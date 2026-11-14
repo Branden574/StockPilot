@@ -19,9 +19,16 @@ vi.mock('@/lib/auth/warehouse', () => ({
   assertWarehouseAccess: vi.fn(async () => undefined),
   ForbiddenError: class extends Error {},
 }));
+/** What the service did, in order: each audit event written and each opening call. */
+const { steps } = vi.hoisted(() => ({ steps: [] as string[] }));
 vi.mock('./audit', () => ({
-  audit: vi.fn(async () => undefined),
-  auditMany: vi.fn(async (payloads: readonly unknown[]) => ({ written: payloads.length, lost: 0 })),
+  audit: vi.fn(async (payload: { event: string; entityId?: string }) => {
+    steps.push(`audit:${payload.event}:${payload.entityId}`);
+  }),
+  auditMany: vi.fn(async (payloads: ReadonlyArray<{ event: string; entityId?: string }>) => {
+    for (const p of payloads) steps.push(`audit:${p.event}:${p.entityId}`);
+    return { written: payloads.length, lost: 0 };
+  }),
 }));
 vi.mock('@/lib/ai/embeddings', () => ({ embedInventoryItem: vi.fn(async () => undefined) }));
 vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -63,6 +70,16 @@ function openingStub(over: Record<string, unknown> = {}) {
   });
 }
 
+/** An open_item_stock answer that records the call in `steps` first. */
+function recordedOpening(answer: Record<string, unknown> | ((call: MockCall) => unknown)) {
+  return (call: MockCall) => {
+    steps.push('open_item_stock');
+    return typeof answer === 'function' ? answer(call) : answer;
+  };
+}
+
+const CREATED = 'inventory.item.created';
+
 /** Every line handed to open_item_stock, across every call. */
 function openedLines(stub: ReturnType<typeof openingStub>) {
   return stub.rpcCalls
@@ -85,7 +102,10 @@ function insertedPayload(stub: ReturnType<typeof openingStub>) {
   return args?.[0]?.[0] as Record<string, unknown> | Array<Record<string, unknown>>;
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  steps.length = 0;
+});
 
 describe('InventoryService.create: opening stock through open_item_stock', () => {
   it('inserts the item at 0, opens the requested quantity in the organization, and returns it', async () => {
@@ -114,6 +134,30 @@ describe('InventoryService.create: opening stock through open_item_stock', () =>
       details: expect.objectContaining({ reason: 'opening_stock_not_recorded', itemIds: ['itm-new'] }),
     });
     expect(directLedgerWrites(stub)).toEqual([]);
+  });
+
+  it('writes the created event before the opening', async () => {
+    const stub = openingStub({
+      'rpc:open_item_stock': recordedOpening({
+        data: [{ opened_item_id: 'itm-new', opened_location_id: 'loc-unplaced', opened_movement_id: 'mv-1' }],
+        error: null,
+      }),
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await svc.create({ ...CREATE_BASE });
+
+    expect(steps).toEqual([`audit:${CREATED}:itm-new`, 'open_item_stock']);
+  });
+
+  it('a refused opening still leaves the created event for the saved item', async () => {
+    const stub = openingStub({
+      'rpc:open_item_stock': recordedOpening({ data: null, error: STOCK_REFUSAL }),
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await expect(svc.create({ ...CREATE_BASE })).rejects.toMatchObject({ code: 'conflict' });
+    expect(steps).toEqual([`audit:${CREATED}:itm-new`, 'open_item_stock']);
   });
 
   it('a ZERO-quantity create opens nothing', async () => {
@@ -195,6 +239,40 @@ describe('InventoryService.bulkCreate: opening stock through open_item_stock', (
       message: expect.stringMatching(/^These items were saved with zero on hand: you do not have permission to add stock\./),
     });
     expect(directLedgerWrites(stub)).toEqual([]);
+  });
+
+  it('a refused opening still leaves a created event for every saved item, written before the opening', async () => {
+    const stub = openingStub({
+      'inventory_items.select': { data: [], error: null, count: 0 },
+      'inventory_items.insert': {
+        data: [
+          { id: 'itm-a', sku: 'SKU-A' },
+          { id: 'itm-b', sku: 'SKU-B' },
+        ],
+        error: null,
+      },
+      'rpc:open_item_stock': recordedOpening({ data: null, error: STOCK_REFUSAL }),
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await expect(
+      svc.bulkCreate({ warehouseId: 'wh-1', items: ITEMS.slice(0, 2) }),
+    ).rejects.toMatchObject({ code: 'conflict' });
+    expect(steps).toEqual([`audit:${CREATED}:itm-a`, `audit:${CREATED}:itm-b`, 'open_item_stock']);
+  });
+
+  it('rows that cannot be confirmed still get their created events', async () => {
+    const stub = openingStub({
+      'inventory_items.select': { data: [], error: null, count: 0 },
+      'inventory_items.insert': { data: [{ id: 'itm-a', sku: 'SKU-A' }], error: null },
+      'rpc:open_item_stock': recordedOpening({ data: null, error: null }),
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await expect(
+      svc.bulkCreate({ warehouseId: 'wh-1', items: ITEMS.slice(0, 2) }),
+    ).rejects.toMatchObject({ code: 'conflict', details: { outcome: 'unchecked' } });
+    expect(steps).toEqual([`audit:${CREATED}:itm-a`]);
   });
 
   it('a row whose SKU is not one the request asked for is never opened at 0 in silence: the person is told', async () => {

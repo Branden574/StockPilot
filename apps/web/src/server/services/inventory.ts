@@ -3576,6 +3576,43 @@ export class InventoryService {
     // next. Held by keepAlive, never awaited (see embedInBackground).
     embedInBackground([data.id as string], this.ctx);
 
+    // Audited before the opening, as the sized run is: the row exists from
+    // here on whatever happens to the opening below, and an item that exists
+    // with no 'created' event is a hole in the trail no later step can fill.
+    void audit(
+      {
+        event: 'inventory.item.created',
+        entityType: 'inventory_item',
+        entityId: data.id as string,
+        warehouseId: resolvedWarehouseId,
+      },
+      this.ctx,
+    );
+
+    // VARIANT PROVENANCE. 'sports.variant.created' / '.imported' were declared
+    // in the audit union and emitted by nothing — vocabulary no reviewer could
+    // ever see. A minted `variant_key` is exactly the moment a variant's
+    // IDENTITY comes into existence, and "did a person add this size or did an
+    // import invent it?" is the first question asked when a group later looks
+    // wrong. `opts.source` is the only thing that separates the two, because
+    // both surfaces reach this one method.
+    if (resolvedVariantKey) {
+      void audit(
+        {
+          event: opts.source === 'import' ? 'sports.variant.imported' : 'sports.variant.created',
+          entityType: 'inventory_item',
+          entityId: data.id as string,
+          warehouseId: resolvedWarehouseId,
+          extra: {
+            group_id: resolvedGroupId,
+            variant_key: resolvedVariantKey,
+            variant_size: normalizedVariantSize,
+          },
+        },
+        this.ctx,
+      );
+    }
+
     // Opening stock through the stock ledger: the holding,
     // on-hand and the 'initial' movement attributed to the creator, in one
     // transaction. With a primary that is only a label the insert carried no
@@ -3681,40 +3718,6 @@ export class InventoryService {
           failedItemIds: [data.id as string],
         } satisfies ManualPlacementOutcome;
       });
-    }
-
-    void audit(
-      {
-        event: 'inventory.item.created',
-        entityType: 'inventory_item',
-        entityId: data.id as string,
-        warehouseId: resolvedWarehouseId,
-      },
-      this.ctx,
-    );
-
-    // VARIANT PROVENANCE. 'sports.variant.created' / '.imported' were declared
-    // in the audit union and emitted by nothing — vocabulary no reviewer could
-    // ever see. A minted `variant_key` is exactly the moment a variant's
-    // IDENTITY comes into existence, and "did a person add this size or did an
-    // import invent it?" is the first question asked when a group later looks
-    // wrong. `opts.source` is the only thing that separates the two, because
-    // both surfaces reach this one method.
-    if (resolvedVariantKey) {
-      void audit(
-        {
-          event: opts.source === 'import' ? 'sports.variant.imported' : 'sports.variant.created',
-          entityType: 'inventory_item',
-          entityId: data.id as string,
-          warehouseId: resolvedWarehouseId,
-          extra: {
-            group_id: resolvedGroupId,
-            variant_key: resolvedVariantKey,
-            variant_size: normalizedVariantSize,
-          },
-        },
-        this.ctx,
-      );
     }
 
     // The row, PLUS what the auto-place managed — on one object rather than a
@@ -5033,6 +5036,21 @@ export class InventoryService {
 
     const createdIds = (inserted ?? []).map((r: { id: string }) => r.id);
 
+    // Audited before the opening and its checks, as the sized run is: the
+    // rows exist from here on whatever happens to the opening below. Up to 500
+    // rows per import: batched INSERTs (auditMany), not one request per
+    // created item fired all at once.
+    await auditMany(
+      createdIds.map((id: string) => ({
+        event: 'inventory.item.created' as const,
+        entityType: 'inventory_item',
+        entityId: id,
+        warehouseId: input.warehouseId,
+        extra: { bulk_op: 'bulk_create' },
+      })),
+      this.ctx,
+    );
+
     // Opening stock through the stock ledger, keyed on the
     // quantity each SKU asked for: one open_item_stock call for the batch (at
     // most 500), all or nothing. On a failure every item stays at 0 with
@@ -5068,19 +5086,6 @@ export class InventoryService {
     if (openingLines.length > 0 || unmatchedIds.length > 0) {
       await openItemStockOrThrow(this.ctx, openingLines, bulkWording, unmatchedIds);
     }
-
-    // Up to 500 rows per import: batched INSERTs (auditMany), not one
-    // request per created item fired all at once.
-    await auditMany(
-      createdIds.map((id: string) => ({
-        event: 'inventory.item.created' as const,
-        entityType: 'inventory_item',
-        entityId: id,
-        warehouseId: input.warehouseId,
-        extra: { bulk_op: 'bulk_create' },
-      })),
-      this.ctx,
-    );
 
     return {
       created: createdIds.length,
