@@ -108,7 +108,15 @@
      in INV-B6 were read on a local Postgres with migrations 0001-0418
      applied; the assertion count in section 10 was re-derived from
      `select plan(58)`, and the two file counts beside it were counted from
-     the manifests in `scripts/security-test.sh` on that date. -->
+     the manifests in `scripts/security-test.sh` on that date.
+
+     AMENDED 2026-11-12 (docket S62, migration 0420): INV-C8 added. Its
+     policy facts were read from migrations 0215, 0322 and 0420 and checked
+     by the 0420 test on a local Postgres with migrations 0001-0418 and 0420
+     applied. The two file counts in section 10 were counted again from the
+     manifests in `scripts/security-test.sh`, which gain one pgTAP file and
+     one vitest file with this entry; the assertion count beside them was
+     not re-derived. -->
 
 # Security invariants
 
@@ -1448,6 +1456,40 @@ actually fire.
   route tests, and core `return-actions.test.ts`, `exchange-status.test.ts`
   and `exchange-view.test.ts`.
 
+### INV-C8 — a permission restriction changes only for someone who holds that permission
+
+- **Invariant**: a `user_permission_overrides` or `role_permission_overrides`
+  row with `granted = false` (a restriction) is changed or deleted with a
+  member's own token only by an admin or owner of its organization who holds
+  the permission the row is about (`has_permission`). A grant row
+  (`granted = true`) may be changed or deleted by any admin, and a row
+  written as a grant needs the permission too. An owner holds every
+  permission, so an owner changes any row.
+- **Why it matters**: this is the rule the Roles page applies
+  (`assertCanGrant` in `apps/web/src/server/actions/permissions.ts`): anyone
+  who configures permissions can take a permission away, but can give,
+  clear or change a restriction only on a permission they hold themselves.
+  The database asks the same, so the rule does not depend on which client
+  wrote the row.
+- **Enforced by**: each table's write rules. INSERT, and UPDATE's
+  `WITH CHECK`: a grant needs the permission (0215). DELETE: a restriction
+  needs it (0322). UPDATE's `USING`: the row an update starts from is read as
+  the DELETE rule reads it (0420). In the app, the two single-toggle
+  actions re-read the row when the database refuses re-writing a
+  restriction that is already there, and answer as before (nothing changed,
+  so no audit row and no broadcast).
+- **Tested at**: [`0215_permission_override_no_escalation.test.sql`](../../supabase/tests/0215_permission_override_no_escalation.test.sql)
+  (grants), section 3 of
+  [`0322_quantity_guards_avatar_scope_override_clears.test.sql`](../../supabase/tests/0322_quantity_guards_avatar_scope_override_clears.test.sql)
+  (deletes), and
+  [`0420_permission_override_updates_follow_0322.test.sql`](../../supabase/tests/0420_permission_override_updates_follow_0322.test.sql)
+  (updates: S1-S6 pin each UPDATE rule's `USING` to the table's DELETE rule
+  and its `WITH CHECK` to the INSERT rule; R, W, H, O and N run the app's
+  shapes and plain updates per persona; M1 is the mutation control). App
+  side:
+  `permissions.override-clear.test.ts` and
+  `permissions.restriction-rewrite.test.ts`.
+
 ---
 
 ## 4. Storage — path shape and bucket exposure
@@ -2277,8 +2319,8 @@ checked.
   first P0 was declared closed.
 - **A high-assurance baseline is implemented and covered by executable
   invariants**: 58 class-wide assertions in
-  `supabase/tests/security_invariants.test.sql`, plus the 100 other pgTAP
-  files and the 341 vitest files on the manifests of
+  `supabase/tests/security_invariants.test.sql`, plus the 101 other pgTAP
+  files and the 342 vitest files on the manifests of
   `scripts/security-test.sh`, gated together as `pnpm security:test` and
   wired into CI.
 - **Two risks are accepted and tracked**, not closed (section 7), each with a

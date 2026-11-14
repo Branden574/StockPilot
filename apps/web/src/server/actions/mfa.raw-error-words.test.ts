@@ -52,6 +52,14 @@ vi.mock('@/lib/auth/verified-claims', () => ({
     aal: 'aal1',
     amr: [],
   })),
+  // After GoTrue's answer the session still holds the account the press was
+  // checked for (S78).
+  readVerifiedSessionClaimsOf: vi.fn(async (_client: unknown, userId: string) => ({
+    userId,
+    sessionId: 'session-1',
+    aal: 'aal1',
+    amr: [],
+  })),
 }));
 vi.mock('next/headers', () => ({ headers: vi.fn(async () => new Headers()) }));
 vi.mock('@/server/services/auth-audit', () => ({ emitAuthAudit: vi.fn(async () => {}) }));
@@ -78,7 +86,18 @@ vi.mock('@/lib/supabase/server', () => ({
     };
     q.eq = () => q;
     q.maybeSingle = async () => (op === 'update' ? orgPolicy.update : orgPolicy.read);
-    return { from: () => q, auth: { mfa: mfaStub } };
+    // getUser: the account's own factor list, which the code step reads first
+    // (f1, a verified authenticator of user-1).
+    return {
+      from: () => q,
+      auth: {
+        mfa: mfaStub,
+        getUser: async () => ({
+          data: { user: { id: 'user-1', factors: [{ id: 'f1', status: 'verified' }] } },
+          error: null,
+        }),
+      },
+    };
   }),
 }));
 
@@ -125,7 +144,9 @@ const UNKNOWN = {
   message: 'Challenge 7c1e2a90-0000-4000-8000-000000000001 has expired',
 };
 
-const SETUP = { factorId: 'f1', code: '123456', password: 'the-account-password' };
+// A dull value under a neutral name (src/test/secret-shaped-fixtures.guard.test.ts).
+const SETUP_VALUE = 'the-account-value';
+const SETUP = { factorId: 'f1', code: '123456', password: SETUP_VALUE };
 
 beforeEach(() => {
   vi.clearAllMocks();

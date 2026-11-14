@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { headers } from 'next/headers';
 
 import { SESSION_ENDED_NOTICE } from '@/lib/auth/auth-page-notices';
+import { sessionAccountNow } from '@/lib/auth/session-account';
 import { clientIpFromHeaders } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -47,6 +48,16 @@ import { emitAuthAudit } from '@/server/services/auth-audit';
  * detectRefusedCodeBursts), well before the account bucket is spent. Both are
  * closed, as every auth front door: a limiter that cannot answer refuses (the
  * address bucket's failure refuses without asking the account bucket).
+ *
+ * THE ACCOUNT GOTRUE JUDGED FOR. The budget is spent before GoTrue is asked,
+ * and the challenge and the verify each load the cookie session again; a load
+ * can refresh it into another account's (lib/auth/verified-claims,
+ * readVerifiedSessionClaimsOf). So once GoTrue has judged the code (accepted
+ * or refused it), the session is read again against the account the press
+ * was checked for (lib/auth/session-account): a verified session of another
+ * account is signed out here, the press is not verified, and no row names the
+ * account; a session that could not be verified just now is left alone, and
+ * the press is answered as not checked, with no row.
  *
  * ROWS ONLY FOR A CODE GOTRUE JUDGED WRONG. mfa.code_refused is written only
  * for GoTrue's wrong-code answer (classifyMfaCodeError's `refused`), never for
@@ -142,10 +153,33 @@ export async function recordRefusedMfaCode(params: {
   });
 }
 
+/**
+ * Signs this browser's session out here only (scope 'local': GoTrue ends this
+ * one session and the account's other sessions stay), for a session that
+ * turned out to hold another account than the one a code press was checked
+ * for. auth-js removes the stored session (the auth cookies) even when GoTrue
+ * does not answer. Never throws: the press is refused either way.
+ */
+export async function signOutThisSession(supabase: MfaClient): Promise<void> {
+  try {
+    await supabase.auth.signOut({ scope: 'local' });
+  } catch {
+    // Refused below whatever happened here.
+  }
+}
+
 /** The result of one code check, for the caller's own words. */
 export type MfaCodeCheck =
   | { kind: 'verified' }
   | { kind: 'budget_spent' }
+  /** GoTrue judged the code while the session held another account: signed out here. */
+  | { kind: 'account_changed' }
+  /**
+   * GoTrue judged the code, then the session could not be verified: the
+   * attempt spent before the challenge stays spent, the answer is not used, no
+   * row is written, and the session is left alone.
+   */
+  | { kind: 'unconfirmed' }
   | { kind: 'challenge_failed'; outcome: MfaCodeOutcome }
   | { kind: 'verify_failed'; outcome: MfaCodeOutcome };
 
@@ -154,7 +188,9 @@ type MfaClient = Pick<SupabaseClient, 'auth'>;
 
 /**
  * One code press, in this order: the budget, the challenge, the verify, the
- * classification of GoTrue's answer, and a row for a refused code only. An
+ * classification of GoTrue's answer, for an answer that judged the code the
+ * session read again against the account the press was checked for, and a
+ * row for a refused code only. An
  * answer this does not know is reported (its name, code and status only) so
  * a change in GoTrue's answers shows on the first day.
  */
@@ -181,9 +217,19 @@ export async function checkMfaCode(
     challengeId: challenge.id,
     code: params.code,
   });
-  if (!vErr) return { kind: 'verified' };
+  const outcome = vErr ? classifyMfaCodeError(vErr) : null;
+  if (!vErr || outcome === 'refused') {
+    // GoTrue judged the code: it counts only for the account the budget was
+    // spent on. A local signature check once the key set is cached.
+    const now = await sessionAccountNow(supabase, params.userId);
+    if (now.kind === 'other') {
+      await signOutThisSession(supabase);
+      return { kind: 'account_changed' };
+    }
+    if (now.kind === 'unverified') return { kind: 'unconfirmed' };
+  }
+  if (!vErr || !outcome) return { kind: 'verified' };
 
-  const outcome = classifyMfaCodeError(vErr);
   if (outcome === 'refused') {
     await recordRefusedMfaCode({
       userId: params.userId,

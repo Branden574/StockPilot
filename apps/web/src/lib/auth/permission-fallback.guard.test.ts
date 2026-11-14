@@ -201,9 +201,9 @@ const OVERRIDE_TABLE_SITES: Record<string, OverrideTableSites> = {
     why: "the console's Users tab: listRows; the column shows as unavailable.",
   },
   'server/actions/permissions.ts': {
-    reads: {},
+    reads: { role_permission_overrides: 1, user_permission_overrides: 1 },
     writes: { role_permission_overrides: 3, user_permission_overrides: 2 },
-    why: "writes only: the Roles page's grant, revoke and clear.",
+    why: "the Roles page's grant, revoke and clear, and the re-read after a refused restriction (docket S62): listRows; an answer that is not a list is not 'already restricted', so the plain sentence answers.",
   },
 };
 
