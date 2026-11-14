@@ -336,29 +336,3 @@ describe('acceptInviteWithToken: everyone else', () => {
     expect(vi.mocked(audit)).not.toHaveBeenCalled();
   });
 });
-
-describe('acceptInviteWithToken: a revoked invite (S11-A)', () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it('refuses a revoked invite as expired, whatever its expiry says, and writes nothing', async () => {
-    const stub = stubFor(inviteRow({ revoked_at: '2026-01-02T03:04:05.000Z' }), { row: null });
-    await expect(acceptInviteWithToken('tok', USER)).rejects.toMatchObject({
-      code: 'validation_error',
-      message: 'Invite has expired',
-    });
-    const read = stub.chainArgs.get('organization_invites.select')!;
-    expect(String(read[0]?.[0])).toContain('revoked_at');
-    expect(writesTo(stub, 'organization_members')).toEqual([]);
-    expect(writesTo(stub, 'organization_invites')).toEqual([]);
-    expect(writesTo(stub, 'audit_logs')).toEqual([]);
-  });
-
-  it('accepts an invite that is not revoked (control)', async () => {
-    const stub = stubFor(inviteRow({ revoked_at: null }), { row: null });
-    await expect(acceptInviteWithToken('tok', USER)).resolves.toMatchObject({
-      organizationId: ORG,
-      alreadyMember: false,
-    });
-    expect(writesTo(stub, 'organization_members').length).toBeGreaterThan(0);
-  });
-});

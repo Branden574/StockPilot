@@ -61,7 +61,7 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
 
   const { data: invite } = await admin
     .from('organization_invites')
-    .select('id, organization_id, email, role, expires_at, accepted_at, revoked_at')
+    .select('id, organization_id, email, role, expires_at, accepted_at')
     .eq('token', token)
     .maybeSingle();
 
@@ -80,11 +80,7 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
   }
 
   const session = await getServerSession();
-  // A revoked invite shows as expired, whatever its expiry says (0393 also
-  // moves its expiry into the past; this is the second check).
-  const expired = invite
-    ? Boolean(invite.revoked_at) || new Date(invite.expires_at as string).getTime() < Date.now()
-    : false;
+  const expired = invite ? new Date(invite.expires_at as string).getTime() < Date.now() : false;
   const accepted = Boolean(invite?.accepted_at);
 
   // NO auto-accept during render. Two reasons:
