@@ -134,7 +134,16 @@
      applied; the assertion count in section 10 was re-derived from
      `select plan(60)`, and the two file counts beside it were counted from
      the manifests in `scripts/security-test.sh` after main's 0419 and 0420
-     were merged in. -->
+     were merged in.
+
+     AMENDED 2026-11-14 (migration 0456): consume_mfa_recovery_code() counts
+     each call of the signed-in account in rate_limit_buckets before it
+     compares a code (allowlist A's reason for it says so; INV-2 still finds
+     auth.uid() in its body). The pgTAP file count in section 10 was counted
+     again from the manifest in `scripts/security-test.sh`, which gains one
+     pgTAP file with this entry: 105 files, so 104 besides
+     `security_invariants.test.sql`. This entry adds no vitest file to the
+     manifests, and the assertion count was not re-derived. -->
 
 # Security invariants
 
@@ -2401,7 +2410,7 @@ checked.
   functions it judges.
 - **A high-assurance baseline is implemented and covered by executable
   invariants**: 60 class-wide assertions in
-  `supabase/tests/security_invariants.test.sql`, plus the 103 other pgTAP
+  `supabase/tests/security_invariants.test.sql`, plus the 104 other pgTAP
   files and the 364 vitest files on the manifests of
   `scripts/security-test.sh`, gated together as `pnpm security:test` and
   wired into CI.

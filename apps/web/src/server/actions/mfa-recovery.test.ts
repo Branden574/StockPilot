@@ -546,6 +546,52 @@ describe('consumeMfaRecoveryCodeAction — limits by address and by account', ()
     expect(deleteFactor).not.toHaveBeenCalled();
   });
 
+  /**
+   * The code check counts its own attempts for the account too (10 per 15
+   * minutes, above the code bucket's 5): past that the database answers an
+   * error whose hint is rate_limited. The person meets the same pause the
+   * limits above answer with, and, as when one of them pauses, nothing is
+   * removed and no row is written.
+   */
+  it('when the code check answers that the account has made too many attempts, the answer is the same pause and nothing is removed or recorded', async () => {
+    stubHolder.stub = makeSupabaseStub({
+      'rpc:increment_rate_limit': limiter(),
+      'rpc:consume_mfa_recovery_code': {
+        data: null,
+        error: { message: 'too_many_attempts', code: 'P0001', hint: 'rate_limited' },
+      },
+    });
+    const { listFactors, deleteFactor } = attachAdminMfa(stubHolder.stub, [
+      { id: 'f1', factor_type: 'totp' },
+    ]);
+
+    const res = await consumeMfaRecoveryCodeAction({ code: 'good-code', password: PW });
+
+    expect(res).toEqual({ ok: false, error: { code: 'validation_error', message: PAUSED } });
+    expect(codeChecked()).toBe(true);
+    expect(listFactors).not.toHaveBeenCalled();
+    expect(deleteFactor).not.toHaveBeenCalled();
+    expect(emitAuthAudit).not.toHaveBeenCalled();
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('any other error of the code check is still an internal error', async () => {
+    stubHolder.stub = makeSupabaseStub({
+      'rpc:increment_rate_limit': limiter(),
+      'rpc:consume_mfa_recovery_code': {
+        data: null,
+        error: { message: 'not_authenticated', code: '42501' },
+      },
+    });
+    const { deleteFactor } = attachAdminMfa(stubHolder.stub, [{ id: 'f1', factor_type: 'totp' }]);
+
+    const res = await consumeMfaRecoveryCodeAction({ code: 'good-code', password: PW });
+
+    expect(res).toMatchObject({ ok: false, error: { code: 'internal_error' } });
+    expect(deleteFactor).not.toHaveBeenCalled();
+    expect(emitAuthAudit).not.toHaveBeenCalled();
+  });
+
   it('a password bucket that cannot answer refuses before the password check (closed)', async () => {
     stubHolder.stub = makeSupabaseStub({
       'rpc:increment_rate_limit': (call: { args: unknown[][] }) =>

@@ -3,6 +3,9 @@
 -- the same two-step sign-in level the app already asks for before it makes
 -- new recovery codes. generate_mfa_recovery_codes() makes codes only for a
 -- token at aal2; consume_mfa_recovery_code() is not changed.
+-- (Re-pinned 2026-11-14 by 0456: consume_mfa_recovery_code() now counts each
+-- call before it compares a code; C1 pins 0456's body, and C2 and C3, three
+-- calls in all, stay under its bound of ten.)
 --
 -- NUMBER: no check reads 0417. R strips the lines tagged "-- S50b", and A
 -- finds the statements the CLI recorded by the migration's name
@@ -28,8 +31,9 @@
 --     the delete.
 -- P.  The header and the ACL are as before (the exact ACL text), and it is
 --     the only function of its name in public.
--- C.  consume_mfa_recovery_code() is not changed: 0103's body, its header and
---     its ACL, and it answers as before.
+-- C.  consume_mfa_recovery_code() is not changed by this migration: its
+--     header and its ACL, and it answers as before (its body is 0456's since
+--     2026-11-14: 0103's plus the count, proved there).
 -- M.  Mutation: with the tagged lines taken out of the live body (inside an
 --     undone attempt), the aal1 call of L3 makes ten codes, so the L refusals
 --     come from those lines.
@@ -281,13 +285,16 @@ select is(
   'P2: the ACL is byte for byte as before: EXECUTE for authenticated and service_role, none for anon or PUBLIC');
 
 -- ══ C. consume_mfa_recovery_code() is not changed ═════════════════════════
+-- Re-pinned by 0456 on 2026-11-14 (was 17f255317559b1f06dfaa19e6440859b, 0103's body): the
+-- function counts each call for the account before it compares a code (0456 H4: taking out
+-- the lines tagged "-- attempts" gives 0103's body exactly); the header and the ACL are unchanged.
 select is(
   (select md5(p.prosrc) || '|' || pg_get_function_identity_arguments(p.oid) || '|' || pg_get_function_result(p.oid) || '|'
           || p.prosecdef::text || '|' || p.provolatile::text || '|' || coalesce(array_to_string(p.proconfig, ';'), '') || '|'
           || pg_get_userbyid(p.proowner) || '|' || coalesce(p.proacl::text, '')
      from pg_proc p where p.oid = 'public.consume_mfa_recovery_code(text)'::regprocedure),
-  '17f255317559b1f06dfaa19e6440859b|p_code text|boolean|true|v|search_path=public, extensions|postgres|{postgres=X/postgres,service_role=X/postgres,authenticated=X/postgres}',
-  'C1: consume_mfa_recovery_code() keeps 0103''s body (md5 17f25531), its header and its ACL');
+  '26c41958657c3e1a8c5048c6ea5bea42|p_code text|boolean|true|v|search_path=public, extensions|postgres|{postgres=X/postgres,service_role=X/postgres,authenticated=X/postgres}',
+  'C1: consume_mfa_recovery_code() keeps its header and its ACL; its body is 0456''s (md5 26c41958: 0103''s plus the count)');
 
 insert into _sets values
   ('c', pg_temp.run('authenticated', :member, $q$select string_agg(code, ',') from public.generate_mfa_recovery_codes()$q$, 'aal2'));

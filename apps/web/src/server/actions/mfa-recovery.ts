@@ -235,7 +235,14 @@ export async function consumeMfaRecoveryCodeAction(input: {
       'consume_mfa_recovery_code',
       { p_code: input.code },
     );
-    if (error) throw new ServiceError('internal_error', error.message);
+    if (error) {
+      // The code check counts its own attempts for the account (10 per 15
+      // minutes, above RECOVERY_CODE_CHECKS) and past that answers hint
+      // rate_limited: the same pause as the limits above, with nothing
+      // compared, removed or recorded, as when one of them pauses.
+      if (error.hint === 'rate_limited') return err('validation_error', RECOVERY_PAUSED);
+      throw new ServiceError('internal_error', error.message);
+    }
     if (!ok_) {
       // No organization, like a refused authenticator code (mfa.code_refused):
       // not shown to the organization's admins, never the person's own last

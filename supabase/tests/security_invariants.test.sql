@@ -130,7 +130,10 @@ insert into _sec_inv_anon_secdef_allow (proname, why) values
   ('force_reassign_cycle_count','manager override; gates on has_permission and requires a reason'),
   -- Per-user MFA material (0027). Scoped to auth.uid() by construction.
   ('generate_mfa_recovery_codes','issues codes for auth.uid() only; anon has no row to write'),
-  ('consume_mfa_recovery_code', 'consumes a code belonging to auth.uid() only'),
+  -- Re-pinned 2026-11-14 by 0456 (was 'consumes a code belonging to auth.uid() only'):
+  -- the body now counts each call of auth.uid() in rate_limit_buckets before it compares
+  -- a code; a null uid still raises before anything is counted.
+  ('consume_mfa_recovery_code', 'consumes a code belonging to auth.uid() only; counts each call of auth.uid() first, 10 per 15 minutes'),
   -- Per-user session management (0213).
   ('revoke_my_other_sessions',  'operates on auth.uid()''s own sessions only'),
   ('revoke_my_session',         'operates on auth.uid()''s own sessions only'),
