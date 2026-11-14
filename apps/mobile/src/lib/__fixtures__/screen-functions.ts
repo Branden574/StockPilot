@@ -147,6 +147,38 @@ export function focusEffectCallback<T>(file: string, deps: Record<string, unknow
 }
 
 /**
+ * The callback a screen passes to `React.useEffect(...)` whose code contains
+ * `marker` (a line only that effect has), built with `deps`: what React runs
+ * after a render in which one of its dependencies changed. The screen must
+ * have exactly one such effect.
+ */
+export function effectCallback<T>(file: string, marker: string, deps: Record<string, unknown>): T {
+  const sf = sourceFile(file);
+  const found: ts.Expression[] = [];
+  const visit = (n: ts.Node): void => {
+    if (
+      ts.isCallExpression(n) &&
+      n.expression.getText(sf) === 'React.useEffect' &&
+      n.arguments[0] &&
+      n.arguments[0].getText(sf).includes(marker)
+    ) {
+      found.push(n.arguments[0]);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  if (found.length !== 1) {
+    throw new Error(`${file}: expected one React.useEffect containing ${marker}, found ${found.length}`);
+  }
+  return build<T>(
+    `return ${compile(`(${found[0]!.getText(sf)});`)
+      .trim()
+      .replace(/;$/, '')};`,
+    deps,
+  );
+}
+
+/**
  * The callback a screen passes to `React.useLayoutEffect(...)`, built with
  * `deps`: what React runs after a render commits, before the screen's other
  * effects. The screen must have exactly one.

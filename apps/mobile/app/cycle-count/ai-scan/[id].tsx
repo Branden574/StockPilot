@@ -30,7 +30,13 @@ import { useGlass } from '@/components/ui/glass/use-glass';
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { API_BASE, orgHeader } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import {
+  type CountLoadKey,
+  countLoadClearsScreen,
+  countLoadDraftAction,
+} from '@/lib/count-access-refresh';
 import { reviewNotACountMessage } from '@/lib/count-box-words';
+import { createOneAlert } from '@/lib/count-save-refusal';
 import {
   countStoredForLiveAccount,
   getCycleCount,
@@ -47,6 +53,7 @@ import {
 import { supabase } from '@/lib/supabase';
 import { FONT, TYPE_CEILING, capTo, palette, radius, space } from '@/lib/theme';
 import { useHoldAppearanceAdoptionWhileFocused } from '@/lib/appearance/use-adoption-hold';
+import { useOrg } from '@/lib/use-org';
 import { useDrawerEntryAccess } from '@/lib/use-screen-access';
 import { useTheme } from '@/lib/use-theme';
 
@@ -148,6 +155,7 @@ export default function AiScanScreen() {
   useHoldAppearanceAdoptionWhileFocused('count');
   const { id: cycleCountId } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = React.useRef<CameraView | null>(null);
   // The permission screen follows the device's mode; the camera chrome is
@@ -159,6 +167,22 @@ export default function AiScanScreen() {
   // The count screen's question (screen-access.ts): the lines saved on this
   // phone are read only for a member who may see cycle counts.
   const access = useDrawerEntryAccess('/cycle-counts');
+  // Why this count cannot be opened here: one alert at a time, though the
+  // read runs again as the account, workspace or access changes, and nothing
+  // once the screen has closed. Its OK leaves.
+  const [openNotice] = React.useState(() =>
+    createOneAlert((title, message, buttons, options) =>
+      Alert.alert(title, message, buttons, options),
+    ),
+  );
+  React.useEffect(() => () => openNotice.close(), [openNotice]);
+
+  // Back, or to the Cycle counts tab when this is the only screen (a link
+  // opened it): going back would then do nothing and leave it open.
+  function leave() {
+    if (router.canGoBack()) router.back();
+    else router.replace('/cycle-counts');
+  }
 
   // The lines saved on this phone. A read that fails is said, and the screen
   // goes back: it used to be an unhandled rejection that left "0 books in this
@@ -177,41 +201,57 @@ export default function AiScanScreen() {
             ? NOT_SYNCED_YET
             : null;
     if (refused !== null) {
-      Alert.alert(access === 'denied' ? 'Not available' : 'Could not open this count', refused, [
-        { text: 'OK', onPress: () => router.back() },
-      ]);
+      openNotice.say(
+        access === 'denied' ? 'Not available' : 'Could not open this count',
+        refused,
+        leave,
+      );
       return;
     }
     let snap: Awaited<ReturnType<typeof getCycleCount>>;
     try {
       snap = await getCycleCount(cycleCountId);
     } catch {
-      Alert.alert('Could not load this count', 'This count could not be read on this phone.', [
-        { text: 'OK', onPress: () => router.back() },
-      ]);
+      openNotice.say(
+        'Could not load this count',
+        'This count could not be read on this phone.',
+        leave,
+      );
       return;
     }
     if (!snap) {
-      Alert.alert(
+      openNotice.say(
         'No cached lines',
         'Open this cycle count from the list once while online so it can be cached for AI scanning.',
-        [{ text: 'OK', onPress: () => router.back() }],
+        leave,
       );
       return;
     }
     setCachedLines(snap.lines);
   }
 
+  // What the lines held were read for. Another count, workspace or account
+  // clears them before the read (count-access-refresh.ts
+  // countLoadClearsScreen), and a review of a photo taken for another account
+  // or workspace closes unsaved (countLoadDraftAction).
+  const lastLinesKey = React.useRef<CountLoadKey | null>(null);
   React.useEffect(() => {
-    if (!user || !cycleCountId) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the device store
+    if (!cycleCountId) return;
+    const key = { id: cycleCountId, orgId, userId: user?.id ?? null, access };
+    if (countLoadClearsScreen(lastLinesKey.current, key)) {
+      if (countLoadDraftAction(lastLinesKey.current, key) === 'drop') setPhase({ kind: 'idle' });
+      setCachedLines([]);
+    }
+    lastLinesKey.current = key;
+    if (!user) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set in loadCachedLines is post-await; the clear above is the identity change's own reset
     void loadCachedLines();
     // loadCachedLines is a plain function, new on every render: listing it
-    // would load the lines on every render. They load once per signed-in user
-    // and count, and again when whether this member may see cycle counts is
-    // known or changes.
+    // would load the lines on every render. They load once per signed-in user,
+    // workspace and count, and again when whether this member may see cycle
+    // counts is known or changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, cycleCountId, access]);
+  }, [user, cycleCountId, orgId, access]);
 
   async function onCapture() {
     if (!cameraRef.current || phase.kind !== 'idle') return;
@@ -476,7 +516,7 @@ export default function AiScanScreen() {
 
       await cycleCountSync.refreshPendingCount();
       void cycleCountSync.forceSync();
-      router.back();
+      leave();
     } catch (e) {
       // Only a non-per-line error (e.g. not signed in) reaches here. Keep the
       // review list rather than discarding it to the camera, so nothing is lost.
@@ -551,7 +591,7 @@ export default function AiScanScreen() {
         <View style={styles.topBar}>
           <Pressable
             style={styles.closeFrame}
-            onPress={() => router.back()}
+            onPress={leave}
             accessibilityRole="button"
             accessibilityLabel="Cancel"
           >

@@ -53,10 +53,8 @@ import {
   countNotClearedAlert,
   countNotSavedAlert,
 } from '@/lib/count-save-refusal';
-import { showWriteCta } from '@/lib/cta-gating';
 import { notACountMessage } from '@/lib/count-box-words';
 import { footerReservation } from '@/lib/dynamic-type-layout';
-import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import {
   cacheCycleCount,
   cacheWriteScope,
@@ -85,6 +83,7 @@ import { useOrg } from '@/lib/use-org';
 import {
   type CountLoadKey,
   countLoadClearsScreen,
+  countLoadDraftAction,
   countReloadIsQuiet,
 } from '@/lib/count-access-refresh';
 import { countReadFailedView } from '@/lib/count-read-failed';
@@ -93,7 +92,12 @@ import {
   NOT_SYNCED_YET,
   SAVED_ACCESS_UNREADABLE,
 } from '@/lib/screen-access';
-import { retrySavedAccess, useDrawerEntryAccess } from '@/lib/use-screen-access';
+import {
+  retrySavedAccess,
+  useCreateControlOffer,
+  useDrawerEntryAccess,
+} from '@/lib/use-screen-access';
+import { retryWorkspace } from '@/lib/use-workspace';
 import { FONT, RADIUS, TYPE_CEILING, capTo, radius, space } from '@/lib/theme';
 import { useHoldAppearanceAdoptionWhileFocused } from '@/lib/appearance/use-adoption-hold';
 import { useTheme } from '@/lib/use-theme';
@@ -237,13 +241,19 @@ export default function CycleCountDetail() {
   }, [router]);
   // Counting + posting are WRITES (stock:adjust). A cycle_counts:read-only
   // viewer gets a read-only view: inputs frozen, no post footer — mirroring
-  // the web detail's canAdjust=false mode. The API enforces server-side;
-  // while permissions load, entry stays enabled.
-  const perms = useEffectivePermissions();
-  const canWrite = showWriteCta(perms, 'stock:adjust');
+  // the web detail's canAdjust=false mode. The API enforces server-side.
+  // Both follow the create-control rule (screen-access.ts createControlOffer):
+  // the saved set when this account has one here; before the first sync, the
+  // role's defaults once the role is known (a viewer's do not hold
+  // stock:adjust). While that is not settled, entry stays enabled.
+  const writeOffer = useCreateControlOffer('stock:adjust');
+  const canWrite = writeOffer !== 'hidden';
   // Manager+ proxy: only manager/admin/owner hold cycle_counts:assign, and the
-  // server 0282 lock lets managers override the assignee. Used below.
-  const canManage = showWriteCta(perms, 'cycle_counts:assign');
+  // server 0282 lock lets managers override the assignee. Used below. Shown
+  // only when offered: staff's defaults do not hold it, so a staff member is
+  // never offered Reassign before the first sync.
+  const assignOffer = useCreateControlOffer('cycle_counts:assign');
+  const canManage = assignOffer === 'offered';
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const syncSnapshot = useSyncStatus();
@@ -538,7 +548,19 @@ export default function CycleCountDetail() {
       }
       return;
     }
-    if (!orgId) return;
+    if (!orgId) {
+      // Online with no workspace known for this account yet (a first sign-in
+      // offline, then the connection back): with no copy on screen, said with
+      // Retry, never a spinner that does not end. The workspace is asked for
+      // again; when it arrives, the load runs again for it.
+      if (!cached) {
+        setReadError(NOT_SYNCED_YET);
+        setEmptyState('read-failed');
+        setLoading(false);
+      }
+      void retryWorkspace();
+      return;
+    }
 
     // The cache and the account this fetch is for, noted before it is sent:
     // an answer that lands after a sign-out, a workspace switch or another
@@ -769,12 +791,19 @@ export default function CycleCountDetail() {
     const { key, linesShown } = loadKeyNow();
     const quiet = countReloadIsQuiet(lastLoadKey.current, key, linesShown);
     const clear = countLoadClearsScreen(lastLoadKey.current, key);
+    const drafts = countLoadDraftAction(lastLoadKey.current, key);
     lastLoadKey.current = key;
     if (quiet) {
       void load();
       return;
     }
     if (clear) {
+      // The counts typed and not saved yet go with the screen: dropped unsent
+      // for another account or workspace, saved now for the same ones
+      // (count-access-refresh.ts countLoadDraftAction).
+      if (drafts === 'drop') lineSaver.dropAll();
+      else lineSaver.flushAll();
+      setDraft({});
       setHeader(null);
       setLines([]);
     }
@@ -785,7 +814,7 @@ export default function CycleCountDetail() {
     setReadError(null);
     setEmptyState('none');
     void load();
-  }, [load, userId]);
+  }, [load, userId, lineSaver]);
 
   // Refresh per-cycle pending count whenever the global sync state changes.
   React.useEffect(() => {

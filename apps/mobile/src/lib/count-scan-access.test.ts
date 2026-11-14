@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { screenFunction } from './__fixtures__/screen-functions';
+import { createOneAlert } from './count-save-refusal';
 
 /** What the count screens say (screen-access.ts CYCLE_COUNTS_NOT_AVAILABLE, pinned there). */
 const CYCLE_COUNTS_NOT_AVAILABLE = 'Cycle counts are not available to you in this workspace.';
@@ -48,6 +49,9 @@ function harness(file: string, name: string, access: ScreenAccess, fetchedHere =
     countStoredForLiveAccount,
     getCycleCount,
     Alert: { alert },
+    // One alert at a time, and its OK leaves (count-scanner-leave.test.ts).
+    openNotice: createOneAlert(alert),
+    leave: back,
     router: { back },
     setLines: (v: unknown) => shown.push(v),
     setCachedLines: (v: unknown) => shown.push(v),
@@ -115,8 +119,8 @@ describe.each([
   it("asks the count screen's question, and loads again when the answer changes", () => {
     const src = readFileSync(path.resolve(__dirname, '../..', file), 'utf8');
     expect(src).toContain("const access = useDrawerEntryAccess('/cycle-counts');");
-    // The barcode scanner also names the workspace (round 3: another
-    // workspace's lines are cleared before the read).
-    expect(src).toMatch(/\}, \[user, (id, orgId|cycleCountId), access\]\);/);
+    // Both also name the workspace (another workspace's lines are cleared
+    // before the read).
+    expect(src).toMatch(/\}, \[user, (id|cycleCountId), orgId, access\]\);/);
   });
 });

@@ -57,6 +57,27 @@ export function countLoadClearsScreen(before: CountLoadKey | null, now: CountLoa
 }
 
 /**
+ * What a full load does with the counts typed on screen and not saved yet
+ * (the count screen's drafts, the scanner's confirm sheet):
+ *   - 'keep': the screen is not cleared (countLoadClearsScreen);
+ *   - 'drop': cleared for another account (a sign-out included), or for
+ *     another workspace than the one they were typed in: never saved under
+ *     the account or workspace now on screen;
+ *   - 'save': cleared for another count of the same account and workspace,
+ *     or the workspace has just become known (or gone) for the same account:
+ *     saved at once, as on leaving the screen (a save the phone refuses is
+ *     said, as always).
+ */
+export type CountDraftAction = 'keep' | 'drop' | 'save';
+
+export function countLoadDraftAction(before: CountLoadKey | null, now: CountLoadKey): CountDraftAction {
+  if (before === null || !countLoadClearsScreen(before, now)) return 'keep';
+  if (before.userId !== now.userId) return 'drop';
+  if (before.orgId !== null && now.orgId !== null && before.orgId !== now.orgId) return 'drop';
+  return 'save';
+}
+
+/**
  * The scanner's tally after it reads the lines again: what this screen
  * scanned stays, a counted line the phone holds is added, and a line no
  * longer in the count goes. With nothing scanned yet, the phone's copy (as

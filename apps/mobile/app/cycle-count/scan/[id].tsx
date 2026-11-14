@@ -27,9 +27,14 @@ import { useAuth } from '@/lib/auth-context';
 import {
   type CountLoadKey,
   countLoadClearsScreen,
+  countLoadDraftAction,
   mergeScannedCounts,
 } from '@/lib/count-access-refresh';
-import { countNotSavedAlert, createLineGoneNotice } from '@/lib/count-save-refusal';
+import {
+  countNotSavedAlert,
+  createLineGoneNotice,
+  createOneAlert,
+} from '@/lib/count-save-refusal';
 import {
   countStoredForLiveAccount,
   getCycleCount,
@@ -127,6 +132,22 @@ function CycleCountScanScreenInner() {
     ),
   );
   React.useEffect(() => () => lineGoneNotice.close(), [lineGoneNotice]);
+  // Why this count cannot be opened here: one alert at a time, though the
+  // read runs again as the account, workspace or access changes, and nothing
+  // once the scanner has closed. Its OK leaves.
+  const [openNotice] = React.useState(() =>
+    createOneAlert((title, message, buttons, options) =>
+      Alert.alert(title, message, buttons, options),
+    ),
+  );
+  React.useEffect(() => () => openNotice.close(), [openNotice]);
+
+  // Back, or to the Cycle counts tab when the scanner is the only screen (a
+  // link opened it): going back would then do nothing and leave it open.
+  function leave() {
+    if (router.canGoBack()) router.back();
+    else router.replace('/cycle-counts');
+  }
   // The count screen's question (screen-access.ts): the lines saved on this
   // phone are read only for a member who may see cycle counts.
   const access = useDrawerEntryAccess('/cycle-counts');
@@ -145,19 +166,21 @@ function CycleCountScanScreenInner() {
             ? NOT_SYNCED_YET
             : null;
     if (refused !== null) {
-      Alert.alert(access === 'denied' ? 'Not available' : 'Could not open this count', refused, [
-        { text: 'OK', onPress: () => router.back() },
-      ]);
+      openNotice.say(
+        access === 'denied' ? 'Not available' : 'Could not open this count',
+        refused,
+        leave,
+      );
       return;
     }
     const snap = await getCycleCount(id);
     if (!snap) {
       // Detail screen handles the offline-uncached state; if we land
       // here without a cache there's nothing to scan against.
-      Alert.alert(
+      openNotice.say(
         'No cached lines',
         'Open this cycle count from the list once while online so it can be cached for offline scanning.',
-        [{ text: 'OK', onPress: () => router.back() }],
+        leave,
       );
       return;
     }
@@ -179,7 +202,10 @@ function CycleCountScanScreenInner() {
     const key = { id, orgId, userId: user?.id ?? null, access };
     if (countLoadClearsScreen(lastLinesKey.current, key)) {
       // Another count, workspace or account: what was read for the previous
-      // one must not stay drawn while this one is read.
+      // one must not stay drawn while this one is read. A confirm sheet
+      // typed for another account or workspace closes unsaved
+      // (countLoadDraftAction).
+      if (countLoadDraftAction(lastLinesKey.current, key) === 'drop') setSheet(null);
       setLines([]);
       setScannedMap(new Map());
     }
@@ -257,7 +283,7 @@ function CycleCountScanScreenInner() {
       snap = null;
     }
     if (!snap) {
-      router.back();
+      leave();
       return;
     }
     setLines(snap.lines);
@@ -391,7 +417,7 @@ function CycleCountScanScreenInner() {
           <View style={styles.topBar}>
             <Pressable
               style={styles.closeFrame}
-              onPress={() => router.back()}
+              onPress={leave}
               accessibilityRole="button"
               accessibilityLabel="Done"
             >

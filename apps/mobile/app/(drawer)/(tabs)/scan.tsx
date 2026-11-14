@@ -260,7 +260,9 @@ export default function Scan() {
 
   /** Loads an item's rich detail (with image + location name) by id. */
   async function loadItemById(id: string): Promise<FoundItem | null | 'failed'> {
-    if (!orgId) return null;
+    // No workspace known yet: nothing can be looked up in it, which is a
+    // failed lookup (said as one), never "not in this workspace".
+    if (!orgId) return 'failed';
     // STOCK IN WAREHOUSES THIS MEMBER CANNOT SEE (0371). It needs only the id,
     // so it starts NOW, alongside the item read, never chained after the
     // holdings read below. It never rejects; a failure resolves 'unavailable'.
@@ -374,7 +376,8 @@ export default function Scan() {
   async function loadItemByValue(
     value: string,
   ): Promise<FoundItem | null | 'ambiguous' | 'failed'> {
-    if (!orgId) return null;
+    // No workspace known yet: a failed lookup, as in loadItemById.
+    if (!orgId) return 'failed';
     // Strip characters that would break the `.or(...)` filter string (a
     // stray `,`/`()`/`%` in a scanned barcode would otherwise be parsed as
     // extra filter clauses) — mirrors the web lookup route's sanitization.

@@ -103,7 +103,7 @@ import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
 import { useCreateControlOffer } from '@/lib/use-screen-access';
 import { useTheme } from '@/lib/use-theme';
-import { useWorkspace } from '@/lib/use-workspace';
+import { NO_WORKSPACE_LINE, retryWorkspace, useWorkspace } from '@/lib/use-workspace';
 import { inventoryViewPredicate } from '@stockpilot/core';
 
 interface BookRow {
@@ -198,7 +198,7 @@ export default function BooksScreen() {
   // Org + warehouse both come from the workspace switcher so they stay in
   // sync. (Sourcing orgId from useOrg's .limit(1) while taking the warehouse
   // from the active workspace mismatched on org switch → empty list.)
-  const { activeOrgId: orgId, activeWarehouseId } = useWorkspace();
+  const { activeOrgId: orgId, activeWarehouseId, loading: workspaceLoading } = useWorkspace();
   const navigation = useNavigation();
   const { c } = useTheme();
   // Liquid Glass (inferred from the iOS Lookup board, as the Items tab): the
@@ -292,6 +292,13 @@ export default function BooksScreen() {
   // A list read that FAILED is not an empty shelf: shown above the list rather
   // than left to "No books match.".
   const [loadError, setLoadError] = React.useState<string | null>(null);
+  // No workspace could be loaded (a first sign-in offline): the read never
+  // starts, so the list says so, with a pull that loads the workspace again,
+  // never a skeleton that does not end. Every place that asks whether the
+  // read failed asks listFailed, so no count is quoted and the empty list is
+  // a list that did not load.
+  const noWorkspace = !orgId && !workspaceLoading;
+  const listFailed = noWorkspace || loadError !== null;
   // Load token: only the newest load may write state. The load is debounced
   // and pull-to-refresh can overlap it, so an older load finishing late could
   // otherwise put back its (possibly failed) answer over a newer one.
@@ -606,6 +613,15 @@ export default function BooksScreen() {
   }, [q, filter, bookCatIds, load, orgId]);
 
   async function refresh() {
+    if (noWorkspace) {
+      setRefreshing(true);
+      try {
+        await retryWorkspace();
+      } finally {
+        setRefreshing(false);
+      }
+      return;
+    }
     setRefreshing(true);
     await load(q, filter, bookCatIds);
     setRefreshing(false);
@@ -960,7 +976,7 @@ export default function BooksScreen() {
           {/* Liquid Glass says the count under the search field, as the board. */}
           {lg ? null : (
             <Eyebrow>
-              {loadError !== null
+              {listFailed
                 ? 'INVENTORY · PLACEMENTS'
                 : `INVENTORY · ${datasetRowCount.toLocaleString()} PLACEMENTS`}
             </Eyebrow>
@@ -1033,7 +1049,7 @@ export default function BooksScreen() {
           {/* The board's count line (.ios-sub num): the placements the list holds. */}
           {lg ? (
             <GlassSubline style={GLASS_LOOKUP.count}>
-              {loadError !== null
+              {listFailed
                 ? 'Placements'
                 : glassCountLine(datasetRowCount, 'placement', 'placements')}
             </GlassSubline>
@@ -1057,7 +1073,11 @@ export default function BooksScreen() {
           ) : null}
 
           {/* A READ that failed is not an empty shelf. */}
-          {loadError !== null ? (
+          {noWorkspace ? (
+            <Body size={11.5} color={c.warnText} style={{ marginTop: 8 }}>
+              {NO_WORKSPACE_LINE}
+            </Body>
+          ) : loadError !== null ? (
             <Body size={11.5} color={c.warnText} style={{ marginTop: 8 }}>
               {`Could not load books: ${loadError}. Pull to retry.`}
             </Body>
@@ -1074,7 +1094,7 @@ export default function BooksScreen() {
         </View>
       </SafeAreaView>
 
-      {loading ? (
+      {loading && !noWorkspace ? (
         <BookListSkeleton count={6} />
       ) : (
         <FlatList
@@ -1094,7 +1114,7 @@ export default function BooksScreen() {
           ListEmptyComponent={
             /* A failed read leaves no rows. Saying "No books match." under the
                failure notice would contradict it. */
-            loadError !== null ? (
+            listFailed ? (
               <View style={styles.empty}>
                 <Display size={18}>Books did not load.</Display>
                 <Body muted style={{ marginTop: 6, textAlign: 'center' }}>

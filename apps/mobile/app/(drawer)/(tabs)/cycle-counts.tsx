@@ -80,6 +80,7 @@ import {
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { retrySavedAccess, useDrawerEntryAccess } from '@/lib/use-screen-access';
+import { retryWorkspace } from '@/lib/use-workspace';
 import { FONT, RADIUS, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useRole } from '@/lib/use-role';
@@ -304,7 +305,21 @@ export default function CycleCounts() {
         },
       );
 
-      if (!activeOrg) return; // the workspace is still resolving; its switch loads
+      if (!activeOrg) {
+        // No workspace is known for this account yet (a first sign-in
+        // offline): nothing of any workspace is read or shown. Said, with Try
+        // again, never a spinner that does not end; online, the workspace is
+        // asked for again. When it arrives, the switch effect below loads its
+        // list; a sync that lands changes the saved access, which runs this
+        // load again.
+        needsAccessRef.current = true;
+        setPage(null);
+        setDownloaded(null);
+        setError(NOT_SYNCED_YET);
+        setBusy(false);
+        if (online) void retryWorkspace();
+        return;
+      }
       if (!online) {
         // Offline: only what this device downloaded, and only for a member
         // who may see cycle counts; until that is known, nothing is claimed.
@@ -500,8 +515,17 @@ export default function CycleCounts() {
     // What the phone saved about this member's access could not be read: a
     // pull reads it again first (a change of it loads the list again too).
     if (storedAccessRef.current === 'unreadable') await retrySavedAccess();
+    // No workspace known yet: it is asked for first (its arrival loads the list).
+    if (!orgRef.current) await retryWorkspace();
     await load(viewRef.current, { withSummary: true });
     setRefreshing(false);
+  }
+
+  // Try again under the error: with no workspace known yet, the workspace is
+  // asked for first, offline too (the member asked).
+  async function tryAgain() {
+    if (!orgRef.current) await retryWorkspace();
+    await load(view, { withSummary: !summary });
   }
 
   // Downloaded counts are shown offline, and under the error when an online
@@ -618,12 +642,12 @@ export default function CycleCounts() {
             <Body size={12.5} muted>
               {error}
             </Body>
-            {offline ? null : (
+            {offline && orgId ? null : (
               <Button
                 size="sm"
                 variant="outline"
                 disabled={busy}
-                onPress={() => void load(view, { withSummary: !summary })}
+                onPress={() => void tryAgain()}
                 style={TAP}
               >
                 {busy ? 'Trying again…' : 'Try again'}

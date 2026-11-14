@@ -96,7 +96,7 @@ import {
 import { FONT, RADIUS } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useWarehouseScope, warehouseScopeMessage } from '@/lib/warehouse-scope';
-import { useWorkspace } from '@/lib/use-workspace';
+import { NO_WORKSPACE_LINE, retryWorkspace, useWorkspace } from '@/lib/use-workspace';
 import { MobileTour } from '@/components/onboarding/mobile-tour';
 import { useTourActive, useTourTarget, useTourVisible } from '@/lib/tour-targets';
 import {
@@ -235,7 +235,7 @@ export default function Inventory() {
   const { fontScale } = useWindowDimensions();
   const stackRows = shouldStackRow(fontScale);
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
-  const { activeOrgId, activeWarehouseId } = useWorkspace();
+  const { activeOrgId, activeWarehouseId, loading: workspaceLoading } = useWorkspace();
   // Derived, not stored: orgId IS the workspace switcher's active org. It used
   // to be useState mirrored from activeOrgId by an effect, which is the same
   // value one render late.
@@ -300,6 +300,13 @@ export default function Inventory() {
   /** A refused list read, disclosed above the list. Never a silent empty state
    *  — an error is not the same claim as "this org has no items". */
   const [loadError, setLoadError] = React.useState<string | null>(null);
+  // No workspace could be loaded (a first sign-in offline): the read never
+  // starts, so the list says so, with a pull that loads the workspace again,
+  // never a skeleton that does not end. Every place that asks whether the
+  // read failed asks listFailed, so no count is quoted and the empty list is
+  // a list that did not load.
+  const noWorkspace = !orgId && !workspaceLoading;
+  const listFailed = noWorkspace || loadError !== null;
   // Load token: only the newest load may write state. The load is debounced
   // and pull-to-refresh can overlap it, so an older load finishing late could
   // otherwise put back its rows, or its error, over a newer answer.
@@ -665,6 +672,15 @@ export default function Inventory() {
   }, [q, filter, orgId, load, activeWarehouseId]);
 
   async function onRefresh() {
+    if (noWorkspace) {
+      setRefreshing(true);
+      try {
+        await retryWorkspace();
+      } finally {
+        setRefreshing(false);
+      }
+      return;
+    }
     if (!orgId) return;
     setRefreshing(true);
     await load(orgId, q, filter, activeWarehouseId);
@@ -1046,7 +1062,7 @@ export default function Inventory() {
           {/* Liquid Glass says the count under the search field, as the board. */}
           {lg ? null : (
             <Eyebrow>
-              {loadError !== null
+              {listFailed
                 ? 'INVENTORY · ITEMS'
                 : `INVENTORY · ${datasetRowCount.toLocaleString()} ITEMS`}
             </Eyebrow>
@@ -1122,7 +1138,7 @@ export default function Inventory() {
           {/* The board's count line (.ios-sub num): the rows the list holds. */}
           {lg ? (
             <GlassSubline style={GLASS_LOOKUP.count}>
-              {loadError !== null ? 'Items' : glassCountLine(datasetRowCount, 'item', 'items')}
+              {listFailed ? 'Items' : glassCountLine(datasetRowCount, 'item', 'items')}
             </GlassSubline>
           ) : null}
 
@@ -1159,7 +1175,11 @@ export default function Inventory() {
               than left to the list's own "No items match." so a refused
               select — the shape a mobile build takes when it is ahead of the
               database — is visible instead of looking like a clean org. */}
-          {loadError !== null ? (
+          {noWorkspace ? (
+            <Body size={11.5} color={c.warnText} style={{ marginTop: 8 }}>
+              {NO_WORKSPACE_LINE}
+            </Body>
+          ) : loadError !== null ? (
             <Body size={11.5} color={c.warnText} style={{ marginTop: 8 }}>
               {`Could not load items: ${loadError}. Pull to retry — if the app was just updated, the server may still be catching up.`}
             </Body>
@@ -1167,7 +1187,7 @@ export default function Inventory() {
         </View>
       </SafeAreaView>
 
-      {loading ? (
+      {loading && !noWorkspace ? (
         <ItemListSkeleton count={8} />
       ) : (
         <FlatList
@@ -1190,7 +1210,7 @@ export default function Inventory() {
                Ghost only for a genuinely empty org — an empty SEARCH result
                must not claim the org has no items yet. Both states take the
                Books tab's look (its twin), the words unchanged. */
-            loadError !== null ? (
+            listFailed ? (
               <View style={styles.empty}>
                 <Display size={18}>Items did not load.</Display>
                 <Body muted style={{ marginTop: 6, textAlign: 'center' }}>

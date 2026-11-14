@@ -18,6 +18,7 @@ import { Body, Mono } from '@/components/ui/text';
 import { createSequenceGuard } from '@/lib/debounced-list-load';
 import { joinMemberProfiles, loadOrgMembers } from '@/lib/org-members';
 import { useOrg } from '@/lib/use-org';
+import { retryWorkspace } from '@/lib/use-workspace';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -46,7 +47,7 @@ const ROLE_PILL: Record<string, { label: string; status: 'ok' | 'warn' | 'crit' 
 };
 
 export default function TeamScreen() {
-  const { orgId } = useOrg();
+  const { orgId, loading: workspaceLoading } = useOrg();
   // Liquid Glass (inferred from Routes-Gallery-2's team rows): the members as
   // one grouped surface, each a monogram, the name, the e-mail and the role.
   const lg = useGlass();
@@ -117,10 +118,17 @@ export default function TeamScreen() {
     void load();
   }, [load]);
 
+  // No workspace could be loaded: the read never starts, so say so (a pull
+  // loads the workspace again), never a spinner that does not end.
+  const noWorkspace = !orgId && !workspaceLoading;
+
   async function refresh() {
     setRefreshing(true);
-    await load();
-    setRefreshing(false);
+    try {
+      await (noWorkspace ? retryWorkspace() : load());
+    } finally {
+      setRefreshing(false);
+    }
   }
 
   const accepted = rows.filter((r) => r.accepted_at).length;
@@ -130,10 +138,10 @@ export default function TeamScreen() {
     <DataListScreen
       eyebrow={
         lg
-          ? loadFailed
+          ? loadFailed || noWorkspace
             ? 'Team'
             : `${accepted} ${accepted === 1 ? 'member' : 'members'}${pending > 0 ? ` · ${pending} pending` : ''}`
-          : loadFailed
+          : loadFailed || noWorkspace
             ? 'TEAM'
             : `TEAM · ${accepted} MEMBERS${pending > 0 ? ` · ${pending} PENDING` : ''}`
       }
@@ -145,15 +153,20 @@ export default function TeamScreen() {
       // The failed read in its own words, through the list's failed state
       // (a warning glyph and an alert), never the empty team's words.
       failed={
-        loadFailed
+        noWorkspace
           ? {
-              title: 'Could not load the team.',
+              title: 'Could not load your workspace.',
               body: 'Check your connection and pull down to try again.',
             }
-          : null
+          : loadFailed
+            ? {
+                title: 'Could not load the team.',
+                body: 'Check your connection and pull down to try again.',
+              }
+            : null
       }
       data={rows}
-      loading={loading}
+      loading={!noWorkspace && loading}
       refreshing={refreshing}
       onRefresh={refresh}
       keyExtractor={(m, i) => m.user_id || `pending-${i}`}

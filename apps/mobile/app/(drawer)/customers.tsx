@@ -10,7 +10,7 @@ import { Body, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { createSequenceGuard } from '@/lib/debounced-list-load';
 import { supabase } from '@/lib/supabase';
-import { useWorkspace } from '@/lib/use-workspace';
+import { retryWorkspace, useWorkspace } from '@/lib/use-workspace';
 import { useTheme } from '@/lib/use-theme';
 
 interface CustomerRow {
@@ -43,7 +43,7 @@ const ACCOUNTS_LOAD_FAILED = {
  */
 export default function CustomersScreen() {
   const { user } = useAuth();
-  const { activeOrgId } = useWorkspace();
+  const { activeOrgId, loading: workspaceLoading } = useWorkspace();
   // The accounts with the workspace they were read for, drawn only for the
   // workspace on screen: after a switch, never the previous workspace's
   // accounts while this one's read is out, or after it failed.
@@ -87,10 +87,17 @@ export default function CustomersScreen() {
     void load();
   }, [load]);
 
+  // No workspace could be loaded: the read never starts, so say so (a pull
+  // loads the workspace again), never a spinner that does not end.
+  const noWorkspace = !activeOrgId && !workspaceLoading;
+
   async function refresh() {
     setRefreshing(true);
-    await load();
-    setRefreshing(false);
+    try {
+      await (noWorkspace ? retryWorkspace() : load());
+    } finally {
+      setRefreshing(false);
+    }
   }
 
   async function setStatus(row: CustomerRow, active: boolean) {
@@ -129,7 +136,7 @@ export default function CustomersScreen() {
     <DataListScreen
       // A read that failed with nothing on screen quotes no count.
       eyebrow={
-        loadFailed && rows.length === 0
+        (noWorkspace || loadFailed) && rows.length === 0
           ? 'B2B'
           : `B2B · ${rows.filter((r) => r.status === 'active').length} ACTIVE`
       }
@@ -138,9 +145,18 @@ export default function CustomersScreen() {
       emptyTitle="No accounts yet."
       emptyBody="Create B2B accounts on the web dashboard (Accounts) — assign a price list and catalog, invite portal users, and their orders flow into your normal approval queue."
       emptyIcon={Handshake}
-      failed={loadFailed ? ACCOUNTS_LOAD_FAILED : null}
+      failed={
+        noWorkspace
+          ? {
+              title: 'Could not load your workspace.',
+              body: 'Check your connection and pull down to try again.',
+            }
+          : loadFailed
+            ? ACCOUNTS_LOAD_FAILED
+            : null
+      }
       data={rows}
-      loading={loading}
+      loading={!noWorkspace && loading}
       refreshing={refreshing}
       onRefresh={refresh}
       keyExtractor={(c) => c.id}

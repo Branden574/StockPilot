@@ -537,6 +537,10 @@ async function rereadSavedAccess(): Promise<void> {
   ]);
 }
 
+/** What a list screen says over its list when no workspace could be loaded (a pull calls retryWorkspace). */
+export const NO_WORKSPACE_LINE =
+  'Could not load your workspace. Check your connection and pull down to try again.';
+
 /** The retry running now (see retryWorkspace). */
 let retrying: Promise<void> | null = null;
 

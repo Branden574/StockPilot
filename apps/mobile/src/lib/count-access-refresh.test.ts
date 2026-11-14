@@ -131,10 +131,11 @@ describe('the count screen', () => {
       'const loadKeyNow = React.useEffectEvent(() => ({ key: { id, orgId, userId, access }, linesShown: lines.length > 0, }));',
     );
     // Quiet: as it was. Full: another count, workspace or account than the
-    // one on screen clears the header and the lines first; and the load runs
-    // again when the account changes.
+    // one on screen clears the header, the lines and the drafts first (the
+    // drafts' waiting saves dropped or saved: count-drafts-cleared.test.ts);
+    // and the load runs again when the account changes.
     expect(src).toMatch(
-      /React\.useEffect\(\(\) => \{ const \{ key, linesShown \} = loadKeyNow\(\); const quiet = countReloadIsQuiet\(lastLoadKey\.current, key, linesShown\); const clear = countLoadClearsScreen\(lastLoadKey\.current, key\); lastLoadKey\.current = key; if \(quiet\) \{ void load\(\); return; \} if \(clear\) \{ setHeader\(null\); setLines\(\[\]\); \} setLoading\(true\); setReadError\(null\); setEmptyState\('none'\); void load\(\); \}, \[load, userId\]\);/,
+      /React\.useEffect\(\(\) => \{ const \{ key, linesShown \} = loadKeyNow\(\); const quiet = countReloadIsQuiet\(lastLoadKey\.current, key, linesShown\); const clear = countLoadClearsScreen\(lastLoadKey\.current, key\); const drafts = countLoadDraftAction\(lastLoadKey\.current, key\); lastLoadKey\.current = key; if \(quiet\) \{ void load\(\); return; \} if \(clear\) \{ if \(drafts === 'drop'\) lineSaver\.dropAll\(\); else lineSaver\.flushAll\(\); setDraft\(\{\}\); setHeader\(null\); setLines\(\[\]\); \} setLoading\(true\); setReadError\(null\); setEmptyState\('none'\); void load\(\); \}, \[load, userId, lineSaver\]\);/,
     );
   });
 });
@@ -144,7 +145,7 @@ describe('the scanner', () => {
     const src = code(SCANNER);
     expect(src).toContain('const lastLinesKey = React.useRef<CountLoadKey | null>(null);');
     expect(src).toMatch(
-      /React\.useEffect\(\(\) => \{ if \(!id\) return; const key = \{ id, orgId, userId: user\?\.id \?\? null, access \}; if \(countLoadClearsScreen\(lastLinesKey\.current, key\)\) \{ setLines\(\[\]\); setScannedMap\(new Map\(\)\); \} lastLinesKey\.current = key; if \(!user\) return; void loadLines\(\); \}, \[user, id, orgId, access\]\);/,
+      /React\.useEffect\(\(\) => \{ if \(!id\) return; const key = \{ id, orgId, userId: user\?\.id \?\? null, access \}; if \(countLoadClearsScreen\(lastLinesKey\.current, key\)\) \{ if \(countLoadDraftAction\(lastLinesKey\.current, key\) === 'drop'\) setSheet\(null\); setLines\(\[\]\); setScannedMap\(new Map\(\)\); \} lastLinesKey\.current = key; if \(!user\) return; void loadLines\(\); \}, \[user, id, orgId, access\]\);/,
     );
   });
 
