@@ -1,4 +1,5 @@
 import { withApiContext } from '@/lib/auth/api-context';
+import { answerModuleState } from '@/server/lib/api-error-response';
 import { getReleaseFor } from '@/server/services/releases';
 
 export const runtime = 'nodejs';
@@ -21,7 +22,14 @@ export async function GET(
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || slug.length > 80) {
     return Response.json({ error: 'not_found' }, { status: 404, headers: NO_STORE });
   }
-  const release = await getReleaseFor(ctx, slug);
+  let release: Awaited<ReturnType<typeof getReleaseFor>>;
+  try {
+    release = await getReleaseFor(ctx, slug);
+  } catch (e) {
+    // A module state that could not be read is the fixed try-again answer,
+    // never "not for you" (docket S81).
+    return answerModuleState(e, 'api.v1.me.releases.slug', { headers: NO_STORE });
+  }
   if (!release) return Response.json({ error: 'not_found' }, { status: 404, headers: NO_STORE });
   return Response.json({ release }, { headers: NO_STORE });
 }

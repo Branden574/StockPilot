@@ -2,11 +2,12 @@ import 'server-only';
 
 import { NextResponse } from 'next/server';
 
-import { contextUnavailableBody } from '@stockpilot/core';
+import { contextUnavailableBody, type ModuleId } from '@stockpilot/core';
 
 import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { withApiContext } from '@/lib/auth/api-context';
 import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
+import { moduleStateUnreadable } from '@/lib/modules/module-state';
 import type { ServiceContext } from '@/server/services/context';
 
 /**
@@ -44,6 +45,18 @@ import type { ServiceContext } from '@/server/services/context';
  * (recurring pattern #23). Nothing is reported here: the loaders already
  * report both failures (`auth.permissions.read`, `auth.account-status.read`).
  *
+ * THE MODULES THE ROUTE NEEDS (docket S81). `opts.modules` names the
+ * optional modules the route refuses without. When withApiContext could not
+ * read the organization's module state, it holds the state as unknown
+ * (lib/modules/module-state.ts) instead of as "off", and a module named here
+ * whose state is unknown gets the same marker, from here, before the route
+ * does anything: without it the service's module check would refuse later,
+ * inside the route's own catch, as a 5xx the phone reads as "not confirmed".
+ * A module that is really off is not refused here: the route answers it as it
+ * always has (403 `module_disabled`). A route that names no module is never
+ * refused for the module state, so the stock adjustment, which reads none,
+ * does not fail more often.
+ *
  * Shape as returnsContext (app/api/v1/returns/http.ts): `{ response }` to
  * answer at once, or `{ ctx }`, where a null ctx is the route's own 401.
  * Registered in GATE_MODULES (test/route-write-handlers.ts), so the cookie
@@ -52,25 +65,34 @@ import type { ServiceContext } from '@/server/services/context';
  */
 export async function apiContextGate(
   req: Request,
+  opts?: { modules?: readonly ModuleId[] },
 ): Promise<{ ctx: ServiceContext | null } | { response: NextResponse }> {
   let ctx: ServiceContext | null;
   try {
     ctx = await withApiContext(req);
   } catch (e) {
     if (e instanceof PermissionsUnavailableError || e instanceof AccountStatusUnavailableError) {
-      // The class only: the loader that refused has already reported the read.
-      console.warn(
-        '[api-context-gate] access could not be checked, refused before any work:',
-        e.name,
-      );
-      return {
-        response: NextResponse.json(contextUnavailableBody(), {
-          status: 503,
-          headers: { 'Retry-After': '5', 'Cache-Control': 'no-store' },
-        }),
-      };
+      return refusedBeforeAnyWork(e.name);
     }
     throw e;
   }
+  if (ctx && opts?.modules?.some((id) => moduleStateUnreadable(ctx.enabledModules, id))) {
+    return refusedBeforeAnyWork('ModulesUnavailableError');
+  }
   return { ctx };
+}
+
+/** The marker, and one log line that names the class and never a message. */
+function refusedBeforeAnyWork(className: string): { response: NextResponse } {
+  // The class only: the loader that refused has already reported the read.
+  console.warn(
+    '[api-context-gate] access could not be checked, refused before any work:',
+    className,
+  );
+  return {
+    response: NextResponse.json(contextUnavailableBody(), {
+      status: 503,
+      headers: { 'Retry-After': '5', 'Cache-Control': 'no-store' },
+    }),
+  };
 }

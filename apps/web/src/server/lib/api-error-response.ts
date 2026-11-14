@@ -7,6 +7,7 @@ import { ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY } from '@stockpilot/core';
 import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { ForbiddenError } from '@/lib/auth/warehouse';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError, type ErrorContext } from '@/lib/error-reporter';
 import { asReportableError } from '@/lib/error-text';
@@ -66,7 +67,10 @@ export interface InternalErrorResponseOptions {
  * throws them when its fallback read fails) answers its own fixed sentence,
  * with the route's status and code, and is reported as a warning: the
  * routes answered those sentences before S16, and the failed read is not the
- * route's fault (S31).
+ * route's fault (S31). A module state that could not be read
+ * (ModulesUnavailableError, thrown when a route asks about a module whose
+ * state withApiContext could not read, S81) is answered the same way: a 5xx
+ * the phone retries, never the 403 a module that is off gets.
  *
  * The guard app/api/no-raw-error-text.guard.test.ts fails an API route that
  * answers an error's own text again.
@@ -77,7 +81,11 @@ export function internalErrorResponse(
   opts: InternalErrorResponseOptions = {},
 ): NextResponse {
   rethrowControlFlow(e);
-  if (e instanceof PermissionsUnavailableError || e instanceof AccountStatusUnavailableError) {
+  if (
+    e instanceof PermissionsUnavailableError ||
+    e instanceof AccountStatusUnavailableError ||
+    e instanceof ModulesUnavailableError
+  ) {
     void reportError(e, reportContext(tag, { ...opts, level: 'warning' }));
     return NextResponse.json(
       { ...opts.body, error: opts.code ?? 'internal_error', message: e.message },
@@ -93,6 +101,30 @@ export function internalErrorResponse(
     },
     { status: opts.status ?? 500, ...(opts.headers ? { headers: opts.headers } : {}) },
   );
+}
+
+/**
+ * A module state the API context could not read (ModulesUnavailableError,
+ * docket S81), answered as internalErrorResponse answers it: the route's 5xx
+ * with the class's fixed try-again sentence, reported once as a warning under
+ * the route's tag. Anything else is thrown again unchanged, so a catch that
+ * calls this changes nothing but this one answer:
+ *
+ *   } catch (e) {
+ *     return answerModuleState(e, 'api.v1.example', { headers: NO_STORE });
+ *   }
+ *
+ * Route handlers have no shared wrapper around their bodies, so each path that
+ * can ask about a module ends in a catch like this or in internalErrorResponse
+ * (app/api/module-state-reach.guard.test.ts holds every route to it).
+ */
+export function answerModuleState(
+  e: unknown,
+  tag: string,
+  opts: InternalErrorResponseOptions = {},
+): NextResponse {
+  if (e instanceof ModulesUnavailableError) return internalErrorResponse(e, tag, opts);
+  throw e;
 }
 
 /**
