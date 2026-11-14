@@ -3,6 +3,7 @@ import 'server-only';
 import { revalidateTag, unstable_cache } from 'next/cache';
 
 import { createAdminClient } from '@/lib/supabase/admin';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { sha256Hex } from '@/lib/token-hash';
 
 import { fetchAllRowsByIds, reportDegradedRead, settleAsDataError } from './lib/fetch-by-ids';
@@ -144,17 +145,30 @@ const resolvePublicRequestTokenCached = unstable_cache(
     // catalog after an org turned the module off (entitlement boundary
     // enforced write-only). Same posture as submit: optional module, an
     // explicit enabled row is required; resolver returns null → the page
-    // 404s without leaking that the org exists. A query error also lands on
-    // null (fail closed). Cached with the resolution (60s TTL bounds a
-    // module toggle; link mutations revalidate the tag).
+    // 404s without leaking that the org exists. Cached with the resolution
+    // (60s TTL bounds a module toggle; link mutations revalidate the tag).
+    //
+    // A module state that could not be read is NOT that null. supabase-js
+    // resolves a failed read as `{ data: null, error }`, the shape of "no
+    // enabled row", so the read's error is checked and thrown (the submit
+    // route answers its own module read error as a 500 too). unstable_cache
+    // stores nothing for a call that throws: only an answer is cached, the
+    // page reaches its error state with Try again, and the next request
+    // reads again. Still closed: nothing is shown on a read that did not
+    // answer.
     const moduleEnabled = async (orgId: string): Promise<boolean> => {
-      const { data } = await admin
+      const { data, error } = await admin
         .from('organization_modules')
         .select('module_id')
         .eq('organization_id', orgId)
         .eq('module_id', 'public_requests')
         .eq('enabled', true)
         .maybeSingle();
+      if (error) {
+        // The code only: a message can quote request details.
+        console.error('[public-catalog] module state unreadable:', error.code || 'unknown');
+        throw new ModulesUnavailableError();
+      }
       return Boolean(data);
     };
 

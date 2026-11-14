@@ -167,12 +167,27 @@ export async function loadShortfallPoAction(input: z.input<typeof loadShortfallS
     rethrowControlFlow(e);
     return NOTHING_LOADED;
   }
-  const allowed = canDraftShortfallPo({
-    isManager: isManagerOrAbove(ctx.role),
-    canManagePurchaseOrders: can(ctx, 'purchase_orders:manage'),
-    ordersModule: isModuleEnabled(ctx, 'orders'),
-    purchaseOrdersModule: isModuleEnabled(ctx, 'purchase_orders'),
-  });
+  let allowed: boolean;
+  try {
+    allowed = canDraftShortfallPo({
+      isManager: isManagerOrAbove(ctx.role),
+      canManagePurchaseOrders: can(ctx, 'purchase_orders:manage'),
+      ordersModule: isModuleEnabled(ctx, 'orders'),
+      purchaseOrdersModule: isModuleEnabled(ctx, 'purchase_orders'),
+    });
+  } catch (e) {
+    // A module state the context could not read (ModulesUnavailableError):
+    // nothing is read, which is this action's "could not be read" answer (the
+    // dialog keeps the view it has), never "not allowed", and it still never
+    // throws. Reported, as the supplier half's failed read is below.
+    rethrowControlFlow(e);
+    void reportError(e, {
+      tag: 'actions.orders.shortfall_po_modules',
+      level: 'warning',
+      organizationId: ctx.organizationId,
+    });
+    return NOTHING_LOADED;
+  }
   if (!allowed) return NOTHING_LOADED;
   const suppliersSvc = new SuppliersService(ctx);
   const [readiness, suppliers] = await Promise.allSettled([

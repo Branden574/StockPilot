@@ -168,6 +168,70 @@ describe('GET /api/v1/public/catalog-thumbnails', () => {
   });
 });
 
+describe('GET /api/v1/public/catalog-thumbnails: an answer is cached only when its reads answered', () => {
+  const FAILED = { data: null, error: { message: 'upstream timeout', code: '57014' } };
+  const CDN = 'public, s-maxage=60, stale-while-revalidate=300';
+
+  /** An open link, with one read replaced. */
+  function openLinkWith(overrides: Record<string, unknown>) {
+    const stub = makeSupabaseStub({
+      'public_request_links.select': {
+        data: {
+          id: LINK,
+          organization_id: ORG,
+          active: true,
+          expires_at: null,
+          available_from: null,
+          available_until: null,
+        },
+        error: null,
+      },
+      'organization_modules.select': { data: { module_id: 'public_requests' }, error: null },
+      'warehouses.select': { data: { id: WH }, error: null },
+      'rpc:public_link_eligible_items': {
+        data: ITEMS.map((item_id) => ({ item_id })),
+        error: null,
+      },
+      ...overrides,
+    } as never);
+    admin.current = stub.client;
+    return stub;
+  }
+
+  it('a module that is off answers the empty map, cached at the CDN as before', async () => {
+    openLinkWith({ 'organization_modules.select': { data: null, error: null } });
+    const res = await get(QUERY);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ urls: {} });
+    expect(res.headers.get('cache-control')).toBe(CDN);
+  });
+
+  it.each([
+    ['the module state', 'organization_modules.select'],
+    ['the link', 'public_request_links.select'],
+    ['the warehouse', 'warehouses.select'],
+    ['the eligible items', 'rpc:public_link_eligible_items'],
+  ])(
+    '%s could not be read: 503, no-store, retry-after, and no empty map for the CDN to keep',
+    async (_name, key) => {
+      openLinkWith({ [key]: FAILED });
+      const res = await get(QUERY);
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({ error: 'unavailable' });
+      expect(res.headers.get('cache-control')).toBe('no-store');
+      expect(res.headers.get('retry-after')).toBe('5');
+      expect(signed.ids).toEqual([]);
+    },
+  );
+
+  it('the module state could not be read: nothing past it is read', async () => {
+    const stub = openLinkWith({ 'organization_modules.select': FAILED });
+    await get(QUERY);
+    expect(stub.fromCalls).toEqual(['public_request_links', 'organization_modules']);
+    expect(stub.rpcCalls).toEqual([]);
+  });
+});
+
 describe('GET /api/v1/public/catalog-thumbnails: ordering visibility (0413)', () => {
   /** A token that is a links row (open, eligible items as given) or a legacy
    *  organization token (no links row, but an organization that has it). */

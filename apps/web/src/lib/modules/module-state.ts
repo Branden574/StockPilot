@@ -167,3 +167,20 @@ export function moduleStateUnreadable(modules: ReadonlySet<ModuleId>, id: Module
     throw e;
   }
 }
+
+/**
+ * A page gate's answer (checkModuleAccess, lib/modules/module-gate) for a
+ * page that asks about a module that is NOT its own gate: a form's extra
+ * fields, a card, a shortcut. True when the module is on, false when it is
+ * off, and ModulesUnavailableError when its state could not be read
+ * (`checkFailed`): the page then reaches its error state with Try again
+ * instead of being drawn as if the module were off.
+ *
+ * A page's OWN gate does not use this: it draws ModuleUnavailable, which has
+ * a "could not check" panel of its own. Pure, so a test that replaces
+ * checkModuleAccess keeps this rule.
+ */
+export function moduleAnswer(access: { enabled: boolean; checkFailed?: boolean }): boolean {
+  if (access.checkFailed) return refuse();
+  return access.enabled;
+}

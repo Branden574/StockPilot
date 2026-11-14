@@ -2,8 +2,11 @@ import { randomBytes } from 'node:crypto';
 
 import { NextResponse } from 'next/server';
 
+import { MODULE_STATE_RETRY_AFTER_SECONDS } from '@/lib/auth/api-key';
 import { authorizePublicApi } from '@/lib/auth/public-api';
+import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { orgMayUseModule } from '@/lib/modules/org-may-use-module';
 import { PUBLIC_HOOK_EVENT_TYPES } from '@/server/services/integration-events';
 
@@ -146,10 +149,38 @@ export async function POST(req: Request) {
  * endpoint itself (its `enabled` flag, or DELETE), not the module switch:
  * dispatch has never consulted the module. Returns a 403 response
  * to short-circuit, or null when enabled.
+ *
+ * A state the reads could not decide is not "off" (orgMayUseModule throws
+ * ModulesUnavailableError): 503 with a Retry-After and the try-again
+ * sentence, before the route reads or writes anything.
  */
 async function requireIntegrationsModule(organizationId: string): Promise<NextResponse | null> {
   const admin = createAdminClient();
-  if (!(await orgMayUseModule(admin, organizationId, 'integrations'))) {
+  let mayUse: boolean;
+  try {
+    mayUse = await orgMayUseModule(admin, organizationId, 'integrations');
+  } catch (e) {
+    if (e instanceof ModulesUnavailableError) {
+      void reportError(e, {
+        tag: 'public_api.hooks.module_state',
+        level: 'warning',
+        organizationId,
+      });
+      // The class's own fixed sentence (the app wrote it).
+      return NextResponse.json(
+        { error: e.message },
+        {
+          status: 503,
+          headers: {
+            'retry-after': String(MODULE_STATE_RETRY_AFTER_SECONDS),
+            'cache-control': 'no-store',
+          },
+        },
+      );
+    }
+    throw e;
+  }
+  if (!mayUse) {
     return NextResponse.json(
       { error: 'The Integrations module is not enabled for this organization.' },
       { status: 403 },

@@ -7,6 +7,7 @@ import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { UNEXPECTED_ERROR_MESSAGE } from '@/server/lib/api-error-response';
 import { ServiceError } from '@/server/services/context';
 
@@ -197,6 +198,39 @@ describe('actionErrorResult', () => {
     });
     expect(reportMock).toHaveBeenCalledWith(permissions, { tag: 'actions.x', level: 'warning' });
     expect(reportMock).toHaveBeenCalledWith(status, { tag: 'actions.y', level: 'warning' });
+  });
+
+  it('answers a module state that could not be read with its try-again sentence, reported as a warning, never as module_disabled', () => {
+    const modules = new ModulesUnavailableError();
+    const res = actionErrorResult(modules, 'actions.z', { organizationId: 'org-1' });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message: 'Your access could not be checked. Please try again.',
+      },
+    });
+    expect(reportMock).toHaveBeenCalledTimes(1);
+    expect(reportMock).toHaveBeenCalledWith(modules, {
+      tag: 'actions.z',
+      organizationId: 'org-1',
+      level: 'warning',
+    });
+    // A module that is off keeps its own refusal, unreported.
+    vi.clearAllMocks();
+    expect(
+      actionErrorResult(
+        new ServiceError('module_disabled', 'Module not enabled for this organization: rentals'),
+        'actions.z',
+      ),
+    ).toEqual({
+      ok: false,
+      error: {
+        code: 'module_disabled',
+        message: 'Module not enabled for this organization: rentals',
+      },
+    });
+    expect(reportMock).not.toHaveBeenCalled();
   });
 });
 

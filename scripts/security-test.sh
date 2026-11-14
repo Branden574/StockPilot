@@ -1069,6 +1069,30 @@ WEB_TESTS=(
   src/lib/auth/api-context.membership-answer-shapes.test.ts
   src/lib/auth/api-context.membership-unreadable.test.ts
   src/app/api/v1/membership-unreadable.routes.test.ts
+  # An organization's module state on the web: a state that could not be read
+  # is neither on nor off. withContext() holds it as unknown, so a Server
+  # Action answers its try-again sentence and a page says it could not check;
+  # the single-module check behind the public API key, the webhook
+  # subscriptions and the accounting connect callbacks throws for it (a 503
+  # with Retry-After, or the connect page's transient code); the public
+  # catalog's photo map and token resolution never cache an answer built on a
+  # failed read; the public tracker says when the return link could not be
+  # checked; the customer portal does not take a failed read for "not a portal
+  # user". The guard lists every reader of the module table with what an
+  # unread answer becomes, so a new reader has to be listed. Nothing is
+  # granted on a read that failed.
+  src/lib/modules/module-state-readers.guard.test.ts
+  src/lib/modules/module-state.test.ts
+  src/lib/modules/org-may-use-module.test.ts
+  src/lib/dashboard/request-cache.modules.test.ts
+  src/server/services/context.module-state.test.ts
+  src/server/actions/module-state-unread.actions.test.ts
+  src/lib/auth/api-key.module-gate.test.ts
+  src/lib/auth/public-api.module-state.test.ts
+  src/app/api/public/v1/hooks/route.test.ts
+  src/server/services/public-catalog.module-state.test.ts
+  src/server/services/portal.module-state.test.ts
+  'src/app/(dashboard)/layout.module-state.test.tsx'
   src/app/api/v1/mobile/snapshot/route.step-up.test.ts
   src/app/api/client-error/route.test.ts
   # A session that still owes its authenticator code gets no organization

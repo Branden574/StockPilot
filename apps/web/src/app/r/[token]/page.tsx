@@ -67,7 +67,11 @@ interface WarehouseSummary {
 
 export async function generateMetadata({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
-  const resolved = token && token.length >= 16 ? await resolvePublicRequestToken(token) : null;
+  // The title only: a resolution that could not be read (the resolver throws
+  // rather than cache a failed read as "not found") keeps the plain title
+  // here, and the page below reaches its error state with Try again.
+  const resolved =
+    token && token.length >= 16 ? await resolvePublicRequestToken(token).catch(() => null) : null;
   const orgName = resolved?.org.name ?? 'Order request';
   return {
     title: `${orgName} · Place an order`,

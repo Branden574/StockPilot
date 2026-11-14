@@ -8,6 +8,7 @@ import { ForbiddenError } from '@/lib/auth/warehouse';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError, type ErrorContext } from '@/lib/error-reporter';
 import { asReportableError } from '@/lib/error-text';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { reportContext, UNEXPECTED_ERROR_MESSAGE } from '@/server/lib/api-error-response';
 import { ServiceError } from '@/server/services/context';
 
@@ -72,6 +73,10 @@ export function unexpectedActionError(
  *     retryable conflict (services/order-requests.ts), reported as a warning;
  *   - a permission or account-status check that could not run: its own fixed
  *     sentence, reported as a warning;
+ *   - a module state that could not be read (ModulesUnavailableError, thrown
+ *     when the action asks about a module withContext() could not read): its
+ *     fixed try-again sentence, reported as a warning, never the
+ *     module_disabled a module that is off gets;
  *   - anything else: unexpectedActionError.
  *
  * The guard app/api/no-raw-error-text.guard.test.ts fails a Server Action that
@@ -104,7 +109,11 @@ export function actionErrorResult(
     }
     return err('forbidden', e.message);
   }
-  if (e instanceof PermissionsUnavailableError || e instanceof AccountStatusUnavailableError) {
+  if (
+    e instanceof PermissionsUnavailableError ||
+    e instanceof AccountStatusUnavailableError ||
+    e instanceof ModulesUnavailableError
+  ) {
     void reportError(e, reportContext(tag, { ...opts, level: 'warning' }));
     return err('internal_error', e.message);
   }

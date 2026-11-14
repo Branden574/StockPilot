@@ -6,6 +6,7 @@ import { NON_CORE_MODULE_IDS } from './effective-modules';
 import {
   ModulesUnavailableError,
   UnreadableModuleSet,
+  moduleAnswer,
   moduleSetFromReads,
   moduleStateUnreadable,
 } from './module-state';
@@ -93,5 +94,22 @@ describe('moduleStateUnreadable', () => {
   it('never true for a plain set, whether the module is on or off', () => {
     expect(moduleStateUnreadable(new Set<ModuleId>(['rentals']), 'rentals')).toBe(false);
     expect(moduleStateUnreadable(new Set<ModuleId>(), 'rentals')).toBe(false);
+  });
+});
+
+describe('moduleAnswer: a page gate answer for a module that is not the page\'s own gate', () => {
+  it('on is true and off is false, when the state was read', () => {
+    expect(moduleAnswer({ enabled: true })).toBe(true);
+    expect(moduleAnswer({ enabled: false })).toBe(false);
+    expect(moduleAnswer({ enabled: false, checkFailed: false })).toBe(false);
+  });
+
+  it('a state that could not be read is the try-again error, never false', () => {
+    expect(() => moduleAnswer({ enabled: false, checkFailed: true })).toThrow(
+      ModulesUnavailableError,
+    );
+    expect(() => moduleAnswer({ enabled: false, checkFailed: true })).toThrow(
+      'Your access could not be checked. Please try again.',
+    );
   });
 });

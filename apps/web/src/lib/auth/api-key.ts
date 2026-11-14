@@ -3,8 +3,10 @@ import 'server-only';
 import { createHash, randomBytes } from 'node:crypto';
 
 import { clientIpFromRequest } from '@/lib/client-ip';
+import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { orgMayUseModule } from '@/lib/modules/org-may-use-module';
 import { keepAlive } from '@/server/services/lib/defer';
 
@@ -15,7 +17,8 @@ import { keepAlive } from '@/server/services/lib/defer';
  * DB leak can't yield a usable key (and timing-safe compare is unnecessary at
  * this entropy). The resolver also enforces the `api_access` module being on for
  * the org and a per-key rate limit, and is fully decoupled from the cookie/JWT
- * session auth used by the dashboard + mobile app.
+ * session auth used by the dashboard + mobile app. A module state that could
+ * not be read is answered 503 with a Retry-After, never as "not enabled".
  */
 
 export const API_SCOPES = [
@@ -51,7 +54,12 @@ export function generateApiKey(): { key: string; prefix: string; hash: string } 
 
 export type ApiKeyResult =
   | { ok: true; ctx: ApiKeyContext }
-  | { ok: false; status: 401 | 403 | 429; error: string; retryAfter?: number };
+  | { ok: false; status: 401 | 403 | 429 | 503; error: string; retryAfter?: number };
+
+/** The module check could not be read: a retry, never "not enabled". */
+export const API_ACCESS_UNCHECKED_MESSAGE = 'API access could not be checked. Please try again.';
+/** Seconds a caller is asked to wait before asking again (Retry-After). */
+export const MODULE_STATE_RETRY_AFTER_SECONDS = 5;
 
 /**
  * Resolve + authorize a public-API request from its Bearer key. Returns an
@@ -103,8 +111,30 @@ export async function withApiKey(req: Request): Promise<ApiKeyResult> {
   // enabled row, or the all-modules comp. This is an ACCESS question (an admin
   // minted this key on purpose), so it follows the one rule. Without the comp
   // here, a comped organization is offered the API keys panel and every key it
-  // mints is refused. Fails closed on either read.
-  if (!(await orgMayUseModule(admin, row.organization_id, 'api_access'))) {
+  // mints is refused.
+  //
+  // A state the two reads could not decide is not "off" (orgMayUseModule
+  // throws ModulesUnavailableError for it): the key is answered 503 with a
+  // Retry-After, never the 403 a module that is off gets, and nothing is
+  // served. Reported as a warning: the failed read is not the caller's fault.
+  let mayUse: boolean;
+  try {
+    mayUse = await orgMayUseModule(admin, row.organization_id, 'api_access');
+  } catch (e) {
+    if (!(e instanceof ModulesUnavailableError)) throw e;
+    void reportError(e, {
+      tag: 'public_api.module_state',
+      level: 'warning',
+      organizationId: row.organization_id,
+    });
+    return {
+      ok: false,
+      status: 503,
+      error: API_ACCESS_UNCHECKED_MESSAGE,
+      retryAfter: MODULE_STATE_RETRY_AFTER_SECONDS,
+    };
+  }
+  if (!mayUse) {
     return { ok: false, status: 403, error: 'API access is not enabled for this organization.' };
   }
 

@@ -28,9 +28,26 @@ export const dynamic = 'force-dynamic';
  * refusal is never served to anyone else. There is deliberately no per-token
  * bucket: anyone holding a link could spend it and blank the photos for every
  * other visitor of that link.
+ *
+ * ONLY AN ANSWER IS CACHED. Every "nothing to show" below (no such link, a
+ * closed link, the module off, a warehouse that is not public, no eligible
+ * item) is the empty map with the CDN header, and each is decided by a read.
+ * supabase-js resolves a failed read as `{ data: null, error }`, the same
+ * shape as "no row", so each read's error is checked: a read that failed is
+ * `unavailable()` (503, no-store, Retry-After), never the empty map, and the
+ * CDN keeps nothing built on it. The page's loader
+ * (lib/use-catalog-thumbnails) retries a refusal by itself.
  */
 const PER_IP_PER_HOUR = 120;
 const ONE_HOUR_MS = 60 * 60 * 1000;
+
+/** A read did not answer: never the empty map, and never kept by the CDN. */
+function unavailable(): NextResponse {
+  return NextResponse.json(
+    { error: 'unavailable' },
+    { status: 503, headers: { 'Cache-Control': 'no-store', 'retry-after': '5' } },
+  );
+}
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
@@ -76,11 +93,12 @@ export async function GET(req: NextRequest) {
   // endpoint, so thumbnails can't be used to enumerate items a link
   // doesn't expose.
   // Mig 0330: compare sha256(token) against the hashed at-rest column.
-  const { data: linkRow } = await admin
+  const { data: linkRow, error: linkError } = await admin
     .from('public_request_links')
     .select('id, organization_id, active, expires_at, available_from, available_until')
     .eq('token_hash', sha256Hex(token))
     .maybeSingle();
+  if (linkError) return unavailable();
   type LinkRow = {
     id: string;
     organization_id: string;
@@ -116,35 +134,45 @@ export async function GET(req: NextRequest) {
   // required. Without this, an org that disabled the module kept signing
   // catalog thumbnails for anyone holding an old link. Empty response (not
   // an error) — same shape as every other ineligible branch here.
-  const { data: modRow } = await admin
+  //
+  // A module state that could not be read is not "off": the read's error is
+  // answered as unavailable (see the note at the top), never as the cached
+  // empty map of an organization that switched the module off.
+  const { data: modRow, error: modError } = await admin
     .from('organization_modules')
     .select('module_id')
     .eq('organization_id', organizationId)
     .eq('module_id', 'public_requests')
     .eq('enabled', true)
     .maybeSingle();
+  if (modError) return unavailable();
   if (!modRow) {
     return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
   }
 
   // Confirm warehouseId belongs to this org and is publicly orderable.
-  const { data: wh } = await admin
+  const { data: wh, error: whError } = await admin
     .from('warehouses')
     .select('id')
     .eq('id', warehouseId)
     .eq('organization_id', organizationId)
     .eq('is_public_orderable', true)
     .maybeSingle();
+  if (whError) return unavailable();
   if (!wh) {
     return NextResponse.json({ urls: {} }, { headers: { 'Cache-Control': cdnCacheControl } });
   }
 
   // Eligible item_ids for this link + warehouse, through the same predicate
   // as the page and the submit (it leaves out an item hidden from ordering).
-  const { data: eligibleRows } = await admin.rpc('public_link_eligible_items', {
-    p_link_id: link.id,
-    p_warehouse_id: warehouseId,
-  });
+  const { data: eligibleRows, error: eligibleError } = await admin.rpc(
+    'public_link_eligible_items',
+    {
+      p_link_id: link.id,
+      p_warehouse_id: warehouseId,
+    },
+  );
+  if (eligibleError) return unavailable();
   const itemIds = ((eligibleRows ?? []) as Array<{ item_id: string }>)
     .map((r) => r.item_id)
     .slice(0, 500);
