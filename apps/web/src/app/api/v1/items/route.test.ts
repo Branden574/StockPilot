@@ -4,6 +4,8 @@ import type { ModuleId } from '@stockpilot/core';
 import { createItemSchema } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
@@ -257,6 +259,33 @@ describe('POST /api/v1/items', () => {
     const res = await POST(buildRequest(VALID_BODY));
     expect(res.status).toBe(500);
     expect((await res.json()).error).toBe('internal_error');
+  });
+
+  it('answers a module state that could not be read with the fixed try-again sentence at warning level', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx());
+    const create = vi.fn(async () => {
+      throw new ModulesUnavailableError();
+    });
+    vi.mocked(InventoryService).mockImplementationOnce(function () {
+      return { create } as unknown as InstanceType<typeof InventoryService>;
+    });
+
+    const res = await POST(buildRequest(VALID_BODY));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      error: 'internal_error',
+      message: 'Your access could not be checked. Please try again.',
+    });
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const [err, context] = vi.mocked(reportError).mock.calls[0]!;
+    expect(err).toBeInstanceOf(ModulesUnavailableError);
+    expect(context).toEqual(
+      expect.objectContaining({
+        tag: 'api.v1.items.create.module_state',
+        level: 'warning',
+        organizationId: 'org-1',
+      }),
+    );
   });
 
   it('parses a representative payload with the SAME createItemSchema the web action uses', () => {

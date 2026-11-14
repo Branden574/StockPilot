@@ -167,6 +167,15 @@ function account(email: string | null, more: Record<string, unknown> = {}) {
   return { data: { user: { id: USER_A, email, ...more } }, error: null };
 }
 
+/**
+ * An account with an email change waiting, as GoTrue answers for it: the new
+ * address and the time of the request, which GoTrue stores with every pending
+ * change (now, so a link signed now is that request's own).
+ */
+function pendingChange(email: string, newEmail: string) {
+  return account(email, { new_email: newEmail, email_change_sent_at: new Date().toISOString() });
+}
+
 function signedInAs(id: string, email: string | null) {
   getUser.mockResolvedValueOnce({ data: { user: { id, email } }, error: null });
 }
@@ -450,7 +459,7 @@ describe('GET /auth/confirm names the account the link is for (S25)', () => {
   });
 
   it('an email change names the current address and the one waiting to replace it', async () => {
-    getUserById.mockResolvedValueOnce(account('old@example.com', { new_email: 'new@example.com' }));
+    getUserById.mockResolvedValueOnce(pendingChange('old@example.com', 'new@example.com'));
     const html = await (await GET(getReq(linkQuery({ type: 'email_change' })))).text();
     expect(html).toContain(
       'This link changes the sign-in email of <span class="addr" data-press-gate-see>old@example.com</span> to <span class="addr" data-press-gate-see>new@example.com</span>. If neither address is yours, close this page.',
@@ -467,6 +476,85 @@ describe('GET /auth/confirm names the account the link is for (S25)', () => {
     expect(html).not.toContain('new@example.com');
     expect(html).not.toContain('<form');
     expect(html).not.toContain('<script');
+    expect(reportError).not.toHaveBeenCalled();
+    expect(verifyOtp).not.toHaveBeenCalled();
+  });
+
+  /**
+   * One GET of an email-change link whose account GoTrue returns with these
+   * fields: the expired page with neither address and no form, nothing spent,
+   * no report, and exactly one info line carrying the link type only.
+   */
+  async function expectExpiredWithoutRequestTime(label: string, fields: Record<string, unknown>) {
+    reportError.mockClear();
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    try {
+      const r = signedRef({ type: 'email_change', tokenHash: HASH_A, userId: USER_A });
+      getUserById.mockResolvedValueOnce(
+        account('old@example.com', { new_email: 'new@example.com', ...fields }),
+      );
+      const res = await GET(getReq(linkQuery({ type: 'email_change', r })));
+      expect(res.status, label).toBe(200);
+      const html = await res.text();
+      expect(html, label).toContain('This link has expired or was already used');
+      expect(html, label).not.toContain('old@example.com');
+      expect(html, label).not.toContain('new@example.com');
+      expect(html, label).not.toContain('<form');
+      expect(html, label).not.toContain(HASH_A);
+      expect(verifyOtp, label).not.toHaveBeenCalled();
+      expect(reportError, label).not.toHaveBeenCalled();
+      expect(info, label).toHaveBeenCalledTimes(1);
+      expect(info.mock.calls[0], label).toEqual([
+        '[auth/confirm] email change pending without a request time',
+        { type: 'email_change' },
+      ]);
+      const logged = JSON.stringify(info.mock.calls);
+      for (const secret of [HASH_A, r, USER_A, 'old@example.com', 'new@example.com']) {
+        expect(logged, `${label}: ${secret}`).not.toContain(secret);
+      }
+    } finally {
+      info.mockRestore();
+    }
+  }
+
+  it('an email change waiting without a readable request time: the expired page with neither address, nothing spent, no report, and one info line with the type only', async () => {
+    const variants: Array<[string, Record<string, unknown>]> = [
+      ['absent', {}],
+      ['null', { email_change_sent_at: null }],
+      ['empty', { email_change_sent_at: '' }],
+      ['not a time', { email_change_sent_at: 'not a time' }],
+      ['a number', { email_change_sent_at: 0 }],
+    ];
+    for (const [label, fields] of variants) await expectExpiredWithoutRequestTime(label, fields);
+  });
+
+  it('an email change waiting after a password change (GoTrue keeps the pending address and clears the request time): the expired page, no address, no form, no report, one info line', async () => {
+    // What GoTrue's admin read returns then: new_email present, no
+    // email_change_sent_at key.
+    await expectExpiredWithoutRequestTime('after a password change', {});
+  });
+
+  it('an email change whose request time is far later than the link is a newer request: the expired page, and no report', async () => {
+    getUserById.mockResolvedValueOnce(
+      account('old@example.com', {
+        new_email: 'new@example.com',
+        email_change_sent_at: '2126-01-01T00:00:00Z',
+      }),
+    );
+    const html = await (await GET(getReq(linkQuery({ type: 'email_change' })))).text();
+    expect(html).toContain('This link has expired or was already used');
+    expect(html).not.toContain('new@example.com');
+    expect(reportError).not.toHaveBeenCalled();
+    expect(verifyOtp).not.toHaveBeenCalled();
+  });
+
+  it("an email change whose request is the link's own is answered as before: both addresses, the form, and no report", async () => {
+    getUserById.mockResolvedValueOnce(pendingChange('old@example.com', 'new@example.com'));
+    const html = await (await GET(getReq(linkQuery({ type: 'email_change' })))).text();
+    expect(html).toMatch(
+      /This link changes the sign-in email of <span class="addr"[^>]*>old@example\.com<\/span> to <span class="addr"[^>]*>new@example\.com<\/span>\./,
+    );
+    expect(html).toContain('form method="post"');
     expect(reportError).not.toHaveBeenCalled();
     expect(verifyOtp).not.toHaveBeenCalled();
   });
@@ -814,7 +902,7 @@ describe('GET /auth/confirm in a browser that is already signed in', () => {
   it('signed in as the account the link is for: no notice (it was a false alarm)', async () => {
     signedInAs(USER_A, EMAIL_A);
     // An email change of this account, still waiting on its links.
-    getUserById.mockResolvedValueOnce(account(EMAIL_A, { new_email: 'new@example.com' }));
+    getUserById.mockResolvedValueOnce(pendingChange(EMAIL_A, 'new@example.com'));
     const html = await (await GET(getReq(linkQuery({ type: 'email_change' })))).text();
     expect(html).not.toContain('class="note"');
     expect(html).not.toContain("You're signed in as");
@@ -882,7 +970,7 @@ describe('GET /auth/confirm for each email-change link, by who this browser is s
 
   /** The page for the email-change link with this token hash, the change still waiting. */
   async function page(tokenHash: string): Promise<string> {
-    getUserById.mockResolvedValueOnce(account('old@example.com', { new_email: 'new@example.com' }));
+    getUserById.mockResolvedValueOnce(pendingChange('old@example.com', 'new@example.com'));
     const res = await GET(getReq(linkQuery({ type: 'email_change', tokenHash })));
     expect(res.status).toBe(200);
     return res.text();
@@ -937,7 +1025,7 @@ describe('GET /auth/confirm for each email-change link, by who this browser is s
     const escaped =
       '&quot;&lt;/span&gt;&lt;b title=&#39;t&#39;&gt;x&amp;y&lt;/b&gt;&quot;@example.com';
     signedInAs(USER_B, EMAIL_B);
-    getUserById.mockResolvedValueOnce(account('old@example.com', { new_email: pending }));
+    getUserById.mockResolvedValueOnce(pendingChange('old@example.com', pending));
     const res = await GET(getReq(linkQuery({ type: 'email_change' })));
     expect(res.status).toBe(200);
     const html = await res.text();
@@ -1506,7 +1594,7 @@ describe('/auth/confirm lands where the link type says, not where the link says'
 // ─────────────────────────────────────────────────────────────────────────
 describe('/auth/confirm — email_change', () => {
   it('GET renders the click-through form for an email_change token without consuming it', async () => {
-    getUserById.mockResolvedValueOnce(account('old@example.com', { new_email: 'new@example.com' }));
+    getUserById.mockResolvedValueOnce(pendingChange('old@example.com', 'new@example.com'));
     const res = await GET(getReq(linkQuery({ type: 'email_change' })));
     expect(res.status).toBe(200);
     const html = await res.text();

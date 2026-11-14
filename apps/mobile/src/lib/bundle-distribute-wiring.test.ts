@@ -25,10 +25,11 @@ const APP_DIR = path.resolve(__dirname, '../../app');
 const screen = readFileSync(path.join(APP_DIR, 'bundles', '[id].tsx'), 'utf8');
 const sync = readFileSync(path.join(__dirname, 'sync.ts'), 'utf8');
 
-/** The distribute() function body: from its declaration to the next top-level `if (!bundle)`. */
+/** The distribute() function body: from its declaration to the screen's top-level
+ *  `if (!bundle || access !== 'allowed')` (S75 added the access check to it). */
 function distributeBody(): string {
   const start = screen.indexOf('async function distribute()');
-  const end = screen.indexOf('if (!bundle) {', start);
+  const end = screen.indexOf("if (!bundle || access !== 'allowed') {", start);
   expect(start, 'distribute() not found').toBeGreaterThan(-1);
   expect(end, 'end of distribute() not found').toBeGreaterThan(start);
   return screen.slice(start, end);

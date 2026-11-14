@@ -285,6 +285,8 @@ describe('denied order ticket: a deleted requester is not handed to Zendesk (A3 
   function denyStub(row: Record<string, unknown>) {
     return makeSupabaseStub({
       'order_requests.select.maybeSingle': { data: { warehouse_id: 'wh-1' }, error: null },
+      // The organization's warehouses: the order's is one of them.
+      'warehouses.select': { data: [{ id: 'wh-1' }], error: null },
       'order_requests.update': { data: row, error: null },
     });
   }
@@ -381,6 +383,7 @@ describe('denied order ticket: a deleted requester is not handed to Zendesk (A3 
   it('a denial that did not land (no longer pending) records no event', async () => {
     const stub = makeSupabaseStub({
       'order_requests.select.maybeSingle': { data: { warehouse_id: 'wh-1' }, error: null },
+      'warehouses.select': { data: [{ id: 'wh-1' }], error: null },
       'order_requests.update': { data: null, error: null },
     });
     await expect(svc(stub).deny('ord-1', 'Out of stock')).rejects.toMatchObject({

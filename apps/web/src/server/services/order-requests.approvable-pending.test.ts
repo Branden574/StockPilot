@@ -143,7 +143,8 @@ const PEOPLE: Person[] = [
     label: 'staff approver with the all-warehouses flag',
     role: 'staff',
     permissions: APPROVER,
-    assignments: ['wh-a'],
+    // The 0280 trigger keeps one assignment row per warehouse of the organization.
+    assignments: ['wh-a', 'wh-b', 'wh-c'],
     allWarehouses: true,
   },
   {

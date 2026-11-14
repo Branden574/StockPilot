@@ -7,6 +7,8 @@ const ITEM_ID_RE =
 import { withApiContext } from '@/lib/auth/api-context';
 import { isbnVariants } from '@/lib/books/isbn-variants';
 import { IN_FILTER_MAX_VALUES } from '@/lib/supabase/in-filter';
+import { answerModuleState } from '@/server/lib/api-error-response';
+import type { ServiceContext } from '@/server/services/context';
 import { InventoryService, type ItemListSort } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
 import { displayGroupFields, readDisplayGroupsByItemIds } from '@/server/services/lib/display-groups';
@@ -64,7 +66,17 @@ export async function GET(req: Request): Promise<Response> {
   if (!ctx) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
+  try {
+    return await searchItems(req, ctx);
+  } catch (e) {
+    // A module state that could not be read (docket S81) is the fixed
+    // try-again answer; anything else is thrown on, as before.
+    return answerModuleState(e, 'items.search.module_state');
+  }
+}
 
+/** The search itself, for the caller withApiContext resolved. */
+async function searchItems(req: Request, ctx: ServiceContext): Promise<Response> {
   const url = new URL(req.url);
   const params = url.searchParams;
   const raw = (params.get('q') ?? '').trim();

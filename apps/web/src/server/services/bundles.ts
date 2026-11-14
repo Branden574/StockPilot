@@ -270,6 +270,21 @@ function drawableAtWarehouse(itemWarehouseId: string | null, warehouseId: string
   return itemWarehouseId == null || itemWarehouseId === warehouseId;
 }
 
+/** True when `quantity` is written with at most four decimal places (the
+ *  scale of bundle_distributions.quantity). A number's shortest form is the
+ *  decimal it was parsed from; an exponent form is a tiny or huge value. */
+function hasAtMostFourDecimals(quantity: number): boolean {
+  const text = String(quantity);
+  if (/e/i.test(text)) return false;
+  const dot = text.indexOf('.');
+  return dot === -1 || text.length - dot - 1 <= 4;
+}
+
+/** A quantity at the four decimal places numeric(14,4) keeps, as an integer. */
+function atColumnScale(quantity: number | string): number {
+  return Math.round(Number(quantity) * 10_000);
+}
+
 export class BundlesService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -899,13 +914,11 @@ export class BundlesService {
     assertPermission(this.ctx, 'bundles:manage');
     // S39: the kit is read in THIS organization first, and a miss refuses
     // before the warehouse check and the function. assemble_bundle decides on
-    // the kit's own organization, and assertWarehouseAccess passes an owner,
-    // admin or manager (or an all-warehouses member) by role without asking
-    // whose warehouse it is, so a page left open after a switch assembled the
-    // other organization's kits while the audit row and the cache invalidation
-    // below went to this one. Read first, so the answer is not_found whoever
-    // asks; the function refuses a warehouse outside the kit's organization,
-    // so the kit is the one row to read.
+    // the kit's own organization, so the kit must be this organization's for
+    // the audit row and the cache invalidation below to be filed where the
+    // change ran. Read first, so the answer is not_found whoever asks; the
+    // warehouse check below then asks for a warehouse of this organization,
+    // and the function refuses a warehouse outside the kit's organization.
     await readInActiveOrg(this.ctx, 'bundles', id, 'Bundle not found');
     // H3: warehouse-scoped managers can hold `bundles:manage` org-wide
     // but must still be assigned to the target warehouse. Without this
@@ -990,6 +1003,13 @@ export class BundlesService {
   async distribute(id: string, input: DistributeInput): Promise<{ distributionId: string }> {
     assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:distribute');
+    // bundle_distributions.quantity is numeric(14,4): a quantity with more
+    // decimal places would be rounded on insert, after the components were
+    // drawn for the unrounded one. Refused here, before anything is read or
+    // drawn, on every try (the web page and the phone route both pass here).
+    if (!hasAtMostFourDecimals(input.quantity)) {
+      throw new ServiceError('validation_error', 'Enter a quantity with at most four decimal places.');
+    }
     // S39: read the kit in THIS organization first, as assemble() does:
     // distribute_bundle decides on the kit's own organization, and the audit
     // row and the cache invalidation below are this organization's.
@@ -1043,8 +1063,12 @@ export class BundlesService {
       }
       throw new ServiceError('internal_error', msg);
     }
-    // distribute_bundle drew every component off the shelf.
+    // distribute_bundle drew every component off the shelf (or, for a key it
+    // has seen, nothing; a list read again then costs nothing).
     invalidateInventoryListAfterWrite(this.ctx.organizationId, 'bundle.distribute');
+    if (input.idempotencyKey) {
+      await this.assertDistributionOfRequest(data as string | null, id, input);
+    }
     await audit(
       {
         event: 'bundle.distributed',
@@ -1061,5 +1085,53 @@ export class BundlesService {
       this.ctx,
     );
     return { distributionId: data as string };
+  }
+
+  /**
+   * A key distribute_bundle has seen is answered with the distribution id its
+   * stored row names (0347). That answer is used only when it is what a retry
+   * of THIS request gets back: a distribution in this organization of this
+   * kit, from this warehouse, in this quantity, made by this person
+   * (distributed_by = auth.uid() at insert). A first send always answers its
+   * own new row, which matches. Anything else is the conflict a key sent with
+   * other details already gets. A read that fails is an internal error: the
+   * phone keeps the key and sends the same request again, which this check
+   * then passes.
+   */
+  private async assertDistributionOfRequest(
+    distributionId: string | null,
+    bundleId: string,
+    input: DistributeInput,
+  ): Promise<void> {
+    const conflict = () =>
+      new ServiceError(
+        'conflict',
+        'This distribution was already submitted with different details. Start a new distribution.',
+      );
+    if (typeof distributionId !== 'string' || distributionId.length === 0) throw conflict();
+    const { data, error } = await this.ctx.supabase
+      .from('bundle_distributions')
+      .select('id, organization_id, bundle_id, warehouse_id, quantity, distributed_by')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', distributionId)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    const row = data as {
+      organization_id: string;
+      bundle_id: string;
+      warehouse_id: string;
+      quantity: number | string;
+      distributed_by: string | null;
+    } | null;
+    if (
+      !row ||
+      row.organization_id !== this.ctx.organizationId ||
+      row.bundle_id.toLowerCase() !== bundleId.toLowerCase() ||
+      row.warehouse_id.toLowerCase() !== input.warehouseId.toLowerCase() ||
+      atColumnScale(row.quantity) !== atColumnScale(input.quantity) ||
+      row.distributed_by !== this.ctx.userId
+    ) {
+      throw conflict();
+    }
   }
 }

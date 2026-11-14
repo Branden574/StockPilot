@@ -42,7 +42,7 @@ const READS_DEFAULT: Record<string, string> = {
     'pickActiveMembership and the bundle path use the default only when an accepted membership matches it.',
   'lib/auth/request-context-bundle.ts': 'Carries the profile column into the bundle; api-context checks it against memberships.',
   'server/services/auth-audit.ts':
-    'resolveDefaultOrgAndRole: the default only when it is an accepted membership, else the oldest accepted membership, else none.',
+    'resolveDefaultOrgAndRole, counting only memberships with no end time: the default only when it is an accepted membership, else the oldest accepted membership, else none.',
   'server/services/team.ts':
     'Writes only: clears the default of a removed member, and sets it on invite acceptance when it is empty.',
   'server/services/platform/impersonation.ts':
@@ -52,6 +52,8 @@ const READS_DEFAULT: Record<string, string> = {
   'server/actions/platform-admin.ts': 'Writes the default for a platform admin entering a workspace.',
   'server/services/maintenance-requests.ts': 'A comment naming the user_profiles columns.',
   'test/step-up-session-fixture.ts': 'A test fixture.',
+  'test/legacy-api-context.ts':
+    'A test fixture: the profile row its client double answers, with a made-up default that matches the made-up membership.',
 };
 
 function sourceFiles(dir: string): string[] {

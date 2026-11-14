@@ -78,6 +78,7 @@ import { useRole } from '@/lib/use-role';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { refreshWarehouseScope } from '@/lib/warehouse-scope';
+import { webLink } from '@/lib/web-links';
 
 /**
  * Live version footer — was a hardcoded string that went stale (shipped
@@ -337,7 +338,7 @@ export default function Settings() {
             title="Profile"
             chevron
             onPress={() =>
-              Linking.openURL('https://stockpilotusa.com/dashboard/settings/profile').catch(
+              Linking.openURL(webLink('/dashboard/settings/profile')).catch(
                 () => undefined,
               )
             }
@@ -442,7 +443,7 @@ export default function Settings() {
             title="Change password"
             chevron
             onPress={() =>
-              Linking.openURL('https://stockpilotusa.com/dashboard/settings/security').catch(
+              Linking.openURL(webLink('/dashboard/settings/security')).catch(
                 () => undefined,
               )
             }
@@ -454,7 +455,7 @@ export default function Settings() {
             detail="Authenticator"
             chevron
             onPress={() =>
-              Linking.openURL('https://stockpilotusa.com/dashboard/settings/security').catch(
+              Linking.openURL(webLink('/dashboard/settings/security')).catch(
                 () => undefined,
               )
             }
@@ -613,7 +614,7 @@ export default function Settings() {
             title="Privacy Policy"
             chevron
             onPress={() =>
-              Linking.openURL('https://stockpilotusa.com/privacy').catch(() => undefined)
+              Linking.openURL(webLink('/privacy')).catch(() => undefined)
             }
           />
           <Hair inset={lg ? GLASS_TILED_INSET : 70} />
@@ -622,7 +623,7 @@ export default function Settings() {
             title="Terms of Service"
             chevron
             onPress={() =>
-              Linking.openURL('https://stockpilotusa.com/terms').catch(() => undefined)
+              Linking.openURL(webLink('/terms')).catch(() => undefined)
             }
           />
           <Hair inset={lg ? GLASS_TILED_INSET : 70} />

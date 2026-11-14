@@ -1,6 +1,8 @@
 import { clearCountPayload } from './cycle-count-clear';
 import {
+  CACHED_CYCLE_COUNTS_FOR_ACCOUNT_LIST_SQL,
   CACHED_CYCLE_COUNTS_LIST_SQL,
+  COUNT_STORED_FOR_ACCOUNT_SQL,
   CYCLE_COUNT_CACHE_HEADER_SQL,
   UNCONFIRMED_LINES_RELEASE_ONE_COUNT_SQL,
 } from './cycle-count-snapshot-sql';
@@ -394,16 +396,18 @@ async function queueLineEdit(
   // Set by the insert; still 0 when a clear found nothing to clear.
   let outboxId = 0;
   await withDbTransaction(db, async () => {
-    if (edit.kind === 'clear') {
-      // A clear needs a saved count to clear. Read here, not before the
-      // transaction: a count of this line saved a moment earlier may still
-      // be waiting its turn, and must be seen (and cleared).
-      const current = await db.getFirstAsync<{ counted: number | null }>(
-        'select counted from cycle_count_lines where id = ?',
-        [lineId],
-      );
-      if (!current || current.counted === null) return;
-    }
+    // The line is read again here, where the edits of a line take turns: a
+    // wipe or a pull can remove it after the read above. Gone, nothing is
+    // written or queued, and null comes back (the screens say the number was
+    // not saved). A clear also needs a saved count to clear: a count of this
+    // line saved a moment earlier may still be waiting its turn, and must be
+    // seen (and cleared).
+    const current = await db.getFirstAsync<{ counted: number | null }>(
+      'select counted from cycle_count_lines where id = ?',
+      [lineId],
+    );
+    if (!current) return;
+    if (edit.kind === 'clear' && current.counted === null) return;
     await db.runAsync(
       `update cycle_count_lines
          set counted = ?, local_dirty = 1
@@ -838,7 +842,46 @@ export async function dirtyLineCounts(): Promise<Map<string, number>> {
   return out;
 }
 
+/**
+ * Whether this stored count was fetched from the server by the signed-in
+ * account in its saved workspace (cycle-count-snapshot-sql.ts
+ * COUNT_STORED_FOR_ACCOUNT_SQL): the one stored count a screen may show while
+ * the member's access is 'not-synced' (screen-access.ts).
+ */
+export async function countStoredForLiveAccount(id: string): Promise<boolean> {
+  const orgId = await storedForAccountWorkspace();
+  if (!orgId) return false;
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ ok: number }>(COUNT_STORED_FOR_ACCOUNT_SQL, [id, orgId]);
+  return row !== null;
+}
+
+/** listCachedCycleCounts, narrowed to the counts countStoredForLiveAccount accepts. */
+export async function listCountsStoredForLiveAccount(): Promise<CachedCycleCountHeader[]> {
+  const orgId = await storedForAccountWorkspace();
+  if (!orgId) return [];
+  return readCachedHeaders(CACHED_CYCLE_COUNTS_FOR_ACCOUNT_LIST_SQL, [orgId]);
+}
+
+/**
+ * The live workspace, when the cache is recorded as the signed-in account's
+ * (db.ts getCacheOwner); otherwise null, and no stored count is this
+ * member's.
+ */
+async function storedForAccountWorkspace(): Promise<string | null> {
+  const { userId, orgId } = await liveOutboxScope();
+  if (!userId || !orgId) return null;
+  return (await getCacheOwner()) === userId ? orgId : null;
+}
+
 export async function listCachedCycleCounts(): Promise<CachedCycleCountHeader[]> {
+  return readCachedHeaders(CACHED_CYCLE_COUNTS_LIST_SQL, []);
+}
+
+async function readCachedHeaders(
+  sql: string,
+  params: string[],
+): Promise<CachedCycleCountHeader[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<{
     id: string;
@@ -852,7 +895,7 @@ export async function listCachedCycleCounts(): Promise<CachedCycleCountHeader[]>
     cached_at: number | null;
     count_number: number | null;
     notes: string | null;
-  }>(CACHED_CYCLE_COUNTS_LIST_SQL);
+  }>(sql, params);
   return rows.map((r) => ({
     id: r.id,
     organizationId: r.organization_id,

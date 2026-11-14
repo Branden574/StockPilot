@@ -6,9 +6,11 @@ import { env } from '@/lib/env';
 import { createClient } from '@/lib/supabase/server';
 import { guardedServerSupabaseFetch } from '@/lib/supabase/url-length-guard.server';
 import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
-import { effectiveModules } from '@/lib/modules/effective-modules';
+import { effectiveModules, NON_CORE_MODULE_IDS } from '@/lib/modules/effective-modules';
+import { moduleSetFromReads } from '@/lib/modules/module-state';
 import { accountIsDisabledOrThrow, loadAccountStatus } from '@/lib/auth/account-status';
 import { bearerTokenFrom, refusesCrossSiteCookieWrite } from '@/lib/auth/cross-site-request';
+import { MembershipUnavailableError } from '@/lib/auth/membership-unavailable';
 import { readVerifiedSessionClaimsOf } from '@/lib/auth/verified-claims';
 import type { ServiceContext } from '@/server/services/context';
 
@@ -191,9 +193,10 @@ async function mfaFromPolicy(
  *
  * Neither path writes the request's work: this module and everything it loads
  * only read (lib/auth/api-context.read-only.guard.test.ts). That is what lets
- * apiContextGate (server/lib/api-context-gate.ts) answer those two throws as a
- * 503 marked as refused before any write, which the phone may send again
- * (docket S26). A write added here would make it send a change twice.
+ * apiContextGate (server/lib/api-context-gate.ts) answer those throws, and the
+ * membership choice's MembershipUnavailableError, as a 503 marked as refused
+ * before any write, which the phone may send again (docket S26). A write added
+ * here would make it send a change twice.
  */
 type ApiBundleResolution =
   /** Use the legacy reads. */
@@ -367,6 +370,11 @@ export async function cookieSessionOwesStepUp(
  * bearer API paths populate ctx.enabledModules and assertModuleEnabled()
  * works inside API route handlers. Core modules are always treated as
  * enabled by assertModuleEnabled even if absent from this set.
+ *
+ * One difference from withContext(), on purpose (docket S81): when a read
+ * fails, the module state that read would have decided is unknown here, not
+ * off (lib/modules/module-state.ts), so a phone is never told a module is off
+ * because a read failed.
  */
 async function resolveApiEnabledModules(
   supabase: any,
@@ -388,23 +396,126 @@ async function resolveApiEnabledModules(
       .eq('id', organizationId)
       .maybeSingle(),
   ]);
+  // A failed read is NOT "off" (docket S81). supabase-js resolves it as
+  // `{ data: null, error }`, and a set built from that alone would be the set
+  // of an organization that switched every module off. So what the reads that
+  // worked say is on stays on (an unreadable flag still grants nothing); any
+  // other module's state is unknown, and asking about it, or listing the set,
+  // throws ModulesUnavailableError (lib/modules/module-state.ts), which the
+  // phone retries. Codes only: the message can quote request details.
+  //
+  // Only a list of rows that each name a module is an answer. postgrest-js
+  // resolves an empty body with no error and data null (a 2xx as it came, a
+  // 404 rewritten to 204), the same shape effective-permissions.ts refuses
+  // for the overrides, so that counts as a failed read too.
+  const rowsUnread =
+    Boolean(mods.error) ||
+    !Array.isArray(mods.data) ||
+    (mods.data as unknown[]).some(
+      (r) =>
+        !r || typeof r !== 'object' || typeof (r as { module_id?: unknown }).module_id !== 'string',
+    );
   if (mods.error) {
-    // Fail open for core / closed for optional (empty set). Log so a silent
-    // empty set is distinguishable from "org genuinely has no optional modules".
-    console.error('[resolveApiEnabledModules] failed:', mods.error);
+    console.error('[resolveApiEnabledModules] rows unreadable:', mods.error.code || 'unknown');
+  } else if (rowsUnread) {
+    console.error('[resolveApiEnabledModules] rows unreadable: not a list of module rows');
   }
+  // The comp flag is a NOT NULL boolean, so only an organization row that
+  // carries a boolean flag is an answer. No row without an error is row
+  // level security hiding it from a member, the case the one-round-trip read
+  // hands here on purpose (resolveApiContextFromBundle: `if
+  // (!held.organization) return null`); the MFA policy read above holds a
+  // hidden row to the strictest policy. Either way the flag was never seen,
+  // so it counts as a failed read and grants nothing.
+  const orgRow = org.data as { all_modules_comp?: unknown } | null;
+  const compUnread =
+    Boolean(org.error) ||
+    !orgRow ||
+    typeof orgRow !== 'object' ||
+    typeof orgRow.all_modules_comp !== 'boolean';
   if (org.error) {
-    // An unreadable flag grants NOTHING: fall back to the explicit rows.
-    console.error('[resolveApiEnabledModules] comp flag unreadable:', org.error);
+    console.error('[resolveApiEnabledModules] comp flag unreadable:', org.error.code || 'unknown');
   }
-  const comped = org.error
-    ? false
-    : (org.data as { all_modules_comp?: boolean | null } | null)?.all_modules_comp === true;
-  return effectiveModules(mods.data as Array<{ module_id: string }> | null, comped);
+  const comped = compUnread ? false : orgRow!.all_modules_comp === true;
+  const known = effectiveModules(
+    rowsUnread ? null : (mods.data as Array<{ module_id: string }>),
+    comped,
+  );
+  const readFailed = rowsUnread || compUnread;
+  return moduleSetFromReads(known, readFailed, NON_CORE_MODULE_IDS);
+}
+
+type ActiveMembership = { organization_id: string; role: Role };
+
+/** The reads pickActiveMembership makes, named in its log line. */
+type MembershipRead =
+  'membership_named' | 'profile_default' | 'membership_default' | 'membership_oldest';
+
+/**
+ * The text Postgres reads as the uuid in `X-Organization-Id`, in the spelling
+ * the one-round-trip read compares (lowercased, so any case). Any other text
+ * names no organization of anyone's.
+ */
+const ORGANIZATION_ID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** One line naming the read and its code (never the message), then the refusal. */
+function membershipUnread(read: MembershipRead, code: string): never {
+  console.error('[pickActiveMembership] read did not answer, request refused:', read, code);
+  throw new MembershipUnavailableError();
+}
+
+type ListRead = { data: unknown; error: { code?: string } | null; status?: number };
+
+/**
+ * Runs one LIST read (at most one row: the reads below filter by a key or
+ * `.limit(1)`) and keeps only an answer: its row, or null when the list is
+ * empty. Only a list answered with status 200 is an answer. supabase-js
+ * RESOLVES a failed read as `{ data: null, error }`, and postgrest-js resolves
+ * four gateway answers with no error and data null (a 404 with an empty body,
+ * rewritten to 204; a 2xx with an empty body or the body `null`; a non-2xx
+ * whose body is JSON `null`). None is a list, so each refuses, the same rule
+ * the module rows above follow. A single-row read (`maybeSingle`) would turn
+ * an empty list into the same null, which is why these read a list.
+ */
+async function answerOf(
+  read: MembershipRead,
+  query: () => PromiseLike<ListRead>,
+): Promise<unknown> {
+  let res: ListRead;
+  try {
+    res = await query();
+  } catch {
+    return membershipUnread(read, 'threw');
+  }
+  if (res.error) return membershipUnread(read, res.error.code || 'unknown');
+  if (res.status !== 200 || !Array.isArray(res.data)) {
+    return membershipUnread(read, `no list (status ${res.status ?? 'none'})`);
+  }
+  if (res.data.length > 1) return membershipUnread(read, 'more than one row');
+  return res.data[0] ?? null;
 }
 
 /**
- * Resolves the active membership for a bearer-authenticated user.
+ * A membership read's answer: no row (null), or a row naming an organization
+ * and a role. A row without them was not an answer about this person's
+ * membership, so it refuses as a failed read does.
+ */
+function membershipFrom(read: MembershipRead, data: unknown): ActiveMembership | null {
+  if (data === null) return null;
+  const row = data as { organization_id?: unknown; role?: unknown };
+  if (
+    typeof row !== 'object' ||
+    Array.isArray(row) ||
+    typeof row.organization_id !== 'string' ||
+    typeof row.role !== 'string'
+  ) {
+    return membershipUnread(read, 'unexpected');
+  }
+  return { organization_id: row.organization_id, role: row.role as Role };
+}
+
+/**
+ * Resolves the active membership for an API request (both sign-in paths).
  *
  *   1. If the request carries `X-Organization-Id`, use that — but only
  *      after verifying the user actually belongs to it. A bad header
@@ -413,55 +524,128 @@ async function resolveApiEnabledModules(
  *      requested org was deleted/revoked.
  *   2. Otherwise honor `user_profiles.default_organization_id` (parity
  *      with the cookie path's loadSessionAndContext).
- *   3. Last resort: any active membership.
+ *   3. Last resort: the oldest accepted membership.
+ *
+ * Only an ANSWER moves the choice along (docket S90). "No row" is one: no
+ * membership in the named organization, or none at all, is null; no profile
+ * row, no default, or a default the person is no longer a member of goes on
+ * to step 3. A read that did not answer (an error, a thrown call, an answer
+ * that is not a list at status 200, a row without the columns asked for)
+ * throws MembershipUnavailableError: a retryable 5xx, never the null every
+ * route answers as 401. The choice moves
+ * to step 3 only on an answer, so a request is served in the oldest
+ * membership only when the reads said there is no usable default.
  */
 async function pickActiveMembership(
   supabase: any,
   userId: string,
   requestedOrgId: string | null,
-): Promise<{ organization_id: string; role: Role } | null> {
+): Promise<ActiveMembership | null> {
   if (requestedOrgId) {
-    const { data } = await supabase
-      .from('organization_members')
-      .select('organization_id, role')
-      .eq('user_id', userId)
-      .eq('organization_id', requestedOrgId)
-      .not('accepted_at', 'is', null)
-      .maybeSingle();
-    return (data as { organization_id: string; role: Role } | null) ?? null;
+    // Not an organization id: no membership, as the one-round-trip read
+    // answers it. Not sent to Postgres, whose answer to it is an error (22P02),
+    // which a phone with a damaged saved workspace would retry for ever.
+    if (!ORGANIZATION_ID_TEXT.test(requestedOrgId)) return null;
+    return membershipFrom(
+      'membership_named',
+      await answerOf('membership_named', () =>
+        supabase
+          .from('organization_members')
+          .select('organization_id, role')
+          .eq('user_id', userId)
+          .eq('organization_id', requestedOrgId)
+          .not('accepted_at', 'is', null)
+          .limit(1),
+      ),
+    );
   }
 
-  const { data: profile } = await supabase
-    .from('user_profiles')
-    .select('default_organization_id')
-    .eq('id', userId)
-    .maybeSingle();
-  const defaultOrgId =
-    (profile as { default_organization_id: string | null } | null)?.default_organization_id ?? null;
+  const profile = await answerOf('profile_default', () =>
+    supabase.from('user_profiles').select('default_organization_id').eq('id', userId).limit(1),
+  );
+  // No profile row is an answer: no default. A row is one only when it
+  // carries the column asked for, a uuid or null.
+  let defaultOrgId: string | null = null;
+  if (profile !== null) {
+    if (typeof profile !== 'object' || Array.isArray(profile)) {
+      membershipUnread('profile_default', 'unexpected');
+    }
+    const value = (profile as { default_organization_id?: unknown }).default_organization_id;
+    if (typeof value === 'string') defaultOrgId = value;
+    else if (value !== null) membershipUnread('profile_default', 'unexpected');
+  }
   if (defaultOrgId) {
-    const { data } = await supabase
-      .from('organization_members')
-      .select('organization_id, role')
-      .eq('user_id', userId)
-      .eq('organization_id', defaultOrgId)
-      .not('accepted_at', 'is', null)
-      .maybeSingle();
-    if (data) return data as { organization_id: string; role: Role };
+    const member = membershipFrom(
+      'membership_default',
+      await answerOf('membership_default', () =>
+        supabase
+          .from('organization_members')
+          .select('organization_id, role')
+          .eq('user_id', userId)
+          .eq('organization_id', defaultOrgId)
+          .not('accepted_at', 'is', null)
+          .limit(1),
+      ),
+    );
+    if (member) return member;
   }
 
-  const { data } = await supabase
-    .from('organization_members')
-    .select('organization_id, role')
-    .eq('user_id', userId)
-    .not('accepted_at', 'is', null)
-    // Oldest first, like loadSessionAndContext and get_request_context() (0355):
-    // the page and the cookie-authed /api calls it makes must agree on the
-    // organization of a user who has several and no valid default.
-    .order('created_at', { ascending: true })
-    .order('organization_id', { ascending: true })
-    .limit(1)
-    .maybeSingle();
-  return (data as { organization_id: string; role: Role } | null) ?? null;
+  return membershipFrom(
+    'membership_oldest',
+    await answerOf('membership_oldest', () =>
+      supabase
+        .from('organization_members')
+        .select('organization_id, role')
+        .eq('user_id', userId)
+        .not('accepted_at', 'is', null)
+        // Oldest first, like loadSessionAndContext and get_request_context() (0355):
+        // the page and the cookie-authed /api calls it makes must agree on the
+        // organization of a user who has several and no valid default.
+        .order('created_at', { ascending: true })
+        .order('organization_id', { ascending: true })
+        .limit(1),
+    ),
+  );
+}
+
+/**
+ * The membership choice and the account status, read in parallel, answered in
+ * one order on both API paths. null is the uniform 401 an anonymous caller
+ * gets.
+ *
+ *   1. A disabled account is null, whatever the membership reads answered.
+ *      The GoTrue ban normally rejects the request earlier, at getUser(); this
+ *      is the backstop for the window where the flag landed but the ban write
+ *      did not.
+ *   2. An UNREADABLE status throws AccountStatusUnavailableError, and a
+ *      membership read that did not answer throws MembershipUnavailableError
+ *      (pickActiveMembership). Each still refuses the request (an authz check
+ *      that cannot read its input must deny), but as a 5xx the client words as
+ *      retryable rather than as the 401 it words as "you do not have access to
+ *      that". Through apiContextGate either is the 503 marked as refused
+ *      before any write (docket S26), since nothing here writes. When both
+ *      reads of the profile row fail, the status refusal is the one thrown.
+ *   3. No membership (the reads answered "none") is null.
+ */
+async function memberAndStatus(
+  supabase: any,
+  userId: string,
+  requestedOrgId: string | null,
+): Promise<ActiveMembership | null> {
+  const [picked, status] = await Promise.all([
+    pickActiveMembership(supabase, userId, requestedOrgId).then(
+      (member) => ({ member }),
+      (error: unknown) => ({ error }),
+    ),
+    loadAccountStatus(supabase, userId),
+  ]);
+  if ('error' in picked) {
+    if (accountIsDisabledOrThrow(status)) return null;
+    throw picked.error;
+  }
+  if (!picked.member) return null;
+  if (accountIsDisabledOrThrow(status)) return null;
+  return picked.member;
 }
 
 /**
@@ -635,26 +819,12 @@ export async function withApiContext(
       );
     }
 
-    // Status and membership in parallel. The status read is NOT free on this
-    // path: pickActiveMembership returns before touching user_profiles whenever
-    // an org header is present, which is every mobile request. Issuing both at
-    // once keeps the added latency off the hot path.
-    const [member, status] = await Promise.all([
-      pickActiveMembership(supabase, userRes.user.id, requestedOrgId),
-      loadAccountStatus(supabase, userRes.user.id),
-    ]);
+    // Status and membership in parallel (memberAndStatus). The status read is
+    // NOT free on this path: pickActiveMembership returns before touching
+    // user_profiles whenever an org header is present, which is every mobile
+    // request. Issuing both at once keeps the added latency off the hot path.
+    const member = await memberAndStatus(supabase, userRes.user.id, requestedOrgId);
     if (!member) return null;
-    // A disabled account gets the same uniform 401 an anonymous caller gets.
-    // The GoTrue ban normally rejects this request one line earlier at
-    // getUser(); this is the backstop for the window where the flag landed but
-    // the ban write did not.
-    //
-    // An UNREADABLE status throws instead: it still refuses the request (an
-    // authz check that cannot read its input must deny), but as a 5xx the
-    // client words as retryable rather than as the 401 it words as "you do not
-    // have access to that". Through apiContextGate that 5xx is the 503 marked
-    // as refused before any write (docket S26), since nothing here writes.
-    if (accountIsDisabledOrThrow(status)) return null;
     const mfa = await resolveApiMfaState(
       supabase,
       member.organization_id as string,
@@ -760,14 +930,10 @@ export async function withApiContext(
     );
   }
 
-  // Same parallel shape as the bearer branch above — a disabled account is
-  // refused with the same uniform null (401) an anonymous caller gets.
-  const [member, status] = await Promise.all([
-    pickActiveMembership(supabase, user.id, requestedOrgId),
-    loadAccountStatus(supabase, user.id),
-  ]);
+  // Same parallel reads and the same order of answers as the bearer branch
+  // above (memberAndStatus).
+  const member = await memberAndStatus(supabase, user.id, requestedOrgId);
   if (!member) return null;
-  if (accountIsDisabledOrThrow(status)) return null;
 
   const mfa = await resolveApiMfaState(
     supabase,

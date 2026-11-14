@@ -9,6 +9,7 @@ export type ActiveOrgTable =
   | 'purchase_orders'
   | 'receipts'
   | 'warehouses'
+  | 'locations'
   | 'bundles'
   | 'stock_movements'
   | 'price_lists'

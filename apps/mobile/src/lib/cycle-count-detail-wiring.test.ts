@@ -58,7 +58,7 @@ describe('cycle-count/[id].tsx — post goes through the API twin (SP-055)', () 
 describe('cycle-count/[id].tsx: a failed cache write is shown, not swallowed', () => {
   it('guards the store-then-read after the fetch and surfaces it when nothing is on screen', () => {
     expect(screen).toMatch(
-      /try \{\s+if \(!\(await cacheCycleCount\(fetchedHeader, fetchedLines, fetchedUnder\)\)\) return 'discarded';\s+const fresh = await getCycleCount\(id\);\s+if \(fresh\) hydrateFromSnapshot\(fresh\);\s+\} catch \(e\) \{[\s\S]*?if \(!cached\) \{\s+setReadError\([^)]*\);\s+setEmptyState\('read-failed'\);/,
+      /try \{\s+if \(!\(await cacheCycleCount\(fetchedHeader, fetchedLines, fetchedUnder\)\)\) \{\s+return stillHere\(\) \? 'discarded' : undefined;\s+\}\s+const fresh = await getCycleCount\(id\);\s+if \(!stillHere\(\)\) return;\s+if \(fresh\) hydrateFromSnapshot\(fresh\);\s+\} catch \(e\) \{[\s\S]*?if \(!cached\) \{\s+setReadError\([^)]*\);\s+setEmptyState\('read-failed'\);/,
     );
   });
 });
@@ -74,15 +74,19 @@ describe('cycle-count/[id].tsx: a fetch the cache discarded is loaded again once
     expect(screen).toContain('const loadOnce = React.useCallback(async (): Promise<LoadPass> => {');
     expect(screen).toContain("type LoadPass = 'discarded' | undefined;");
     // A discarded store stops the pass before anything is read back or the
-    // spinner is stopped (pinned above, in the store's try).
-    expect(screen.match(/return 'discarded'/g)).toHaveLength(1);
+    // spinner is stopped (pinned above, in the store's try); a pass the
+    // account, workspace or count changed under answers nothing, so no second
+    // pass runs for a key the screen no longer shows.
+    expect(screen.match(/return stillHere\(\) \? 'discarded' : undefined;/g)).toHaveLength(1);
     expect(screen).toMatch(
-      /const load = React\.useCallback\(async \(\) => \{\s+if \(\(await loadOnce\(\)\) !== 'discarded'\) return;\s+if \(\(await loadOnce\(\)\) !== 'discarded'\) return;\s+setReadError\(COUNT_NOT_SAVED_AFTER_A_CHANGE\);\s+setEmptyState\('read-failed'\);\s+setLoading\(false\);\s+\}, \[loadOnce\]\);/,
+      /const load = React\.useCallback\(async \(\) => \{\s+(?:\/\/[^\n]*\n\s+)*const startedUnder = lastLoadKey\.current;\s+const stillHere = \(\) => countAnswerStillShown\(startedUnder, lastLoadKey\.current\);\s+if \(\(await loadOnce\(\)\) !== 'discarded' \|\| !stillHere\(\)\) return;\s+if \(\(await loadOnce\(\)\) !== 'discarded' \|\| !stillHere\(\)\) return;\s+setReadError\(COUNT_NOT_SAVED_AFTER_A_CHANGE\);\s+setEmptyState\('read-failed'\);\s+setLoading\(false\);\s+\}, \[loadOnce\]\);/,
     );
     // Two passes at most: the mount, the workspace change and both Retry
-    // buttons go through load().
+    // buttons go through load(); since S75 so does the reload after a count
+    // the phone could not store (reloadAfterLineGone), and the quiet read in
+    // place when the phone finishes syncing (count-access-refresh.ts).
     expect(screen.match(/loadOnce\(\)/g)).toHaveLength(2);
-    expect(screen.match(/void load\(\);/g)).toHaveLength(3);
+    expect(screen.match(/void load\(\);/g)).toHaveLength(5);
     expect(screen).toContain('const COUNT_NOT_SAVED_AFTER_A_CHANGE =');
   });
 });

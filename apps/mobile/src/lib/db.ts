@@ -527,6 +527,7 @@ async function clearOrgScopedTables(db: SQLite.SQLiteDatabase): Promise<void> {
     delete from meta where key = 'enabled_modules';
     delete from meta where key = 'effective_permissions';
     delete from meta where key = 'warehouse_scope';
+    delete from meta where key = 'bundles_refill';
   `);
 }
 
@@ -628,7 +629,7 @@ export async function markPhotosCleared(): Promise<void> {
  * time: it is this account's, and confirmed, once that write has released any
  * edit on it that is not this account's (cycle-count-snapshot-sql.ts).
  *
- * The four meta keys are the ones clearOrgScopedTables clears, which keeps
+ * The meta keys are the ones clearOrgScopedTables clears, which keeps
  * the record too: db-clear-keys.wiring.test.ts checks both lists against the
  * keys sync.ts writes.
  */
@@ -640,6 +641,7 @@ export async function markCacheUnconfirmed(): Promise<void> {
       delete from meta where key = 'enabled_modules';
       delete from meta where key = 'effective_permissions';
       delete from meta where key = 'warehouse_scope';
+      delete from meta where key = 'bundles_refill';
       update items set last_synced_at = ${UNCONFIRMED_ROW_STAMP};
       update purchase_orders set last_synced_at = ${UNCONFIRMED_ROW_STAMP};
       update cycle_counts set last_synced_at = ${UNCONFIRMED_ROW_STAMP};

@@ -778,7 +778,10 @@ describe('drawer lists: a failed read is said in the list’s own words, never a
     const decl = screenDeclarations(file, [name]);
     expect(decl[name]).toEqual(words);
     const code = codeOnly(sourceOf(file));
-    expect(code).toContain(`failed={loadFailed ? ${name} : null}`);
+    // Accounts says first when no workspace is known (no-workspace-screens.test.ts).
+    expect(code.replace(/\s+/g, ' ')).toMatch(
+      new RegExp(`failed=\\{ ?(noWorkspace \\? \\{[^}]*\\} : )?loadFailed \\? ${name} : null ?\\}`),
+    );
     expect(code).toContain(`emptyTitle="${empty}"`);
   });
 
@@ -799,13 +802,15 @@ describe('drawer lists: a failed read is said in the list’s own words, never a
     expect(codeOnly(sourceOf(NOTIFICATIONS))).toMatch(
       /loadFailed && rows\.length === 0\s*\? 'INBOX'/,
     );
-    expect(codeOnly(sourceOf(ACCOUNTS))).toMatch(/loadFailed && rows\.length === 0\s*\? 'B2B'/);
+    expect(codeOnly(sourceOf(ACCOUNTS))).toMatch(
+      /\(noWorkspace \|\| loadFailed\) && rows\.length === 0\s*\? 'B2B'/,
+    );
   });
 
   it('Team: the failure goes through the failed state too, with its own words', () => {
     const code = codeOnly(sourceOf(TEAM));
     expect(code).toMatch(
-      /failed=\{\s*loadFailed\s*\?\s*\{\s*title: 'Could not load the team\.',\s*body: 'Check your connection and pull down to try again\.',\s*\}\s*: null\s*\}/,
+      /failed=\{\s*noWorkspace\s*\?\s*\{\s*title: 'Could not load your workspace\.',\s*body: 'Check your connection and pull down to try again\.',\s*\}\s*: loadFailed\s*\?\s*\{\s*title: 'Could not load the team\.',\s*body: 'Check your connection and pull down to try again\.',\s*\}\s*: null\s*\}/,
     );
     expect(code).toContain('emptyTitle="No team yet."');
     expect(code).toContain(
@@ -821,7 +826,7 @@ describe('Schedule (M-WS-04)', () => {
     expect(code).toMatch(
       /canManageSchedule \? \([\s\S]{0,300}?router\.push\('\/schedule\/new'\)[\s\S]{0,80}?accessibilityLabel="New event"/,
     );
-    expect(code).toContain('Linking.openURL(`https://stockpilotusa.com/dashboard/schedule`)');
+    expect(code).toContain("Linking.openURL(webLink('/dashboard/schedule'))");
     const { sf, els } = elements(SCHEDULE, (el, s) => attrText(el, 'onPress', s) === 'openOnWeb');
     expect(els.map(({ el }) => attrText(el, 'accessibilityRole', sf))).toEqual(['link']);
   });
@@ -1028,7 +1033,9 @@ describe('Team and Accounts (M-WS-07, 08)', () => {
     expect(code).toContain("import { plainAddressMailtoUrl } from '@stockpilot/core';");
     expect(code).toContain('const mailto = plainAddressMailtoUrl(email);');
     expect(code).not.toMatch(/`mailto:\$\{/);
-    expect(code).toMatch(/\{email && mailto \? \( <Pressable onPress=\{\(\) => Linking\.openURL\(mailto\)/);
+    expect(code).toMatch(
+      /\{email && mailto \? \( <Pressable onPress=\{\(\) => Linking\.openURL\(mailto\)/,
+    );
     expect(classicFlat(sourceOf(TEAM), TEAM)).toContain(
       flatNorm(
         ') : email ? ( <View style={{ marginTop: 3 }}> <Mono size={11.5} tracking={0.04} color={c.ink3}> {email} </Mono> </View> ) : null}',
@@ -1252,9 +1259,9 @@ describe('Maintenance request (M-WS-10)', () => {
     // The two typed boxes and the two copy boxes are controls: hair2, never
     // the hairline alone. Classic is read through the classic projection.
     const classic = classicFlat(sourceOf(REQUEST), REQUEST);
-    expect(
-      classic.match(/styles\.textarea,\{color: c\.ink,borderColor: c\.hair2\}/g),
-    ).toHaveLength(2);
+    expect(classic.match(/styles\.textarea,\{color: c\.ink,borderColor: c\.hair2\}/g)).toHaveLength(
+      2,
+    );
     expect(classic.match(/styles\.copyBox,\{color: c\.ink,borderColor: c\.hair2\b/g)).toHaveLength(
       2,
     );
