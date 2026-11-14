@@ -45,13 +45,16 @@ function failedObject(obj: string): { title: string; body: string } | null {
  * over the empty state: the redesign's D25 hand-off, which team.tsx took in
  * P5.10) with the object written inline, `failed={loadFailed ? { title,
  * body } : null}`, or as the screen's own const, `failed={loadFailed ? NAME :
- * null}` with `const NAME = { title, body, reloadNote? }`; or the empty
+ * null}` with `const NAME = { title, body, reloadNote? }`, either after the
+ * no-workspace case (`failed={noWorkspace ? { ... } : loadFailed ? ...}`); or the empty
  * state's words swapped on the flag (users.tsx before its restyle). Null when
  * none is there, so the empty list's words would stand for a failed read.
  */
 function failureWords(src: string): { title: string; body: string } | null {
   const viaFailed =
-    /failed=\{\s*loadFailed\s*\?\s*(\{[^}]*\}|[A-Za-z_$][\w$]*)\s*:\s*null,?\s*\}/.exec(src);
+    /failed=\{\s*(?:noWorkspace\s*\?\s*\{[^}]*\}\s*:\s*)?loadFailed\s*\?\s*(\{[^}]*\}|[A-Za-z_$][\w$]*)\s*:\s*null,?\s*\}/.exec(
+      src,
+    );
   if (viaFailed) {
     const value = viaFailed[1]!;
     if (value.startsWith('{')) return failedObject(value);
@@ -106,8 +109,11 @@ describe.each([
   });
 
   it('a failed load empties the list and sets the flag; a good one clears it', () => {
+    // B124: the rows live in `list` with the workspace they were read for.
     const body = loadBody(src);
-    expect(body).toMatch(/setLoadFailed\(false\);\s*\} catch \(e\) \{[\s\S]*?setRows\(\[\]\);\s*setLoadFailed\(true\);/);
+    expect(body).toMatch(
+      /setLoadFailed\(false\);\s*\} catch \(e\) \{[\s\S]*?setList\(null\);\s*setLoadFailed\(true\);/,
+    );
   });
 
   // Mutation caught: a failed load shown with the empty list's words, or the
@@ -117,7 +123,11 @@ describe.each([
       title: failedTitle,
       body: 'Check your connection and pull down to try again.',
     });
-    expect(src).toMatch(new RegExp(`loadFailed\\s*\\? ${neutralEyebrow.replace(/[·]/g, '.')}`));
+    expect(src).toMatch(
+      new RegExp(
+        `loadFailed(?: \\|\\| noWorkspace)?\\s*\\? ${neutralEyebrow.replace(/[·]/g, '.')}`,
+      ),
+    );
   });
 });
 
@@ -127,14 +137,18 @@ describe('cycle-count reassign sheet', () => {
     expect(sheet).toContain("{ acceptedOnly: true, profileColumns: 'id, full_name, email' }");
     expect(sheet).toContain('buildReassignCandidates(rows, profiles)');
     expect(sheet).not.toContain(".from('user_profiles')");
-    expect(sheet).toMatch(/\} catch \(e\) \{[\s\S]*?setMembers\(\[\]\);\s*setMembersFailed\(true\);/);
+    expect(sheet).toMatch(
+      /\} catch \(e\) \{[\s\S]*?setMembers\(\[\]\);\s*setMembersFailed\(true\);/,
+    );
   });
 
   it('a failed load shows the error and a Try again instead of "No other team members"', () => {
     const failedBranch = sheet.indexOf(') : membersFailed ? (');
     expect(failedBranch).toBeGreaterThan(-1);
     expect(failedBranch).toBeLessThan(sheet.lastIndexOf('No other team members to assign.'));
-    expect(sheet.slice(failedBranch)).toMatch(/Could not load team members\.[\s\S]*?onPress=\{retryMembers\}/);
+    expect(sheet.slice(failedBranch)).toMatch(
+      /Could not load team members\.[\s\S]*?onPress=\{retryMembers\}/,
+    );
   });
 
   it('Try again re-runs the load, clears the flag, and cannot stack reloads', () => {

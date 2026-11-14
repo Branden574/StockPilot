@@ -30,17 +30,31 @@ import { useGlass } from '@/components/ui/glass/use-glass';
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { API_BASE, orgHeader } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { reviewNotACountMessage } from '@/lib/count-box-words';
 import {
+  type CountLoadKey,
+  countAnswerStillShown,
+  countLoadClearsScreen,
+} from '@/lib/count-access-refresh';
+import { reviewNotACountMessage } from '@/lib/count-box-words';
+import { createOneAlert } from '@/lib/count-save-refusal';
+import {
+  countStoredForLiveAccount,
   getCycleCount,
   mirrorRecordedCount,
   type CachedCycleCountLine,
 } from '@/lib/cycle-count-cache';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { postMultipart } from '@/lib/multipart-upload';
+import {
+  CYCLE_COUNTS_NOT_AVAILABLE,
+  NOT_SYNCED_YET,
+  SAVED_ACCESS_UNREADABLE,
+} from '@/lib/screen-access';
 import { supabase } from '@/lib/supabase';
 import { FONT, TYPE_CEILING, capTo, palette, radius, space } from '@/lib/theme';
 import { useHoldAppearanceAdoptionWhileFocused } from '@/lib/appearance/use-adoption-hold';
+import { useOrg } from '@/lib/use-org';
+import { useDrawerEntryAccess } from '@/lib/use-screen-access';
 import { useTheme } from '@/lib/use-theme';
 
 const AI_CONFIDENCE_THRESHOLD = 0.85;
@@ -79,6 +93,10 @@ type Phase =
       scanId: string;
       photoSignedUrl: string;
       reviewLines: ReviewLine[];
+      /** The count, workspace, account and access the review was built for:
+       *  Confirm sends it only while the screen still shows them, and only
+       *  for the account the session is. */
+      builtUnder: CountLoadKey | null;
     }
   | { kind: 'saving' };
 
@@ -141,6 +159,7 @@ export default function AiScanScreen() {
   useHoldAppearanceAdoptionWhileFocused('count');
   const { id: cycleCountId } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = React.useRef<CameraView | null>(null);
   // The permission screen follows the device's mode; the camera chrome is
@@ -149,42 +168,119 @@ export default function AiScanScreen() {
 
   const [phase, setPhase] = React.useState<Phase>({ kind: 'idle' });
   const [cachedLines, setCachedLines] = React.useState<CachedCycleCountLine[]>([]);
+  // The count screen's question (screen-access.ts): the lines saved on this
+  // phone are read only for a member who may see cycle counts.
+  const access = useDrawerEntryAccess('/cycle-counts');
+  // Why this count cannot be opened here: one alert at a time, though the
+  // read runs again as the account, workspace or access changes, and nothing
+  // once the screen has closed. Its OK leaves.
+  const [openNotice] = React.useState(() =>
+    createOneAlert((title, message, buttons, options) =>
+      Alert.alert(title, message, buttons, options),
+    ),
+  );
+  React.useEffect(() => () => openNotice.close(), [openNotice]);
 
+  // Back, or to the Cycle counts tab when this is the only screen (a link
+  // opened it): going back would then do nothing and leave it open.
+  function leave() {
+    if (router.canGoBack()) router.back();
+    else router.replace('/cycle-counts');
+  }
+
+  // The lines saved on this phone. A read that fails is said, and the screen
+  // goes back: it used to be an unhandled rejection that left "0 books in this
+  // count" over a camera that could only scan nothing.
+  async function loadCachedLines() {
+    if (!cycleCountId || access === 'unknown') return;
+    // The key this read started under (lastLinesKey, below): an answer that
+    // lands after the account, workspace, count or access changed is dropped
+    // (count-access-refresh.ts countAnswerStillShown).
+    const startedUnder = lastLinesKey.current;
+    const stillHere = () => countAnswerStillShown(startedUnder, lastLinesKey.current);
+    // Not for a member who may not see cycle counts, nor while what the
+    // phone saved about the member's access is unreadable; not synced yet,
+    // only a count this account fetched here (screen-access.ts).
+    const refused =
+      access === 'denied'
+        ? CYCLE_COUNTS_NOT_AVAILABLE
+        : access === 'unreadable'
+          ? SAVED_ACCESS_UNREADABLE
+          : access === 'not-synced' && !(await countStoredForLiveAccount(cycleCountId).catch(() => false))
+            ? NOT_SYNCED_YET
+            : null;
+    if (!stillHere()) return;
+    if (refused !== null) {
+      openNotice.say(
+        access === 'denied' ? 'Not available' : 'Could not open this count',
+        refused,
+        leave,
+      );
+      return;
+    }
+    let snap: Awaited<ReturnType<typeof getCycleCount>>;
+    try {
+      snap = await getCycleCount(cycleCountId);
+    } catch {
+      if (!stillHere()) return;
+      openNotice.say(
+        'Could not load this count',
+        'This count could not be read on this phone.',
+        leave,
+      );
+      return;
+    }
+    if (!stillHere()) return;
+    if (!snap) {
+      openNotice.say(
+        'No cached lines',
+        'Open this cycle count from the list once while online so it can be cached for AI scanning.',
+        leave,
+      );
+      return;
+    }
+    setCachedLines(snap.lines);
+  }
+
+  // What the lines held were read for. Another count, workspace or account
+  // clears them before the read (count-access-refresh.ts
+  // countLoadClearsScreen), and closes a review or an upload in progress
+  // unsaved: what it was built from is no longer the count on screen.
+  const lastLinesKey = React.useRef<CountLoadKey | null>(null);
+  // Uploads in the order they started: a dropped one ends only its own phase.
+  const uploadSeq = React.useRef(0);
   React.useEffect(() => {
-    if (!user || !cycleCountId) return;
-    void (async () => {
-      // The lines saved on this phone. A read that fails is said, and the
-      // screen goes back: it used to be an unhandled rejection that left
-      // "0 books in this count" over a camera that could only scan nothing.
-      let snap: Awaited<ReturnType<typeof getCycleCount>>;
-      try {
-        snap = await getCycleCount(cycleCountId);
-      } catch {
-        Alert.alert('Could not load this count', 'This count could not be read on this phone.', [
-          { text: 'OK', onPress: () => router.back() },
-        ]);
-        return;
-      }
-      if (!snap) {
-        Alert.alert(
-          'No cached lines',
-          'Open this cycle count from the list once while online so it can be cached for AI scanning.',
-          [{ text: 'OK', onPress: () => router.back() }],
-        );
-        return;
-      }
-      setCachedLines(snap.lines);
-    })();
-  }, [user, cycleCountId, router]);
+    if (!cycleCountId) return;
+    const key = { id: cycleCountId, orgId, userId: user?.id ?? null, access };
+    if (countLoadClearsScreen(lastLinesKey.current, key)) {
+      setPhase({ kind: 'idle' });
+      setCachedLines([]);
+    }
+    lastLinesKey.current = key;
+    if (!user) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set in loadCachedLines is post-await; the clear above is the identity change's own reset
+    void loadCachedLines();
+    // loadCachedLines is a plain function, new on every render: listing it
+    // would load the lines on every render. They load once per signed-in user,
+    // workspace and count, and again when whether this member may see cycle
+    // counts is known or changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, cycleCountId, orgId, access]);
 
   async function onCapture() {
     if (!cameraRef.current || phase.kind !== 'idle') return;
     setPhase({ kind: 'capturing' });
+    // The key the photo is taken under: one that lands after the screen
+    // cleared for another count, workspace or account is not sent, and
+    // nothing is said (the clear has already ended this capture).
+    const takenUnder = lastLinesKey.current;
+    const stillHere = () => countAnswerStillShown(takenUnder, lastLinesKey.current);
     try {
       const captured = await cameraRef.current.takePictureAsync({
         quality: 1,
         skipProcessing: false,
       });
+      if (!stillHere()) return;
       if (!captured?.uri) {
         Alert.alert('Capture failed', 'Try again.');
         setPhase({ kind: 'idle' });
@@ -192,6 +288,7 @@ export default function AiScanScreen() {
       }
       await uploadCapturedPhoto(captured.uri);
     } catch (e) {
+      if (!stillHere()) return;
       Alert.alert('Capture failed', e instanceof Error ? e.message : 'Try again.');
       setPhase({ kind: 'idle' });
     }
@@ -199,6 +296,16 @@ export default function AiScanScreen() {
 
   async function uploadCapturedPhoto(photoUri: string) {
     setPhase({ kind: 'uploading' });
+    // The key the scan is taken under. The photo is sent only for the account
+    // the session is, and its review is built only while the screen still
+    // shows that key; otherwise nothing is drawn or said, and this upload's
+    // phase ends (a newer upload's, if one started, is left alone).
+    uploadSeq.current += 1;
+    const mine = uploadSeq.current;
+    const startedUnder = lastLinesKey.current;
+    const stillHere = () => countAnswerStillShown(startedUnder, lastLinesKey.current);
+    const drop = () =>
+      setPhase((p) => (p.kind === 'uploading' && uploadSeq.current === mine ? { kind: 'idle' } : p));
     try {
       // Compress + downscale before upload — phone-camera raw JPEGs
       // are 4-10 MB; Gemini gets the same accuracy from 1600px JPEG
@@ -229,6 +336,10 @@ export default function AiScanScreen() {
         data: { session },
       } = await supabase.auth.getSession();
       if (!session) throw new Error('Not signed in.');
+      if (!stillHere() || startedUnder === null || session.user.id !== startedUnder.userId) {
+        drop();
+        return;
+      }
 
       const res = await postMultipart(
         `${API_BASE}/api/cycle-counts/${cycleCountId}/ai-scan`,
@@ -247,6 +358,10 @@ export default function AiScanScreen() {
           },
         },
       );
+      if (!stillHere()) {
+        drop();
+        return;
+      }
       if (!res.ok) {
         const text = await res.text();
         // Friendlier message for the common "no books in this count" case.
@@ -266,6 +381,10 @@ export default function AiScanScreen() {
           notes?: string;
         }[];
       };
+      if (!stillHere()) {
+        drop();
+        return;
+      }
 
       // Build the review-line list — every cached line, with its AI
       // result attached when one exists. Books-only filter for v1
@@ -284,8 +403,13 @@ export default function AiScanScreen() {
         scanId: payload.scanId,
         photoSignedUrl: payload.photoSignedUrl,
         reviewLines,
+        builtUnder: startedUnder,
       });
     } catch (e) {
+      if (!stillHere()) {
+        drop();
+        return;
+      }
       Alert.alert(
         'Scan failed',
         e instanceof Error ? e.message : 'Try again.',
@@ -306,6 +430,12 @@ export default function AiScanScreen() {
 
   async function onConfirm() {
     if (phase.kind !== 'review') return;
+    // A review built for another count, workspace or account than the one on
+    // screen is closed, and nothing is sent.
+    if (!countAnswerStillShown(phase.builtUnder, lastLinesKey.current)) {
+      setPhase({ kind: 'idle' });
+      return;
+    }
 
     // A box that holds something that is not a number writes nothing, so a
     // line the person typed over would silently keep its old count. Name
@@ -341,12 +471,22 @@ export default function AiScanScreen() {
     // verbatim if the save fails — keeping the user's review list intact.
     const reviewPhase = phase;
     const scanId = phase.scanId;
+    const builtUnder = phase.builtUnder;
+    const stillHere = () => countAnswerStillShown(builtUnder, lastLinesKey.current);
+    // The screen changed key while this was saving: nothing more is sent or
+    // said, and the save's phase ends (the screen reads again for its key).
+    const stop = () => setPhase((p) => (p.kind === 'saving' ? { kind: 'idle' } : p));
     setPhase({ kind: 'saving' });
     try {
       const {
         data: { session },
       } = await supabase.auth.getSession();
       if (!session) throw new Error('Not signed in.');
+      // Sent only for the account the review was built for.
+      if (builtUnder === null || session.user.id !== builtUnder.userId) {
+        setPhase({ kind: 'idle' });
+        return;
+      }
 
       // Write each line via the existing v1 record endpoint (now accepting
       // aiScanId). Each line is recorded INDEPENDENTLY: a mid-batch failure
@@ -356,6 +496,10 @@ export default function AiScanScreen() {
       // is idempotent and retry is always safe.
       const failed: string[] = [];
       for (const w of toWrite) {
+        if (!stillHere()) {
+          stop();
+          return;
+        }
         try {
           const res = await fetch(
             `${API_BASE}/api/v1/cycle-counts/${cycleCountId}/lines/${w.lineId}/record`,
@@ -411,6 +555,10 @@ export default function AiScanScreen() {
         }
       }
 
+      if (!stillHere()) {
+        stop();
+        return;
+      }
       if (failed.length > 0) {
         // Partial save: KEEP the review list so the user can see their work
         // and retry. Re-confirming re-sends every line, but record is an
@@ -440,8 +588,16 @@ export default function AiScanScreen() {
 
       await cycleCountSync.refreshPendingCount();
       void cycleCountSync.forceSync();
-      router.back();
+      if (!stillHere()) {
+        stop();
+        return;
+      }
+      leave();
     } catch (e) {
+      if (!stillHere()) {
+        stop();
+        return;
+      }
       // Only a non-per-line error (e.g. not signed in) reaches here. Keep the
       // review list rather than discarding it to the camera, so nothing is lost.
       Alert.alert(
@@ -515,7 +671,7 @@ export default function AiScanScreen() {
         <View style={styles.topBar}>
           <Pressable
             style={styles.closeFrame}
-            onPress={() => router.back()}
+            onPress={leave}
             accessibilityRole="button"
             accessibilityLabel="Cancel"
           >

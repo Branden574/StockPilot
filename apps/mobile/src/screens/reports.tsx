@@ -46,6 +46,7 @@ import { FONT, type Palette } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useTheme } from '@/lib/use-theme';
 import { retryWorkspace, useWorkspace } from '@/lib/use-workspace';
+import { webLink } from '@/lib/web-links';
 
 interface ReportSummary {
   itemCount: number;
@@ -317,7 +318,7 @@ export default function ReportsScreen() {
               </Body>
               <WebReportLink
                 onPress={() =>
-                  Linking.openURL('https://stockpilotusa.com/dashboard/reports').catch(() => undefined)
+                  Linking.openURL(webLink('/dashboard/reports')).catch(() => undefined)
                 }
               />
             </Card>

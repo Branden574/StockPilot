@@ -6,6 +6,7 @@ import { orderLineItemName } from '@stockpilot/core';
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { answerModuleState } from '@/server/lib/api-error-response';
 import { resolveSignatureToken, SIGNATURE_TOKEN_RE } from '@/server/lib/order-secrets';
 import { isModuleEnabled } from '@/server/services/context';
 
@@ -49,7 +50,15 @@ export async function POST(req: NextRequest) {
   }
   const parsed = bodySchema.safeParse(body);
   if (!parsed.success) return notFound();
-  if (!isModuleEnabled(ctx, 'orders')) return notFound();
+  let ordersOn: boolean;
+  try {
+    ordersOn = isModuleEnabled(ctx, 'orders');
+  } catch (e) {
+    // A module state that could not be read (docket S81): the fixed
+    // try-again answer, never the not-found an off module gets.
+    return answerModuleState(e, 'orders.signature-lookup.module_state');
+  }
+  if (!ordersOn) return notFound();
 
   try {
     const match = await resolveSignatureToken<{ id: string; organization_id: string }>(

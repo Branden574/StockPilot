@@ -6,7 +6,8 @@ import { env } from '@/lib/env';
 import { createClient } from '@/lib/supabase/server';
 import { guardedServerSupabaseFetch } from '@/lib/supabase/url-length-guard.server';
 import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
-import { effectiveModules } from '@/lib/modules/effective-modules';
+import { effectiveModules, NON_CORE_MODULE_IDS } from '@/lib/modules/effective-modules';
+import { moduleSetFromReads } from '@/lib/modules/module-state';
 import { accountIsDisabledOrThrow, loadAccountStatus } from '@/lib/auth/account-status';
 import { bearerTokenFrom, refusesCrossSiteCookieWrite } from '@/lib/auth/cross-site-request';
 import { readVerifiedSessionClaimsOf } from '@/lib/auth/verified-claims';
@@ -367,6 +368,11 @@ export async function cookieSessionOwesStepUp(
  * bearer API paths populate ctx.enabledModules and assertModuleEnabled()
  * works inside API route handlers. Core modules are always treated as
  * enabled by assertModuleEnabled even if absent from this set.
+ *
+ * One difference from withContext(), on purpose (docket S81): when a read
+ * fails, the module state that read would have decided is unknown here, not
+ * off (lib/modules/module-state.ts), so a phone is never told a module is off
+ * because a read failed.
  */
 async function resolveApiEnabledModules(
   supabase: any,
@@ -388,19 +394,53 @@ async function resolveApiEnabledModules(
       .eq('id', organizationId)
       .maybeSingle(),
   ]);
+  // A failed read is NOT "off" (docket S81). supabase-js resolves it as
+  // `{ data: null, error }`, and a set built from that alone would be the set
+  // of an organization that switched every module off. So what the reads that
+  // worked say is on stays on (an unreadable flag still grants nothing); any
+  // other module's state is unknown, and asking about it, or listing the set,
+  // throws ModulesUnavailableError (lib/modules/module-state.ts), which the
+  // phone retries. Codes only: the message can quote request details.
+  //
+  // Only a list of rows that each name a module is an answer. postgrest-js
+  // resolves an empty body with no error and data null (a 2xx as it came, a
+  // 404 rewritten to 204), the same shape effective-permissions.ts refuses
+  // for the overrides, so that counts as a failed read too.
+  const rowsUnread =
+    Boolean(mods.error) ||
+    !Array.isArray(mods.data) ||
+    (mods.data as unknown[]).some(
+      (r) =>
+        !r || typeof r !== 'object' || typeof (r as { module_id?: unknown }).module_id !== 'string',
+    );
   if (mods.error) {
-    // Fail open for core / closed for optional (empty set). Log so a silent
-    // empty set is distinguishable from "org genuinely has no optional modules".
-    console.error('[resolveApiEnabledModules] failed:', mods.error);
+    console.error('[resolveApiEnabledModules] rows unreadable:', mods.error.code || 'unknown');
+  } else if (rowsUnread) {
+    console.error('[resolveApiEnabledModules] rows unreadable: not a list of module rows');
   }
+  // The comp flag is a NOT NULL boolean, so only an organization row that
+  // carries a boolean flag is an answer. No row without an error is row
+  // level security hiding it from a member, the case the one-round-trip read
+  // hands here on purpose (resolveApiContextFromBundle: `if
+  // (!held.organization) return null`); the MFA policy read above holds a
+  // hidden row to the strictest policy. Either way the flag was never seen,
+  // so it counts as a failed read and grants nothing.
+  const orgRow = org.data as { all_modules_comp?: unknown } | null;
+  const compUnread =
+    Boolean(org.error) ||
+    !orgRow ||
+    typeof orgRow !== 'object' ||
+    typeof orgRow.all_modules_comp !== 'boolean';
   if (org.error) {
-    // An unreadable flag grants NOTHING: fall back to the explicit rows.
-    console.error('[resolveApiEnabledModules] comp flag unreadable:', org.error);
+    console.error('[resolveApiEnabledModules] comp flag unreadable:', org.error.code || 'unknown');
   }
-  const comped = org.error
-    ? false
-    : (org.data as { all_modules_comp?: boolean | null } | null)?.all_modules_comp === true;
-  return effectiveModules(mods.data as Array<{ module_id: string }> | null, comped);
+  const comped = compUnread ? false : orgRow!.all_modules_comp === true;
+  const known = effectiveModules(
+    rowsUnread ? null : (mods.data as Array<{ module_id: string }>),
+    comped,
+  );
+  const readFailed = rowsUnread || compUnread;
+  return moduleSetFromReads(known, readFailed, NON_CORE_MODULE_IDS);
 }
 
 /**

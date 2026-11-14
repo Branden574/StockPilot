@@ -124,6 +124,36 @@ export function readRoleOnce(
   return promise;
 }
 
+/** A role a useRole hook holds, with the member and workspace it was read for. */
+export interface HeldRole {
+  userId: string;
+  orgId: string;
+  role: Role | null;
+  loading: boolean;
+}
+
+/**
+ * What useRole answers for the member and workspace on screen: the role held,
+ * when it was read for them; otherwise this identity's cached role, or none
+ * and loading until its read answers. The previous workspace's role is never
+ * answered for the next one (B124): a manager in one workspace who is staff
+ * in another was decided as a manager there until the new read answered, and
+ * for good when it failed offline. Nobody signed in, or no workspace: no
+ * role, not loading.
+ */
+export function roleShownFor(
+  held: HeldRole | null,
+  userId: string | null,
+  orgId: string | null,
+): { role: Role | null; loading: boolean } {
+  if (!userId || !orgId) return { role: null, loading: false };
+  if (held && held.userId === userId && held.orgId === orgId) {
+    return { role: held.role, loading: held.loading };
+  }
+  const cached = cachedRoleFor(userId, orgId);
+  return { role: cached, loading: cached === null };
+}
+
 /** Tests only: forget everything, listeners included. */
 export function resetRoleCacheForTests(): void {
   entry = null;

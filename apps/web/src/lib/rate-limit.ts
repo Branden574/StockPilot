@@ -35,6 +35,13 @@ interface RateLimitResult {
   allowed: boolean;
   count: number;
   resetAt: number;
+  /**
+   * Set only when the limiter could not answer (the RPC failed, answered no
+   * row, or threw): `allowed` is then the mode's choice, not a count. A
+   * caller that must tell "over the count" from "could not count" reads it;
+   * every other caller can ignore it.
+   */
+  failed?: true;
 }
 
 export async function checkRateLimit(
@@ -56,17 +63,17 @@ export async function checkRateLimit(
       // DB outage can't unlock unlimited submissions.
       if (mode === 'closed') {
         console.warn('[rate-limit] RPC failed, denying request (closed mode)', error?.message);
-        return { allowed: false, count: limit, resetAt: Date.now() + windowMs };
+        return { allowed: false, count: limit, resetAt: Date.now() + windowMs, failed: true };
       }
       console.warn('[rate-limit] RPC failed, allowing request', error?.message);
-      return { allowed: true, count: 0, resetAt: Date.now() + windowMs };
+      return { allowed: true, count: 0, resetAt: Date.now() + windowMs, failed: true };
     }
     const row = Array.isArray(data) ? data[0] : data;
     if (!row) {
       if (mode === 'closed') {
-        return { allowed: false, count: limit, resetAt: Date.now() + windowMs };
+        return { allowed: false, count: limit, resetAt: Date.now() + windowMs, failed: true };
       }
-      return { allowed: true, count: 0, resetAt: Date.now() + windowMs };
+      return { allowed: true, count: 0, resetAt: Date.now() + windowMs, failed: true };
     }
     return {
       allowed: Boolean(row.allowed),
@@ -76,10 +83,10 @@ export async function checkRateLimit(
   } catch (e) {
     if (mode === 'closed') {
       console.warn('[rate-limit] threw, denying request (closed mode)', e);
-      return { allowed: false, count: limit, resetAt: Date.now() + windowMs };
+      return { allowed: false, count: limit, resetAt: Date.now() + windowMs, failed: true };
     }
     console.warn('[rate-limit] threw, allowing request', e);
-    return { allowed: true, count: 0, resetAt: Date.now() + windowMs };
+    return { allowed: true, count: 0, resetAt: Date.now() + windowMs, failed: true };
   }
 }
 

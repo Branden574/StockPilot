@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { withApiContext } from '@/lib/auth/api-context';
 import { can } from '@/lib/auth/permissions';
 import {
+  answerModuleState,
   UNREADABLE_REQUEST_MESSAGE,
   unreadableRequestResponse,
 } from '@/server/lib/api-error-response';
@@ -167,7 +168,9 @@ export async function POST(req: Request) {
     if (e instanceof ServiceError && e.code === 'module_disabled') {
       return NextResponse.json({ error: 'module_disabled', message: e.message }, { status: 403 });
     }
-    throw e;
+    // A module state that could not be read (docket S81); anything else is
+    // thrown on, as before.
+    return answerModuleState(e, 'ai.chat.module_state');
   }
 
   // Route-level role gate. The write tools each assertPermission too,

@@ -70,8 +70,10 @@ describe('the count screen flushes on unmount (wiring)', () => {
   it('schedules each keystroke through the debouncer and flushes it in the unmount cleanup', () => {
     expect(screen).toContain('createDraftDebouncer(SAVE_DEBOUNCE_MS,');
     expect(screen).toContain('lineSaver.schedule(lineId, v);');
+    // S75: the "Count not saved" notice closes first, so a save flushed on
+    // the way out says nothing on a screen that has gone.
     expect(screen).toMatch(
-      /React\.useEffect\(\(\) => \{\s+return \(\) => lineSaver\.flushAll\(\);\s+\}, \[lineSaver\]\);/,
+      /React\.useEffect\(\(\) => \{\s+return \(\) => \{\s+lineGoneNotice\.close\(\);\s+lineSaver\.flushAll\(\);\s+\};\s+\}, \[lineSaver, lineGoneNotice\]\);/,
     );
     // The save it flushes is the real one: the local write + outbox row.
     expect(screen).toMatch(

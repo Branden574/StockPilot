@@ -176,8 +176,13 @@ function ordersList() {
 const read = (permissions: Iterable<Permission>): EffectivePermissionsState => ({
   permissions: new Set(permissions),
   read: true,
+  answered: true,
 });
-const UNREAD: EffectivePermissionsState = { permissions: undefined, read: false };
+const UNREAD: EffectivePermissionsState = {
+  permissions: undefined,
+  read: false,
+  answered: false,
+};
 const STAFF_APPROVER = read([...ROLE_PERMISSIONS.staff, 'orders:approve']);
 const STAFF = read(ROLE_PERMISSIONS.staff);
 const REVOKED_MANAGER = read(ROLE_PERMISSIONS.manager.filter((p) => p !== 'orders:approve'));

@@ -66,13 +66,13 @@ vi.mock('@/server/services/platform/sessions', () => ({
   revokeAllSessionsForUser: (...args: unknown[]) => revokeAllSessionsForUser(...args),
 }));
 vi.mock('@/lib/supabase/admin', () => {
-  // resolveDefaultOrgAndRole chains .select().eq()[.eq()][.not()][.limit()]
+  // resolveDefaultOrgAndRole chains .select().eq()[.eq()][.not()][.is()][.limit()]
   // .maybeSingle(); a permissive self-returning chain keeps it honest without
   // pinning the exact call order (it is try/catch-wrapped in the action, so a
   // missing link would silently degrade to a null-org audit row instead of
   // failing the test).
   const chain: Record<string, unknown> = {};
-  for (const k of ['select', 'eq', 'not', 'limit', 'order']) chain[k] = () => chain;
+  for (const k of ['select', 'eq', 'not', 'is', 'limit', 'order']) chain[k] = () => chain;
   chain.maybeSingle = async () => ({ data: null, error: null });
   return {
     createAdminClient: () => ({

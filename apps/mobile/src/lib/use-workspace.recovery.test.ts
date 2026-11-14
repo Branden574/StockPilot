@@ -52,6 +52,10 @@ const storage = vi.hoisted(() => ({
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: storage }));
 vi.mock('./db', () => ({ deleteOrgData: vi.fn(async () => {}) }));
 vi.mock('./enabled-modules', () => ({ refreshEnabledModules: vi.fn() }));
+// The saved permissions and warehouse scope a switch tells the screens to
+// read again (B124); their own tests are use-workspace.saved-access.test.ts.
+vi.mock('./use-effective-permissions', () => ({ refreshEffectivePermissions: async () => {} }));
+vi.mock('./warehouse-scope', () => ({ refreshWarehouseScope: async () => {} }));
 vi.mock('./sync', () => ({
   syncNow: vi.fn(async () => {}),
   syncAfterRunning: vi.fn(async () => {}),
@@ -65,14 +69,22 @@ const gate = vi.hoisted(() => ({
   failWarehouses: false,
   // Holds only the NEXT warehouse read.
   nextWarehouses: null as Promise<void> | null,
+  // Holds every membership read, and every profile read, while set.
+  holdMemberships: null as Promise<void> | null,
+  holdProfile: null as Promise<void> | null,
 }));
 vi.mock('./supabase', () => {
-  const offline = { data: null, error: { message: 'TypeError: Network request failed' }, status: 0 };
+  const offline = {
+    data: null,
+    error: { message: 'TypeError: Network request failed' },
+    status: 0,
+  };
   const members = {
     select: () => members,
     eq: () => members,
-    not: async () =>
-      gate.failMemberships
+    not: async () => {
+      if (gate.holdMemberships) await gate.holdMemberships;
+      return gate.failMemberships
         ? offline
         : {
             data: [
@@ -80,12 +92,16 @@ vi.mock('./supabase', () => {
               { role: 'staff', organization_id: 'org-b', organizations: { name: 'B' } },
             ],
             error: null,
-          },
+          };
+    },
   };
   const profiles = {
     select: () => profiles,
     eq: () => profiles,
-    maybeSingle: async () => ({ data: { default_organization_id: 'org-a' }, error: null }),
+    maybeSingle: async () => {
+      if (gate.holdProfile) await gate.holdProfile;
+      return { data: { default_organization_id: 'org-a' }, error: null };
+    },
   };
   const warehouses = {
     select: () => warehouses,
@@ -106,7 +122,8 @@ vi.mock('./supabase', () => {
   };
   return {
     supabase: {
-      from: (t: string) => (t === 'organization_members' ? members : t === 'user_profiles' ? profiles : warehouses),
+      from: (t: string) =>
+        t === 'organization_members' ? members : t === 'user_profiles' ? profiles : warehouses,
       auth: {
         onAuthStateChange: (cb: typeof auth.listener) => {
           auth.listener = cb;
@@ -128,6 +145,8 @@ afterEach(() => {
   gate.failMemberships = false;
   gate.failWarehouses = false;
   gate.nextWarehouses = null;
+  gate.holdMemberships = null;
+  gate.holdProfile = null;
   vi.restoreAllMocks();
 });
 
@@ -145,7 +164,11 @@ describe('a failed warehouse read keeps the warehouses on screen', () => {
     store.set('workspace.activeWarehouseId.org-b', 'wh-1');
     useWorkspace();
     await settled();
-    expect(published.at(-1)).toMatchObject({ activeOrgId: 'org-b', activeWarehouseId: 'wh-1', activeWarehouseName: 'Main' });
+    expect(published.at(-1)).toMatchObject({
+      activeOrgId: 'org-b',
+      activeWarehouseId: 'wh-1',
+      activeWarehouseName: 'Main',
+    });
 
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     gate.failWarehouses = true; // the next screen that mounts, on flaky Wi-Fi
@@ -153,7 +176,11 @@ describe('a failed warehouse read keeps the warehouses on screen', () => {
     useWorkspace();
     await settled();
 
-    expect(published.at(-1)).toMatchObject({ activeOrgId: 'org-b', activeWarehouseId: 'wh-1', activeWarehouseName: 'Main' });
+    expect(published.at(-1)).toMatchObject({
+      activeOrgId: 'org-b',
+      activeWarehouseId: 'wh-1',
+      activeWarehouseName: 'Main',
+    });
     expect(published.at(-1)?.warehouses.map((w) => w.id)).toEqual(['wh-1', 'wh-2']);
     expect(published.slice(before).some((s) => s.activeWarehouseId === null)).toBe(false);
     // The saved choice is untouched.
@@ -164,7 +191,11 @@ describe('a failed warehouse read keeps the warehouses on screen', () => {
     store.set('workspace.activeWarehouseId.org-b', 'wh-2');
     useWorkspace();
     await settled();
-    expect(published.at(-1)).toMatchObject({ activeOrgId: 'org-b', activeWarehouseId: 'wh-2', activeWarehouseName: 'Annex' });
+    expect(published.at(-1)).toMatchObject({
+      activeOrgId: 'org-b',
+      activeWarehouseId: 'wh-2',
+      activeWarehouseName: 'Annex',
+    });
   });
 
   // The load read its warehouses without a bound, so a request that never
@@ -178,7 +209,11 @@ describe('a failed warehouse read keeps the warehouses on screen', () => {
       await vi.advanceTimersByTimeAsync(14_000);
       expect(published.at(-1)?.loading).toBe(true);
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(published.at(-1)).toMatchObject({ loading: false, activeOrgId: 'org-b', activeWarehouseId: 'wh-2' });
+      expect(published.at(-1)).toMatchObject({
+        loading: false,
+        activeOrgId: 'org-b',
+        activeWarehouseId: 'wh-2',
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -258,6 +293,88 @@ describe('retryWorkspace: no workspace is not the end', () => {
     await first;
     expect(published.at(-1)?.activeOrgId).not.toBeNull();
   });
+
+  // React Native's fetch has no timeout of its own, and the membership and
+  // profile reads had no bound: a request that never answered held `loading`
+  // for good, and every screen that spins while the workspace loads spun with
+  // it. They now end like a failed read after 15 s: a membership read with no
+  // workspace (said by each screen, and asked for again by the sync loop and
+  // Try again), a profile read with the workspace the memberships give.
+  it.each([
+    ['membership', 'with no workspace', 'holdMemberships', false],
+    ['profile', 'with the workspace the memberships give', 'holdProfile', true],
+  ] as const)(
+    'a %s read that never answers ends the load after 15 s, %s',
+    async (_read, _outcome, hold, chosen) => {
+      emitAuth(null);
+      emitAuth('u1');
+      vi.useFakeTimers();
+      try {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        gate[hold] = new Promise<void>(() => {}); // a socket that never answers
+        useWorkspace();
+        await vi.advanceTimersByTimeAsync(14_000);
+        expect(published.at(-1)?.loading).toBe(true);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(published.at(-1)?.loading).toBe(false);
+        expect(published.at(-1)?.activeOrgId !== null).toBe(chosen);
+      } finally {
+        gate[hold] = null;
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  // On a link where the membership read always takes longer than 15 s, the
+  // bound alone would mean no workspace ever loads. A late answer still
+  // applies when it is for the account still signed in and no membership
+  // answer has landed since; one for an account that has gone is ignored.
+  it('a membership read that answers at 20 s still loads the workspace', async () => {
+    emitAuth(null);
+    emitAuth('u1');
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      let answer!: () => void;
+      gate.holdMemberships = new Promise<void>((r) => {
+        answer = r;
+      });
+      useWorkspace();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(published.at(-1)).toMatchObject({ loading: false, activeOrgId: null });
+      await vi.advanceTimersByTimeAsync(5_000);
+      answer();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(published.at(-1)?.activeOrgId).not.toBeNull();
+    } finally {
+      gate.holdMemberships = null;
+      vi.useRealTimers();
+    }
+  });
+
+  it('a late membership answer for an account that has gone is ignored', async () => {
+    emitAuth(null);
+    emitAuth('u1');
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      let answer!: () => void;
+      gate.holdMemberships = new Promise<void>((r) => {
+        answer = r;
+      });
+      useWorkspace();
+      await vi.advanceTimersByTimeAsync(15_000);
+      emitAuth('u2');
+      const before = published.length;
+      answer();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(published.slice(before).some((p) => p.activeOrgId !== null)).toBe(false);
+    } finally {
+      gate.holdMemberships = null;
+      vi.useRealTimers();
+      emitAuth('u1');
+    }
+  });
 });
 
 // useSync (the app root's sync loop) imports React Native, so its wiring is
@@ -271,8 +388,12 @@ describe('useSync loads the workspace again when none is shown', () => {
 
   it('on each sync tick and on every return to the foreground', () => {
     expect(src).toContain("import { retryWorkspace } from './use-workspace';");
-    expect(src).toMatch(/setInterval\(\(\) => \{[\s\S]*?void syncNow\(\);\s*void retryWorkspace\(\);/);
-    expect(src).toMatch(/if \(state === 'active'\) \{\s*void syncNow\(\);\s*void retryWorkspace\(\);/);
+    expect(src).toMatch(
+      /setInterval\(\(\) => \{[\s\S]*?void syncNow\(\);\s*void retryWorkspace\(\);/,
+    );
+    expect(src).toMatch(
+      /if \(state === 'active'\) \{\s*void syncNow\(\);\s*void retryWorkspace\(\);/,
+    );
   });
 
   it('when the connection comes back (the rule sync.ts isOnline() applies), and stops listening on sign-out', () => {

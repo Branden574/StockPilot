@@ -116,7 +116,25 @@
      applied. The two file counts in section 10 were counted again from the
      manifests in `scripts/security-test.sh`, which gain one pgTAP file and
      one vitest file with this entry; the assertion count beside them was
-     not re-derived. -->
+     not re-derived.
+
+     AMENDED 2026-11-02, brought up to date with T23 and T24 on 2026-11-13
+     (docket S49, migration 0421): INV-B1, INV-B3 and INV-B4 now say a gate
+     counts only in code. INV-2, INV-25 and INV-31 match the four gate names
+     as whole words (`_sec_inv_gate_re`) on the code skeleton T23's strip
+     pass makes (`_sec_inv_strip_re`), the pass INV-27b holds every
+     first-party body to; INV-4b and INV-29b were added, and INV-29 and
+     INV-32 plant comment-only and string-only probes. INV-B3's grants
+     paragraph gained the exception 0310 and 0421 use, INV-B2 names INV-22's
+     string-literal residual and gives the measured current state (18
+     policies, 15 gated; the figure it had carried since this document's
+     first version was 19, 16 gated), and section 10 records the second
+     recurrence. The census figures in those entries were read by a scratch
+     pgTAP probe on a local Postgres with migrations 0001-0418 and 0421
+     applied; the assertion count in section 10 was re-derived from
+     `select plan(60)`, and the two file counts beside it were counted from
+     the manifests in `scripts/security-test.sh` after main's 0419 and 0420
+     were merged in. -->
 
 # Security invariants
 
@@ -360,10 +378,15 @@ section 2 as "the anon posture" is what let 0342's helper stand from 0342 to
   `locations` rows into an arbitrary tenant.
 - **Enforced by**: explicit `revoke execute ... from public, anon` in migration
   0318, plus an in-body gate (`auth.uid()`, `has_org_role`, `has_permission`,
-  `is_org_member`) on each function that legitimately stays open.
+  `is_org_member`) on each function that legitimately stays open. The gate
+  must be in the function's code: a name in a comment, in a quoted string or
+  inside a longer name is not a gate (S49).
 - **Tested at**: INV-1 (the sweep), INV-2 (the allowlist polices itself),
-  INV-3 (no stale entries), INV-4 (control). Per-function posture for the 15
-  fixed functions is pinned in
+  INV-3 (no stale entries), INV-4 (control), INV-4b (INV-2's mutation control:
+  it plants two allowlisted probes, one that names the gates only in a comment
+  and a string, which must be caught, and one that calls `is_org_member` after
+  a comment with a quote in it, which must not). Per-function posture for the
+  15 fixed functions is pinned in
   [`0318_secdef_grants.test.sql`](../../supabase/tests/0318_secdef_grants.test.sql).
 
 Two design points in that test are load-bearing.
@@ -377,6 +400,12 @@ return type, not an observation about today's catalog — which is precisely why
 **The allowlist cannot be used as a bypass.** INV-2 requires every allowlisted
 function to reference an authorization gate in its own body. Adding a name to
 the allowlist for an ungated function fails INV-2 instead of buying an exemption.
+Since S49 the reference must be code: INV-2 reads each body through the
+test's strip pass (`_sec_inv_strip_re`, which turns `--` and `/* */` comments
+into a space and single-quoted strings into `''` in one left-to-right pass)
+and then looks for the four names as whole words (`_sec_inv_gate_re`), so a
+gate named only in a comment or an error message buys nothing. INV-2 names
+its offenders in the failure output.
 
 Current state: 42 anon-executable `SECURITY DEFINER` functions — 17
 trigger-returning (not RPC-invocable) and 25 RPC-invocable with in-body gates,
@@ -412,16 +441,23 @@ null ACL — which is itself `PUBLIC`-executable, and is what a
   unremarkable in a migration diff.
 - **Enforced by**: the predicate on each policy.
 - **Tested at**: INV-22, with INV-23 as the control that the population being
-  judged is non-empty. Current state: 19 such policies — 16 gated, 3 explicit
-  denies (the `mfa_recovery_codes_no_*` idiom that makes that table
-  trigger-write-only).
+  judged is non-empty. Current state, measured on 2026-11-13 (migrations
+  0001-0418 and 0421): 18 such policies — 15 gated, 3 explicit denies (the
+  `mfa_recovery_codes_no_*` idiom that makes that table trigger-write-only).
+  One residual, named since S49: INV-22 searches the deparsed predicate,
+  which carries no comment but can carry a string literal, so an identity
+  name inside a quoted string in a predicate would still count as a gate.
+  INV-22 does not strip strings; a predicate is short enough that a reviewer
+  reads it whole. All 15 gated policies are still gated with their strings
+  removed, so none passes on a string alone.
 
 ### INV-B3 — no ungated SECURITY DEFINER function is authenticated-executable
 
 - **Invariant**: every `SECURITY DEFINER` function in `public` that can be
   invoked as an RPC and that `authenticated` can execute either names an
   authorization gate (`auth.uid()`, `has_org_role`, `has_permission`,
-  `is_org_member`) inside its own body, or is on **allowlist E** — the
+  `is_org_member`) in its own code (not in a comment, a quoted string or a
+  longer name, S49), or is on **allowlist E** — the
   `_sec_inv_auth_secdef_nogate_allow` table in the invariant test, every entry
   of which is a read-only predicate that writes nothing. (Go by the table name:
   the test file currently letters two blocks `E`, this one and the storage
@@ -451,6 +487,16 @@ null ACL — which is itself `PUBLIC`-executable, and is what a
   that legitimately calls the helper (INV-C1). That is why each of these
   migrations re-states its `grant execute ... to authenticated, service_role`
   unchanged and puts the entire fix in the body.
+
+  The one exception is a helper that nothing evaluates as the user: no policy
+  names it, no `SECURITY INVOKER` function calls it, and no app path calls it.
+  Revoking `authenticated`'s `EXECUTE` on such a helper breaks nothing, so it
+  may lose the grant instead of gaining a gate. 0310 did that for
+  `account_is_disabled`, and 0421 (S49) for `user_can_see_item_category` once
+  `categories_select` stopped calling it. The condition is checked, not
+  assumed: 0421's test (S4) asserts that no policy names the function, that
+  nothing depends on it and that no other function's code calls it, and S2
+  and S5 that only `postgres` and `service_role` may execute it.
 - **Tested at**: INV-25 (the sweep), INV-26 (allowlist E polices itself: no
   stale entry, and no entry that writes), with INV-29, INV-30, INV-30b and
   INV-30c as the controls. What INV-26 judges:
@@ -502,13 +548,21 @@ null ACL — which is itself `PUBLIC`-executable, and is what a
   separately: `EXECUTE` in an entry or in a callee withdraws the exemption),
   an operator, a cast, a trigger or a view; of `pg_catalog`'s functions only
   the side-effect forms are judged.
-  Per-function posture is pinned
+  Since S49, INV-25 reads each body through the same strip pass and then
+  `_sec_inv_gate_re` (comments and quoted strings do not count, the four
+  names are matched as whole words) and
+  names its offenders; INV-29 also plants probes that name every gate only
+  in comments, only in a quoted string and only inside longer names, all of
+  which must be caught, and one that calls `has_org_role` after a comment
+  with a quote and a string with `--` in it, which must not; INV-29b checks
+  the expression's lexical rules on ten samples, the way INV-30b checks the
+  writer detector. Per-function posture is pinned
   in
   [`0346_gate_secdef_stock_helpers.test.sql`](../../supabase/tests/0346_gate_secdef_stock_helpers.test.sql)
   and
   [`0350_location_facts_gate_and_catalog_metadata.test.sql`](../../supabase/tests/0350_location_facts_gate_and_catalog_metadata.test.sql).
 
-Two design points in that pair of assertions are load-bearing, the same way
+Three design points in that pair of assertions are load-bearing, the same way
 the trigger-return exclusion and the self-policing allowlist are under INV-B1.
 
 **The allowlist cannot be used as a bypass, and it is not a place to park a
@@ -534,12 +588,34 @@ now judges it on its body like everything else. "Reading past RLS is the point"
 justifies the `SECURITY DEFINER`; it never justified the missing authorization
 check.
 
-Reproduce (the `authenticated` twin of the INV-B1 query above):
+**A gate named in a comment is not a gate, and a predicate about a user
+belongs in the zero-argument set form.** Since S49 the sweep reads a body's
+code only: a gate name in a comment, a quoted string or a longer name does
+not count. `user_can_see_item_category` (0310) is a predicate about the user
+it is given. 0421 moved
+`categories_select` onto zero-argument sets that read `auth.uid()`
+themselves: the two category sets `inventory_items_select` already read
+(0229) and the membership set `stock_movements_select` reads. It took
+`authenticated`'s `EXECUTE` away from the function under the exception
+above, so the function left INV-25's population. The lesson for the next
+helper: a policy should read sets that derive the user from the session,
+not pass `auth.uid()` into a function that takes a user id and that
+`authenticated` may execute. The strip pass reads only bodies INV-27b
+accepts: a body with a form the pass does not follow (an `E''` string with
+`\'`, a dollar-quoted literal, a comment inside a comment, a quote left once
+the pass is done) is refused there. And a name proves a gate is called, not
+that the call decides anything.
+
+Reproduce (the `authenticated` twin of the INV-B1 query above; the body is read
+the way INV-25 reads it, comments and quoted strings removed first):
 
 ```sql
 select p.proname,
        pg_get_function_identity_arguments(p.oid) as args,
-       (p.prosrc ~* '(auth\.uid|has_org_role|has_permission|is_org_member)')
+       (regexp_replace(p.prosrc,
+                       $re$/\*(?:[^*]|\*+[^*/])*\*+/|--[^\n\r]*|(')(?:[^']|'')*(')|("(?:[^"]|"")*")$re$,
+                       ' \1\2\3 ', 'g')
+          ~* $re$\m(auth\.uid|has_org_role|has_permission|is_org_member)\M$re$)
          as gated_in_body
   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
  where n.nspname = 'public' and p.prosecdef
@@ -551,9 +627,10 @@ select p.proname,
 ### INV-B4 — the same rule holds in the `ledger` schema
 
 - **Invariant**: every `SECURITY DEFINER` function in `ledger` that
-  `authenticated` can execute names an authorization gate in its own body, or
-  is on **allowlist F** (`_sec_inv_ledger_secdef_nogate_allow`), every entry of
-  which is a read-only predicate.
+  `authenticated` can execute names an authorization gate in its own code (not
+  in a comment or a quoted string, S49), or is on **allowlist F**
+  (`_sec_inv_ledger_secdef_nogate_allow`), every entry of which is a read-only
+  predicate.
 - **Why it matters**: PostgREST does not publish `ledger` (0359), but that
   schema is not private. `authenticated` holds `USAGE` on it and `EXECUTE` on
   its bodies, because the `SECURITY INVOKER` public wrappers call them as the
@@ -567,12 +644,14 @@ select p.proname,
   manager+ or `caller_can_write_location`. The one allowlisted entry,
   `ledger.cycle_count_line_superseded` (0369), returns a boolean, writes
   nothing, and answers only inside a ledger transaction.
-- **Tested at**: INV-31 (the sweep, plus allowlist F's own audit, which is
-  the view INV-26 reads: no stale entry, and no entry that writes, runs
+- **Tested at**: INV-31 (the sweep, reading bodies through the same strip
+  pass and `_sec_inv_gate_re` as INV-25, plus allowlist F's own audit, which
+  is the view INV-26 reads: no stale entry, and no entry that writes, runs
   `EXECUTE` or has a side effect, reaches a function that does, or reaches a
   function with no first-party body that allowlist K does not list) and
-  INV-32 (plants an ungated definer probe in `ledger` and a stale allowlist
-  row; both must be caught). INV-30c plants an allowlist-F entry that reaches
+  INV-32 (plants an ungated definer probe in `ledger`, two that name the
+  gates only in a comment or only in a quoted string, and a stale allowlist
+  row; all must be caught). INV-30c plants an allowlist-F entry that reaches
   a writer, and INV-30e one that runs `SET LOCAL`. The
   helper's gate is pinned line by line in
   [`0371_holdings_staff_scope.test.sql`](../../supabase/tests/0371_holdings_staff_scope.test.sql)
@@ -2316,18 +2395,21 @@ checked.
   A-E. The P0 (anon `EXECUTE` on ungated `SECURITY DEFINER` functions) is closed
   by migration 0318 for all 15 exploitable functions, and the class — not just
   those 15 — is now covered by an allowlist-based sweep.
-- **The same class recurred once on the `authenticated` role** and is closed:
+- **The same class has recurred on the `authenticated` role** and is closed:
   SP-001, SP-059 and the `_cycle_count_location_facts` leak (section 2, INV-B3)
   — four definer functions any signed-in user could execute with no
   authorization in their bodies — closed by migrations 0346 and 0350 and swept
   from then on by INV-25/26. It is recorded on its own line rather than folded
   into the one above because it is the counterexample to reading that line as
   permanent: the sweep that would have caught it did not exist on the day the
-  first P0 was declared closed.
+  first P0 was declared closed. S49 found a second instance in the sweep
+  itself: INV-25 counted a gate name in a comment as a gate. Since 0421 it
+  reads code only, and `user_can_see_item_category` is no longer one of the
+  functions it judges.
 - **A high-assurance baseline is implemented and covered by executable
-  invariants**: 58 class-wide assertions in
-  `supabase/tests/security_invariants.test.sql`, plus the 101 other pgTAP
-  files and the 342 vitest files on the manifests of
+  invariants**: 60 class-wide assertions in
+  `supabase/tests/security_invariants.test.sql`, plus the 103 other pgTAP
+  files and the 364 vitest files on the manifests of
   `scripts/security-test.sh`, gated together as `pnpm security:test` and
   wired into CI.
 - **Two risks are accepted and tracked**, not closed (section 7), each with a
