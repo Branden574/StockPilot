@@ -48,7 +48,7 @@ type Filter = ['eq' | 'is' | 'not', string, unknown];
 
 function tableClient(name: 'user_login_devices' | 'organization_members') {
   const q = {
-    op: 'select' as 'select' | 'insert' | 'update',
+    op: 'select' as 'select' | 'insert' | 'update' | 'delete',
     head: false,
     payload: null as Record<string, unknown> | null,
     filters: [] as Filter[],
@@ -80,6 +80,11 @@ function tableClient(name: 'user_login_devices' | 'organization_members') {
       db.devices.push({ ...p, id: `device-${db.nextId++}` });
       return { data: null, error: null };
     }
+    if (q.op === 'delete') {
+      const keep = rows().filter((r) => !matches(r));
+      if (name === 'user_login_devices') db.devices = keep as unknown as DeviceRow[];
+      return { data: null, error: null };
+    }
     if (q.op === 'update') {
       for (const r of rows().filter(matches)) Object.assign(r, q.payload);
       return { data: null, error: null };
@@ -95,6 +100,10 @@ function tableClient(name: 'user_login_devices' | 'organization_members') {
     insert: (payload: Record<string, unknown>) => {
       q.op = 'insert';
       q.payload = payload;
+      return b;
+    },
+    delete: () => {
+      q.op = 'delete';
       return b;
     },
     update: (payload: Record<string, unknown>) => {
@@ -156,8 +165,8 @@ vi.mock('@/lib/rate-limit', () => ({
     limiter.calls.push({ key, limit, windowMs, mode });
     if (limiter.storeDown || (limiter.downPrefix && key.startsWith(limiter.downPrefix))) {
       return mode === 'closed'
-        ? { allowed: false, count: limit, resetAt: Date.now() + windowMs }
-        : { allowed: true, count: 0, resetAt: Date.now() + windowMs };
+        ? { allowed: false, count: limit, resetAt: Date.now() + windowMs, failed: true }
+        : { allowed: true, count: 0, resetAt: Date.now() + windowMs, failed: true };
     }
     const count = (limiter.buckets.get(key) ?? 0) + 1;
     if (count > limit) return { allowed: false, count: limit, resetAt: Date.now() + windowMs };
@@ -256,14 +265,63 @@ describe('noteLoginDevice — new-device alerts per account and per organization
     expect(JSON.stringify(held)).not.toContain(USER);
   });
 
-  it('a limiter that cannot answer: the device is recorded, no email and no event go out', async () => {
+  it('a limiter that cannot answer: no email, no event, no held report, and the device is not left recorded', async () => {
     memberOf('org-a');
     await web();
     limiter.storeDown = true;
     await phone(installs[0]!);
-    expect(db.devices).toHaveLength(2);
+    expect(db.devices).toHaveLength(1);
     expect(sendNewDeviceLoginEmail).not.toHaveBeenCalled();
     expect(dispatchEvent).not.toHaveBeenCalled();
+    expect(reportError).not.toHaveBeenCalled();
+
+    // The next sign-in from that device, with the limiter back, is new and alerts.
+    limiter.storeDown = false;
+    await phone(installs[0]!);
+    expect(db.devices).toHaveLength(2);
+    expect(sendNewDeviceLoginEmail).toHaveBeenCalledTimes(1);
+    expect(dispatchEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('a count refusal keeps the device recorded', async () => {
+    await web();
+    limiter.buckets.set(`new-device-alert:user:${USER}`, 5);
+    await phone(installs[0]!);
+    expect(db.devices).toHaveLength(2);
+    expect(sendNewDeviceLoginEmail).not.toHaveBeenCalled();
+  });
+
+  it('the email that reaches the count, and only that one, says no more will come for 24 hours', async () => {
+    await web();
+    for (const install of installs.slice(0, 5)) await phone(install);
+    expect(sendNewDeviceLoginEmail.mock.calls.map((c) => c[0].lastForADay)).toEqual([
+      false,
+      false,
+      false,
+      false,
+      true,
+    ]);
+  });
+
+  it('events held for an organization: one report per organization per window, the organization id only', async () => {
+    memberOf('org-a');
+    limiter.buckets.set('new-device-event:org:org-a', 30);
+    await web();
+    await phone(installs[0]!);
+    await phone(installs[1]!);
+    const held = reportError.mock.calls.filter(
+      (c) => (c[1] as { tag: string }).tag === 'auth.new_device_events_held',
+    );
+    expect(held).toHaveLength(1);
+    expect(held[0]![1]).toMatchObject({ level: 'warning', organizationId: 'org-a' });
+    expect(limiter.calls).toContainEqual({
+      key: 'new-device-event-held:org:org-a',
+      limit: 1,
+      windowMs: HOUR_MS,
+      mode: 'closed',
+    });
+    const text = JSON.stringify(held);
+    for (const absent of [USER, EMAIL, '203.0.113.7', FAMILY]) expect(text).not.toContain(absent);
   });
 
   it('at most 30 new-device events an hour per organization, closed; the email and other organizations are not held by it', async () => {
@@ -281,13 +339,18 @@ describe('noteLoginDevice — new-device alerts per account and per organization
     });
   });
 
-  it('an organization bucket that cannot answer sends no event to it', async () => {
+  it('an organization bucket that cannot answer sends no event to it, and reports no held events', async () => {
     memberOf('org-a');
     await web();
     limiter.downPrefix = 'new-device-event:';
     await phone(installs[0]!);
     expect(sendNewDeviceLoginEmail).toHaveBeenCalledTimes(1);
     expect(dispatchEvent).not.toHaveBeenCalled();
+    expect(
+      reportError.mock.calls.filter(
+        (c) => (c[1] as { tag: string }).tag === 'auth.new_device_events_held',
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -372,6 +435,7 @@ describe('noteLoginDevice — the label names the device to the person, the fami
       userAgent: APP_UA_1,
       ip: '203.0.113.7',
       deviceLabel: LABEL,
+      lastForADay: false,
     });
     expect(db.devices[1]!.user_agent).toBe(LABEL);
     // Integrator decision (device label, 2026-11-02): the sign-in note keeps

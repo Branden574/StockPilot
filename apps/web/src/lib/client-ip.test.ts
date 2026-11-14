@@ -64,4 +64,10 @@ describe('clientIpForRecord', () => {
     expect(clientIpForRecord(bag({ 'x-forwarded-for': 'unknown' }))).toBeNull();
     expect(clientIpForRecord(bag({ 'x-real-ip': 'proxy.example.com' }))).toBeNull();
   });
+
+  it('an IPv6 zone id is null (the inet column refuses it); an IPv4-mapped address is kept', () => {
+    vi.stubEnv('VERCEL', '');
+    expect(clientIpForRecord(bag({ 'x-real-ip': 'fe80::1%eth0' }))).toBeNull();
+    expect(clientIpForRecord(bag({ 'x-real-ip': '::ffff:203.0.113.7' }))).toBe('::ffff:203.0.113.7');
+  });
 });

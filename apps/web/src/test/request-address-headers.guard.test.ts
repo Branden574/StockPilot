@@ -11,11 +11,22 @@ import { describe, expect, it } from 'vitest';
  * clientIpFromRequest, clientIpFromHeaders or clientIpForRecord, so the rule
  * cannot differ from one reader to the next.
  *
- * This reads every source file under src (tests and test helpers aside) for a
- * read of an address header: `.get('<name>')` or `['<name>']`. Writing the
- * header (the analytics proxy sets x-forwarded-for from the helper's answer)
- * is not a read. The self-test at the bottom runs the same reading over
- * sources written to fail, so this cannot pass by reading nothing.
+ * Every source file under src (tests and test helpers aside), comments taken
+ * out, is read two ways:
+ *   1. a read of an address header: `.get('<name>')` or `['<name>']` (with
+ *      its line, for the message);
+ *   2. stricter: any quoted literal that IS an address-header name, however
+ *      it is used (held in a constant, cast with `as`), or a quoted piece of
+ *      one that a name could be built from ('forwarded-for', 'real-ip'),
+ *      unless the literal is the first argument of `.set(`, `.append(` or
+ *      `.delete(` (writing a header, as the analytics proxy sets
+ *      x-forwarded-for from the helper's answer, is not a read); and the other
+ *      ways to the address: `request.ip` / `req.ip`, a socket's
+ *      `remoteAddress`, and `ipAddress` or `geolocation` from
+ *      `@vercel/functions`.
+ * Only lib/client-ip.ts may do either. The self-test at the bottom runs both
+ * readings over inline sources written to fail, and to pass, so this cannot
+ * pass by reading nothing.
  */
 
 const WEB_SRC = path.resolve(__dirname, '..');
@@ -33,21 +44,82 @@ const ADDRESS_HEADERS = [
   'x-cluster-client-ip',
   'fastly-client-ip',
   'x-vercel-forwarded-for',
+  'x-vercel-proxied-for',
+  'x-original-forwarded-for',
 ];
+
+/**
+ * Quoted pieces an address-header name could be built from: every run of
+ * two or more of a name's dash-separated words that is not the whole name
+ * ('forwarded-for', 'real-ip', 'connecting-ip', 'x-forwarded', ...). A
+ * single word ('for', 'ip', 'real') is too common to mean anything.
+ */
+const NAME_PIECES = (() => {
+  const pieces = new Set<string>();
+  for (const name of ADDRESS_HEADERS) {
+    const words = name.split('-');
+    for (let i = 0; i < words.length; i++) {
+      for (let j = i + 2; j <= words.length; j++) {
+        const piece = words.slice(i, j).join('-');
+        if (piece !== name) {
+          pieces.add(piece);
+          if (i > 0) pieces.add(`-${piece}`);
+          if (j < words.length) pieces.add(`${piece}-`);
+        }
+      }
+    }
+  }
+  for (const name of ADDRESS_HEADERS) pieces.delete(name);
+  return pieces;
+})();
 
 const NAMES = ADDRESS_HEADERS.map((n) => n.replace(/-/g, '\\-')).join('|');
 const READ = new RegExp(
   `(?:\\.get\\(\\s*|\\[\\s*)(['"\`])(?:${NAMES})\\1\\s*[)\\]]`,
   'gi',
 );
+/** Any single-, double- or backtick-quoted literal with no `${` inside. */
+const LITERAL = /(['"`])((?:(?!\1)[^\\\n$]|\\.|\$(?!\{))*)\1/g;
+const WRITE_BEFORE = /\.(?:set|append|delete)\(\s*$/;
+const OTHER_WAYS: Array<[string, RegExp]> = [
+  ['request.ip', /\b(?:req|request)\??\.ip\b(?!\w)/g],
+  ['remoteAddress', /\bremoteAddress\b/g],
+  [
+    '@vercel/functions ipAddress or geolocation',
+    /import\s*\{[^}]*\b(?:ipAddress|geolocation)\b[^}]*\}\s*from\s*['"]@vercel\/functions['"]/g,
+  ],
+];
 
-/** The address-header reads in one source text, as their line numbers. */
+/** The source with comments taken out (a `//` after a `:` is kept, for URLs). */
+function code(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
+
+const lineOf = (source: string, index: number) => source.slice(0, index).split('\n').length;
+
+/** Reading 1: the address-header reads in one source text, as their line numbers. */
 function addressHeaderReads(source: string): number[] {
-  const lines: number[] = [];
-  for (const m of source.matchAll(READ)) {
-    lines.push(source.slice(0, m.index).split('\n').length);
+  const text = code(source);
+  return [...text.matchAll(READ)].map((m) => lineOf(text, m.index));
+}
+
+/** Reading 2: every other way to the address, as `<line>: <what>`. */
+function strictFindings(source: string): string[] {
+  const text = code(source);
+  const found: string[] = [];
+  for (const m of text.matchAll(LITERAL)) {
+    const value = m[2]!.toLowerCase();
+    const isName = ADDRESS_HEADERS.includes(value);
+    if (!isName && !NAME_PIECES.has(value)) continue;
+    if (isName && WRITE_BEFORE.test(text.slice(Math.max(0, m.index - 40), m.index))) continue;
+    found.push(`${lineOf(text, m.index)}: ${isName ? 'name' : 'piece'} ${m[0]}`);
   }
-  return lines;
+  for (const [what, re] of OTHER_WAYS) {
+    for (const m of text.matchAll(re)) found.push(`${lineOf(text, m.index)}: ${what}`);
+  }
+  return found;
 }
 
 function isTestFile(rel: string): boolean {
@@ -76,6 +148,7 @@ describe('the caller address is read only through lib/client-ip.ts', () => {
   const files = sourceFiles(WEB_SRC)
     .map((f) => path.relative(WEB_SRC, f).split(path.sep).join('/'))
     .filter((rel) => !isTestFile(rel));
+  const read = (rel: string) => readFileSync(path.join(WEB_SRC, rel), 'utf8');
 
   it('reads a real tree', () => {
     expect(files.length).toBeGreaterThan(500);
@@ -86,19 +159,28 @@ describe('the caller address is read only through lib/client-ip.ts', () => {
     const found: string[] = [];
     for (const rel of files) {
       if (ALLOWED.has(rel)) continue;
-      const source = readFileSync(path.join(WEB_SRC, rel), 'utf8');
-      for (const line of addressHeaderReads(source)) found.push(`${rel}:${line}`);
+      for (const line of addressHeaderReads(read(rel))) found.push(`${rel}:${line}`);
+    }
+    expect(found).toEqual([]);
+  });
+
+  it('no other source file names an address header, builds one, or reads the address another way', () => {
+    const found: string[] = [];
+    for (const rel of files) {
+      if (ALLOWED.has(rel)) continue;
+      for (const f of strictFindings(read(rel))) found.push(`${rel}:${f}`);
     }
     expect(found).toEqual([]);
   });
 
   it('lib/client-ip.ts itself still reads them (the reading is not blind)', () => {
-    const source = readFileSync(path.join(WEB_SRC, 'lib/client-ip.ts'), 'utf8');
+    const source = read('lib/client-ip.ts');
     expect(addressHeaderReads(source).length).toBeGreaterThanOrEqual(2);
+    expect(strictFindings(source).length).toBeGreaterThanOrEqual(2);
   });
 });
 
-describe('self-test: the reading finds what it must', () => {
+describe('self-test: the readings find what they must', () => {
   it.each([
     ["req.headers.get('x-forwarded-for')?.split(',')[0]"],
     ['h.get("x-real-ip")'],
@@ -107,16 +189,39 @@ describe('self-test: the reading finds what it must', () => {
     ["request.headers.get('true-client-ip')"],
     ["h.get('forwarded')"],
     ["raw['x-forwarded-for']"],
-  ])('finds %s', (src) => {
+  ])('reading 1 finds %s', (src) => {
     expect(addressHeaderReads(src)).toEqual([1]);
   });
 
   it.each([
+    ["const H = 'x-forwarded-for';\nh.get(H);"],
+    ["h.get('x-real-ip' as string)"],
+    ["h.get('x-' + 'forwarded-for')"],
+    ["h.get(['x', 'real-ip'].join('-'))"],
+    ["const name = `x-vercel-forwarded-for`;"],
+    ["h.get('x-vercel-proxied-for')"],
+    ["const ip = request.ip;"],
+    ["const ip = req?.ip ?? null;"],
+    ["const ip = req.socket.remoteAddress;"],
+    ["import { ipAddress } from '@vercel/functions';"],
+    ["import { geolocation, waitUntil } from '@vercel/functions';"],
+  ])('reading 2 finds %s', (src) => {
+    expect(strictFindings(src).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it.each([
     ["headers.set('x-forwarded-for', visitor)"],
-    ["// read x-forwarded-for only on Vercel"],
+    ["out.append('x-real-ip', value)"],
+    ["// read 'x-forwarded-for' only on Vercel"],
+    ["/* `x-real-ip` in a comment */"],
     ["h.get('x-forwarded-host')"],
     ["h.get('user-agent')"],
-  ])('does not count %s', (src) => {
+    ["import { clientIpFromHeaders } from '@/lib/client-ip';"],
+    ["const url = 'https://example.com/x';"],
+    ["const shipping = request.ipAllowList;"],
+    ["import { waitUntil } from '@vercel/functions';"],
+  ])('neither reading counts %s', (src) => {
     expect(addressHeaderReads(src)).toEqual([]);
+    expect(strictFindings(src)).toEqual([]);
   });
 });

@@ -3,12 +3,9 @@ import 'server-only';
 import { isIP } from 'node:net';
 
 /**
- * Best-effort client IP for rate-limiting keys.
- *
- * We only trust `x-forwarded-for` when running on Vercel (where the platform
- * sets/strips it). Off-Vercel a client can spoof XFF to rotate past a per-IP
- * cap, so we fall back to `x-real-ip` or an `unknown` bucket. Mirrors the
- * battle-tested logic in the public order-request POST handler.
+ * The caller's address, read in one place. x-forwarded-for is read only on
+ * Vercel, where the platform sets it; elsewhere x-real-ip, else the 'unknown'
+ * bucket.
  *
  * Both `clientIpFromRequest` (route handlers, which get a real `Request`)
  * and `clientIpFromHeaders` (Server Components, which only get Next's
@@ -39,9 +36,10 @@ export function clientIpFromHeaders(headers: { get(name: string): string | null 
  * a device row (user_login_devices.last_ip), a new-device email. The one rule
  * above, then null for anything that is not an IP literal: the limiter's
  * 'unknown' bucket, or a header value that is not an address, which the inet
- * column would refuse (22P02) and lose the row with it.
+ * column would refuse (22P02) and lose the row with it. An IPv6 zone id
+ * ("fe80::1%eth0") passes isIP but not inet, so a '%' is refused too.
  */
 export function clientIpForRecord(headers: { get(name: string): string | null }): string | null {
   const ip = pickClientIp(headers);
-  return isIP(ip) ? ip : null;
+  return isIP(ip) && !ip.includes('%') ? ip : null;
 }

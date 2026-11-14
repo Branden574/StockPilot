@@ -7,6 +7,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { bearerTokenFrom } from '@/lib/auth/cross-site-request';
 import { readVerifiedTokenClaims, type VerifiedSessionClaims } from '@/lib/auth/verified-claims';
 import { clientIpForRecord } from '@/lib/client-ip';
+import { reportError } from '@/lib/error-reporter';
 
 /**
  * What the phone's sign-in and sign-out notes share (S5: POST
@@ -77,4 +78,28 @@ export const SESSION_NOTE_WINDOW_MS = 24 * 60 * 60_000;
  */
 export function requestIp(req: Request): string | null {
   return clientIpForRecord(req.headers);
+}
+
+/** At most one report of an uncounted note per instance in this window. */
+const REPORT_WINDOW_MS = 5 * 60_000;
+let lastUncountedReportAt = 0;
+
+/** Test-only: forget the last report, so each test starts with none. */
+export function resetUncountedNoteReportForTests(): void {
+  lastUncountedReportAt = 0;
+}
+
+/**
+ * The phone's sign-in note was written while the limiter could not answer
+ * for a bucket, and the device was not noted. No account id, no address.
+ */
+export function reportUncountedNote(bucket: 'account' | 'session' | 'both'): void {
+  const now = Date.now();
+  if (now - lastUncountedReportAt < REPORT_WINDOW_MS) return;
+  lastUncountedReportAt = now;
+  void reportError(new Error('Phone sign-in note written without a count; device not noted'), {
+    tag: 'auth.signed_in_note_uncounted',
+    level: 'warning',
+    extra: { bucket },
+  });
 }

@@ -46,6 +46,8 @@ export async function sendNewDeviceLoginEmail(args: {
    *  agent: the app's agent ("StockPilot/<build> CFNetwork/... Darwin/...")
    *  matches no case in friendlyDevice. The template escapes it. */
   deviceLabel?: string | null;
+  /** The account's last new-device email for 24 hours (lib/auth/login-device.ts). */
+  lastForADay?: boolean;
 }): Promise<void> {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://stockpilotusa.com';
   const when =
@@ -63,6 +65,7 @@ export async function sendNewDeviceLoginEmail(args: {
     securityUrl: `${appUrl}/dashboard/settings/security`,
     resetUrl: `${appUrl}/reset`,
     appUrl,
+    lastForADay: args.lastForADay === true,
   });
 
   await sendEmail({

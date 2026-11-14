@@ -200,7 +200,19 @@ export interface SigninAlertEmailParams {
   resetUrl: string;
   firstName?: string | null;
   appUrl?: string;
+  /**
+   * This is the last new-device email the account gets in 24 hours
+   * (lib/auth/login-device.ts NEW_DEVICE_ALERTS_PER_ACCOUNT): one more
+   * sentence says so, in both parts.
+   */
+  lastForADay?: boolean;
 }
+
+/** The sentence on the last new-device email of a 24-hour window (text part). */
+export const SIGNIN_ALERT_LAST_FOR_A_DAY_TEXT =
+  'Further new-device sign-ins in the next 24 hours won’t send more emails, so if these sign-ins weren’t you, change your password and review your devices in your security settings now.';
+const SIGNIN_ALERT_LAST_FOR_A_DAY_HTML =
+  'Further new-device sign-ins in the next 24 hours won&rsquo;t send more emails, so if these sign-ins weren&rsquo;t you, change your password and review your devices in your security settings now.';
 
 export function renderSigninAlertEmail(params: SigninAlertEmailParams): RenderedEsEmail {
   const def = esEmailById('signin');
@@ -268,6 +280,9 @@ export function renderSigninAlertEmail(params: SigninAlertEmailParams): Rendered
             'Secure your account right away — you can sign out all devices and reset your password from your security settings.',
         }),
       ),
+      ...(params.lastForADay
+        ? [section('0 36px 20px', bodyText(SIGNIN_ALERT_LAST_FOR_A_DAY_HTML))]
+        : []),
       section(
         '0 36px 30px',
         ctaRow({
@@ -295,6 +310,7 @@ export function renderSigninAlertEmail(params: SigninAlertEmailParams): Rendered
     '',
     `Don’t recognize this? Secure your account right away — sign out all devices and reset your password: ${params.securityUrl}`,
     `Reset password: ${params.resetUrl}`,
+    ...(params.lastForADay ? ['', SIGNIN_ALERT_LAST_FOR_A_DAY_TEXT] : []),
   ].join('\n');
 
   return { id: def.id, subject, preheader, html, text, from: def.from };

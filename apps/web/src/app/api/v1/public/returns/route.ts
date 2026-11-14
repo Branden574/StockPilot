@@ -136,7 +136,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Only trusts x-forwarded-for on Vercel (elsewhere a client could rotate it).
+  // The one rule (lib/client-ip.ts): x-forwarded-for on Vercel.
   const ip = clientIpFromRequest(req);
   const [ipLimit, tokenLimit] = await Promise.all([
     checkRateLimit(`public-return-request:${ip}`, RATE_LIMIT_PER_IP_PER_HOUR, ONE_HOUR_MS, 'closed'),
