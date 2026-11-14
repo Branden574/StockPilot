@@ -67,3 +67,56 @@ describe('audit_logs writes', () => {
     }
   });
 });
+
+/**
+ * A later try of an audit write is an upsert that SKIPS a row already there
+ * (`insert ... on conflict (id) do nothing`). postgrest-js's upsert MERGES by
+ * default (`ignoreDuplicates = false`, Prefer: resolution=merge-duplicates),
+ * which would write over a stored audit row with the same id. So every upsert
+ * in the writer names `ignoreDuplicates: true` and `onConflict: 'id'`; an
+ * omitted option fails.
+ */
+describe('a later try never overwrites a stored audit row', () => {
+  /** The argument text of every `.upsert(` call in a source, to its closing paren. */
+  function upsertArguments(source: string): string[] {
+    const out: string[] = [];
+    const re = /\.\s*upsert\s*\(/g;
+    for (const m of source.matchAll(re)) {
+      let depth = 1;
+      let i = m.index + m[0].length;
+      const start = i;
+      while (i < source.length && depth > 0) {
+        if (source[i] === '(') depth += 1;
+        else if (source[i] === ')') depth -= 1;
+        i += 1;
+      }
+      out.push(source.slice(start, i - 1));
+    }
+    return out;
+  }
+  const SKIPS = (args: string) =>
+    /\bignoreDuplicates\s*:\s*true\b/.test(args) && /\bonConflict\s*:\s*['"`]id['"`]/.test(args);
+
+  it('the writer sends a later try as an upsert, and every upsert in it skips a row already there', () => {
+    const calls = upsertArguments(readFileSync(join(SRC, 'server/services/audit.ts'), 'utf8'));
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    for (const args of calls) expect(SKIPS(args), args).toBe(true);
+  });
+
+  it('self-test: an omitted option or ignoreDuplicates false is caught, the skipping form passes', () => {
+    const [omitted] = upsertArguments("admin.from('audit_logs').upsert(rows).abortSignal(s)");
+    const [noOption] = upsertArguments(
+      "admin.from('audit_logs').upsert(rows, { onConflict: 'id' })",
+    );
+    const [merge] = upsertArguments(
+      "admin.from('audit_logs').upsert(rows, { onConflict: 'id', ignoreDuplicates: false })",
+    );
+    const [skips] = upsertArguments(
+      "admin\n  .from('audit_logs')\n  .upsert(withTime(rows), {\n    onConflict: 'id',\n    ignoreDuplicates: true,\n  })",
+    );
+    expect(SKIPS(omitted!)).toBe(false);
+    expect(SKIPS(noOption!)).toBe(false);
+    expect(SKIPS(merge!)).toBe(false);
+    expect(SKIPS(skips!)).toBe(true);
+  });
+});

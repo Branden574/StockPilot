@@ -78,12 +78,16 @@ const ENTRY = 'lib/auth/api-context.ts';
  *   lib/modules/module-state.ts  the module set held when a module read failed
  *     (docket S81): a Set subclass and an error class, in memory only. It
  *     loads @stockpilot/core (the module registry) and nothing in this app.
+ *   lib/auth/membership-unavailable.ts  the refusal of a membership read that
+ *     did not answer (docket S90): an error class, in memory only. It imports
+ *     nothing.
  */
 const REVIEWED_CLOSURE = [
   'lib/auth/account-status.ts',
   'lib/auth/api-context.ts',
   'lib/auth/cross-site-request.ts',
   'lib/auth/effective-permissions.ts',
+  'lib/auth/membership-unavailable.ts',
   'lib/auth/mfa-policy.ts',
   'lib/auth/request-context-bundle.ts',
   'lib/auth/verified-claims.ts',
@@ -639,10 +643,16 @@ function answerFor(table: string): { single: unknown; list: unknown[]; error: un
   if (table === 'user_profiles') {
     return world.statusReadFails
       ? failed
-      : { single: { default_organization_id: ORG, disabled_at: null }, list: [], error: null };
+      : {
+          single: { default_organization_id: ORG, disabled_at: null },
+          list: [{ default_organization_id: ORG, disabled_at: null }],
+          error: null,
+        };
   }
+  // The membership choice reads lists (one row at most), the status read a single row.
   if (table === 'organization_members') {
-    return { single: { organization_id: ORG, role: world.role }, list: [], error: null };
+    const row = { organization_id: ORG, role: world.role };
+    return { single: row, list: [row], error: null };
   }
   if (table === 'organizations') {
     return { single: { mfa_policy: 'optional', all_modules_comp: false }, list: [], error: null };

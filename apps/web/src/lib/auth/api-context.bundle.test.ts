@@ -117,11 +117,14 @@ function table(single: unknown, list: unknown[] = [], error: unknown = null) {
   const q: Record<string, unknown> = {};
   const self = () => q;
   for (const k of ['select', 'eq', 'is', 'not', 'in', 'limit', 'order']) q[k] = self;
-  q.maybeSingle = async () => ({ data: error ? null : single, error });
+  q.maybeSingle = async () => ({ data: error ? null : single, error, status: error ? 500 : 200 });
   q.then = (resolve: (v: unknown) => unknown) =>
-    Promise.resolve({ data: error ? null : list, error }).then(resolve);
+    Promise.resolve({ data: error ? null : list, error, status: error ? 500 : 200 }).then(resolve);
   return q;
 }
+
+/** A single-row fake that also answers its row as a one-row list (the membership choice reads lists). */
+const row = (r: unknown) => table(r, r ? [r] : []);
 
 /** Stands for the PostgREST message, which can quote request details. */
 const SECRET = 'relation secret-detail is not readable';
@@ -165,7 +168,7 @@ function makeClient() {
       world.calls.push(`table:${name}`);
       const m = active();
       if (name === 'user_profiles')
-        return table(
+        return row(
           world.hideProfile
             ? null
             : {
@@ -176,7 +179,7 @@ function makeClient() {
               },
         );
       if (name === 'organization_members')
-        return table(m ? { organization_id: m.organization_id, role: m.role } : null);
+        return row(m ? { organization_id: m.organization_id, role: m.role } : null);
       if (name === 'organizations')
         return table(
           world.hideOrganization
@@ -392,35 +395,46 @@ describe('the platform-managed key and the hide mark', () => {
   it.each([
     ['cookie', cookie],
     ['bearer', bearer],
-  ])('an owner StockPilot denied the key lacks it, and only it, on both paths (%s)', async (_kind, make) => {
-    world.memberships = [
-      {
-        organization_id: ORG_A,
-        role: 'owner',
-        role_overrides: [{ permission: 'items:delete', granted: false }],
-        user_overrides: [
-          { permission: KEY, granted: false },
-          { permission: 'items:delete', granted: false },
-        ],
-      },
-    ];
-    const { fast, legacy, legacyCalls } = await both(make());
-    expect(shape(fast)).toEqual(shape(legacy));
-    expect(fast?.permissions?.has(KEY)).toBe(false);
-    expect(fast?.permissions?.has('items:delete')).toBe(true);
-    expect(fast?.permissions?.size).toBe(effectivePermissions('owner').size - 1);
-    expect(legacyCalls).toContain('table:user_permission_overrides');
-  });
+  ])(
+    'an owner StockPilot denied the key lacks it, and only it, on both paths (%s)',
+    async (_kind, make) => {
+      world.memberships = [
+        {
+          organization_id: ORG_A,
+          role: 'owner',
+          role_overrides: [{ permission: 'items:delete', granted: false }],
+          user_overrides: [
+            { permission: KEY, granted: false },
+            { permission: 'items:delete', granted: false },
+          ],
+        },
+      ];
+      const { fast, legacy, legacyCalls } = await both(make());
+      expect(shape(fast)).toEqual(shape(legacy));
+      expect(fast?.permissions?.has(KEY)).toBe(false);
+      expect(fast?.permissions?.has('items:delete')).toBe(true);
+      expect(fast?.permissions?.size).toBe(effectivePermissions('owner').size - 1);
+      expect(legacyCalls).toContain('table:user_permission_overrides');
+    },
+  );
 
   it('a manager: a role row for the key is ignored, a user deny is not (both paths)', async () => {
     world.memberships = [
-      { organization_id: ORG_A, role: 'manager', role_overrides: [{ permission: KEY, granted: false }] },
+      {
+        organization_id: ORG_A,
+        role: 'manager',
+        role_overrides: [{ permission: KEY, granted: false }],
+      },
     ];
     let r = await both(cookie());
     expect(shape(r.fast)).toEqual(shape(r.legacy));
     expect(r.fast?.permissions?.has(KEY)).toBe(true);
     world.memberships = [
-      { organization_id: ORG_A, role: 'manager', user_overrides: [{ permission: KEY, granted: false }] },
+      {
+        organization_id: ORG_A,
+        role: 'manager',
+        user_overrides: [{ permission: KEY, granted: false }],
+      },
     ];
     r = await both(cookie());
     expect(shape(r.fast)).toEqual(shape(r.legacy));
@@ -430,19 +444,28 @@ describe('the platform-managed key and the hide mark', () => {
   it.each([
     ['cookie', cookie],
     ['bearer', bearer],
-  ])('the one-round-trip context carries its membership, hide mark included (%s)', async (_kind, make) => {
-    world.memberships = [
-      { organization_id: ORG_A, role: 'manager', last_hide_at: '2026-10-26T18:04:05.123456+00:00' },
-    ];
-    const { fast, legacy } = await both(make());
-    expect(orderCatalogLastHideAtOf(heldMembership(fast!))).toBe('2026-10-26T18:04:05.123456+00:00');
-    // The legacy reads hold no membership: the mark is unknown, never "never".
-    expect(heldMembership(legacy!)).toBeNull();
-    expect(orderCatalogLastHideAtOf(heldMembership(legacy!))).toBeUndefined();
-    // Not enumerable: never serialized with the context.
-    expect(Object.keys(fast!)).not.toContain('order_catalog_last_hide_at');
-    expect(JSON.stringify({ ...fast, supabase: null })).not.toContain('2026-10-26T18:04:05');
-  });
+  ])(
+    'the one-round-trip context carries its membership, hide mark included (%s)',
+    async (_kind, make) => {
+      world.memberships = [
+        {
+          organization_id: ORG_A,
+          role: 'manager',
+          last_hide_at: '2026-10-26T18:04:05.123456+00:00',
+        },
+      ];
+      const { fast, legacy } = await both(make());
+      expect(orderCatalogLastHideAtOf(heldMembership(fast!))).toBe(
+        '2026-10-26T18:04:05.123456+00:00',
+      );
+      // The legacy reads hold no membership: the mark is unknown, never "never".
+      expect(heldMembership(legacy!)).toBeNull();
+      expect(orderCatalogLastHideAtOf(heldMembership(legacy!))).toBeUndefined();
+      // Not enumerable: never serialized with the context.
+      expect(Object.keys(fast!)).not.toContain('order_catalog_last_hide_at');
+      expect(JSON.stringify({ ...fast, supabase: null })).not.toContain('2026-10-26T18:04:05');
+    },
+  );
 
   it('an organization that never hid anything answers null', async () => {
     world.memberships = [{ organization_id: ORG_A, role: 'staff' }];
