@@ -120,18 +120,36 @@ function tabLoad(online: boolean) {
   };
 }
 
-/** The tab's spinner: nothing read and nothing said (its render, pinned below). */
-const spinning = (s: { page: unknown; downloaded: unknown; error: unknown }) =>
-  !s.page && !s.downloaded && !s.error;
+/**
+ * The tab's body (its render, pinned below): the not-synced sentence only once
+ * the workspace load has finished without a workspace; while it is still
+ * loading, the spinner, as before; with a workspace, what the load read.
+ */
+function tabBody(
+  s: { page: unknown; downloaded: unknown; error: unknown },
+  orgId: string | null,
+  workspaceLoading: boolean,
+) {
+  const noWorkspace = !orgId && !workspaceLoading;
+  const shownError = noWorkspace ? NOT_SYNCED_YET : s.error;
+  return { spinner: !s.page && !s.downloaded && !shownError, sentence: shownError };
+}
 
 describe('the Cycle counts tab with no workspace known', () => {
-  it('says the phone has not finished syncing, never a spinner that does not end; nothing is read', async () => {
-    expect(flat(LIST)).toContain('{!page && !downloaded && !error ? ( <ActivityIndicator');
+  it('spins while the workspace loads, says the phone has not finished syncing once it loaded none, and reads nothing', async () => {
+    const code = flat(LIST);
+    expect(code).toContain('const { orgId, loading: workspaceLoading } = useOrg();');
+    expect(code).toContain('const noWorkspace = !orgId && !workspaceLoading;');
+    expect(code).toContain('const shownError = noWorkspace ? NOT_SYNCED_YET : error;');
+    expect(code).toContain('{!page && !downloaded && !shownError ? ( <ActivityIndicator');
+    expect(code).toContain('{shownError ? ( <Card padding={16} style={{ gap: 10 }}>');
     for (const online of [false, true]) {
       const t = tabLoad(online);
       await t.load(VIEW, { withSummary: true });
-      expect(t.state.error).toBe(NOT_SYNCED_YET);
-      expect(spinning(t.state)).toBe(false);
+      // The load claims nothing about the workspace; the render decides.
+      expect(t.state.error).toBeNull();
+      expect(tabBody(t.state, null, true)).toEqual({ spinner: true, sentence: null });
+      expect(tabBody(t.state, null, false)).toEqual({ spinner: false, sentence: NOT_SYNCED_YET });
       expect(t.state.busy).toBe(false);
       expect(t.listCycleCounts).not.toHaveBeenCalled();
       expect(t.readDownloaded).not.toHaveBeenCalled();
@@ -168,7 +186,9 @@ describe('the Cycle counts tab with no workspace known', () => {
     const loadNext = vi.fn();
     const arrived = effectCallback<() => void>(LIST, 'lastOrg.current = orgId', {
       lastOrg: { current: null },
+      lastUser: { current: 'user-a' },
       orgId: ORG,
+      userId: 'user-a',
       recallListView: () => VIEW,
       debounce: { current: { cancel: () => undefined } },
       setPage: () => undefined,
@@ -182,6 +202,10 @@ describe('the Cycle counts tab with no workspace known', () => {
     arrived();
     expect(errors).toEqual([null]);
     expect(loadNext).toHaveBeenCalledWith(VIEW, { withSummary: true });
+    expect(tabBody({ page: { items: [] }, downloaded: null, error: null }, ORG, false)).toEqual({
+      spinner: false,
+      sentence: null,
+    });
   });
 
   it('Try again and a pull ask for the workspace first, and Try again is offered offline too', async () => {
@@ -209,51 +233,73 @@ describe('the Cycle counts tab with no workspace known', () => {
   });
 });
 
+/** The count screen's own loadOnce, online, with no workspace known. */
+function countLoadNoWorkspace(workspaceLoading: boolean) {
+  const state = {
+    loading: true as unknown,
+    readError: undefined as unknown,
+    emptyState: undefined as unknown,
+  };
+  const from = vi.fn(() => {
+    throw new Error('not stood in for');
+  });
+  const retryWorkspace = vi.fn(async () => undefined);
+  const loadOnce = screenCallback<() => Promise<unknown>>(COUNT, 'loadOnce', {
+    id: COUNT_ID,
+    orgId: null,
+    access: 'not-synced',
+    workspaceLoading,
+    lastLoadKey: { current: null },
+    countAnswerStillShown: (a: unknown, b: unknown) => a === b,
+    CYCLE_COUNTS_NOT_AVAILABLE: 'x',
+    NOT_SYNCED_YET,
+    SAVED_ACCESS_UNREADABLE: 'y',
+    countStoredForLiveAccount: async () => false,
+    getCycleCount: vi.fn(async () => null),
+    hydrateFromSnapshot: () => undefined,
+    setLoading: (v: unknown) => {
+      state.loading = v;
+    },
+    setReadError: (v: unknown) => {
+      state.readError = v;
+    },
+    setEmptyState: (v: unknown) => {
+      state.emptyState = v;
+    },
+    setLinked: () => undefined,
+    Network: {
+      getNetworkStateAsync: async () => ({ isConnected: true, isInternetReachable: true }),
+    },
+    COUNT_UNREADABLE_ON_PHONE: 'z',
+    cacheWriteScope: async () => ({}),
+    retryWorkspace,
+    supabase: { from },
+    fetchAllCycleCountLines: async () => ({ data: [], error: null }),
+  });
+  return { loadOnce, state, retryWorkspace, from };
+}
+
 describe('the count screen online with no workspace and no stored copy', () => {
-  it('says the phone has not finished syncing, with its Retry, and asks for the workspace again', async () => {
-    const state = {
-      loading: true as unknown,
-      readError: undefined as unknown,
-      emptyState: undefined as unknown,
-    };
-    const from = vi.fn(() => {
-      throw new Error('not stood in for');
-    });
-    const retryWorkspace = vi.fn(async () => undefined);
-    const loadOnce = screenCallback<() => Promise<unknown>>(COUNT, 'loadOnce', {
-      id: COUNT_ID,
-      orgId: null,
-      access: 'not-synced',
-      CYCLE_COUNTS_NOT_AVAILABLE: 'x',
-      NOT_SYNCED_YET,
-      SAVED_ACCESS_UNREADABLE: 'y',
-      countStoredForLiveAccount: async () => false,
-      getCycleCount: vi.fn(async () => null),
-      hydrateFromSnapshot: () => undefined,
-      setLoading: (v: unknown) => {
-        state.loading = v;
-      },
-      setReadError: (v: unknown) => {
-        state.readError = v;
-      },
-      setEmptyState: (v: unknown) => {
-        state.emptyState = v;
-      },
-      Network: {
-        getNetworkStateAsync: async () => ({ isConnected: true, isInternetReachable: true }),
-      },
-      COUNT_UNREADABLE_ON_PHONE: 'z',
-      cacheWriteScope: async () => ({}),
-      retryWorkspace,
-      supabase: { from },
-      fetchAllCycleCountLines: async () => ({ data: [], error: null }),
-    });
-    await loadOnce();
-    expect(state.loading).toBe(false);
-    expect(state.readError).toBe(NOT_SYNCED_YET);
-    expect(state.emptyState).toBe('read-failed');
-    expect(retryWorkspace).toHaveBeenCalledTimes(1);
-    expect(from).not.toHaveBeenCalled();
+  it('once the workspace load finished without one: the sentence, with its Retry, and the workspace asked for again', async () => {
+    const c = countLoadNoWorkspace(false);
+    await c.loadOnce();
+    expect(c.state.loading).toBe(false);
+    expect(c.state.readError).toBe(NOT_SYNCED_YET);
+    expect(c.state.emptyState).toBe('read-failed');
+    expect(c.retryWorkspace).toHaveBeenCalledTimes(1);
+    expect(c.from).not.toHaveBeenCalled();
+  });
+
+  it('while the workspace is still loading: the spinner stays, nothing is said, and the load runs again when it ends', async () => {
+    const c = countLoadNoWorkspace(true);
+    await c.loadOnce();
+    expect(c.state.loading).toBe(true);
+    expect(c.state.readError).toBeUndefined();
+    expect(c.retryWorkspace).not.toHaveBeenCalled();
+    expect(c.from).not.toHaveBeenCalled();
+    const code = flat(COUNT);
+    expect(code).toContain('const { orgId, loading: workspaceLoading } = useOrg();');
+    expect(code).toContain('}, [id, orgId, access, workspaceLoading]);');
   });
 });
 

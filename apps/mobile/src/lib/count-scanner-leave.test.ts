@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { effectCallback, screenFunction } from './__fixtures__/screen-functions';
+import { countAnswerStillShown } from './count-access-refresh';
 
 /** What the count screens say (screen-access.ts, pinned there). */
 const NOT_SYNCED_YET =
@@ -79,6 +80,9 @@ async function loader(
     setLines: (v: unknown) => shown.push(v),
     setCachedLines: (v: unknown) => shown.push(v),
     setScannedMap: () => undefined,
+    // The key the read started under, unchanged while it runs.
+    lastLinesKey: { current: null },
+    countAnswerStillShown,
   });
   return { run, alert, back, leave, shown, getCycleCount };
 }
@@ -174,6 +178,9 @@ describe('the barcode scanner: lines only from a read for the account signed in'
         countStoredForLiveAccount: async () => false,
         getCycleCount: async () => ({ lines: LINES }),
         mergeScannedCounts,
+        // The effect notes the key before it reads; the read keeps it.
+        lastLinesKey,
+        countAnswerStillShown,
         Alert: { alert: h.alert },
         openNotice: await oneAlert(h.alert),
         router: { back: h.back },

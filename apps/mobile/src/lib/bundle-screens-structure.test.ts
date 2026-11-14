@@ -235,7 +235,7 @@ describe('Bundles', () => {
     // S75: the rule decides for a member who may see bundles; otherwise the
     // gate's spinner, never beside the pull's (bundle-screens-access.test.ts).
     expect(code).toContain(
-      'const body = allowed ? bundlesListBody(read, rows.length, refreshing, pulling) : { spinner: gate.spinner && !pulling, words: null, staleNote: false };',
+      'const body = allowed ? bundlesListBody(shownRead, shownRows.length, refreshing, pulling) : { spinner: gate.spinner && !pulling, words: null, staleNote: false };',
     );
     expect(code).toContain(
       '{body.spinner ? <ActivityIndicator color={c.ink} style={{ marginTop: space.xl }} /> : null}',
@@ -273,9 +273,12 @@ describe('Bundles', () => {
   // (onPress={refresh}) and from a pull (void pull()).
   it('the cache read is caught and kept, so the first load, Refresh and a pull never reject', () => {
     expect(code).toContain(
-      "const load = React.useCallback(async () => { try { const list = await listBundles(); setRows(list); setRead('ok'); } catch (e) { console.warn('[bundles] cache read failed:', e instanceof Error ? e.message : e); setRead('failed'); } }, []);",
+      "const load = React.useCallback(async () => { const forWhom = readFor; try { const list = await listBundles(); if (readForRef.current !== forWhom) return; setHeld({ key: forWhom, rows: list, read: 'ok' }); } catch (e) { if (readForRef.current !== forWhom) return; console.warn('[bundles] cache read failed:', e instanceof Error ? e.message : e); setHeld((prev) => ({ key: forWhom, rows: prev !== null && prev.key === forWhom ? prev.rows : NO_BUNDLES, read: 'failed', })); } }, [readFor]);",
     );
-    expect(code).toContain("const [read, setRead] = React.useState<CacheRead>('pending');");
+    // Before this account's first read answers in this workspace: pending.
+    expect(code).toContain(
+      "const shownRead: CacheRead = held !== null && held.key === readFor ? held.read : 'pending';",
+    );
   });
 
   // Mutation caught: the failure words swapped into the empty words' place
@@ -330,7 +333,7 @@ describe('a bundle', () => {
   // as looked.
   it('the cache read always ends as looked, and no id is a bundle this phone cannot hold', () => {
     expect(code).toMatch(
-      /\} catch \(e\) \{ console\.warn\('\[bundle\] cache read failed:', e instanceof Error \? e\.message : e\); setFailedRead\(reading\); \} finally \{ setLooked\(true\); \}/,
+      /\} catch \(e\) \{ if \(cancelled\) return; console\.warn\('\[bundle\] cache read failed:', e instanceof Error \? e\.message : e\); setFailedRead\(reading\); \} finally \{ if \(!cancelled\) setLooked\(true\); \}/,
     );
     expect(code).toContain(
       // S75: a member the side menu does not offer Bundles to sees the gate's

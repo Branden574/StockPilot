@@ -69,6 +69,9 @@ const gate = vi.hoisted(() => ({
   failWarehouses: false,
   // Holds only the NEXT warehouse read.
   nextWarehouses: null as Promise<void> | null,
+  // Holds every membership read, and every profile read, while set.
+  holdMemberships: null as Promise<void> | null,
+  holdProfile: null as Promise<void> | null,
 }));
 vi.mock('./supabase', () => {
   const offline = {
@@ -79,8 +82,9 @@ vi.mock('./supabase', () => {
   const members = {
     select: () => members,
     eq: () => members,
-    not: async () =>
-      gate.failMemberships
+    not: async () => {
+      if (gate.holdMemberships) await gate.holdMemberships;
+      return gate.failMemberships
         ? offline
         : {
             data: [
@@ -88,12 +92,16 @@ vi.mock('./supabase', () => {
               { role: 'staff', organization_id: 'org-b', organizations: { name: 'B' } },
             ],
             error: null,
-          },
+          };
+    },
   };
   const profiles = {
     select: () => profiles,
     eq: () => profiles,
-    maybeSingle: async () => ({ data: { default_organization_id: 'org-a' }, error: null }),
+    maybeSingle: async () => {
+      if (gate.holdProfile) await gate.holdProfile;
+      return { data: { default_organization_id: 'org-a' }, error: null };
+    },
   };
   const warehouses = {
     select: () => warehouses,
@@ -137,6 +145,8 @@ afterEach(() => {
   gate.failMemberships = false;
   gate.failWarehouses = false;
   gate.nextWarehouses = null;
+  gate.holdMemberships = null;
+  gate.holdProfile = null;
   vi.restoreAllMocks();
 });
 
@@ -283,6 +293,37 @@ describe('retryWorkspace: no workspace is not the end', () => {
     await first;
     expect(published.at(-1)?.activeOrgId).not.toBeNull();
   });
+
+  // React Native's fetch has no timeout of its own, and the membership and
+  // profile reads had no bound: a request that never answered held `loading`
+  // for good, and every screen that spins while the workspace loads spun with
+  // it. They now end like a failed read after 15 s: a membership read with no
+  // workspace (said by each screen, and asked for again by the sync loop and
+  // Try again), a profile read with the workspace the memberships give.
+  it.each([
+    ['membership', 'holdMemberships', 'with no workspace', false],
+    ['profile', 'holdProfile', 'with the workspace the memberships give', true],
+  ] as const)(
+    'a %s read that never answers ends the load after 15 s, %s',
+    async (_read, hold, _outcome, chosen) => {
+      emitAuth(null);
+      emitAuth('u1');
+      vi.useFakeTimers();
+      try {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        gate[hold] = new Promise<void>(() => {}); // a socket that never answers
+        useWorkspace();
+        await vi.advanceTimersByTimeAsync(14_000);
+        expect(published.at(-1)?.loading).toBe(true);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(published.at(-1)?.loading).toBe(false);
+        expect(published.at(-1)?.activeOrgId !== null).toBe(chosen);
+      } finally {
+        gate[hold] = null;
+        vi.useRealTimers();
+      }
+    },
+  );
 });
 
 // useSync (the app root's sync loop) imports React Native, so its wiring is

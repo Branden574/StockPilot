@@ -58,7 +58,7 @@ describe('cycle-counts list: "none downloaded" only after a successful read', ()
   });
 
   it('says "No counts are downloaded" under an error only when the store was read', () => {
-    expect(screen).toMatch(/const empty = error \? \(\s*downloaded \? \(/);
+    expect(screen).toMatch(/const empty = shownError \? \(\s*downloaded \? \(/);
   });
 
   it('the footer and the offline heading count downloads only when they were read', () => {

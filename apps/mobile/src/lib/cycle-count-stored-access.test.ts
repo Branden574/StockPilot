@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { screenCallback } from './__fixtures__/screen-functions';
 import { createSequenceGuard } from './debounced-list-load';
+import { countAnswerStillShown } from './count-access-refresh';
 
 // count-read-failed.ts reaches drawer-nav, which maps icon names to lucide
 // components; the native package does not load under node.
@@ -286,6 +287,13 @@ function countLoad(access: ScreenAccess, online: boolean, fetchedHere = false) {
     cacheWriteScope: async () => ({}),
     supabase: { from },
     fetchAllCycleCountLines: async () => ({ data: [], error: null }),
+    // The key the screen was loaded under, unchanged while this runs (the
+    // change of key is count-screens-keyed.test.ts), and the workspace load
+    // ended (no-workspace-screens.test.ts has it loading).
+    lastLoadKey: { current: null },
+    countAnswerStillShown,
+    workspaceLoading: false,
+    setLinked: () => undefined,
   });
   return { loadOnce, calls, state, hydrated, cached };
 }
@@ -364,7 +372,7 @@ describe('the wiring: both screens ask the side menu rule, and act on a change',
   it('the count screen reads its access the same way, and loadOnce follows it', () => {
     const count = code(COUNT);
     expect(count).toContain("const access = useDrawerEntryAccess('/cycle-counts');");
-    expect(count).toMatch(/\}, \[id, orgId, access\]\);/);
+    expect(count).toMatch(/\}, \[id, orgId, access, workspaceLoading\]\);/);
   });
 });
 

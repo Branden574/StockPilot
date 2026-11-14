@@ -119,12 +119,12 @@ describe('the Bundles list', () => {
     expect(list).toContain('const waitingForPull = useNotSyncedPull(access);');
     expect(list).toContain('const gate = bundlesGateView(access, waitingForPull || refreshing);');
     expect(list).toContain(
-      'const body = allowed ? bundlesListBody(read, rows.length, refreshing, pulling) : { spinner: gate.spinner && !pulling, words: null, staleNote: false };',
+      'const body = allowed ? bundlesListBody(shownRead, shownRows.length, refreshing, pulling) : { spinner: gate.spinner && !pulling, words: null, staleNote: false };',
     );
     expect(list).toContain(
       '{gate.words ? ( <Body muted style={styles.empty}> {gate.words} </Body> ) : null}',
     );
-    expect(list).toContain('{(allowed ? rows : []).map((b) => (');
+    expect(list).toContain('{(allowed ? shownRows : []).map((b) => (');
     expect(list).toMatch(/\{gate\.refresh !== null \? \( <Pressable onPress=\{refresh\}/);
   });
 });
@@ -134,7 +134,8 @@ describe('a bundle', () => {
     const detail = code(DETAIL);
     expect(detail).toContain("const access = useDrawerEntryAccess('/bundles');");
     expect(detail).toMatch(/if \(!id \|\| access !== 'allowed'\) return;/);
-    expect(detail).toMatch(/\}, \[id, access\]\);/);
+    // And read again for another account or workspace (gated-lists-keyed.test.ts).
+    expect(detail).toMatch(/\}, \[id, access, userId, orgId\]\);/);
   });
 
   it('draws the gate words in place of the bundle, with Try again when the saved access was unreadable', () => {

@@ -102,6 +102,14 @@ function countScreen() {
       setLoading: () => undefined,
       setReadError: () => undefined,
       setEmptyState: () => undefined,
+      // The rest of the count's state, cleared with it
+      // (count-screens-keyed.test.ts).
+      setLinked: () => undefined,
+      setServerLocations: () => undefined,
+      setScope: () => undefined,
+      setConflictBanner: () => undefined,
+      rememberedCloseGate: () => null,
+      setCloseGate: () => undefined,
       load: async () => {
         screen.lines = ['line'];
       },

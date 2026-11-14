@@ -160,6 +160,33 @@ function loadWarehousesBounded(orgId: string): Promise<WarehouseOption[] | null>
   });
 }
 
+/** How long a workspace load waits for the membership and profile reads.
+ *  React Native's fetch has no timeout of its own, so a request that never
+ *  answered held `loading` for good, and every screen that spins while the
+ *  workspace loads spun with it. */
+const WORKSPACE_READ_TIMEOUT_MS = 15_000;
+
+/** A workspace load's read, answered with null (as a failed read is) when it
+ *  rejects or takes longer than WORKSPACE_READ_TIMEOUT_MS. */
+function boundedWorkspaceRead<T>(what: string, read: () => Promise<T | null>): Promise<T | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      console.warn(`[workspace] ${what} timed out`);
+      resolve(null);
+    }, WORKSPACE_READ_TIMEOUT_MS);
+    read().then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(null);
+      },
+    );
+  });
+}
+
 /** The profile's default organization (the server's choice when a request
  *  names none), or null when unset or unreadable. */
 async function loadProfileDefaultOrg(userId: string): Promise<string | null> {
@@ -264,9 +291,12 @@ async function loadWorkspace(userId: string) {
   const epochAtStart = accountEpoch();
   const switchesAtStart = switchesStarted;
   const [memberships, saved, profileDefault, repairOwed] = await Promise.all([
-    loadOrgs(userId),
+    // Bounded: a read that never answers ends like a failed one (null), so the
+    // load ends and a screen says there is no workspace, never a spinner for
+    // good; the sync loop and Try again ask again (retryWorkspace).
+    boundedWorkspaceRead('membership read', () => loadOrgs(userId)),
     readSavedWorkspace(AsyncStorage),
-    loadProfileDefaultOrg(userId),
+    boundedWorkspaceRead('default organization read', () => loadProfileDefaultOrg(userId)),
     // A cache repair an earlier load or switch could not finish (below).
     readCacheRepairOwed(AsyncStorage),
   ]);

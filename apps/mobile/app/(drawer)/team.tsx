@@ -17,6 +17,7 @@ import { Pill } from '@/components/ui/pill';
 import { Body, Mono } from '@/components/ui/text';
 import { createSequenceGuard } from '@/lib/debounced-list-load';
 import { joinMemberProfiles, loadOrgMembers } from '@/lib/org-members';
+import { useAuth } from '@/lib/auth-context';
 import { useOrg } from '@/lib/use-org';
 import { retryWorkspace } from '@/lib/use-workspace';
 import { supabase } from '@/lib/supabase';
@@ -51,11 +52,19 @@ export default function TeamScreen() {
   // Liquid Glass (inferred from Routes-Gallery-2's team rows): the members as
   // one grouped surface, each a monogram, the name, the e-mail and the role.
   const lg = useGlass();
-  // The rows with the workspace they were read for, drawn only for the
-  // workspace on screen: after a switch, never the previous workspace's
-  // members while this one's read is out, or after it failed.
-  const [list, setList] = React.useState<{ orgId: string; rows: MemberRow[] } | null>(null);
-  const rows = list !== null && list.orgId === orgId ? list.rows : NO_ROWS;
+  // The rows with the workspace and the account they were read for, drawn
+  // only for both: after a switch, never the previous workspace's members
+  // while this one's read is out, or after it failed; and never one
+  // account's read for the next (a sign-in with the screen still open).
+  const { user } = useAuth();
+  const userId = user?.id ?? null;
+  const [list, setList] = React.useState<{
+    orgId: string;
+    userId: string | null;
+    rows: MemberRow[];
+  } | null>(null);
+  const rows =
+    list !== null && list.orgId === orgId && list.userId === userId ? list.rows : NO_ROWS;
   // Only the newest read changes the list: an older one that lands last
   // (the previous workspace's, or a slow refresh) is dropped.
   const guard = React.useRef(createSequenceGuard());
@@ -69,6 +78,7 @@ export default function TeamScreen() {
     const token = guard.current.next();
     if (!orgId) return;
     const forOrg = orgId;
+    const forUser = userId;
     // Two-step fetch — the embedded `profile:user_profiles!user_id (...)`
     // was returning zero rows because organization_members has two FKs
     // into user_profiles (user_id + invited_by) and PostgREST's hint
@@ -89,6 +99,7 @@ export default function TeamScreen() {
       if (!guard.current.isCurrent(token)) return;
       setList({
         orgId: forOrg,
+        userId: forUser,
         rows: joinMemberProfiles(members, profiles).map(({ member: m, profile: p }) => ({
           user_id: m.user_id,
           role: m.role,
@@ -111,7 +122,7 @@ export default function TeamScreen() {
       setLoadFailed(true);
     }
     setLoading(false);
-  }, [orgId]);
+  }, [orgId, userId]);
 
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server

@@ -10,6 +10,7 @@ import {
   countNotSavedAlert,
   createLineGoneNotice,
 } from './count-save-refusal';
+import { countAnswerStillShown } from './count-access-refresh';
 import { reportPhoneSaveFailure } from './phone-save-report';
 
 /**
@@ -87,6 +88,10 @@ describe('the count screen', () => {
         setLines,
         setDraft,
         cycleCountSync: sync,
+        // The key the screen was loaded under, unchanged while this runs (the
+        // change of key is count-screens-keyed.test.ts).
+        lastLoadKey: { current: null },
+        countAnswerStillShown,
       },
     );
     return { saver: init(), alert, setLines, setDraft, sync, setLineGoneAnswered, notice };
@@ -185,6 +190,8 @@ describe('the count screen', () => {
       setLoading,
       setReadError: vi.fn(),
       setEmptyState: vi.fn(),
+      lastLoadKey: { current: null },
+      countAnswerStillShown,
     });
     return { run, leave, load };
   }
@@ -234,6 +241,8 @@ describe('the count scanner', () => {
         setScannedMap,
         setLines,
         cycleCountSync: sync,
+        lastLinesKey: { current: null },
+        countAnswerStillShown,
       },
     );
     return { run, alert, setScannedMap, setLines, setBusy, afterScanLineGone, sync, notice };
@@ -296,6 +305,8 @@ describe('the count scanner', () => {
       leave: back,
       setLines,
       setScannedMap,
+      lastLinesKey: { current: null },
+      countAnswerStillShown,
     });
     return { run, back, setLines, getCycleCount };
   }

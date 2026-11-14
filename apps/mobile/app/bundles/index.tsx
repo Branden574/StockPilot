@@ -26,16 +26,21 @@ import {
 } from '@/components/ui/glass/screens/ops';
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { Body, Display, Mono } from '@/components/ui/text';
+import { useAuth } from '@/lib/auth-context';
 import { listBundles, type CachedBundle } from '@/lib/db-reads';
 import { bundlesGateView } from '@/lib/bundles-gate-view';
 import { syncNow } from '@/lib/sync';
 import { FONT, space } from '@/lib/theme';
 import { useNotSyncedPull } from '@/lib/use-not-synced-pull';
+import { useOrg } from '@/lib/use-org';
 import { retrySavedAccess, useDrawerEntryAccess } from '@/lib/use-screen-access';
 import { useTheme } from '@/lib/use-theme';
 
 /** Where the read of the offline cache is: not answered yet, read, or failed. */
 type CacheRead = 'pending' | 'ok' | 'failed';
+
+/** No kits: the rows drawn for an account or workspace the kits were not read for. */
+const NO_BUNDLES: CachedBundle[] = [];
 
 /**
  * What the list's body shows besides its rows. A cache read that failed is
@@ -84,8 +89,25 @@ export default function BundlesList() {
   // card opens nothing else. Nothing is read before it is known.
   const access = useDrawerEntryAccess('/bundles');
   const allowed = access === 'allowed';
-  const [rows, setRows] = React.useState<CachedBundle[]>([]);
-  const [read, setRead] = React.useState<CacheRead>('pending');
+  // The kits read, with whose they are: the account and the workspace they
+  // were read for. A read that lands after either changed is dropped, and
+  // kits read for another account or workspace are never drawn (a screen
+  // left open under the sign-in screen sees another account sign in to the
+  // same workspace); for those, nothing is read yet.
+  const { user } = useAuth();
+  const { orgId } = useOrg();
+  const readFor = `${user?.id ?? ''}:${orgId ?? ''}`;
+  const readForRef = React.useRef(readFor);
+  React.useLayoutEffect(() => {
+    readForRef.current = readFor;
+  });
+  const [held, setHeld] = React.useState<{
+    key: string;
+    rows: CachedBundle[];
+    read: CacheRead;
+  } | null>(null);
+  const shownRows = held !== null && held.key === readFor ? held.rows : NO_BUNDLES;
+  const shownRead: CacheRead = held !== null && held.key === readFor ? held.read : 'pending';
   const [refreshing, setRefreshing] = React.useState(false);
   // A pull's own spinner: the list's pull-to-refresh shows it, so the body's
   // spinner stays away and one refresh never shows two.
@@ -100,15 +122,22 @@ export default function BundlesList() {
   // first load, Refresh and a pull, and leave "No bundles synced yet." over a
   // read that had failed. The rows already shown stay.
   const load = React.useCallback(async () => {
+    const forWhom = readFor;
     try {
       const list = await listBundles();
-      setRows(list);
-      setRead('ok');
+      if (readForRef.current !== forWhom) return;
+      setHeld({ key: forWhom, rows: list, read: 'ok' });
     } catch (e) {
+      if (readForRef.current !== forWhom) return;
       console.warn('[bundles] cache read failed:', e instanceof Error ? e.message : e);
-      setRead('failed');
+      // This account's rows from an earlier read stay, under the note.
+      setHeld((prev) => ({
+        key: forWhom,
+        rows: prev !== null && prev.key === forWhom ? prev.rows : NO_BUNDLES,
+        read: 'failed',
+      }));
     }
-  }, []);
+  }, [readFor]);
 
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
@@ -150,7 +179,7 @@ export default function BundlesList() {
   }
 
   const body = allowed
-    ? bundlesListBody(read, rows.length, refreshing, pulling)
+    ? bundlesListBody(shownRead, shownRows.length, refreshing, pulling)
     : { spinner: gate.spinner && !pulling, words: null, staleNote: false };
 
   return (
@@ -235,7 +264,7 @@ export default function BundlesList() {
             Could not refresh the bundles. Tap Refresh to try again.
           </Body>
         ) : null}
-        {(allowed ? rows : []).map((b) => (
+        {(allowed ? shownRows : []).map((b) => (
           <Pressable
             key={b.id}
             onPress={() => router.push(`/bundles/${b.id}`)}

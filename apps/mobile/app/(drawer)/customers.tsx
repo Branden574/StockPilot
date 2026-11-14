@@ -43,12 +43,19 @@ const ACCOUNTS_LOAD_FAILED = {
  */
 export default function CustomersScreen() {
   const { user } = useAuth();
+  const userId = user?.id ?? null;
   const { activeOrgId, loading: workspaceLoading } = useWorkspace();
-  // The accounts with the workspace they were read for, drawn only for the
-  // workspace on screen: after a switch, never the previous workspace's
-  // accounts while this one's read is out, or after it failed.
-  const [list, setList] = React.useState<{ orgId: string; rows: CustomerRow[] } | null>(null);
-  const rows = list !== null && list.orgId === activeOrgId ? list.rows : NO_ROWS;
+  // The accounts with the workspace and the account they were read for, drawn
+  // only for both: after a switch, never the previous workspace's accounts
+  // while this one's read is out, or after it failed; and never one
+  // account's read for the next (a sign-in with the screen still open).
+  const [list, setList] = React.useState<{
+    orgId: string;
+    userId: string | null;
+    rows: CustomerRow[];
+  } | null>(null);
+  const rows =
+    list !== null && list.orgId === activeOrgId && list.userId === userId ? list.rows : NO_ROWS;
   // Only the newest read changes the list: an older one that lands last
   // (the previous workspace's, or a slow refresh) is dropped.
   const guard = React.useRef(createSequenceGuard());
@@ -62,6 +69,7 @@ export default function CustomersScreen() {
     const token = guard.current.next();
     if (!user || !activeOrgId) return;
     const forOrg = activeOrgId;
+    const forUser = userId;
     const { data, error } = await supabase
       .from('customers')
       .select(
@@ -77,10 +85,10 @@ export default function CustomersScreen() {
       setLoadFailed(true);
     } else {
       setLoadFailed(false);
-      setList({ orgId: forOrg, rows: (data ?? []) as CustomerRow[] });
+      setList({ orgId: forOrg, userId: forUser, rows: (data ?? []) as CustomerRow[] });
     }
     setLoading(false);
-  }, [user, activeOrgId]);
+  }, [user, userId, activeOrgId]);
 
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
@@ -121,7 +129,7 @@ export default function CustomersScreen() {
     // Only into the list of the workspace the change was made in.
     const changedIn = activeOrgId;
     setList((prev) =>
-      prev !== null && prev.orgId === changedIn
+      prev !== null && prev.orgId === changedIn && prev.userId === userId
         ? {
             ...prev,
             rows: prev.rows.map((r) =>

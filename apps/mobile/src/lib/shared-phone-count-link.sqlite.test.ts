@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { nodeExpoDb } from './__fixtures__/expo-sqlite-node';
 import { screenCallback } from './__fixtures__/screen-functions';
+import { countAnswerStillShown } from './count-access-refresh';
 
 // drawer-nav maps icon names to lucide components; irrelevant here. The
 // network client is never reached (offline).
@@ -133,6 +134,13 @@ describe('a count link opened offline reads only a count the signed-in account s
       cacheWriteScope: cache.cacheWriteScope,
       supabase: {},
       fetchAllCycleCountLines: async () => ({ data: [], error: null }),
+      // The key the screen was loaded under, unchanged while this runs (the
+      // change of key is count-screens-keyed.test.ts), and the workspace load
+      // ended (no-workspace-screens.test.ts has it loading).
+      lastLoadKey: { current: null },
+      countAnswerStillShown,
+      workspaceLoading: false,
+      setLinked: () => undefined,
     });
     await loadOnce();
     expect(getCycleCount).not.toHaveBeenCalled();

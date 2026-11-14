@@ -2,6 +2,7 @@ import { countFromText } from '@stockpilot/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { screenFunction, stateInitializer } from './__fixtures__/screen-functions';
+import { countAnswerStillShown } from './count-access-refresh';
 import { reviewNotACountMessage } from './count-box-words';
 import {
   COUNT_NOT_CLEARED_ON_PHONE,
@@ -133,6 +134,10 @@ describe('the count screen (app/cycle-count/[id].tsx): a typed count the phone r
       setLines,
       setDraft,
       cycleCountSync: sync,
+      // The key the screen was loaded under, unchanged while this runs (the
+      // change of key is count-screens-keyed.test.ts).
+      lastLoadKey: { current: null },
+      countAnswerStillShown,
     });
     return { saver: init(), alert, setLines, setDraft, sync };
   }
@@ -303,6 +308,8 @@ describe('the count scanner (app/cycle-count/scan/[id].tsx): a scanned count the
         setScannedMap,
         setLines: vi.fn(),
         cycleCountSync: sync,
+        lastLinesKey: { current: null },
+        countAnswerStillShown,
       },
     );
     return { run, alert, setBusy, setScannedMap, sync };
@@ -375,6 +382,8 @@ describe('the count scanner (app/cycle-count/scan/[id].tsx): a scanned count the
         },
         setLines: vi.fn(),
         cycleCountSync: sync,
+        lastLinesKey: { current: null },
+        countAnswerStillShown,
       });
       const onBarcode = screenFunction<(e: { data: string }) => Promise<void>>(
         SCANNER,
@@ -471,6 +480,8 @@ describe('the AI shelf scan (app/cycle-count/ai-scan/[id].tsx): a count the serv
     const alert = vi.fn();
     const setPhase = vi.fn();
     const back = vi.fn();
+    // Built for the account signed in, which is still on the screen.
+    const key = { id: 'cc1', orgId: 'org-a', userId: 'u-a', access: 'allowed' };
     const reviewPhase = {
       kind: 'review',
       scanId: 'scan-1',
@@ -478,6 +489,7 @@ describe('the AI shelf scan (app/cycle-count/ai-scan/[id].tsx): a count the serv
         { line: { id: 'l1' }, override: '3' },
         { line: { id: 'l2' }, override: '4' },
       ],
+      builtUnder: key,
     };
     let line = 0;
     const fetch = vi.fn(async (url: string) => {
@@ -509,6 +521,8 @@ describe('the AI shelf scan (app/cycle-count/ai-scan/[id].tsx): a count the serv
       // when nothing is under it: count-scanner-leave.test.ts).
       leave: back,
       console: { warn: vi.fn() },
+      lastLinesKey: { current: { ...key } },
+      countAnswerStillShown,
     });
     const confirmed = () => fetch.mock.calls.some(([url]) => String(url).endsWith('/confirm'));
     return { run, alert, setPhase, back, reviewPhase, confirmed };

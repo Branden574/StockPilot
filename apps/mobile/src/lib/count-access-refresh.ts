@@ -57,6 +57,28 @@ export function countLoadClearsScreen(before: CountLoadKey | null, now: CountLoa
 }
 
 /**
+ * Whether an answer that started under `started` may still be drawn, or a
+ * review built under it still sent, now that the screen's key is `now` (what
+ * its last load ran for): the same count, workspace and account, with the
+ * access the same or widened to 'allowed' (the phone finished syncing).
+ * Another count, workspace or account, a sign-out, or an access narrowed
+ * since, and the answer is dropped: the screen has cleared what it drew and
+ * reads again for the key it has now. Two absent keys are the same.
+ */
+export function countAnswerStillShown(
+  started: CountLoadKey | null,
+  now: CountLoadKey | null,
+): boolean {
+  if (started === null || now === null) return started === now;
+  return (
+    started.id === now.id &&
+    started.orgId === now.orgId &&
+    started.userId === now.userId &&
+    (started.access === now.access || now.access === 'allowed')
+  );
+}
+
+/**
  * What a full load does with the counts typed on screen and not saved yet
  * (the count screen's drafts, the scanner's confirm sheet):
  *   - 'keep': the screen is not cleared (countLoadClearsScreen);

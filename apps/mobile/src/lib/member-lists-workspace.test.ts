@@ -69,6 +69,8 @@ function memberScreen(file: string, opts: { fail?: (org: string) => boolean } = 
   const build = (orgId: string) =>
     screenCallback<() => Promise<void>>(file, 'load', {
       orgId,
+      // One account throughout; another account is gated-lists-keyed.test.ts.
+      userId: 'u1',
       isAdmin: true,
       supabase: {},
       loadOrgMembers: members(opts.fail ?? (() => false), gates),
@@ -111,20 +113,21 @@ describe.each([
   });
 
   it('draws only rows read for the workspace on screen', () => {
-    const src = readFileSync(path.resolve(__dirname, '../..', file), 'utf8');
+    const src = readFileSync(path.resolve(__dirname, '../..', file), 'utf8').replace(/\s+/g, ' ');
     expect(src).toContain(
-      'const rows = list !== null && list.orgId === orgId ? list.rows : NO_ROWS;',
+      'const rows = list !== null && list.orgId === orgId && list.userId === userId ? list.rows : NO_ROWS;',
     );
     expect(src).toContain('const guard = React.useRef(createSequenceGuard());');
   });
 });
 
 describe('Users: a role sheet opened in another workspace closes', () => {
-  it('keeps the member being edited with its workspace', () => {
-    const src = readFileSync(path.resolve(__dirname, '../..', USERS), 'utf8');
+  it('keeps the member being edited with its workspace (and its account: gated-lists-keyed.test.ts)', () => {
+    const src = readFileSync(path.resolve(__dirname, '../..', USERS), 'utf8').replace(/\s+/g, ' ');
     expect(src).toContain(
-      'const editing = editingFor !== null && editingFor.orgId === orgId ? editingFor.row : null;',
+      'return editingFor !== null && editingFor.orgId === orgId && editingFor.userId === userId ? editingFor.row : null;',
     );
+    expect(src).toContain('const editing = roleSheetRow();');
   });
 });
 
@@ -144,6 +147,7 @@ describe('Customers', () => {
       };
       return screenCallback<() => Promise<void>>(CUSTOMERS, 'load', {
         user: { id: 'u1' },
+        userId: 'u1',
         activeOrgId: orgId,
         supabase: { from: () => q },
         setList,
@@ -182,9 +186,12 @@ describe('Customers', () => {
   });
 
   it('draws only accounts read for the workspace on screen', () => {
-    const src = readFileSync(path.resolve(__dirname, '../..', CUSTOMERS), 'utf8');
+    const src = readFileSync(path.resolve(__dirname, '../..', CUSTOMERS), 'utf8').replace(
+      /\s+/g,
+      ' ',
+    );
     expect(src).toContain(
-      'const rows = list !== null && list.orgId === activeOrgId ? list.rows : NO_ROWS;',
+      'const rows = list !== null && list.orgId === activeOrgId && list.userId === userId ? list.rows : NO_ROWS;',
     );
     expect(src).toContain('const guard = React.useRef(createSequenceGuard());');
   });

@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { screenFunction } from './__fixtures__/screen-functions';
+import { countAnswerStillShown } from './count-access-refresh';
 import { createOneAlert } from './count-save-refusal';
 
 /** What the count screens say (screen-access.ts CYCLE_COUNTS_NOT_AVAILABLE, pinned there). */
@@ -56,6 +57,10 @@ function harness(file: string, name: string, access: ScreenAccess, fetchedHere =
     setLines: (v: unknown) => shown.push(v),
     setCachedLines: (v: unknown) => shown.push(v),
     setScannedMap: () => undefined,
+    // The key the read started under, unchanged while it runs (the change of
+    // key is count-screens-keyed.test.ts).
+    lastLinesKey: { current: null },
+    countAnswerStillShown,
   });
   return { run, getCycleCount, alert, back, shown };
 }
