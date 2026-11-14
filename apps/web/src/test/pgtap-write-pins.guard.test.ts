@@ -31,12 +31,13 @@ import { describe, expect, it } from 'vitest';
  * The UPDATE arm is also used through regexp_matches, to count statements;
  * the named files are checked for the form they are expected to carry.
  *
- * A pin written another way is refused, so that no pin goes unread: a write
- * verb in a pattern under `not (... ~ ...)`, `not like` and its relatives,
- * pgTAP's doesnt_match, doesnt_imatch, unalike or unialike, a regexp_matches
- * or regexp_count compared with zero, or `!~` with its pattern on a later
- * line. Write the pin with `!~` or `!~*` and the pattern on the same line.
- * The controls at the end plant one of each.
+ * Also read, and refused, are these other spellings of a pin, when their
+ * pattern names a write verb: `not (... ~ ...)`, `not like` and its
+ * relatives, pgTAP's doesnt_match, doesnt_imatch, unalike or unialike, a
+ * regexp_matches or regexp_count compared with zero, and `!~` with its
+ * pattern on a later line. The controls at the end plant one of each. A
+ * spelling that is none of these is not read here: write a pin with `!~` or
+ * `!~*` and a plain quoted or dollar-quoted pattern on the same line.
  *
  * The suite's UPDATE form reads a statement as far as its SET. The five named
  * files also keep the form they held before they took it, which refuses an
@@ -358,9 +359,9 @@ describe('pgTAP write pins read the security invariant suite’s write forms', (
     }
     for (const f of BARE_WORD_FILES) {
       const text = read(f);
-    if (!text.includes(`!~* '${BARE}'`) && !text.includes(`!~* '${BARE_THEN_SPACE}'`)) {
-      missing.push(`${f}: the five bare verbs after !~*`);
-    }
+      if (!text.includes(`!~* '${BARE}'`) && !text.includes(`!~* '${BARE_THEN_SPACE}'`)) {
+        missing.push(`${f}: the five bare verbs after !~*`);
+      }
     }
     expect(missing).toEqual([]);
   });

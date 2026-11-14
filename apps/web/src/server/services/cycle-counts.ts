@@ -14,18 +14,14 @@ import {
   type ListPage,
 } from '@stockpilot/core';
 
-import {
-  countReadScope,
-  countScopeWarehouseIds,
-  mayReadCount,
-  type CountReadScope,
-} from '@/lib/auth/count-read-scope';
+import { countScopeWarehouseIds, mayReadCount } from '@/lib/auth/count-read-scope';
 import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess } from '@/lib/auth/warehouse';
 import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { reportError } from '@/lib/error-reporter';
 
 import { audit } from './audit';
 import { dispatchEvent } from './integration-events';
+import { readCountScope } from './lib/count-read-scope';
 import { assertAcceptedMember, assertCountStartFloors, gateCountItems } from './lib/count-start-preflight';
 import { scheduleExceptionSync } from './lib/exception-sync-schedule';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
@@ -454,12 +450,12 @@ export class CycleCountsService {
    *   from her web list while her notification link and her phone showed it.
    *   The arm stays narrow: null header AND assigned to the caller.
    *
-   * The rule is decided HERE (readScope), from getWarehouseAccess, and handed
-   * to the SECURITY INVOKER RPC as a narrowing list, so it can only ever show
-   * less than org-member RLS allows, never more. A member with no readable
-   * warehouse sees no counts, and the RPC is not called. An access read that
-   * FAILED is an error, not an empty history: "No cycle counts yet" would be a
-   * wrong answer from a read that did not happen.
+   * The rule is decided HERE (readCountScope), from getWarehouseAccess, and
+   * handed to the SECURITY INVOKER RPC as a narrowing list, so it only
+   * narrows what the caller's own client returns, never widens it. A member
+   * with no readable warehouse sees no counts, and the RPC is not called. An
+   * access read that FAILED is an error, not an empty history: "No cycle
+   * counts yet" would be a wrong answer from a read that did not happen.
    *
    * With `includeSummary`, the in-progress and started-today totals for the
    * same visibility are fetched alongside, sharing the one access read.
@@ -475,7 +471,7 @@ export class CycleCountsService {
     const pageSize = CYCLE_COUNT_PAGE_SIZE;
     const page = parsePageParam(query.page);
 
-    const scope = await this.readScope();
+    const scope = await readCountScope(this.ctx);
     const scopeIds = countScopeWarehouseIds(scope);
     if (scope.kind === 'none') {
       const empty = toListPage<CycleCountListItem>([], { page: 1, pageSize, total: 0 });
@@ -868,34 +864,11 @@ export class CycleCountsService {
     return data as unknown as CycleCountRow;
   }
 
-  /**
-   * Which counts this caller reads: the one rule of
-   * lib/auth/count-read-scope.ts, for the list (listPage) and for one count
-   * (get, getDetailPage).
-   *
-   * Managers and above see every count by ROLE alone, the first rule in
-   * getWarehouseAccess (isManagerOrAbove), so no warehouse read is made for
-   * them: on the Bearer path that read was a round trip whose answer went
-   * unused. Everyone else is decided by their assignments. An access read
-   * that FAILED is an error to try again, never a scope: its empty id list
-   * would read as a member with no warehouse.
-   */
-  private async readScope(): Promise<CountReadScope> {
-    const access = isManagerOrAbove(this.ctx.role) ? null : await getWarehouseAccess(this.ctx);
-    if (access && !access.hasAllAccess && access.unreadable) {
-      throw new ServiceError(
-        'internal_error',
-        'Could not check which warehouses you can see. Try again.',
-      );
-    }
-    return countReadScope(access, this.ctx.userId);
-  }
-
   /** Refuses, as not found, a count header the caller's read scope does not show. */
   private async assertMayRead(
     header: Pick<CycleCountRow, 'warehouse_id' | 'assigned_to'>,
   ): Promise<void> {
-    if (!mayReadCount(await this.readScope(), header)) {
+    if (!mayReadCount(await readCountScope(this.ctx), header)) {
       throw new ServiceError('not_found', 'Cycle count not found');
     }
   }
@@ -914,10 +887,10 @@ export class CycleCountsService {
     if (!header) throw new ServiceError('not_found', 'Cycle count not found');
 
     const h = header as unknown as CycleCountRow;
-    // The one count read rule (readScope), before any line is read. A count
-    // the caller does not read answers 404, not 403, in the words of a count
-    // that does not exist, so the answer says nothing about a count in a
-    // warehouse the caller can't see.
+    // The one count read rule (readCountScope), before any line is read. A
+    // count the caller does not read answers 404, not 403, in the words of a
+    // count that does not exist, so the answer says nothing about a count in
+    // a warehouse the caller can't see.
     await this.assertMayRead(h);
 
     // Fetch EVERY line. The PDF count sheet + variance report print all of

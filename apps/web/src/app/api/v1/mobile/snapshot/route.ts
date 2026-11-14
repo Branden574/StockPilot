@@ -502,10 +502,10 @@ async function snapshotGET(req: NextRequest) {
       .eq('status', 'in_progress')
       .order('started_at', { ascending: false })
       .limit(50);
-    // A count's lines carry item ids and quantities whatever warehouse the
-    // items sit in, so a count with no header warehouse goes only to the
-    // member it is assigned to (countScope). Built only for a caller whose
-    // read is sent (readCounts below), never for scope `none`.
+    // The count read rule as a filter (countScope): the caller's readable
+    // warehouses, and a count with no header warehouse only when it is
+    // assigned to them. Built only for a caller whose read is sent
+    // (readCounts below), never for scope `none`.
     const countFilter = countReadFilter(countScope);
     if (countFilter) ccQ = ccQ.or(countFilter);
     return ccQ;

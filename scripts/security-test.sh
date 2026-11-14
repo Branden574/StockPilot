@@ -1870,15 +1870,17 @@ WEB_TESTS=(
   src/test/outbox-publish-sites.guard.test.ts
   src/server/lib/outbox-events.test.ts
   # Which cycle counts a member reads: one rule (lib/auth/count-read-scope.ts)
-  # for the count list, the count page and count sheet, and the open counts
-  # the phone's sync sends. Managers and above, and members with every
-  # warehouse, read every count; anyone else reads the counts of the
-  # warehouses they can read, and a count with no warehouse only when it is
-  # assigned to them; a member with no readable warehouse reads none.
+  # for the count list, the count page and count sheet, a count's linked
+  # exceptions, and the open counts the phone's sync sends. Managers and
+  # above, and members with every warehouse, read every count; anyone else
+  # reads the counts of the warehouses they can read, and a count with no
+  # warehouse only when it is assigned to them; a member with no readable
+  # warehouse reads none.
   src/lib/auth/count-read-scope.test.ts
   src/server/services/cycle-counts.read-scope.test.ts
   src/server/services/cycle-counts.list.test.ts
   src/app/api/v1/mobile/snapshot/route.count-scope.test.ts
+  'src/app/api/v1/cycle-counts/[id]/exceptions/route.count-read-scope.test.ts'
   # The email change an account holds: Settings shows it whenever the account
   # has a pending address (a change with no request time shows as expired,
   # with Resend and Cancel), and links are minted only once the auth server

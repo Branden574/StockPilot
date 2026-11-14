@@ -2,7 +2,9 @@
 // behind the count list (listPage: the web list and GET /api/v1/cycle-counts)
 // and the count itself (getDetailPage: the web count page; get: the count
 // sheet and variance report). The phone's sync applies the same rule in
-// app/api/v1/mobile/snapshot/route.count-scope.test.ts.
+// app/api/v1/mobile/snapshot/route.count-scope.test.ts, and a count's linked
+// exceptions in
+// app/api/v1/cycle-counts/[id]/exceptions/route.count-read-scope.test.ts.
 //
 //   - managers and above, and members with every warehouse: every count;
 //   - anyone else: a count in a warehouse they can read, and a count with no

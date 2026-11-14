@@ -1,12 +1,15 @@
 import type { WarehouseAccess } from './warehouse';
 
 /**
- * Which cycle counts a member reads. One rule, in one place, for every
- * surface that shows a count: the count list (CycleCountsService.listPage,
- * behind the web list and GET /api/v1/cycle-counts), the count itself
- * (getDetailPage and get, behind the web count page, the count sheet and the
- * variance report) and the open counts the phone's sync sends
- * (app/api/v1/mobile/snapshot).
+ * Which cycle counts a member reads. One rule, in one place, asked by:
+ *   - the count list: CycleCountsService.listPage, behind the web list and
+ *     GET /api/v1/cycle-counts;
+ *   - the count itself: getDetailPage and get, behind the web count page, the
+ *     count sheet and the variance report;
+ *   - a count's linked exceptions: ExceptionOccurrencesService.listForCount,
+ *     behind that block of the web count page and
+ *     GET /api/v1/cycle-counts/[id]/exceptions;
+ *   - the open counts the phone's sync is sent: app/api/v1/mobile/snapshot.
  *
  *   every       managers and above (their role sees every warehouse), and a
  *               member with every warehouse (the 0280 flag): every count of
@@ -20,14 +23,14 @@ import type { WarehouseAccess } from './warehouse';
  * separately, by the write gates of the count service.
  *
  * A count's header has no warehouse when it covers the whole organization, or
- * when it is a selection whose items sit in more than one warehouse. Its lines
- * can then name items from warehouses the reader is not assigned to, so it is
- * shown only to the person a manager assigned it to (assigning is a manager's
- * act: cycle_counts:assign).
+ * when it is a selection whose items sit in more than one warehouse. Such a
+ * count is shown to the person a manager assigned it to (assigning is a
+ * manager's act: cycle_counts:assign), and to members who see every
+ * warehouse.
  *
- * This narrows what row level security already allows (organization members);
- * it never widens it. Who may read counts at all (the module and
- * cycle_counts:read or stock:adjust) is checked by each caller before this.
+ * It only narrows what the caller's own client returns; it never widens it.
+ * Who may read counts at all (the module and cycle_counts:read or
+ * stock:adjust) is checked by each caller before this.
  */
 export type CountReadScope =
   | { kind: 'every' }
