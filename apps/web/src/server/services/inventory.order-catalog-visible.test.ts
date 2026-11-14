@@ -46,8 +46,7 @@ function buildStub(over: Record<string, unknown> = {}) {
     'organizations.select': { data: { plan: 'enterprise' }, error: null },
     'custom_field_definitions.select': { data: [], error: null },
     'inventory_items.insert': { data: { id: 'item-new' }, error: null },
-    // Opening stock goes through the ledger (0454).
-    'rpc:open_item_stock': { data: [], error: null },
+    'stock_movements.insert': { data: null, error: null },
     ...over,
   });
 }

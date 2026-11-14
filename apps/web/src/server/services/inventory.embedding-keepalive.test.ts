@@ -192,12 +192,12 @@ describe('create(): the new item is embedded after the response, held by keepAli
   });
 
   it('embeds the saved item even when create() then throws (its opening stock was refused)', async () => {
-    // The row exists from the insert on; the refused opening (open_item_stock,
-    // 0454) leaves it at 0 and makes create() throw. The embed must already be
+    // The row exists from the insert on; the refused opening movement makes
+    // create() roll the quantity back and throw. The embed must already be
     // running by then, not wait for a line the throw never reaches.
     const stub = createStub({
-      'inventory_items.insert': { data: { id: 'itm-new', quantity_on_hand: 0 }, error: null },
-      'rpc:open_item_stock': { data: null, error: { message: 'refused', code: '42501', hint: 'stock:adjust' } },
+      'inventory_items.insert': { data: { id: 'itm-new', quantity_on_hand: 5 }, error: null },
+      'stock_movements.insert': { data: null, error: { message: 'refused' } },
     });
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const svc = new InventoryService(makeServiceContext(stub.client));
@@ -287,6 +287,7 @@ function runStub(over: Record<string, unknown> = {}) {
         error: null,
       };
     },
+    'stock_movements.insert': { data: null, error: null },
     ...over,
   });
 }
@@ -310,7 +311,7 @@ describe('bulkCreateSizedVariants(): every size of the run is embedded when it i
 
   it('embeds every saved size even when the run then throws (its opening stock was refused)', async () => {
     const stub = runStub({
-      'rpc:open_item_stock': { data: null, error: { message: 'refused', code: '42501', hint: 'stock:adjust' } },
+      'stock_movements.insert': { data: null, error: { message: 'refused' } },
     });
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const svc = new InventoryService(makeServiceContext(stub.client));

@@ -109,7 +109,7 @@ function buildStub(over: Record<string, unknown> = {}) {
     'organizations.select': { data: { plan: 'enterprise' }, error: null },
     'custom_field_definitions.select': { data: [], error: null },
     'inventory_items.insert': { data: { id: 'item-new' }, error: null },
-    'rpc:open_item_stock': { data: [], error: null },
+    'stock_movements.insert': { data: null, error: null },
     // Answered like PostgREST: the lookup's own filters decide what it sees.
     'locations.select': servedLikePostgrest(LOCATIONS),
     'locations.insert': { data: { id: 'rack-1b-new' }, error: null },
@@ -227,7 +227,7 @@ describe('InventoryService.create asks before it creates a rack', () => {
 
     const item = await svc.create({ ...BASE, confirmNewRack: true });
 
-    expect(item).toEqual({ id: 'item-new', quantity_on_hand: 130, placementFailed: null });
+    expect(item).toEqual({ id: 'item-new', placementFailed: null });
     expect(createdRack(stub)).toMatchObject({
       organization_id: ORG,
       warehouse_id: 'wh-1',
@@ -249,7 +249,7 @@ describe('InventoryService.create asks before it creates a rack', () => {
 
       const item = await svc.create({ ...BASE, binLocation: typed });
 
-      expect(item).toEqual({ id: 'item-new', quantity_on_hand: 130, placementFailed: null });
+      expect(item).toEqual({ id: 'item-new', placementFailed: null });
       expect(createdRack(stub)).toBeUndefined();
       expect(transferTargets(stub)).toEqual(['rack-17-b']);
       // Found on the first read: no near-match list, no warehouse name.
@@ -263,7 +263,7 @@ describe('InventoryService.create asks before it creates a rack', () => {
 
     const item = await svc.create({ ...BASE, warehouseId: 'wh-2' });
 
-    expect(item).toEqual({ id: 'item-new', quantity_on_hand: 130, placementFailed: null });
+    expect(item).toEqual({ id: 'item-new', placementFailed: null });
     expect(createdRack(stub)).toBeUndefined();
     expect(transferTargets(stub)).toEqual(['rack-1b-wh2']);
   });
@@ -306,7 +306,7 @@ describe('InventoryService.create asks before it creates a rack', () => {
 
     const item = await svc.create({ ...BASE }, { allowUnconfirmedNewRack: true });
 
-    expect(item).toEqual({ id: 'item-new', quantity_on_hand: 130, placementFailed: null });
+    expect(item).toEqual({ id: 'item-new', placementFailed: null });
     expect(createdRack(stub)).toMatchObject({ name: '1-B', kind: 'rack', warehouse_id: 'wh-1' });
     expect(transferTargets(stub)).toEqual(['rack-1b-new']);
   });
@@ -323,7 +323,7 @@ describe('InventoryService.create asks before it creates a rack', () => {
 
     const item = await svc.create({ ...BASE, binLocation: '17-B' });
 
-    expect(item).toEqual({ id: 'item-new', quantity_on_hand: 130, placementFailed: { rackName: '17-B', count: 1 } });
+    expect(item).toEqual({ id: 'item-new', placementFailed: { rackName: '17-B', count: 1 } });
     expect(createdRack(stub)).toBeUndefined();
     expect(transferTargets(stub)).toEqual([]);
   });
@@ -341,7 +341,7 @@ describe('InventoryService.create asks before it creates a rack', () => {
 
     const item = await svc.create({ ...BASE });
 
-    expect(item).toEqual({ id: 'item-new', quantity_on_hand: 130, placementFailed: null });
+    expect(item).toEqual({ id: 'item-new', placementFailed: null });
     expect(createdRack(stub)).toBeUndefined();
     expect(transferTargets(stub)).toEqual(['rack-1b-late']);
   });
@@ -416,7 +416,7 @@ describe('InventoryService.create asks before it creates a rack', () => {
 
       const item = await svc.create({ ...BASE, confirmNewRack: true });
 
-      expect(item).toEqual({ id: 'item-new', quantity_on_hand: 130, placementFailed: { rackName: '1-B', count: 1 } });
+      expect(item).toEqual({ id: 'item-new', placementFailed: { rackName: '1-B', count: 1 } });
       expect(createdRack(stub)).toBeUndefined();
       expect(transferTargets(stub)).toEqual([]);
       // No create is attempted only to be refused: nothing to log as a failure.
@@ -432,7 +432,7 @@ describe('InventoryService.create asks before it creates a rack', () => {
 
       const item = await svc.create({ ...BASE }, { allowUnconfirmedNewRack: true });
 
-      expect(item).toEqual({ id: 'item-new', quantity_on_hand: 130, placementFailed: { rackName: '1-B', count: 1 } });
+      expect(item).toEqual({ id: 'item-new', placementFailed: { rackName: '1-B', count: 1 } });
       expect(createdRack(stub)).toBeUndefined();
       expect(transferTargets(stub)).toEqual([]);
     });
@@ -443,7 +443,7 @@ describe('InventoryService.create asks before it creates a rack', () => {
 
       const item = await svc.create({ ...BASE, binLocation: '17-B' });
 
-      expect(item).toEqual({ id: 'item-new', quantity_on_hand: 130, placementFailed: null });
+      expect(item).toEqual({ id: 'item-new', placementFailed: null });
       expect(transferTargets(stub)).toEqual(['rack-17-b']);
     });
 
@@ -458,7 +458,7 @@ describe('InventoryService.create asks before it creates a rack', () => {
       expect(e.details).toMatchObject({ title: 'Create new rack 1-B?', canCreateRack: true });
 
       const item = await new InventoryService(ctx).create({ ...BASE, confirmNewRack: true });
-      expect(item).toEqual({ id: 'item-new', quantity_on_hand: 130, placementFailed: null });
+      expect(item).toEqual({ id: 'item-new', placementFailed: null });
       expect(transferTargets(stub)).toEqual(['rack-1b-new']);
     });
 
@@ -478,7 +478,7 @@ describe('InventoryService.create asks before it creates a rack', () => {
       });
 
       const item = await new InventoryService(ctx).create({ ...BASE, confirmNewRack: true });
-      expect(item).toEqual({ id: 'item-new', quantity_on_hand: 130, placementFailed: { rackName: '1-B', count: 1 } });
+      expect(item).toEqual({ id: 'item-new', placementFailed: { rackName: '1-B', count: 1 } });
       // Before: the rack was created, then the move was refused, and an empty
       // rack nobody asked for was left in the warehouse.
       expect(createdRack(stub)).toBeUndefined();

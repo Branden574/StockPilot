@@ -100,12 +100,11 @@ const STOCK_RPCS: Record<string, string> = {
   change_return_replacement: 'cancel_order_request (the undrawn replacement it substitutes; holds only)',
   complete_picking: 'adjust_stock (draws the picked batch)',
   reopen_picking: 'adjust_stock (gives the draw back)',
-  duplicate_inventory_item: 'inventory_items insert + open_item_stock (0454)',
+  duplicate_inventory_item: 'inventory_items insert + opening stock_movements',
   inventory_set_rack: 'inventory_items.bin_location + rack custom_fields',
   inventory_set_bin_location: 'inventory_items.bin_location',
   inventory_set_book_placement: 'inventory_items book_crate_* / rack custom_fields',
-  open_item_stock:
-    'inventory_items.quantity_on_hand, item_stock_levels and the opening stock_movements row of a new item (0454)',
+  compensate_opening_stock: 'item_stock_levels + inventory_items.quantity_on_hand (failed-create rollback, 0359)',
   save_purchase_order_draft:
     'inventory_items.created_from_purchase_order_id (tags PO-born custom items, bumping updated_at; 0366)',
   draft_order_shortfall_pos:

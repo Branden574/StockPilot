@@ -110,7 +110,7 @@ import {
 } from './lib/fetch-by-ids';
 import { dbGuardRefusal } from './lib/db-guard-refusal';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
-import { openItemStockOrThrow } from './opening-stock';
+import { compensateOpeningStockOrThrow } from './opening-stock-compensation';
 import { fetchAllRows } from './lib/paginate';
 import { audit, auditMany, type AuditEvent, type AuditPayload } from './audit';
 import { dispatchEvent } from './integration-events';
@@ -3213,14 +3213,6 @@ export class InventoryService {
     // before we touch the DB (mirrors the form's client-side check).
     await this.assertCustomFieldsValid(input.customFields);
 
-    // The item is inserted at 0 and its stock opened afterwards (see the
-    // opening below), so a negative opening quantity is refused here, before
-    // anything is written: the schema's own sentence. Only callers that skip
-    // createItemSchema (the Intacct import) can send one.
-    if (input.quantityOnHand < 0) {
-      throw new ServiceError('validation_error', 'Enter 0 or more.', { field: 'quantityOnHand' });
-    }
-
     // ── Sports profile resolution (server-side; the form is never trusted) ──
     // For every category that has never been given a tracking_mode — which is
     // every category in every org today — this returns QUANTITY / 'none' /
@@ -3441,22 +3433,21 @@ export class InventoryService {
     // (The warehouse, the charter and the manual-create guards are resolved
     // above, before the group find-or-create; see the new-rack question.)
     // ═══ THE PRIMARY LOCATION IS A LABEL ON A MANUAL CREATE (owner, 2026-09-24) ═══
-    // The opening stock lands AT primary_location_id when one is set (the
-    // rule tg_seed_initial_level had, which open_item_stock shares since
-    // 0454). The pickers offer only SITES (the warehouse building, rooms,
+    // tg_seed_initial_level seeds the opening stock AT primary_location_id when
+    // one is set. The pickers offer only SITES (the warehouse building, rooms,
     // vehicles), so an item added from the phone or web with PRIMARY LOCATION
     // "DC4" and no rack had its stock recorded at the DC4 site: counted as
     // placed, missing from the put-away list, and printed in the Items Rack
     // column as if "DC4" were a rack. 67 items at L4L on 2026-09-23/24.
     // The owner's rule: stock added without a rack lands in Unplaced, awaiting
     // put-away, and the primary location stays a label. So a manual create
-    // inserts WITHOUT the primary location (the opening then lands in the
+    // inserts WITHOUT the primary location (the trigger then seeds the
     // warehouse's Unplaced bucket, exactly as a create with no location always
     // has) and writes the label straight after. A typed rack still wins: the
     // auto-place below moves the stock from Unplaced onto it. Imports and the
     // PO paths keep their behaviour (they are not manual creates).
-    // Only when there is opening stock: with none nothing is opened, and the
-    // primary can ride the insert as it always has.
+    // Only when there is opening stock to seed: with none the trigger does
+    // nothing, and the primary can ride the insert as it always has.
     const primaryIsLabelOnly =
       isManualCreatePath && !!input.primaryLocationId && input.quantityOnHand > 0;
 
@@ -3473,13 +3464,11 @@ export class InventoryService {
         description: input.description ?? null,
         category_id: input.categoryId ?? null,
         supplier_id: input.supplierId ?? null,
-        // See primaryIsLabelOnly: written as a label after the opening.
+        // See primaryIsLabelOnly: written as a label after the opening movement.
         primary_location_id: primaryIsLabelOnly ? null : (input.primaryLocationId ?? null),
         unit_cost: input.unitCost,
         retail_price: input.retailPrice,
-        // Inserted with nothing on hand; open_item_stock records the opening
-        // quantity right after (migration 0454).
-        quantity_on_hand: 0,
+        quantity_on_hand: input.quantityOnHand,
         reorder_point: input.reorderPoint,
         reorder_quantity: input.reorderQuantity,
         // Counting unit: an EXPLICIT input always wins, including an explicit
@@ -3542,29 +3531,40 @@ export class InventoryService {
     // next. Held by keepAlive, never awaited (see embedInBackground).
     embedInBackground([data.id as string], this.ctx);
 
-    // Opening stock through the stock ledger (migration 0454): the holding,
-    // on-hand and the 'initial' movement attributed to the creator, in one
-    // transaction. With a primary that is only a label the insert carried no
-    // primary, so the stock waits in Unplaced and the movement's destination
-    // is null; otherwise it lands at a valid site primary, which the movement
-    // names. On a failure the item stays at 0 with nothing written, and the
-    // helper throws the "saved with zero on hand" sentence. BEFORE the
-    // label write and the auto-place below: neither may run on stock that was
-    // never recorded.
-    if (input.quantityOnHand > 0) {
-      const opened = await openItemStockOrThrow(
-        this.ctx,
-        [{ itemId: data.id as string, quantity: input.quantityOnHand }],
-        { tag: '[create]', subject: 'This item was', pronoun: 'its', invalidateLabel: 'item.open_stock' },
-      );
-      (data as { quantity_on_hand: number }).quantity_on_hand =
-        opened.get(data.id as string) ?? input.quantityOnHand;
+    if (input.quantityOnHand && input.quantityOnHand > 0) {
+      // The result USED TO BE DISCARDED — no destructuring at all — so an
+      // 'initial' movement that RLS or a pooler timeout refused left the item
+      // carrying stock that no movement anywhere explains, and create() returned
+      // success. See compensateOpeningStockOrThrow for why that is not an
+      // acceptable "recoverable audit gap". Compensated BEFORE the auto-place
+      // block below, so no placement ever runs on stock that no longer exists.
+      const { error: movementErr } = await this.ctx.supabase.from('stock_movements').insert({
+        organization_id: this.ctx.organizationId,
+        item_id: data.id,
+        movement_type: 'initial',
+        quantity_change: input.quantityOnHand,
+        previous_quantity: 0,
+        new_quantity: input.quantityOnHand,
+        user_id: this.ctx.userId,
+        // Where the trigger actually seeded it: Unplaced (null here, as for
+        // every create with no location) when the primary is only a label.
+        to_location_id: primaryIsLabelOnly ? null : (input.primaryLocationId ?? null),
+      });
+      if (movementErr) {
+        await compensateOpeningStockOrThrow(this.ctx, [data.id as string], movementErr, {
+          tag: '[create]',
+          subject: 'This item was',
+          pronoun: 'its',
+          invalidateLabel: 'item.compensate_opening_stock',
+        });
+      }
     }
 
     // The primary location, as a label only (see primaryIsLabelOnly). The stock
-    // is already opened in Unplaced; nothing reacts to this column changing.
-    // AFTER the opening: written before it, the label would make
-    // open_item_stock put the stock at the site instead of Unplaced (#253).
+    // is already seeded in Unplaced; nothing reacts to this column changing.
+    // AFTER the opening movement and its compensation: the label is cosmetic,
+    // so it must never sit inside the window where on-hand exists without a
+    // movement (a slow round trip there is a ledger hazard, not a label one).
     // FAIL-SOFT: the item and its stock are saved whatever happens here, so a
     // refusal (a custom role with items:create but not items:update) costs the
     // label, which is reported, never the create.
@@ -3602,10 +3602,10 @@ export class InventoryService {
     // id onto it made auto-placed items vanish from every location-filtered
     // view and leak a duplicate rack label into exports — caught in review.
     //
-    // Instead: let the opening (open_item_stock, migration 0454, which writes
-    // the item's first item_stock_levels row by 0199's rule) put the stock in
-    // the warehouse's Unplaced bucket on this path, since the insert carries
-    // no primary location when there is stock — and
+    // Instead: let `tg_seed_initial_level` (migration 0199, the AFTER INSERT
+    // trigger that actually seeds the item's first item_stock_levels row)
+    // seed the level (in the warehouse's Unplaced bucket on this path, since the
+    // insert carries no primary location when there is stock) — and
     // THEN reuse the bulk "Set rack" placement path: resolve-or-create the
     // typed rack (findOrCreateRackLocation — the SAME helper, SAME dedup,
     // SAME 23505-race retry the bulk fix uses) and transferStock the
@@ -3616,7 +3616,7 @@ export class InventoryService {
     //
     // FAIL-SOFT: awaited with a catch-all — any failure (rack resolve/create,
     // the holdings read, or the transfer itself) leaves the item created with
-    // its stock exactly where the opening put it (today's behavior). A
+    // its stock exactly where the trigger put it (today's behavior). A
     // placement hiccup must never undo or block a create that already
     // succeeded.
     //
@@ -3822,14 +3822,6 @@ export class InventoryService {
       if (rpcErr.code === 'P0002') {
         throw new ServiceError('not_found', 'Original item no longer exists.');
       }
-      // open_item_stock (0454) refuses a member who may not add stock: no copy
-      // was made. Read by SQLSTATE and hint, never by message text.
-      if (rpcErr.code === '42501' && (rpcErr as { hint?: string | null }).hint === 'stock:adjust') {
-        throw new ServiceError(
-          'forbidden',
-          'You do not have permission to add stock, so the copy was not made. Set the quantity to 0 to copy it without stock.',
-        );
-      }
       if (rpcErr.code === '23505') {
         // The copy keeps the original's SKU and charter (0299); only its rack
         // label is new, so that is the slot that collided.
@@ -3843,8 +3835,7 @@ export class InventoryService {
       }
       throw new ServiceError('internal_error', rpcErr.message);
     }
-    // duplicate_inventory_item inserted the copy and opened its stock through
-    // open_item_stock (0454).
+    // duplicate_inventory_item inserted the copy (and its opening movement).
     invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.duplicate');
     // 0299 copies no embedding ("derived, rebuilt by their own paths"), and
     // until now no path rebuilt it: a duplicate was invisible to semantic
@@ -4270,11 +4261,6 @@ export class InventoryService {
     placementFailed: { rackName: string; count: number } | null;
   }> {
     assertPermission(this.ctx, 'items:create');
-    // Each size is inserted at 0 and its stock opened afterwards (migration
-    // 0454), so a negative quantity is refused before anything is written.
-    if (input.variants.some((v) => v.quantity < 0)) {
-      throw new ServiceError('validation_error', 'Enter 0 or more.', { field: 'variants' });
-    }
     if (input.variants.length === 0) {
       throw new ServiceError(
         'validation_error',
@@ -4512,16 +4498,8 @@ export class InventoryService {
       return cf;
     };
 
-    // The quantity each SKU asked for. Every row is inserted at 0 and opened
-    // afterwards, so the opening, the label write and the auto-place below
-    // read THIS, never the inserted row's quantity_on_hand. A SKU is unique
-    // within one insert: every row of a run shares the charter and the bin,
-    // and inventory_items_org_sku_charter_bin_unique (0234, NULLS NOT
-    // DISTINCT) covers exactly that.
-    const requestedBySku = new Map<string, number>();
     const rows = input.variants.map((v) => {
       const normalizedSize = normalizeSizeValue(v.size, sizeSystem) as string;
-      requestedBySku.set(`${sharedBase}-${v.size}`, v.quantity);
       return {
       organization_id: this.ctx.organizationId,
       name: `${input.baseName} - ${v.size}`,
@@ -4533,17 +4511,16 @@ export class InventoryService {
       warehouse_id: resolvedWarehouseId,
       charter_id: resolvedCharterId,
       // A size run is always a manual create: for a STOCKED size the primary
-      // location is a label, written after the opening, so the stock opens in
-      // Unplaced (see primaryIsLabelOnly in create()). A size left at 0 opens
-      // nothing, so it keeps the primary on the insert.
+      // location is a label, written after the opening movements, so the stock
+      // seeds Unplaced (see primaryIsLabelOnly in create()). A size left at 0
+      // seeds nothing, so it keeps the primary on the insert.
       primary_location_id: v.quantity > 0 ? null : input.primaryLocationId,
       bin_location: input.binLocation,
       retail_price: input.retailPrice,
       unit_cost: input.unitCost,
       reorder_point: input.reorderPoint,
       reorder_quantity: input.reorderQuantity,
-      // Inserted at 0; opened below through open_item_stock (0454).
-      quantity_on_hand: 0,
+      quantity_on_hand: v.quantity,
       // Explicit caller value wins; the category default fills an omission.
       // Same rule as create() so the two create paths cannot disagree.
       unit_of_measure: input.unitOfMeasure ?? profile.countingUnit,
@@ -4624,37 +4601,85 @@ export class InventoryService {
       this.ctx,
     );
 
-    // Opening stock for the stocked sizes, through the stock ledger
-    // (migration 0454): one open_item_stock call writes each size's holding
-    // (Unplaced: the insert carried no primary), on-hand and its 'initial'
-    // movement, all or nothing. On a failure every size stays at 0 with nothing
-    // written and the helper throws the "saved with zero on hand" sentence;
-    // the label write and the auto-place below never run on stock that was
-    // not recorded.
-    const requestedOf = (r: { sku: string }) => requestedBySku.get(r.sku) ?? 0;
-    const openingLines = inserted
-      .filter((r) => requestedOf(r) > 0)
-      .map((r) => ({ itemId: r.id, quantity: requestedOf(r) }));
-    if (openingLines.length > 0) {
-      const opened = await openItemStockOrThrow(this.ctx, openingLines, {
-        tag: '[bulkCreateSizedVariants]',
-        subject: 'These variants were',
-        pronoun: 'their',
-        invalidateLabel: 'item.open_stock',
-      });
-      for (const r of inserted) {
-        const q = opened.get(r.id);
-        if (q !== undefined) r.quantity_on_hand = q;
+    // Opening stock_movements for the non-zero variants.
+    //
+    // THE LEDGER INVARIANT IS ABSOLUTE: for every item,
+    // SUM(stock_movements.quantity_change) = quantity_on_hand. This block used
+    // to console.warn a failed insert and RETURN SUCCESS, which left rows
+    // carrying stock that no movement anywhere explains — invisible to the item
+    // Activity feed and to the 14-day sparklines, and silently wrong for every
+    // reconciliation, restore point and audit that sums the ledger. "The items
+    // exist, the gap is recoverable" was true of the ROWS and false of the
+    // BOOKS.
+    //
+    // So: COMPENSATE, then fail loudly. Zeroing the on-hand of exactly the rows
+    // we just inserted restores 0 = 0 — the variants survive (their skus, sizes
+    // and keys are all correct) and the operator re-enters the quantities as a
+    // normal stock adjustment, which writes its own movement. Rolling the ITEMS
+    // back instead would be a hard DELETE on a table whose whole convention is
+    // soft-delete, and a fail-open .delete().eq() under RLS would leave the
+    // worst of both.
+    //
+    // TWO INVARIANTS, NOT ONE (re-review). `trg_seed_initial_level` (0199) is an
+    // AFTER INSERT trigger on inventory_items: by the time this movement insert
+    // is even attempted, it has ALREADY written one `item_stock_levels` row per
+    // stocked variant, at the same quantity. Nothing syncs levels on UPDATE, so
+    // zeroing only `quantity_on_hand` left Σlevels = N against on_hand = 0 —
+    // PHANTOM PLACED STOCK. That is not a cosmetic mismatch: the archive
+    // stock-guard takes max(on_hand, Σholdings) and would refuse to archive the
+    // variant forever, and the placed draw-down would happily pick those units,
+    // driving on_hand NEGATIVE against a ledger that says nothing ever arrived.
+    // The compensation therefore restores BOTH: levels 0 = on_hand 0 = no
+    // movements.
+    //
+    // ORDER: levels FIRST. If the second write then fails, the intermediate is
+    // "stock on the row, not placed" — the pre-0199 shape, which blocks picking
+    // and is caught by the same max() the guard uses. The reverse order's
+    // intermediate is the phantom-placed one, which is the state that picks
+    // negative. Either way this throws, but the worse intermediate is not worth
+    // choosing.
+    const movementRows = inserted
+      .filter((r) => r.quantity_on_hand > 0)
+      .map((r) => ({
+        organization_id: this.ctx.organizationId,
+        item_id: r.id,
+        movement_type: 'initial',
+        quantity_change: r.quantity_on_hand,
+        previous_quantity: 0,
+        new_quantity: r.quantity_on_hand,
+        user_id: this.ctx.userId,
+        // Seeded in Unplaced (the insert carried no primary location).
+        to_location_id: null,
+      }));
+    if (movementRows.length > 0) {
+      const { error: movementErr } = await this.ctx.supabase
+        .from('stock_movements')
+        .insert(movementRows);
+      if (movementErr) {
+        // The compensation itself now lives in compensateOpeningStockOrThrow —
+        // create() and bulkCreate() were making the OPPOSITE decision on the
+        // same failure (pattern #26). It always throws.
+        await compensateOpeningStockOrThrow(
+          this.ctx,
+          inserted.filter((r) => r.quantity_on_hand > 0).map((r) => r.id),
+          movementErr,
+          {
+            tag: '[bulkCreateSizedVariants]',
+            subject: 'These variants were',
+            pronoun: 'their',
+            invalidateLabel: 'item.compensate_opening_stock',
+          },
+        );
       }
     }
 
     // The primary location as a LABEL for the stocked sizes (owner, 2026-09-24;
     // see create()). One write for the whole run (at most 60 variants), AFTER
-    // the opening, for the same reason as create(): written first, it would put
-    // the stock at the site instead of Unplaced. FAIL-SOFT: the variants and their stock are saved; a refused
+    // the opening movements and their compensation, for the same ledger reason
+    // as create(). FAIL-SOFT: the variants and their stock are saved; a refused
     // label is reported, never fatal. `.select('id')` so an update that RLS
     // filtered to zero rows (no error) is reported too, not assumed.
-    const stockedIds = inserted.filter((r) => requestedOf(r) > 0).map((r) => r.id);
+    const stockedIds = inserted.filter((r) => r.quantity_on_hand > 0).map((r) => r.id);
     if (input.primaryLocationId && stockedIds.length > 0) {
       const { data: labelled, error: labelErr } = await this.ctx.supabase
         .from('inventory_items')
@@ -4704,15 +4729,15 @@ export class InventoryService {
     //     against a SITES-ONLY set and exports resolve it into a "Primary
     //     location" column, so stamping a rack there makes auto-placed rows
     //     vanish from location-filtered views and duplicates the rack label
-    //     into exports. Let the opening put the stock where it puts it, then
-    //     MOVE the holding with transferStock.
-    //  2. AFTER the opening, never before. The opening can throw and leave
-    //     every size at 0; placing first would write 'transfer' rows describing
-    //     stock that was never recorded. This ordering also matches create()'s
-    //     (insert → 'initial' → place), so the ledger reads as a human put-away
-    //     on both paths.
+    //     into exports. Let the trigger seed wherever it seeds, then MOVE the
+    //     holding with transferStock.
+    //  2. AFTER the opening movements, never before. That block can throw and
+    //     compensate back to zero on-hand + zero levels; placing first would
+    //     write 'transfer' rows describing stock that the compensation then
+    //     erased. This ordering also matches create()'s (insert → 'initial' →
+    //     place), so the ledger reads as a human put-away on both paths.
     //  3. Only the STOCKED variants. A size the user left at 0 has no holding
-    //     at all (nothing is opened for it), so including it would buy a
+    //     at all (0199 returns early on qty <= 0), so including it would buy a
     //     wider read for nothing.
     //
     // `typedBinLabel` (computed with the new-rack question, above) is derived
@@ -4730,7 +4755,7 @@ export class InventoryService {
     // ledger are already committed, so no placement failure may undo or block
     // them, and one variant's failed transfer must not cost the others theirs.
     // `mayCreateRack` as in create(): an unconfirmed run only FINDS the rack.
-    const stockedForPlacement = inserted.filter((r) => requestedOf(r) > 0).map((r) => r.id);
+    const stockedForPlacement = inserted.filter((r) => r.quantity_on_hand > 0).map((r) => r.id);
     let placement: ManualPlacementOutcome | null = null;
     if (typedBinLabel && stockedForPlacement.length > 0) {
       placement = await this.placeManualCreateOnRack(
@@ -4798,12 +4823,6 @@ export class InventoryService {
         'validation_error',
         'Bulk import is limited to 500 items per call.',
       );
-    }
-    // Every item is inserted at 0 and its stock opened afterwards (migration
-    // 0454), so a negative quantity is refused before anything is read or
-    // written.
-    if (input.items.some((i) => i.quantityOnHand < 0)) {
-      throw new ServiceError('validation_error', 'Enter 0 or more.', { field: 'quantityOnHand' });
     }
 
     // The SAME gate matrix create() applies, which this path never had: it
@@ -4929,26 +4948,18 @@ export class InventoryService {
       };
     }
 
-    // Build the batch INSERT payload. Generate SKUs in JS. Every row is
-    // inserted at 0; the quantity each SKU asked for is kept here for the
-    // opening below. A SKU is unique within one insert: every row shares the
-    // charter and has no bin, and inventory_items_org_sku_charter_bin_unique
-    // (0234, NULLS NOT DISTINCT) covers exactly that.
-    const requestedBySku = new Map<string, number>();
-    const rows = survivors.map((i) => {
-      const sku = (i.sku && i.sku.trim()) || generateSku();
-      requestedBySku.set(sku, i.quantityOnHand);
-      return {
+    // Build the batch INSERT payload. Generate SKUs in JS.
+    const rows = survivors.map((i) => ({
       organization_id: this.ctx.organizationId,
       warehouse_id: resolvedWarehouseId,
       charter_id: resolvedCharterId,
-      sku,
+      sku: (i.sku && i.sku.trim()) || generateSku(),
       barcode: i.barcode,
       name: i.name,
       description: i.description ?? null,
       unit_cost: i.unitCost,
       retail_price: i.retailPrice,
-      quantity_on_hand: 0,
+      quantity_on_hand: i.quantityOnHand,
       reorder_point: i.reorderPoint ?? 0,
       reorder_quantity: i.reorderQuantity ?? 0,
       unit_of_measure: i.unitOfMeasure ?? 'unit',
@@ -4958,13 +4969,12 @@ export class InventoryService {
       status: i.status ?? 'active',
       created_by: this.ctx.userId,
       updated_by: this.ctx.userId,
-      };
-    });
+    }));
 
     const { data: inserted, error } = await this.ctx.supabase
       .from('inventory_items')
       .insert(rows)
-      .select('id, sku');
+      .select('id, quantity_on_hand');
 
     if (error) {
       if (error.code === '23505') {
@@ -4981,21 +4991,43 @@ export class InventoryService {
 
     const createdIds = (inserted ?? []).map((r: { id: string }) => r.id);
 
-    // Opening stock through the stock ledger (migration 0454), keyed on the
-    // quantity each SKU asked for: one open_item_stock call for the batch (at
-    // most 500), all or nothing. On a failure every item stays at 0 with
-    // nothing written and the helper throws the "saved with zero on hand"
-    // sentence.
-    const openingLines = ((inserted ?? []) as Array<{ id: string; sku: string }>)
-      .map((r) => ({ itemId: r.id, quantity: requestedBySku.get(r.sku) ?? 0 }))
-      .filter((l) => l.quantity > 0);
-    if (openingLines.length > 0) {
-      await openItemStockOrThrow(this.ctx, openingLines, {
-        tag: '[bulkCreate]',
-        subject: 'These items were',
-        pronoun: 'their',
-        invalidateLabel: 'item.open_stock',
-      });
+    // Batch stock_movements for non-zero quantities (was per-row).
+    const movementRows = (inserted ?? [])
+      .filter((r: { quantity_on_hand: number }) => r.quantity_on_hand > 0)
+      .map((r: { id: string; quantity_on_hand: number }) => ({
+        organization_id: this.ctx.organizationId,
+        item_id: r.id,
+        movement_type: 'initial',
+        quantity_change: r.quantity_on_hand,
+        previous_quantity: 0,
+        new_quantity: r.quantity_on_hand,
+        user_id: this.ctx.userId,
+      }));
+
+    if (movementRows.length > 0) {
+      const { error: movementErr } = await this.ctx.supabase
+        .from('stock_movements')
+        .insert(movementRows);
+      // This used to console.warn and return `created: N` — "the items exist,
+      // the audit gap is recoverable". It is not: 500 stocked rows with no
+      // ledger break every history-derived view for those items permanently,
+      // and the sibling sized-variants path had already reversed that decision.
+      // COMPENSATE, then fail loudly (the helper always throws).
+      if (movementErr) {
+        await compensateOpeningStockOrThrow(
+          this.ctx,
+          (inserted ?? [])
+            .filter((r: { quantity_on_hand: number }) => r.quantity_on_hand > 0)
+            .map((r: { id: string }) => r.id),
+          movementErr,
+          {
+            tag: '[bulkCreate]',
+            subject: 'These items were',
+            pronoun: 'their',
+            invalidateLabel: 'item.compensate_opening_stock',
+          },
+        );
+      }
     }
 
     // Up to 500 rows per import: batched INSERTs (auditMany), not one

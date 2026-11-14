@@ -80,9 +80,7 @@ function buildStub(over: Record<string, unknown> = {}) {
     'organizations.select': { data: { plan: 'enterprise' }, error: null },
     'custom_field_definitions.select': { data: [], error: null },
     'inventory_items.insert': { data: { id: 'item-new' }, error: null },
-    // Opening stock through the ledger (0454): the holding, on-hand and the
-    // 'initial' movement are the function's; the service writes none of them.
-    'rpc:open_item_stock': { data: [], error: null },
+    'stock_movements.insert': { data: null, error: null },
     'rpc:transfer_stock': { data: null, error: null },
     ...over,
   });
@@ -92,11 +90,8 @@ function insertedItemRow(stub: ReturnType<typeof buildStub>) {
   return stub.chainArgs.get('inventory_items.insert')?.[0]?.[0] as Record<string, unknown>;
 }
 
-/** The lines handed to open_item_stock (0454), across every call. */
-function openedLines(stub: ReturnType<typeof buildStub>) {
-  return stub.rpcCalls
-    .filter((c) => c.name === 'open_item_stock')
-    .flatMap((c) => (c.args as { p_lines: unknown[] }).p_lines);
+function insertedMovementRow(stub: ReturnType<typeof buildStub>) {
+  return stub.chainArgs.get('stock_movements.insert')?.[0]?.[0] as Record<string, unknown>;
 }
 
 function transferCall(stub: ReturnType<typeof buildStub>) {
@@ -117,11 +112,11 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
 
     const item = await svc.create({ ...BASE });
 
-    expect(item).toEqual({ id: 'item-new', quantity_on_hand: 5, placementFailed: null });
+    expect(item).toEqual({ id: 'item-new', placementFailed: null });
     // The item row and its ledger entry are BYTE-IDENTICAL to pre-feature
     // behavior — no primaryLocationId was supplied, so both stay null.
     expect(insertedItemRow(stub).primary_location_id).toBeNull();
-    expect(openedLines(stub)).toEqual([{ itemId: 'item-new', quantity: 5 }]);
+    expect(insertedMovementRow(stub).to_location_id).toBeNull();
     // No new location was minted.
     expect(stub.chainArgs.get('locations.insert')).toBeUndefined();
     // The seeded holding physically moved onto the rack via transferStock.
@@ -158,7 +153,7 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
     // it the create is refused first (inventory.new-rack-question.test.ts).
     const item = await svc.create({ ...BASE, confirmNewRack: true });
 
-    expect(item).toEqual({ id: 'item-new', quantity_on_hand: 5, placementFailed: null });
+    expect(item).toEqual({ id: 'item-new', placementFailed: null });
     const createdLoc = stub.chainArgs.get('locations.insert')?.[0]?.[0] as Record<
       string,
       unknown
@@ -199,11 +194,10 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
     // the caller is handed the sentence that sends someone to look.
     expect(item).toEqual({
       id: 'item-new',
-      quantity_on_hand: 5,
       placementFailed: { rackName: '28-A', count: 1 },
     });
     expect(insertedItemRow(stub).primary_location_id).toBeNull();
-    expect(openedLines(stub)).toEqual([{ itemId: 'item-new', quantity: 5 }]);
+    expect(insertedMovementRow(stub).to_location_id).toBeNull();
     // placeManualCreateOnRack returns BEFORE reading holdings when the rack
     // never resolved — no wasted read, no transfer.
     expect(stub.chainArgs.get('item_stock_levels.select')).toBeUndefined();
@@ -224,7 +218,6 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
 
     expect(item).toEqual({
       id: 'item-new',
-      quantity_on_hand: 5,
       placementFailed: { rackName: '28-A', count: 1 },
     });
     expect(insertedItemRow(stub).primary_location_id).toBeNull();
@@ -242,8 +235,8 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
 
     expect(stub.fromCalls).not.toContain('locations');
     expect(insertedItemRow(stub).primary_location_id).toBeNull();
-    // qty 0 also means nothing is opened at all.
-    expect(openedLines(stub)).toEqual([]);
+    // qty 0 also means no 'initial' stock_movements row at all.
+    expect(stub.chainArgs.get('stock_movements.insert')).toBeUndefined();
     expect(transferCall(stub)).toBeUndefined();
   });
 
@@ -269,7 +262,7 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
 
     expect(stub.fromCalls).not.toContain('locations');
     expect(insertedItemRow(stub).primary_location_id).toBeNull();
-    expect(openedLines(stub)).toEqual([{ itemId: 'item-new', quantity: 5 }]);
+    expect(insertedMovementRow(stub).to_location_id).toBeNull();
     expect(transferCall(stub)).toBeUndefined();
   });
 
@@ -316,7 +309,7 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
     await svc.create({ ...BASE, primaryLocationId: 'site-chosen-by-caller' });
 
     expect(insertedItemRow(stub).primary_location_id).toBeNull();
-    expect(openedLines(stub)).toEqual([{ itemId: 'item-new', quantity: 5 }]);
+    expect(insertedMovementRow(stub).to_location_id).toBeNull();
     // The caller's choice is still recorded, as the label, and never as the rack.
     expect(stub.chainArgs.get('inventory_items.update')?.[0]?.[0]).toEqual({
       primary_location_id: 'site-chosen-by-caller',
@@ -334,21 +327,21 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
     await svc.create({ ...BASE, binLocation: null, primaryLocationId: 'site-chosen-by-caller' });
 
     expect(insertedItemRow(stub).primary_location_id).toBeNull();
-    expect(openedLines(stub)).toEqual([{ itemId: 'item-new', quantity: 5 }]);
+    expect(insertedMovementRow(stub).to_location_id).toBeNull();
     expect(stub.chainArgs.get('inventory_items.update')?.[0]?.[0]).toEqual({
       primary_location_id: 'site-chosen-by-caller',
     });
     expect(transferCall(stub)).toBeUndefined();
   });
 
-  it('the label is written AFTER the opening, scoped to the new item in this org, and the returned item carries it', async () => {
+  it('the label is written AFTER the opening movement, scoped to the new item in this org, and the returned item carries it', async () => {
     const order: string[] = [];
     const stub = buildStub({
       ...SEEDED_AT_UNPLACED,
       'locations.select': { data: [{ id: 'rack-28a', name: '28-A' }], error: null },
-      'rpc:open_item_stock': () => {
-        order.push('opening');
-        return { data: [], error: null };
+      'stock_movements.insert': () => {
+        order.push('movement');
+        return { data: null, error: null };
       },
       'inventory_items.update': () => {
         order.push('label');
@@ -361,7 +354,7 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
       primary_location_id: string | null;
     };
 
-    expect(order).toEqual(['opening', 'label']);
+    expect(order).toEqual(['movement', 'label']);
     const args = stub.chainArgsAll.get('inventory_items.update')?.[0] ?? [];
     expect(args).toContainEqual(['id', 'item-new']);
     expect(args.some((a) => a[0] === 'organization_id')).toBe(true);
@@ -385,7 +378,7 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
     await svc.create({ ...BASE, quantityOnHand: 0, binLocation: null, primaryLocationId: 'site-dc4' });
     expect(insertedItemRow(stub).primary_location_id).toBe('site-dc4');
     expect(stub.chainArgs.get('inventory_items.update')).toBeUndefined();
-    expect(openedLines(stub)).toEqual([]);
+    expect(stub.chainArgs.get('stock_movements.insert')).toBeUndefined();
   });
 
   it('an IMPORT create keeps seeding at the primary location (not a manual create)', async () => {
@@ -430,7 +423,6 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
     // which is exactly why it has to report like the other two.
     expect(item).toEqual({
       id: 'item-new',
-      quantity_on_hand: 5,
       placementFailed: { rackName: '28-A', count: 1 },
     });
     expect(insertCalls).toBe(2); // exactly one retry, not an infinite loop

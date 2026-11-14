@@ -3,15 +3,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
 
 /**
- * Opening stock goes through the stock ledger (migration 0454).
+ * THE LEDGER INVARIANT IS ABSOLUTE: for every item,
+ * SUM(stock_movements.quantity_change) = quantity_on_hand.
  *
- * create() and bulkCreate() insert their items with nothing on hand and then
- * open the quantity each item asked for through open_item_stock, which writes
- * the holding, on-hand and the 'initial' movement in one transaction. Neither
- * writes stock_movements, item_stock_levels or on-hand directly. A refused
- * opening leaves the items at 0 with nothing written, and the caller reads the
- * "saved with zero on hand" sentence. bulkCreate keys each opening on the
- * quantity its SKU asked for, never on the inserted row (which is 0).
+ * bulkCreateSizedVariants already enforces it (compensate, then fail loudly).
+ * Its two siblings did not: create() never even destructured the insert result
+ * (`await …from('stock_movements').insert(…)`) and bulkCreate() console.warn'd
+ * "the audit gap is recoverable" and returned success — pattern #26, a fix
+ * applied to one of three copies.
+ *
+ * By the time either insert runs, `trg_seed_initial_level` (0199, AFTER INSERT
+ * on inventory_items) has ALREADY seeded an item_stock_levels row at the full
+ * quantity, so the failure leaves on-hand = Σlevels = N with zero movements:
+ * the item Activity feed, the 14-day sparklines and every reconciliation that
+ * sums the ledger are wrong for that item, forever, with nothing logged.
+ *
+ * Not merely transient: the two RLS floors differ. inventory_items_insert
+ * (0212) admits `items:create`; stock_movements_insert (0321) requires staff or
+ * `stock:adjust`. A viewer granted items:create through configurable
+ * permissions creates stocked items whose ledger row RLS refuses EVERY time.
  */
 vi.mock('@/lib/auth/warehouse', () => ({
   getWarehouseAccess: vi.fn(async () => ({ hasAllAccess: true, readableIds: [], writableIds: [] })),
@@ -24,11 +34,10 @@ vi.mock('./audit', () => ({
   auditMany: vi.fn(async (payloads: readonly unknown[]) => ({ written: payloads.length, lost: 0 })),
 }));
 vi.mock('@/lib/ai/embeddings', () => ({ embedInventoryItem: vi.fn(async () => undefined) }));
-vi.spyOn(console, 'error').mockImplementation(() => {});
 
 import { InventoryService } from './inventory';
 
-const STOCK_REFUSAL = { message: 'forbidden', code: '42501', hint: 'stock:adjust' };
+const RLS_REFUSAL = { message: 'new row violates row-level security policy for table "stock_movements"' };
 
 const CREATE_BASE = {
   name: 'Chromebook',
@@ -45,175 +54,125 @@ const CREATE_BASE = {
   warehouseId: 'wh-1',
 };
 
-function openingStub(over: Record<string, unknown> = {}) {
+function compensationStub(over: Record<string, unknown> = {}) {
   return makeSupabaseStub({
     'inventory_items.select': { data: null, error: null, count: 0 },
     'organizations.select': { data: { plan: 'enterprise' }, error: null },
     'custom_field_definitions.select': { data: [], error: null },
-    'inventory_items.insert': { data: { id: 'itm-new', quantity_on_hand: 0 }, error: null },
-    'rpc:open_item_stock': (call: MockCall) => ({
-      data: ((call.args[0]?.[0] as { p_lines: Array<{ itemId: string }> }).p_lines ?? []).map((l) => ({
-        opened_item_id: l.itemId,
-        opened_location_id: 'loc-unplaced',
-        opened_movement_id: `mv-${l.itemId}`,
-      })),
+    'inventory_items.insert': { data: { id: 'itm-new', quantity_on_hand: 40 }, error: null },
+    'stock_movements.insert': { data: null, error: RLS_REFUSAL },
+    // The compensation RPC (0359) returns the ids it rolled back, then the
+    // re-read proves no placement survived.
+    'rpc:compensate_opening_stock': (call: MockCall) => ({
+      data: (call.args[0]?.[0] as { p_item_ids: string[] }).p_item_ids,
       error: null,
     }),
+    'item_stock_levels.select': { data: [], error: null },
     ...over,
   });
 }
 
-/** Every line handed to open_item_stock, across every call. */
-function openedLines(stub: ReturnType<typeof openingStub>) {
+/** The ids handed to compensate_opening_stock, across every batch. */
+function compensatedIds(stub: ReturnType<typeof compensationStub>) {
   return stub.rpcCalls
-    .filter((c) => c.name === 'open_item_stock')
-    .flatMap((c) => (c.args as { p_lines: Array<{ itemId: string; quantity: number }> }).p_lines);
+    .filter((c) => c.name === 'compensate_opening_stock')
+    .flatMap((c) => (c.args as { p_item_ids: string[] }).p_item_ids);
 }
 
-/** No ledger table, and no on-hand, is written directly. */
-function directLedgerWrites(stub: ReturnType<typeof openingStub>) {
-  return [...stub.chains.keys()].filter(
-    (k) =>
-      /^(item_stock_levels|stock_movements)\.(insert|update|upsert|delete)$/.test(k) ||
-      /^inventory_items\.(update|upsert|delete)$/.test(k),
+/** Since 0359 neither table is written directly: the RPC does both. */
+function directLedgerWrites(stub: ReturnType<typeof compensationStub>) {
+  return [...stub.chains.keys()].filter((k) =>
+    /^(item_stock_levels|inventory_items)\.(update|upsert|delete)$/.test(k),
   );
-}
-
-/** The payload of the first inventory_items insert. */
-function insertedPayload(stub: ReturnType<typeof openingStub>) {
-  const args = stub.chainArgsAll.get('inventory_items.insert')?.[0];
-  return args?.[0]?.[0] as Record<string, unknown> | Array<Record<string, unknown>>;
 }
 
 beforeEach(() => vi.clearAllMocks());
 
-describe('InventoryService.create: opening stock through open_item_stock', () => {
-  it('inserts the item at 0, opens the requested quantity in the organization, and returns it', async () => {
-    const stub = openingStub();
-    const svc = new InventoryService(makeServiceContext(stub.client));
-
-    const item = await svc.create({ ...CREATE_BASE });
-
-    expect((insertedPayload(stub) as Record<string, unknown>).quantity_on_hand).toBe(0);
-    const calls = stub.rpcCalls.filter((c) => c.name === 'open_item_stock');
-    expect(calls).toHaveLength(1);
-    expect((calls[0]!.args as { p_org_id: string }).p_org_id).toBe('org-test');
-    expect(openedLines(stub)).toEqual([{ itemId: 'itm-new', quantity: 40 }]);
-    expect(directLedgerWrites(stub)).toEqual([]);
-    expect(item).toMatchObject({ id: 'itm-new', quantity_on_hand: 40 });
-  });
-
-  it('a refused opening leaves the item at 0 and says so, writing nothing else', async () => {
-    const stub = openingStub({ 'rpc:open_item_stock': { data: null, error: STOCK_REFUSAL } });
+describe('InventoryService.create — a failed opening movement compensates and throws', () => {
+  it('does not return success with stock that no movement explains', async () => {
+    const stub = compensationStub();
     const svc = new InventoryService(makeServiceContext(stub.client));
 
     await expect(svc.create({ ...CREATE_BASE })).rejects.toMatchObject({
       code: 'internal_error',
-      internalDetail: expect.stringMatching(/saved with zero on hand/),
     });
+
+    // Both invariants restored — the 0199-seeded placement AND the row qty —
+    // by the one RPC, never by direct writes.
+    expect(compensatedIds(stub)).toEqual(['itm-new']);
     expect(directLedgerWrites(stub)).toEqual([]);
   });
 
-  it('a ZERO-quantity create opens nothing', async () => {
-    const stub = openingStub();
+  it('leaves a ZERO-quantity create untouched (no movement, nothing to compensate)', async () => {
+    const stub = compensationStub({
+      'inventory_items.insert': { data: { id: 'itm-new', quantity_on_hand: 0 }, error: null },
+    });
     const svc = new InventoryService(makeServiceContext(stub.client));
 
     await expect(svc.create({ ...CREATE_BASE, quantityOnHand: 0 })).resolves.toMatchObject({
       id: 'itm-new',
     });
-    expect(stub.rpcCalls.filter((c) => c.name === 'open_item_stock')).toEqual([]);
+    expect(stub.chains.has('stock_movements.insert')).toBe(false);
   });
 
-  it('a negative quantity is refused before anything is written', async () => {
-    const stub = openingStub();
+  it('throws the harder message when the compensation itself cannot be proved', async () => {
+    const stub = compensationStub({
+      // The rollback compensated nothing and a placement survives — the
+      // phantom-stock state.
+      'rpc:compensate_opening_stock': { data: [], error: null },
+      'item_stock_levels.select': { data: [{ id: 'lvl-1' }], error: null },
+    });
     const svc = new InventoryService(makeServiceContext(stub.client));
 
-    await expect(svc.create({ ...CREATE_BASE, quantityOnHand: -3 })).rejects.toMatchObject({
-      code: 'validation_error',
-      message: 'Enter 0 or more.',
+    // `internal_error` sanitizes the PUBLIC message (S13); the operator-facing
+    // copy lives on internalDetail.
+    await expect(svc.create({ ...CREATE_BASE })).rejects.toMatchObject({
+      code: 'internal_error',
+      internalDetail: expect.stringMatching(/Contact support/),
     });
-    expect(stub.chains.has('inventory_items.insert')).toBe(false);
-    expect(stub.rpcCalls.filter((c) => c.name === 'open_item_stock')).toEqual([]);
   });
 });
 
-describe('InventoryService.bulkCreate: opening stock through open_item_stock', () => {
+describe('InventoryService.bulkCreate — a failed opening movement compensates and throws', () => {
   const ITEMS = [
-    { name: 'A', barcode: 'B-1', sku: 'SKU-A', itemType: 'product' as const, quantityOnHand: 10, unitCost: 0, retailPrice: 0 },
-    { name: 'B', barcode: 'B-2', sku: 'SKU-B', itemType: 'product' as const, quantityOnHand: 5, unitCost: 0, retailPrice: 0 },
-    { name: 'C', barcode: 'B-3', sku: 'SKU-C', itemType: 'product' as const, quantityOnHand: 0, unitCost: 0, retailPrice: 0 },
+    { name: 'A', barcode: 'B-1', itemType: 'product' as const, quantityOnHand: 10, unitCost: 0, retailPrice: 0 },
+    { name: 'B', barcode: 'B-2', itemType: 'product' as const, quantityOnHand: 5, unitCost: 0, retailPrice: 0 },
   ];
 
-  it('inserts every row at 0 and opens each SKU with its own quantity (mapped by SKU, whatever the row order)', async () => {
-    const stub = openingStub({
-      'inventory_items.select': { data: [], error: null, count: 0 },
-      // Rows come back in a different order from the request.
+  it('no longer console.warns a broken ledger and reports created: 2', async () => {
+    const stub = compensationStub({
       'inventory_items.insert': {
         data: [
-          { id: 'itm-c', sku: 'SKU-C' },
-          { id: 'itm-b', sku: 'SKU-B' },
-          { id: 'itm-a', sku: 'SKU-A' },
+          { id: 'itm-1', quantity_on_hand: 10 },
+          { id: 'itm-2', quantity_on_hand: 5 },
         ],
         error: null,
       },
-    });
-    const svc = new InventoryService(makeServiceContext(stub.client));
-
-    const res = await svc.bulkCreate({ warehouseId: 'wh-1', items: ITEMS });
-
-    expect(res.created).toBe(3);
-    const payload = insertedPayload(stub) as Array<Record<string, unknown>>;
-    expect(payload.map((r) => r.quantity_on_hand)).toEqual([0, 0, 0]);
-    expect(stub.chainArgsAll.get('inventory_items.insert')?.[0]).toBeDefined();
-    expect(openedLines(stub).sort((a, b) => a.itemId.localeCompare(b.itemId))).toEqual([
-      { itemId: 'itm-a', quantity: 10 },
-      { itemId: 'itm-b', quantity: 5 },
-    ]);
-    expect(directLedgerWrites(stub)).toEqual([]);
-  });
-
-  it('a refused opening throws the zero-on-hand sentence for the batch', async () => {
-    const stub = openingStub({
-      'inventory_items.select': { data: [], error: null, count: 0 },
-      'inventory_items.insert': {
-        data: [
-          { id: 'itm-a', sku: 'SKU-A' },
-          { id: 'itm-b', sku: 'SKU-B' },
-        ],
-        error: null,
-      },
-      'rpc:open_item_stock': { data: null, error: STOCK_REFUSAL },
     });
     const svc = new InventoryService(makeServiceContext(stub.client));
 
     await expect(
-      svc.bulkCreate({ warehouseId: 'wh-1', items: ITEMS.slice(0, 2) }),
-    ).rejects.toMatchObject({
-      code: 'internal_error',
-      internalDetail: expect.stringMatching(/These items were created, but their opening stock could not be recorded, so they were saved with zero on hand/),
-    });
+      svc.bulkCreate({ warehouseId: 'wh-1', items: ITEMS }),
+    ).rejects.toMatchObject({ code: 'internal_error' });
+
+    expect(compensatedIds(stub).sort()).toEqual(['itm-1', 'itm-2']);
     expect(directLedgerWrites(stub)).toEqual([]);
   });
 
-  it('a batch with no stocked rows opens nothing', async () => {
-    const stub = openingStub({
-      'inventory_items.select': { data: [], error: null, count: 0 },
-      'inventory_items.insert': { data: [{ id: 'itm-c', sku: 'SKU-C' }], error: null },
+  it('a batch with no stocked rows still succeeds (no movement is written at all)', async () => {
+    const stub = compensationStub({
+      'inventory_items.insert': {
+        data: [{ id: 'itm-1', quantity_on_hand: 0 }],
+        error: null,
+      },
     });
     const svc = new InventoryService(makeServiceContext(stub.client));
 
-    const res = await svc.bulkCreate({ warehouseId: 'wh-1', items: [ITEMS[2]!] });
+    const res = await svc.bulkCreate({
+      warehouseId: 'wh-1',
+      items: [{ ...ITEMS[0]!, quantityOnHand: 0 }],
+    });
     expect(res.created).toBe(1);
-    expect(stub.rpcCalls.filter((c) => c.name === 'open_item_stock')).toEqual([]);
-  });
-
-  it('a negative quantity is refused before anything is read or written', async () => {
-    const stub = openingStub();
-    const svc = new InventoryService(makeServiceContext(stub.client));
-
-    await expect(
-      svc.bulkCreate({ warehouseId: 'wh-1', items: [{ ...ITEMS[0]!, quantityOnHand: -1 }] }),
-    ).rejects.toMatchObject({ code: 'validation_error', message: 'Enter 0 or more.' });
-    expect(stub.chains.has('inventory_items.insert')).toBe(false);
+    expect(stub.chains.has('stock_movements.insert')).toBe(false);
   });
 });
