@@ -826,9 +826,11 @@ PGTAP_TESTS=(
   # codes stay as they were; an aal2 token still makes ten that replace the old
   # set. The body is 0103's plus the five lines tagged S50b (taking them out
   # lets the refused call through), the header and the ACL are byte for byte
-  # as before, consume_mfa_recovery_code() is not changed, and the migration's
-  # own preflight is replayed from the recorded statements. The lock footprint
-  # is scripts/db-concurrency/0417_migration_lock_footprint.sh.
+  # as before, consume_mfa_recovery_code() is not changed by 0417, and the
+  # migration's own preflight is replayed from the recorded statements. The
+  # lock footprint is scripts/db-concurrency/0417_migration_lock_footprint.sh.
+  # (Re-pinned 2026-11-14 by 0456: C1 pins consume_mfa_recovery_code()'s body
+  # as 0456 left it, 0103's plus the count; header and ACL unchanged.)
   supabase/tests/0417_recovery_codes_need_aal2.test.sql
   # Cycle count release (0419, docket item S42): release_cycle_count refuses
   # everyone but a manager of the count's organization on a count with no
@@ -860,6 +862,23 @@ PGTAP_TESTS=(
   # user_can_see_item_category answers service_role only. The lock footprint
   # is scripts/db-concurrency/0421_migration_lock_footprint.sh.
   supabase/tests/0421_categories_select_category_sets.test.sql
+  # The recovery-code check counts its own attempts (0456; no check reads the
+  # number): consume_mfa_recovery_code() counts every call of a signed-in
+  # account with a non-empty code, before it compares any code, in
+  # rate_limit_buckets through increment_rate_limit (key 'mfa-recovery-fn:'
+  # and the account id, nothing of the code; 10 per 15 minutes), and past
+  # that raises P0001 with hint rate_limited even for a right code, marking
+  # nothing. Another account's count is its own; a counter that errors or
+  # answers nothing fails the call (closed); a read-only transaction counts
+  # nothing and answers nothing; a refused call does not move the window; no
+  # role or database sets pgrst.db_tx_end. The body is 0103's plus the
+  # eight lines tagged "-- attempts" (taking them out lets the refused call
+  # through), the header and the ACL are as before, anon cannot execute it,
+  # service_role without an account id is refused as before, and the
+  # migration's own preflight (which pins the counter's body too) is
+  # replayed from the recorded statements. The lock footprint is
+  # scripts/db-concurrency/0456_migration_lock_footprint.sh.
+  supabase/tests/0456_recovery_code_check_counts_attempts.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
