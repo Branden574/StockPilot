@@ -38,6 +38,17 @@ describe('organizationOwnerRefusal', () => {
     }
   });
 
+  // On the sign-up path the account already exists when the invite is
+  // refused, so this sentence says only what did not happen.
+  it('the invite refusal says the person was not added', () => {
+    expect(INVITE_ORGANIZATION_HAS_NO_OWNER_COPY).toBe(
+      'This organization has no owner right now, so the invite cannot be accepted. You were not added.',
+    );
+    expect(ORGANIZATION_NEEDS_OWNER_COPY).toBe(
+      'This change would leave the organization with members and no owner. Nothing was changed.',
+    );
+  });
+
   it('the sentences are plain and name no database word', () => {
     for (const s of [
       ORGANIZATION_OWNER_BUSY_COPY,

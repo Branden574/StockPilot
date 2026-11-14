@@ -25,9 +25,12 @@ export const ORGANIZATION_OWNER_BUSY_COPY =
 /** A Team change or the ownership transfer that would leave no owner. */
 export const ORGANIZATION_NEEDS_OWNER_COPY =
   'This change would leave the organization with members and no owner. Nothing was changed.';
-/** Accepting an invite into an organization that has no owner. */
+/**
+ * Accepting an invite into an organization that has no owner. It says only
+ * what did not happen: on the sign-up path the account already exists.
+ */
 export const INVITE_ORGANIZATION_HAS_NO_OWNER_COPY =
-  'This organization has no owner right now, so the invite cannot be accepted. Nothing was changed.';
+  'This organization has no owner right now, so the invite cannot be accepted. You were not added.';
 /** "Act as" whose grant would have replaced the platform admin's own, only, owner membership. */
 export const ACT_AS_ONLY_OWNER_COPY = 'You are the only owner of this organization, so Act as did not start.';
 

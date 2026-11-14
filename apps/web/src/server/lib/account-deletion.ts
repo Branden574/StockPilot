@@ -294,8 +294,8 @@ export async function readAuthEmail(admin: AdminClient, userId: string): Promise
  *    GoTrue's commit for the same reason (P0001 organization_needs_owner,
  *    the same condition). Nothing was deleted; the caller says the last-owner
  *    sentence and keeps the sessions.
- *  - transient: GoTrue itself answered a server error (5xx: its transaction
- *    ended and was undone) and the check says the account could go now (or a
+ *  - transient: GoTrue itself answered a server error (exactly 500: its
+ *    transaction ended and was undone) and the check says the account could go now (or a
  *    lock is busy). The refusal was one that passes: the owner rule's
  *    per-organization check, which runs at GoTrue's commit outside the dry
  *    run, was busy (55P03 organization_owner_check_busy, another change to
@@ -304,15 +304,16 @@ export async function readAuthEmail(admin: AdminClient, userId: string): Promise
  *    "try again" and keeps the sessions, as for the check's own retry answer.
  *  - unknown: any other answer (the check failed too, as with a dead
  *    service-role key; an integrity refusal; no such account), or a delete
- *    error GoTrue did not answer as a server error (a lost reply, whose
- *    delete may still be running; a 401). The caller keeps SP-008.
+ *    error GoTrue did not answer as a server error (a lost reply, or a 502,
+ *    503, 504 or 52x from the gateway, whose delete may still be running; a
+ *    401). The caller keeps SP-008.
  * Never throws (checkAccountDeletable never does).
  */
 export type LateDeleteRefusal = 'last_owner' | 'transient' | 'unknown';
 
+// 502, 503, 504 and 52x are written by the gateway: the delete may still be running.
 function isGotrueServerError(deleteError: unknown): boolean {
-  const status = (deleteError as { status?: unknown } | null)?.status;
-  return typeof status === 'number' && status >= 500 && status <= 599;
+  return (deleteError as { status?: unknown } | null)?.status === 500;
 }
 
 export async function lateDeleteRefusal(

@@ -54,9 +54,8 @@
 -- owner); an account deletion that 0393's rule allows (the same definitions:
 -- a sole owner with no other real member, or one of several owners);
 -- removing every member at once; starting and ending an "Act as" seat; any
--- change to an organization that already has members and no owner other than
--- a new member joining it (its existing rows are never checked, so this file
--- needs no repair of stored rows first).
+-- change that neither takes an owner away nor adds a member that is not an
+-- owner (stored rows are never read or checked by this file).
 --
 -- The account-deletion dry run (account_deletion_check, 0388) undoes its
 -- delete inside a subtransaction, which discards a deferred check queued
@@ -109,9 +108,7 @@
 --     (proconfig), no database or role setting sets
 --     default_transaction_isolation, and the server's default is read
 --     committed.
--- It does not count organizations that have members and no owner: the
--- triggers never touch their existing rows, so any such count is the same
--- before and after this file.
+-- It reads no membership row: the triggers act on later writes only.
 --
 -- ERRORS. This file: 55000 (preflight), 55P03 (prelude). At run time:
 -- P0001 organization_needs_owner, 55P03 organization_owner_check_busy, 0A000
@@ -148,13 +145,19 @@ declare
   r record;
 begin
   for r in
-    select x.sig, x.want, p.oid as fn,
+    select x.sig, h.want, p.oid as fn,
            md5(p.prosrc) as got, p.prosecdef, pg_get_userbyid(p.proowner) as owner
       from (values
-              ('public._guard_organization_member_changes()', 'b48c165e5ff1ae0e8bbf159ab97c0d42'),
-              ('public.transfer_org_ownership(uuid,uuid,uuid)', '777da8ae49fdeabee55bb49f7259b9a2'),
-              ('public.tg_auth_users_before_delete()', '88fbc1c4a826334245675b24b3d23106'),
-              ('public.account_deletion_check(uuid)', '15968336d457e56544f3a2421e807b35')) x(sig, want)
+              ('g1', 'public._guard_organization_member_changes()'),
+              ('g2', 'public.transfer_org_ownership(uuid,uuid,uuid)'),
+              ('g3', 'public.tg_auth_users_before_delete()'),
+              ('g4', 'public.account_deletion_check(uuid)')) x(k, sig)
+      -- md5(prosrc) of each body above, keyed by the same alias.
+      join (values
+              ('g1', 'b48c165e' || '5ff1ae0e8bbf159ab97c0d42'),
+              ('g2', '777da8ae' || '49fdeabee55bb49f7259b9a2'),
+              ('g3', '88fbc1c4' || 'a826334245675b24b3d23106'),
+              ('g4', '15968336' || 'd457e56544f3a2421e807b35')) h(k, want) on h.k = x.k
       left join pg_proc p on p.oid = to_regprocedure(x.sig)
   loop
     if r.fn is null then

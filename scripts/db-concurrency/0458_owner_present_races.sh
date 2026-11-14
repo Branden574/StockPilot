@@ -401,7 +401,7 @@ delete_as_gotrue 0458-race-5b-G "$U52" > "$TMP/5b.G.out" 2>&1
 wait "$PID"
 check "5b: the deletion committed (the member was not visible); the join was refused at its commit" \
   "$(has 'G=committed' "$TMP/5b.G.out")/$(has 'J=committed' "$TMP/5b.J.out")/$(has 'organization_needs_owner' "$TMP/5b.J.out")" "1/0/1"
-check "5b: the organization has no member and no owner (not one member and no owner)" \
+check "5b: the organization has no member and no owner" \
   "$(q "select count(*) from public.organization_members where organization_id = '$ORG5B'")/$(owners "$ORG5B")" "0/"
 
 # ═══ 6. GoTrue's role commits allowed deletions ══════════════════════════

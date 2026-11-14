@@ -732,6 +732,23 @@ describe('lateDeleteRefusal (desk check F-5; 0458)', () => {
     }
   });
 
+  // Only GoTrue's own 500 means its transaction ended. A 502, 503, 504 or 52x
+  // is written by the gateway: the delete may still be running.
+  it.each([502, 503, 504, 520, 524])(
+    'unknown for a %i (a gateway answer), whether the re-check answers deletable or a busy lock',
+    async (status) => {
+      for (const res of [
+        { data: { deletable: true }, error: null },
+        { data: { deletable: false, reason: 'blocked', sqlstate: '55P03' }, error: null },
+      ]) {
+        const { admin } = adminAnswering(res);
+        await expect(
+          lateDeleteRefusal(admin, 'u-1', 'web', { name: 'AuthRetryableFetchError', status, message: 'gateway' }),
+        ).resolves.toBe('unknown');
+      }
+    },
+  );
+
   it('unknown for any other answer (the delete failed for another reason: SP-008 stays)', async () => {
     for (const res of [
       { data: null, error: { code: 'PGRST301' } },

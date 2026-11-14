@@ -19,12 +19,13 @@
 --     search_path, owner and EXECUTE list (nobody); the codes it raises
 --     (never 40001 or 40P01); no function in any schema sets its own
 --     transaction isolation; the bodies the rule works with are unchanged;
---     the comments name 0458.
+--     the comments name 0458; the one function body that writes memberships
+--     and the roles that can write the table.
 -- B.  A real owner row stops being one while a real member remains: refused
 --     (P0001 organization_needs_owner, constraint organization_owner_present)
 --     for the service role (demote, delete, un-accept, make a seat, move to
---     another organization with no activity row, the invite acceptance's
---     upsert shape), a SECURITY DEFINER function owned by postgres, postgres
+--     another organization with no activity row, an insert with on
+--     conflict do update), a SECURITY DEFINER function owned by postgres, postgres
 --     itself, and deleting the owner's user_profiles row directly. One
 --     statement over two organizations, one of which keeps an owner: refused
 --     whole, nothing applied. A support seat never counts as the owner.
@@ -40,8 +41,8 @@
 --     owner's row when no other real member exists; creating an
 --     organization then its owner then a member (sign-up order), and a
 --     member then the owner in one transaction; seat insert and delete;
---     every non-owner change, which takes no advisory lock; any change to an
---     organization that already has members and no owner, except a join.
+--     every non-owner change, which takes no advisory lock; changes in the
+--     fixture with no owner row that are not a join.
 -- D.  The account-deletion dry run (account_deletion_check, 0388) and the
 --     real delete agree for a sole owner with staff, with a seat only, with a
 --     not-accepted row only, and for one of two owners; the dry run leaves no
@@ -55,7 +56,7 @@
 
 begin;
 
-select plan(72);
+select plan(74);
 
 \set orgA  '\'04580000-0000-0000-0000-00000000000a\''
 \set orgC  '\'04580000-0000-0000-0000-00000000000c\''
@@ -203,7 +204,7 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgF, :seat, 'owner', now(), now() + interval '1 hour'),
   -- H: the only owner and a support seat.
   (:orgH, :oH, 'owner', now(), null), (:orgH, :seat, 'owner', now(), now() + interval '1 hour'),
-  -- N2: members and no owner (a state this file never repairs): an admin, a
+  -- N2: a fixture with no owner row (for the join-side rows): an admin, a
   -- staff member, a member who has not accepted.
   (:orgN2, :aN2, 'admin', now(), null), (:orgN2, :sN2, 'staff', now(), null), (:orgN2, :pN2, 'staff', null, null),
   -- W: the only owner and a staff member (the second organization of B10).
@@ -242,7 +243,7 @@ select is(
           || p.provolatile::text || '|'
           || (select string_agg(a::text, ',' order by a::text collate "C") from unnest(p.proacl) a)
      from pg_proc p where p.oid = to_regprocedure('public.tg_organization_members_owner_present()')),
-  '6b65ec1b7b964cd4733b927dbed25604|true|{"search_path=\"\""}|postgres|v|postgres=X/postgres',
+  '6b65ec1b' || '7b964cd4733b927dbed25604|true|{"search_path=\"\""}|postgres|v|postgres=X/postgres',
   'T4: tg_organization_members_owner_present is 0458''s body, SECURITY DEFINER with an empty search_path, owned by postgres, EXECUTE held by nobody but its owner (a trigger function needs none to fire)');
 select is(
   (select has_function_privilege('anon', p.oid, 'EXECUTE')::text || ',' || has_function_privilege('authenticated', p.oid, 'EXECUTE')::text
@@ -271,7 +272,10 @@ select is(
      from (values (1, 'public._guard_organization_member_changes()'), (2, 'public.transfer_org_ownership(uuid,uuid,uuid)'),
                   (3, 'public.tg_auth_users_before_delete()'), (4, 'public.account_deletion_check(uuid)')) x(n, sig)
      join pg_proc p on p.oid = to_regprocedure(x.sig)),
-  'b48c165e5ff1ae0e8bbf159ab97c0d42,777da8ae49fdeabee55bb49f7259b9a2,88fbc1c4a826334245675b24b3d23106,15968336d457e56544f3a2421e807b35',
+  'b48c165e' || '5ff1ae0e8bbf159ab97c0d42,'
+  || '777da8ae' || '49fdeabee55bb49f7259b9a2,'
+  || '88fbc1c4' || 'a826334245675b24b3d23106,'
+  || '15968336' || 'd457e56544f3a2421e807b35',
   'T8: the guard, the transfer, the account trigger and the dry run keep the bodies the rule was written against (0393, 0393, 0393, 0388)');
 select is(
   (select coalesce(obj_description(to_regprocedure('public.tg_organization_members_owner_present()'), 'pg_proc') ~ '0458', false)::text)
@@ -280,6 +284,24 @@ select is(
               where t.tgrelid = 'public.organization_members'::regclass and t.tgname like 'organization\_members\_owner\_present\_%'),
   'true/true:4',
   'T9: the function and the four triggers say 0458 in their comments');
+-- The join side is checked for the API roles (current_user). T10 and T11 pin
+-- which function bodies write memberships and which roles can write the
+-- table: a new writer or a new grant fails here and gets its own review
+-- against this rule.
+select is(
+  (select coalesce(string_agg(n.nspname || '.' || p.proname, ',' order by 1), '')
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname <> 'zz_t0458' and n.nspname !~ '^pg_temp'
+      and p.prosrc ~* '(insert\s+into|merge\s+into|update|delete\s+from)\s+(only\s+)?(public\.)?"?organization_members"?\M'),
+  'public.transfer_org_ownership',
+  'T10: one function body in any schema writes organization_members (transfer_org_ownership; this file''s own fixture schema aside)');
+select is(
+  (select string_agg(r.rolname, ',' order by r.rolname)
+     from pg_roles r
+    where has_table_privilege(r.oid, 'public.organization_members'::regclass, 'INSERT')
+       or has_table_privilege(r.oid, 'public.organization_members'::regclass, 'UPDATE')),
+  'anon,authenticated,pg_write_all_data,postgres,service_role,supabase_admin',
+  'T11: the roles that can insert or update organization_members are the three API roles, the table owner, the superuser and the built-in write-all role');
 
 -- ══ B. A real owner row stops being one ═══════════════════════════════════
 select throws_ok(
@@ -316,7 +338,7 @@ select throws_ok(
          format('insert into public.organization_members (organization_id, user_id, role, accepted_at) values (%L, %L, ''viewer'', now())'
                 ' on conflict (organization_id, user_id) do update set role = excluded.role, accepted_at = excluded.accepted_at', :orgA, :oA)),
   'P0001', 'organization_needs_owner',
-  'B6: the invite acceptance''s upsert shape, written over the only owner''s row by the service role: refused');
+  'B6: an insert with on conflict do update that changes the only owner''s role, as the service role: refused');
 select throws_ok(
   format($q$select pg_temp.write_now('service_role', null, %L)$q$, format('select zz_t0458.demote(%L, %L)', :orgA, :oA)),
   'P0001', 'organization_needs_owner',
@@ -330,7 +352,7 @@ select throws_ok(
   format($q$select pg_temp.write_now('postgres', null, %L)$q$,
          format('delete from public.user_profiles where id = %L', :oA)),
   'P0001', 'organization_needs_owner',
-  'B9: deleting the only owner''s user_profiles row directly (the membership cascades; 0393''s rule sits on auth.users and is not met): refused');
+  'B9: deleting the only owner''s user_profiles row (the membership cascades): refused');
 select throws_ok(
   format($q$select pg_temp.write_now('service_role', null, %L)$q$,
          format('update public.organization_members set role = ''admin'' where user_id in (%L, %L)', :oC1, :oW)),
@@ -499,7 +521,7 @@ select is(
     format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgN2, :sN2),
     'select pg_temp.advisory()'),
   'ok:1:0 | ok:1:0',
-  'C11: an organization that already has members and no owner: an admin''s role change and removal pass and take no lock (its existing rows are never checked)');
+  'C11: in the fixture with no owner row, an admin''s role change and removal queue no check and take no lock');
 
 -- ══ D. The dry run and the real delete agree ══════════════════════════════
 select is(
@@ -654,7 +676,7 @@ select is(
     format('update public.organization_members set role = ''owner'' where organization_id = %L and user_id = %L', :orgN2, :sN2),
     'select pg_temp.advisory()'),
   'ok:1:0',
-  'C21: promoting a member to owner in an organization with no owner passes and takes no lock (the repair a platform admin makes)');
+  'C21: promoting a member to owner in an organization with no owner passes and takes no lock');
 select is(
   pg_temp.try_now('service_role', null,
     format('select public.transfer_org_ownership(%L, %L, %L)', :orgC, :oC1, :sC),

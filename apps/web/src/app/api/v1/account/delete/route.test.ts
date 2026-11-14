@@ -262,6 +262,27 @@ describe('POST /api/v1/account/delete', () => {
     );
   });
 
+  // A 502, 503, 504 or 52x is the gateway's answer: the delete may still be
+  // running, so the existing failure answer (500, sessions revoked) stays.
+  it.each([502, 503, 504, 520])('a %i from the gateway keeps the failure answer: 500, revoke, no audit row', async (status) => {
+    const stub = happyStub();
+    deleteUser.mockResolvedValueOnce({
+      error: { name: 'AuthRetryableFetchError', status, message: 'gateway' },
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub) as never);
+
+    const res = await POST(buildRequest({ confirm: 'DELETE' }));
+
+    expect(res.status).toBe(500);
+    expect(((await res.json()) as { error: string }).error).toBe('internal_error');
+    expect(revokeAllSessionsForUser).toHaveBeenCalledWith(USER_ID);
+    expect(insertAuditRowReported).not.toHaveBeenCalled();
+    expect(reportError).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'account.delete.auth_delete_transient' }),
+    );
+  });
+
   // Review R7 (2026-10-03): deleteUser can answer an error although the
   // account is gone. The phone used to get 500 "could not be deleted" and no
   // audit row was written; now the route asks GoTrue again.

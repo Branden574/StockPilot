@@ -1924,5 +1924,28 @@ describe('deleteOwnAccountAction', () => {
         expect.objectContaining({ tag: 'account.delete.auth_delete_failed' }),
       );
     });
+
+    // A 502, 503, 504 or 52x is the gateway's answer, not the auth server's:
+    // the delete may still be running, so the existing signed-out answer stays.
+    it.each([502, 503, 504, 520])(
+      'a %i from the gateway keeps SP-008 although the re-check answers deletable',
+      async (status) => {
+        adminAuth.deleteUser.mockImplementationOnce(async () => ({
+          error: { name: 'AuthRetryableFetchError', status, message: 'gateway' },
+        }));
+        adminRpc
+          .mockImplementationOnce(async () => ({ data: { deletable: true }, error: null }))
+          .mockImplementationOnce(async () => ({ data: { deletable: true }, error: null }));
+        const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.error.message).toBe(ACCOUNT_DELETE_SIGNED_OUT_COPY);
+        expect(revokeAllSessionsForUserMock).toHaveBeenCalledWith('user-1');
+        expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
+        expect(reportErrorMock).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ tag: 'account.delete.auth_delete_transient' }),
+        );
+      },
+    );
   });
 });
