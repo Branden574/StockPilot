@@ -226,7 +226,8 @@ export async function GET(req: Request) {
         const subject = weeklyDigestSubject(runStartedAt, group.timeZone);
         // One org-wide read (the service role sees every row), plus what
         // decides each recipient's view: their warehouse and category
-        // assignments and the purchase_orders:read permission. A failed read
+        // assignments and the purchase_orders:read, cycle_counts:read and
+        // stock:adjust permissions. A failed read
         // throws to the per-org catch below, so nobody in the org is sent a
         // wider view than theirs.
         //

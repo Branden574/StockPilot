@@ -423,9 +423,12 @@ export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Perm
   // bundles / returns SELECT policies allow any active org member; schedule
   // allows org members (with a warehouse condition); rentals and (since S48)
   // cycle_counts reads are warehouse-scoped like items:read, so an auditor
-  // who needs every warehouse gets the all-warehouses flag. Within the
-  // member's warehouses the app-layer gate is the sole restriction, so a
-  // grant is fully effective there.
+  // who needs every warehouse gets the all-warehouses flag. For bundles,
+  // returns, schedule and rentals, within the member's warehouses the
+  // app-layer gate is the sole restriction, so a grant is fully effective
+  // there. cycle_counts and cycle_count_lines also ask, in the database,
+  // for cycle_counts:read or stock:adjust (0460), so this grant is what lets
+  // an auditor's reads through there too.
   'cycle_counts:read',
   'schedule:read',
   'bundles:read',

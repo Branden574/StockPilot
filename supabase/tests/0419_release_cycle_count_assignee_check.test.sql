@@ -382,8 +382,8 @@ select is(
 select is(
   pg_temp.each(array['asg', 'stf', 'vwr', 'noAdj', 'rmv', 'dis', 'exp', 'outZ', 'nobody'],
                format('select 1 from public.cycle_counts where id = %L', :cUn)),
-  'asg=ok:1, stf=ok:1, vwr=ok:1, noAdj=ok:1, rmv=ok:0, dis=ok:0, exp=ok:0, outZ=ok:0, nobody=ok:0',
-  'F3: row level security (cycle_counts_select, is_org_member) shows cUn to organization A''s members and to no one else: a row release_cycle_count returns to an outsider is read past it');
+  'asg=ok:1, stf=ok:1, vwr=ok:0, noAdj=ok:1, rmv=ok:0, dis=ok:0, exp=ok:0, outZ=ok:0, nobody=ok:0',
+  'F3: row level security (cycle_counts_select) shows cUn to organization A''s members who hold a count permission (since 0460 the viewer, who holds neither cycle_counts:read nor stock:adjust, reads it no more; noAdj keeps cycle_counts:read) and to no one else: a row release_cycle_count returns to an outsider is read past it');
 
 -- Everything below must leave this unchanged (Z1): every attempt is undone.
 create function pg_temp.state() returns text language sql stable as $$
