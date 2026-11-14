@@ -877,6 +877,11 @@ PGTAP_TESTS=(
   # sync log entry, a notification endpoint, a public request link, a queued
   # event, a supplier or a charter (tg_organization_id_fixed on each table).
   supabase/tests/0463_organization_fixed_on_connected_records.test.sql
+  # Connection records (0465): a mapping and a sync log entry name a
+  # connection and a queued event of their own organization (connection_in_org,
+  # outbox_event_in_org), a connection names only the Vault secret stored for
+  # it and only the server sets it, and the Vault reads check the row.
+  supabase/tests/0465_connection_records_in_their_organization.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

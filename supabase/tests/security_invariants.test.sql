@@ -174,6 +174,8 @@ insert into _sec_inv_auth_secdef_nogate_allow (proname, why) values
   ('supplier_in_org',             'boolean FK-org predicate used by write RLS'),
   ('warehouse_in_org',            'boolean FK-org predicate used by write RLS'),
   ('bin_in_org',                  'boolean FK-org predicate used by write RLS (inventory_stock, putaway_moves); warehouse_in_org''s body for bins'),
+  ('connection_in_org',           'boolean FK-org predicate used by write RLS (connection_mappings, connection_sync_log); bin_in_org''s body for connections'),
+  ('outbox_event_in_org',         'boolean FK-org predicate used by write RLS (connection_sync_log); bin_in_org''s body for queued events'),
   ('purchase_order_in_org',       'boolean FK-org predicate used by write RLS'),
   ('product_group_in_org',        'boolean FK-org predicate used by write RLS (0294+)'),
   ('module_enabled',              'boolean entitlement read (organization_modules row, OR organizations.all_modules_comp answered only to that org''s members, 0354) evaluated inside RLS/RPCs'),
