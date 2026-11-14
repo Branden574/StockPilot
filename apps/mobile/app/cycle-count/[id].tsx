@@ -48,15 +48,18 @@ import {
   rememberedCloseGate,
   type CloseGateState,
 } from '@/lib/count-close-gate';
-import { countNotClearedAlert, countNotSavedAlert } from '@/lib/count-save-refusal';
-import { showWriteCta } from '@/lib/cta-gating';
+import {
+  createLineGoneNotice,
+  countNotClearedAlert,
+  countNotSavedAlert,
+} from '@/lib/count-save-refusal';
 import { notACountMessage } from '@/lib/count-box-words';
 import { footerReservation } from '@/lib/dynamic-type-layout';
-import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import {
   cacheCycleCount,
   cacheWriteScope,
   clearLocalLine,
+  countStoredForLiveAccount,
   getCycleCount,
   pendingCountFor,
   updateLocalLine,
@@ -77,6 +80,25 @@ import { createDraftDebouncer } from '@/lib/draft-debouncer';
 import { reportPhoneSaveFailure } from '@/lib/phone-save-report';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
+import {
+  type CountLoadKey,
+  countLoadClearsScreen,
+  countAnswerStillShown,
+  countLoadDraftAction,
+  countReloadIsQuiet,
+} from '@/lib/count-access-refresh';
+import { countReadFailedView } from '@/lib/count-read-failed';
+import {
+  CYCLE_COUNTS_NOT_AVAILABLE,
+  NOT_SYNCED_YET,
+  SAVED_ACCESS_UNREADABLE,
+} from '@/lib/screen-access';
+import {
+  retrySavedAccess,
+  useCreateControlOffer,
+  useDrawerEntryAccess,
+} from '@/lib/use-screen-access';
+import { retryWorkspace } from '@/lib/use-workspace';
 import { FONT, RADIUS, TYPE_CEILING, capTo, radius, space } from '@/lib/theme';
 import { useHoldAppearanceAdoptionWhileFocused } from '@/lib/appearance/use-adoption-hold';
 import { useTheme } from '@/lib/use-theme';
@@ -220,18 +242,33 @@ export default function CycleCountDetail() {
   }, [router]);
   // Counting + posting are WRITES (stock:adjust). A cycle_counts:read-only
   // viewer gets a read-only view: inputs frozen, no post footer — mirroring
-  // the web detail's canAdjust=false mode. The API enforces server-side;
-  // while permissions load, entry stays enabled.
-  const perms = useEffectivePermissions();
-  const canWrite = showWriteCta(perms, 'stock:adjust');
+  // the web detail's canAdjust=false mode. The API enforces server-side.
+  // Both follow the create-control rule (screen-access.ts createControlOffer):
+  // the saved set when this account has one here; before the first sync, the
+  // role's defaults once the role is known (a viewer's do not hold
+  // stock:adjust). While that is not settled, entry stays enabled.
+  const writeOffer = useCreateControlOffer('stock:adjust');
+  const canWrite = writeOffer !== 'hidden';
   // Manager+ proxy: only manager/admin/owner hold cycle_counts:assign, and the
-  // server 0282 lock lets managers override the assignee. Used below.
-  const canManage = showWriteCta(perms, 'cycle_counts:assign');
+  // server 0282 lock lets managers override the assignee. Used below. Shown
+  // only when offered: staff's defaults do not hold it, so a staff member is
+  // never offered Reassign before the first sync.
+  const assignOffer = useCreateControlOffer('cycle_counts:assign');
+  const canManage = assignOffer === 'offered';
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const syncSnapshot = useSyncStatus();
 
-  const { orgId } = useOrg();
+  const { orgId, loading: workspaceLoading } = useOrg();
+  // Only "no workspace yet, and its load still running" decides anything
+  // here. The hook also reports loading while a workspace is shown (a token
+  // refresh, another screen using it mounting): that must not make a new
+  // load, which would blank the count to its spinner and fetch it twice.
+  const waitingForWorkspace = !orgId && workspaceLoading;
+  // Whether this member may see cycle counts (the side menu's rule, decided
+  // once the saved permissions and modules are read: screen-access.ts). Asked
+  // before the copy on this phone or the database is read.
+  const access = useDrawerEntryAccess('/cycle-counts');
   // The organization's timezone for the "Counted offline <time>" label, so
   // the phone and the web review name the same moment. Fail-soft: without it
   // (offline, a refused read) the device's own zone is used.
@@ -315,13 +352,38 @@ export default function CycleCountDetail() {
     () => new Map(),
   );
 
+  // How many times OK was answered on "Count not saved" for a line no longer
+  // on this phone (lineSaver below is created once and can only set state;
+  // the effect after loadOnce reloads or leaves).
+  const [lineGoneAnswered, setLineGoneAnswered] = React.useState(0);
+
+  // What the last load ran for: the count, the workspace, the account and the
+  // access (count-access-refresh.ts CountLoadKey), set by the load effect
+  // below. Every answer on this screen that lands after an await notes the
+  // key it started under and is dropped when the key has changed since
+  // (countAnswerStillShown): the screen has cleared what it drew and reads
+  // again for the key it has now, so an answer read for another account,
+  // workspace or count is never drawn over it.
+  const lastLoadKey = React.useRef<CountLoadKey | null>(null);
+
   // Debounced local saves (updateLocalLine + the outbox row), FLUSHED on
   // unmount: a count typed within SAVE_DEBOUNCE_MS of leaving the screen used
   // to be dropped (see draft-debouncer.ts). Created once; the save touches
-  // only stable state setters and module functions.
+  // only stable state setters, module functions and lastLoadKey, which it
+  // reads when a save runs, never while the screen renders.
+  const [lineGoneNotice] = React.useState(() =>
+    createLineGoneNotice((title, message, buttons, options) =>
+      Alert.alert(title, message, buttons, options),
+    ),
+  );
+  // eslint-disable-next-line react-hooks/refs -- lastLoadKey is read inside the debounced save, after render, never during it
   const [lineSaver] = React.useState(() => {
     const saver = createDraftDebouncer(SAVE_DEBOUNCE_MS, (lineId, raw) => {
       void (async () => {
+        // The key the save is made under: what it answers is drawn, or said,
+        // only while the screen still shows it.
+        const savedUnder = lastLoadKey.current;
+        const stillHere = () => countAnswerStillShown(savedUnder, lastLoadKey.current);
         const num = countFromBox(raw);
         if (num === null) {
           // An emptied box clears the line's saved count, as the web count
@@ -340,6 +402,7 @@ export default function CycleCountDetail() {
             // empty over a line that keeps its count, so Post still waits for
             // it, and Try again clears it again.
             reportPhoneSaveFailure(e, 'cycle-count.clear');
+            if (!stillHere()) return;
             const { title, message } = countNotClearedAlert(e);
             Alert.alert(title, message, [
               { text: 'Cancel', style: 'cancel' },
@@ -347,6 +410,7 @@ export default function CycleCountDetail() {
             ]);
             return;
           }
+          if (!stillHere()) return;
           if (cleared) {
             setLines((curr) =>
               curr.map((l) =>
@@ -363,8 +427,9 @@ export default function CycleCountDetail() {
           return;
         }
 
+        let queued: Awaited<ReturnType<typeof updateLocalLine>>;
         try {
-          await updateLocalLine(lineId, num);
+          queued = await updateLocalLine(lineId, num);
         } catch (e) {
           // Not saved and not queued: the outbox refused it (no account, or
           // the workspace still loading) or the phone's store failed. Said
@@ -373,11 +438,21 @@ export default function CycleCountDetail() {
           // reported to the team (phone-save-report.ts), as it was when it
           // escaped unhandled.
           reportPhoneSaveFailure(e, 'cycle-count.save');
+          if (!stillHere()) return;
           const { title, message } = countNotSavedAlert(e);
           Alert.alert(title, message, [
             { text: 'Cancel', style: 'cancel' },
             { text: 'Try again', onPress: () => saver.schedule(lineId, raw) },
           ]);
+          return;
+        }
+        if (!stillHere()) return;
+        if (queued === null) {
+          // The line is no longer in this phone's copy of the count: nothing
+          // was saved or queued, so nothing is marked saved. Said, once at a
+          // time and never after the screen closed; OK loads the count again
+          // or leaves (reloadAfterLineGone).
+          lineGoneNotice.say(() => setLineGoneAnswered((n) => n + 1));
           return;
         }
         setLines((curr) =>
@@ -433,6 +508,32 @@ export default function CycleCountDetail() {
   // of it: load() below runs a second when the cache discarded the first.
   const loadOnce = React.useCallback(async (): Promise<LoadPass> => {
     if (!id) return;
+    // The key this pass started under: after each await, an answer for a key
+    // the screen no longer shows is dropped (countAnswerStillShown).
+    const startedUnder = lastLoadKey.current;
+    const stillHere = () => countAnswerStillShown(startedUnder, lastLoadKey.current);
+    // Not before it is known (the spinner stays; this runs again once it is),
+    // and not at all for a member who may not see cycle counts, or when what
+    // the phone saved about the member's access could not be read (said, with
+    // Retry, never a spinner that does not end).
+    if (access === 'unknown') return;
+    if (access === 'denied' || access === 'unreadable') {
+      setReadError(access === 'denied' ? CYCLE_COUNTS_NOT_AVAILABLE : SAVED_ACCESS_UNREADABLE);
+      setEmptyState('read-failed');
+      setLoading(false);
+      return;
+    }
+    // Not synced yet for this member (screen-access.ts): of what is stored,
+    // only a count this account fetched from the server in this workspace.
+    let mayReadStored = access === 'allowed';
+    if (access === 'not-synced') {
+      try {
+        mayReadStored = await countStoredForLiveAccount(id);
+      } catch {
+        mayReadStored = false;
+      }
+      if (!stillHere()) return;
+    }
 
     // The copy saved on this phone. A read that fails is said, never a
     // spinner that does not end: load() is fire-and-forget, so a throw here
@@ -440,10 +541,13 @@ export default function CycleCountDetail() {
     // Online, the fetch below still runs (and stores and re-reads the count).
     let cached: Awaited<ReturnType<typeof getCycleCount>> = null;
     let cacheUnreadable = false;
-    try {
-      cached = await getCycleCount(id);
-    } catch {
-      cacheUnreadable = true;
+    if (mayReadStored) {
+      try {
+        cached = await getCycleCount(id);
+      } catch {
+        cacheUnreadable = true;
+      }
+      if (!stillHere()) return;
     }
     if (cached) {
       hydrateFromSnapshot(cached);
@@ -457,13 +561,20 @@ export default function CycleCountDetail() {
     } catch {
       online = true;
     }
+    if (!stillHere()) return;
 
     if (!online) {
+      // The linked exceptions are read online only: none are kept from an
+      // earlier read.
+      setLinked({ kind: 'none' });
       if (!cached) {
         // "Not cached" only when the phone's store answered that it has no
         // copy; a store that could not be read says so.
         if (cacheUnreadable) {
           setReadError(COUNT_UNREADABLE_ON_PHONE);
+          setEmptyState('read-failed');
+        } else if (access === 'not-synced') {
+          setReadError(NOT_SYNCED_YET);
           setEmptyState('read-failed');
         } else {
           setEmptyState('offline-uncached');
@@ -472,7 +583,23 @@ export default function CycleCountDetail() {
       }
       return;
     }
-    if (!orgId) return;
+    if (!orgId) {
+      // Still loading the workspace (a cold start): the spinner stays, and
+      // this runs again when the load ends (waitingForWorkspace is in its deps).
+      if (waitingForWorkspace) return;
+      // Online with no workspace known for this account once the load has
+      // ended (a first sign-in offline, then the connection back): with no
+      // copy on screen, said with Retry, never a spinner that does not end.
+      // The workspace is asked for again; when it arrives, the load runs again
+      // for it.
+      if (!cached) {
+        setReadError(NOT_SYNCED_YET);
+        setEmptyState('read-failed');
+        setLoading(false);
+      }
+      void retryWorkspace();
+      return;
+    }
 
     // The cache and the account this fetch is for, noted before it is sent:
     // an answer that lands after a sign-out, a workspace switch or another
@@ -495,6 +622,7 @@ export default function CycleCountDetail() {
       // the missing lines were uncountable and got cached that way.
       fetchAllCycleCountLines(supabase, id),
     ]);
+    if (!stillHere()) return;
 
     if (ccErr || lErr || !cc) {
       // Couldn't fetch — if we already have a cache hit, just show it (the
@@ -611,11 +739,15 @@ export default function CycleCountDetail() {
     // 'discarded', and load() runs one more, under a fresh note, which stores
     // the count for the same account in the same cache.
     try {
-      if (!(await cacheCycleCount(fetchedHeader, fetchedLines, fetchedUnder))) return 'discarded';
+      if (!(await cacheCycleCount(fetchedHeader, fetchedLines, fetchedUnder))) {
+        return stillHere() ? 'discarded' : undefined;
+      }
       const fresh = await getCycleCount(id);
+      if (!stillHere()) return;
       if (fresh) hydrateFromSnapshot(fresh);
     } catch (e) {
       console.warn('[cycle-count] could not store the count on this phone', e);
+      if (!stillHere()) return;
       if (!cached) {
         setReadError('This count could not be saved on this phone.');
         setEmptyState('read-failed');
@@ -627,13 +759,47 @@ export default function CycleCountDetail() {
     // them). An answer for another workspace is never shown.
     try {
       const links = await getCountLinkedExceptions(id);
+      if (!stillHere()) return;
       setLinked(
         links.organizationId === orgId ? { kind: 'ready', data: links } : { kind: 'failed' },
       );
     } catch {
+      if (!stillHere()) return;
       setLinked({ kind: 'failed' });
     }
-  }, [id, orgId]);
+  }, [id, orgId, access, waitingForWorkspace]);
+
+  /**
+   * After a count the phone could not store because its line is no longer in
+   * this phone's copy (COUNT_LINE_NOT_SAVED): the count is read again from the
+   * server while it is still on this phone and open to this member; otherwise
+   * the screen is left.
+   */
+  async function reloadAfterLineGone() {
+    const startedUnder = lastLoadKey.current;
+    let onPhone: Awaited<ReturnType<typeof getCycleCount>> = null;
+    if ((access === 'allowed' || access === 'not-synced') && id) {
+      try {
+        // Not synced yet: only a count this account fetched here (as loadOnce).
+        if (access === 'allowed' || (await countStoredForLiveAccount(id))) {
+          onPhone = await getCycleCount(id);
+        }
+      } catch {
+        onPhone = null;
+      }
+    }
+    // The screen shows another count, workspace or account by now: its own
+    // load runs for that.
+    if (!countAnswerStillShown(startedUnder, lastLoadKey.current)) return;
+    if (!onPhone) {
+      leave();
+      return;
+    }
+    setLoading(true);
+    setReadError(null);
+    setEmptyState('none');
+    void load();
+  }
 
   /** The count's load: one pass, and a second, under a fresh note, when the
    *  cache discarded what the first fetched (see the store in loadOnce).
@@ -641,22 +807,84 @@ export default function CycleCountDetail() {
    *  show a copy: what the cache discards belongs to an account, a workspace
    *  or a cache this screen no longer has, and so does what it read before. */
   const load = React.useCallback(async () => {
-    if ((await loadOnce()) !== 'discarded') return;
-    if ((await loadOnce()) !== 'discarded') return;
+    // A second pass, or the words, only while the screen still shows the key
+    // the load started under: a pass for another key is that key's own load.
+    const startedUnder = lastLoadKey.current;
+    const stillHere = () => countAnswerStillShown(startedUnder, lastLoadKey.current);
+    if ((await loadOnce()) !== 'discarded' || !stillHere()) return;
+    if ((await loadOnce()) !== 'discarded' || !stillHere()) return;
     setReadError(COUNT_NOT_SAVED_AFTER_A_CHANGE);
     setEmptyState('read-failed');
     setLoading(false);
   }, [loadOnce]);
 
+  // OK on "Count not saved" for a line no longer on this phone.
+  const onLineGoneAnswered = React.useEffectEvent(() => {
+    void reloadAfterLineGone();
+  });
   React.useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount AND dep-change re-run: the flag resets are pre-await by necessity (the spinner must show during the fetch; a workspace switch re-runs this with stale content otherwise); everything else is post-await
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- answers OK on a dialog: every set in reloadAfterLineGone is after its await
+    if (lineGoneAnswered > 0) onLineGoneAnswered();
+  }, [lineGoneAnswered]);
+
+  // What the last load ran for, and what is on screen now: when the phone
+  // finishes syncing while a count it fetched is on screen (not synced yet ->
+  // allowed), the count is read again in place, with no spinner and nothing
+  // on screen reset (count-access-refresh.ts countReloadIsQuiet), so a
+  // counter who is typing keeps the keyboard, the list and the drafts. A
+  // full load for another count, workspace or account than the one on screen
+  // clears the header and the lines first (countLoadClearsScreen): a read
+  // that finds nothing never leaves the previous one drawn. The key names the
+  // account, and the load runs again when it changes.
+  const loadKeyNow = React.useEffectEvent(() => ({
+    key: { id, orgId, userId, access },
+    linesShown: lines.length > 0,
+  }));
+  React.useEffect(() => {
+    const { key, linesShown } = loadKeyNow();
+    const quiet = countReloadIsQuiet(lastLoadKey.current, key, linesShown);
+    const clear = countLoadClearsScreen(lastLoadKey.current, key);
+    const drafts = countLoadDraftAction(lastLoadKey.current, key);
+    lastLoadKey.current = key;
+    if (quiet) {
+      void load();
+      return;
+    }
+    if (clear) {
+      // The counts typed and not saved yet go with the screen: dropped unsent
+      // for another account or workspace, saved now for the same ones
+      // (count-access-refresh.ts countLoadDraftAction).
+      if (drafts === 'drop') lineSaver.dropAll();
+      else lineSaver.flushAll();
+      setDraft({});
+      setHeader(null);
+      setLines([]);
+      // Every other state read for the count on screen goes with it: the
+      // linked exceptions (their chips match lines by item, so another
+      // count's would show on lines that share an item), the server's line
+      // locations, the scope, the conflict banner, and the Post gate (the one
+      // remembered for this account and workspace, or loading). The Reassign
+      // and Release sheets opened for it close.
+      setLinked({ kind: 'none' });
+      setServerLocations(new Map());
+      setScope(null);
+      setConflictBanner(null);
+      const knownGate = rememberedCloseGate(key.userId, key.orgId);
+      setCloseGate(knownGate ? { kind: 'known', gate: knownGate } : { kind: 'loading' });
+      setReassignOpen(false);
+      setReleaseOpen(false);
+    }
+    // Fetch-on-mount AND dep-change re-run: the flag resets are pre-await by
+    // necessity (the spinner must show during the fetch; a workspace switch
+    // re-runs this with stale content otherwise); everything else is post-await.
     setLoading(true);
     setReadError(null);
     setEmptyState('none');
     void load();
-  }, [load]);
+  }, [load, userId, lineSaver]);
 
-  // Refresh per-cycle pending count whenever the global sync state changes.
+  // Refresh per-cycle pending count whenever the global sync state changes,
+  // and for another account: a read for one account is never set for the next.
   React.useEffect(() => {
     if (!id) return;
     let cancelled = false;
@@ -667,7 +895,7 @@ export default function CycleCountDetail() {
     return () => {
       cancelled = true;
     };
-  }, [id, syncSnapshot.pendingCount, syncSnapshot.status]);
+  }, [id, userId, syncSnapshot.pendingCount, syncSnapshot.status]);
 
   // The Post gate, read whenever the screen is online (a role changed since
   // is picked up on the next open). Every set is post-await.
@@ -694,9 +922,14 @@ export default function CycleCountDetail() {
   // cancelling it. The state updates the save makes afterwards land on an
   // unmounted screen and are ignored; the local write and the outbox row are
   // what matter.
+  // The notice closes first: a save flushed here that finds its line gone
+  // says nothing on a screen that has gone.
   React.useEffect(() => {
-    return () => lineSaver.flushAll();
-  }, [lineSaver]);
+    return () => {
+      lineGoneNotice.close();
+      lineSaver.flushAll();
+    };
+  }, [lineSaver, lineGoneNotice]);
 
   function setDraftValue(lineId: string, v: string) {
     setDraft((d) => ({ ...d, [lineId]: v }));
@@ -707,6 +940,10 @@ export default function CycleCountDetail() {
 
   async function postCount() {
     if (!header) return;
+    // Posted only for the key the person asked under, and said only while the
+    // screen still shows it.
+    const startedUnder = lastLoadKey.current;
+    const stillHere = () => countAnswerStillShown(startedUnder, lastLoadKey.current);
     // Only on a known yes (the footer shows no Post otherwise).
     if (closeGateView.kind !== 'known' || !closeGateView.gate.canPost) return;
     if (syncSnapshot.status === 'offline') {
@@ -747,6 +984,7 @@ export default function CycleCountDetail() {
     } catch {
       // The phone's outbox could not be read: the tally on screen decides.
     }
+    if (!stillHere()) return;
     if (unsaved || pending > 0) {
       Alert.alert(
         'Sync first',
@@ -770,7 +1008,7 @@ export default function CycleCountDetail() {
         ],
       );
     });
-    if (!proceed) return;
+    if (!proceed || !stillHere()) return;
 
     setPosting(true);
     try {
@@ -786,6 +1024,7 @@ export default function CycleCountDetail() {
       // message is shown as-is; postCycleCountErrorMessage stays as the
       // FALLBACK for anything that still arrives as a raw code (0339's
       // stale_line / negative_result among them).
+      if (!stillHere()) return;
       Alert.alert(
         'Could not post',
         postCycleCountErrorMessage(e instanceof Error ? e.message : null),
@@ -794,6 +1033,7 @@ export default function CycleCountDetail() {
     } finally {
       setPosting(false);
     }
+    if (!stillHere()) return;
     Alert.alert('Posted', 'Variance adjustments applied.');
     leave();
   }
@@ -834,6 +1074,7 @@ export default function CycleCountDetail() {
   });
 
   if (emptyState === 'read-failed') {
+    const failedView = countReadFailedView(readError);
     return (
       <SafeAreaView
         style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}
@@ -863,23 +1104,33 @@ export default function CycleCountDetail() {
           <Text
             style={[styles.emptyTitle, { color: c.ink }, lg && glassCountStyles(lg).emptyTitle]}
           >
-            Could not load this count
+            {failedView.title}
           </Text>
           <Text style={[styles.emptyBody, { color: c.ink3 }, lg && glassCountStyles(lg).emptyBody]}>
             {readError}
-            {'\n\n'}If the app was just updated, the server may still be catching up.
+            {failedView.catchingUpNote ? (
+              <>{'\n\n'}If the app was just updated, the server may still be catching up.</>
+            ) : null}
           </Text>
           <Button
             variant="outline"
             style={styles.retry}
             onPress={() => {
+              // Denied: nothing to try again, Back leaves.
+              if (failedView.action === 'back') {
+                leave();
+                return;
+              }
               setLoading(true);
               setReadError(null);
               setEmptyState('none');
-              void load();
+              // Unreadable: the saved access is read again first (a change
+              // of it loads the count again on its own, too).
+              if (failedView.rereadAccess) void retrySavedAccess().then(() => load());
+              else void load();
             }}
           >
-            Retry
+            {failedView.action === 'back' ? 'Back' : 'Retry'}
           </Button>
         </View>
       </SafeAreaView>

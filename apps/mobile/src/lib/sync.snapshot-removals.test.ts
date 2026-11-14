@@ -58,8 +58,10 @@ vi.mock('./db', () => ({
   currentCacheGeneration: () => meta.generation,
   // The queue itself is tested in db.transaction-queue.test.ts; here a
   // transaction is just the fake db's own.
-  withDbTransaction: (db: { withTransactionAsync: (t: () => Promise<void>) => Promise<void> }, task: () => Promise<void>) =>
-    db.withTransactionAsync(task),
+  withDbTransaction: (
+    db: { withTransactionAsync: (t: () => Promise<void>) => Promise<void> },
+    task: () => Promise<void>,
+  ) => db.withTransactionAsync(task),
   getMeta: async (k: string) => meta.store.get(k) ?? null,
   setMeta: async (k: string, v: string) => {
     meta.store.set(k, v);
@@ -104,10 +106,12 @@ vi.mock('./account-disabled-state', () => ({ getAccountDisabled: () => false }))
 vi.mock('./enabled-modules', () => ({
   ENABLED_MODULES_META_KEY: 'enabled_modules',
   refreshEnabledModules: vi.fn(),
+  rereadFailedEnabledModules: vi.fn(async () => undefined),
 }));
 vi.mock('./use-effective-permissions', () => ({
   EFFECTIVE_PERMISSIONS_META_KEY: 'effective_permissions',
   refreshEffectivePermissions: vi.fn(),
+  rereadFailedEffectivePermissions: vi.fn(async () => undefined),
 }));
 vi.mock('./warehouse-scope', () => ({
   WAREHOUSE_SCOPE_META_KEY: 'warehouse_scope',
@@ -335,6 +339,48 @@ async function fullPull(snap: Snap) {
   await pullSnapshot(true);
 }
 
+describe('the saved permission set a pull writes (S75)', () => {
+  // Every writer of the key: this pull, fetchEffectivePermissions
+  // (use-effective-permissions.ts) and the wipes that delete it (db.ts). An
+  // empty list from the server is the member's answer (the server refuses a
+  // request whose permissions it cannot read), so it is saved as an empty
+  // set; a snapshot that carries no list at all leaves the saved set as it is.
+  it('an empty list is saved as an empty set', async () => {
+    meta.store.set('effective_permissions', '["items:read"]');
+    await deltaPull(emptySnap({ permissions: [] }));
+    expect(meta.store.get('effective_permissions')).toBe('[]');
+  });
+
+  it('a list is saved as it came', async () => {
+    await deltaPull(emptySnap({ permissions: ['items:read', 'items:create'] }));
+    expect(meta.store.get('effective_permissions')).toBe('["items:read","items:create"]');
+  });
+
+  it('no list at all: the saved set stays as it is, and nothing is written for it', async () => {
+    meta.store.set('effective_permissions', '["items:read"]');
+    await deltaPull(emptySnap());
+    expect(meta.store.get('effective_permissions')).toBe('["items:read"]');
+    meta.store.delete('effective_permissions');
+    await deltaPull(emptySnap());
+    expect(meta.store.has('effective_permissions')).toBe(false);
+  });
+});
+
+describe('a saved-access read that failed is read again at the end of every pull (S75)', () => {
+  it('whether or not the saved sets changed', async () => {
+    const modules = await import('./enabled-modules');
+    const permissions = await import('./use-effective-permissions');
+    const failedModules = vi.mocked(modules.rereadFailedEnabledModules);
+    const failedPermissions = vi.mocked(permissions.rereadFailedEffectivePermissions);
+    failedModules.mockClear();
+    failedPermissions.mockClear();
+    await deltaPull(emptySnap({ permissions: ['items:read'] }));
+    await deltaPull(emptySnap({ permissions: ['items:read'] }));
+    expect(failedModules).toHaveBeenCalledTimes(2);
+    expect(failedPermissions).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('cycle counts — reconciled on EVERY pull', () => {
   /**
    * The server's cycle-count query carries NO `since` filter (snapshot/route.ts
@@ -381,7 +427,9 @@ describe('items + bundles — reconciled against a FULL pull', () => {
    * Only a full pull carries the complete active set.
    */
   it('a delta pull must NOT delete rows it simply did not carry', async () => {
-    await deltaPull(emptySnap({ items: [item('i-keep')], bundles: [bundle('b-live', 'Live kit')] }));
+    await deltaPull(
+      emptySnap({ items: [item('i-keep')], bundles: [bundle('b-live', 'Live kit')] }),
+    );
     expect(ids('select id from items order by id')).toEqual(['i-archived', 'i-keep']);
     expect(ids('select id from bundles order by id')).toEqual(['b-archived', 'b-live']);
   });
@@ -390,8 +438,9 @@ describe('items + bundles — reconciled against a FULL pull', () => {
     await fullPull(emptySnap({ items: [item('i-keep')], bundles: [bundle('b-live', 'Live kit')] }));
     expect(ids('select id from bundles order by id')).toEqual(['b-live']);
     expect(
-      (sqlite.prepare('select bundle_id from bundle_components').all() as { bundle_id: string }[])
-        .map((r) => r.bundle_id),
+      (
+        sqlite.prepare('select bundle_id from bundle_components').all() as { bundle_id: string }[]
+      ).map((r) => r.bundle_id),
     ).toEqual(['b-live']);
     expect(ids('select id from items order by id')).toEqual(['i-keep']);
   });
@@ -419,8 +468,9 @@ describe('explicit server removal lists (forward-compatible)', () => {
     await deltaPull(emptySnap({ bundles: [], activeBundleIds: ['b-live'] }));
     expect(ids('select id from bundles order by id')).toEqual(['b-live']);
     expect(
-      (sqlite.prepare('select bundle_id from bundle_components').all() as { bundle_id: string }[])
-        .map((r) => r.bundle_id),
+      (
+        sqlite.prepare('select bundle_id from bundle_components').all() as { bundle_id: string }[]
+      ).map((r) => r.bundle_id),
     ).toEqual(['b-live']);
   });
 
@@ -471,10 +521,16 @@ describe('a cache wipe while a snapshot is loading (workspace switch, repair or 
       delete from warehouses; delete from items; delete from bundles; delete from bundle_components;
       delete from cycle_counts; delete from cycle_count_lines;
     `);
-    for (const k of ['last_synced_at', 'enabled_modules', 'effective_permissions', 'warehouse_scope']) meta.store.delete(k);
+    for (const k of [
+      'last_synced_at',
+      'enabled_modules',
+      'effective_permissions',
+      'warehouse_scope',
+    ])
+      meta.store.delete(k);
   };
 
-  it("discards an answer that lands after the wipe: no rows, no cursor, no modules", async () => {
+  it('discards an answer that lands after the wipe: no rows, no cursor, no modules', async () => {
     apiMock.api.mockImplementation(async () => {
       askForWipe();
       runWipe();
@@ -510,7 +566,14 @@ describe('a cache wipe while a snapshot is loading (workspace switch, repair or 
 
   const fourItems = () =>
     ['i-1', 'i-2', 'i-3', 'i-4'].map((id) => ({
-      id, sku: id, name: id, barcode: null, quantityOnHand: 1, unitCost: 0, warehouseId: 'wh1', itemType: 'standard',
+      id,
+      sku: id,
+      name: id,
+      barcode: null,
+      quantityOnHand: 1,
+      unitCost: 0,
+      warehouseId: 'wh1',
+      itemType: 'standard',
     }));
 
   it('a wipe asked for mid-write stops the pull at the next row; the queued wipe clears what it wrote', async () => {
@@ -546,7 +609,9 @@ describe('a cache wipe while a snapshot is loading (workspace switch, repair or 
       }
     };
     await expect(pullSnapshot(true)).resolves.toBeNull();
-    const statuses = sqlite.prepare('select status from pending_actions order by id').all() as { status: string }[];
+    const statuses = sqlite.prepare('select status from pending_actions order by id').all() as {
+      status: string;
+    }[];
     expect(statuses.map((r) => r.status)).toEqual(['rejected', 'rejected']);
   });
 
@@ -560,7 +625,9 @@ describe('a cache wipe while a snapshot is loading (workspace switch, repair or 
         await oldLoaded;
         return answerForA();
       })
-      .mockImplementationOnce(async () => emptySnap({ warehouses: [{ id: 'wh-next', name: 'Next user' }] }));
+      .mockImplementationOnce(async () =>
+        emptySnap({ warehouses: [{ id: 'wh-next', name: 'Next user' }] }),
+      );
 
     const timerSync = syncNow();
     await vi.waitFor(() => expect(apiMock.api).toHaveBeenCalledTimes(1));
@@ -589,7 +656,9 @@ describe('a cache wipe while a snapshot is loading (workspace switch, repair or 
         await aLoaded;
         return answerForA();
       })
-      .mockImplementationOnce(async () => emptySnap({ warehouses: [{ id: 'wh-b', name: 'B Warehouse' }] }));
+      .mockImplementationOnce(async () =>
+        emptySnap({ warehouses: [{ id: 'wh-b', name: 'B Warehouse' }] }),
+      );
 
     const timerSync = syncNow();
     await vi.waitFor(() => expect(apiMock.api).toHaveBeenCalledTimes(1)); // A's request is out
@@ -987,7 +1056,10 @@ describe('whose cache: a pull for another account resets it first (#242 follow-u
   it("offline, another account's cache is still cleared: it must not be readable offline either", async () => {
     meta.store.set('cache_user_id', 'u0');
     meta.store.set('last_synced_at', '2026-09-05T11:00:00.000Z');
-    netMock.getNetworkStateAsync.mockResolvedValue({ isConnected: false, isInternetReachable: false });
+    netMock.getNetworkStateAsync.mockResolvedValue({
+      isConnected: false,
+      isInternetReachable: false,
+    });
 
     expect(await pullSnapshot()).toBeNull();
     expect(ids('select id from items')).toEqual([]);
@@ -1236,5 +1308,110 @@ describe('unconfirmed rows: what a full pull keeps of a cache it adopted', () =>
     sqlite.prepare(UNCONFIRMED_LINES_RELEASE_SQL).run('u1');
     expect(lineState('cc-open-l1')).toEqual({ counted: null, local_dirty: 0 });
     expect(lineState('cc-dirty-l1')).toEqual({ counted: 4, local_dirty: 1 });
+  });
+});
+
+describe('kits the server lists as active but the phone lacks come back (S75)', () => {
+  /**
+   * Kits are sent `since`-filtered, beside the complete active-kit id list
+   * (activeBundleIds), and the phone only DELETED against that list. A pull
+   * that carried no kits (when the server answers with empty lists, as for
+   * the module off) empties the phone's kits; once kits come back, the delta
+   * pulls bring only kits edited since the cursor, so an
+   * unchanged kit never arrived until a full pull. Now a pull whose active
+   * list names a kit the phone lacks makes the next pull a full one, once:
+   * an id the server keeps naming but never sends is reported after that
+   * full pull, and does not make every later pull a full one.
+   */
+  const CURSOR = '2026-09-05T11:00:00.000Z';
+
+  /** One pull, answered with `snap`; returns the path it asked for. */
+  async function pull(snap: Snap) {
+    apiMock.api.mockResolvedValueOnce(snap);
+    await pullSnapshot();
+    return apiMock.api.mock.calls.at(-1)![0] as string;
+  }
+
+  it('a pull that carried no kits, then access back: the next pull is full and the kit arrives', async () => {
+    meta.store.set('last_synced_at', CURSOR);
+    // Not allowed (or the module off): empty lists. The phone drops its kits.
+    expect(await pull(emptySnap({ bundles: [], activeBundleIds: [] }))).toContain('since=');
+    expect(ids('select id from bundles')).toEqual([]);
+    // Allowed again: a delta pull names b-live, unchanged since the cursor, so not sent.
+    expect(await pull(emptySnap({ bundles: [], activeBundleIds: ['b-live'] }))).toContain('since=');
+    expect(ids('select id from bundles')).toEqual([]);
+    // The next pull is FULL, and carries it.
+    expect(
+      await pull(
+        emptySnap({ bundles: [bundle('b-live', 'Live kit')], activeBundleIds: ['b-live'] }),
+      ),
+    ).toBe('/api/v1/mobile/snapshot');
+    expect(ids('select id from bundles')).toEqual(['b-live']);
+    // And the pulls after it are deltas again.
+    expect(await pull(emptySnap({ bundles: [], activeBundleIds: ['b-live'] }))).toContain('since=');
+  });
+
+  it('an id the server names but never sends: one full pull, reported, then deltas (no loop)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    meta.store.set('last_synced_at', CURSOR);
+    const ghost = emptySnap({ bundles: [], activeBundleIds: ['b-live', 'b-archived', 'b-ghost'] });
+    expect(await pull(ghost)).toContain('since=');
+    expect(await pull(ghost)).toBe('/api/v1/mobile/snapshot');
+    expect(warn).toHaveBeenCalledWith(
+      '[sync] a full pull did not send 1 active kit the server lists; it is not asked for again until the list changes',
+    );
+    expect(await pull(ghost)).toContain('since=');
+    expect(await pull(ghost)).toContain('since=');
+    warn.mockRestore();
+  });
+
+  it("an allowed member's ordinary pulls stay deltas", async () => {
+    meta.store.set('last_synced_at', CURSOR);
+    for (let i = 0; i < 3; i += 1) {
+      expect(
+        await pull(
+          emptySnap({
+            bundles: [bundle('b-live', 'Live kit')],
+            activeBundleIds: ['b-live', 'b-archived'],
+          }),
+        ),
+      ).toContain('since=');
+    }
+    expect(ids('select id from bundles order by id')).toEqual(['b-archived', 'b-live']);
+  });
+
+  it('the full pull a missing kit asked for is the last, even when its answer lists no active kits', async () => {
+    meta.store.set('last_synced_at', CURSOR);
+    expect(await pull(emptySnap({ bundles: [], activeBundleIds: ['b-new'] }))).toContain('since=');
+    // b-new is not on the phone. The full pull is answered with no active-kit list at all (an older
+    // server, or a failed read of the list): nothing more is owed.
+    const noList = emptySnap({ bundles: [] });
+    expect(await pull(noList)).toBe('/api/v1/mobile/snapshot');
+    expect(await pull(noList)).toContain('since=');
+    expect(await pull(noList)).toContain('since=');
+  });
+
+  it('a kit still missing after the full pull it asked for asks for no second one', async () => {
+    meta.store.set('last_synced_at', CURSOR);
+    const names = emptySnap({ bundles: [], activeBundleIds: ['b-new'] });
+    expect(await pull(names)).toContain('since=');
+    // The full pull brings no list and not the kit.
+    expect(await pull(emptySnap({ bundles: [] }))).toBe('/api/v1/mobile/snapshot');
+    // The deltas after it name the same kit, still not on the phone.
+    expect(await pull(names)).toContain('since=');
+    expect(await pull(names)).toContain('since=');
+    expect(ids('select id from bundles')).toEqual([]);
+  });
+
+  it('the answer for a member who may not see kits (no kits, an empty active list) never asks for a full pull, and ends one asked for', async () => {
+    meta.store.set('last_synced_at', CURSOR);
+    const notAllowed = emptySnap({ bundles: [], activeBundleIds: [] });
+    expect(await pull(notAllowed)).toContain('since=');
+    expect(await pull(notAllowed)).toContain('since=');
+    // A full pull owed from before access was taken away.
+    expect(await pull(emptySnap({ bundles: [], activeBundleIds: ['b-live'] }))).toContain('since=');
+    expect(await pull(notAllowed)).toBe('/api/v1/mobile/snapshot');
+    expect(await pull(notAllowed)).toContain('since=');
+    expect(await pull(notAllowed)).toContain('since=');
   });
 });
