@@ -908,6 +908,10 @@ const TABLE_WRITES: Record<string, ClassifiedWrite> = {
     'not_org_data',
     'Claims the one return prompt on the order row the sender read; the row carries its own organization.',
   ],
+  'server/services/audit.ts#sendAuditRows::audit_logs.upsert': [
+    'row_in_hand',
+    "A later try of the audit writer's own rows: the rows its first try's INSERT sent, organization included, with the ids the writer chose (never a caller's); on conflict (id) do nothing, so it never changes a stored row.",
+  ],
   'server/services/billing.ts#syncSubscriptionFromStripe::organizations.update': [
     'not_org_data',
     'Billing webhook: the organization found by its billing customer id; no active organization.',
@@ -3008,11 +3012,12 @@ describe('every table write in apps/web/src stays in the active organization and
       ([k]) => k === 'row_in_hand' || k === 'not_org_data',
     );
     for (const [, why] of Object.values(TABLE_WRITES)) expect(why.trim()).not.toBe('');
-    // 4 rows in hand and 56 jobs, webhooks, callbacks, public token paths,
-    // platform console and sign-up writes today (the 56th: the weekly digest
-    // re-signing its week's claim row). A new one is added here on purpose,
-    // with its reason, never to quiet a failure.
-    expect(stated.filter(([k]) => k === 'row_in_hand')).toHaveLength(4);
+    // 5 rows in hand (the 5th: the audit writer's later try of its own rows)
+    // and 56 jobs, webhooks, callbacks, public token paths, platform console
+    // and sign-up writes today (the 56th: the weekly digest re-signing its
+    // week's claim row). A new one is added here on purpose, with its reason,
+    // never to quiet a failure.
+    expect(stated.filter(([k]) => k === 'row_in_hand')).toHaveLength(5);
     expect(stated.filter(([k]) => k === 'not_org_data')).toHaveLength(56);
     expect(Object.keys(ROW_PROOF_EXEMPT)).toHaveLength(8);
     // One write serves several tables, and no query builder is kept in a

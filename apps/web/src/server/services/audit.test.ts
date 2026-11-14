@@ -14,6 +14,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   insert: vi.fn(),
+  /** A later try (audit.retry.test.ts): insert, skipping a row already there. */
+  upsert: vi.fn(),
   headersCalls: 0,
   headerValues: null as Record<string, string> | null,
   reportError: vi.fn(),
@@ -35,28 +37,33 @@ vi.mock('next/headers', () => ({
   },
 }));
 // Shaped like the real postgrest builder: lazy, thenable, and carrying an
-// optional abort signal. `h.insert(rows, signal)` answers the request.
-vi.mock('@/lib/supabase/admin', () => ({
-  createAdminClient: () => ({
-    from: () => ({
-      insert: (rows: unknown) => {
-        let signal: AbortSignal | undefined;
-        const builder = {
-          abortSignal(s: AbortSignal) {
-            signal = s;
-            return builder;
-          },
-          then(onOk: (v: unknown) => unknown, onErr?: (e: unknown) => unknown) {
-            return Promise.resolve()
-              .then(() => h.insert(rows, signal))
-              .then(onOk, onErr);
-          },
-        };
-        return builder;
+// optional abort signal. `h.insert(rows, signal)` answers the request, and
+// `h.upsert(rows, signal)` a later try.
+vi.mock('@/lib/supabase/admin', () => {
+  const builder = (answer: (signal: AbortSignal | undefined) => unknown) => {
+    let signal: AbortSignal | undefined;
+    const b = {
+      abortSignal(s: AbortSignal) {
+        signal = s;
+        return b;
       },
+      then(onOk: (v: unknown) => unknown, onErr?: (e: unknown) => unknown) {
+        return Promise.resolve()
+          .then(() => answer(signal))
+          .then(onOk, onErr);
+      },
+    };
+    return b;
+  };
+  return {
+    createAdminClient: () => ({
+      from: () => ({
+        insert: (rows: unknown) => builder((signal) => h.insert(rows, signal)),
+        upsert: (rows: unknown) => builder((signal) => h.upsert(rows, signal)),
+      }),
     }),
-  }),
-}));
+  };
+});
 vi.mock('@/lib/error-reporter', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/error-reporter')>()),
   reportError: h.reportError,
@@ -99,6 +106,8 @@ const badGateway = { error: { message: '', code: '' }, status: 502, statusText: 
 
 beforeEach(() => {
   h.insert.mockReset();
+  h.upsert.mockReset();
+  h.upsert.mockResolvedValue({ error: null, status: 201, statusText: 'Created' });
   h.reportError.mockReset();
   h.withContext.mockReset();
   h.after.mockReset();
@@ -133,6 +142,8 @@ describe('audit()', () => {
     await audit(payload(7), ctx);
     expect(h.insert).toHaveBeenCalledWith(
       {
+        // Chosen by the writer before the first try (audit.retry.test.ts).
+        id: expect.any(String),
         organization_id: 'org-1',
         user_id: 'user-1',
         event: 'inventory.item.updated',
@@ -201,7 +212,11 @@ describe('insertAuditRowReported()', () => {
   it('writes exactly the row it was given, organization_id null included', async () => {
     h.insert.mockResolvedValue(ok);
     await expect(insertAuditRowReported(row)).resolves.toBe(true);
-    expect(h.insert).toHaveBeenCalledWith(row, expect.any(AbortSignal));
+    // Plus the id the writer chose for it (audit.retry.test.ts).
+    expect(h.insert).toHaveBeenCalledWith(
+      { ...row, id: expect.any(String) },
+      expect.any(AbortSignal),
+    );
     expect(h.reportError).not.toHaveBeenCalled();
   });
 
@@ -263,7 +278,14 @@ describe('auditMany()', () => {
 
     await auditMany([payload(7)], ctx);
     const [batch] = h.insert.mock.calls[0]! as [unknown[]];
-    expect(batch).toEqual([single]);
+    // The same row, each with its own id.
+    const { id: singleId, ...singleRest } = single as { id: string };
+    const { id: batchId, ...batchRest } = (batch as Array<{ id: string }>)[0]!;
+    expect(batch).toHaveLength(1);
+    expect(batchRest).toEqual(singleRest);
+    expect(typeof singleId).toBe('string');
+    expect(typeof batchId).toBe('string');
+    expect(batchId).not.toBe(singleId);
   });
 
   it('keeps writing after a failed chunk and reports how many rows were lost', async () => {
@@ -375,13 +397,24 @@ describe('lost-row reports during an incident', () => {
     });
 
     // The other 408 are counted and sent as ONE report when the window closes.
+    // A 502 is sent again (audit.retry.test.ts), by at most AUDIT_RETRY_SLOTS
+    // writes at once: the first 20 (the first of them reported at once above)
+    // are written on try 2 inside the window; the 389 past them are not sent
+    // again and are counted as never written.
     await vi.advanceTimersByTimeAsync(AUDIT_LOSS_REPORT_WINDOW_MS);
     expect(h.reportError).toHaveBeenCalledTimes(2);
     expect(h.reportError.mock.calls[1]![1]).toMatchObject({
       tag: 'audit.write_failed',
       level: 'warning',
       organizationId: 'org-1',
-      extra: { event: 'inventory.item.updated', lost: 408, total: 408, status: 502 },
+      extra: {
+        event: 'inventory.item.updated',
+        lost: 389,
+        total: 408,
+        sentAgain: 19,
+        writtenLate: 20,
+        status: 502,
+      },
     });
     expect(JSON.stringify(h.reportError.mock.calls)).not.toContain(SENSITIVE_NAME);
 
@@ -415,11 +448,18 @@ describe('lost-row reports during an incident', () => {
       ['org-1', 443],
       ['org-2', 1],
     ]);
+    // The 201 rows counted into org-1's window were sent again, and every row
+    // of the four writes was written on try 2 inside the windows, so org-2's
+    // window reports its outcome too.
     await vi.advanceTimersByTimeAsync(AUDIT_LOSS_REPORT_WINDOW_MS);
-    expect(h.reportError).toHaveBeenCalledTimes(3);
+    expect(h.reportError).toHaveBeenCalledTimes(4);
     expect(h.reportError.mock.calls[2]![1]).toMatchObject({
       organizationId: 'org-1',
-      extra: { lost: 201, total: 201 },
+      extra: { lost: 0, total: 201, sentAgain: 201, writtenLate: 644 },
+    });
+    expect(h.reportError.mock.calls[3]![1]).toMatchObject({
+      organizationId: 'org-2',
+      extra: { lost: 0, total: 0, sentAgain: 0, writtenLate: 1 },
     });
   });
 
@@ -508,7 +548,7 @@ describe('an INSERT that never answers', () => {
  * whose INSERT was still in flight when the route returned. Nothing held the
  * invocation, so Vercel suspended the instance, and the next request resumed
  * it with the 5 s deadline long past: 33 rows had committed (the reply was
- * never read) and 2 Learn4Life item-create rows were never sent. Each writer
+ * never read) and 2 item-create rows were never sent. Each writer
  * now hands its write to after() (lib/defer.ts keepAlive), so the platform
  * keeps the invocation up until the INSERT answers. audit.keepalive.test.ts
  * shows the same through Next's real App Route module.
@@ -529,8 +569,11 @@ describe('the write outlives the response', () => {
   const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
   // Mutation caught: a writer that does not hand its write to after() (the
-  // `void` shape), or hands it something other than the promise its caller
-  // gets (a callback started after the response, a copy that settles early).
+  // `void` shape), or hands it something that settles before the write does
+  // (a callback started after the response, a copy that settles early). The
+  // promise the caller gets settles after the first try; the one held is the
+  // whole write, later tries included (audit.retry.test.ts), so for a write
+  // answered in time the two settle together.
   it.each(writers)(
     '%s registers its write with after() once, and it settles only when the INSERT answers',
     async (_name, write) => {
@@ -544,19 +587,24 @@ describe('the write outlives the response', () => {
       try {
         expect(h.after).toHaveBeenCalledTimes(1);
         const registered = h.after.mock.calls[0]![0] as Promise<unknown>;
-        // The promise the caller gets: a caller that awaits it sees no change.
-        expect(registered).toBe(returned);
         let settled = false;
         void registered.then(() => {
           settled = true;
         });
+        let returnedSettled = false;
+        void returned.then(() => {
+          returnedSettled = true;
+        });
         await settle();
         expect(h.insert).toHaveBeenCalledTimes(1);
         expect(settled).toBe(false);
+        expect(returnedSettled).toBe(false);
 
         answer(ok);
         await returned;
+        await settle();
         expect(settled).toBe(true);
+        expect(h.after).toHaveBeenCalledTimes(1);
         expect(h.reportError).not.toHaveBeenCalled();
       } finally {
         answer(ok);
