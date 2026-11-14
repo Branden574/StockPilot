@@ -108,8 +108,8 @@ export const RELEASES: Release[] = [
     // links release below is dated 2026-11-13T17:39:00Z, so the placeholder is that same minute.
     // Moved again by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: '2026-11-13T17:39:00Z'): the
     // phone authenticator code and access check releases below share one minute, so the placeholder is that
-    // same minute. SET AT MERGE: the same value as those two releases' publishedAt.
-    publishedAt: '2026-11-13T21:30:00Z',
+    // same minute. Set at merge (2026-11-14): the same value as those two releases' publishedAt.
+    publishedAt: '2026-11-14T01:24:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -232,8 +232,8 @@ export const RELEASES: Release[] = [
     title: 'The mobile app waits for your authenticator code',
     summary:
       "If you use an authenticator app, the mobile app now shows the code screen before your organization's data and waits for your 6-digit code before it loads your items and orders or sends changes waiting on the phone.",
-    // SET AT MERGE (see the note above).
-    publishedAt: '2026-11-13T21:30:00Z',
+    // Set at merge: EAS showed the first iOS launch of the update on 2026-11-14 (read 01:22Z).
+    publishedAt: '2026-11-14T01:24:00Z',
     entries: [
       {
         id: 'phone-waits-for-authenticator-code',
@@ -292,8 +292,8 @@ export const RELEASES: Release[] = [
     title: 'Clearer words on the phone when your access cannot be checked',
     summary:
       'If StockPilot cannot check your access for a moment, the phone app now says that a stock adjustment, a rental checkout or an escalation was not saved, and asks you to try again. An adjustment saved offline now waits and is sent later, instead of being moved to Unsent work.',
-    // SET AT MERGE (see the note above).
-    publishedAt: '2026-11-13T21:30:00Z',
+    // Set at merge: EAS showed the first iOS launch of the update on 2026-11-14 (read 01:22Z).
+    publishedAt: '2026-11-14T01:24:00Z',
     entries: [
       {
         id: 'phone-adjustment-access-not-checked',
