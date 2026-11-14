@@ -727,9 +727,12 @@ select is(
               on conflict (id) do update set parent_id = excluded.parent_id$q$, :locA2, :orgA, :whA, :locB)),
   '42501:-:new row violates row-level security policy for table "locations"',
   'L8: an upsert onto a location of A that proposes B''s location as its parent is refused');
+-- Re-pinned by 0462 (was the UPDATE rule's row level security answer): its
+-- BEFORE UPDATE guard, tg_organization_id_fixed, refuses a location's change
+-- of organization first, in its own words; the move is refused either way.
 select is(
   pg_temp.attempt('authenticated', :both, format('update public.locations set organization_id = %L where id = %L', :orgB, :locA3)),
-  '42501:-:new row violates row-level security policy for table "locations"',
+  '42501:-:A location cannot be moved to another organization.',
   'L9: an admin of both moving a location of A (no warehouse) to B while it keeps its parent of A: refused');
 
 -- ══ E. An event's warehouse ═══════════════════════════════════════════════
