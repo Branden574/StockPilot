@@ -97,7 +97,7 @@ vi.mock('@/lib/supabase/admin', () => ({
         return { insert: (row: unknown) => auditInsert(row) };
       }
       const chain: Record<string, unknown> = {};
-      for (const method of ['select', 'eq', 'not', 'limit', 'order']) {
+      for (const method of ['select', 'eq', 'not', 'is', 'limit', 'order']) {
         chain[method] = () => chain;
       }
       chain.maybeSingle = async () => ({ data: null, error: null });
