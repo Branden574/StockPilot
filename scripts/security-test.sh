@@ -860,6 +860,19 @@ PGTAP_TESTS=(
   # user_can_see_item_category answers service_role only. The lock footprint
   # is scripts/db-concurrency/0421_migration_lock_footprint.sh.
   supabase/tests/0421_categories_select_category_sets.test.sql
+  # Retry keys (0464, docket S96 part one): a receipt post or kit hand-out
+  # sent again with its retry key answers only the record that key was
+  # written with: the receipt of this organization, purchase order,
+  # warehouse, key, receiver and request hash, or the distribution of this
+  # organization, kit, warehouse, quantity (at the column's scale), person
+  # and key (a distribution made before 0464 carries no key and the time of
+  # its key row); anything else is 55000 idempotency_conflict. The
+  # distribution stores its key; both bodies raise stockpilot.idempotency_write
+  # around their own key writes and put the previous value back; anon holds
+  # nothing on idempotency_keys and authenticated SELECT, INSERT and UPDATE.
+  # Each body is production's with its added lines removed. The lock
+  # footprint is scripts/db-concurrency/0464_migration_lock_footprint.sh.
+  supabase/tests/0464_retry_keys_match_their_record.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

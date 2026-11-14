@@ -910,7 +910,12 @@ select is(
   -- revise_order_needed_by calls neither. 0415's pgTAP R3 takes those two
   -- bodies back to their pre-0415 text and gets 1c283e93|18 exactly, so
   -- nothing else in ledger moved.
-  'ledger.*|cfc031524c8052a69fceab91be550768|18\n'
+  -- Re-pinned by 0464 (retry keys; was cfc031524c8052a69fceab91be550768|18):
+  -- ledger.post_receipt_v2 and ledger.distribute_bundle gained their tagged retry
+  -- key lines (header, owner and ACL unchanged); revise_order_needed_by calls
+  -- neither. 0464's pgTAP P8 takes both back to their pre-0464 text and gets
+  -- cfc03152|18 exactly.
+  'ledger.*|ee07dd0a0c69b01b77f39c5791aea9e4|18\n'
   -- Re-pinned by 0384 (was c388801c0cca0196bed7d51dc7df2096): the
   -- schedule_events insert and update WITH CHECK gained
   -- order_request_in_org(order_request_id, organization_id); every earlier
