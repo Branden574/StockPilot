@@ -2,6 +2,7 @@ import { releaseStateActionSchema } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { refusesCrossSiteCookieWrite } from '@/lib/auth/cross-site-request';
+import { answerModuleState } from '@/server/lib/api-error-response';
 import { recordReleaseState } from '@/server/services/releases';
 
 export const runtime = 'nodejs';
@@ -42,7 +43,14 @@ export async function POST(req: Request): Promise<Response> {
   if (!parsed.success)
     return Response.json({ error: 'validation_error' }, { status: 400, headers: NO_STORE });
 
-  const result = await recordReleaseState(ctx, parsed.data);
+  let result: Awaited<ReturnType<typeof recordReleaseState>>;
+  try {
+    result = await recordReleaseState(ctx, parsed.data);
+  } catch (e) {
+    // A module state that could not be read (docket S81): nothing was saved,
+    // the fixed try-again answer.
+    return answerModuleState(e, 'api.v1.me.release-state', { headers: NO_STORE });
+  }
   if (!result.ok) return Response.json({ ok: false }, { status: 503, headers: NO_STORE });
   return Response.json({ ok: true, recorded: result.recorded }, { headers: NO_STORE });
 }

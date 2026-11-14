@@ -7,6 +7,8 @@ import {
   ACCOUNT_NOTE_LIMIT,
   ACCOUNT_NOTE_WINDOW_MS,
   accountNoteKey,
+  admitUncountedNote,
+  reportUncountedNote,
   requestIp,
   SESSION_NOTE_WINDOW_MS,
   sessionNoteKey,
@@ -45,6 +47,17 @@ export const dynamic = 'force-dynamic';
  * Once per session: a second note for the same session (a retry, a relaunch)
  * writes nothing, by a hash of the session id, for a day. 30 notes an hour per
  * account. A token with no session id writes nothing (nothing to count by).
+ * A count either bucket refuses is answered as above. A limiter that cannot
+ * answer (lib/rate-limit's `failed`), for either bucket, is answered the same
+ * way: the user.signed_in row is still written (with limiter_unavailable),
+ * the device is not noted, so no new-device email or organization event goes
+ * out without a count and the device is still new at its next sign-in, and
+ * the hold is reported (at most once in five minutes on an instance,
+ * lib/auth/session-note.ts). The phone's sign-in itself has already happened
+ * at the Auth server, so the row is kept. Meanwhile the instance counts in
+ * memory (admitUncountedNote): a session's row once, and 30 an hour per
+ * account, past which the answer is the same 429 with no row. The note counts
+ * new-device alerts per account and per organization (lib/auth/login-device.ts).
  *
  * Body: { installId?, device?: { model?, osName?, osVersion?, appVersion? } },
  * each field checked against an allowlist and a length cap. A field that
@@ -148,9 +161,9 @@ export async function POST(req: Request) {
       accountNoteKey(ctx.userId),
       ACCOUNT_NOTE_LIMIT,
       ACCOUNT_NOTE_WINDOW_MS,
-      'open',
+      'closed',
     );
-    if (!perAccount.allowed) {
+    if (!perAccount.allowed && !perAccount.failed) {
       return NextResponse.json(
         { error: 'rate_limited', message: 'Too many sign-ins from this account. Try again later.' },
         { status: 429 },
@@ -160,9 +173,35 @@ export async function POST(req: Request) {
       sessionNoteKey('in', sessionId),
       1,
       SESSION_NOTE_WINDOW_MS,
-      'open',
+      'closed',
     );
-    if (!firstNote.allowed) return NextResponse.json({ ok: true });
+    if (!firstNote.allowed && !firstNote.failed) return NextResponse.json({ ok: true });
+    // The limiter could not answer for a bucket: the row is written, the
+    // device is not noted (no email, no event), and the hold is reported.
+    const uncounted =
+      perAccount.failed && firstNote.failed
+        ? 'both'
+        : perAccount.failed
+          ? 'account'
+          : firstNote.failed
+            ? 'session'
+            : null;
+
+    if (uncounted) {
+      // No count from the limiter: this instance's own bound decides.
+      const admitted = admitUncountedNote('in', ctx.userId, sessionId);
+      if (admitted !== 'write') {
+        reportUncountedNote(uncounted);
+        if (admitted === 'repeat') return NextResponse.json({ ok: true });
+        return NextResponse.json(
+          {
+            error: 'rate_limited',
+            message: 'Too many sign-ins from this account. Try again later.',
+          },
+          { status: 429 },
+        );
+      }
+    }
 
     const device = readDevice(parsed.data.device);
     const label = deviceLabel(device);
@@ -185,8 +224,14 @@ export async function POST(req: Request) {
         // The family only (integrator decision, device label 2026-11-02).
         device_label: family,
         session_ref: sessionRef(sessionId),
+        ...(uncounted ? { limiter_unavailable: true } : {}),
       },
     });
+
+    if (uncounted) {
+      reportUncountedNote(uncounted);
+      return NextResponse.json({ ok: true });
+    }
 
     // After the response (defer: after(), kept alive), like the web's
     // sign-in: the device, and the email when it is new on an account that

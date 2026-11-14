@@ -6,6 +6,7 @@ import { z } from 'zod';
 
 import { currentUserIsPlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireOrgContext, requireSession } from '@/lib/auth/session';
+import { clientIpFromHeaders } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
@@ -49,10 +50,8 @@ export async function createSupportTicketAction(
   if (data.company && data.company.trim().length > 0) return ok({ id: 'received' });
 
   const h = await headers();
-  // Only trust x-forwarded-for on Vercel (it strips client-supplied XFF there).
-  const onVercel = process.env.VERCEL === '1';
-  const xff = onVercel ? h.get('x-forwarded-for') : null;
-  const ip = xff?.split(',')[0]?.trim() || h.get('x-real-ip') || 'unknown';
+  // The one rule (lib/client-ip.ts): x-forwarded-for only on Vercel.
+  const ip = clientIpFromHeaders(h);
   const userAgent = h.get('user-agent') ?? null;
 
   // Fail-CLOSED: this is an unauthenticated surface, so a limiter outage must

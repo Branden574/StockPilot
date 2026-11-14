@@ -238,11 +238,12 @@ describe('InventoryService.get: the row, the access list and the holdings are as
     expect(unhandled).toEqual([]);
   });
 
-  it('a manager is cleared by role, and the placement split is computed exactly as before', async () => {
+  it('a manager is cleared for a warehouse of the organization, and the placement split is computed exactly as before', async () => {
     const { client } = makeRecordingClient({
       inventory_items: async () => ({ data: { ...ROW }, error: null }),
       item_stock_levels: async () => HOLDINGS,
-      warehouses: async () => ({ data: [{ id: 'wh-a' }], error: null }),
+      // The organization's warehouses, the row's among them.
+      warehouses: async () => ({ data: [{ id: 'wh-a' }, { id: 'wh-b' }], error: null }),
     });
 
     const item = await svcFor(client, 'manager').get('item-1');

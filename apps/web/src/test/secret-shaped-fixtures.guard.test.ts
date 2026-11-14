@@ -69,6 +69,8 @@ const FILES = [
   'src/server/actions/auth.change-password.test.ts',
   'src/lib/auth/mfa-code-attempts.test.ts',
   'src/lib/auth/reset-link-session.test.ts',
+  // The ownership transfer's password re-confirm, with a stand-in session.
+  'src/server/actions/team.transfer-session-identity.test.ts',
 ];
 
 // A password-, secret- or token-shaped name (identifier, property or quoted

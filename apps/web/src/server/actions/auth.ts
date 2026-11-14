@@ -21,6 +21,7 @@ import { sessionAccountNow, type SessionAccountNow } from '@/lib/auth/session-ac
 import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { broadcastToChannel } from '@/lib/realtime/broadcast';
+import { clientIpForRecord, clientIpFromHeaders } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createClient } from '@/lib/supabase/server';
@@ -57,18 +58,13 @@ import {
 } from '@stockpilot/core';
 
 /**
- * Best-effort client-IP extraction from request headers. Used as a
- * secondary rate-limit key on unauthenticated flows so an attacker can't
- * fan out across many email addresses from one host. `next/headers` is
- * async in Next 16.
+ * The client's address, by the one rule (lib/client-ip.ts: x-forwarded-for
+ * only on Vercel). Used as a secondary rate-limit key on unauthenticated
+ * flows so an attacker can't fan out across many email addresses from one
+ * host. `next/headers` is async in Next 16.
  */
 async function getClientIp(): Promise<string> {
-  const h = await headers();
-  return (
-    h.get('x-forwarded-for')?.split(',')[0]?.trim() ??
-    h.get('x-real-ip') ??
-    'unknown'
-  );
+  return clientIpFromHeaders(await headers());
 }
 
 /**
@@ -223,8 +219,14 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
   // baseline). Fires here on the password step — i.e. even before TOTP — so a
   // stolen password used from a new device still alerts the real owner.
   if (userId) {
-    const ua = (await headers()).get('user-agent');
-    after(() => noteLoginDevice({ userId, email: parsed.data.email, userAgent: ua, ip }));
+    const h = await headers();
+    const ua = h.get('user-agent');
+    // The device row and the email take the address only as an IP literal,
+    // never the limiter's 'unknown' bucket.
+    const deviceIp = clientIpForRecord(h);
+    after(() =>
+      noteLoginDevice({ userId, email: parsed.data.email, userAgent: ua, ip: deviceIp }),
+    );
   }
 
   return ok({ next: nextPath });

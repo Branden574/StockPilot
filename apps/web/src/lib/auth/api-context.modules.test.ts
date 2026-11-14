@@ -28,6 +28,7 @@ vi.mock('@supabase/supabase-js', () => ({ createClient: () => refs.client }));
 vi.mock('@/lib/supabase/server', () => ({ createClient: async () => refs.client }));
 
 import { NON_CORE_MODULE_IDS } from '@/lib/modules/effective-modules';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
 
 import { withApiContext } from './api-context';
 
@@ -45,11 +46,14 @@ function table(single: unknown, list: unknown[] = [], error: unknown = null) {
   const q: Record<string, unknown> = {};
   const self = () => q;
   for (const k of ['select', 'eq', 'is', 'not', 'in', 'limit', 'order']) q[k] = self;
-  q.maybeSingle = async () => ({ data: error ? null : single, error });
+  q.maybeSingle = async () => ({ data: error ? null : single, error, status: error ? 500 : 200 });
   q.then = (resolve: (v: unknown) => unknown) =>
-    Promise.resolve({ data: error ? null : list, error }).then(resolve);
+    Promise.resolve({ data: error ? null : list, error, status: error ? 500 : 200 }).then(resolve);
   return q;
 }
+
+/** A single-row fake that also answers its row as a one-row list (the membership choice reads lists). */
+const row = (r: unknown) => table(r, r ? [r] : []);
 
 function makeClient() {
   return {
@@ -60,9 +64,9 @@ function makeClient() {
           [],
           state.orgError,
         );
-      if (name === 'organization_members') return table({ organization_id: ORG_ID, role: 'staff' });
+      if (name === 'organization_members') return row({ organization_id: ORG_ID, role: 'staff' });
       if (name === 'user_profiles')
-        return table({
+        return row({
           id: USER_ID,
           email: 'user@example.com',
           default_organization_id: ORG_ID,
@@ -124,20 +128,29 @@ describe.each([
     expect([...ctx!.enabledModules!]).toEqual(['orders']);
   });
 
-  it('a NULL comp flag grants nothing: only an explicit true is a comp', async () => {
+  it('a NULL comp flag grants nothing: only an explicit true is a comp, and the rest is unknown', async () => {
+    // The column is boolean NOT NULL (0175), so a null is not an answer: it
+    // grants nothing, and like an unreadable flag it leaves every module the
+    // rows did not name unknown rather than off.
     state.comped = null;
     state.moduleRows = [{ module_id: 'orders' }];
     const ctx = await withApiContext(request());
-    expect([...ctx!.enabledModules!]).toEqual(['orders']);
+    expect(ctx!.enabledModules!.has('orders')).toBe(true);
+    expect(() => ctx!.enabledModules!.has('rentals')).toThrow(ModulesUnavailableError);
+    expect(() => [...ctx!.enabledModules!]).toThrow(ModulesUnavailableError);
   });
 
-  it('an UNREADABLE comp flag grants nothing: it falls back to the rows', async () => {
+  it('an UNREADABLE comp flag grants nothing: the rows that were read answer on, the rest is unknown', async () => {
     state.comped = true;
     state.orgError = { message: 'upstream timeout' };
     state.moduleRows = [{ module_id: 'orders' }];
     const ctx = await withApiContext(request());
     expect(ctx).not.toBeNull();
-    expect([...ctx!.enabledModules!]).toEqual(['orders']);
+    expect(ctx!.enabledModules!.has('orders')).toBe(true);
+    // Not granted, and not "off" either: the comp could have turned it on
+    // (api-context.unreadable-modules.guard.test.ts pins the whole rule).
+    expect(() => ctx!.enabledModules!.has('rentals')).toThrow(ModulesUnavailableError);
+    expect(() => [...ctx!.enabledModules!]).toThrow(ModulesUnavailableError);
   });
 
   it('a failed rows read is not a reason to withhold the comp', async () => {

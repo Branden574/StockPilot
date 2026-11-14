@@ -32,7 +32,22 @@ import { ServiceError } from './context';
 
 const rpc = vi.fn();
 // The kit is read in the organization before the function (S39) and is found.
-const reads = makeSupabaseStub({ 'bundles.select': { data: { id: 'b-1' }, error: null } });
+// The distribution a keyed first send records, read back by its id
+// (bundles.retry-key-answer.test.ts covers every other answer).
+const reads = makeSupabaseStub({
+  'bundles.select': { data: { id: 'b-1' }, error: null },
+  'bundle_distributions.select': {
+    data: {
+      id: 'dist-1',
+      organization_id: 'org-1',
+      bundle_id: 'b-1',
+      warehouse_id: 'wh-1',
+      quantity: 2,
+      distributed_by: 'u-1',
+    },
+    error: null,
+  },
+});
 const ctx = {
   organizationId: 'org-1',
   userId: 'u-1',

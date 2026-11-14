@@ -73,7 +73,8 @@ describe('InventoryService lot gate', () => {
   });
 
   it('leaves an all-none bulk import untouched by the gate', async () => {
-    const stub = makeSupabaseStub({});
+    // The organization's own warehouse list holds the import's warehouse.
+    const stub = makeSupabaseStub({ 'warehouses.select': { data: [{ id: 'wh-1' }], error: null } });
     const svc = new InventoryService(makeServiceContext(stub.client));
     // Runs all the way through against the empty stub — the gate did not fire.
     await expect(
@@ -82,7 +83,7 @@ describe('InventoryService lot gate', () => {
   });
 
   it('leaves a bulk import that omits trackingType entirely untouched', async () => {
-    const stub = makeSupabaseStub({});
+    const stub = makeSupabaseStub({ 'warehouses.select': { data: [{ id: 'wh-1' }], error: null } });
     const svc = new InventoryService(makeServiceContext(stub.client));
     await expect(
       svc.bulkCreate({ warehouseId: 'wh-1', items: [{ ...bulkItem }] }),

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { reportErrorMock, insertAuditRowReportedMock } = vi.hoisted(() => ({
   reportErrorMock: vi.fn(async () => undefined),
@@ -7,8 +7,11 @@ const { reportErrorMock, insertAuditRowReportedMock } = vi.hoisted(() => ({
 
 vi.mock('@/lib/error-reporter', () => ({ reportError: reportErrorMock }));
 vi.mock('@/server/services/audit', () => ({ insertAuditRowReported: insertAuditRowReportedMock }));
+const requestHeaders = vi.hoisted(() => ({
+  current: { 'x-forwarded-for': '203.0.113.7, 10.0.0.1', 'user-agent': 'UA/1' } as Record<string, string>,
+}));
 vi.mock('next/headers', () => ({
-  headers: vi.fn(async () => new Headers({ 'x-forwarded-for': '203.0.113.7, 10.0.0.1', 'user-agent': 'UA/1' })),
+  headers: vi.fn(async () => new Headers(requestHeaders.current)),
 }));
 
 import {
@@ -317,6 +320,26 @@ describe('settleFailedDelete', () => {
 });
 
 describe('auditAccountDeleted', () => {
+  beforeEach(() => {
+    requestHeaders.current = { 'x-forwarded-for': '203.0.113.7, 10.0.0.1', 'user-agent': 'UA/1' };
+    // Production: Vercel sets x-forwarded-for.
+    vi.stubEnv('VERCEL', '1');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('the ip is read by the one rule (lib/client-ip): off Vercel x-forwarded-for is not read', async () => {
+    vi.stubEnv('VERCEL', '');
+    await auditAccountDeleted({ userId: 'u-1', organizationId: 'org-1', reason: 'self_deletion' });
+    expect(insertAuditRowReportedMock).toHaveBeenLastCalledWith(expect.objectContaining({ ip: null }));
+    requestHeaders.current = { 'x-forwarded-for': '203.0.113.7', 'x-real-ip': '198.51.100.2' };
+    await auditAccountDeleted({ userId: 'u-1', organizationId: 'org-1', reason: 'self_deletion' });
+    expect(insertAuditRowReportedMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ip: '198.51.100.2' }),
+    );
+  });
+
   it('writes user.deactivated with user_id null, the entity id, the reason, ip and user agent', async () => {
     await auditAccountDeleted({ userId: 'u-1', organizationId: 'org-1', reason: 'self_deletion' });
     expect(insertAuditRowReportedMock).toHaveBeenCalledWith({

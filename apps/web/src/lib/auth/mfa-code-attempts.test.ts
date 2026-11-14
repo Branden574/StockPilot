@@ -184,6 +184,8 @@ describe('allowMfaCodeAttempt — per account and client address, and per accoun
 
 describe('recordRefusedMfaCode', () => {
   it('writes one platform-only row naming the account, the path, the level and GoTrue’s code', async () => {
+    // Production: Vercel sets x-forwarded-for (the row reads lib/client-ip).
+    vi.stubEnv('VERCEL', '1');
     requestHeaders.current = new Headers({
       'x-forwarded-for': '203.0.113.7',
       'user-agent': 'vitest-agent',

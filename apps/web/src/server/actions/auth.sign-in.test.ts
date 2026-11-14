@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * SP-051 — signInAction is the unauthenticated front door, and until this file
@@ -29,26 +29,30 @@ const signInWithPassword = vi.fn();
 const getAuthenticatorAssuranceLevel = vi.fn();
 const cookieSet = vi.fn();
 
-const { checkRateLimit, auditInsert, noteLoginDevice, noteDisabledAccountBlocked } = vi.hoisted(
-  () => ({
+const { checkRateLimit, auditInsert, noteLoginDevice, noteDisabledAccountBlocked, request } =
+  vi.hoisted(() => ({
     checkRateLimit: vi.fn(),
     auditInsert: vi.fn(),
     noteLoginDevice: vi.fn(),
     noteDisabledAccountBlocked: vi.fn(),
-  }),
-);
+    /** The request's headers; null is the default pair below. */
+    request: { headers: null as Record<string, string> | null },
+  }));
 
-// A real header bag: getClientIp takes the FIRST entry of x-forwarded-for, and
-// that value becomes the second rate-limit key. Returning an empty Headers (as
+// A real header bag: on Vercel the address is the FIRST entry of
+// x-forwarded-for (lib/client-ip), and that value becomes the second
+// rate-limit key. Returning an empty Headers (as
 // the sibling auth tests do) would collapse the ip key to the literal
 // 'unknown' and hide a regression in the extraction itself.
 vi.mock('next/headers', () => ({
   headers: vi.fn(
     async () =>
-      new Headers({
-        'x-forwarded-for': '203.0.113.7, 10.0.0.1',
-        'user-agent': 'vitest-agent',
-      }),
+      new Headers(
+        request.headers ?? {
+          'x-forwarded-for': '203.0.113.7, 10.0.0.1',
+          'user-agent': 'vitest-agent',
+        },
+      ),
   ),
   cookies: vi.fn(async () => ({ get: () => undefined, set: cookieSet, delete: () => {} })),
 }));
@@ -97,7 +101,7 @@ vi.mock('@/lib/supabase/admin', () => ({
         return { insert: (row: unknown) => auditInsert(row) };
       }
       const chain: Record<string, unknown> = {};
-      for (const method of ['select', 'eq', 'not', 'limit', 'order']) {
+      for (const method of ['select', 'eq', 'not', 'is', 'limit', 'order']) {
         chain[method] = () => chain;
       }
       chain.maybeSingle = async () => ({ data: null, error: null });
@@ -121,7 +125,19 @@ vi.mock('@supabase/supabase-js', () => ({
 
 import { ACCOUNT_DISABLED_MESSAGE } from '@stockpilot/core';
 
+import { after } from 'next/server';
+
 import { signInAction } from './auth';
+
+beforeEach(() => {
+  request.headers = null;
+  // Production: Vercel sets x-forwarded-for.
+  vi.stubEnv('VERCEL', '1');
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 const INPUT = { email: 'User@Example.com', password: 'Passw0rd!', rememberMe: true };
 
@@ -157,6 +173,28 @@ describe('signInAction — brute-force gates', () => {
     await signInAction(INPUT);
 
     expect(checkRateLimit).toHaveBeenNthCalledWith(2, 'signin-ip:203.0.113.7', 30, 60_000, 'closed');
+  });
+
+  it('off Vercel the per-IP gate does not read x-forwarded-for: x-real-ip, else unknown', async () => {
+    vi.stubEnv('VERCEL', '');
+    request.headers = { 'x-forwarded-for': '203.0.113.7', 'user-agent': 'vitest-agent' };
+    await signInAction(INPUT);
+    expect(checkRateLimit).toHaveBeenNthCalledWith(2, 'signin-ip:unknown', 30, 60_000, 'closed');
+
+    checkRateLimit.mockClear();
+    request.headers = { 'x-forwarded-for': '203.0.113.7', 'x-real-ip': '198.51.100.2' };
+    await signInAction(INPUT);
+    expect(checkRateLimit).toHaveBeenNthCalledWith(2, 'signin-ip:198.51.100.2', 30, 60_000, 'closed');
+  });
+
+  it('the device note gets the address only as an IP literal, never the limiter\'s unknown bucket', async () => {
+    vi.stubEnv('VERCEL', '');
+    request.headers = { 'x-forwarded-for': '203.0.113.7', 'user-agent': 'vitest-agent' };
+    await signInAction(INPUT);
+    const deferred = vi.mocked(after).mock.calls.at(-1)?.[0] as (() => unknown) | undefined;
+    expect(deferred).toBeTypeOf('function');
+    await deferred!();
+    expect(noteLoginDevice).toHaveBeenCalledWith(expect.objectContaining({ ip: null }));
   });
 
   it('refuses without ever touching GoTrue when the email gate is spent', async () => {

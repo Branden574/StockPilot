@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
 import { NextResponse } from 'next/server';
 
@@ -58,6 +58,149 @@ function digestWeekKey(d: Date): string {
   return monday.toISOString().slice(0, 10);
 }
 
+/**
+ * The claim's request_hash when the run can sign: an HMAC over (organization,
+ * key) under the run's claim key (digestClaimKeyMaterial). A row under the key
+ * counts as "sent" only when it carries this value, which is bound to this
+ * organization, member and week.
+ */
+function digestClaimSignature(keyMaterial: Buffer, orgId: string, claimKey: string): string {
+  return createHmac('sha256', keyMaterial)
+    .update(`weekly_digest_claim:v1|${orgId}|${claimKey}`)
+    .digest('hex');
+}
+
+/** The shortest UNSUBSCRIBE_SECRET the claim key is derived from. */
+const MIN_CLAIM_SIGNING_LENGTH = 32;
+
+/**
+ * The run's claim key: HMAC-SHA256 of a fixed label under UNSUBSCRIBE_SECRET
+ * (a signing-only value; the label keeps the claim apart from the unsubscribe
+ * links signed with the same value), or null when that value is unset or
+ * shorter than MIN_CLAIM_SIGNING_LENGTH. The run then claims unsigned.
+ */
+function digestClaimKeyMaterial(signingValue: string | undefined): Buffer | null {
+  if (!signingValue || signingValue.length < MIN_CLAIM_SIGNING_LENGTH) return null;
+  return createHmac('sha256', signingValue).update('weekly_digest_claim_key:v1').digest();
+}
+
+/** The unsigned form of a claim: what a run that cannot sign stores, and what
+ *  every claim stored before claims were signed carries. */
+function unsignedClaimHash(orgId: string, claimKey: string): string {
+  return createHash('sha256').update(`${orgId}:${claimKey}`).digest('hex');
+}
+
+/**
+ * The last claim week whose unsigned form still marks the week sent when the
+ * run can sign (the weeks claimed before claims were signed). Any later week
+ * needs the signature.
+ */
+const LAST_UNSIGNED_CLAIM_WEEK = '2026-11-09'; // the release owner raises this to the next Monday if the change goes live after that Monday's run
+
+/** How many times a run tries to hold the week's claim before it sends unclaimed. */
+const MAX_CLAIM_TRIES = 3;
+
+interface DigestClaimRow {
+  organization_id: string;
+  scope: 'weekly_digest';
+  key: string;
+  request_hash: string;
+  status: 'completed';
+}
+
+function isDuplicateClaim(err: { code?: string; message?: string }): boolean {
+  return err.code === '23505' || (err.message ?? '').includes('duplicate key value');
+}
+
+type DigestClaimRead =
+  | { kind: 'ours' }
+  | { kind: 'other'; id: string; hash: string }
+  | { kind: 'none' }
+  | { kind: 'unreadable' };
+
+/** The row under (org, weekly_digest, key), judged against the signature. A
+ *  failed read is reported here. */
+async function readDigestClaim(
+  admin: ReturnType<typeof createAdminClient>,
+  claim: DigestClaimRow,
+  userId: string,
+): Promise<DigestClaimRead> {
+  const orgId = claim.organization_id;
+  const { data, error } = await admin
+    .from('idempotency_keys')
+    .select('id, request_hash')
+    .eq('organization_id', orgId)
+    .eq('scope', 'weekly_digest')
+    .eq('key', claim.key)
+    .maybeSingle();
+  if (error) {
+    void reportError(new Error(error.message ?? 'digest claim read failed'), {
+      tag: 'cron.weekly-digest.claim',
+      extra: { orgId, userId },
+    });
+    return { kind: 'unreadable' };
+  }
+  const row = data as { id: string; request_hash: string | null } | null;
+  if (!row) return { kind: 'none' };
+  if (row.request_hash === claim.request_hash) return { kind: 'ours' };
+  const week = claim.key.slice(claim.key.lastIndexOf(':') + 1);
+  if (week <= LAST_UNSIGNED_CLAIM_WEEK && row.request_hash === unsignedClaimHash(orgId, claim.key)) {
+    return { kind: 'ours' };
+  }
+  return { kind: 'other', id: row.id, hash: row.request_hash ?? '' };
+}
+
+/**
+ * After the signed insert met an existing row: true when this run may send.
+ * Up to MAX_CLAIM_TRIES times, the row is read and:
+ *   * a signed claim (or an unsigned one of a week up to
+ *     LAST_UNSIGNED_CLAIM_WEEK): already sent, false;
+ *   * the row cannot be read: reported, false (a row is there; at most once
+ *     wins without proof it is not signed);
+ *   * a row without the cron's signature: taken over by a compare-and-set on
+ *     the hash it was read with; true when it holds;
+ *   * no row any more: claimed again; true when the insert holds.
+ * A try that misses (the row changed first) reads again. After the last miss
+ * the run reports and sends without holding the claim.
+ */
+async function mayClaimTakenWeek(
+  admin: ReturnType<typeof createAdminClient>,
+  claim: DigestClaimRow,
+  userId: string,
+): Promise<boolean> {
+  const orgId = claim.organization_id;
+  for (let attempt = 0; attempt < MAX_CLAIM_TRIES; attempt += 1) {
+    const held = await readDigestClaim(admin, claim, userId);
+    if (held.kind === 'ours' || held.kind === 'unreadable') return false;
+    if (held.kind === 'none') {
+      const { error: insertErr } = await admin.from('idempotency_keys').insert(claim);
+      if (!insertErr) return true;
+      if (!isDuplicateClaim(insertErr)) {
+        // Fails open on the marker, as the first claim does.
+        void reportError(new Error(insertErr.message ?? 'digest claim failed'), {
+          tag: 'cron.weekly-digest.claim',
+          extra: { orgId, userId },
+        });
+        return true;
+      }
+      continue;
+    }
+    const { data, error } = await admin
+      .from('idempotency_keys')
+      .update({ request_hash: claim.request_hash, status: 'completed' })
+      .eq('organization_id', orgId)
+      .eq('id', held.id)
+      .eq('request_hash', held.hash)
+      .select('id');
+    if (!error && Array.isArray(data) && data.length > 0) return true;
+  }
+  void reportError(new Error('digest claim under the key is not signed and could not be taken over'), {
+    tag: 'cron.weekly-digest.claim',
+    extra: { orgId, userId },
+  });
+  return true;
+}
+
 // Vercel default function timeout is 10s for Hobby. The cron iterates orgs
 // + sends emails sequentially; bump generously since each Resend send is
 // a network round trip.
@@ -89,6 +232,10 @@ export async function GET(req: Request) {
   if (!secretsEqual(auth, `Bearer ${env.CRON_SECRET}`)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
+  // The claim's signing key for this run (digestClaimKeyMaterial), computed
+  // once; null claims unsigned, reported once per run.
+  const claimKeyMaterial = digestClaimKeyMaterial(env.UNSUBSCRIBE_SECRET);
+  let unsignedReported = false;
 
   let sent = 0;
   let skipped = 0;
@@ -334,35 +481,53 @@ export async function GET(req: Request) {
           // Claimed BEFORE the send, like schedule-reminders' stamp-first
           // write: losing one digest to a crash between claim and send
           // beats re-spamming the fleet.
+          //
+          // The row's request_hash is the run's signature over (org, key)
+          // (digestClaimSignature) when the run can sign: a row under the key
+          // marks the week sent only when it carries it (mayClaimTakenWeek).
           const claimKey = `${userId}:${digestWeekKey(runStartedAt)}`;
-          const { error: claimErr } = await admin.from('idempotency_keys').insert({
+          const signature = claimKeyMaterial
+            ? digestClaimSignature(claimKeyMaterial, orgId, claimKey)
+            : null;
+          if (!signature && !unsignedReported) {
+            unsignedReported = true;
+            // The condition only: no secret material, no length.
+            void reportError(
+              new Error(
+                'weekly digest claims are unsigned this run: UNSUBSCRIBE_SECRET is unset or shorter than 32 characters',
+              ),
+              { tag: 'cron.weekly-digest.claim_unsigned' },
+            );
+          }
+          const claim: DigestClaimRow = {
             organization_id: orgId,
             scope: 'weekly_digest',
             key: claimKey,
-            // request_hash is NOT NULL on the table; the "payload" of a
-            // digest send is exactly its (org, user, week) identity.
-            request_hash: createHash('sha256').update(`${orgId}:${claimKey}`).digest('hex'),
+            request_hash: signature ?? unsignedClaimHash(orgId, claimKey),
             status: 'completed',
-          });
+          };
+          const { error: claimErr } = await admin.from('idempotency_keys').insert(claim);
           if (claimErr) {
-            const duplicate =
-              claimErr.code === '23505' ||
-              (claimErr.message ?? '').includes('duplicate key value');
-            if (duplicate) {
-              // Already sent this week — the whole point.
-              skipped += 1;
-              continue;
+            if (isDuplicateClaim(claimErr)) {
+              // Already sent this week (the whole point). A signed run sends
+              // anyway when the row does not carry its signature
+              // (mayClaimTakenWeek); an unsigned run takes any row as sent.
+              if (!signature || !(await mayClaimTakenWeek(admin, claim, userId))) {
+                skipped += 1;
+                continue;
+              }
+            } else {
+              // Any OTHER claim failure fails OPEN on the MARKER, never on
+              // the send: a missing table/permission blip must degrade to a
+              // possible duplicate, not a fleet-wide digest outage (the
+              // deploy-before-migrate class — see the account-disable
+              // landmine). Reported so a silent duplicate-forever state is
+              // visible.
+              void reportError(new Error(claimErr.message ?? 'digest claim failed'), {
+                tag: 'cron.weekly-digest.claim',
+                extra: { orgId, userId },
+              });
             }
-            // Any OTHER claim failure fails OPEN on the MARKER, never on
-            // the send: a missing table/permission blip must degrade to a
-            // possible duplicate, not a fleet-wide digest outage (the
-            // deploy-before-migrate class — see the account-disable
-            // landmine). Reported so a silent duplicate-forever state is
-            // visible.
-            void reportError(new Error(claimErr.message ?? 'digest claim failed'), {
-              tag: 'cron.weekly-digest.claim',
-              extra: { orgId, userId },
-            });
           }
 
           // The recipient's own signed one-click link for this org's digest

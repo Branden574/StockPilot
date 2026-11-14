@@ -3,10 +3,10 @@ import { z } from 'zod';
 
 import { RETURNS_COPY } from '@stockpilot/core';
 
+import { clientIpFromRequest } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
-  publicRequestIp,
   RETURN_OPTIONS_PER_IP_PER_HOUR,
   RETURN_OPTIONS_PER_TOKEN_PER_HOUR,
   returnOptionsIpBucketKey,
@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) return NextResponse.json(CLOSED_DOOR, { status: 404, headers: NO_STORE });
   const token = parsed.data.token;
 
-  const ip = publicRequestIp(req.headers);
+  const ip = clientIpFromRequest(req);
   const [ipLimit, tokenLimit] = await Promise.all([
     checkRateLimit(returnOptionsIpBucketKey(ip), RETURN_OPTIONS_PER_IP_PER_HOUR, ONE_HOUR_MS, 'closed'),
     checkRateLimit(returnOptionsTokenBucketKey(token), RETURN_OPTIONS_PER_TOKEN_PER_HOUR, ONE_HOUR_MS, 'closed'),

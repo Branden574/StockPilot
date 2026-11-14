@@ -19,8 +19,9 @@ import { RELEASES } from './registry';
  * Added by docs/whats-new-phone-screens-by-access (2026-11-14): the release
  * for the phone update of 2026-11-14 (group 8c30f488, runtime 1.4.0, from
  * #527, squash 60f1bfe48), published at the top, directly below the Liquid
- * Glass draft and above the phone authenticator code release. One release
- * with three entries, as #527 is one phone change:
+ * Glass draft and above the order request alerts release (published earlier
+ * the same day) and the phone authenticator code release. One release with
+ * three entries, as #527 is one phone change:
  *
  *  - the add buttons, Cycle counts and Bundles follow the member's access
  *    (every member);
@@ -33,9 +34,9 @@ import { RELEASES } from './registry';
  * The suggested line about bundles coming back after access returns is left
  * out: no member notices it today.
  *
- * publishedAt is set at merge to the whole minute at or after the first iOS
- * launch of the update, so these tests pin its shape and its order, not the
- * minute itself. Its own file, so the release tests other open branches edit
+ * publishedAt was set at merge (2026-11-14) to the whole minute the first iOS
+ * launch of the update showed, so these tests pin that minute with its shape
+ * and its order. Its own file, so the release tests other open branches edit
  * stay as they are.
  */
 const ID = 'phone-screens-by-access-2026-11';
@@ -83,9 +84,11 @@ describe('the phone screens by access release of 2026-11-14: order, status and d
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
-    expect(RELEASES.slice(0, 3).map((r) => [r.id, r.status])).toEqual([
+    // The order request alerts release, published earlier the same day (17:58Z), sits directly below.
+    expect(RELEASES.slice(0, 4).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
       [ID, 'published'],
+      ['order-request-alerts-follow-approve-2026-11', 'published'],
       ['phone-authenticator-code-2026-11', 'published'],
     ]);
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
@@ -94,6 +97,8 @@ describe('the phone screens by access release of 2026-11-14: order, status and d
   it('is dated on a whole minute after the phone update was published, with the draft placeholder at that minute and no later release below', () => {
     const at = release().publishedAt;
     expect(at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
+    // Set at merge: the first iOS launch of the update showed between the reads of 18:34:04Z and 18:44:07Z.
+    expect(at).toBe('2026-11-14T18:44:00Z');
     expect(RELEASES[0]!.publishedAt).toBe(at);
     // The phone update (group 8c30f488) was published at 2026-11-14T05:39:05Z.
     expect(Date.parse(at)).toBeGreaterThan(Date.parse('2026-11-14T05:39:05Z'));

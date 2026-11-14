@@ -4,6 +4,7 @@ import { RETURN_ERROR_WORDS } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { answerModuleState } from '@/server/lib/api-error-response';
 import { isModuleEnabled, type ServiceContext } from '@/server/services/context';
 
 import { contextFailedResponse, NO_STORE, RATE_LIMITED_MESSAGE } from '../../../returns/http';
@@ -77,7 +78,15 @@ export async function memberRequesterGate(
   }
   const { id } = await params;
   if (!UUID_RE.test(id)) return { response: orderNotAvailable() };
-  if (!isModuleEnabled(ctx, 'returns')) {
+  let returnsOn: boolean;
+  try {
+    returnsOn = isModuleEnabled(ctx, 'returns');
+  } catch (e) {
+    // A module state that could not be read (docket S81): the fixed
+    // try-again answer, never module_disabled.
+    return { response: answerModuleState(e, 'returns.member.module_state', { headers: NO_STORE }) };
+  }
+  if (!returnsOn) {
     return {
       response: NextResponse.json(
         { error: 'module_disabled', message: RETURN_ERROR_WORDS.moduleDisabled },

@@ -375,6 +375,10 @@ const REGISTRY: Record<string, Entry> = {
     'read_first:requireActable',
     'The occurrence is read in the organization first.',
   ],
+  'server/services/exception-occurrences.ts::exception_recount_facts': [
+    'takes_org',
+    'Passes the active organization; reads only (0460, STABLE), only that organization\'s exceptions.',
+  ],
   'server/services/exception-occurrences.ts::exceptions_sync': [
     'takes_org',
     'Passes the organization being synced.',
@@ -755,6 +759,10 @@ const TABLE_WRITES: Record<string, ClassifiedWrite> = {
     'not_org_data',
     'Scheduled job: claims and releases the reminder on the rental row it just read; no active organization.',
   ],
+  'app/api/cron/weekly-digest/route.ts#mayClaimTakenWeek::idempotency_keys.update': [
+    'not_org_data',
+    "Scheduled job: takes over the week's claim row it just read under the organization's key, by its id and the hash it was read with; no active organization.",
+  ],
   'app/api/cron/schedule-reminders/route.ts#GET::schedule_events.update': [
     'not_org_data',
     'Scheduled job: claims the reminder on the event row it just read; no active organization.',
@@ -802,6 +810,10 @@ const TABLE_WRITES: Record<string, ClassifiedWrite> = {
   'lib/auth/login-device.ts#noteLoginDevice::user_login_devices.update': [
     'not_org_data',
     "The signing-in person's own device row, read just above.",
+  ],
+  'lib/auth/login-device.ts#noteLoginDevice::user_login_devices.delete': [
+    'own_row',
+    "The signing-in person's own device row this call just inserted, by user id and device hash, removed when the alert could not be counted.",
   ],
   'lib/books/lookup.ts#writeBookCache::book_metadata_cache.upsert': [
     'not_org_data',
@@ -899,6 +911,10 @@ const TABLE_WRITES: Record<string, ClassifiedWrite> = {
   'server/email/return-prompt.ts#maybeSendReturnPrompt::order_requests.update': [
     'not_org_data',
     'Claims the one return prompt on the order row the sender read; the row carries its own organization.',
+  ],
+  'server/services/audit.ts#sendAuditRows::audit_logs.upsert': [
+    'row_in_hand',
+    "A later try of the audit writer's own rows: the rows its first try's INSERT sent, organization included, with the ids the writer chose (never a caller's); on conflict (id) do nothing, so it never changes a stored row.",
   ],
   'server/services/billing.ts#syncSubscriptionFromStripe::organizations.update': [
     'not_org_data',
@@ -3000,11 +3016,13 @@ describe('every table write in apps/web/src stays in the active organization and
       ([k]) => k === 'row_in_hand' || k === 'not_org_data',
     );
     for (const [, why] of Object.values(TABLE_WRITES)) expect(why.trim()).not.toBe('');
-    // 4 rows in hand and 55 jobs, webhooks, callbacks, public token paths,
-    // platform console and sign-up writes today. A new one is added here on
-    // purpose, with its reason, never to quiet a failure.
-    expect(stated.filter(([k]) => k === 'row_in_hand')).toHaveLength(4);
-    expect(stated.filter(([k]) => k === 'not_org_data')).toHaveLength(55);
+    // 5 rows in hand (the 5th: the audit writer's later try of its own rows)
+    // and 56 jobs, webhooks, callbacks, public token paths, platform console
+    // and sign-up writes today (the 56th: the weekly digest re-signing its
+    // week's claim row). A new one is added here on purpose, with its reason,
+    // never to quiet a failure.
+    expect(stated.filter(([k]) => k === 'row_in_hand')).toHaveLength(5);
+    expect(stated.filter(([k]) => k === 'not_org_data')).toHaveLength(56);
     expect(Object.keys(ROW_PROOF_EXEMPT)).toHaveLength(8);
     // One write serves several tables, and no query builder is kept in a
     // variable.

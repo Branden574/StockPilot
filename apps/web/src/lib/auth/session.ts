@@ -221,10 +221,13 @@ const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
   // means "resolve this request the old way", and the two reads below run.
   // Both sources list memberships OLDEST FIRST (created_at, then organization
   // id), and so do the other two resolvers (api-context pickActiveMembership,
-  // actions/auth resolveDefaultOrgAndRole). The order only matters to a user
-  // with several organizations and no valid default, and for that user every
-  // path must land on the SAME organization: the page and the cookie-authed
-  // /api calls it makes, and a request that fell back to the legacy reads.
+  // services/auth-audit resolveDefaultOrgAndRole). The order only matters to a
+  // user with several organizations and no valid default, and for that user
+  // every path must land on the SAME organization: the page and the
+  // cookie-authed /api calls it makes, and a request that fell back to the
+  // legacy reads. The audit resolver counts only memberships with no end time
+  // (impersonation_expires_at null), so for an account that also holds a
+  // temporary seat it can answer a different organization, on purpose.
   const bundle = resolution.bundle;
   const [profileRes, membersRes] = bundle
     ? [

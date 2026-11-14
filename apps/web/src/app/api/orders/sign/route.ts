@@ -1,5 +1,3 @@
-import { isIP } from 'node:net';
-
 import { revalidateTag } from 'next/cache';
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
@@ -8,6 +6,7 @@ import { formatOrderNumber } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { refusesCrossSiteCookieWrite } from '@/lib/auth/cross-site-request';
+import { clientIpForRecord } from '@/lib/client-ip';
 import { sendOrderRequestEmail } from '@/lib/email/order-requests';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
@@ -16,6 +15,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
 import { maybeSendReturnPrompt } from '@/server/email/return-prompt';
 import { NOT_SET_UP_MESSAGE } from '@/server/lib/action-error-result';
+import { answerModuleState } from '@/server/lib/api-error-response';
 import {
   notifyRequesterBackordered,
   notifyRequesterBackorderShipped,
@@ -112,15 +112,14 @@ interface SignOrderRow {
 }
 
 /**
- * The IP for the hand-over's audit row: the first x-forwarded-for hop, else
- * x-real-ip, as every other audit row takes it (server/services/audit.ts),
- * and only when it is an IP literal. audit_logs.ip is inet: a value such as
- * the rate-limit helper's "unknown" bucket fails the insert (22P02) and the
- * row, and with it the timeline's "Signature collected", is lost.
+ * The IP for the hand-over's audit row, as every other audit row takes it:
+ * the one rule (lib/client-ip.ts clientIpForRecord), only when it is an IP
+ * literal. audit_logs.ip is inet: a value such as the rate-limit helper's
+ * "unknown" bucket fails the insert (22P02) and the row, and with it the
+ * timeline's "Signature collected", is lost.
  */
 function auditIp(req: Request): string | null {
-  const raw = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || req.headers.get('x-real-ip')?.trim() || null;
-  return raw && isIP(raw) ? raw : null;
+  return clientIpForRecord(req.headers);
 }
 
 /**
@@ -245,11 +244,21 @@ export async function POST(req: NextRequest) {
     // the same rule.
     if (refusesCrossSiteCookieWrite(req)) return notFound();
     const ctx = await memberContextFor(req, order.organization_id);
+    let ordersOn = false;
+    if (ctx && ctx.organizationId === order.organization_id) {
+      try {
+        ordersOn = isModuleEnabled(ctx, 'orders');
+      } catch (e) {
+        // A module state that could not be read (docket S81): the fixed
+        // try-again answer, never the not-found an off module gets.
+        return answerModuleState(e, 'orders.sign.module_state');
+      }
+    }
     if (
       !ctx ||
       ctx.organizationId !== order.organization_id ||
       // The orders module off: the mint and the lookup refuse it too (review 9).
-      !isModuleEnabled(ctx, 'orders') ||
+      !ordersOn ||
       // The mint's warehouse rule for an approver below manager rank (review 1).
       !(await mayHandOverOrder(ctx, order))
     ) {
@@ -432,9 +441,14 @@ export async function POST(req: NextRequest) {
 
   // WHO the requester is, resolved ONCE (see resolveRequesterContact): the
   // row's own columns for an external/on-behalf-of order, else the member's
-  // user_profiles row. Every requester-facing notice below uses THIS, never
-  // the raw column — internal requesters have a NULL email column.
-  const requester = await resolveRequesterContact(admin, order);
+  // user_profiles row, and that one only while they are a current member of
+  // the order's organization (docket S36). Every requester-facing notice
+  // below uses THIS, never the raw column — internal requesters have a NULL
+  // email column.
+  const requester = await resolveRequesterContact(admin, order, {
+    tag: 'orders.sign.requester_member_check',
+    orderId: order.id,
+  });
   // A3: a requester who deleted their account is never emailed again. The
   // phone pre-fills the signer email with the address the order kept (every
   // installed bundle does), so a signer email equal to that kept address gets
@@ -445,6 +459,21 @@ export async function POST(req: NextRequest) {
     (order.requester_email ?? '').trim().toLowerCase() !== '' &&
     parsed.data.signerEmail.trim().toLowerCase() ===
       (order.requester_email ?? '').trim().toLowerCase();
+  // Docket S36, the same rule for a requester who is no longer a member: their
+  // own address was withheld from every requester notice, and the sign page
+  // offers it as the default signer email, so a signer email equal to it gets
+  // no signer receipt either (otherwise the order would still reach that
+  // address, as a receipt instead of a notice). When that address could not
+  // be read (withheldEmailUnknown; resolveRequesterContact reported it under
+  // the tag above), no signer email can be told apart from it, so no signer
+  // receipt goes out: a receipt lost to a read error is acceptable (every
+  // email here is best-effort), one to a former member's own address is not.
+  const signerMayBeWithheldRequester =
+    requester.withheldEmailUnknown ||
+    (requester.withheldEmail !== null &&
+      parsed.data.signerEmail.trim().toLowerCase() ===
+        requester.withheldEmail.trim().toLowerCase());
+  const signerGetsNoReceipt = signerIsDeletedRequester || signerMayBeWithheldRequester;
 
   // Requester email opt-out (notification_preferences.email_order_completed,
   // 0113), computed ONCE and honored by BOTH the completion receipt and the
@@ -512,7 +541,7 @@ export async function POST(req: NextRequest) {
       // transactional receipt (matching the completed path's semantics).
       const signerIsRequester =
         parsed.data.signerEmail.toLowerCase() === (requester.email ?? '').toLowerCase();
-      if (!signerIsDeletedRequester && (!signerIsRequester || requesterEmailOptedOut)) {
+      if (!signerGetsNoReceipt && (!signerIsRequester || requesterEmailOptedOut)) {
         try {
           // es `partial-receipt` template: external-recipient receipt from
           // "<supplier> via StockPilot" — the signer may not be a StockPilot
@@ -581,7 +610,7 @@ export async function POST(req: NextRequest) {
           name: requester.name,
         });
       }
-      if (!signerIsDeletedRequester && !recipients.has(parsed.data.signerEmail.toLowerCase())) {
+      if (!signerGetsNoReceipt && !recipients.has(parsed.data.signerEmail.toLowerCase())) {
         recipients.set(parsed.data.signerEmail.toLowerCase(), {
           email: parsed.data.signerEmail,
           name: parsed.data.signerName,

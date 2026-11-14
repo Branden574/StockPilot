@@ -5,7 +5,9 @@ import { bodyAnswersNewRack, createItemSchema } from '@stockpilot/core';
 import { withApiContext } from '@/lib/auth/api-context';
 import { ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { answerModuleState } from '@/server/lib/api-error-response';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
@@ -105,6 +107,13 @@ export async function POST(req: NextRequest) {
     }
     if (e instanceof ForbiddenError) {
       return NextResponse.json({ error: 'forbidden', message: e.message }, { status: 403 });
+    }
+    // A module state that could not be read (docket S81): the fixed try-again
+    // answer at warning level, still a 500 like every other failure here.
+    if (e instanceof ModulesUnavailableError) {
+      return answerModuleState(e, 'api.v1.items.create.module_state', {
+        organizationId: ctx.organizationId,
+      });
     }
     void reportError(e, { tag: 'api.v1.items.create' });
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });

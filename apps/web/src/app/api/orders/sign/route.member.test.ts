@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { sha256Hex } from '@/lib/token-hash';
 import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
@@ -201,13 +201,33 @@ describe('link path: the raw token of a 0389 mint, no session', () => {
 describe('the audit row\'s IP fits audit_logs.ip (inet)', () => {
   // Off Vercel the rate-limit helper answers "unknown", which the inet column
   // refuses (22P02): the row, and the timeline's Signature collected, was
-  // lost (local E2E, 2026-10-03).
+  // lost (local E2E, 2026-10-03). The address is read by the one rule
+  // (lib/client-ip clientIpForRecord); production is on Vercel.
+  beforeEach(() => {
+    vi.stubEnv('VERCEL', '1');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('off Vercel x-forwarded-for is not read: null with nothing else', async () => {
+    vi.stubEnv('VERCEL', '');
+    await POST(request(RAW, { 'x-forwarded-for': '203.0.113.7' }));
+    expect(insertAuditRowReported.mock.calls[0]![0].ip).toBeNull();
+  });
+
+  it('off Vercel x-forwarded-for is not read: x-real-ip when present', async () => {
+    vi.stubEnv('VERCEL', '');
+    await POST(request(RAW, { 'x-forwarded-for': '203.0.113.7', 'x-real-ip': '198.51.100.2' }));
+    expect(insertAuditRowReported.mock.calls[0]![0].ip).toBe('198.51.100.2');
+  });
+
   it('no forwarding header: ip is null, never a word', async () => {
     await POST(request(RAW));
     expect(insertAuditRowReported.mock.calls[0]![0].ip).toBeNull();
   });
 
-  it('the first x-forwarded-for hop, as every other audit row takes it', async () => {
+  it('on Vercel: the first x-forwarded-for hop, as every other audit row takes it', async () => {
     await POST(request(RAW, { 'x-forwarded-for': '203.0.113.7, 10.0.0.1' }));
     expect(insertAuditRowReported.mock.calls[0]![0].ip).toBe('203.0.113.7');
   });

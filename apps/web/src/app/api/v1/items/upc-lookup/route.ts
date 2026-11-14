@@ -6,6 +6,7 @@ import { resolveAiProvider } from '@/lib/ai/provider';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { lookupUpc, buildAiDescriptionPrompt } from '@/lib/upc-lookup';
 import {
   assertModuleEnabled,
@@ -65,11 +66,18 @@ export async function GET(req: NextRequest) {
   // the AI entitlement from reaching a model. assertModuleEnabled stays the
   // single source of truth for the decision (it also honours core-tier
   // modules); only the response to a failure differs.
+  //
+  // An AI module state that could not be read (docket S81) is closed for the
+  // paid call the same way: no AI description this time, and the local and
+  // catalogue lookup still answers.
   let aiModuleEnabled = true;
   try {
     assertModuleEnabled(ctx, 'ai');
   } catch (e) {
-    if (e instanceof ServiceError && e.code === 'module_disabled') {
+    if (
+      (e instanceof ServiceError && e.code === 'module_disabled') ||
+      e instanceof ModulesUnavailableError
+    ) {
       aiModuleEnabled = false;
     } else {
       throw e;

@@ -211,6 +211,22 @@ describe('POST /unsubscribe with a member link changes the setting', () => {
     ]);
   });
 
+  it("the setting change's audit row takes the address only as an IP literal", async () => {
+    const { insertAuditRowReported } = await import('@/server/services/audit');
+    const rowIps = () =>
+      vi.mocked(insertAuditRowReported).mock.calls.map((c) => (c[0] as { ip: unknown }).ip);
+
+    vi.mocked(insertAuditRowReported).mockClear();
+    wireAdmin();
+    await POST(oneClickPost(digestLink(), { 'x-real-ip': '203.0.113.9' }));
+    expect(rowIps()).toEqual(['203.0.113.9']);
+
+    vi.mocked(insertAuditRowReported).mockClear();
+    wireAdmin();
+    await POST(oneClickPost(digestLink(), { 'x-real-ip': 'fe80::1%eth0' }));
+    expect(rowIps()).toEqual([null]);
+  });
+
   it('the confirm form: the link in the body does the same', async () => {
     const stub = wireAdmin();
     const res = await POST(formPost(remindersLink()));

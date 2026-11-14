@@ -1,4 +1,5 @@
 import { withApiContext } from '@/lib/auth/api-context';
+import { answerModuleState } from '@/server/lib/api-error-response';
 import { listReleasesFor } from '@/server/services/releases';
 
 export const runtime = 'nodejs';
@@ -24,5 +25,11 @@ const NO_STORE = { 'Cache-Control': 'private, no-store' } as const;
 export async function GET(req: Request): Promise<Response> {
   const ctx = await withApiContext(req);
   if (!ctx) return Response.json({ error: 'unauthorized' }, { status: 401, headers: NO_STORE });
-  return Response.json(await listReleasesFor(ctx), { headers: NO_STORE });
+  try {
+    return Response.json(await listReleasesFor(ctx), { headers: NO_STORE });
+  } catch (e) {
+    // Which releases a reader sees depends on the modules: a module state that
+    // could not be read is the fixed try-again answer (docket S81).
+    return answerModuleState(e, 'api.v1.me.releases', { headers: NO_STORE });
+  }
 }

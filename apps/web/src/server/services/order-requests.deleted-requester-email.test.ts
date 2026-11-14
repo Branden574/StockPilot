@@ -31,11 +31,23 @@ vi.mock('@/lib/error-reporter', () => ({
   isNextControlFlowError: () => false,
 }));
 vi.mock('@/lib/supabase/admin', async () => {
-  const { makeSupabaseStub: stub } = await import('@/test/supabase-mock');
+  const { makeSupabaseStub: stub, servedLikePostgrest } = await import('@/test/supabase-mock');
   return {
     createAdminClient: () => {
       const made = stub({
         'notification_preferences.select.maybeSingle': prefsResult.value as never,
+        // S36: the live requester is still a current member of the order's
+        // organization, on an account that is not disabled
+        // (order-requests.member-email.test.ts covers the rest).
+        'user_profiles.select': { data: [{ disabled_at: null }], error: null },
+        'organization_members.select': servedLikePostgrest([
+          {
+            organization_id: 'org-test',
+            user_id: 'u-live',
+            accepted_at: '2026-01-05T00:00:00Z',
+            impersonation_expires_at: null,
+          },
+        ]),
       });
       adminStubs.push(made);
       return made.client;
@@ -273,6 +285,8 @@ describe('denied order ticket: a deleted requester is not handed to Zendesk (A3 
   function denyStub(row: Record<string, unknown>) {
     return makeSupabaseStub({
       'order_requests.select.maybeSingle': { data: { warehouse_id: 'wh-1' }, error: null },
+      // The organization's warehouses: the order's is one of them.
+      'warehouses.select': { data: [{ id: 'wh-1' }], error: null },
       'order_requests.update': { data: row, error: null },
     });
   }
@@ -369,6 +383,7 @@ describe('denied order ticket: a deleted requester is not handed to Zendesk (A3 
   it('a denial that did not land (no longer pending) records no event', async () => {
     const stub = makeSupabaseStub({
       'order_requests.select.maybeSingle': { data: { warehouse_id: 'wh-1' }, error: null },
+      'warehouses.select': { data: [{ id: 'wh-1' }], error: null },
       'order_requests.update': { data: null, error: null },
     });
     await expect(svc(stub).deny('ord-1', 'Out of stock')).rejects.toMatchObject({

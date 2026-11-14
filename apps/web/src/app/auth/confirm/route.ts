@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { confirmLanding } from '@/lib/auth/confirm-landing';
 import {
+  emailChangeRequestTimeMissing,
   lookUpConfirmRecipient,
   pendingEmailChangeFor,
   verifyConfirmRecipient,
@@ -65,7 +66,8 @@ import type { EmailOtpType } from '@supabase/supabase-js';
  *     moved or relabelled `r` gets the type's refused answer and one past its
  *     hour the expired answer, with no lookup. An email-change link whose
  *     change GoTrue no longer holds (done, cancelled, or replaced by a newer
- *     request) gets the expired answer and no address. POST checks `r` again
+ *     request), or whose pending change comes back without a readable request
+ *     time, gets the expired answer and no address. POST checks `r` again
  *     before verifyOtp, so the token is not spent;
  *   - a browser already signed in as another account is told both addresses
  *     (and the one already signed in as the link's account is told nothing);
@@ -476,11 +478,22 @@ export async function GET(request: NextRequest) {
   if (type === 'email_change') {
     // GoTrue keeps one pending change, and every new request replaces the
     // links of the last one. A link whose change is done, cancelled or
-    // replaced gets the expired answer and no address: the account's
+    // replaced, or whose pending change GoTrue gives no readable request time
+    // for, gets the expired answer and no address: the account's
     // addresses now are not the ones it was sent for (a link sent to a
     // mistyped address must not show the corrected one).
     const pending = pendingEmailChangeFor(account, verdict.issued);
-    if (pending === null) return expiredAnswer(origin, type);
+    if (pending === null) {
+      if (emailChangeRequestTimeMissing(account)) {
+        // A password change clears GoTrue's request time and both link tokens
+        // and keeps the pending address, so the links of that change no longer
+        // verify. Logged with the type only (never the id, an address, the
+        // token or r); not a report, since the link can be opened any number
+        // of times within its hour.
+        console.info('[auth/confirm] email change pending without a request time', { type });
+      }
+      return expiredAnswer(origin, type);
+    }
     line = emailChangeLine(account.email, pending);
     newEmail = pending;
   } else {

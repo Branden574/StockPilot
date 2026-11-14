@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { clientIpFromRequest } from '@/lib/client-ip';
+import { clientIpForRecord, clientIpFromRequest } from '@/lib/client-ip';
 import {
   MEMBER_UNSUBSCRIBE_MAX_AGE_DAYS,
   verifyMemberUnsubscribeToken,
@@ -348,7 +348,8 @@ async function memberPost(request: NextRequest, link: string): Promise<NextRespo
 
   try {
     const outcome = await unsubscribeMemberEmail(createAdminClient(), claim, {
-      ip: ip === 'unknown' ? null : ip,
+      // The record's form of the address (audit_logs.ip is inet).
+      ip: clientIpForRecord(request.headers),
       userAgent: request.headers.get('user-agent'),
     });
     // Only a change made (or already made) is a success; every refusal (a

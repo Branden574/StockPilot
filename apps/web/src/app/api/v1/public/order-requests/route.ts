@@ -3,6 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
+import { clientIpFromRequest } from '@/lib/client-ip';
 import { sendOrderRequestEmail } from '@/lib/email/order-requests';
 import { reportError } from '@/lib/error-reporter';
 import { hasArrayLongerThan } from '@/lib/oversized-array';
@@ -213,17 +214,10 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 2. Rate limit per IP. We only trust `x-forwarded-for` when running
-  // on Vercel — outside of Vercel the platform may not strip client-
-  // supplied XFF, so a submitter could rotate the header to bypass
-  // the per-IP cap. Local dev / self-hosted falls back to the socket
-  // address via `x-real-ip`, or the unknown bucket. (C7)
-  const onVercel = process.env.VERCEL === '1';
-  const xff = onVercel ? req.headers.get('x-forwarded-for') : null;
-  const ip =
-    xff?.split(',')[0]?.trim() ||
-    req.headers.get('x-real-ip') ||
-    'unknown';
+  // 2. Rate limit per IP, by the one rule in lib/client-ip.ts:
+  // x-forwarded-for on Vercel, where the platform sets it; elsewhere
+  // x-real-ip, or the unknown bucket. (C7)
+  const ip = clientIpFromRequest(req);
   // `mode: 'closed'` — this is an unauthenticated endpoint, so a DB
   // outage that makes the rate-limiter fall back to fail-open would
   // grant unlimited submissions. Prefer to 429 during the outage.

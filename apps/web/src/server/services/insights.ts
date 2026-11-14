@@ -7,6 +7,7 @@ import { resolveAiProvider } from '@/lib/ai/provider';
 import { env } from '@/lib/env';
 
 import { withContext, type ServiceContext } from './context';
+import { insightsVisibleTo, type InsightSignalKey } from './insights-access';
 import { getDashboardActions, getLowStockItems } from './movements';
 import { OrderRequestsService } from './order-requests';
 import { PurchaseOrdersService } from './purchase-orders';
@@ -23,7 +24,8 @@ import { PurchaseOrdersService } from './purchase-orders';
 export type InsightSeverity = 'urgent' | 'warn' | 'info';
 
 export interface InsightSignal {
-  key: string;
+  /** One of the lines insights-access.ts has a rule for. */
+  key: InsightSignalKey;
   label: string;
   count: number;
   severity: InsightSeverity;
@@ -35,21 +37,33 @@ export interface InsightsResult {
   lowStock: Array<{ id: string; name: string; sku: string; qty: number; reorderPoint: number }>;
 }
 
+/**
+ * Today's briefing for the signed-in reader: only the lines they can open and
+ * act on (insights-access.ts), so the page and its AI summary, which is
+ * written from this result, never speak of anything else.
+ */
 export async function gatherInsights(): Promise<InsightsResult> {
-  return gatherInsightsForCtx(await withContext());
+  const ctx = await withContext();
+  return insightsVisibleTo(await gatherInsightsForCtx(ctx), ctx);
 }
 
 /**
  * Context-explicit variant so the daily-briefing cron can run the same
  * gathering under a per-org system context (the page path above stays bound
- * to the signed-in user's context).
+ * to the signed-in user's context). Every line the context's counts produce;
+ * the caller decides who reads which (the cron, per recipient).
+ *
+ * Approvals are the pending requests this context could approve
+ * (approvablePendingCount: orders:approve, never a viewer, write access to the
+ * request's warehouse), the same count as the Overview's card. For the cron's
+ * owner-role system context that is the organization's.
  */
 export async function gatherInsightsForCtx(ctx: ServiceContext): Promise<InsightsResult> {
   const [lowStock, actions, overdue, pending] = await Promise.all([
     getLowStockItems(8, { ctx }).catch(() => []),
     getDashboardActions({ ctx }).catch(() => ({ openPoCount: 0, openCycleCount: 0, pendingReceipts: 0 })),
     new PurchaseOrdersService(ctx).overdueCount().catch(() => 0),
-    new OrderRequestsService(ctx).pendingCount().catch(() => 0),
+    new OrderRequestsService(ctx).approvablePendingCount().catch(() => 0),
   ]);
 
   const signals: InsightSignal[] = [];

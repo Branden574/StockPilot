@@ -21,6 +21,7 @@ import {
   NOT_SET_UP_MESSAGE,
   unexpectedActionError,
 } from '@/server/lib/action-error-result';
+import { SESSION_CHANGED } from '@/server/services/step-up-held';
 
 import {
   acceptInviteSchema,
@@ -61,6 +62,11 @@ export async function inviteMemberAction(
     const ctx = await withContext();
     const svc = new TeamService(ctx);
     const session = await requireSession();
+    // The inviter's name and email come from this second load: it must be the
+    // account the context resolved, or the action is refused.
+    if (session.userId !== ctx.userId) {
+      return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
+    }
 
     const { data: orgRow } = await ctx.supabase
       .from('organizations')
@@ -375,6 +381,11 @@ export async function transferOwnershipAction(input: {
     }
 
     const session = await requireSession();
+    // The password below is checked for this second load's email: it must be
+    // the account the context resolved, or the action is refused.
+    if (session.userId !== ctx.userId) {
+      return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
+    }
 
     // Rate-limit BEFORE the password verify so a leaked cookie can't
     // brute-force the password.

@@ -154,8 +154,8 @@ async function callSnapshot(world: Partial<World>, qs = '') {
     organizationId: 'org-1',
     userId: 'u-1',
     role: 'admin',
-    permissions: new Set(),
-    enabledModules: new Set(),
+    permissions: new Set(['bundles:read']),
+    enabledModules: new Set(['bundles']),
     supabase: makeClient(respondFor(full)),
   } as never);
   const res = await GET(

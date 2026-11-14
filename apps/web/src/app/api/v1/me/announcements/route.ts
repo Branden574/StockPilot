@@ -2,9 +2,11 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { computeSeenViewedMap } from '@/lib/onboarding/announcement-logic';
 import { legacyAnnouncementsFor } from '@/lib/releases/logic';
 import { RELEASES } from '@/lib/releases/registry';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { releaseViewerFor } from '@/server/services/releases';
 
 export const runtime = 'nodejs';
@@ -57,7 +59,16 @@ export async function GET(req: Request): Promise<Response> {
       { items: legacyAnnouncementsFor(RELEASES, releaseViewerFor(ctx), viewed) },
       { headers: { 'Cache-Control': 'no-store' } },
     );
-  } catch {
+  } catch (e) {
+    // A module state that could not be read (docket S81) is not "nothing to
+    // show": an empty list would hide the items no module scopes. The route's
+    // 5xx instead; the phone shows nothing this time and asks again on its
+    // next launch (its show-once mark is set only when it has items to show).
+    if (e instanceof ModulesUnavailableError) {
+      return internalErrorResponse(e, 'api.v1.me.announcements', {
+        headers: { 'Cache-Control': 'no-store' },
+      });
+    }
     // Fail-quiet — What's New must never break the shell. Empty = show nothing.
     return NextResponse.json({ items: [] }, { headers: { 'Cache-Control': 'no-store' } });
   }

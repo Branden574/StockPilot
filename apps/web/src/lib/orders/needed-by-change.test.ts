@@ -12,6 +12,7 @@ import {
 
 import { assertWarehouseAccess, roleSeesEveryWarehouse, type WarehouseAccess } from '@/lib/auth/warehouse';
 import { orderReadinessFacts, READINESS_FAILED, readinessOk, visibleItemFacts } from '@/test/order-readiness-facts';
+import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 import {
   initialNeededByWallClock,
@@ -106,10 +107,20 @@ describe('neededByChangeView: who is offered Change', () => {
   });
 
   it("agrees with the service's own gate (assertWarehouseAccess 'write') for every role and access shape (pattern #26)", async () => {
+    // The order's warehouse is one of the organization's (the order row is
+    // read in it), which is what the service's warehouse read answers.
+    const WH = '00000000-0000-4000-8000-0000000000a1';
+    const WH_OTHER = '00000000-0000-4000-8000-0000000000a2';
+    const client = makeSupabaseStub({
+      'warehouses.select': servedLikePostgrest([
+        { id: WH, organization_id: 'org-1' },
+        { id: WH_OTHER, organization_id: 'org-1' },
+      ]),
+    }).client;
     const shapes: WarehouseAccess[] = [
-      { readableIds: ['wh-1'], writableIds: ['wh-1'], hasAllAccess: false, primaryWarehouseId: 'wh-1' },
-      { readableIds: ['wh-1'], writableIds: [], hasAllAccess: false, primaryWarehouseId: 'wh-1' },
-      { readableIds: ['wh-2'], writableIds: ['wh-2'], hasAllAccess: false, primaryWarehouseId: 'wh-2' },
+      { readableIds: [WH], writableIds: [WH], hasAllAccess: false, primaryWarehouseId: WH },
+      { readableIds: [WH], writableIds: [], hasAllAccess: false, primaryWarehouseId: WH },
+      { readableIds: [WH_OTHER], writableIds: [WH_OTHER], hasAllAccess: false, primaryWarehouseId: WH_OTHER },
       { readableIds: [], writableIds: [], hasAllAccess: true, primaryWarehouseId: null },
       { readableIds: [], writableIds: [], hasAllAccess: false, primaryWarehouseId: null, unreadable: true },
       { readableIds: [], writableIds: [], hasAllAccess: true, primaryWarehouseId: null, unreadable: true },
@@ -117,9 +128,9 @@ describe('neededByChangeView: who is offered Change', () => {
     for (const role of ['owner', 'admin', 'manager', 'staff', 'viewer'] as const) {
       for (const access of shapes) {
         const service = await assertWarehouseAccess(
-          'wh-1',
+          WH,
           'write',
-          { organizationId: 'org-1', userId: 'u-1', role },
+          { organizationId: 'org-1', userId: 'u-1', role, supabase: client },
           Promise.resolve(access),
         ).then(
           () => true,
@@ -127,8 +138,13 @@ describe('neededByChangeView: who is offered Change', () => {
         );
         const byRole = roleSeesEveryWarehouse(role);
         const page =
-          neededByChangeView({ ...base, role, roleSeesEveryWarehouse: byRole, access: byRole ? null : access }) !==
-          null;
+          neededByChangeView({
+            ...base,
+            warehouseId: WH,
+            role,
+            roleSeesEveryWarehouse: byRole,
+            access: byRole ? null : access,
+          }) !== null;
         // A manager's access is never read by the page: the role decides, as
         // getWarehouseAccess answers hasAllAccess for it whatever its lists.
         if (!byRole || access.hasAllAccess) {
