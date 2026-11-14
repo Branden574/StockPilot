@@ -3006,8 +3006,8 @@ describe('every table write in apps/web/src stays in the active organization and
     for (const [, why] of Object.values(TABLE_WRITES)) expect(why.trim()).not.toBe('');
     // 4 rows in hand and 56 jobs, webhooks, callbacks, public token paths,
     // platform console and sign-up writes today (the 56th: the weekly digest
-    // taking over a claim row the cron did not write). A new one is added here
-    // on purpose, with its reason, never to quiet a failure.
+    // re-signing its week's claim row). A new one is added here on purpose,
+    // with its reason, never to quiet a failure.
     expect(stated.filter(([k]) => k === 'row_in_hand')).toHaveLength(4);
     expect(stated.filter(([k]) => k === 'not_org_data')).toHaveLength(56);
     expect(Object.keys(ROW_PROOF_EXEMPT)).toHaveLength(8);

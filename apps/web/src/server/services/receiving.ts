@@ -100,7 +100,8 @@ export function hashReceiptRequest(input: PostReceiptInput): string {
 
 /**
  * True when post_receipt_v2's answer is a receipt this request posted: of its
- * purchase order and warehouse, in the caller's organization, recorded with
+ * purchase order and warehouse (ids compared in lower case, as the database
+ * returns them), in the caller's organization, recorded with
  * its key (receipts.idempotency_key, written with the receipt) by the caller
  * (received_by = auth.uid() at insert). A missing receipt answers a row of
  * nulls, which fails on the id.
@@ -116,8 +117,10 @@ function isReceiptOfRequest(
     typeof receipt.id === 'string' &&
     receipt.id.length > 0 &&
     receipt.organization_id === ctx.organizationId &&
-    receipt.purchase_order_id === input.purchaseOrderId &&
-    receipt.warehouse_id === input.warehouseId &&
+    typeof receipt.purchase_order_id === 'string' &&
+    receipt.purchase_order_id.toLowerCase() === input.purchaseOrderId.toLowerCase() &&
+    typeof receipt.warehouse_id === 'string' &&
+    receipt.warehouse_id.toLowerCase() === input.warehouseId.toLowerCase() &&
     receipt.idempotency_key === input.idempotencyKey &&
     receipt.received_by === ctx.userId
   );
@@ -414,7 +417,8 @@ export class ReceivingService {
     // person. A first post always returns its own new receipt, which matches.
     // Anything else is the same conflict as a key sent with other lines (the
     // receipts route tags it idempotency_conflict); the function wrote
-    // nothing for it, so no audit, outbox, webhook or cache step runs.
+    // nothing for it, so no receipt audit row, outbox event, webhook or cache
+    // step runs (the refusal itself is audited).
     const receipt = data as unknown as ReceiptRow | null;
     if (!isReceiptOfRequest(receipt, input, this.ctx)) {
       throw await this.receiptKeyConflict(input);

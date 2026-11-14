@@ -82,6 +82,15 @@ describe('ReceivingService.postReceipt: the answer to a retry key', () => {
     );
   });
 
+  it('matches the purchase order and warehouse ids whatever their letter case', async () => {
+    const receipt = await serviceAnswering(ownReceipt).postReceipt({
+      ...input,
+      purchaseOrderId: 'PO-1',
+      warehouseId: 'WH-1',
+    });
+    expect(receipt).toMatchObject({ id: 'rcpt-1' });
+  });
+
   const others: Array<[string, unknown]> = [
     ['a receipt of another purchase order', { ...ownReceipt, id: 'rcpt-9', purchase_order_id: 'po-9' }],
     ['a receipt into another warehouse', { ...ownReceipt, id: 'rcpt-9', warehouse_id: 'wh-9' }],

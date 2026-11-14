@@ -1,3 +1,5 @@
+import { createHash, createHmac } from 'node:crypto';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeSupabaseStub, type MockCall, type QueryResult } from '@/test/supabase-mock';
@@ -69,6 +71,7 @@ vi.mock('@/server/services/digest', () => ({
 
 import { GET } from './route';
 import { env } from '@/lib/env';
+import { reportError } from '@/lib/error-reporter';
 import { mintMemberUnsubscribeToken } from '@/lib/email/member-unsubscribe';
 
 function buildRequest(authHeader?: string) {
@@ -284,12 +287,28 @@ describe('GET /api/cron/weekly-digest — at-most-once per (org, user, week)', (
   });
 });
 
-describe('GET /api/cron/weekly-digest — a week is marked sent only by the cron', () => {
-  // The claim's request_hash is the cron's signature over (organization, key),
-  // made with a value only the server holds. A row under the key is honoured
-  // as "already sent" only when it carries that signature; any other row is
-  // taken over (compare-and-set on the hash it was read with) and the digest
-  // is sent.
+describe('GET /api/cron/weekly-digest — a week is marked sent only by a signed claim', () => {
+  // With UNSUBSCRIBE_SECRET at least 32 characters long, the claim's
+  // request_hash is an HMAC over (organization, key) under a key derived from
+  // it with a fixed label. A row under the key is honoured as "already sent"
+  // only when it carries that value (or, for the weeks up to the last one
+  // claimed before claims were signed, the unsigned form those weeks used);
+  // any other row is taken over (compare-and-set on the hash it was read
+  // with, up to three tries) and the digest is sent. Without such a value the
+  // run reports once and claims unsigned: any row under the key means sent.
+  const signable = env as Record<string, string | undefined>;
+  // A dull value under a neutral name (secret-shaped-fixtures guard).
+  const CLAIM_SIGNING_VALUE = 'claim-sign-' + 'k'.repeat(24);
+
+  beforeEach(() => {
+    signable.UNSUBSCRIBE_SECRET = CLAIM_SIGNING_VALUE;
+  });
+  afterEach(() => {
+    delete signable.UNSUBSCRIBE_SECRET;
+    signable.CRON_SECRET = 'test-cron-secret';
+    vi.useRealTimers();
+  });
+
   const DUPLICATE = {
     data: null,
     error: { message: 'duplicate key value violates unique constraint "idempotency_keys_..."', code: '23505' },
@@ -297,9 +316,12 @@ describe('GET /api/cron/weekly-digest — a week is marked sent only by the cron
 
   type Answer = QueryResult | ((call: MockCall) => QueryResult);
 
-  function stubWithClaim(answers: { insert?: Answer; select?: Answer; update?: Answer }) {
+  function stubWithClaim(
+    answers: { insert?: Answer; select?: Answer; update?: Answer },
+    recipients = [recipientRow('user-a', 'a@acme.test')],
+  ) {
     return makeSupabaseStub({
-      'user_profiles.select': { data: [recipientRow('user-a', 'a@acme.test')], error: null },
+      'user_profiles.select': { data: recipients, error: null },
       'user_profiles.select.maybeSingle': {
         data: { email_digest_optin: true, disabled_at: null },
         error: null,
@@ -314,9 +336,9 @@ describe('GET /api/cron/weekly-digest — a week is marked sent only by the cron
     });
   }
 
-  /** The row the cron inserted, as the first insert's argument. */
-  function insertedClaim(stub: ReturnType<typeof makeSupabaseStub>): Record<string, unknown> {
-    return stub.chainArgsAll.get('idempotency_keys.insert')?.[0]?.[0]?.[0] as Record<string, unknown>;
+  /** The row the cron inserted, as the n-th insert's argument. */
+  function insertedClaim(stub: ReturnType<typeof makeSupabaseStub>, n = 0): Record<string, unknown> {
+    return stub.chainArgsAll.get('idempotency_keys.insert')?.[n]?.[0]?.[0] as Record<string, unknown>;
   }
 
   function eqFilters(stub: ReturnType<typeof makeSupabaseStub>, key: string, n = 0): unknown[][] {
@@ -325,7 +347,18 @@ describe('GET /api/cron/weekly-digest — a week is marked sent only by the cron
     return chain.flatMap((m, i) => (m === 'eq' ? [args[i]!] : []));
   }
 
-  it('sends the digest when the row under the key is not one the cron wrote', async () => {
+  /** The form a claim took before claims were signed. */
+  function unsignedForm(orgId: string, key: string): string {
+    return createHash('sha256').update(`${orgId}:${key}`).digest('hex');
+  }
+
+  function reportsTagged(tag: string): unknown[][] {
+    return vi.mocked(reportError).mock.calls.filter(
+      ([, context]) => (context as { tag?: string } | undefined)?.tag === tag,
+    );
+  }
+
+  it('sends the digest when the row under the key is not signed', async () => {
     const stub = stubWithClaim({
       insert: DUPLICATE,
       select: { data: { id: 'row-1', request_hash: 'f'.repeat(64) }, error: null },
@@ -357,25 +390,169 @@ describe('GET /api/cron/weekly-digest — a week is marked sent only by the cron
     expect(update).toMatchObject({ status: 'completed', request_hash: insertedClaim(stub).request_hash });
   });
 
-  it('signs the claim with a value only the server holds', async () => {
-    const signable = env as Record<string, string | undefined>;
+  it('signs the claim with a key derived from UNSUBSCRIBE_SECRET, never with the cron secret', async () => {
     const hashes: string[] = [];
-    try {
-      for (const secret of ['test-cron-secret', 'another-cron-secret']) {
-        signable.CRON_SECRET = secret;
-        const stub = stubWithClaim({ insert: { data: { id: 'claim-1' }, error: null } });
-        adminHolder.client = stub.client;
-        await GET(buildRequest(`Bearer ${secret}`));
-        const claim = insertedClaim(stub);
-        expect(claim).toMatchObject({ organization_id: 'org-1', scope: 'weekly_digest', status: 'completed' });
-        hashes.push(String(claim.request_hash));
-      }
-    } finally {
-      signable.CRON_SECRET = 'test-cron-secret';
+    const runs: Array<[string, string]> = [
+      ['test-cron-secret', CLAIM_SIGNING_VALUE],
+      ['another-cron-secret', CLAIM_SIGNING_VALUE],
+      ['test-cron-secret', 'claim-sign-' + 'm'.repeat(24)],
+    ];
+    let key = '';
+    for (const [cronSecret, signingValue] of runs) {
+      signable.CRON_SECRET = cronSecret;
+      signable.UNSUBSCRIBE_SECRET = signingValue;
+      const stub = stubWithClaim({ insert: { data: { id: 'claim-1' }, error: null } });
+      adminHolder.client = stub.client;
+      await GET(buildRequest(`Bearer ${cronSecret}`));
+      const claim = insertedClaim(stub);
+      expect(claim).toMatchObject({ organization_id: 'org-1', scope: 'weekly_digest', status: 'completed' });
+      key = String(claim.key);
+      hashes.push(String(claim.request_hash));
     }
     expect(hashes[0]).toMatch(/^[0-9a-f]{64}$/);
-    // Same organization, member and week; another server value, another hash.
-    expect(hashes[1]).not.toBe(hashes[0]);
+    // Another cron secret, the same hash; another signing value, another hash.
+    expect(hashes[1]).toBe(hashes[0]);
+    expect(hashes[2]).not.toBe(hashes[0]);
+    // Not the value the cron secret would sign, nor the unsigned form.
+    const underCronSecret = createHmac('sha256', 'test-cron-secret')
+      .update(`weekly_digest_claim:v1|org-1|${key}`)
+      .digest('hex');
+    expect(hashes[0]).not.toBe(underCronSecret);
+    expect(hashes[0]).not.toBe(unsignedForm('org-1', key));
+    expect(reportsTagged('cron.weekly-digest.claim_unsigned')).toHaveLength(0);
+  });
+
+  it('claims unsigned and reports once per run when UNSUBSCRIBE_SECRET is shorter than 32 characters', async () => {
+    signable.UNSUBSCRIBE_SECRET = 'k'.repeat(31);
+    const stub = stubWithClaim({ insert: DUPLICATE }, [
+      recipientRow('user-a', 'a@acme.test'),
+      recipientRow('user-b', 'b@acme.test'),
+    ]);
+    adminHolder.client = stub.client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+
+    // Any row under the key means sent: nothing is read or taken over.
+    expect(await res.json()).toMatchObject({ ok: true, sent: 0, skipped: 2 });
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(stub.chainsAll.has('idempotency_keys.select')).toBe(false);
+    expect(stub.chainsAll.has('idempotency_keys.update')).toBe(false);
+    const claim = insertedClaim(stub);
+    expect(claim.request_hash).toBe(unsignedForm('org-1', String(claim.key)));
+    const reports = reportsTagged('cron.weekly-digest.claim_unsigned');
+    expect(reports).toHaveLength(1);
+    // The report names the condition only; no secret material.
+    expect(String((reports[0]![0] as Error).message)).not.toContain('k'.repeat(8));
+  });
+
+  it('claims unsigned, and reports, when UNSUBSCRIBE_SECRET is unset', async () => {
+    delete signable.UNSUBSCRIBE_SECRET;
+    const stub = stubWithClaim({ insert: { data: { id: 'claim-1' }, error: null } });
+    adminHolder.client = stub.client;
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+
+    const claim = insertedClaim(stub);
+    expect(claim.request_hash).toBe(unsignedForm('org-1', String(claim.key)));
+    expect(reportsTagged('cron.weekly-digest.claim_unsigned')).toHaveLength(1);
+  });
+
+  it('honours an unsigned claim of the week of 2026-11-09 as sent', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-12T10:00:00.000Z'));
+    const key = 'user-a:2026-11-09';
+    const stub = stubWithClaim({
+      insert: DUPLICATE,
+      select: { data: { id: 'row-1', request_hash: unsignedForm('org-1', key) }, error: null },
+      update: { data: [{ id: 'row-1' }], error: null },
+    });
+    adminHolder.client = stub.client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+
+    expect(String(insertedClaim(stub).key)).toBe(key);
+    expect(await res.json()).toMatchObject({ ok: true, sent: 0, skipped: 1 });
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(stub.chainsAll.has('idempotency_keys.update')).toBe(false);
+  });
+
+  it('does not honour the unsigned form for the week of 2026-11-16', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-16T14:00:00.000Z'));
+    const key = 'user-a:2026-11-16';
+    const stub = stubWithClaim({
+      insert: DUPLICATE,
+      select: { data: { id: 'row-1', request_hash: unsignedForm('org-1', key) }, error: null },
+      update: { data: [{ id: 'row-1' }], error: null },
+    });
+    adminHolder.client = stub.client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+
+    expect(String(insertedClaim(stub).key)).toBe(key);
+    expect(await res.json()).toMatchObject({ ok: true, sent: 1, skipped: 0 });
+    expect(eqFilters(stub, 'idempotency_keys.update')).toContainEqual([
+      'request_hash',
+      unsignedForm('org-1', key),
+    ]);
+  });
+
+  it('tries the take-over again when the row changes between tries, and sends holding the claim', async () => {
+    let reads = 0;
+    let updates = 0;
+    const stub = stubWithClaim({
+      insert: DUPLICATE,
+      // Each read answers an unsigned row with another hash.
+      select: () => ({ data: { id: 'row-1', request_hash: String(++reads).repeat(64) }, error: null }),
+      // The first two compare-and-sets miss (the row changed first); the third holds.
+      update: () => (++updates < 3 ? { data: [], error: null } : { data: [{ id: 'row-1' }], error: null }),
+    });
+    adminHolder.client = stub.client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+
+    expect(await res.json()).toMatchObject({ ok: true, sent: 1, skipped: 0 });
+    expect(updates).toBe(3);
+    // Each try names the hash that try read.
+    for (const [n, digit] of [[0, '1'], [1, '2'], [2, '3']] as const) {
+      expect(eqFilters(stub, 'idempotency_keys.update', n)).toContainEqual(['request_hash', digit.repeat(64)]);
+    }
+    expect(reportsTagged('cron.weekly-digest.claim')).toHaveLength(0);
+  });
+
+  it('sends, and reports, after three tries that each find the row changed', async () => {
+    let reads = 0;
+    const stub = stubWithClaim({
+      insert: DUPLICATE,
+      select: () => ({ data: { id: 'row-1', request_hash: String(++reads % 10).repeat(64) }, error: null }),
+      update: { data: [], error: null },
+    });
+    adminHolder.client = stub.client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+
+    expect(await res.json()).toMatchObject({ ok: true, sent: 1, skipped: 0 });
+    expect(stub.chainsAll.get('idempotency_keys.update')).toHaveLength(3);
+    expect(reportsTagged('cron.weekly-digest.claim')).toHaveLength(1);
+  });
+
+  it('claims again when the row under the key is gone, and sends holding the claim', async () => {
+    let inserts = 0;
+    const stub = stubWithClaim({
+      insert: () => (++inserts === 1 ? DUPLICATE : { data: { id: 'claim-2' }, error: null }),
+      select: { data: null, error: null },
+    });
+    adminHolder.client = stub.client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+
+    expect(await res.json()).toMatchObject({ ok: true, sent: 1, skipped: 0 });
+    expect(inserts).toBe(2);
+    expect(insertedClaim(stub, 1)).toMatchObject({
+      key: insertedClaim(stub, 0).key,
+      request_hash: insertedClaim(stub, 0).request_hash,
+    });
+    expect(reportsTagged('cron.weekly-digest.claim')).toHaveLength(0);
   });
 
   it("leaves the week marked sent when another run's claim replaced the row first", async () => {
@@ -387,8 +564,8 @@ describe('GET /api/cron/weekly-digest — a week is marked sent only by the cron
           ?.request_hash;
         return DUPLICATE;
       },
-      // First read: a row the cron did not write. After the take-over missed,
-      // the read answers the row the other run left: the cron's own claim.
+      // First read: an unsigned row. After the take-over missed, the read
+      // answers the row the other run left: a signed claim.
       select: () =>
         reads++ === 0
           ? { data: { id: 'row-1', request_hash: '0'.repeat(64) }, error: null }
@@ -404,7 +581,6 @@ describe('GET /api/cron/weekly-digest — a week is marked sent only by the cron
   });
 
   it('leaves the week marked sent, and reports, when the row under the key cannot be read', async () => {
-    const { reportError } = await import('@/lib/error-reporter');
     const stub = stubWithClaim({
       insert: DUPLICATE,
       select: { data: null, error: { message: 'read failed' } },
@@ -415,10 +591,7 @@ describe('GET /api/cron/weekly-digest — a week is marked sent only by the cron
 
     expect(await res.json()).toMatchObject({ ok: true, sent: 0, skipped: 1 });
     expect(sendEmailMock).not.toHaveBeenCalled();
-    expect(reportError).toHaveBeenCalledWith(
-      expect.any(Error),
-      expect.objectContaining({ tag: 'cron.weekly-digest.claim' }),
-    );
+    expect(reportsTagged('cron.weekly-digest.claim')).toHaveLength(1);
   });
 });
 

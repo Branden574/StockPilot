@@ -270,6 +270,21 @@ function drawableAtWarehouse(itemWarehouseId: string | null, warehouseId: string
   return itemWarehouseId == null || itemWarehouseId === warehouseId;
 }
 
+/** True when `quantity` is written with at most four decimal places (the
+ *  scale of bundle_distributions.quantity). A number's shortest form is the
+ *  decimal it was parsed from; an exponent form is a tiny or huge value. */
+function hasAtMostFourDecimals(quantity: number): boolean {
+  const text = String(quantity);
+  if (/e/i.test(text)) return false;
+  const dot = text.indexOf('.');
+  return dot === -1 || text.length - dot - 1 <= 4;
+}
+
+/** A quantity at the four decimal places numeric(14,4) keeps, as an integer. */
+function atColumnScale(quantity: number | string): number {
+  return Math.round(Number(quantity) * 10_000);
+}
+
 export class BundlesService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -990,6 +1005,13 @@ export class BundlesService {
   async distribute(id: string, input: DistributeInput): Promise<{ distributionId: string }> {
     assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:distribute');
+    // bundle_distributions.quantity is numeric(14,4): a quantity with more
+    // decimal places would be rounded on insert, after the components were
+    // drawn for the unrounded one. Refused here, before anything is read or
+    // drawn, on every try (the web page and the phone route both pass here).
+    if (!hasAtMostFourDecimals(input.quantity)) {
+      throw new ServiceError('validation_error', 'Enter a quantity with at most four decimal places.');
+    }
     // S39: read the kit in THIS organization first, as assemble() does:
     // distribute_bundle decides on the kit's own organization, and the audit
     // row and the cache invalidation below are this organization's.
@@ -1106,9 +1128,9 @@ export class BundlesService {
     if (
       !row ||
       row.organization_id !== this.ctx.organizationId ||
-      row.bundle_id !== bundleId ||
-      row.warehouse_id !== input.warehouseId ||
-      Number(row.quantity) !== Number(input.quantity) ||
+      row.bundle_id.toLowerCase() !== bundleId.toLowerCase() ||
+      row.warehouse_id.toLowerCase() !== input.warehouseId.toLowerCase() ||
+      atColumnScale(row.quantity) !== atColumnScale(input.quantity) ||
       row.distributed_by !== this.ctx.userId
     ) {
       throw conflict();

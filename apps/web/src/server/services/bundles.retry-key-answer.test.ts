@@ -119,6 +119,34 @@ describe('BundlesService.distribute: the answer to a retry key', () => {
     expect(audit).not.toHaveBeenCalled();
   });
 
+  it('refuses a quantity with more than four decimal places before anything is drawn, on every try', async () => {
+    const { svc, rpc } = serviceWith('dist-1', [{ ...own, quantity: 2.1235 }]);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(svc.distribute('b-1', { ...request, quantity: 2.12345 })).rejects.toMatchObject({
+        code: 'validation_error',
+      });
+    }
+    expect(rpc).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it('compares the quantity at the four decimal places the column keeps', async () => {
+    for (const stored of ['1.0001', 1.0001, '1.00010']) {
+      const { svc } = serviceWith('dist-1', [{ ...own, quantity: stored }]);
+      await expect(svc.distribute('b-1', { ...request, quantity: 1.0001 })).resolves.toEqual({
+        distributionId: 'dist-1',
+      });
+    }
+  });
+
+  it('matches the kit and warehouse ids whatever their letter case', async () => {
+    const { svc } = serviceWith('dist-1', [{ ...own, bundle_id: 'b-1', warehouse_id: 'wh-1' }]);
+    await expect(svc.distribute('B-1', { ...request, warehouseId: 'WH-1' })).resolves.toEqual({
+      distributionId: 'dist-1',
+    });
+  });
+
   it('answers an internal error, not a conflict, when the distribution cannot be read', async () => {
     const { svc } = serviceWith('dist-1', { data: null, error: { message: 'read failed' } });
     await expect(svc.distribute('b-1', request)).rejects.toMatchObject({ code: 'internal_error' });
