@@ -854,6 +854,16 @@ PGTAP_TESTS=(
   # stays 0215's. The lock footprint is
   # scripts/db-concurrency/0420_migration_lock_footprint.sh.
   supabase/tests/0420_permission_override_updates_follow_0322.test.sql
+  # Opening stock through the stock ledger (docket S8): a new
+  # item's opening holding, on-hand and 'initial' movement are written together
+  # by open_item_stock (SECURITY DEFINER; the caller's own new item, within 15
+  # minutes, not a kit, still empty; staff or above with stock:adjust; the
+  # item's warehouse writable unless a manager). duplicate_inventory_item opens a copy's stock
+  # through it, and no invoker function outside the ledger schema but the
+  # postgres-only dedup helper writes stock_movements. Two-session proof:
+  # scripts/db-concurrency/0454_opening_races.sh; lock footprint and
+  # preflight: scripts/db-concurrency/0454_migration_lock_footprint.sh.
+  supabase/tests/0454_opening_stock_function.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
