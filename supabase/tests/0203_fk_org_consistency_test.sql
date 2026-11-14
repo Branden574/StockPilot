@@ -19,7 +19,7 @@
 
 begin;
 
-select plan(24);
+select plan(25);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Fixed UUIDs — namespace fc030300, never clashes with other test files.
@@ -342,7 +342,26 @@ set local "request.jwt.claim.sub" to 'fc030300-0000-0000-0000-000000000003';
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
 
--- Test 6b: INSERT shipment with same-org source_warehouse_id → lives_ok
+-- Test 6b (re-pinned by 0451, docket S3c): authenticated holds no INSERT on
+-- the legacy shipments table since 0451 (the service role writes it), so the
+-- manager's same-org insert is 42501 permission denied. 6a above still
+-- raises 42501 (now at the privilege check, before the policy).
+select throws_ok(
+  $$ insert into public.shipments
+       (organization_id, source_warehouse_id, destination_charter_id, work_order_number)
+     values (
+       'fc030300-0000-0000-0000-000000000001'::uuid,  -- orgA
+       'fc030300-0000-0000-0000-000000000004'::uuid,  -- whA (SAME ORG source)
+       'fc030300-0000-0000-0000-00000000000a'::uuid,  -- charterA (same-org dest)
+       'FK-SHIP-SAME-1'
+     ) $$,
+  '42501', 'permission denied for table shipments',
+  'shipments: an authenticated INSERT is refused (no table privilege since 0451)');
+
+-- Test 6c: the same-org row is still a valid shipment for the server's own
+-- role (postgres here, which the service role's writes match: no row
+-- security), so the table's constraints and triggers accept it.
+reset role;
 select lives_ok(
   $$ insert into public.shipments
        (organization_id, source_warehouse_id, destination_charter_id, work_order_number)
@@ -352,7 +371,7 @@ select lives_ok(
        'fc030300-0000-0000-0000-00000000000a'::uuid,  -- charterA (same-org dest)
        'FK-SHIP-SAME-1'
      ) $$,
-  'shipments: INSERT with same-org source_warehouse_id lives');
+  'shipments: INSERT with same-org source_warehouse_id lives for the server role');
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Shape 7: procedures.authoring_warehouse_id (warehouse-FK, nullable, direct org)

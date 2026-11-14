@@ -15,7 +15,7 @@
 
 begin;
 
-select plan(19);
+select plan(20);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Fixed UUIDs — namespace fc030400, never clashes with other test files.
@@ -158,7 +158,25 @@ set local "request.jwt.claim.sub"  to 'fc030400-0000-0000-0000-000000000003';
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
 
--- Test 2b: INSERT shipment with same-org destination_charter_id → lives_ok
+-- Test 2b (re-pinned by 0451, docket S3c): authenticated holds no INSERT on
+-- the legacy shipments table since 0451 (the service role writes it), so the
+-- admin's same-org insert is 42501 permission denied. 2a above still raises
+-- 42501 (now at the privilege check, before the policy).
+select throws_ok(
+  $$ insert into public.shipments
+       (organization_id, source_warehouse_id, destination_charter_id, work_order_number)
+     values (
+       'fc030400-0000-0000-0000-000000000001'::uuid,  -- orgA
+       'fc030400-0000-0000-0000-000000000004'::uuid,  -- whA (SAME ORG source)
+       'fc030400-0000-0000-0000-000000000008'::uuid,  -- charterA (SAME ORG destination)
+       'CFK-SHIP-SAME-CHARTER'
+     ) $$,
+  '42501', 'permission denied for table shipments',
+  'shipments: an authenticated INSERT is refused (no table privilege since 0451)');
+
+-- Test 2c: the same-org row is still a valid shipment for the server's own
+-- role (postgres here: no row security), so constraints and triggers accept it.
+reset role;
 select lives_ok(
   $$ insert into public.shipments
        (organization_id, source_warehouse_id, destination_charter_id, work_order_number)
@@ -168,7 +186,7 @@ select lives_ok(
        'fc030400-0000-0000-0000-000000000008'::uuid,  -- charterA (SAME ORG destination)
        'CFK-SHIP-SAME-CHARTER'
      ) $$,
-  'shipments: INSERT with same-org destination_charter_id lives');
+  'shipments: INSERT with same-org destination_charter_id lives for the server role');
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Shape 3: inventory_items.charter_id (nullable, INSERT path)
