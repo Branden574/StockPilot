@@ -1127,7 +1127,9 @@ function notWrittenReport(
 }
 
 function outcomeReport(subject: WriteSubject, o: LaterOutcome, total: number): WriteReport {
-  const rows = o.writtenLate.length + o.lost.length;
+  // The rows the headline counts: the ones never written when there are any
+  // (the written ones are a count after it), else the ones written late.
+  const rows = o.lost.length > 0 ? o.lost.length : o.writtenLate.length;
   return {
     subject,
     outcome: o.lost.length === 0 ? 'written_late' : 'not_written',
@@ -1136,8 +1138,8 @@ function outcomeReport(subject: WriteSubject, o: LaterOutcome, total: number): W
     lost: o.lost.length,
     writtenLate: o.writtenLate.length,
     tries: o.tries,
-    // The rows never written first: they are the ones to look up.
-    rowIds: [...o.lost, ...o.writtenLate],
+    // The rows never written when there are any: they are the ones to look up.
+    rowIds: o.lost.length > 0 ? o.lost : o.writtenLate,
     failure: o.lost.length === 0 ? null : o.failure,
   };
 }

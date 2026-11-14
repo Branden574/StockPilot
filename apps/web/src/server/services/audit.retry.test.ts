@@ -501,6 +501,98 @@ describe('a later try starts only when it can end within AUDIT_WRITE_BUDGET_MS o
   });
 });
 
+describe("an alert's headline counts and names the rows it is about", () => {
+  /** Every alert text: sent ones, and the server-log lines of folded ones. */
+  function alertTexts(warn: { mock: { calls: unknown[][] } }): string[] {
+    return [
+      ...h.reportError.mock.calls.map(([e]) => (e as Error).message),
+      ...warn.mock.calls.map(([line]) => String(line).replace(/^\[audit\] /, '')),
+    ];
+  }
+  /** The row ids a headline names: between "; rows " and the account. */
+  const idsNamed = (text: string) =>
+    (/; rows (.*?)(?: \(first \d+ of \d+\))?; account /.exec(text)?.[1] ?? '').split(', ');
+
+  it('some rows written on a later try, the rest never: the headline counts and names the lost rows', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    h.insert.mockImplementation(never);
+    // The 50-row chunk is written on try 2; the four 100-row chunks never are.
+    // Try 2 ends at 26 s (the 50-row chunk answers at once), so try 3 (3 s,
+    // then two rounds of 5 s) ends at 39 s and is sent.
+    h.upsert.mockImplementation((rows: Row[]) => (rows.length === 50 ? ok : never()));
+    void auditMany(
+      Array.from({ length: 450 }, (_, i) => payload(i)),
+      ctx,
+    );
+    await vi.runAllTimersAsync();
+    const writtenIds = new Set(
+      h.insert.mock.calls.flatMap((_, i) => {
+        const rows = insertedRows(i);
+        return rows.length === 50 ? rows.map((r) => r.id!) : [];
+      }),
+    );
+    expect(writtenIds.size).toBe(50);
+    const outcome = alertTexts(warn).find((t) => /^Audit rows: .*never written after/.test(t));
+    expect(outcome).toMatch(
+      /^Audit rows: 400 of 450 never written after 3 tries \(not answered in 5000 ms\); 50 written on a later try\. /,
+    );
+    expect(outcome).toContain('(first 10 of 400)');
+    const named = idsNamed(outcome!);
+    expect(named).toHaveLength(10);
+    for (const id of named) expect(writtenIds.has(id)).toBe(false);
+    const last = h.reportError.mock.calls.length - 1;
+    expect(reportExtra(last)).toMatchObject({ lost: 400, total: 450, writtenLate: 50, tries: 3 });
+    for (const id of String(reportExtra(last).rowIds).split(',')) {
+      expect(writtenIds.has(id)).toBe(false);
+    }
+  });
+
+  it('every row written on a later try: the headline counts them all', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    h.insert.mockImplementation(never);
+    h.upsert.mockResolvedValue(ok);
+    void auditMany(
+      Array.from({ length: 200 }, (_, i) => payload(i)),
+      ctx,
+    );
+    await vi.runAllTimersAsync();
+    const outcome = alertTexts(warn).find((t) => /^Audit rows: .*written on a later try/.test(t));
+    expect(outcome).toMatch(/^Audit rows: 200 of 200 written on a later try \(try 2 of 3\)\. /);
+    expect(outcome).toContain('(first 10 of 200)');
+  });
+
+  it('no row ever written: the headline counts them all', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    h.insert.mockImplementation(never);
+    h.upsert.mockImplementation(never);
+    void auditMany(
+      Array.from({ length: 200 }, (_, i) => payload(i)),
+      ctx,
+    );
+    await vi.runAllTimersAsync();
+    const outcome = alertTexts(warn).find((t) => /^Audit rows: .*never written after/.test(t));
+    expect(outcome).toMatch(
+      /^Audit rows: 200 of 200 never written after 3 tries \(not answered in 5000 ms\)\. /,
+    );
+    expect(outcome).toContain('(first 10 of 200)');
+  });
+
+  // Not sent again past the budget: 'a 7-chunk batch nothing answers' above.
+  it('not sent again because the slots are taken: the headline names the one row', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    h.insert.mockResolvedValue(badGateway);
+    h.upsert.mockImplementation(never);
+    for (let i = 0; i < AUDIT_RETRY_SLOTS + 1; i += 1) await audit(payload(i), ctx);
+    const last = insertedRows(AUDIT_RETRY_SLOTS)[0]!.id!;
+    const busy = alertTexts(warn).find((t) => t.includes('writes are already being sent again'));
+    expect(busy).toBe(
+      `Audit row not written on try 1 (status 502), not sent again: ${AUDIT_RETRY_SLOTS} writes are already being sent again on this instance. ` +
+        `event inventory.item.updated; row ${last}; account ${USER}; organization ${ORG}`,
+    );
+    await vi.runAllTimersAsync();
+  });
+});
+
 describe('at most AUDIT_RETRY_SLOTS writes in their later tries at once on one instance', () => {
   it('the 21st unanswered write is reported at once and not sent again', async () => {
     expect(AUDIT_RETRY_SLOTS).toBe(20);
