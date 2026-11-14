@@ -38,6 +38,7 @@ function formatInviteExpiry(iso: string): string {
 }
 
 const INVITE_CANNOT_BE_RESENT = 'This invite can no longer be resent. Send a new invite.';
+const INVITE_COULD_NOT_BE_RENEWED = 'Could not renew this invite, so nothing was sent. Try again.';
 
 export class TeamService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -177,6 +178,9 @@ export class TeamService {
       .select('id, email, role, token, expires_at, created_at')
       .eq('organization_id', this.ctx.organizationId)
       .is('accepted_at', null)
+      // A withdrawn invitation (revoked_at: a removal, 0429, or an account
+      // deletion, 0393) is never pending, whatever its expiry says.
+      .is('revoked_at', null)
       .gt('expires_at', new Date().toISOString())
       .order('created_at', { ascending: false });
     if (error) throw new ServiceError('internal_error', error.message);
@@ -255,13 +259,14 @@ export class TeamService {
       }
     }
 
-    // Already invited and not yet expired?
+    // Already invited, not withdrawn and not yet expired?
     const { data: existingInvite } = await this.ctx.supabase
       .from('organization_invites')
       .select('id')
       .eq('organization_id', this.ctx.organizationId)
       .eq('email', normalizedEmail)
       .is('accepted_at', null)
+      .is('revoked_at', null)
       .gt('expires_at', new Date().toISOString())
       .maybeSingle();
     if (existingInvite) {
@@ -409,16 +414,38 @@ export class TeamService {
       })
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', inviteId)
+      // Only a row still open: the write itself decides, so an invite
+      // accepted or revoked between the read above and this write is not
+      // renewed (no row back).
+      .is('accepted_at', null)
+      .is('revoked_at', null)
       .select('id, expires_at')
       .maybeSingle();
-    // A refusal by the database's rules (42501: the row is not this admin's
-    // to renew, or the change is more than the expiry; 22023: the expiry is
-    // out of range) answers the same fixed sentence as no row back, never
-    // the database's own text.
+    // No database text reaches the admin on any error of this write. A
+    // refusal by the database's rules (42501: the row is not this admin's to
+    // renew, or the change is more than the expiry; 22023: the expiry is out
+    // of range) answers the same fixed sentence as no row back; a 42501 is
+    // also reported as a warning, so a privilege denial is recorded. Any
+    // other error is reported and answers that nothing was sent.
     if (updErr && (updErr.code === '42501' || updErr.code === '22023')) {
+      if (updErr.code === '42501') {
+        void reportError(new Error(`invite renew refused: ${postgrestErrorText(updErr)}`), {
+          tag: 'team.invite.resend_renew',
+          level: 'warning',
+          organizationId: this.ctx.organizationId,
+          extra: { inviteId },
+        });
+      }
       throw new ServiceError('conflict', INVITE_CANNOT_BE_RESENT);
     }
-    if (updErr) throw new ServiceError('internal_error', updErr.message);
+    if (updErr) {
+      void reportError(new Error(`invite renew failed: ${postgrestErrorText(updErr)}`), {
+        tag: 'team.invite.resend_renew',
+        organizationId: this.ctx.organizationId,
+        extra: { inviteId },
+      });
+      throw new ServiceError('conflict', INVITE_COULD_NOT_BE_RENEWED);
+    }
     if (!renewed) {
       throw new ServiceError('conflict', INVITE_CANNOT_BE_RESENT);
     }
