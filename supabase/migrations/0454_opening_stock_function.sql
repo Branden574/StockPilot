@@ -1,24 +1,30 @@
 -- 0454_opening_stock_function.sql
 --
--- Opening stock is recorded through one stock-ledger function (docket S8,
--- first part). A new item is inserted with nothing on hand, and its opening
--- quantity, its first holding and its 'initial' movement are written
--- together, in one transaction, by public.open_item_stock. The web app's
--- create paths (single create, size runs, bulk create, book imports) and
--- Duplicate all open stock through it. No row of any table changes, and no
--- grant or policy on any table changes.
+-- Opening stock is recorded through one stock-ledger function (docket S8).
+-- A new item is inserted with nothing on hand, and its opening quantity, its
+-- first holding and its 'initial' movement are written together, in one
+-- transaction, by public.open_item_stock. Duplicate opens a copy's stock
+-- through it. The file adds two functions (open_item_stock and
+-- _opening_stock_location) and restates two (tg_seed_initial_level, which
+-- now shares the location rule, and duplicate_inventory_item), with their
+-- grants and comments.
 --
 -- ── WHAT ──────────────────────────────────────────────────────────────────
 --   0. Preflight: refuse (55000, hint s8a_preflight, nothing applied) unless
 --      duplicate_inventory_item is 0413's body and tg_seed_initial_level is
 --      0199's (md5 pinned, with their security mode, search_path and owner),
---      and neither new function exists yet.
+--      and no function named open_item_stock or _opening_stock_location
+--      exists in public, with any signature.
 --   1. public._opening_stock_location(item): where an item's opening stock
 --      lands. 0199's rule, moved out of the trigger so the trigger and the
 --      new function share it: the item's primary location when it is a live,
 --      non-staging location of the item's organization (and warehouse);
 --      else the warehouse's Unplaced; else the organization's Unplaced,
---      created on demand. SECURITY DEFINER; only the owner may execute it.
+--      created on demand (two openings that create it at once share the one
+--      row: ON CONFLICT DO NOTHING, then read again). SECURITY DEFINER; only
+--      the owner may execute it. It stays in public: the ledger schema's
+--      functions are pinned as a set by other tests and queued files, and
+--      with no API role able to execute it, public exposes nothing.
 --   2. tg_seed_initial_level restated to call it. Same header, same
 --      behaviour, still never blocks an insert.
 --   3. public.open_item_stock(p_org_id, p_lines): the opening-stock ledger
@@ -26,20 +32,22 @@
 --      authenticated and service_role, not by anon or PUBLIC.
 --      Whole call:
 --        42501 forbidden    no signed-in user, or no organization;
---        42501 forbidden    hint stock:adjust, unless the caller is staff or
---                           above, or holds stock:adjust (the movement
---                           insert rule's floor, 0321);
+--        42501 forbidden    hint stock:adjust, unless the caller holds
+--                           stock:adjust (has_permission: staff and above
+--                           hold it unless it is turned off for them;
+--                           adjust_stock asks the same);
 --        22023              p_lines is not an array, has more than 1,000
 --                           lines, repeats an itemId, or a line's itemId is
---                           not a uuid or its quantity is not a number above
---                           0, or its duplicateOf is not a uuid;
+--                           not a uuid or its quantity is not a number that
+--                           is above 0 at four decimals, or its duplicateOf
+--                           is not a uuid;
 --        []                 an empty array writes nothing.
 --      Per line, in itemId order, the item is locked FOR UPDATE by a query
---      that filters on p_org_id (an id of another organization is never
---      locked):
---        P0002 item_not_found        no such item in p_org_id;
---        42501 opening_stock_refused (detail: the item id) unless the caller
---                                    created it less than 15 minutes ago, it
+--      that filters on p_org_id and on the caller as the item's creator (an
+--      item of another organization or of another member is never locked):
+--        P0002 item_not_found        no such item of the caller's in p_org_id;
+--        42501 opening_stock_refused (detail: the item id) unless it was
+--                                    created less than 15 minutes ago, it
 --                                    is not deleted, it is not a kit, it has
 --                                    nothing on hand, no movement and no
 --                                    holding above 0;
@@ -65,17 +73,16 @@
 --      SECURITY INVOKER, search_path, owner and grants. The refusal of a
 --      negative quantity stays.
 --   5. Comments, then a PostgREST schema reload (the 0382 and 0400
---      precedent), so /rest/v1/rpc/open_item_stock answers at once.
---
--- compensate_opening_stock (0359) stays: the web app no longer calls it, and
--- it is removed by a later cleanup once the second part of this work has
--- been live for three days.
+--      precedent), so /rest/v1/rpc/open_item_stock answers at once, and
+--      lock_timeout reset.
 --
 -- ── LOCKS ─────────────────────────────────────────────────────────────────
 -- Functions and comments only: CREATE OR REPLACE FUNCTION, REVOKE and GRANT
 -- on a function, and COMMENT ON FUNCTION take no table lock. No trigger is
 -- created or dropped, so there is no prelude. lock_timeout 900ms bounds
--- anything unforeseen.
+-- anything unforeseen, and is reset at the end. Proof:
+-- scripts/db-concurrency/0454_migration_lock_footprint.sh; two openings that
+-- meet: scripts/db-concurrency/0454_opening_races.sh.
 --
 -- ── ERRORS ────────────────────────────────────────────────────────────────
 -- 55000 hint s8a_preflight: drift, or a second run; nothing applied.
@@ -89,11 +96,6 @@
 -- calls (has_org_role, has_permission, user_can_access_warehouse,
 -- caller_can_read_item, ensure_warehouse_placement_locations) are called by
 -- signature, so a queued restatement of any of them keeps working here.
---
--- ── DEPLOY ────────────────────────────────────────────────────────────────
--- Apply this BEFORE the web release that calls open_item_stock. Web builds
--- older than that release keep working with it applied: nothing they do is
--- refused here.
 
 set lock_timeout = '900ms';
 
@@ -123,8 +125,9 @@ begin
     end if;
   end loop;
 
-  if to_regprocedure('public.open_item_stock(uuid,jsonb)') is not null then
-    v_bad := v_bad || ' public.open_item_stock(uuid,jsonb) already exists;';
+  if exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+              where n.nspname = 'public' and p.proname = 'open_item_stock') then
+    v_bad := v_bad || ' public.open_item_stock already exists;';
   end if;
   if exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
               where n.nspname = 'public' and p.proname = '_opening_stock_location') then
@@ -175,9 +178,18 @@ begin
         and kind = 'unplaced' and deleted_at is null
       limit 1;
     if v_loc is null then
+      -- Two openings may create it at once: the second waits for the first's
+      -- row, does nothing, and reads it.
       insert into public.locations(organization_id, name, type, kind)
       values (p_item.organization_id, 'Unplaced', 'other', 'unplaced')
+      on conflict do nothing
       returning id into v_loc;
+      if v_loc is null then
+        select id into v_loc from public.locations
+          where organization_id = p_item.organization_id and warehouse_id is null
+            and kind = 'unplaced' and deleted_at is null
+          limit 1;
+      end if;
     end if;
   end if;
 
@@ -237,8 +249,8 @@ begin
   if v_uid is null or p_org_id is null then
     raise exception 'forbidden' using errcode = '42501';
   end if;
-  -- The movement insert rule's floor (0321): staff or above, or stock:adjust.
-  if not (public.has_org_role(p_org_id, 'staff') or public.has_permission(p_org_id, 'stock:adjust')) then
+  -- The stock:adjust permission, as adjust_stock asks it.
+  if not public.has_permission(p_org_id, 'stock:adjust') then
     raise exception 'forbidden' using errcode = '42501', hint = 'stock:adjust';
   end if;
 
@@ -259,7 +271,7 @@ begin
            or jsonb_typeof(e->'itemId') is distinct from 'string'
            or (e->>'itemId') !~ c_uuid
            or case when jsonb_typeof(e->'quantity') = 'number'
-                   then (e->>'quantity')::numeric <= 0
+                   then round((e->>'quantity')::numeric, 4) <= 0
                    else true end
            or (e ? 'duplicateOf' and jsonb_typeof(e->'duplicateOf') <> 'null'
                and (jsonb_typeof(e->'duplicateOf') <> 'string' or (e->>'duplicateOf') !~ c_uuid))
@@ -272,7 +284,7 @@ begin
 
   for v_line in
     select (e->>'itemId')::uuid as iid,
-           (e->>'quantity')::numeric as qty,
+           round((e->>'quantity')::numeric, 4) as qty,
            (e->>'duplicateOf')::uuid as dup
       from jsonb_array_elements(p_lines) e
      order by 1
@@ -281,14 +293,14 @@ begin
       from public.inventory_items i
      where i.id = v_line.iid
        and i.organization_id = p_org_id
+       and i.created_by = v_uid
        for update;
     if not found then
       raise exception 'item_not_found' using errcode = 'P0002', detail = v_line.iid::text;
     end if;
 
-    -- Only the caller's own new item, still empty, opens here.
-    if v_item.created_by is distinct from v_uid
-       or v_item.created_at is null
+    -- Only the caller's own new item (the query above), still empty, opens here.
+    if v_item.created_at is null
        or v_item.created_at <= now() - interval '15 minutes'
        or v_item.deleted_at is not null
        or coalesce(v_item.is_bundle, false)
@@ -561,7 +573,7 @@ comment on function public.open_item_stock(uuid, jsonb) is
   'own items created in the last 15 minutes that is not a kit and has no stock, '
   'no holding and no movement: the holding at _opening_stock_location, on-hand, '
   'and one ''initial'' movement attributed to the caller, in one transaction. '
-  'Needs staff or stock:adjust, and write access to the item''s warehouse '
+  'Needs stock:adjust, and write access to the item''s warehouse '
   'unless a manager. Returns (opened_item_id, opened_location_id, '
   'opened_movement_id) per line.';
 
@@ -571,3 +583,5 @@ comment on function public.duplicate_inventory_item(uuid, jsonb) is
   'original as the movement''s reference.';
 
 notify pgrst, 'reload schema';
+
+reset lock_timeout;

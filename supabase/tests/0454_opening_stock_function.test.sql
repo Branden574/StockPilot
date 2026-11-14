@@ -15,10 +15,15 @@
 --               manager, admin, a member of another organization, the
 --               service role, anon.
 -- PART 5 (L)    Duplicate.
--- PART 6 (S, R) The seed trigger is unchanged for direct stocked inserts;
---               adjustments and receipts after an opening work as before.
+-- PART 6 (S, R) The seed trigger places a stocked insert by the shared rule;
+--               adjustments and receipts after an opening.
 -- PART 7 (G)    The census of invoker writers of stock_movements outside the
 --               ledger schema.
+-- PART 8 (N)    The stock:adjust floor for every kind of seat (owner, a viewer
+--               granted stock:adjust, staff with it turned off, pending,
+--               disabled, an expired act-as seat), quantities that round to 0,
+--               updated_by, the duplicateOf read check, and Duplicate when the
+--               opening is refused.
 --
 -- Roles: every member call runs through pg_temp.run, which sets the role and
 -- the JWT subject, and answers ERR:<sqlstate>:<message>:<hint>:<detail> on a
@@ -27,7 +32,7 @@
 -- Run via `supabase test db` after `supabase db reset`.
 
 begin;
-select plan(83);
+select plan(107);
 
 \set orgA    '\'04540000-0000-4000-8000-00000000000a\''
 \set orgB    '\'04540000-0000-4000-8000-00000000000b\''
@@ -70,6 +75,23 @@ select plan(83);
 \set iSvc    '\'04540000-0000-4000-8000-000000000103\''
 \set iSeed   '\'04540000-0000-4000-8000-000000000104\''
 \set iMissing '\'04540000-0000-4000-8000-0000000009ff\''
+\set u_own   '\'04540000-0000-4000-8000-0000000000a8\''
+\set u_norev '\'04540000-0000-4000-8000-0000000000a9\''
+\set u_pend  '\'04540000-0000-4000-8000-0000000000aa\''
+\set u_dis   '\'04540000-0000-4000-8000-0000000000ab\''
+\set u_exp   '\'04540000-0000-4000-8000-0000000000ac\''
+\set u_vsa   '\'04540000-0000-4000-8000-0000000000ad\''
+\set iOwn    '\'04540000-0000-4000-8000-000000000301\''
+\set iVsa    '\'04540000-0000-4000-8000-000000000302\''
+\set iVsaW   '\'04540000-0000-4000-8000-000000000303\''
+\set iNorev  '\'04540000-0000-4000-8000-000000000304\''
+\set iPend   '\'04540000-0000-4000-8000-000000000305\''
+\set iDis    '\'04540000-0000-4000-8000-000000000306\''
+\set iExp    '\'04540000-0000-4000-8000-000000000307\''
+\set iTiny   '\'04540000-0000-4000-8000-000000000308\''
+\set iTiny2  '\'04540000-0000-4000-8000-000000000309\''
+\set iUpd    '\'04540000-0000-4000-8000-00000000030a\''
+\set iOnh    '\'04540000-0000-4000-8000-00000000030b\''
 \set poA     '\'04540000-0000-4000-8000-000000000201\''
 \set poLine  '\'04540000-0000-4000-8000-000000000202\''
 
@@ -137,7 +159,13 @@ insert into auth.users (id, email, raw_user_meta_data) values
   (:u_vic,  'vic-0454@test.local',  '{}'::jsonb),
   (:u_mgr,  'mgr-0454@test.local',  '{}'::jsonb),
   (:u_adm,  'adm-0454@test.local',  '{}'::jsonb),
-  (:u_mgrB, 'mgrb-0454@test.local', '{}'::jsonb)
+  (:u_mgrB, 'mgrb-0454@test.local', '{}'::jsonb),
+  (:u_own,  'own-0454@test.local',  '{}'::jsonb),
+  (:u_norev,'norev-0454@test.local','{}'::jsonb),
+  (:u_pend, 'pend-0454@test.local', '{}'::jsonb),
+  (:u_dis,  'dis-0454@test.local',  '{}'::jsonb),
+  (:u_exp,  'exp-0454@test.local',  '{}'::jsonb),
+  (:u_vsa,  'vsa-0454@test.local',  '{}'::jsonb)
 on conflict (id) do nothing;
 
 insert into public.organizations (id, name, slug) values
@@ -152,7 +180,18 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgA, :u_vic,  'viewer',  now()),
   (:orgA, :u_mgr,  'manager', now()),
   (:orgA, :u_adm,  'admin',   now()),
-  (:orgB, :u_mgrB, 'manager', now());
+  (:orgB, :u_mgrB, 'manager', now()),
+  (:orgA, :u_own,   'owner',   now()),
+  (:orgA, :u_norev, 'staff',   now()),
+  (:orgA, :u_pend,  'staff',   null),
+  (:orgA, :u_dis,   'staff',   now()),
+  (:orgA, :u_exp,   'admin',   now()),
+  (:orgA, :u_vsa,   'viewer',  now());
+-- An act-as seat whose time is up, and a disabled account.
+update public.organization_members set impersonation_expires_at = now() - interval '1 minute'
+ where organization_id = :orgA and user_id = :u_exp;
+insert into public.user_profiles (id, email, disabled_at) values (:u_dis, 'dis-0454@test.local', now())
+on conflict (id) do update set disabled_at = excluded.disabled_at;
 
 -- The warehouse trigger creates each warehouse's Staging and Unplaced.
 insert into public.warehouses (id, organization_id, name, code, status) values
@@ -170,11 +209,19 @@ insert into public.user_warehouse_assignments (organization_id, user_id, warehou
   (:orgA, :u_stf2, :whA,  true),
   (:orgA, :u_stw2, :whA2, true),
   (:orgA, :u_vwr,  :whA,  true),
-  (:orgA, :u_vic,  :whA,  true);
+  (:orgA, :u_vic,  :whA,  true),
+  (:orgA, :u_norev, :whA, true),
+  (:orgA, :u_pend,  :whA, true),
+  (:orgA, :u_dis,   :whA, true),
+  (:orgA, :u_vsa,   :whA, true);
 
--- u_vic may create items but holds no stock right.
+-- u_vic may create items but holds no stock right; u_vsa is a viewer granted
+-- items:create and stock:adjust; u_norev is staff with stock:adjust turned off.
 insert into public.user_permission_overrides (organization_id, user_id, permission, granted) values
-  (:orgA, :u_vic, 'items:create', true);
+  (:orgA, :u_vic,   'items:create', true),
+  (:orgA, :u_vsa,   'items:create', true),
+  (:orgA, :u_vsa,   'stock:adjust', true),
+  (:orgA, :u_norev, 'stock:adjust', false);
 
 -- Fresh items at 0, created by the member named (as the create paths leave
 -- them: the 0364 guard stamps created_by and created_at on a member's insert).
@@ -198,7 +245,26 @@ insert into public.inventory_items
   (:iAdm,    :orgA, :whA2, null,    'O0454-ADM',    'Admin item',       0, 'active', 'product', :u_adm,  now()),
   (:iLock,   :orgA, :whA,  null,    'O0454-LOCK',   'Lock probe',       0, 'active', 'product', :u_mgrB, now()),
   (:iLockC,  :orgA, :whA,  null,    'O0454-LOCKC',  'Lock control',     0, 'active', 'product', :u_mgrB, now()),
-  (:iB,      :orgB, :whB,  null,    'O0454-B',      'Org B item',       0, 'active', 'product', :u_mgrB, now());
+  (:iB,      :orgB, :whB,  null,    'O0454-B',      'Org B item',       0, 'active', 'product', :u_mgrB, now()),
+  (:iOwn,    :orgA, :whA,  null,    'O0454-OWN',    'Owner item',       0, 'active', 'product', :u_own,  now()),
+  (:iVsa,    :orgA, null,  null,    'O0454-VSA',    'Viewer no wh',     0, 'active', 'product', :u_vsa,  now()),
+  (:iVsaW,   :orgA, :whA,  null,    'O0454-VSAW',   'Viewer in wh',     0, 'active', 'product', :u_vsa,  now()),
+  (:iNorev,  :orgA, :whA,  null,    'O0454-NOREV',  'Adjust off',       0, 'active', 'product', :u_norev,now()),
+  (:iPend,   :orgA, :whA,  null,    'O0454-PEND',   'Pending',          0, 'active', 'product', :u_pend, now()),
+  (:iDis,    :orgA, :whA,  null,    'O0454-DIS',    'Disabled',         0, 'active', 'product', :u_dis,  now()),
+  (:iExp,    :orgA, :whA,  null,    'O0454-EXP',    'Expired act-as',   0, 'active', 'product', :u_exp,  now()),
+  (:iTiny,   :orgA, :whA,  null,    'O0454-TINY',   'Rounds to 0',      0, 'active', 'product', :u_stf,  now()),
+  (:iTiny2,  :orgA, :whA,  null,    'O0454-TINY2',  'Rounds up',        0, 'active', 'product', :u_stf,  now());
+-- iUpd: last updated by someone else, so the opening's updated_by shows.
+insert into public.inventory_items
+  (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, item_type, created_by, created_at, updated_by)
+values (:iUpd, :orgA, :whA, 'O0454-UPD', 'Updated by', 0, 'active', 'product', :u_stf, now(), :u_mgr);
+-- iOnh: on-hand set after the insert, so it has stock on hand but no holding
+-- and no movement (the seed trigger runs on insert only).
+insert into public.inventory_items
+  (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, item_type, created_by, created_at)
+values (:iOnh, :orgA, :whA, 'O0454-ONH', 'On hand only', 0, 'active', 'product', :u_stf, now());
+update public.inventory_items set quantity_on_hand = 4 where id = :iOnh;
 update public.inventory_items set primary_location_id =
   (select id from public.locations where warehouse_id = :whA and kind = 'staging')
  where id = :iStg;
@@ -332,8 +398,8 @@ select is(pg_temp.open(:u_stf, :orgA, jsonb_build_array(
     jsonb_build_object('itemId', (select id from w where k = 'c1'), 'quantity', 4),
     jsonb_build_object('itemId', :iOther::uuid, 'quantity', 4),
     jsonb_build_object('itemId', (select id from w where k = 'c2'), 'quantity', 4))),
-  'ERR:42501:opening_stock_refused::' || :iOther::text,
-  'W9: a batch with another member''s item is refused');
+  'ERR:P0002:item_not_found::' || :iOther::text,
+  'W9: a batch naming another member''s item is refused as an unknown id');
 select is(pg_temp.st((select id from w where k = 'c1')) || ',' || pg_temp.st((select id from w where k = 'c2')),
   '0.0000|none|0|0,0.0000|none|0|0',
   'W10: and nothing of that batch was written');
@@ -363,8 +429,13 @@ select is(pg_temp.open(:u_stf, :orgA, jsonb_build_array(jsonb_build_object('item
   '1', 'O10: a decimal quantity opens');
 select is(pg_temp.st(:iDec), '2.5000|2.5000|1|2.5000', 'O11: 2.5 on hand, held and moved');
 select is(pg_temp.open(:u_stf, :orgA, jsonb_build_array(jsonb_build_object('itemId', :iOther::uuid, 'quantity', 5))),
-  'ERR:42501:opening_stock_refused::' || :iOther::text,
-  'O12: another member''s new item is refused');
+  'ERR:P0002:item_not_found::' || :iOther::text,
+  'O12: another member''s new item answers P0002, as an unknown id');
+-- The locking query names the caller as creator, so the other member's row
+-- was never locked by W9 or O12 (a lock rolled back still leaves xmax; M11
+-- below shows the control).
+select is((select xmax::text from public.inventory_items where id = :iOther), '0',
+  'O12b: and its row was not locked');
 select is(pg_temp.open(:u_stf, :orgA, jsonb_build_array(jsonb_build_object('itemId', :iOld::uuid, 'quantity', 5))),
   'ERR:42501:opening_stock_refused::' || :iOld::text,
   'O13: the creator''s item created 16 minutes ago is refused');
@@ -516,7 +587,7 @@ select is(pg_temp.run('service_role', null, format(
     $$insert into public.inventory_items (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, item_type)
       values (%L, %L, %L, 'O0454-SVC', 'Service stocked', 7, 'active', 'product') returning id::text$$,
     :iSvc, :orgA, :whA)),
-  :iSvc::text, 'S1: the service role still inserts an item with stock');
+  :iSvc::text, 'S1: the service role inserts an item with stock');
 select is(pg_temp.st(:iSvc) || '|' || pg_temp.loc(:iSvc), '7.0000|7.0000|0|0|unplaced:' || :whA::text,
   'S2: the seed trigger places it in the warehouse''s Unplaced, as 0199 did');
 insert into public.inventory_items
@@ -546,7 +617,7 @@ select is(pg_temp.st((select id from w where k = 'web')), '14.0000|14.0000|3|14.
 select is(
   (select count(*)::int from public.inventory_items i
     where i.organization_id in (:orgA, :orgB) and i.sku like 'O0454-%'
-      and i.id not in (:iStock, :iSvc, :iSeed, :iOrig)
+      and i.id not in (:iStock, :iSvc, :iSeed, :iOrig, :iOnh)
       and i.quantity_on_hand <> coalesce((select sum(m.quantity_change) from public.stock_movements m where m.item_id = i.id), 0)),
   0, 'R5: every item opened here sums its movements to its on-hand');
 
@@ -566,6 +637,58 @@ select is(
        where oid = 'public.duplicate_inventory_item(uuid, jsonb)'::regprocedure)::text,
   'true|true',
   'G2: the opening movement is written by open_item_stock, which Duplicate calls');
+
+-- ═══ PART 8: the floor, rounding, updated_by, duplicateOf, Duplicate ═══════
+select is(pg_temp.open(:u_own, :orgA, jsonb_build_array(jsonb_build_object('itemId', :iOwn::uuid, 'quantity', 5))),
+  '1', 'N1: an owner opens their own new item');
+select is(pg_temp.open(:u_vsa, :orgA, jsonb_build_array(jsonb_build_object('itemId', :iVsa::uuid, 'quantity', 5))),
+  '1', 'N2: a viewer granted items:create and stock:adjust opens their own new item that has no warehouse');
+select is(pg_temp.st(:iVsa) || '|' || pg_temp.mv(:iVsa),
+  '5.0000|5.0000|1|5.0000|initial|true|' || :u_vsa::text || '|null|null|null|null',
+  'N3: recorded in full and attributed to them');
+select is(pg_temp.open(:u_vsa, :orgA, jsonb_build_array(jsonb_build_object('itemId', :iVsaW::uuid, 'quantity', 5))),
+  'ERR:42501:forbidden:warehouse_write:' || :iVsaW::text,
+  'N4: the same viewer is refused in a warehouse, which a viewer may not write');
+select is(pg_temp.open(:u_norev, :orgA, jsonb_build_array(jsonb_build_object('itemId', :iNorev::uuid, 'quantity', 5))),
+  'ERR:42501:forbidden:stock:adjust:', 'N5: staff whose stock:adjust is turned off are refused (hint stock:adjust)');
+select is(pg_temp.st(:iNorev), '0.0000|none|0|0', 'N6: and their item stays at 0 with nothing written');
+select is(pg_temp.open(:u_pend, :orgA, jsonb_build_array(jsonb_build_object('itemId', :iPend::uuid, 'quantity', 5))),
+  'ERR:42501:forbidden:stock:adjust:', 'N7: a member who has not accepted the invitation is refused');
+select is(pg_temp.open(:u_dis, :orgA, jsonb_build_array(jsonb_build_object('itemId', :iDis::uuid, 'quantity', 5))),
+  'ERR:42501:forbidden:stock:adjust:', 'N8: a disabled account is refused');
+select is(pg_temp.open(:u_exp, :orgA, jsonb_build_array(jsonb_build_object('itemId', :iExp::uuid, 'quantity', 5))),
+  'ERR:42501:forbidden:stock:adjust:', 'N9: an act-as seat whose time is up is refused');
+select is(pg_temp.st(:iPend) || ',' || pg_temp.st(:iDis) || ',' || pg_temp.st(:iExp),
+  '0.0000|none|0|0,0.0000|none|0|0,0.0000|none|0|0', 'N10: and none of their items was written');
+select is(pg_temp.open(:u_stf, :orgA, jsonb_build_array(jsonb_build_object('itemId', :iTiny::uuid, 'quantity', 0.00004))),
+  'ERR:22023:invalid_lines::', 'N11: a quantity that rounds to 0 at four decimals is refused');
+select is(pg_temp.st(:iTiny), '0.0000|none|0|0', 'N12: and nothing was written for it');
+select is(pg_temp.open(:u_stf, :orgA, jsonb_build_array(jsonb_build_object('itemId', :iTiny2::uuid, 'quantity', 0.00005))),
+  '1', 'N13: a quantity that rounds up to 0.0001 opens');
+select is(pg_temp.st(:iTiny2), '0.0001|0.0001|1|0.0001', 'N14: as 0.0001 on hand, held and moved');
+select is(pg_temp.open(:u_stf, :orgA, jsonb_build_array(jsonb_build_object('itemId', :iUpd::uuid, 'quantity', 3))),
+  '1', 'N15: the creator opens an item someone else last updated');
+select is((select updated_by::text from public.inventory_items where id = :iUpd), :u_stf::text,
+  'N16: and the item now names the opener as its last updater');
+select is(pg_temp.open(:u_stf, :orgA, jsonb_build_array(
+    jsonb_build_object('itemId', :iDupT::uuid, 'quantity', 1, 'duplicateOf', :iAdm::uuid))),
+  'ERR:22023:invalid_duplicate_of::' || :iAdm::text,
+  'N17: duplicateOf may not name an item of the organization the caller cannot read');
+select is(pg_temp.run('authenticated', :u_norev::uuid, format(
+    $$select public.duplicate_inventory_item(%L, '{"sku": "O0454-COPYR", "quantity": 5, "bin_location": "Copy R"}'::jsonb)::text$$,
+    :iOrig)),
+  'ERR:42501:forbidden:stock:adjust:', 'N18: Duplicate with stock by staff whose stock:adjust is off is refused');
+select is((select count(*)::text from public.inventory_items where sku = 'O0454-COPYR'), '0',
+  'N19: and the copy was rolled back with the refused opening');
+select ok(pg_temp.run('authenticated', :u_norev::uuid, format(
+    $$select public.duplicate_inventory_item(%L, '{"sku": "O0454-COPYZ", "quantity": 0, "bin_location": "Copy Z"}'::jsonb)::text$$,
+    :iOrig)) ~ '^[0-9a-f-]{36}$', 'N20: the same member copies it with a quantity of 0');
+select is((select string_agg(quantity_on_hand::text || '|' || pg_temp.st(id), ',') from public.inventory_items where sku = 'O0454-COPYZ'),
+  '0.0000|0.0000|none|0|0', 'N21: one copy, with nothing on hand and nothing written');
+select is(pg_temp.open(:u_stf, :orgA, jsonb_build_array(jsonb_build_object('itemId', :iOnh::uuid, 'quantity', 5))),
+  'ERR:42501:opening_stock_refused::' || :iOnh::text,
+  'N22: an item with stock on hand and no holding or movement is refused');
+select is(pg_temp.st(:iOnh), '4.0000|none|0|0', 'N23: and is unchanged');
 
 select * from finish();
 rollback;
