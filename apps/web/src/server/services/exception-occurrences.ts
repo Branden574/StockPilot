@@ -2000,9 +2000,8 @@ export class ExceptionOccurrencesService {
    * The recount facts of these exceptions (exception_recount_facts, 0460),
    * read through the caller's own client in batches of 500: per exception the
    * counts it names, with its item's line in its open and closed recounts and
-   * an open recount's progress, for the exceptions the caller may see. It is
-   * how a member who may read an exception but not cycle counts sees what
-   * its recount came to.
+   * an open recount's progress, for the exceptions the caller may see. One
+   * read for everything the Exception Center shows about a recount.
    *
    * Null when the database does not have the function yet (the web can be
    * live before the migration): the caller then reads the counts directly,

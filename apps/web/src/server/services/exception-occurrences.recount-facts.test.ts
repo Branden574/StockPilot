@@ -7,8 +7,8 @@ import { makeServiceContext, makeSupabaseStub, servedLikePostgrest, type MockCal
  * exception_recount_facts (migration 0460), with the caller's own client: for
  * the exceptions the caller may see, the counts each names, the line of the
  * exception's item in its open and closed recounts, and an open recount's
- * progress. So a member who may read an exception but not cycle counts (a
- * viewer) sees the same recount state and words as a counter.
+ * progress. So every member who may read an exception sees the same recount
+ * state and words.
  *
  * Until the database has the function (the web is live before the migration
  * is pushed), PostgREST answers PGRST202 (Postgres 42883) naming it, and the
