@@ -42,7 +42,7 @@ const READS_DEFAULT: Record<string, string> = {
     'pickActiveMembership and the bundle path use the default only when an accepted membership matches it.',
   'lib/auth/request-context-bundle.ts': 'Carries the profile column into the bundle; api-context checks it against memberships.',
   'server/services/auth-audit.ts':
-    'resolveDefaultOrgAndRole: the default only when it is an accepted membership, else the oldest accepted membership, else none.',
+    'resolveDefaultOrgAndRole, counting only memberships with no end time: the default only when it is an accepted membership, else the oldest accepted membership, else none.',
   'server/services/team.ts':
     'Writes only: clears the default of a removed member, and sets it on invite acceptance when it is empty.',
   'server/services/platform/impersonation.ts':

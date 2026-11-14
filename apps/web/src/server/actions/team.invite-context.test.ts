@@ -129,7 +129,9 @@ describe("inviteMemberAction names the inviter from the context's own account", 
     });
   });
 
-  it('a session that answers with another account is refused, and no invitation is made', async () => {
+  // The session loaders (lib/auth/session.ts) do not produce this state; the
+  // stand-in session is the only way to reach the check.
+  it('a stand-in session naming a different account is refused, and no invitation is made', async () => {
     h.session = {
       userId: 'someone-else',
       email: 'someone.else@example.com',

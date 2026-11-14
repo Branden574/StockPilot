@@ -4,7 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * transferOwnershipAction re-confirms the owner's password, and keys its rate
  * limit, on the account the context resolved. The session is loaded a second
  * time for the email; an answer about any other account is refused before
- * the rate limit, the password check or the transfer.
+ * the rate limit, the password check or the transfer. The session loaders
+ * (lib/auth/session.ts) do not produce that state; the stand-in session below
+ * is the only way to reach the check.
  *
  * Stand-ins: the context, the session, the factor list, the password check,
  * the rate limit and the admin client. team.transfer-refresh-swap.test.ts runs
@@ -15,6 +17,8 @@ const ORG = 'aaaaaaaa-1111-4111-8111-111111111111';
 const OWNER = '11111111-1111-4111-8111-111111111111';
 const TARGET_USER = '33333333-3333-4333-8333-333333333333';
 const TARGET_MEMBER_ID = 'bbbbbbbb-2222-4222-8222-222222222222';
+/** A third account, neither the owner nor the member ownership moves to. */
+const UNRELATED_ACCOUNT = '77777777-7777-4777-8777-777777777777';
 
 const h = vi.hoisted(() => ({
   /** The account requireSession() answers with. */
@@ -119,11 +123,11 @@ describe("transferOwnershipAction checks the password of the context's own accou
     expect(h.rpc).toHaveLength(1);
   });
 
-  it('a session that answers with another account is refused before the rate limit, the password check and the transfer', async () => {
+  it('a stand-in session naming a different account is refused before the rate limit, the password check and the transfer', async () => {
     h.session = {
-      userId: TARGET_USER,
-      email: 'other.member@example.com',
-      fullName: 'Jordan Other',
+      userId: UNRELATED_ACCOUNT,
+      email: 'unrelated.account@example.com',
+      fullName: 'Jordan Example',
       avatarUrl: null,
       defaultOrganizationId: ORG,
     };

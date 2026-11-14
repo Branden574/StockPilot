@@ -497,6 +497,14 @@ describe('resolveDefaultOrgAndRole: a failed read is reported and the next read 
     expect(reportsFor('any_membership')).toHaveLength(1);
   });
 
+  it('reads that succeed report nothing', async () => {
+    setWorld(WORLDS[CURRENT]!.world);
+    await expect(resolveDefaultOrgAndRole(USER_ID)).resolves.toEqual({ organizationId: ORG_HOME, role: 'staff' });
+    expect(reportError).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveDefaultOrgAndRole counts only memberships with no end time', () => {
   it("a temporary seat in the default organization: the person's own membership and its role answer", async () => {
     setWorld(
       WORLDS['a default organization where the person holds only a temporary seat, beside their own membership']!.world,
@@ -508,12 +516,6 @@ describe('resolveDefaultOrgAndRole: a failed read is reported and the next read 
   it('only a temporary seat: no organization and no role', async () => {
     setWorld(WORLDS['a temporary seat and no membership of their own']!.world);
     await expect(resolveDefaultOrgAndRole(USER_ID)).resolves.toEqual({ organizationId: null, role: null });
-    expect(reportError).not.toHaveBeenCalled();
-  });
-
-  it('reads that succeed report nothing', async () => {
-    setWorld(WORLDS[CURRENT]!.world);
-    await expect(resolveDefaultOrgAndRole(USER_ID)).resolves.toEqual({ organizationId: ORG_HOME, role: 'staff' });
     expect(reportError).not.toHaveBeenCalled();
   });
 });
