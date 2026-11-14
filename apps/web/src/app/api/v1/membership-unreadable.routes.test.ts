@@ -10,8 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * read fails) and the real route runs behind it; only the database is a
  * double (src/test/legacy-api-context.ts). When the read that decides the
  * caller's organization does not answer, every route refuses with an answer
- * the phone retries, never the 401 it words as "signed out" and never an
- * answer from another of the person's organizations:
+ * the phone retries, and does no work:
  *
  *   - the stock adjustment, which the phone cannot send twice, answers the API
  *     context gate's 503 marked as refused before any write (core
@@ -63,7 +62,7 @@ import { GET as permissionsGET } from './me/permissions/route';
 
 const ITEM = '22222222-0000-4000-8000-000000000004';
 const WAREHOUSE = '11111111-0000-4000-8000-000000000003';
-/** The person's first membership, where a request must never land by default. */
+/** The person's first membership. */
 const OLDEST = '77777777-0000-4000-8000-00000000000a';
 
 /** The refusal (lib/auth/membership-unavailable.ts), matched by name and code. */
@@ -171,22 +170,16 @@ describe('a route with no catch around the context: GET /api/v1/me/permissions',
   it.each([
     ['the phone before its workspace is saved', phoneGetNoOrg],
     ['a web tab', cookieGet],
-  ])(
-    '%s, the profile default unreadable: refused (Next answers 500), never the oldest organization',
-    async (_who, make) => {
-      world.membershipReadFails = { read: 'profile', how: 'error' };
-      await expect(permissionsGET(make('/api/v1/me/permissions'))).rejects.toMatchObject(REFUSED);
-    },
-  );
+  ])('%s, the profile default unreadable: refused (Next answers 500)', async (_who, make) => {
+    world.membershipReadFails = { read: 'profile', how: 'error' };
+    await expect(permissionsGET(make('/api/v1/me/permissions'))).rejects.toMatchObject(REFUSED);
+  });
 
   it.each([
     ['the phone before its workspace is saved', phoneGetNoOrg],
     ['a web tab', cookieGet],
-  ])(
-    '%s, the default membership unreadable: refused (Next answers 500), never the oldest organization',
-    async (_who, make) => {
-      world.membershipReadFails = { read: 'named', orgId: LEGACY_ORG_ID, how: 'error' };
-      await expect(permissionsGET(make('/api/v1/me/permissions'))).rejects.toMatchObject(REFUSED);
-    },
-  );
+  ])('%s, the default membership unreadable: refused (Next answers 500)', async (_who, make) => {
+    world.membershipReadFails = { read: 'named', orgId: LEGACY_ORG_ID, how: 'error' };
+    await expect(permissionsGET(make('/api/v1/me/permissions'))).rejects.toMatchObject(REFUSED);
+  });
 });

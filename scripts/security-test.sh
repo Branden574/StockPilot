@@ -1041,9 +1041,10 @@ WEB_TESTS=(
   # The organization an API request is served in (docket S90): only an answer
   # moves the membership choice along. A membership or profile read that does
   # not answer refuses with a retryable 5xx (the gate's 503 marker on the
-  # writes the phone cannot send twice), never the 401 and never another of
-  # the person's organizations; "no row" answers exactly as before. Both paths,
-  # and the routes behind them.
+  # writes the phone cannot send twice), and nothing is read for any
+  # organization; "no row" answers exactly as before. Both paths, the routes
+  # behind them, and the answers the real PostgREST client resolves.
+  src/lib/auth/api-context.membership-answer-shapes.test.ts
   src/lib/auth/api-context.membership-unreadable.test.ts
   src/app/api/v1/membership-unreadable.routes.test.ts
   src/app/api/v1/mobile/snapshot/route.step-up.test.ts

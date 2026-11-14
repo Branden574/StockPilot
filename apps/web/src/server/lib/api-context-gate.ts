@@ -20,10 +20,11 @@ import type { ServiceContext } from '@/server/services/context';
  * the caller's account status (AccountStatusUnavailableError, anyone), the
  * membership that decides the caller's organization
  * (MembershipUnavailableError, S90) or a non-owner's permission overrides
- * (PermissionsUnavailableError, S19), it refuses the request by throwing, before the route has done anything. That
- * throw escaped as the framework's bare 500, and the phone reads every 5xx on
- * these routes as "may or may not have been saved", because none of them takes
- * an idempotency key and a gateway 5xx can arrive after a commit: online it
+ * (PermissionsUnavailableError, S19), it refuses the request by throwing,
+ * before the route has done anything. That throw escaped as the framework's
+ * bare 500, and the phone reads every 5xx on these routes as "may or may not
+ * have been saved", because none of them takes an idempotency key and a
+ * gateway 5xx can arrive after a commit: online it
  * said "Adjustment not confirmed" and labelled the on-hand for up to 90 s, and
  * a queued adjustment was parked in Unsent work and never sent again.
  *

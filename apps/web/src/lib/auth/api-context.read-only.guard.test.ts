@@ -643,10 +643,16 @@ function answerFor(table: string): { single: unknown; list: unknown[]; error: un
   if (table === 'user_profiles') {
     return world.statusReadFails
       ? failed
-      : { single: { default_organization_id: ORG, disabled_at: null }, list: [], error: null };
+      : {
+          single: { default_organization_id: ORG, disabled_at: null },
+          list: [{ default_organization_id: ORG, disabled_at: null }],
+          error: null,
+        };
   }
+  // The membership choice reads lists (one row at most), the status read a single row.
   if (table === 'organization_members') {
-    return { single: { organization_id: ORG, role: world.role }, list: [], error: null };
+    const row = { organization_id: ORG, role: world.role };
+    return { single: row, list: [row], error: null };
   }
   if (table === 'organizations') {
     return { single: { mfa_policy: 'optional', all_modules_comp: false }, list: [], error: null };

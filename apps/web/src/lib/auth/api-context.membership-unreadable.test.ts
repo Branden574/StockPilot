@@ -12,13 +12,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * organization and the membership in it, and last the oldest membership.
  *
  *   - A read that does not answer (an error, a thrown call, a row without the
- *     columns asked for) refuses the request with MembershipUnavailableError,
- *     a retryable 5xx: never the null every route answers as 401, and never a
- *     context in another of the person's organizations.
+ *     columns asked for, or an answer with neither a list nor an error: an
+ *     empty or `null` body, a 404 with no body, a non-2xx whose body is `null`)
+ *     refuses the request with MembershipUnavailableError, a retryable 5xx,
+ *     and no context is built.
  *   - A read that answers "no row" is still an answer: no membership in the
  *     named organization or no membership at all is null (401), as before; no
  *     profile row, no default, or a default without a membership falls to the
- *     oldest membership, as before.
+ *     oldest membership, as before. "No row" is an empty list answered with
+ *     status 200.
+ *   - When the account-status read fails too, its own refusal is the one
+ *     thrown; a disabled account is null whatever the membership reads say.
  */
 
 const refs = vi.hoisted(() => ({
@@ -43,8 +47,8 @@ import {
   legacyContextClient,
   legacyContextWorld,
   LEGACY_ORG_ID,
+  READ_FAILURES,
   type LegacyContextWorld,
-  type ReadFailure,
 } from '@/test/legacy-api-context';
 
 import { withApiContext } from './api-context';
@@ -86,7 +90,7 @@ function request(path: Path, orgHeader: string | null): Request {
 }
 
 const PATHS: Path[] = ['phone', 'cookie'];
-const HOW: ReadFailure[] = ['error', 'throws', 'malformed'];
+const HOW = READ_FAILURES;
 
 /** The organization the context carries, or null for the 401 answer. */
 async function servedIn(path: Path, orgHeader: string | null): Promise<string | null> {
@@ -139,9 +143,27 @@ describe.each(PATHS)('a membership read that answers (%s path)', (path) => {
     expect(await servedIn(path, null)).toBeNull();
   });
 
-  it('an organization header that is not an organization id: null (401), and no membership read', async () => {
-    expect(await servedIn(path, 'not-an-organization')).toBeNull();
+  it.each([
+    ['not an organization id', 'not-an-organization'],
+    ['in braces', `{${DEFAULT}}`],
+    ['without hyphens', DEFAULT.replace(/-/g, '')],
+  ])('an organization header %s: null (401), and no membership read', async (_how, header) => {
+    expect(await servedIn(path, header)).toBeNull();
     expect(world.calls).not.toContain('from:organization_members');
+  });
+
+  it('an invite not yet accepted is no membership', async () => {
+    world.memberships = [
+      { organization_id: OLDEST, role: 'staff' },
+      { organization_id: DEFAULT, role: 'manager', accepted: false },
+    ];
+    // Named: not a member there.
+    expect(await servedIn(path, DEFAULT)).toBeNull();
+    // Default pointing at the invite: the oldest accepted membership.
+    expect(await servedIn(path, null)).toBe(OLDEST);
+    // Only the invite: no membership at all.
+    world.memberships = [{ organization_id: DEFAULT, role: 'manager', accepted: false }];
+    expect(await servedIn(path, null)).toBeNull();
   });
 });
 
@@ -155,7 +177,7 @@ describe.each(PATHS)('a membership read that does not answer (%s path)', (path) 
   );
 
   it.each(HOW)(
-    'the profile default organization (%s): refused with a retry, never served in the oldest',
+    'the profile default organization (%s): refused with a retry, and no context is built',
     async (how) => {
       world.membershipReadFails = { read: 'profile', how };
       await expect(withApiContext(request(path, null))).rejects.toMatchObject(REFUSED);
@@ -165,7 +187,7 @@ describe.each(PATHS)('a membership read that does not answer (%s path)', (path) 
   );
 
   it.each(HOW)(
-    'the membership in the default organization (%s): refused with a retry, never served in the oldest',
+    'the membership in the default organization (%s): refused with a retry, and no context is built',
     async (how) => {
       world.membershipReadFails = { read: 'named', orgId: DEFAULT, how };
       await expect(withApiContext(request(path, null))).rejects.toMatchObject(REFUSED);
@@ -194,6 +216,18 @@ describe.each(PATHS)('a membership read that does not answer (%s path)', (path) 
     expect(await servedIn(path, DEFAULT)).toBeNull();
     world.membershipReadFails = { read: 'profile', how: 'error' };
     expect(await servedIn(path, null)).toBeNull();
+  });
+
+  it('the account-status read fails too: its own refusal is the one thrown', async () => {
+    world.accountStatusFails = true;
+    world.membershipReadFails = { read: 'named', orgId: DEFAULT, how: 'error' };
+    await expect(withApiContext(request(path, DEFAULT))).rejects.toMatchObject({
+      name: 'AccountStatusUnavailableError',
+    });
+    world.membershipReadFails = { read: 'profile', how: 'no_body' };
+    await expect(withApiContext(request(path, null))).rejects.toMatchObject({
+      name: 'AccountStatusUnavailableError',
+    });
   });
 
   it('a failed read for an organization the request does not use changes nothing', async () => {

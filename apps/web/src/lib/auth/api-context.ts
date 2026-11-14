@@ -193,9 +193,10 @@ async function mfaFromPolicy(
  *
  * Neither path writes the request's work: this module and everything it loads
  * only read (lib/auth/api-context.read-only.guard.test.ts). That is what lets
- * apiContextGate (server/lib/api-context-gate.ts) answer those two throws as a
- * 503 marked as refused before any write, which the phone may send again
- * (docket S26). A write added here would make it send a change twice.
+ * apiContextGate (server/lib/api-context-gate.ts) answer those throws, and the
+ * membership choice's MembershipUnavailableError, as a 503 marked as refused
+ * before any write, which the phone may send again (docket S26). A write added
+ * here would make it send a change twice.
  */
 type ApiBundleResolution =
   /** Use the legacy reads. */
@@ -463,22 +464,35 @@ function membershipUnread(read: MembershipRead, code: string): never {
   throw new MembershipUnavailableError();
 }
 
+type ListRead = { data: unknown; error: { code?: string } | null; status?: number };
+
 /**
- * Runs one read and keeps only an answer. supabase-js RESOLVES a failed read
- * as `{ data: null, error }`, which is not "no row": it refuses.
+ * Runs one LIST read (at most one row: the reads below filter by a key or
+ * `.limit(1)`) and keeps only an answer: its row, or null when the list is
+ * empty. Only a list answered with status 200 is an answer. supabase-js
+ * RESOLVES a failed read as `{ data: null, error }`, and postgrest-js resolves
+ * four gateway answers with no error and data null (a 404 with an empty body,
+ * rewritten to 204; a 2xx with an empty body or the body `null`; a non-2xx
+ * whose body is JSON `null`). None is a list, so each refuses, the same rule
+ * the module rows above follow. A single-row read (`maybeSingle`) would turn
+ * an empty list into the same null, which is why these read a list.
  */
 async function answerOf(
   read: MembershipRead,
-  query: () => PromiseLike<{ data: unknown; error: { code?: string } | null }>,
+  query: () => PromiseLike<ListRead>,
 ): Promise<unknown> {
-  let res: { data: unknown; error: { code?: string } | null };
+  let res: ListRead;
   try {
     res = await query();
   } catch {
     return membershipUnread(read, 'threw');
   }
   if (res.error) return membershipUnread(read, res.error.code || 'unknown');
-  return res.data ?? null;
+  if (res.status !== 200 || !Array.isArray(res.data)) {
+    return membershipUnread(read, `no list (status ${res.status ?? 'none'})`);
+  }
+  if (res.data.length > 1) return membershipUnread(read, 'more than one row');
+  return res.data[0] ?? null;
 }
 
 /**
@@ -515,9 +529,10 @@ function membershipFrom(read: MembershipRead, data: unknown): ActiveMembership |
  * Only an ANSWER moves the choice along (docket S90). "No row" is one: no
  * membership in the named organization, or none at all, is null; no profile
  * row, no default, or a default the person is no longer a member of goes on
- * to step 3. A read that did not answer (an error, a thrown call, a row
- * without the columns asked for) throws MembershipUnavailableError: a
- * retryable 5xx, never the null every route answers as 401. The choice moves
+ * to step 3. A read that did not answer (an error, a thrown call, an answer
+ * that is not a list at status 200, a row without the columns asked for)
+ * throws MembershipUnavailableError: a retryable 5xx, never the null every
+ * route answers as 401. The choice moves
  * to step 3 only on an answer, so a request is served in the oldest
  * membership only when the reads said there is no usable default.
  */
@@ -540,13 +555,13 @@ async function pickActiveMembership(
           .eq('user_id', userId)
           .eq('organization_id', requestedOrgId)
           .not('accepted_at', 'is', null)
-          .maybeSingle(),
+          .limit(1),
       ),
     );
   }
 
   const profile = await answerOf('profile_default', () =>
-    supabase.from('user_profiles').select('default_organization_id').eq('id', userId).maybeSingle(),
+    supabase.from('user_profiles').select('default_organization_id').eq('id', userId).limit(1),
   );
   // No profile row is an answer: no default. A row is one only when it
   // carries the column asked for, a uuid or null.
@@ -569,7 +584,7 @@ async function pickActiveMembership(
           .eq('user_id', userId)
           .eq('organization_id', defaultOrgId)
           .not('accepted_at', 'is', null)
-          .maybeSingle(),
+          .limit(1),
       ),
     );
     if (member) return member;
@@ -588,8 +603,7 @@ async function pickActiveMembership(
         // organization of a user who has several and no valid default.
         .order('created_at', { ascending: true })
         .order('organization_id', { ascending: true })
-        .limit(1)
-        .maybeSingle(),
+        .limit(1),
     ),
   );
 }
