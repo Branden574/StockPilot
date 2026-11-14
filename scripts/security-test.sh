@@ -868,6 +868,10 @@ PGTAP_TESTS=(
   # service_role only. The lock footprint is
   # scripts/db-concurrency/0422_migration_lock_footprint.sh.
   supabase/tests/0422_notice_audience_follows_permission.test.sql
+  # Audit rows (S80): the id is the only unique index, a later try with an id
+  # already there writes and changes nothing, and neither a member nor a
+  # signed-out caller can insert an audit row.
+  supabase/tests/audit_logs_row_id_contract.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -932,6 +936,11 @@ WEB_TESTS=(
   src/server/services/exception-occurrences.confirm.test.ts
   src/app/api/v1/exceptions/confirm-count-route.test.ts
   src/server/actions/exceptions.confirm.test.ts
+  # Exception recount facts (0460): one function read with the active
+  # organization; only "function missing" (PGRST202 or 42883 naming it) takes
+  # the direct read; any other error, or an answer that is not a list, fails
+  # the list and the detail.
+  src/server/services/exception-occurrences.recount-facts.test.ts
   # Maintenance photos (2026-09-27): what finalize stores carries no EXIF,
   # GPS, XMP or ICC (real sharp on GPS-tagged JPEG, PNG and WEBP), the
   # thumbnail is the server's, made from the clean photo at the mint's name,
@@ -1226,6 +1235,14 @@ WEB_TESTS=(
   src/lib/rate-limit.failed.test.ts
   src/server/services/auth-audit.address.test.ts
   src/app/api/v1/auth/password-reset/route.address.test.ts
+  # S80: an audit row's id is chosen by the writer, never by its caller, and a
+  # row that was not written is sent again as an insert that skips a row
+  # already there (no upsert on audit_logs may overwrite one). While the
+  # limiter cannot answer, the phone's sign-in and sign-out notes are bounded
+  # per instance.
+  src/server/services/audit.retry.test.ts
+  src/server/services/audit-writes.guard.test.ts
+  src/lib/auth/session-note.test.ts
 
   # Only a platform admin creates a workspace (S20, owner decision b.9):
   # createOrganizationAction runs checkPlatformAdmin({ requireStepUp: true })
