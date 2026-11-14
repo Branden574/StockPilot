@@ -854,6 +854,14 @@ PGTAP_TESTS=(
   # stays 0215's. The lock footprint is
   # scripts/db-concurrency/0420_migration_lock_footprint.sh.
   supabase/tests/0420_permission_override_updates_follow_0322.test.sql
+  # Write rules follow the app's checks, part A (0453 placeholder number,
+  # docket S11, slice S11-A): an admin's Resend renews an open invite (an
+  # UPDATE rule on organization_invites, and a pin trigger that lets an API
+  # member role change only the expiry, within 7 days); a delivery's live
+  # point is written by its assigned driver with live_tracking on; and
+  # rls_orgs_with_module, the module helper later slices call. The lock
+  # footprint is scripts/db-concurrency/0453_migration_lock_footprint.sh.
+  supabase/tests/0453_invite_resend_and_live_location_rules.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

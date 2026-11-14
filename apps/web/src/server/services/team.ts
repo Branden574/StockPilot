@@ -379,6 +379,9 @@ export class TeamService {
       )
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', inviteId)
+      // A revoked invite (0393: its sender's account was deleted) is terminal
+      // (0098), so it is never resent.
+      .is('revoked_at', null)
       .maybeSingle();
     if (fetchErr) throw new ServiceError('internal_error', fetchErr.message);
     if (!invite) throw new ServiceError('not_found', 'Invite not found');
@@ -391,16 +394,26 @@ export class TeamService {
 
     // Refresh the expiry so a recipient who acts on a re-sent email
     // doesn't immediately hit "invite expired". The reminder email states
-    // this NEW expiry (registry: invite-reminder).
+    // this NEW expiry (registry: invite-reminder). The renewed row is asked
+    // back (pattern #2): the database renews only an open invite of this
+    // organization, for an admin (S11-A, organization_invites_update), and a
+    // filtered update that matches no row is not an error. With no row back,
+    // nothing is sent and nothing is audited.
     const newExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-    const { error: updErr } = await this.ctx.supabase
+    const { data: renewed, error: updErr } = await this.ctx.supabase
       .from('organization_invites')
       .update({
         expires_at: newExpiresAt,
       })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', inviteId);
+      .eq('id', inviteId)
+      .select('id, expires_at')
+      .maybeSingle();
     if (updErr) throw new ServiceError('internal_error', updErr.message);
+    if (!renewed) {
+      throw new ServiceError('conflict', 'This invite can no longer be resent. Send a new invite.');
+    }
+    const renewedExpiresAt = (renewed.expires_at as string | null) ?? newExpiresAt;
 
     // Inviter name: prefer current user's full_name, fallback to email.
     const { data: profile } = await this.ctx.supabase
@@ -431,7 +444,7 @@ export class TeamService {
       inviterEmail: (profile?.email as string | null) ?? null,
       role: (invite.role as Role | null) ?? 'staff',
       acceptUrl,
-      expiresOn: formatInviteExpiry(newExpiresAt),
+      expiresOn: formatInviteExpiry(renewedExpiresAt),
       appUrl: env.NEXT_PUBLIC_APP_URL,
     });
     const sent = await sendEmail({
@@ -1193,14 +1206,16 @@ export async function acceptInviteWithToken(
   const { data: invite, error: inviteErr } = await admin
     .from('organization_invites')
     .select(
-      'id, organization_id, email, role, expires_at, accepted_at, warehouse_id, charter_id, charter_ids, all_warehouses, invited_by',
+      'id, organization_id, email, role, expires_at, accepted_at, revoked_at, warehouse_id, charter_id, charter_ids, all_warehouses, invited_by',
     )
     .eq('token', token)
     .maybeSingle();
   if (inviteErr) throw new ServiceError('internal_error', inviteErr.message);
   if (!invite) throw new ServiceError('not_found', 'Invite not found');
   if (invite.accepted_at) throw new ServiceError('conflict', 'Invite already accepted');
-  if (new Date(invite.expires_at as string).getTime() < Date.now()) {
+  // A revoked invite answers as an expired one, whatever its expiry says
+  // (0393 also moves its expiry into the past; this is the second check).
+  if (invite.revoked_at || new Date(invite.expires_at as string).getTime() < Date.now()) {
     throw new ServiceError('validation_error', 'Invite has expired');
   }
 
