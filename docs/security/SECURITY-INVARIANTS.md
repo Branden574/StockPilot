@@ -776,10 +776,14 @@ select p.proname,
   policy or a trigger reads to tell a write made inside one of this schema's
   functions from a direct one (the ledger guards, the `order_submissions`
   insert policy, the order top-up helper, the exchange item rule, the
-  `updated_at` trigger). A function that raises a flag opens that guard for
-  whatever it then does. Four flags also have a census in the test of the
-  migration that introduced them; this list holds all seven, and a flag
-  invented later has to be added to it.
+  `updated_at` trigger, the `idempotency_keys` guard). A function that raises
+  a flag opens that guard for whatever it then does. Four flags also have a
+  census in the test of the migration that introduced them; this list holds
+  all eight, and a flag invented later has to be added to it.
+  `stockpilot.idempotency_write` (0464, 0466) carries the transaction id, not
+  a fixed value: the `idempotency_keys` guard admits an API role's write only
+  when it equals `pg_current_xact_id()`, so a value left from another
+  transaction never opens it.
 - **Enforced by**: each writer raises its flag around its own statements and
   puts the previous value back before it returns. No Data API identity can set
   a setting directly: PostgREST runs one statement per request and does not
@@ -788,7 +792,7 @@ select p.proname,
   call names its setting with one quoted literal, so none takes a setting's
   name from its caller (INV-40d, described under INV-B6; test 18 of the same
   file).
-- **Tested at**: INV-40c (the census, against all 19 pairs of the seven flags:
+- **Tested at**: INV-40c (the census, against all 23 pairs of the eight flags:
   an unlisted pair or a stale row fails, by name) and INV-41c (plants an
   unlisted `set_config`, an unlisted `SET LOCAL` of a new flag, a flag name
   finished at run time and two bad allowlist-M rows; a function that only
@@ -796,7 +800,7 @@ select p.proname,
   `set_config` under a double-quoted name, `SET LOCAL` with a comment inside
   it, and a flag whose name has a third part, which is read whole). The
   `SET`-clause form is proved by INV-41e. Per flag: `0359` test 17, `0391`
-  G5, `0397` A1b and INV-40.
+  G5, `0397` A1b, INV-40, and `0464` P6 with `0466` P3 and G8.
 
 ---
 
@@ -1019,12 +1023,19 @@ actually fire.
     Returns module check. Every stock rule holds on that path (status gate,
     budget, latch, the planned-rack revalidation, holdings = on hand). Its
     revoke, with those suites moved to `close_return`, is a later slice.
-    (2) `idempotency_keys_write` still lets a manager write any key row of
-    their organization, the return scopes included: the RMA functions never
-    trust a row they did not complete (below), so a planted or edited row
-    can only turn a replay into `return_changed` or `idempotency_conflict`;
-    narrowing the policy would make supautils lock every policy_grants table
-    at push time for no further gain. The read boundary is also wider than
+    (2) Since 0466 no API role writes `idempotency_keys` directly: the
+    `trg_zz_idempotency_keys_guard` trigger refuses an insert or update by
+    `authenticated` or `anon` (42501 `idempotency_key_through_rpc`) unless
+    `stockpilot.idempotency_write` equals the transaction id, which only the
+    four SECURITY INVOKER key functions (`ledger.post_receipt_v2`,
+    `ledger.distribute_bundle`, `start_targeted_recount`,
+    `draft_order_shortfall_pos`) set around their own key writes (allowlist
+    M); nobody but the owner and `service_role` may delete a key row (0464).
+    The SECURITY DEFINER RMA functions run as the table owner and are not
+    held, and they still never trust a row they did not complete (below).
+    The policy `idempotency_keys_write` is unchanged (narrowing it would make
+    supautils lock every policy_grants table at push time; the guard does
+    the work). The read boundary is also wider than
     the app's `returns:read` gate: every member reads `returns`,
     `return_lines` and `return_overview` (requester email and the denial
     reason included); only `return_decisions` needs `returns:read` or
@@ -1052,8 +1063,9 @@ actually fire.
     write locks the RMA row first under `lock_timeout = '5s'`, so a blocked
     caller is refused with 55P03, and no function raises 40001 or 40P01
     (PostgREST retries those forever). The functions never trust a key row
-    in `idempotency_keys` they did not write (managers may write that table
-    through the API): a create replays only an RMA of its own organization
+    in `idempotency_keys` they did not write (since 0466 an API role writes
+    that table only through the key functions; see residual 2 above): a
+    create replays only an RMA of its own organization
     and order that the same caller created (the staff path: its
     `requested_by` and `created` decision; the requester path: a requester
     RMA created on the same channel by the same actor, the token path keyed

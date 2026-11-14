@@ -479,7 +479,9 @@ insert into _sec_inv_flag_setter_allow (flag, fn, why) values
   ('stockpilot.derived_write', 'public.set_order_catalog_visibility', 'writes the two order catalog columns without moving updated_at, and puts the previous value back (0413)'),
   ('stockpilot.derived_write', 'public._backfill_variant_size',       'the 0303 size backfill, which leaves updated_at alone'),
   ('stockpilot.idempotency_write', 'ledger.post_receipt_v2',   'raises the flag (the transaction id) around its own retry key insert, and puts the previous value back (0464; also 0464 P6, F1)'),
-  ('stockpilot.idempotency_write', 'ledger.distribute_bundle', 'raises the flag (the transaction id) around its own retry key insert and update, and puts the previous value back (0464; also 0464 P6, F1)');
+  ('stockpilot.idempotency_write', 'ledger.distribute_bundle', 'raises the flag (the transaction id) around its own retry key insert and update, and puts the previous value back (0464; also 0464 P6, F1)'),
+  ('stockpilot.idempotency_write', 'public.start_targeted_recount',    'raises the flag (the transaction id) around its own retry key insert and update, and puts the previous value back; the idempotency_keys guard admits an API role''s write only under it (0466; also 0466 P3)'),
+  ('stockpilot.idempotency_write', 'public.draft_order_shortfall_pos', 'raises the flag (the transaction id) around its own retry key insert and update, and puts the previous value back; the idempotency_keys guard admits an API role''s write only under it (0466; also 0466 P3)');
 
 
 -- ═══════════════════════════════════════════════════════════════════════════

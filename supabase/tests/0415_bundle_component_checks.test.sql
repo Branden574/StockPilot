@@ -331,9 +331,10 @@ end $$;
 -- function, recreated inside an undone subtransaction by the M and A checks.
 -- 0464 later added lines tagged '-- 0464' to ledger.distribute_bundle (each
 -- an added line only, 0464 P4); they are removed too, so this is still the
--- pre-0415 text.
+-- pre-0415 text. 0466 added lines tagged '-- 0466' the same way (0466 P1);
+-- they are removed too.
 create function pg_temp.stripped(p_sig text) returns text language sql stable as $$
-  select regexp_replace(pg_get_functiondef(to_regprocedure(p_sig)), E'\n[^\n]*-- (0404|0464)[^\n]*', '', 'g')
+  select regexp_replace(pg_get_functiondef(to_regprocedure(p_sig)), E'\n[^\n]*-- (0404|0464|0466)[^\n]*', '', 'g')
 $$;
 
 -- The pre-0415 state, statement by statement: the three bodies without
@@ -513,8 +514,9 @@ create temp table snap as select pg_temp.state() as v;
 -- ══ R. One change per body ═══════════════════════════════════════════════
 select is(
   -- 0464 added lines tagged -- 0464 to ledger.distribute_bundle (0464 P4); both tags are
-  -- stripped, so the pre-0415 values stand.
-  (select string_agg(v.fn || '=' || md5(p.prosrc) || '|' || md5(regexp_replace(p.prosrc, E'\n[^\n]*-- (0404|0464)[^\n]*', '', 'g'))
+  -- stripped, so the pre-0415 values stand. 0466 added lines tagged -- 0466 to it
+  -- as well (0466 P1); they are stripped too.
+  (select string_agg(v.fn || '=' || md5(p.prosrc) || '|' || md5(regexp_replace(p.prosrc, E'\n[^\n]*-- (0404|0464|0466)[^\n]*', '', 'g'))
                      || '|' || (select count(*) from regexp_matches(p.prosrc, '-- 0404', 'g'))::text, E'\n' order by v.n)
      from (values (1, 'ledger.assemble_bundle(uuid,numeric,uuid,text)'),
                   (2, 'ledger.distribute_bundle(uuid,numeric,uuid,boolean,uuid,text,text)'),
@@ -522,7 +524,8 @@ select is(
      join pg_proc p on p.oid = to_regprocedure(v.fn)),
   E'ledger.assemble_bundle(uuid,numeric,uuid,text)=0002b48757da651a90a38dd50eb7df15|a2967a282fbdf76c10c2808f35760973|23\n'
   -- Re-pinned by 0464 (was ebe22d594c11813464c7d50accae54a7): 17 lines tagged -- 0464 (0464 P4).
-  'ledger.distribute_bundle(uuid,numeric,uuid,boolean,uuid,text,text)=f0fac64fbdabf5870422e7b8fc3f7df3|d78bf6b0471c49981b6a8df064e6b895|30\n'
+  -- Re-pinned by 0466 (was f0fac64fbdabf5870422e7b8fc3f7df3): 7 lines tagged -- 0466 (0466 P1).
+  'ledger.distribute_bundle(uuid,numeric,uuid,boolean,uuid,text,text)=52aa32489d62af5c89355b67f6493ea3|d78bf6b0471c49981b6a8df064e6b895|30\n'
   'public.distribute_bundle(uuid,numeric,uuid,boolean,uuid,text,text)=4b731f8a78341906009971d042f5ed56|f0ef2bde4103221457cf632769ce36c7|22',
   'R1: each restated body has 0415''s text, and removing its lines tagged -- 0404 (23, 30 and 22) gives the pre-0415 body exactly (the 0373 bodies a2967a28 and d78bf6b0, the 0359 wrapper f0ef2bde): the added lines are the only change');
 select is(
@@ -558,11 +561,15 @@ end $$;
 -- lines to ledger.post_receipt_v2 and ledger.distribute_bundle (0464 P8 takes both
 -- back to their pre-0464 text and gets cfc03152|18 exactly). The receipt body is
 -- taken back to its pre-0464 text here as well, so the second value stands.
+-- Re-pinned by 0466 (was ee07dd0a0c69b01b77f39c5791aea9e4|18): 0466 added tagged
+-- lines to the same two bodies (0466 P2 takes both back to their pre-0466 text
+-- and gets ee07dd0a|18 exactly); the receipt's -- 0466 lines are removed here
+-- too, so the second value stands.
 select is(
   pg_temp.ledger_fp() || ' / ' || pg_temp.ledger_fp_after(pg_temp.pre(array['fn_assemble', 'fn_distribute']) || E';\n'
-    || regexp_replace(pg_get_functiondef('ledger.post_receipt_v2(uuid,uuid,jsonb,text,text,text)'::regprocedure), E'\n[^\n]*-- 0464[^\n]*', '', 'g')),
-  'ee07dd0a0c69b01b77f39c5791aea9e4|18 / 1c283e932202295a91e5c118f0873689|18',
-  'R3: the ledger.* fingerprint 0383 Z2 and 0385 Z2 pin is ee07dd0a|18 after 0415 and 0464, and with the two bodies 0415 restated taken back to their pre-0415 text (and the receipt body to its pre-0464 text) it is their old pin (1c283e93|18) exactly: nothing else in ledger moved');
+    || regexp_replace(pg_get_functiondef('ledger.post_receipt_v2(uuid,uuid,jsonb,text,text,text)'::regprocedure), E'\n[^\n]*-- (0464|0466)[^\n]*', '', 'g')),
+  '7e62f415c0fee59d829acffae47f602c|18 / 1c283e932202295a91e5c118f0873689|18',
+  'R3: the ledger.* fingerprint 0383 Z2 and 0385 Z2 pin is 7e62f415|18 after 0415, 0464 and 0466, and with the two bodies 0415 restated taken back to their pre-0415 text (and the receipt body to its pre-0464 text) it is their old pin (1c283e93|18) exactly: nothing else in ledger moved');
 
 -- ══ P. Posture ════════════════════════════════════════════════════════════
 select is(
