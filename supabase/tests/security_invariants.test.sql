@@ -51,7 +51,7 @@
 --   * INV-25 create a SECURITY DEFINER function in public, grant EXECUTE to
 --            `authenticated`, and write a body with no auth.uid()/has_org_role/
 --            has_permission/is_org_member in it (this is the 0342 shape).
---   * INV-27 create a function in public or ledger without `set search_path`
+--   * INV-27 create a function in public, ledger or gate without `set search_path`
 --            (or `alter function ... reset search_path` on an existing one).
 --
 -- INV-29 and INV-30 need no hand recipe: they plant their own probes and are
@@ -1240,8 +1240,9 @@ select is(
 -- (0329's header states this; its test #42 pins it from the other side).
 -- ═══════════════════════════════════════════════════════════════════════════
 
--- The sweep's detector (T23): first-party functions in public and ledger
--- (ledger, 0359, is ours: authenticated holds USAGE and EXECUTE there), less
+-- The sweep's detector (T23): first-party functions in public, ledger and gate
+-- (ledger, 0359, is ours: authenticated holds USAGE and EXECUTE there; so is
+-- gate, 0455: anon, authenticated and service_role hold USAGE there), less
 -- extension members, with no search_path in proconfig, less allowlist J; and
 -- allowlist J's own audit.
 create temporary view _sec_inv_search_path_violations as
@@ -1249,7 +1250,7 @@ create temporary view _sec_inv_search_path_violations as
     select p.oid, p.oid::regprocedure::text as sig, p.prosecdef,
            exists (select 1 from unnest(coalesce(p.proconfig, '{}'::text[])) c where c like 'search_path=%') as pinned
       from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-     where n.nspname in ('public', 'ledger')
+     where n.nspname in ('public', 'ledger', 'gate')
        and not exists (select 1 from pg_depend d
                         where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')),
   j as (select a.sig, to_regprocedure(a.sig) as oid from _sec_inv_search_path_allow a)
@@ -1279,11 +1280,11 @@ create temporary view _sec_inv_search_path_violations as
 --     forces the decision here). USAGE is not the test: a trigger function
 --     fires for a role with no USAGE on its schema, under that role's
 --     search_path;
---   * a first-party function in public or ledger with an SQL-standard body
+--   * a first-party function in public, ledger or gate with an SQL-standard body
 --     (BEGIN ATOMIC, or RETURN with no AS string): its prosrc is empty, and
 --     every text census in this suite reads prosrc, so such a body would be
 --     invisible to all of them;
---   * a first-party function in public or ledger whose body the strip pass
+--   * a first-party function in public, ledger or gate whose body the strip pass
 --     does not follow: one of the forms of _sec_inv_unread_re, a quote left
 --     once the pass is done, standard_conforming_strings in the function's
 --     own SET clause, or a body written in a language other than SQL or
@@ -1293,7 +1294,7 @@ create temporary view _sec_inv_first_party_census as
   select 'unswept schema: ' || n.nspname as x, n.nspname::text as nspname
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where pg_get_userbyid(p.proowner) = 'postgres'
-     and n.nspname not in ('public', 'ledger')
+     and n.nspname not in ('public', 'ledger', 'gate')
      and n.nspname !~ '^pg_(toast_)?temp_'
      and not exists (select 1 from pg_depend d
                       where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
@@ -1301,44 +1302,44 @@ create temporary view _sec_inv_first_party_census as
   union all
   select 'sql-standard body: ' || p.oid::regprocedure::text, n.nspname::text
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-   where n.nspname in ('public', 'ledger')
+   where n.nspname in ('public', 'ledger', 'gate')
      and p.prosqlbody is not null
      and not exists (select 1 from pg_depend d
                       where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
   union all
   select 'body the text censuses do not follow (' || u.form || '): ' || f.sig, f.nspname
     from _sec_inv_fn_scope f join _sec_inv_unread_re u on f.raw ~* u.re
-   where f.nspname in ('public', 'ledger') and not f.ext
+   where f.nspname in ('public', 'ledger', 'gate') and not f.ext
   union all
   select 'body the text censuses do not follow (a quote left after the pass): ' || f.sig, f.nspname
     from _sec_inv_fn_scope f
-   where f.nspname in ('public', 'ledger') and not f.ext
+   where f.nspname in ('public', 'ledger', 'gate') and not f.ext
      and position('''' in replace(f.s, '''''', '')) > 0
   union all
   select 'body the text censuses do not follow (standard_conforming_strings in its SET clause): ' || f.sig, f.nspname
     from _sec_inv_fn_scope f
-   where f.nspname in ('public', 'ledger') and not f.ext
+   where f.nspname in ('public', 'ledger', 'gate') and not f.ext
      and exists (select 1 from unnest(f.config) k where k ~* '^standard_conforming_strings=')
   union all
   select 'body the text censuses do not follow (written in ' || f.lang || ', not SQL or PL/pgSQL): ' || f.sig, f.nspname
     from _sec_inv_fn_scope f
-   where f.nspname in ('public', 'ledger') and not f.ext
+   where f.nspname in ('public', 'ledger', 'gate') and not f.ext
      and f.lang not in ('sql', 'plpgsql');
 
 -- INV-27. The sweep. Offenders are named.
 select is(
   (select coalesce(string_agg(v.x, ', ' order by v.x collate "C"), '') from _sec_inv_search_path_violations v),
   '',
-  'INV-27: every first-party function in public and ledger pins search_path, or is on allowlist J and within its terms'
+  'INV-27: every first-party function in public, ledger and gate pins search_path, or is on allowlist J and within its terms'
 );
 
 -- INV-27b. The census (T23): every first-party function lives in a schema
--- INV-27 sweeps, and none in public or ledger hides its body from prosrc or
+-- INV-27 sweeps, and none in public, ledger or gate hides its body from prosrc or
 -- holds a form the strip pass does not follow.
 select is(
   (select coalesce(string_agg(c.x, ', ' order by c.x collate "C"), '') from _sec_inv_first_party_census c),
   '',
-  'INV-27b: every first-party function (non-extension, owned by postgres) lives in public or ledger, and none there has an SQL-standard body or a body the text censuses do not follow'
+  'INV-27b: every first-party function (non-extension, owned by postgres) lives in public, ledger or gate, and none there has an SQL-standard body or a body the text censuses do not follow'
 );
 
 -- INV-28. VACUITY CONTROL, both halves of the detector.
