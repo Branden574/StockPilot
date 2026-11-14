@@ -5,6 +5,7 @@ import { ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY } from '@stockpilot/core';
 
 import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
+import { MembershipUnavailableError } from '@/lib/auth/membership-unavailable';
 import { ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { ModulesUnavailableError } from '@/lib/modules/module-state';
@@ -79,6 +80,18 @@ describe('internalErrorResponse', () => {
     expect(await res.json()).toEqual({
       error: 'internal_error',
       message: 'Account status could not be verified. Please try again.',
+    });
+    expect(reportError).toHaveBeenCalledWith(e, { tag: 'api.test.route', level: 'warning' });
+  });
+
+  it('answers a membership read that did not answer with its own sentence and the route status, as a warning', async () => {
+    const e = new MembershipUnavailableError();
+    const res = internalErrorResponse(e, 'api.test.route', { status: 503 });
+    // A 5xx the phone retries: never the 401 it words as signed out.
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({
+      error: 'internal_error',
+      message: 'Your access could not be checked. Please try again.',
     });
     expect(reportError).toHaveBeenCalledWith(e, { tag: 'api.test.route', level: 'warning' });
   });

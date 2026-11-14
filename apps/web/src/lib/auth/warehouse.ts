@@ -46,7 +46,8 @@ export interface WarehouseAccess {
   readableIds: string[];
   /** Warehouses where the user can write. For viewer this is []. */
   writableIds: string[];
-  /** True for owner/admin/manager — all warehouses. */
+  /** True for owner/admin/manager (and the 0280 all-warehouses flag): every
+   *  warehouse of the ACTIVE organization, never another organization's. */
   hasAllAccess: boolean;
   /** Default warehouse to scope queries to (first assignment, if any). */
   primaryWarehouseId: string | null;
@@ -111,7 +112,9 @@ function accessWhenUnreadable(role: Role): WarehouseAccess {
  *
  * Decision rules:
  *   • owner / admin / manager  → hasAllAccess = true (readableIds is loaded
- *     to support UIs that need a concrete list, but enforcement is by role).
+ *     to support UIs that need a concrete list, but enforcement is by role,
+ *     within the active organization's own warehouses: assertWarehouseAccess
+ *     refuses any other id).
  *   • staff   → readable + writable = assigned warehouses
  *   • viewer  → readable = assigned warehouses, writable = []
  *   • any read below that returns an error → accessWhenUnreadable(role).
@@ -261,7 +264,18 @@ export async function assertWarehouseAccess(
     throw new ForbiddenError('Read-only auditor cannot perform write operations.');
   }
 
-  if (access.hasAllAccess) return;
+  if (access.hasAllAccess) {
+    // Every warehouse means every warehouse OF THE ACTIVE ORGANIZATION. The
+    // warehouse must be one of its own before the role (or the 0280
+    // all-warehouses flag) decides anything; see warehouseInActiveOrganization.
+    // The refusal is the one a member outside the warehouse gets, word for
+    // word, so it says nothing about whether the id exists anywhere else.
+    const inOrg = await warehouseInActiveOrganization(warehouseId, c, ctx, access);
+    if (inOrg === true) return;
+    throw new ForbiddenError(`User does not have ${op} access to warehouse ${warehouseId}.`, {
+      accessUnreadable: inOrg === 'unreadable',
+    });
+  }
 
   const allowed = op === 'write' ? access.writableIds : access.readableIds;
   if (!allowed.includes(warehouseId)) {
@@ -273,6 +287,51 @@ export async function assertWarehouseAccess(
       accessUnreadable: access.unreadable === true,
     });
   }
+}
+
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Whether `warehouseId` is a warehouse of the active organization
+ * (`c.organizationId`), for a caller whose access covers every warehouse.
+ *
+ *   • In `access.readableIds`: yes, with no further read. For owner / admin /
+ *     manager that list is the organization's own non-archived warehouses
+ *     (getWarehouseAccess reads `warehouses` filtered by organization_id); for
+ *     an all-warehouses member it is their assignment rows in this
+ *     organization, which the 0280 trigger keeps one per warehouse.
+ *   • Otherwise one read of that warehouse, filtered by the active
+ *     organization: an archived warehouse of the organization (not in the
+ *     list), a list read that failed (`unreadable`, empty list), or an
+ *     assignment row not written yet. A row: yes. No row: no.
+ *   • A read that fails: 'unreadable', so the caller refuses and can say it
+ *     could not be checked. A gate never passes on a read that did not happen.
+ *
+ * An id that is not a UUID is no warehouse of anyone's and is refused without
+ * a read (Postgres would answer it with an error, which reads as unreadable).
+ */
+async function warehouseInActiveOrganization(
+  warehouseId: string,
+  c: WarehouseCtxLike,
+  ctx: WarehouseCtxLike | undefined,
+  access: WarehouseAccess,
+): Promise<boolean | 'unreadable'> {
+  if (access.readableIds.includes(warehouseId)) return true;
+  if (typeof warehouseId !== 'string' || !UUID_SHAPE.test(warehouseId)) return false;
+  // The same client getWarehouseAccess reads with: the caller's own when it
+  // passed one (Bearer routes), else the request's cookie client.
+  const supabase = ctx?.supabase ?? (await createClient());
+  const { data, error } = await supabase
+    .from('warehouses')
+    .select('id')
+    .eq('organization_id', c.organizationId)
+    .eq('id', warehouseId)
+    .maybeSingle();
+  if (error) {
+    console.error('[assertWarehouseAccess] warehouse read failed:', error.message);
+    return 'unreadable';
+  }
+  return data != null;
 }
 
 /**

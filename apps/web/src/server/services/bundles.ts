@@ -914,13 +914,11 @@ export class BundlesService {
     assertPermission(this.ctx, 'bundles:manage');
     // S39: the kit is read in THIS organization first, and a miss refuses
     // before the warehouse check and the function. assemble_bundle decides on
-    // the kit's own organization, and assertWarehouseAccess passes an owner,
-    // admin or manager (or an all-warehouses member) by role without asking
-    // whose warehouse it is, so a page left open after a switch assembled the
-    // other organization's kits while the audit row and the cache invalidation
-    // below went to this one. Read first, so the answer is not_found whoever
-    // asks; the function refuses a warehouse outside the kit's organization,
-    // so the kit is the one row to read.
+    // the kit's own organization, so the kit must be this organization's for
+    // the audit row and the cache invalidation below to be filed where the
+    // change ran. Read first, so the answer is not_found whoever asks; the
+    // warehouse check below then asks for a warehouse of this organization,
+    // and the function refuses a warehouse outside the kit's organization.
     await readInActiveOrg(this.ctx, 'bundles', id, 'Bundle not found');
     // H3: warehouse-scoped managers can hold `bundles:manage` org-wide
     // but must still be assigned to the target warehouse. Without this

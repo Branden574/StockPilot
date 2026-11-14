@@ -1043,6 +1043,15 @@ WEB_TESTS=(
   # token, timed to refresh after getUser(), reads as not aal2. The real server
   # client and auth-js against the fixture's Auth server.
   src/lib/auth/api-context.refresh-swap.test.ts
+  # The organization an API request is served in (docket S90): only an answer
+  # moves the membership choice along. A membership or profile read that does
+  # not answer refuses with a retryable 5xx (the gate's 503 marker on the
+  # writes the phone cannot send twice), and nothing is read for any
+  # organization; "no row" answers exactly as before. Both paths, the routes
+  # behind them, and the answers the real PostgREST client resolves.
+  src/lib/auth/api-context.membership-answer-shapes.test.ts
+  src/lib/auth/api-context.membership-unreadable.test.ts
+  src/app/api/v1/membership-unreadable.routes.test.ts
   src/app/api/v1/mobile/snapshot/route.step-up.test.ts
   src/app/api/client-error/route.test.ts
   # A session that still owes its authenticator code gets no organization
@@ -1334,6 +1343,16 @@ WEB_TESTS=(
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts
   src/lib/locations/scope.test.ts
+  # A warehouse must belong to the active organization: assertWarehouseAccess
+  # refuses, for read and write, a warehouse id that is not one of the active
+  # organization's for every caller (owners, admins, managers and
+  # all-warehouses members included), in the words a member outside the
+  # warehouse gets; item create (route and action) and an item's warehouse
+  # move write nothing on it; a parent location is read in the active
+  # organization before a location is created or moved under it.
+  src/lib/auth/warehouse.active-organization.test.ts
+  src/app/api/v1/items/route.warehouse-organization.test.ts
+  src/server/services/locations.parent-organization.test.ts
 
   # S39: a write named by a row id reads that row in the ACTIVE organization,
   # through the caller's own client, before its function runs; a miss answers

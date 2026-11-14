@@ -6,6 +6,7 @@ import { ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY } from '@stockpilot/core';
 
 import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
+import { MembershipUnavailableError } from '@/lib/auth/membership-unavailable';
 import { ForbiddenError } from '@/lib/auth/warehouse';
 import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { rethrowControlFlow } from '@/lib/control-flow';
@@ -67,7 +68,9 @@ export interface InternalErrorResponseOptions {
  * throws them when its fallback read fails) answers its own fixed sentence,
  * with the route's status and code, and is reported as a warning: the
  * routes answered those sentences before S16, and the failed read is not the
- * route's fault (S31). A module state that could not be read
+ * route's fault (S31). So is a membership read that did not answer
+ * (MembershipUnavailableError, S90: withApiContext throws it instead of
+ * answering "no membership"). A module state that could not be read
  * (ModulesUnavailableError, thrown when a route asks about a module whose
  * state withApiContext could not read, S81) is answered the same way: a 5xx
  * the phone retries, never the 403 a module that is off gets.
@@ -84,6 +87,7 @@ export function internalErrorResponse(
   if (
     e instanceof PermissionsUnavailableError ||
     e instanceof AccountStatusUnavailableError ||
+    e instanceof MembershipUnavailableError ||
     e instanceof ModulesUnavailableError
   ) {
     void reportError(e, reportContext(tag, { ...opts, level: 'warning' }));
