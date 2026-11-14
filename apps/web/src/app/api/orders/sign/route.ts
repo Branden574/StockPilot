@@ -16,6 +16,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
 import { maybeSendReturnPrompt } from '@/server/email/return-prompt';
 import { NOT_SET_UP_MESSAGE } from '@/server/lib/action-error-result';
+import { answerModuleState } from '@/server/lib/api-error-response';
 import {
   notifyRequesterBackordered,
   notifyRequesterBackorderShipped,
@@ -245,11 +246,21 @@ export async function POST(req: NextRequest) {
     // the same rule.
     if (refusesCrossSiteCookieWrite(req)) return notFound();
     const ctx = await memberContextFor(req, order.organization_id);
+    let ordersOn = false;
+    if (ctx && ctx.organizationId === order.organization_id) {
+      try {
+        ordersOn = isModuleEnabled(ctx, 'orders');
+      } catch (e) {
+        // A module state that could not be read (docket S81): the fixed
+        // try-again answer, never the not-found an off module gets.
+        return answerModuleState(e, 'orders.sign.module_state');
+      }
+    }
     if (
       !ctx ||
       ctx.organizationId !== order.organization_id ||
       // The orders module off: the mint and the lookup refuse it too (review 9).
-      !isModuleEnabled(ctx, 'orders') ||
+      !ordersOn ||
       // The mint's warehouse rule for an approver below manager rank (review 1).
       !(await mayHandOverOrder(ctx, order))
     ) {

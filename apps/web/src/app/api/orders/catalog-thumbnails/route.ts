@@ -5,6 +5,7 @@ import { can, rentalItemsPredicate } from '@stockpilot/core';
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { answerModuleState } from '@/server/lib/api-error-response';
 import { CATALOG_ROW_CEILING } from '@/server/loaders/orders-new-catalog';
 import { isModuleEnabled, ServiceError, type ServiceContext } from '@/server/services/context';
 import { ItemImagesService } from '@/server/services/item-images';
@@ -77,7 +78,15 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
   // New rental's own gates, first (see WHO above).
-  if (!isModuleEnabled(ctx, 'rentals')) {
+  let rentalsOn: boolean;
+  try {
+    rentalsOn = isModuleEnabled(ctx, 'rentals');
+  } catch (e) {
+    // A module state that could not be read (docket S81): the fixed
+    // try-again answer, never module_disabled.
+    return answerModuleState(e, 'orders.catalog-thumbnails.module_state');
+  }
+  if (!rentalsOn) {
     return NextResponse.json({ error: 'module_disabled' }, { status: 403 });
   }
   if (!can(ctx, 'rentals:create')) {

@@ -52,6 +52,8 @@ const READS_DEFAULT: Record<string, string> = {
   'server/actions/platform-admin.ts': 'Writes the default for a platform admin entering a workspace.',
   'server/services/maintenance-requests.ts': 'A comment naming the user_profiles columns.',
   'test/step-up-session-fixture.ts': 'A test fixture.',
+  'test/legacy-api-context.ts':
+    'A test fixture: the profile row its client double answers, with a made-up default that matches the made-up membership.',
 };
 
 function sourceFiles(dir: string): string[] {

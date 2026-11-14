@@ -57,7 +57,9 @@ export const dynamic = 'force-dynamic';
  *       gate, docket S26). Nothing was saved; the phone says to try again.
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const gate = await apiContextGate(req);
+  // The Maintenance requests module state that could not be read is the
+  // gate's marker too (docket S81), before any of the work below.
+  const gate = await apiContextGate(req, { modules: ['maintenance_requests'] });
   if ('response' in gate) return gate.response;
   const ctx = gate.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
