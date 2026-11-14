@@ -542,9 +542,11 @@ export async function setOrgLogoUrlAction(input: {
     // of being stale for up to 60s. Static cross-org tag.
     revalidateTag('dashboard-org', 'max');
     // The public catalog page caches organization data (with the logo link)
-    // under this tag for 60 s; refresh it so the page shows the new logo, or
-    // none, on its next load.
-    revalidateTag(PUBLIC_TOKEN_RESOLVE_TAG, 'max');
+    // under this tag for 60 s. Expire it at once ({ expire: 0 }), not 'max':
+    // 'max' serves the cached copy once more while it refreshes, and that copy
+    // names the previous object, which removePreviousOrgLogo removes. With
+    // { expire: 0 } the next load reads fresh and shows the new logo, or none.
+    revalidateTag(PUBLIC_TOKEN_RESOLVE_TAG, { expire: 0 });
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {

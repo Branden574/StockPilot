@@ -832,11 +832,18 @@ describe('setOrgLogoUrlAction', () => {
     it.each([
       ['Replace', `${LOGO_URL_BASE}logo-200.png`],
       ['Remove', null],
-    ])('%s refreshes the public catalog page cache of organization data', async (_l, url) => {
+    ])('%s expires the public catalog page cache of organization data at once', async (_l, url) => {
+      // The previous object is removed after this save, so the public page
+      // must not serve its cached copy (which names that object) even once:
+      // { expire: 0 } makes the next load read fresh, where 'max' would serve
+      // the cached copy once while it refreshes.
       withPrevious(`${LOGO_URL_BASE}logo-100.png`);
       const result = await setOrgLogoUrlAction({ url });
       expect(result.ok).toBe(true);
-      expect(revalidateTag).toHaveBeenCalledWith('public-org-by-token', 'max');
+      const publicTagCalls = vi
+        .mocked(revalidateTag)
+        .mock.calls.filter(([tag]) => tag === 'public-org-by-token');
+      expect(publicTagCalls).toEqual([['public-org-by-token', { expire: 0 }]]);
     });
 
     it('a staff member removes nothing', async () => {
