@@ -1,73 +1,82 @@
 -- 0451_order_photo_audience_and_grants.sql
 --
--- Who reads a Wet signature photo on an order, which table privileges the API
--- roles hold on order attachments, the legacy shipment tables and orders, and
--- which rules a new Schedule event follows (docket S3, part S3c). The number
--- is provisional: it is renumbered to the first free one when its turn comes.
+-- Who reads, removes and replaces a Wet signature photo on an order and its
+-- stored file, which stored file an attachment row may name, which table
+-- privileges the API roles hold on order attachments, the legacy shipment
+-- tables and orders, and what a Schedule event write asks (docket S3, part
+-- S3c). The number is provisional: it is renumbered to the first free one
+-- when its turn comes.
 --
--- TIER A. This file creates three read-only helper functions, restates four
--- row policies (two on order_request_attachments, two on schedule_events) and
--- one storage policy, revokes table privileges and writes comments. It
--- inserts, updates or deletes no stored row, and it creates, drops or retypes
--- no table, view, sequence or column.
+-- TIER A. This file adds one unique index, creates three read-only helper
+-- functions, restates three row policies on order_request_attachments, three
+-- on schedule_events and the four order-attachments policies on
+-- storage.objects, revokes table privileges and writes comments. It inserts,
+-- updates or deletes no stored row, and it creates, drops or retypes no
+-- table, view, sequence or column. The unique index is built over the rows
+-- already stored; the preflight right after the lock prelude stops the file,
+-- before any change, when two rows name the same stored file.
 --
 -- ── WHAT IT DOES ──────────────────────────────────────────────────────────
--- 1. order_signature_photo_reader(order_id): true when the caller is a member
+-- 1. order_request_attachments_storage_path_key: each stored file is named by
+--    at most one attachment row.
+-- 2. order_signature_photo_reader(order_id): true when the caller is a member
 --    of the order's organization and either holds orders:approve there or is
---    the order's driver (assigned_delivery_user_id). It is not limited by
---    warehouse (owner brief decision a.19).
--- 2. "order_request_attachments read": a member reads an attachment row of
---    their organization when it is not a Wet signature photo (kind
---    'signature'), or when they added it (uploaded_by), or when
---    order_signature_photo_reader says yes. Drop-off, location and other
---    photos are read by every member, as before.
---    The uploader term keeps the app's write working for a manager without
---    orders:approve: OrderAttachmentsService.add (web panel and the phone's
---    finalize route) inserts with RETURNING, which reads the new row.
--- 3. "order_request_attachments manager insert": 0143's check restated with
---    one term added: uploaded_by is the caller or empty, so a row cannot name
---    someone else as the person who added it.
--- 4. "order-attachments read" (storage): 0142's check restated with
---    order_attachment_object_readable(name) added, so the stored file follows
---    its row. The helper answers false only when a Wet signature row for that
---    exact path exists (looked up by the order id in the path's second folder,
---    cast only when it has the uuid shape) and the caller neither added it nor
---    passes order_signature_photo_reader. A file with no row (an upload before
---    its row is written) stays readable to members, as before.
--- 5. Revokes, none of which an app path uses (re-checked 2026-11-13 on main
---    0f560ac8d: no app, phone or edge-function code reads or writes shipments
---    or shipment_lines, and none deletes order_requests; attachments are never
---    updated, and they have no UPDATE policy):
+--    the order's driver (assigned_delivery_user_id). Any warehouse (owner
+--    brief decision a.19).
+-- 3. order_request_attachments, the three row policies:
+--      read    a member of the organization; a Wet signature photo (kind
+--              'signature') only for the person who added it (uploaded_by),
+--              or when order_signature_photo_reader says yes.
+--      insert  0143's check, plus: the path is exactly
+--              {organization}/{this order}/{file} (three non-empty parts),
+--              and uploaded_by is the caller or empty.
+--      delete  a manager (0142), and for a Wet signature photo the same
+--              audience as read.
+--    The app writes with RETURNING (OrderAttachmentsService.add, used by the
+--    web panel and the phone's finalize route), which reads the new row back
+--    through the uploader term.
+-- 4. order_attachment_object_readable(name, owner): the stored file's rule.
+--    When a row names the file, the row's rule decides (a Wet signature file
+--    for its uploader or order_signature_photo_reader). When no row names it
+--    yet, the member who uploaded it (the object's owner_id, or owner on an
+--    older storage server) or a member who holds orders:approve in the
+--    organization of its first folder.
+-- 5. The order-attachments bucket, its four policies dropped and created
+--    again (the way 0142 created them): read asks membership and the file's
+--    rule; write is 0142's manager check; update (USING and WITH CHECK) and
+--    delete ask the manager check and the file's rule.
+-- 6. Revokes; no privilege is granted:
 --      * every privilege on order_request_attachments from anon;
---      * UPDATE on order_request_attachments from authenticated;
+--      * UPDATE on order_request_attachments from authenticated (it has no
+--        UPDATE policy);
 --      * every privilege on shipments and shipment_lines from anon, and
 --        SELECT, INSERT, UPDATE and DELETE on both from authenticated (the
 --        service role keeps its own; post_shipment_shipped is service-role
 --        only since 0356);
 --      * DELETE on order_requests from authenticated (its delete policy is
 --        using (false) since 0119; cancel is the app's way out).
---    No privilege is granted.
--- 6. bundle_in_org(bundle, org): 0362's order_request_in_org shape for kits.
---    True for no kit, true for a kit of the organization asked by a member of
---    it (or with no end user), false otherwise. Asked by a signed-in caller who
---    is not a member of the organization it names, it answers false, so it is
---    no existence oracle for other organizations' kits.
--- 7. schedule_events_insert: 0384's check restated verbatim, plus
---    bundle_in_org(bundle_id, organization_id), has_permission(organization,
---    'schedule:manage') and module_enabled(organization, 'schedule'): the
---    checks ScheduleService.create already makes (schedule.ts:376-378), and the
---    phone's New event button already asks for schedule:manage.
---    schedule_events_update: 0384's check restated verbatim plus
---    bundle_in_org. Its USING and the creator-or-manager rule are unchanged
---    (owner decision on S3 question 12: role rank on update is a later item).
---
--- ── WHAT IT DOES NOT CHANGE ───────────────────────────────────────────────
---   * The attachments delete policy, the bucket write, update and delete
---     policies, and every grant of service_role.
---   * Any stored row.
---   * No phone update and no web change is needed: the panel lists rows under
---     row security and signs only those (order-attachments.ts list), and the
---     phone lists rows and signs links under the member's own session.
+--    Re-checked 2026-11-13 on main: no app, phone or edge-function code reads
+--    or writes shipments or shipment_lines, deletes order_requests or updates
+--    an attachment row.
+-- 7. bundle_in_org(bundle, org): 0362's order_request_in_org shape for kits.
+--    True for no kit, or for a kit of p_org_id asked by a member of p_org_id
+--    (or with no end user); false otherwise.
+-- 8. schedule_events, every write asks schedule:manage and the Schedule
+--    module (the checks ScheduleService.create, .update and .delete make,
+--    schedule.ts:376-378, 452-453, 760-761):
+--      insert  0384's check, plus bundle_in_org, schedule:manage and the
+--              module.
+--      update  0384's USING and WITH CHECK (the creator or a manager), plus
+--              schedule:manage and the module, and bundle_in_org in WITH
+--              CHECK.
+--      delete  0140's USING (the creator or a manager), plus schedule:manage
+--              and the module.
+--    The order flows (autoScheduleFromOrder, assignDelivery's driver sync,
+--    syncOrderScheduleEvent, bringOrderEventInStep) and the reminder job
+--    write through the admin client; revise_order_needed_by is SECURITY
+--    DEFINER.
+-- 9. The web's OrderAttachmentsService.add asks the same path shape (HI-8,
+--    orderAttachmentPathShape: {organization}/{this order}/{file}).
 --
 -- ── ORDER ─────────────────────────────────────────────────────────────────
 -- Applied after the queued kits listed in the pull request (0421 S49, S36a,
@@ -75,24 +84,66 @@
 -- them restates a policy, function or grant this file restates. S9's
 -- grants cleanup revokes anon on shipments too (the same revoke twice changes
 -- nothing) and pins authenticated's shipment privileges in its own suite
--- (G2), which this file's suite re-pins when the two meet.
+-- (G2), which is re-pinned when the two meet.
 --
 -- ── LOCKS ─────────────────────────────────────────────────────────────────
 -- The CLI applies the file as one implicit transaction, so each lock is held
--- to the commit. The prelude takes every table lock the file needs, at once
--- and without waiting (0404's and 0415's pattern):
+-- to the commit. The preflight reads the catalogs only. The prelude then takes
+-- every table lock the file needs, at once and without waiting (0404's and
+-- 0415's pattern):
 --   * order_request_attachments, schedule_events, storage.objects: ACCESS
---     EXCLUSIVE (ALTER POLICY);
---   * order_requests: ACCESS SHARE (the attachments insert check reads it);
+--     EXCLUSIVE (the policy statements; the index's SHARE lock is covered);
+--   * order_requests and bundles: ACCESS SHARE (the attachments insert check
+--     and the helpers' bodies read them when they are created);
 --   * every existing table supautils.policy_grants lists for this role,
 --     ACCESS EXCLUSIVE (supautils takes it on any policy statement).
--- REVOKE, CREATE FUNCTION and COMMENT take no lock on a table that conflicts
--- with readers. The storage policy is the last statement before the reset
--- (storage-policy-order.guard.test.ts).
+-- REVOKE, CREATE FUNCTION and COMMENT take no other table lock. The storage
+-- policies are the last statements before the reset
+-- (storage-policy-order.guard.test.ts). scripts/db-concurrency/
+-- 0451_migration_lock_footprint.sh proves the footprint.
 
 -- PLAIN `set`, not `set local` (0303/0358): the CLI batch is not a
 -- transaction block. Reset at the end.
 set lock_timeout = '5s';
+
+-- ═══ 0. Preflight (catalogs only) ══════════════════════════════════════════
+-- The policies this file restates are the ones it was written against, and
+-- the objects it adds are not there yet. Any difference stops the file before
+-- it changes anything (55000, hint s3c_preflight).
+do $pre451$
+declare
+  v_bad text := '';
+  v_set text;
+begin
+  select string_agg(n.nspname || '.' || c.relname || '.' || pol.polname || ':' || pol.polcmd::text, ','
+                    order by n.nspname collate "C", c.relname collate "C", pol.polname collate "C")
+    into v_set
+    from pg_policy pol
+    join pg_class c on c.oid = pol.polrelid
+    join pg_namespace n on n.oid = c.relnamespace
+   where pol.polrelid in ('public.order_request_attachments'::regclass, 'public.schedule_events'::regclass)
+      or (pol.polrelid = 'storage.objects'::regclass and pol.polname like 'order-attachments %');
+  if v_set is distinct from
+     'public.order_request_attachments.order_request_attachments manager delete:d,'
+     || 'public.order_request_attachments.order_request_attachments manager insert:a,'
+     || 'public.order_request_attachments.order_request_attachments read:r,'
+     || 'public.schedule_events.schedule_events_delete:d,public.schedule_events.schedule_events_insert:a,'
+     || 'public.schedule_events.schedule_events_select:r,public.schedule_events.schedule_events_update:w,'
+     || 'storage.objects.order-attachments manager delete:d,storage.objects.order-attachments manager update:w,'
+     || 'storage.objects.order-attachments manager write:a,storage.objects.order-attachments read:r' then
+    v_bad := v_bad || format(' attachment, schedule or bucket policies differ (%s);', coalesce(v_set, 'none'));
+  end if;
+  if to_regprocedure('public.order_signature_photo_reader(uuid)') is not null
+     or to_regprocedure('public.order_attachment_object_readable(text,text)') is not null
+     or to_regprocedure('public.bundle_in_org(uuid,uuid)') is not null
+     or to_regclass('public.order_request_attachments_storage_path_key') is not null then
+    v_bad := v_bad || ' a function or index this file adds already exists;';
+  end if;
+  if v_bad <> '' then
+    raise exception 's3c_preflight:%', v_bad using errcode = '55000', hint = 's3c_preflight';
+  end if;
+end
+$pre451$;
 
 -- ═══ 1. The lock prelude ═══════════════════════════════════════════════════
 -- A busy table fails the attempt at once; the rollback of the inner block
@@ -109,7 +160,7 @@ begin
   loop
     v_try := v_try + 1;
     begin
-      lock table only public.order_requests in access share mode nowait;
+      lock table only public.order_requests, public.bundles in access share mode nowait;
       lock table only public.order_request_attachments, public.schedule_events
         in access exclusive mode nowait;
       lock table only storage.objects in access exclusive mode nowait;
@@ -133,7 +184,29 @@ begin
   end loop;
 end $lock451$;
 
--- ═══ 2. Who reads a Wet signature photo ════════════════════════════════════
+-- ═══ 2. One row per stored file ════════════════════════════════════════════
+-- Counted with the table locked, so the count is exact. The message carries
+-- the count only.
+do $dup451$
+declare
+  v_dup bigint;
+begin
+  select count(*) into v_dup
+    from (select storage_path from public.order_request_attachments
+           group by storage_path having count(*) > 1) d;
+  if v_dup > 0 then
+    raise exception 's3c_preflight: % stored file path(s) are named by more than one attachment row; resolve them before this migration', v_dup
+      using errcode = '55000', hint = 's3c_preflight';
+  end if;
+end
+$dup451$;
+
+create unique index order_request_attachments_storage_path_key
+  on public.order_request_attachments (storage_path);
+comment on index public.order_request_attachments_storage_path_key is
+  'S3c (0451): each stored file in the order-attachments bucket is named by at most one attachment row.';
+
+-- ═══ 3. Who reads and removes a Wet signature photo ════════════════════════
 create function public.order_signature_photo_reader(p_order_request_id uuid)
 returns boolean
 language sql
@@ -154,8 +227,8 @@ revoke all on function public.order_signature_photo_reader(uuid) from public, an
 grant execute on function public.order_signature_photo_reader(uuid) to authenticated, service_role;
 comment on function public.order_signature_photo_reader(uuid) is
   'S3c (0451): true when the caller is a member of the order''s organization and holds orders:approve there '
-  '(not limited by warehouse) or is the order''s driver (assigned_delivery_user_id). Read-only boolean used by '
-  'the order_request_attachments read policy and order_attachment_object_readable.';
+  '(any warehouse) or is the order''s driver (assigned_delivery_user_id). Read-only boolean used by the '
+  'order_request_attachments read and delete policies and order_attachment_object_readable.';
 
 alter policy "order_request_attachments read" on public.order_request_attachments
   using (
@@ -166,9 +239,9 @@ alter policy "order_request_attachments read" on public.order_request_attachment
   );
 comment on policy "order_request_attachments read" on public.order_request_attachments is
   'S3c (0451): a member reads the attachments of their organization; a Wet signature photo (kind signature) '
-  'only when they added it, hold orders:approve, or are the order''s driver (order_signature_photo_reader).';
+  'when they added it, hold orders:approve, or are the order''s driver (order_signature_photo_reader).';
 
--- 0143's check, restated verbatim, with the uploader term added last.
+-- 0143's check, restated verbatim, with the path and uploader terms added last.
 alter policy "order_request_attachments manager insert" on public.order_request_attachments
   with check (
     public.has_org_role(organization_id, 'manager')
@@ -182,49 +255,68 @@ alter policy "order_request_attachments manager insert" on public.order_request_
         )
     )
     and split_part(storage_path, '/', 1) = organization_id::text
+    and split_part(storage_path, '/', 2) = order_request_id::text
+    and split_part(storage_path, '/', 3) <> ''
+    and split_part(storage_path, '/', 4) = ''
     and (uploaded_by is null or uploaded_by = (select auth.uid()))
   );
 comment on policy "order_request_attachments manager insert" on public.order_request_attachments is
-  'A manager adds an attachment to an order of the same organization in a delivery or completed status, under '
-  'the organization''s folder (0143); since S3c (0451) uploaded_by is the caller or empty.';
+  'A manager adds an attachment to an order of the same organization in a delivery or completed status (0143); '
+  'since S3c (0451) its path is exactly {organization}/{order}/{file} and uploaded_by is the caller or empty.';
 
--- The storage read's helper (the policy itself is the last statement).
-create function public.order_attachment_object_readable(p_name text)
+-- 0142's USING, with the read rule's Wet signature term added.
+alter policy "order_request_attachments manager delete" on public.order_request_attachments
+  using (
+    public.has_org_role(organization_id, 'manager')
+    and (   kind <> 'signature'
+         or uploaded_by = (select auth.uid())
+         or public.order_signature_photo_reader(order_request_id))
+  );
+comment on policy "order_request_attachments manager delete" on public.order_request_attachments is
+  'A manager removes an attachment of their organization (0142); since S3c (0451) a Wet signature photo only '
+  'when they added it or order_signature_photo_reader says yes.';
+
+-- The stored file's rule (the bucket policies themselves come last).
+create function public.order_attachment_object_readable(p_name text, p_owner text)
 returns boolean
 language sql
 stable
 security definer
 set search_path = public, pg_temp
 as $$
-  select not exists (
-    select 1
-      from public.order_request_attachments a
-     where a.order_request_id = (
-             case when (storage.foldername(p_name))[2]
-                       ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-                  then ((storage.foldername(p_name))[2])::uuid
-             end)
-       and a.storage_path = p_name
-       and a.kind = 'signature'
-       and a.uploaded_by is distinct from (select auth.uid())
-       and not public.order_signature_photo_reader(a.order_request_id)
+  select coalesce(
+    -- A row names the file: the row's rule decides.
+    (select a.kind <> 'signature'
+            or coalesce(a.uploaded_by = (select auth.uid()), false)
+            or public.order_signature_photo_reader(a.order_request_id)
+       from public.order_request_attachments a
+      where a.storage_path = p_name),
+    -- No row names it yet: its uploader, or an approver of its organization.
+    coalesce(p_owner = ((select auth.uid())::text), false)
+    or coalesce((
+      select public.is_org_member(f.org) and public.has_permission(f.org, 'orders:approve')
+        from (select case when (storage.foldername(p_name))[1]
+                                 ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                          then ((storage.foldername(p_name))[1])::uuid
+                     end as org) f), false)
   );
 $$;
-revoke all on function public.order_attachment_object_readable(text) from public, anon;
-grant execute on function public.order_attachment_object_readable(text) to authenticated, service_role;
-comment on function public.order_attachment_object_readable(text) is
-  'S3c (0451): false only when a Wet signature attachment row stores this exact path and the caller neither '
-  'added it nor passes order_signature_photo_reader; true for every other name. Read-only boolean used by the '
-  'order-attachments bucket read policy.';
+revoke all on function public.order_attachment_object_readable(text, text) from public, anon;
+grant execute on function public.order_attachment_object_readable(text, text) to authenticated, service_role;
+comment on function public.order_attachment_object_readable(text, text) is
+  'S3c (0451): the rule for a stored file in the order-attachments bucket. When an attachment row names the '
+  'file, the row''s rule (a Wet signature file for its uploader or order_signature_photo_reader); when none does, '
+  'the member who uploaded it (p_owner: the object''s owner_id, else owner) or a member holding orders:approve in '
+  'the organization of its first folder. Read-only boolean used by the bucket''s read, update and delete policies.';
 
--- ═══ 3. Table privileges ═══════════════════════════════════════════════════
+-- ═══ 4. Table privileges ═══════════════════════════════════════════════════
 revoke all on table public.order_request_attachments from anon;
 revoke update on table public.order_request_attachments from authenticated;
 revoke all on table public.shipments, public.shipment_lines from anon;
 revoke select, insert, update, delete on table public.shipments, public.shipment_lines from authenticated;
 revoke delete on table public.order_requests from authenticated;
 
--- ═══ 4. Schedule events: the kit's organization, schedule:manage, the module ═
+-- ═══ 5. Schedule events: schedule:manage, the module, the kit ══════════════
 create function public.bundle_in_org(p_bundle_id uuid, p_org_id uuid)
 returns boolean
 language sql
@@ -246,7 +338,7 @@ comment on function public.bundle_in_org(uuid, uuid) is
   'S3c (0451): true for no kit, or for a kit of p_org_id asked by a member of p_org_id (or with no end user); '
   'false otherwise. 0362''s order_request_in_org shape. Read-only boolean used by the schedule_events write policies.';
 
--- 0384's text, restated verbatim, then the three S3c terms.
+-- 0384's text, restated verbatim, then the S3c terms.
 alter policy schedule_events_insert on public.schedule_events
   with check (
     (( SELECT public.is_org_member(schedule_events.organization_id) AS is_org_member)
@@ -259,8 +351,15 @@ alter policy schedule_events_insert on public.schedule_events
     AND ( SELECT public.module_enabled(schedule_events.organization_id, 'schedule'::text) AS module_enabled)
   );
 
--- 0384's WITH CHECK, restated verbatim, then bundle_in_org. USING unchanged.
+-- 0384's USING and WITH CHECK, restated verbatim, then the S3c terms.
 alter policy schedule_events_update on public.schedule_events
+  using (
+    (( SELECT public.is_org_member(schedule_events.organization_id) AS is_org_member)
+      AND ((created_by = auth.uid())
+           OR ( SELECT public.has_org_role(schedule_events.organization_id, 'manager'::text) AS has_org_role)))
+    AND ( SELECT public.has_permission(schedule_events.organization_id, 'schedule:manage'::text) AS has_permission)
+    AND ( SELECT public.module_enabled(schedule_events.organization_id, 'schedule'::text) AS module_enabled)
+  )
   with check (
     (( SELECT public.is_org_member(schedule_events.organization_id) AS is_org_member)
       AND ((created_by = auth.uid())
@@ -269,6 +368,18 @@ alter policy schedule_events_update on public.schedule_events
       AND ( SELECT public.warehouse_in_org(schedule_events.bundle_warehouse_id, schedule_events.organization_id) AS warehouse_in_org))
     AND ( SELECT public.order_request_in_org(schedule_events.order_request_id, schedule_events.organization_id) AS order_request_in_org)
     AND ( SELECT public.bundle_in_org(schedule_events.bundle_id, schedule_events.organization_id) AS bundle_in_org)
+    AND ( SELECT public.has_permission(schedule_events.organization_id, 'schedule:manage'::text) AS has_permission)
+    AND ( SELECT public.module_enabled(schedule_events.organization_id, 'schedule'::text) AS module_enabled)
+  );
+
+-- 0140's USING, restated verbatim, then the S3c terms.
+alter policy schedule_events_delete on public.schedule_events
+  using (
+    (( SELECT public.is_org_member(schedule_events.organization_id) AS is_org_member)
+      AND ((created_by = auth.uid())
+           OR ( SELECT public.has_org_role(schedule_events.organization_id, 'manager'::text) AS has_org_role)))
+    AND ( SELECT public.has_permission(schedule_events.organization_id, 'schedule:manage'::text) AS has_permission)
+    AND ( SELECT public.module_enabled(schedule_events.organization_id, 'schedule'::text) AS module_enabled)
   );
 
 comment on policy schedule_events_insert on public.schedule_events is
@@ -277,17 +388,54 @@ comment on policy schedule_events_insert on public.schedule_events is
   '(S3c, 0451) of the same organization, and no order of another organization (0384; authenticated cannot '
   'write order_request_id at all, the admin client links events).';
 comment on policy schedule_events_update on public.schedule_events is
-  'The creator or a manager updates an event; the new row keeps both warehouses (0203), its linked order '
-  '(0384) and its kit (S3c, 0451) in the organization, so an event cannot be moved to another organization.';
+  'The creator or a manager, holding schedule:manage with the Schedule module on (S3c, 0451), updates an event; '
+  'the new row keeps both warehouses (0203), its linked order (0384) and its kit (0451) in the organization.';
+comment on policy schedule_events_delete on public.schedule_events is
+  'The creator or a manager, holding schedule:manage with the Schedule module on (S3c, 0451), deletes an event.';
 
--- ═══ 5. The order-attachments bucket follows its rows (last: storage) ══════
--- 0142's text with order_attachment_object_readable(name) added. Nothing may
--- follow it but the lock_timeout reset (storage-policy-order.guard.test.ts).
-alter policy "order-attachments read" on storage.objects
+-- ═══ 6. The order-attachments bucket (last: storage) ═══════════════════════
+-- 0142's four policies dropped and created again, the way 0142 created them.
+-- Nothing may follow them but the lock_timeout reset
+-- (storage-policy-order.guard.test.ts).
+drop policy "order-attachments read" on storage.objects;
+drop policy "order-attachments manager write" on storage.objects;
+drop policy "order-attachments manager update" on storage.objects;
+drop policy "order-attachments manager delete" on storage.objects;
+
+create policy "order-attachments read"
+  on storage.objects for select to authenticated
   using (
     bucket_id = 'order-attachments'
     and public.is_org_member((storage.foldername(name))[1]::uuid)
-    and public.order_attachment_object_readable(name)
+    and public.order_attachment_object_readable(name, coalesce(owner_id, owner::text))
+  );
+
+create policy "order-attachments manager write"
+  on storage.objects for insert to authenticated
+  with check (
+    bucket_id = 'order-attachments'
+    and public.has_org_role((storage.foldername(name))[1]::uuid, 'manager')
+  );
+
+create policy "order-attachments manager update"
+  on storage.objects for update to authenticated
+  using (
+    bucket_id = 'order-attachments'
+    and public.has_org_role((storage.foldername(name))[1]::uuid, 'manager')
+    and public.order_attachment_object_readable(name, coalesce(owner_id, owner::text))
+  )
+  with check (
+    bucket_id = 'order-attachments'
+    and public.has_org_role((storage.foldername(name))[1]::uuid, 'manager')
+    and public.order_attachment_object_readable(name, coalesce(owner_id, owner::text))
+  );
+
+create policy "order-attachments manager delete"
+  on storage.objects for delete to authenticated
+  using (
+    bucket_id = 'order-attachments'
+    and public.has_org_role((storage.foldername(name))[1]::uuid, 'manager')
+    and public.order_attachment_object_readable(name, coalesce(owner_id, owner::text))
   );
 
 reset lock_timeout;

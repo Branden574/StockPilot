@@ -929,11 +929,11 @@ select is(
   -- suite H1 predicts) with the local authenticated role's OID (16444, the OID
   -- that reproduces the old pin from production's text); verify on the stack.
   -- Re-pinned by 0451 (docket S3c; was 87377ff4c4e4c700e7598e50fadb59c6|8):
-  -- schedule_events_insert WITH CHECK adds bundle_in_org, has_permission
-  -- (schedule:manage) and module_enabled(schedule); schedule_events_update
-  -- WITH CHECK adds bundle_in_org. The order_requests policies are unchanged.
-  -- Measured on the local stack.
-  'order_requests + schedule_events policies|0d91580c5b9ddec7e2e10be5e3231b4e|8',
+  -- schedule_events_insert, _update (USING and WITH CHECK) and _delete ask
+  -- has_permission(schedule:manage) and module_enabled(schedule), and insert
+  -- and update WITH CHECK ask bundle_in_org. The order_requests policies are
+  -- unchanged. Measured on the local stack.
+  'order_requests + schedule_events policies|5605f4bac66e5f3ca338556851a9ec77|8',
   'Z2: ledger.*, the 0380 report functions, the 0381 photo functions and policies, the 0382 book functions, and the order_requests and schedule_events policies are the ones F2-4 was proven against (schedule_events as 0384 left them)');
 select ok(
   (select bool_and(has_column_privilege('authenticated', 'public.schedule_events', c, 'UPDATE'))
