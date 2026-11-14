@@ -4,7 +4,7 @@
 -- log entries, a notification endpoint, a public request link, a queued
 -- event, a supplier and a charter stay in their organization: for the API
 -- roles an update that changes organization_id is refused (42501). The guard
--- is 0462's tg_organization_id_fixed, unchanged, bound on ten more tables.
+-- is 0462's tg_organization_id_fixed, unchanged, bound on each of these tables.
 -- No row of any table changes, and no rule changes.
 --
 -- ── WHAT ──────────────────────────────────────────────────────────────────

@@ -36,7 +36,8 @@
 --     API role calls, are not held; anon changes no row (R1 to R3).
 -- P.  tg_organization_id_fixed is unchanged, and it is bound exactly once on
 --     each of the ten tables, BEFORE UPDATE FOR EACH ROW, only when
---     organization_id changes (P1, P2).
+--     organization_id changes (P1, P2). The whole list of tables the guard
+--     is bound on: these ten and 0462's four (P3).
 -- Z.  Nothing the refused writes and the undone attempts touched was left
 --     changed.
 --
@@ -48,7 +49,7 @@
 
 begin;
 
-select plan(21);
+select plan(22);
 
 \set orgA     '\'04630000-0000-0000-0000-00000000000a\''
 \set orgB     '\'04630000-0000-0000-0000-00000000000b\''
@@ -472,6 +473,18 @@ select is(
   || ' BEFORE UPDATE ON public.suppliers FOR EACH ROW WHEN ((new.organization_id IS DISTINCT FROM old.organization_id))'
   || ' EXECUTE FUNCTION tg_organization_id_fixed(''supplier'')',
   'P2: the guard is bound exactly once on each of the ten tables, BEFORE UPDATE FOR EACH ROW, only when organization_id changes');
+select is(
+  (select string_agg(t.tgrelid::regclass::text || ':' || t.tgname, ', ' order by t.tgrelid::regclass::text collate "C")
+     from pg_trigger t where t.tgfoid = to_regprocedure('public.tg_organization_id_fixed()')),
+  'api_keys:trg_zz_api_keys_organization_fixed, bins:trg_zz_bins_organization_fixed, '
+  || 'categories:trg_zz_categories_organization_fixed, charters:trg_zz_charters_organization_fixed, '
+  || 'connection_mappings:trg_zz_connection_mappings_organization_fixed, '
+  || 'connection_sync_log:trg_zz_connection_sync_log_organization_fixed, customers:trg_zz_customers_organization_fixed, '
+  || 'integration_endpoints:trg_zz_integration_endpoints_organization_fixed, locations:trg_zz_locations_organization_fixed, '
+  || 'org_connections:trg_zz_org_connections_organization_fixed, outbox_events:trg_zz_outbox_events_organization_fixed, '
+  || 'public_request_links:trg_zz_public_request_links_organization_fixed, suppliers:trg_zz_suppliers_organization_fixed, '
+  || 'warehouses:trg_zz_warehouses_organization_fixed',
+  'P3: every binding of the guard: the ten tables here and warehouses, locations, bins and categories');
 
 -- ══ Z. Nothing left changed ═══════════════════════════════════════════════
 select is(pg_temp.state(), (select v from snap),

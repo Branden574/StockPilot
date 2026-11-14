@@ -619,7 +619,11 @@ select is(
 select is(
   (select string_agg(t.tgrelid::regclass::text || ':' || t.tgname || ':' || t.tgtype::text || ':' || t.tgenabled::text
                      || ':' || pg_get_triggerdef(t.oid), E'\n' order by t.tgrelid::regclass::text)
-     from pg_trigger t where t.tgfoid = to_regprocedure('public.tg_organization_id_fixed()')),
+     -- Narrowed to this file's four tables when the guard was bound on more
+     -- (0463 pins those, and the whole list).
+     from pg_trigger t where t.tgfoid = to_regprocedure('public.tg_organization_id_fixed()')
+      and t.tgrelid in ('public.warehouses'::regclass, 'public.locations'::regclass,
+                        'public.bins'::regclass, 'public.categories'::regclass)),
   'bins:trg_zz_bins_organization_fixed:19:O:CREATE TRIGGER trg_zz_bins_organization_fixed'
   || ' BEFORE UPDATE ON public.bins FOR EACH ROW WHEN ((new.organization_id IS DISTINCT FROM old.organization_id))'
   || ' EXECUTE FUNCTION tg_organization_id_fixed(''bin'')' || E'\n'
