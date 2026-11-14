@@ -487,3 +487,175 @@ describe('loadDigestReaderData: an answer that is not a list is a failed read', 
     });
   });
 });
+
+/**
+ * Cycle counts follow cycle_counts_select and cycle_count_lines_select (S48):
+ * a staff member or viewer reads the counts of their warehouses (a count with
+ * no header warehouse when it is assigned to them or has a line in their
+ * warehouses), managers and all-warehouses members read every count, and the
+ * totals count only the lines the reader may read: a manager every line,
+ * anyone else a line in their warehouses whose item they may open.
+ */
+describe('buildDigestPayload: cycle counts', () => {
+  type SourceCount = DigestSource['openCycleCounts'][number];
+  type SourceLine = SourceCount['lines'][number];
+  const ln = (
+    warehouseId: string | null,
+    counted: boolean,
+    item: Partial<NonNullable<SourceLine['item']>> | null = {},
+  ): SourceLine => ({
+    warehouseId,
+    counted,
+    item: item === null ? null : { warehouseId, charterId: null, categoryId: null, ...item },
+  });
+  const count = (id: string, over: Partial<SourceCount>): SourceCount => ({
+    id,
+    countNumber: 1,
+    warehouseId: null,
+    warehouseName: null,
+    scope: 'warehouse',
+    startedAt: '2026-10-01T00:00:00Z',
+    assignedTo: null,
+    lines: [],
+    ...over,
+  });
+  const source = (): DigestSource => ({
+    lowStock: [],
+    openPos: [],
+    openCycleCounts: [
+      count('north', {
+        warehouseId: 'wh-n',
+        warehouseName: 'North',
+        lines: [
+          ln('wh-n', true, { categoryId: 'cat-a' }),
+          ln('wh-n', false, { categoryId: 'cat-b' }),
+          ln('wh-n', true, { charterId: 'ch-2' }),
+        ],
+      }),
+      count('south', {
+        warehouseId: 'wh-s',
+        warehouseName: 'South',
+        lines: [ln('wh-s', true, { categoryId: 'cat-a' })],
+      }),
+      count('mixed', {
+        scope: 'selection',
+        lines: [
+          ln('wh-n', true, { categoryId: 'cat-a' }),
+          ln('wh-s', false, { categoryId: 'cat-a' }),
+        ],
+      }),
+      count('south-mine', {
+        scope: 'selection',
+        assignedTo: 'staff-n',
+        lines: [ln('wh-s', false)],
+      }),
+      count('no-warehouse-line', {
+        scope: 'selection',
+        lines: [ln(null, true, null)],
+      }),
+    ],
+  });
+  const facts = (): DigestReaderData => ({
+    assignments: new Map([
+      ['staff-n', [{ warehouseId: 'wh-n', charterId: null }]],
+      ['staff-ch1', [{ warehouseId: 'wh-n', charterId: 'ch-1' }]],
+      ['viewer-cat-a', [{ warehouseId: 'wh-n', charterId: null }]],
+      [
+        'flag-viewer',
+        [
+          { warehouseId: 'wh-n', charterId: null },
+          { warehouseId: 'wh-s', charterId: null },
+        ],
+      ],
+    ]),
+    categories: new Map([
+      ['viewer-cat-a', new Set(['cat-a'])],
+      ['flag-viewer', new Set(['cat-a'])],
+    ]),
+    userPoRead: new Map(),
+    rolePoRead: new Map(),
+    defaultPoReadRoles: new Set(['owner', 'admin', 'manager', 'staff', 'viewer']),
+  });
+  const totals = (reader: Parameters<typeof buildDigestPayload>[1]) =>
+    buildDigestPayload(source(), reader).openCycleCounts.map(
+      (c) => `${c.id} ${c.countedLines}/${c.totalLines}`,
+    );
+
+  it("keeps every count and line the reader's own client returned (the preview)", () => {
+    expect(totals(null)).toEqual([
+      'north 2/3',
+      'south 1/1',
+      'mixed 1/2',
+      'south-mine 0/1',
+      'no-warehouse-line 1/1',
+    ]);
+  });
+
+  it('gives a manager every count and every line, a line with no warehouse included', () => {
+    expect(totals(digestReaderFor(facts(), 'mgr', 'manager'))).toEqual([
+      'north 2/3',
+      'south 1/1',
+      'mixed 1/2',
+      'south-mine 0/1',
+      'no-warehouse-line 1/1',
+    ]);
+  });
+
+  it('gives a North staff member North, the mixed count and her own assignment, with North lines only', () => {
+    expect(totals(digestReaderFor(facts(), 'staff-n', 'staff'))).toEqual([
+      'north 2/3',
+      'mixed 1/1',
+      'south-mine 0/0',
+    ]);
+  });
+
+  it('leaves out the lines of another charter for a charter-limited staff member', () => {
+    expect(totals(digestReaderFor(facts(), 'staff-ch1', 'staff'))).toEqual([
+      'north 1/2',
+      'mixed 1/1',
+    ]);
+  });
+
+  it("gives a category-limited viewer only that category's lines", () => {
+    expect(totals(digestReaderFor(facts(), 'viewer-cat-a', 'viewer'))).toEqual([
+      'north 1/1',
+      'mixed 1/1',
+    ]);
+  });
+
+  it('gives an all-warehouses member every count, with lines by assignment and category', () => {
+    // South's uncategorised line is not one of her categories.
+    expect(totals(digestReaderFor(facts(), 'flag-viewer', 'viewer', true))).toEqual([
+      'north 1/1',
+      'south 1/1',
+      'mixed 1/2',
+      'south-mine 0/0',
+      'no-warehouse-line 0/0',
+    ]);
+    // The flag decides the counts; lines still need the assignment rows.
+    expect(totals(digestReaderFor(facts(), 'staff-n', 'staff', true))).toEqual([
+      'north 2/3',
+      'south 0/0',
+      'mixed 1/1',
+      'south-mine 0/0',
+      'no-warehouse-line 0/0',
+    ]);
+  });
+
+  it('reads a missing all-warehouses flag as false', () => {
+    expect(digestReaderFor(facts(), 'staff-n', 'staff').allWarehouses).toBe(false);
+    expect(totals(digestReaderFor(facts(), 'staff-n', 'staff'))).not.toContain('south 0/0');
+  });
+
+  it('never counts a line whose item the read did not return for a non-manager', () => {
+    const src = source();
+    src.openCycleCounts = [
+      count('north', { warehouseId: 'wh-n', lines: [ln('wh-n', true, null)] }),
+    ];
+    expect(
+      buildDigestPayload(src, digestReaderFor(facts(), 'staff-n', 'staff')).openCycleCounts.map(
+        (c) => c.totalLines,
+      ),
+    ).toEqual([0]);
+  });
+});

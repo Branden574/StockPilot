@@ -16,6 +16,21 @@ import {
 
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 
+// The service client release() asks, past row level security, whether the
+// caller is the assignee of a count their own read does not show (S48).
+const adminState = vi.hoisted(() => ({
+  rows: [] as Array<Record<string, unknown>>,
+  throws: false,
+  fails: false,
+  stub: null as unknown,
+}));
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: vi.fn(() => {
+    if (adminState.throws) throw new Error('SUPABASE_SERVICE_ROLE_KEY is not configured');
+    return (adminState.stub as { client: unknown }).client;
+  }),
+}));
+
 vi.mock('@/lib/auth/warehouse', () => ({
   getWarehouseAccess: vi.fn(async () => ({
     readableIds: ['wh-a'],
@@ -39,10 +54,23 @@ vi.mock('@/lib/auth/session', () => ({
 }));
 
 // audit() is globally no-op'd in setup.ts; keep it silent here too.
+import { createAdminClient } from '@/lib/supabase/admin';
+
 import { audit } from './audit';
 import { CycleCountsService } from './cycle-counts';
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  adminState.rows = [];
+  adminState.throws = false;
+  adminState.fails = false;
+  adminState.stub = makeSupabaseStub({
+    'cycle_counts.select': (call) =>
+      adminState.fails
+        ? { data: null, error: { message: 'connection reset', code: '08006' } }
+        : servedLikePostgrest(() => adminState.rows)(call),
+  });
+});
 
 // A supabase stub whose .rpc(name) resolves to the given result. The count
 // is read in the organization before the RPC (S39) and is found.
@@ -308,6 +336,105 @@ describe('CycleCountsService.release after the database refused it (S42b)', () =
     });
     expect(stub.rpcCalls).toHaveLength(1);
     expect(stub.chainArgsAll.get('cycle_counts.select')).toEqual([IN_ORG_READ]);
+  });
+});
+
+describe('CycleCountsService.release of a count the caller cannot read (S48)', () => {
+  const ORG = 'org-test';
+  const COUNT = 'cc-1';
+  const NOT_FOUND = 'Cycle count not found.';
+  const IN_ORG_READ = [['id'], ['organization_id', ORG], ['id', COUNT]];
+  const count = (over: Record<string, unknown> = {}) => ({
+    id: COUNT,
+    organization_id: ORG,
+    status: 'in_progress',
+    assigned_to: null as string | null,
+    ...over,
+  });
+  /** The member's own read finds nothing: the count is of a warehouse she
+   *  does not have. The function lets its assignee release it. */
+  function unreadableStub() {
+    return makeSupabaseStub({
+      // The database as S48 leaves it: the function lets the assignee release.
+      'rpc:release_cycle_count': () =>
+        adminState.rows.some((r) => r.assigned_to === 'me' && r.organization_id === ORG)
+          ? { data: count(), error: null }
+          : { data: null, error: { message: 'forbidden', code: '42501' } },
+      'cycle_counts.select': servedLikePostgrest([]),
+    });
+  }
+  const asStaff = (stub: ReturnType<typeof makeSupabaseStub>, userId = 'me') =>
+    new CycleCountsService(makeServiceContext(stub.client, { role: 'staff', userId }));
+  const adminStub = () => adminState.stub as ReturnType<typeof makeSupabaseStub>;
+
+  it('the assignee releases her count of a warehouse she does not have: the function runs as her, and the release is audited', async () => {
+    adminState.rows = [count({ assigned_to: 'me' })];
+    const stub = unreadableStub();
+    await expect(asStaff(stub).release(COUNT, 'Shift ending')).resolves.toMatchObject({
+      id: COUNT,
+    });
+    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['release_cycle_count']);
+    expect(stub.chainArgsAll.get('cycle_counts.select')).toEqual([IN_ORG_READ]);
+    // The service client asks one thing: this count, in the active
+    // organization, assigned to the caller.
+    expect(adminStub().chainArgsAll.get('cycle_counts.select')).toEqual([
+      [['id'], ['organization_id', ORG], ['id', COUNT], ['assigned_to', 'me']],
+    ]);
+    expect(audit).toHaveBeenCalledTimes(1);
+  });
+
+  it('a member of the same organization who is not its assignee: not found, before the function', async () => {
+    adminState.rows = [count({ assigned_to: 'someone-else' })];
+    const stub = unreadableStub();
+    await expect(asStaff(stub).release(COUNT, 'Shift ending')).rejects.toMatchObject({
+      code: 'not_found',
+      message: NOT_FOUND,
+    });
+    expect(stub.rpcCalls).toHaveLength(0);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('a count of another organization, even one assigned to the caller there: not found from the active one, before the function', async () => {
+    adminState.rows = [count({ organization_id: 'org-other', assigned_to: 'me' })];
+    const stub = unreadableStub();
+    await expect(asStaff(stub).release(COUNT, 'Shift ending')).rejects.toMatchObject({
+      code: 'not_found',
+      message: NOT_FOUND,
+    });
+    expect(stub.rpcCalls).toHaveLength(0);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('without the service client nothing passes: internal_error, before the function', async () => {
+    adminState.rows = [count({ assigned_to: 'me' })];
+    adminState.throws = true;
+    const stub = unreadableStub();
+    await expect(asStaff(stub).release(COUNT, 'Shift ending')).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+    expect(stub.rpcCalls).toHaveLength(0);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('a failed service read passes nothing: internal_error, before the function', async () => {
+    adminState.rows = [count({ assigned_to: 'me' })];
+    adminState.fails = true;
+    const stub = unreadableStub();
+    await expect(asStaff(stub).release(COUNT, 'Shift ending')).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+    expect(stub.rpcCalls).toHaveLength(0);
+  });
+
+  it('a count the caller reads goes to the function without the service client', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:release_cycle_count': { data: count(), error: null },
+      'cycle_counts.select': servedLikePostgrest([count({ assigned_to: 'me' })]),
+    });
+    await expect(asStaff(stub).release(COUNT, 'Shift ending')).resolves.toMatchObject({
+      id: COUNT,
+    });
+    expect(vi.mocked(createAdminClient)).not.toHaveBeenCalled();
   });
 });
 

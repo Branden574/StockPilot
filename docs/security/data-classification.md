@@ -128,7 +128,12 @@ returns, rentals, maintenance requests.
   `SELECT`/`INSERT`/`UPDATE`/`DELETE` on nearly all of these by Supabase default.
 - Where a member's access is partial, **warehouse scoping** applies on top of org
   scoping — the movement ledger and the PO list are both warehouse-scoped
-  (migrations 0321, 0322).
+  (migrations 0321, 0322), and so are cycle counts, their lines, AI shelf scans
+  and scan photos (S48): a count is read in the member's warehouses (every
+  warehouse for managers and all-warehouses members), a count line also follows
+  the item it counts, as movements do, an AI scan is read by its creator and
+  managers, and a scan photo by managers through their own token (the app signs
+  photos with the service role, the bucket's only writer).
 - Cross-tenant confirmation oracles count as disclosure. The `*_in_org` helpers
   were closed to anon in 0318 for exactly this reason: "does item X belong to org
   Y?" is a leak even when it returns only a boolean.

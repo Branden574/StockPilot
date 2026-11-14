@@ -37,12 +37,24 @@ vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn() }));
 vi.mock('@/lib/env', () => ({ env: h.env }));
-// A refusal comes before any spend: none of these may be reached.
-vi.mock('@/lib/supabase/admin', () => ({
-  createAdminClient: vi.fn(() => {
-    throw new Error('storage must not be reached: the gate refuses first');
-  }),
-}));
+// A refusal comes before any spend: none of these may be reached. The
+// service-role client answers only the gate's read of the count's line
+// warehouses (S48: assertSessionAccess reads them past row level security);
+// its storage is never reached, because the gate refuses first.
+vi.mock('@/lib/supabase/admin', async () => {
+  const { makeSupabaseStub: stub } = await import('@/test/supabase-mock');
+  const admin = stub({
+    'cycle_count_lines.select': { data: [{ warehouse_id: null }], error: null },
+  });
+  const client = new Proxy(admin.client as object, {
+    get(target, prop, receiver) {
+      if (prop === 'storage')
+        throw new Error('storage must not be reached: the gate refuses first');
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+  return { createAdminClient: vi.fn(() => client) };
+});
 vi.mock('@/lib/auth/session', () => ({
   requireOrgContext: vi.fn(async () => {
     throw new Error('requireOrgContext must not be reached: the route passes its context');

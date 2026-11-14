@@ -413,7 +413,7 @@ export async function GET(req: Request) {
           const [membershipRes, profileRes] = await Promise.all([
             admin
               .from('organization_members')
-              .select('user_id, accepted_at, role')
+              .select('user_id, accepted_at, role, all_warehouses')
               .eq('organization_id', orgId)
               .eq('user_id', userId)
               // An "act as" grant is not a membership (see the pull above).
@@ -425,9 +425,12 @@ export async function GET(req: Request) {
               .eq('id', userId)
               .maybeSingle(),
           ]);
-          const membership = membershipRes.data as
-            | { user_id: string; accepted_at: string | null; role: string }
-            | null;
+          const membership = membershipRes.data as {
+            user_id: string;
+            accepted_at: string | null;
+            role: string;
+            all_warehouses?: boolean | null;
+          } | null;
           const profile = profileRes.data as
             | { email_digest_optin: boolean | null; disabled_at: string | null }
             | null;
@@ -447,10 +450,16 @@ export async function GET(req: Request) {
           // Each recipient is sent what they may read in StockPilot, which
           // is also what their "Send preview now" shows: the role read just
           // now, with their assignments and permission (services/digest.ts
-          // restates the SELECT policies). Then only their opted-in
+          // restates the SELECT policies; the all-warehouses flag decides
+          // which cycle counts they read, S48). Then only their opted-in
           // sections; one or two could be all-empty even when the org's
           // source isn't.
-          const reader = digestReaderFor(readerData, userId, membership.role);
+          const reader = digestReaderFor(
+            readerData,
+            userId,
+            membership.role,
+            membership.all_warehouses === true,
+          );
           const payload = applySectionOptIns(buildDigestPayload(source, reader), sections);
           if (isDigestEmpty(payload)) {
             skipped += 1;

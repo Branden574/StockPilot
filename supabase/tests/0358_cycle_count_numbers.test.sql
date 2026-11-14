@@ -23,13 +23,16 @@
 --      started-from filters, identical totals, line progress, and the
 --      warehouse-restricted member's scope (own null-warehouse assignments
 --      included, a guessed reference outside it and another org's id
---      returning nothing).
+--      returning nothing). The database's read rule (cycle_counts_select)
+--      decides that scope: G22, G24, G26b and G29-G31 pass no
+--      p_scope_warehouse_ids, as the phone's direct reads and a Data API call
+--      pass none; G22w and G24w add the web's own narrowing on top.
 --
 -- Namespace cc035800. Wrapped in begin/rollback: nothing leaks.
 
 begin;
 
-select plan(81);
+select plan(92);
 
 \set orgA '\'cc035800-0000-4000-8000-00000000000a\''
 \set orgB '\'cc035800-0000-4000-8000-00000000000b\''
@@ -550,13 +553,37 @@ select is(
   (select min(total_count)::int from public.cycle_counts_page('cc035800-0000-4000-8000-00000000000d', p_text => 'delta')),
   91, 'G21f: the warehouse name is still searched (91 counts have a Delta warehouse)');
 
+-- 0452: a Delta South item and a line on count 136 (Delta South, still
+-- open), written as the test owner after G21's count 135 got its lines, so
+-- staff D has a South count WITH lines to be refused.
+reset role;
+insert into public.inventory_items
+  (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type) values
+  ('cc035800-0000-4000-8000-0000000000d4', :orgD, :whD2, 'D-0358-4', 'D item 4', 4, 'active', 'none')
+  on conflict (id) do nothing;
+insert into public.cycle_count_lines (cycle_count_id, item_id, warehouse_id, expected_quantity, counted_quantity)
+select c.id, 'cc035800-0000-4000-8000-0000000000d4', :whD2, 4, 4
+from public.cycle_counts c
+where c.organization_id = :orgD and c.count_number = 136;
+set local role to 'authenticated';
+
 -- As staff D, who may work in Delta North only.
 set local "request.jwt.claim.sub" to 'cc035800-0000-4000-8000-0000000000a4';
 
+-- The database's own rule: no scope is passed.
+select is(
+  (select min(total_count)::int from public.cycle_counts_page('cc035800-0000-4000-8000-00000000000d', p_page_size => 100)),
+  68, 'G22: with no scope passed, a restricted member sees her warehouse''s 45 counts plus her 23 null-warehouse assignments');
+select is(
+  (select count(*)::int from public.cycle_counts where organization_id = 'cc035800-0000-4000-8000-00000000000d'),
+  68, 'G22b: a direct read of the table returns the same 68');
+select is(
+  (select count(*)::int from public.cycle_counts where warehouse_id = 'cc035800-0000-4000-8000-0000000000b5'),
+  0, 'G22c: and none of Delta South''s 46');
 select is(
   (select min(total_count)::int from public.cycle_counts_page('cc035800-0000-4000-8000-00000000000d',
      p_scope_warehouse_ids => array['cc035800-0000-4000-8000-0000000000b4']::uuid[], p_page_size => 100)),
-  68, 'G22: a restricted member sees her warehouse''s 45 counts plus her 23 null-warehouse assignments');
+  68, 'G22w: the web''s scope (Delta North) gives the same 68');
 select is(
   (select count(*)::int from public.cycle_counts_page('cc035800-0000-4000-8000-00000000000d',
      p_scope_warehouse_ids => array['cc035800-0000-4000-8000-0000000000b4']::uuid[], p_page_size => 100)
@@ -564,9 +591,20 @@ select is(
                or (warehouse_id is null and assigned_to = 'cc035800-0000-4000-8000-0000000000a4'))),
   0, 'G23: nothing outside that scope is returned');
 select is(
+  (select count(*)::int from public.cycle_counts_page('cc035800-0000-4000-8000-00000000000d', p_number => 1)),
+  0, 'G24: guessing the reference of a South count reveals nothing, with no scope passed');
+select is(
+  (select count(*)::int from public.cycle_counts_page('cc035800-0000-4000-8000-00000000000d',
+     p_number => 1, p_scope_warehouse_ids => array['cc035800-0000-4000-8000-0000000000b5']::uuid[])),
+  0, 'G24b: nor by naming Delta South as the scope');
+select is(
+  (select min(total_count)::int from public.cycle_counts_page('cc035800-0000-4000-8000-00000000000d',
+     p_scope_warehouse_ids => array['cc035800-0000-4000-8000-0000000000b5']::uuid[], p_page_size => 100)),
+  23, 'G24c: a Delta South scope returns only her own 23 null-warehouse assignments');
+select is(
   (select count(*)::int from public.cycle_counts_page('cc035800-0000-4000-8000-00000000000d',
      p_number => 1, p_scope_warehouse_ids => array['cc035800-0000-4000-8000-0000000000b4']::uuid[])),
-  0, 'G24: guessing the reference of a South count reveals nothing');
+  0, 'G24w: the web''s scope finds nothing either');
 select is(
   (select min(total_count)::int from public.cycle_counts_page('cc035800-0000-4000-8000-00000000000d',
      p_text => 'south', p_scope_warehouse_ids => array['cc035800-0000-4000-8000-0000000000b4']::uuid[])),
@@ -577,12 +615,33 @@ select is(
      p_scope_warehouse_ids => array['cc035800-0000-4000-8000-0000000000b4']::uuid[])),
   3, 'G26: scoped totals count only what the member may see (2 North + 1 own assignment open)');
 select is(
+  (select min(total_count)::int from public.cycle_counts_page('cc035800-0000-4000-8000-00000000000d',
+     p_status => 'in_progress')),
+  3, 'G26b: with no scope passed the open total is the same 3 the member may see');
+select is(
   (select assignee_name from public.cycle_counts_page('cc035800-0000-4000-8000-00000000000d',
      p_number => 2, p_scope_warehouse_ids => array['cc035800-0000-4000-8000-0000000000b4']::uuid[])),
   'Dana Stafford', 'G27: the assignee''s name comes back with the row');
 select is(
   (select count(*)::int from public.cycle_counts_page('cc035800-0000-4000-8000-00000000000a')),
   0, 'G28: another organization''s id returns nothing (RLS)');
+
+-- The phone reads an open count and its lines straight from the tables.
+select is(
+  (select count(*)::int from public.cycle_counts where id = 'cc035800-0000-4000-8002-000000000136'),
+  0, 'G29: reading an open Delta South count by its id returns no header');
+select is(
+  (select count(*)::int from public.cycle_count_lines where cycle_count_id = 'cc035800-0000-4000-8002-000000000136'),
+  0, 'G30: nor any of its lines');
+select is(
+  (select count(*)::int from public.cycle_count_line_progress('cc035800-0000-4000-8000-00000000000d',
+     array['cc035800-0000-4000-8002-000000000136']::uuid[])),
+  0, 'G31: and the progress helper counts none of them');
+select results_eq(
+  $$ select line_total::int, line_counted::int from public.cycle_count_line_progress(
+       'cc035800-0000-4000-8000-00000000000d', array['cc035800-0000-4000-8002-000000000135']::uuid[]) $$,
+  $$ values (3, 2) $$,
+  'G32: her own warehouse''s open count keeps its progress');
 
 select * from finish();
 

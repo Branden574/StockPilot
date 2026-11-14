@@ -2290,7 +2290,14 @@ it must not.
   silently low "movements since". It gates in its body (signed in,
   `is_org_member(org)`, `caller_can_read_item` per item, the item in the org),
   returns counts and the count's own facts only, never a movement row, and
-  takes at most 500 ids. `location_holdings_visible(location)` is
+  takes at most 500 ids. The item's last count and the open count holding it
+  come only from a count line the caller may read (`cycle_count_lines_select`'s
+  count and warehouse arms written inline, as in `cycle_count_line_progress`;
+  held equal to a direct read under the line rule for every persona in
+  [`0452_cycle_count_edges.test.sql`](../../supabase/tests/0452_cycle_count_edges.test.sql)
+  and
+  [`0452_cycle_count_item_page_parity.test.sql`](../../supabase/tests/0452_cycle_count_item_page_parity.test.sql));
+  otherwise those fields are null (0452, S48). `location_holdings_visible(location)` is
   `item_stock_levels_select`'s location clause for one location
   (`SECURITY INVOKER`), held equal to the policy for every persona of its
   pgTAP file, so the location page says "not in your warehouses" instead of

@@ -11,6 +11,28 @@ vi.mock('@/lib/auth/session', () => ({
   }),
 }));
 
+// The service client release() asks, past row level security, whether the
+// caller is the assignee of a count their own read does not show (S48). The
+// count is B's and assigned to the person in both organizations.
+vi.mock('@/lib/supabase/admin', async () => {
+  const mock = await import('@/test/supabase-mock');
+  return {
+    createAdminClient: vi.fn(
+      () =>
+        mock.makeSupabaseStub({
+          'cycle_counts.select': mock.servedLikePostgrest([
+            {
+              id: 'cc-b-1',
+              organization_id: 'org-B',
+              status: 'in_progress',
+              assigned_to: 'u-in-both',
+            },
+          ]),
+        }).client,
+    ),
+  };
+});
+
 import { audit } from './audit';
 import { CycleCountsService } from './cycle-counts';
 
@@ -55,7 +77,7 @@ function expectReadInA(stub: ReturnType<typeof makeSupabaseStub>) {
 beforeEach(() => vi.clearAllMocks());
 
 describe('release: a count of another organization is not found', () => {
-  it('the assignee working in A releasing a count that is not in A', async () => {
+  it('the assignee working in A releasing a count that is not in A (the service read asks in A too)', async () => {
     const stub = stubFor();
 
     await expect(
