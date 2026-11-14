@@ -92,6 +92,7 @@ import {
   photoCodes,
   SCAN_CODE_NOT_FOUND,
   SCAN_LOOKUP_FAILED,
+  SCAN_PHOTO_LOOKUP_FAILED,
   SCAN_PHOTO_NOT_FOUND,
 } from '@/lib/scan-add-gate';
 import { useCreateControlOffer } from '@/lib/use-screen-access';
@@ -755,7 +756,9 @@ export default function Scan() {
     for (const value of codes) {
       const found = await loadItemByValue(value);
       if (found === 'failed') {
-        Alert.alert(SCAN_LOOKUP_FAILED.title, SCAN_LOOKUP_FAILED.message);
+        Alert.alert(SCAN_PHOTO_LOOKUP_FAILED.title, SCAN_PHOTO_LOOKUP_FAILED.message, [
+          { text: 'OK', onPress: reset },
+        ]);
         return;
       }
       if (found === 'ambiguous') return;
@@ -764,7 +767,10 @@ export default function Scan() {
         return;
       }
     }
-    Alert.alert(SCAN_PHOTO_NOT_FOUND.title, SCAN_PHOTO_NOT_FOUND.message);
+    // OK goes back to scanning, as a code's "Not found" does.
+    Alert.alert(SCAN_PHOTO_NOT_FOUND.title, SCAN_PHOTO_NOT_FOUND.message, [
+      { text: 'OK', onPress: reset },
+    ]);
   }
 
   /**

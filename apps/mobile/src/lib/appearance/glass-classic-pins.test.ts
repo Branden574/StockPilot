@@ -51,8 +51,11 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // createControlOffer; a lookup in the workspace that failed says Lookup failed; a photo, where
   // no create control is offered, is matched against the workspace's own items; an existing-item
   // card shows for everyone). Before this the pin was ea9a0ffb...2c08.
+  // Re-pinned again for B124 round 3 (Classic is meant to change: a photo whose lookup in the
+  // workspace failed has its own sentence, and both photo alerts go back to scanning on OK, as a
+  // code's do). Before this the pin was 80ab8f33...9461.
   'app/(drawer)/(tabs)/scan.tsx':
-    '80ab8f3369cc5bb8dcd62da3ea2d79e34e7d8233e14b989a5f71c1f3cd939461',
+    'ca635064f58d9f1c658137671d419b96944e05be21b2e62e48c653dbaa49f401',
   // Re-pinned for S75 (Classic is meant to change: the count is read only for a member who may
   // see cycle counts, and the not-available state leaves out the catching-up sentence). Before
   // S75 the projection was 225237c6...e731e, the pin it had.
@@ -67,7 +70,10 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // Re-pinned again for S75 round 2 (Classic is meant to change: when the phone finishes syncing
   // with a count on screen, the count is read again in place, with no spinner). Before this the
   // pin was f8e71e10...c3f5.
-  'app/cycle-count/[id].tsx': '3f44ec8acbc47e32024d682d96b4809b0cff426639da71d14a7077bbc2a6d683',
+  // Re-pinned again for S75 round 3 (Classic is meant to change: the load key names the account,
+  // and a full load for another count, workspace or account clears the header and lines first).
+  // Before this the pin was 3f44ec8a...d683.
+  'app/cycle-count/[id].tsx': '4e13d65fca29c81837606f4b239fceec0c43c666b8f3da10c8b36c19767f0935',
   // Re-pinned for B124 (Classic is meant to change: its web link is built by webLink from the
   // configured host; a production build opens the same address). Before B124 the projection was
   // 0e3f35aa...a3fa, the pin it had.
@@ -177,8 +183,11 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // the pin was b26f7e81...6047.
   // Re-pinned again for S75 round 2 (Classic is meant to change: a read of the lines merges into
   // the tally, so a count scanned on this screen stays). Before this the pin was 33f84bae...a54e.
+  // Re-pinned again for S75 round 3 (Classic is meant to change: another count, workspace or
+  // account clears the lines and the tally before the read). Before this the pin was
+  // d5c5ef72...9199.
   'app/cycle-count/scan/[id].tsx':
-    'd5c5ef7234d08aaea8c199cb15ae2f1ae8b6c13e29b7815ef01b255497959199',
+    'fff043b1323b964406efbb707a4be83a5699f594bedadc244a72c059d847b9ee',
   // Re-pinned for B124 (Classic is meant to change: a member without items:create is told so
   // beside Create and refused before anything is sent). Before B124 the projection was
   // 1869d65f...7806, the pin it had.

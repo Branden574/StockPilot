@@ -32,11 +32,12 @@ const code = (file: string) =>
     .replace(/\s+/g, ' ');
 
 describe('countReloadIsQuiet', () => {
-  const key = (access: ScreenAccess, id = 'cc-1', orgId: string | null = 'org-a') => ({
-    id,
-    orgId,
-    access,
-  });
+  const key = (
+    access: ScreenAccess,
+    id = 'cc-1',
+    orgId: string | null = 'org-a',
+    userId: string | null = 'u-1',
+  ) => ({ id, orgId, userId, access });
 
   it('not synced yet -> allowed, same count and workspace, lines on screen: quiet', async () => {
     const { countReloadIsQuiet } = await import('./count-access-refresh');
@@ -55,6 +56,41 @@ describe('countReloadIsQuiet', () => {
     expect(countReloadIsQuiet(key('allowed'), key('not-synced'), true)).toBe(false);
     expect(countReloadIsQuiet(key('not-synced'), key('denied'), true)).toBe(false);
     expect(countReloadIsQuiet(key('allowed'), key('allowed'), true)).toBe(false);
+  });
+
+  // Round 3: the key names the account. Another account signing in under a
+  // mounted screen is never the quiet case.
+  it('same count and workspace, not synced yet -> allowed, another account: the full load', async () => {
+    const { countReloadIsQuiet } = await import('./count-access-refresh');
+    expect(
+      countReloadIsQuiet(key('not-synced'), key('allowed', 'cc-1', 'org-a', 'u-2'), true),
+    ).toBe(false);
+    expect(countReloadIsQuiet(key('not-synced'), key('allowed', 'cc-1', 'org-a', null), true)).toBe(
+      false,
+    );
+  });
+});
+
+describe('countLoadClearsScreen: a full load for another count, workspace or account starts empty', () => {
+  const key = (
+    id: string | undefined = 'cc-1',
+    orgId: string | null = 'org-a',
+    userId: string | null = 'u-1',
+    access: ScreenAccess = 'allowed',
+  ) => ({ id, orgId, userId, access });
+
+  it('another count, workspace or account: cleared', async () => {
+    const { countLoadClearsScreen } = await import('./count-access-refresh');
+    expect(countLoadClearsScreen(key(), key('cc-2'))).toBe(true);
+    expect(countLoadClearsScreen(key(), key('cc-1', 'org-b'))).toBe(true);
+    expect(countLoadClearsScreen(key(), key('cc-1', 'org-a', 'u-2'))).toBe(true);
+    expect(countLoadClearsScreen(key(), key('cc-1', 'org-a', null))).toBe(true);
+  });
+
+  it('the first load, or the same count, workspace and account (an access change): kept', async () => {
+    const { countLoadClearsScreen } = await import('./count-access-refresh');
+    expect(countLoadClearsScreen(null, key())).toBe(false);
+    expect(countLoadClearsScreen(key(), key('cc-1', 'org-a', 'u-1', 'denied'))).toBe(false);
   });
 });
 
@@ -92,15 +128,26 @@ describe('the count screen', () => {
     const src = code(COUNT);
     expect(src).toContain('const lastLoadKey = React.useRef<CountLoadKey | null>(null);');
     expect(src).toContain(
-      'const loadKeyNow = React.useEffectEvent(() => ({ key: { id, orgId, access }, linesShown: lines.length > 0, }));',
+      'const loadKeyNow = React.useEffectEvent(() => ({ key: { id, orgId, userId, access }, linesShown: lines.length > 0, }));',
     );
+    // Quiet: as it was. Full: another count, workspace or account than the
+    // one on screen clears the header and the lines first; and the load runs
+    // again when the account changes.
     expect(src).toMatch(
-      /React\.useEffect\(\(\) => \{ const \{ key, linesShown \} = loadKeyNow\(\); const quiet = countReloadIsQuiet\(lastLoadKey\.current, key, linesShown\); lastLoadKey\.current = key; if \(quiet\) \{ void load\(\); return; \} (?:\/\/[^\n]*)?setLoading\(true\); setReadError\(null\); setEmptyState\('none'\); void load\(\); \}, \[load\]\);/,
+      /React\.useEffect\(\(\) => \{ const \{ key, linesShown \} = loadKeyNow\(\); const quiet = countReloadIsQuiet\(lastLoadKey\.current, key, linesShown\); const clear = countLoadClearsScreen\(lastLoadKey\.current, key\); lastLoadKey\.current = key; if \(quiet\) \{ void load\(\); return; \} if \(clear\) \{ setHeader\(null\); setLines\(\[\]\); \} setLoading\(true\); setReadError\(null\); setEmptyState\('none'\); void load\(\); \}, \[load, userId\]\);/,
     );
   });
 });
 
 describe('the scanner', () => {
+  it('another count, workspace or account: the lines and the tally are cleared before the read', () => {
+    const src = code(SCANNER);
+    expect(src).toContain('const lastLinesKey = React.useRef<CountLoadKey | null>(null);');
+    expect(src).toMatch(
+      /React\.useEffect\(\(\) => \{ if \(!id\) return; const key = \{ id, orgId, userId: user\?\.id \?\? null, access \}; if \(countLoadClearsScreen\(lastLinesKey\.current, key\)\) \{ setLines\(\[\]\); setScannedMap\(new Map\(\)\); \} lastLinesKey\.current = key; if \(!user\) return; void loadLines\(\); \}, \[user, id, orgId, access\]\);/,
+    );
+  });
+
   it('merges what it reads into its tally', () => {
     const src = code(SCANNER);
     expect(src).toContain('setScannedMap((prev) => mergeScannedCounts(prev, snap.lines));');

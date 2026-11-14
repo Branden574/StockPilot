@@ -20,6 +20,13 @@ export const SCAN_LOOKUP_FAILED = {
     'This code could not be looked up in this workspace. Check your connection and try again.',
 };
 
+/** The same, for a photo: the workspace's own items could not be read. */
+export const SCAN_PHOTO_LOOKUP_FAILED = {
+  title: 'Lookup failed',
+  message:
+    'This photo could not be looked up in this workspace. Check your connection and try again.',
+};
+
 /**
  * The codes a photo carried, as the workspace's items are looked up by: a
  * product's UPC digits (11 to 14 of them, as the Scan tab's product lookup

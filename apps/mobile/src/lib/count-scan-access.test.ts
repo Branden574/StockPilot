@@ -115,6 +115,8 @@ describe.each([
   it("asks the count screen's question, and loads again when the answer changes", () => {
     const src = readFileSync(path.resolve(__dirname, '../..', file), 'utf8');
     expect(src).toContain("const access = useDrawerEntryAccess('/cycle-counts');");
-    expect(src).toMatch(/\}, \[user, (id|cycleCountId), access\]\);/);
+    // The barcode scanner also names the workspace (round 3: another
+    // workspace's lines are cleared before the read).
+    expect(src).toMatch(/\}, \[user, (id, orgId|cycleCountId), access\]\);/);
   });
 });

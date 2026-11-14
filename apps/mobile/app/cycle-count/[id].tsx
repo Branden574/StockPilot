@@ -82,7 +82,11 @@ import { createDraftDebouncer } from '@/lib/draft-debouncer';
 import { reportPhoneSaveFailure } from '@/lib/phone-save-report';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
-import { type CountLoadKey, countReloadIsQuiet } from '@/lib/count-access-refresh';
+import {
+  type CountLoadKey,
+  countLoadClearsScreen,
+  countReloadIsQuiet,
+} from '@/lib/count-access-refresh';
 import { countReadFailedView } from '@/lib/count-read-failed';
 import {
   CYCLE_COUNTS_NOT_AVAILABLE,
@@ -751,19 +755,28 @@ export default function CycleCountDetail() {
   // finishes syncing while a count it fetched is on screen (not synced yet ->
   // allowed), the count is read again in place, with no spinner and nothing
   // on screen reset (count-access-refresh.ts countReloadIsQuiet), so a
-  // counter who is typing keeps the keyboard, the list and the drafts.
+  // counter who is typing keeps the keyboard, the list and the drafts. A
+  // full load for another count, workspace or account than the one on screen
+  // clears the header and the lines first (countLoadClearsScreen): a read
+  // that finds nothing never leaves the previous one drawn. The key names the
+  // account, and the load runs again when it changes.
   const lastLoadKey = React.useRef<CountLoadKey | null>(null);
   const loadKeyNow = React.useEffectEvent(() => ({
-    key: { id, orgId, access },
+    key: { id, orgId, userId, access },
     linesShown: lines.length > 0,
   }));
   React.useEffect(() => {
     const { key, linesShown } = loadKeyNow();
     const quiet = countReloadIsQuiet(lastLoadKey.current, key, linesShown);
+    const clear = countLoadClearsScreen(lastLoadKey.current, key);
     lastLoadKey.current = key;
     if (quiet) {
       void load();
       return;
+    }
+    if (clear) {
+      setHeader(null);
+      setLines([]);
     }
     // Fetch-on-mount AND dep-change re-run: the flag resets are pre-await by
     // necessity (the spinner must show during the fetch; a workspace switch
@@ -772,7 +785,7 @@ export default function CycleCountDetail() {
     setReadError(null);
     setEmptyState('none');
     void load();
-  }, [load]);
+  }, [load, userId]);
 
   // Refresh per-cycle pending count whenever the global sync state changes.
   React.useEffect(() => {

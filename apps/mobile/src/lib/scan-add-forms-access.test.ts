@@ -41,6 +41,11 @@ const LOOKUP_FAILED = {
   message:
     'This code could not be looked up in this workspace. Check your connection and try again.',
 };
+const PHOTO_LOOKUP_FAILED = {
+  title: 'Lookup failed',
+  message:
+    'This photo could not be looked up in this workspace. Check your connection and try again.',
+};
 const FOUND = { id: 'item-1', name: 'Made-up item' };
 
 type Lookup = typeof FOUND | null | 'ambiguous' | 'failed';
@@ -193,6 +198,24 @@ describe("the workspace's own lookup tells a failed read from an empty one", () 
   });
 });
 
+/** One alert, these words, and OK goes back to scanning (reset), as a code's does. */
+function saidWithReset(
+  alert: ReturnType<typeof vi.fn>,
+  reset: ReturnType<typeof vi.fn>,
+  words: { title: string; message: string },
+) {
+  expect(alert).toHaveBeenCalledTimes(1);
+  const [title, message, buttons] = alert.mock.calls[0] as [
+    string,
+    string,
+    { text: string; onPress: () => void }[],
+  ];
+  expect([title, message]).toEqual([words.title, words.message]);
+  expect(buttons.map((b) => b.text)).toEqual(['OK']);
+  buttons[0]!.onPress();
+  expect(reset).toHaveBeenCalledTimes(1);
+}
+
 describe('a photo', () => {
   function photo(canCreateItems: boolean, vision: Record<string, unknown>, inWorkspace: Lookup) {
     const alert = vi.fn();
@@ -206,6 +229,7 @@ describe('a photo', () => {
     const setAddBook = vi.fn();
     const setAddItem = vi.fn();
     const loadItemByValue = vi.fn(async () => inWorkspace);
+    const reset = vi.fn();
     // The screen's own helper, RUN as well.
     const showPhotoMatchInWorkspace = screenFunction<(codes: string[]) => Promise<void>>(
       SCAN,
@@ -215,7 +239,8 @@ describe('a photo', () => {
         showScannedItem,
         Alert: { alert },
         SCAN_PHOTO_NOT_FOUND: PHOTO_NOT_FOUND,
-        SCAN_LOOKUP_FAILED: LOOKUP_FAILED,
+        SCAN_PHOTO_LOOKUP_FAILED: PHOTO_LOOKUP_FAILED,
+        reset,
       },
     );
     const run = screenFunction<() => Promise<void>>(SCAN, 'captureCoverId', {
@@ -239,9 +264,9 @@ describe('a photo', () => {
       SCAN_LOOKUP_FAILED: LOOKUP_FAILED,
       photoCodes: (v: { isbn?: string; upc?: string }) =>
         [v.upc, v.isbn].filter((c): c is string => Boolean(c)),
-      reset: () => undefined,
+      reset,
     });
-    return { run, alert, calls, showScannedItem, setAddBook, setAddItem, loadItemByValue };
+    return { run, alert, calls, showScannedItem, setAddBook, setAddItem, loadItemByValue, reset };
   }
 
   it('in the workspace, create not offered: the item is shown; only the photo reader was asked', async () => {
@@ -258,14 +283,14 @@ describe('a photo', () => {
     const h = photo(false, { kind: 'product', upc: '012345678905' }, null);
     await h.run();
     expect(h.calls).toEqual(['/api/v1/ai/identify-from-photo']);
-    expect(h.alert).toHaveBeenCalledWith(PHOTO_NOT_FOUND.title, PHOTO_NOT_FOUND.message);
+    saidWithReset(h.alert, h.reset, PHOTO_NOT_FOUND);
     expect(h.setAddItem).not.toHaveBeenCalled();
   });
 
-  it('a lookup in the workspace that failed, create not offered: said as failed', async () => {
+  it('a lookup in the workspace that failed, create not offered: said as a failed photo lookup', async () => {
     const h = photo(false, { kind: 'book', isbn: '9780000000002' }, 'failed');
     await h.run();
-    expect(h.alert).toHaveBeenCalledWith(LOOKUP_FAILED.title, LOOKUP_FAILED.message);
+    saidWithReset(h.alert, h.reset, PHOTO_LOOKUP_FAILED);
     expect(h.showScannedItem).not.toHaveBeenCalled();
   });
 
@@ -273,7 +298,7 @@ describe('a photo', () => {
     const h = photo(false, { kind: 'product', title: 'Made-up' }, FOUND);
     await h.run();
     expect(h.loadItemByValue).not.toHaveBeenCalled();
-    expect(h.alert).toHaveBeenCalledWith(PHOTO_NOT_FOUND.title, PHOTO_NOT_FOUND.message);
+    saidWithReset(h.alert, h.reset, PHOTO_NOT_FOUND);
   });
 
   it('create offered: the lookup and the card, as before', async () => {
@@ -311,5 +336,6 @@ describe('the wiring', () => {
     expect(words.SCAN_CODE_NOT_FOUND).toEqual(CODE_NOT_FOUND);
     expect(words.SCAN_PHOTO_NOT_FOUND).toEqual(PHOTO_NOT_FOUND);
     expect(words.SCAN_LOOKUP_FAILED).toEqual(LOOKUP_FAILED);
+    expect(words.SCAN_PHOTO_LOOKUP_FAILED).toEqual(PHOTO_LOOKUP_FAILED);
   });
 });

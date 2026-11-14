@@ -24,7 +24,11 @@ import { SceneBackground } from '@/components/ui/glass/scene-background';
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth-context';
-import { mergeScannedCounts } from '@/lib/count-access-refresh';
+import {
+  type CountLoadKey,
+  countLoadClearsScreen,
+  mergeScannedCounts,
+} from '@/lib/count-access-refresh';
 import { countNotSavedAlert, createLineGoneNotice } from '@/lib/count-save-refusal';
 import {
   countStoredForLiveAccount,
@@ -39,6 +43,7 @@ import {
   NOT_SYNCED_YET,
   SAVED_ACCESS_UNREADABLE,
 } from '@/lib/screen-access';
+import { useOrg } from '@/lib/use-org';
 import { useDrawerEntryAccess } from '@/lib/use-screen-access';
 import { reportPhoneSaveFailure } from '@/lib/phone-save-report';
 import { FONT, TYPE_CEILING, capTo, palette, radius, space } from '@/lib/theme';
@@ -99,6 +104,7 @@ function CycleCountScanScreenInner() {
   useHoldAppearanceAdoptionWhileFocused('count');
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const [permission, requestPermission] = useCameraPermissions();
   // The confirm sheet and the permission screen follow the device's mode;
   // the camera chrome is dark in both (CAMERA, below).
@@ -163,16 +169,30 @@ function CycleCountScanScreenInner() {
     setScannedMap((prev) => mergeScannedCounts(prev, snap.lines));
   }
 
+  // What the lines on screen were read for. Another count, workspace or
+  // account clears the lines and the tally before the read
+  // (count-access-refresh.ts countLoadClearsScreen); the same count read again
+  // (an access change) merges into the tally.
+  const lastLinesKey = React.useRef<CountLoadKey | null>(null);
   React.useEffect(() => {
-    if (!user || !id) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
+    if (!id) return;
+    const key = { id, orgId, userId: user?.id ?? null, access };
+    if (countLoadClearsScreen(lastLinesKey.current, key)) {
+      // Another count, workspace or account: what was read for the previous
+      // one must not stay drawn while this one is read.
+      setLines([]);
+      setScannedMap(new Map());
+    }
+    lastLinesKey.current = key;
+    if (!user) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set in loadLines is post-await; the clear above is the identity change's own reset
     void loadLines();
     // loadLines is a plain function, new on every render (it reads only id
     // and the router): listing it would load the lines on every render. The
-    // lines load once per signed-in user and count, and again when whether
-    // this member may see cycle counts is known or changes.
+    // lines load once per signed-in user, workspace and count, and again when
+    // whether this member may see cycle counts is known or changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, id, access]);
+  }, [user, id, orgId, access]);
 
 
   /** Saves one count on the phone and queues it. False when nothing was saved (said). */
