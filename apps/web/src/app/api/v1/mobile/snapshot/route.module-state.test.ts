@@ -113,3 +113,88 @@ describe('GET /api/v1/mobile/snapshot with the module state unreadable', () => {
     expect(body.enabledModules).toContain('bundles');
   });
 });
+
+/**
+ * The three lists gated on a module (open counts, kits, purchase orders) are
+ * instructions too: the phone clears its clean cached counts on an empty
+ * openCycleCounts and its cached kits on an empty activeBundleIds. With the
+ * module state unreadable, the route answers its refusal before any list is
+ * built, so none of the three is ever sent empty because a read failed.
+ */
+describe('GET /api/v1/mobile/snapshot: module-gated lists with the module state unreadable', () => {
+  const GATED = ['cycle_counts', 'bundles', 'purchase_orders'];
+  const LIST_TABLES = ['from:cycle_counts', 'from:bundles', 'from:purchase_orders'];
+
+  beforeEach(() => {
+    world.lists = {
+      cycle_counts: [
+        {
+          id: 'count-1',
+          count_number: 'CC-1',
+          status: 'in_progress',
+          warehouse_id: null,
+          started_at: '2026-01-01T00:00:00.000Z',
+          assigned_to: null,
+          notes: null,
+          lines: [],
+        },
+      ],
+      bundles: [
+        {
+          id: 'kit-1',
+          name: 'Sample kit',
+          sku: 'KIT-1',
+          preassembly_enabled: false,
+          phantom_item_id: null,
+          updated_at: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+      purchase_orders: [
+        {
+          id: 'po-1',
+          po_number: 'PO-1',
+          status: 'ordered',
+          expected_at: null,
+          destination_location_id: null,
+          updated_at: '2026-01-01T00:00:00.000Z',
+          destination: null,
+          items: [],
+        },
+      ],
+    };
+  });
+
+  it('reads that worked, modules on: the three lists carry their rows', async () => {
+    world.moduleRows = GATED;
+    const res = await pull();
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown[]>;
+    expect(body.openCycleCounts).toHaveLength(1);
+    expect(body.bundles).toHaveLength(1);
+    expect(body.activeBundleIds).toEqual(['kit-1']);
+    expect(body.openPOs).toHaveLength(1);
+  });
+
+  it.each<[string, Partial<LegacyContextWorld>]>([
+    ['the rows read failed', { moduleRowsFail: true }],
+    ['the comp flag read failed', { organizationFail: true, moduleRows: ['orders'] }],
+    ['the organization row read back hidden', { organizationHidden: true, moduleRows: ['orders'] }],
+  ])('%s: the refusal, with no list in the body and no list read sent', async (_what, failure) => {
+    Object.assign(world, failure);
+    const res = await pull();
+    expect(res.status).not.toBe(200);
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as Record<string, unknown>;
+    for (const key of ['openCycleCounts', 'bundles', 'activeBundleIds', 'openPOs']) {
+      expect(body).not.toHaveProperty(key);
+    }
+    expect(body).toEqual({
+      error: 'internal_error',
+      message: 'Your access could not be checked. Please try again.',
+    });
+    expect(world.calls.filter((c) => LIST_TABLES.includes(c))).toEqual([]);
+    expect(vi.mocked(reportError).mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ tag: 'mobile.snapshot.module_state', level: 'warning' }),
+    );
+  });
+});
