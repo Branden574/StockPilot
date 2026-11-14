@@ -790,9 +790,11 @@ actually fire.
 - **Enforced by**: every holdings statement runs in `SECURITY DEFINER` code:
   `ledger.apply_holding_delta` (0371, for `adjust_stock`/`transfer_stock`),
   `apply_level_delta` (0331), `apply_cycle_count_location_delta`,
-  `_cycle_count_org_stock_sum`, `tg_seed_initial_level` and
-  `compensate_opening_stock`. The invoker ledger bodies keep only the item
-  lock, the gates, the on-hand update and the movement row.
+  `_cycle_count_org_stock_sum`, `tg_seed_initial_level`,
+  `compensate_opening_stock`, `open_item_stock` and `_opening_stock_location`
+  (0454: a new item's opening holding, written with its on-hand and its
+  'initial' movement). The invoker ledger bodies keep only the item lock, the
+  gates, the on-hand update and the movement row.
 - **Tested at**: INV-33 (the sweep) and INV-34 (plants an invoker reader,
   which must be caught, and a function that names the table only in a
   comment, which must not). Behaviourally, section E of

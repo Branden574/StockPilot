@@ -133,11 +133,6 @@ const READERS: Record<string, Entry> = {
     count: 1,
     why: 'Exceptions sync (SystemServiceContext, admin client) reads every holding of the org.',
   },
-  'server/services/opening-stock-compensation.ts::compensateOpeningStockOrThrow': {
-    classification: 'complete-by-scope',
-    count: 1,
-    why: 'Verifies the just-created items\' opening holdings, which tg_seed_initial_level puts in the creator\'s own warehouse (or a location with no warehouse).',
-  },
   'server/loaders/inventory-list.ts::loadInventoryRowsUncached': {
     classification: 'service-client',
     count: 1,

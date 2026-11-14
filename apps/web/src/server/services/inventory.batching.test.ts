@@ -322,10 +322,10 @@ describe('id-list reads that throw', () => {
   });
 });
 
-// The opening-stock compensation's batching (150 items across batches, a
-// failed batch, a failed verify read) is covered in
-// opening-stock-compensation.test.ts: since migration 0359 it is one shared
-// function around the compensate_opening_stock RPC, not a private method.
+// The opening's batching (lines across open_item_stock calls, a refused
+// batch, a lost response and its re-read) is covered in opening-stock.test.ts:
+// since migration 0454 it is one shared function around the open_item_stock
+// RPC, not a private method.
 
 describe('bulkCreate barcode pre-check', () => {
   it('checks 250 barcodes in batches and inserts nothing when a batch fails', async () => {

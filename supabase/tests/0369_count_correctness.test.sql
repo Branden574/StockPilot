@@ -277,10 +277,10 @@ select is(
   'A8: via_ledger is never null');
 
 -- Every stock_movements writer outside the ledger schema that is not SECURITY
--- DEFINER writes UNTRUSTED rows when a user calls it. Today that is the
--- opening-stock copy in duplicate_inventory_item (a brand-new item, never on
--- an open count) and the 0340 location dedup helper. A new invoker writer
--- outside the ledger shows up here.
+-- DEFINER writes UNTRUSTED rows when a user calls it. Today that is the 0340
+-- location dedup helper only: since 0454 duplicate_inventory_item opens a
+-- copy's stock through open_item_stock (SECURITY DEFINER). A new invoker
+-- writer outside the ledger shows up here.
 -- Changed on purpose by 0395 (L19; was array['public.duplicate_inventory_item']
 -- with the INSERT-only regex 'insert\s+into\s+(public\.)?stock_movements'):
 -- the census now reads 0387's writer forms (INSERT INTO, MERGE INTO [ONLY],
@@ -295,8 +295,8 @@ select is(
     where n.nspname in ('public', 'ledger') and p.prokind = 'f'
       and p.prosrc ~* $re$(insert\s+into|merge\s+into(\s+only)?|update(\s+only)?|delete\s+from(\s+only)?)\s+("?public"?\s*\.\s*)?"?stock_movements\M$re$
       and n.nspname <> 'ledger' and not p.prosecdef),
-  array['public._dedup_rack_locations', 'public.duplicate_inventory_item'],
-  'A9: the non-ledger invoker writers of stock_movements are the opening-stock copy and the postgres-only location dedup helper');
+  array['public._dedup_rack_locations'],
+  'A9: the only non-ledger invoker writer of stock_movements is the postgres-only location dedup helper');
 select is(
   (select string_agg(v.form || '=' || (v.src ~* $re$(insert\s+into|merge\s+into(\s+only)?|update(\s+only)?|delete\s+from(\s+only)?)\s+("?public"?\s*\.\s*)?"?stock_movements\M$re$)::text, ', ' order by v.n)
      from (values

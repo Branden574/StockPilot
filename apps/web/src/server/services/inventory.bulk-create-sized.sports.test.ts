@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ModuleId } from '@stockpilot/core';
 
-import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+import { callArgs, makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
 
 vi.mock('@/lib/auth/warehouse', () => ({
   getWarehouseAccess: vi.fn(async () => ({ hasAllAccess: true, readableIds: [] })),
@@ -93,7 +93,6 @@ function buildStub(over: Record<string, unknown> = {}) {
       ],
       error: null,
     },
-    'stock_movements.insert': { data: null, error: null },
     ...over,
   });
 }
@@ -213,6 +212,15 @@ describe('InventoryService.bulkCreateSizedVariants — sports parity with create
       'categories.select': { data: jerseysCategory(), error: null },
       'product_groups.select': { data: null, error: null },
       'product_groups.insert': { data: { id: 'grp-j' }, error: null },
+      // The insert answers the rows it was given, so the opening below can be
+      // matched to them by SKU.
+      'inventory_items.insert': (call: MockCall) => ({
+        data: ((callArgs(call, 'insert')?.[0] ?? []) as Array<Record<string, unknown>>).map((r, i) => ({
+          ...r,
+          id: `i-${i}`,
+        })),
+        error: null,
+      }),
     });
     const ctx = makeServiceContext(stub.client, { enabledModules: SPORTS_ON });
 
@@ -230,9 +238,18 @@ describe('InventoryService.bulkCreateSizedVariants — sports parity with create
     });
 
     const rows = insertedRows(stub);
-    // R3: two variants sharing ONE jersey number, per-size quantities retained.
+    // R3: two variants sharing ONE jersey number, per-size quantities retained:
+    // each row is inserted at 0 and opened with its own quantity (0454).
     expect(rows.map((r) => r.jersey_number)).toEqual(['07', '07']);
-    expect(rows.map((r) => r.quantity_on_hand)).toEqual([3, 2]);
+    expect(rows.map((r) => r.quantity_on_hand)).toEqual([0, 0]);
+    expect(
+      stub.rpcCalls
+        .filter((c) => c.name === 'open_item_stock')
+        .flatMap((c) => (c.args as { p_lines: unknown[] }).p_lines),
+    ).toEqual([
+      { itemId: 'i-0', quantity: 3 },
+      { itemId: 'i-1', quantity: 2 },
+    ]);
     expect(rows.map((r) => r.player_name)).toEqual(['Vega', 'Vega']);
     expect(rows[0]?.variant_color).toBe('Navy');
     expect(rows[0]?.variant_fit).toBe('Regular');
