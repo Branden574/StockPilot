@@ -74,6 +74,10 @@ export const UUID_SEGMENT = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-
  * `...` are all unrepresentable; `/`, `\`, `%` and control characters
  * (including NUL and newline) are outside every class here, so no
  * encoding of a traversal or a segment break can be expressed.
+ *
+ * The same rule as the "order_request_attachments manager insert" policy's
+ * file-name pattern (0451, docket S3c); changing one without the other fails
+ * storage-path.order-attachments-db-rule.guard.test.ts.
  */
 export const OBJECT_FILENAME_SEGMENT = '[A-Za-z0-9_-]{1,120}(?:\\.[A-Za-z0-9]{1,10}){1,3}';
 

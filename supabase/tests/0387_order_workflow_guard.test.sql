@@ -574,8 +574,10 @@ select is(
   || '|REFERENCES(any column)=' || has_any_column_privilege('authenticated', 'public.order_requests', 'REFERENCES')::text,
   -- Re-pinned by 0388 (was INSERT=true): 0388 replaces table INSERT with
   -- INSERT on the 13 columns create_order_request names (0388 N1).
-  'DELETE=true,INSERT=false,MAINTAIN=false,REFERENCES=false,SELECT=true,TRIGGER=false,TRUNCATE=false,UPDATE=false|REFERENCES(any column)=false',
-  'A9c: authenticated holds no TRUNCATE, REFERENCES, TRIGGER or MAINTAIN and no table UPDATE or INSERT (0388: INSERT on 13 columns), and keeps table SELECT and DELETE');
+  -- Re-pinned by 0451 (docket S3c, was DELETE=true): authenticated holds no
+  -- DELETE on order_requests (its delete policy is using (false), 0119).
+  'DELETE=false,INSERT=false,MAINTAIN=false,REFERENCES=false,SELECT=true,TRIGGER=false,TRUNCATE=false,UPDATE=false|REFERENCES(any column)=false',
+  'A9c: authenticated holds no TRUNCATE, REFERENCES, TRIGGER or MAINTAIN, no table UPDATE or INSERT (0388: INSERT on 13 columns) and no DELETE (0451), and keeps table SELECT');
 select is(
   (select string_agg(a.attname, ',' order by a.attname)
      from pg_attribute a

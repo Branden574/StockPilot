@@ -37,6 +37,12 @@ insert into public.order_requests
   (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type)
 values
   (:ord, :orgA, :wh, 'completed', 'internal', :mgr, 'pickup');
+-- Since 0451 (docket S3c) a row names a stored file that is already in the
+-- bucket and that the caller reads; the manager uploads it first, as the app
+-- does.
+insert into storage.objects (bucket_id, name, owner, owner_id) values
+  ('order-attachments', 'da000000-0000-0000-0000-0000000000da/d0000000-0000-0000-0000-0000000000d9/proof.jpg',
+   :mgr, 'd0000000-0000-0000-0000-0000000000d1');
 
 -- ── Manager can attach (org + attachable-status + path-prefix binds pass) ───
 set local "request.jwt.claim.sub" to 'd0000000-0000-0000-0000-0000000000d1'; -- mgr
@@ -54,6 +60,10 @@ select lives_ok(
 reset role;
 
 -- ── ANY org member (a plain viewer) can READ the attachments ────────────────
+-- (Since 0451, docket S3c, a Wet signature photo, kind 'signature', is read
+-- by people who may approve orders, the order's driver and the person who
+-- added it, row and file alike; 0451's suite proves it. The row here is a
+-- drop-off photo.)
 set local "request.jwt.claim.sub" to 'd0000000-0000-0000-0000-0000000000d2'; -- viewer
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';

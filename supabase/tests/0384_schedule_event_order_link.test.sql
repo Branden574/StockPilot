@@ -29,8 +29,14 @@
 -- I. An event's identity (review finding U4): a viewer re-keying their own
 --    event and its creator backdating it are 42501; nothing is written.
 -- K. Every legitimate flow still works: a manual event inserted the phone's
---    way (staff) and the Schedule page's way (manager, with RETURNING), and by
---    a viewer (the existing any-member insert rule is unchanged); the order
+--    way (staff granted schedule:manage) and the Schedule page's way (manager,
+--    with RETURNING). Changed on purpose by 0451 (docket S3c): a new event
+--    needs schedule:manage and the Schedule module, as ScheduleService.create
+--    already asked, so staff without the permission (K1) and a viewer (K3) are
+--    refused (42501 row-level security) and K1b proves the phone's way for
+--    staff who hold it; updating and deleting an event ask it too, so stfAp
+--    holds it for K4 and a viewer's delete of their own event (K8) removes
+--    nothing; the order
 --    event's creator and a manager editing it the Schedule page's way (title,
 --    start, end, description, status, both reminder stamps cleared,
 --    updated_by), the link unchanged; the owner too; a viewer who is neither
@@ -71,7 +77,7 @@
 
 begin;
 
-select plan(57);
+select plan(58);
 
 \set orgA   '\'03840000-0000-0000-0000-00000000000a\''
 \set orgB   '\'03840000-0000-0000-0000-00000000000b\''
@@ -132,8 +138,11 @@ insert into public.user_warehouse_assignments (organization_id, user_id, warehou
   (:orgA, :stf,   :whA, true),
   (:orgA, :stfAp, :whA, true),
   (:orgA, :vwr,   :whA, true);
+-- stfAp also holds schedule:manage (0451, docket S3c: editing an event asks
+-- it; K4 is stfAp editing the order event it created).
 insert into public.user_permission_overrides (organization_id, user_id, permission, granted) values
-  (:orgA, :stfAp, 'orders:approve', true);
+  (:orgA, :stfAp, 'orders:approve', true),
+  (:orgA, :stfAp, 'schedule:manage', true);
 insert into public.order_requests
   (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type, needed_by, delivery_charter_id) values
   (:ordEv,   :orgA, :whA, 'approved', 'internal', :stf,  'pickup',   date_trunc('minute', now()) + interval '3 days', null),
@@ -337,7 +346,20 @@ set local role to 'authenticated';
 set local "request.jwt.claim.sub" to :stf;
 select is(pg_temp.err(format($q$insert into public.schedule_events (organization_id, title, starts_at, ends_at, all_day, location_text, warehouse_id, requester_name)
                                values (%L, 'Phone event', now() + interval '1 day', now() + interval '1 day 1 hour', false, 'Dock 2', %L, 'School')$q$, :orgA, :whA)),
-  'no error', 'K1: staff inserting a manual event the phone''s way still works');
+  '42501:new row violates row-level security policy for table "schedule_events"',
+  'K1: staff without schedule:manage cannot insert a manual event (0451: the insert rule asks schedule:manage)');
+-- K1b (0451): the same insert by staff granted schedule:manage works.
+reset role;
+insert into public.user_permission_overrides (organization_id, user_id, permission, granted)
+  values (:orgA, :stf, 'schedule:manage', true);
+set local role to 'authenticated';
+select is(pg_temp.err(format($q$insert into public.schedule_events (organization_id, title, starts_at, ends_at, all_day, location_text, warehouse_id, requester_name)
+                               values (%L, 'Phone event', now() + interval '1 day', now() + interval '1 day 1 hour', false, 'Dock 2', %L, 'School')$q$, :orgA, :whA)),
+  'no error', 'K1b: staff granted schedule:manage insert a manual event the phone''s way');
+reset role;
+delete from public.user_permission_overrides
+ where organization_id = :orgA and user_id = :stf and permission = 'schedule:manage';
+set local role to 'authenticated';
 -- The Schedule page (ScheduleService.create), with its RETURNING read.
 set local "request.jwt.claim.sub" to :mgr;
 select is(pg_temp.val(format($q$with ins as (
@@ -351,7 +373,8 @@ select is(pg_temp.val(format($q$with ins as (
 set local "request.jwt.claim.sub" to :vwr;
 select is(pg_temp.err(format($q$insert into public.schedule_events (organization_id, title, starts_at, created_by)
                                values (%L, 'Viewer manual', now() + interval '1 day', %L)$q$, :orgA, :vwr)),
-  'no error', 'K3: a viewer''s manual event is unchanged by 0384 (the any-member insert rule stays as it was)');
+  '42501:new row violates row-level security policy for table "schedule_events"',
+  'K3: a viewer cannot insert a manual event (0451: the insert rule asks schedule:manage)');
 -- The Schedule page's edit of the order's event by its creator (staff).
 set local "request.jwt.claim.sub" to :stfAp;
 select is(pg_temp.val(format($q$with up as (
@@ -381,7 +404,9 @@ select is(pg_temp.val(format($q$with up as (update public.schedule_events set ti
                                 select count(*)::text from up$q$, :evOrd)),
   '0', 'K7: a viewer who neither created the order event nor manages still changes nothing (schedule_events_update, unchanged)');
 select is(pg_temp.val(format($q$with d as (delete from public.schedule_events where id = %L returning 1) select count(*)::text from d$q$, :evVwr)),
-  '1', 'K8: the creator deletes their own manual event (DELETE unchanged)');
+  -- Re-pinned by 0451 (docket S3c; was 1): deleting an event asks
+  -- schedule:manage, which a viewer does not hold.
+  '0', 'K8: a viewer who created a manual event removes nothing (0451: deleting an event asks schedule:manage)');
 reset role;
 -- The order flows' admin client (service_role).
 set local "request.jwt.claim.sub" to '';
@@ -538,18 +563,22 @@ select is(
                      || coalesce(pg_get_expr(pol.polwithcheck, pol.polrelid), '-'), E'\n' order by pol.polname)
      from pg_policy pol where pol.polrelid = 'public.schedule_events'::regclass),
   E'schedule_events_delete d {authenticated}\n'
-  '  USING (( SELECT is_org_member(schedule_events.organization_id) AS is_org_member) AND ((created_by = auth.uid()) OR ( SELECT has_org_role(schedule_events.organization_id, ''manager''::text) AS has_org_role)))\n'
+  '  USING (( SELECT is_org_member(schedule_events.organization_id) AS is_org_member) AND ((created_by = auth.uid()) OR ( SELECT has_org_role(schedule_events.organization_id, ''manager''::text) AS has_org_role)) AND ( SELECT has_permission(schedule_events.organization_id, ''schedule:manage''::text) AS has_permission) AND ( SELECT module_enabled(schedule_events.organization_id, ''schedule''::text) AS module_enabled))\n'
   '  CHECK -\n'
   'schedule_events_insert a {authenticated}\n'
   '  USING -\n'
-  '  CHECK (( SELECT is_org_member(schedule_events.organization_id) AS is_org_member) AND (created_by = auth.uid()) AND ((warehouse_id IS NULL) OR user_can_access_warehouse(auth.uid(), warehouse_id, ''write''::text)) AND ( SELECT warehouse_in_org(schedule_events.bundle_warehouse_id, schedule_events.organization_id) AS warehouse_in_org) AND ( SELECT order_request_in_org(schedule_events.order_request_id, schedule_events.organization_id) AS order_request_in_org))\n'
+  '  CHECK (( SELECT is_org_member(schedule_events.organization_id) AS is_org_member) AND (created_by = auth.uid()) AND ((warehouse_id IS NULL) OR user_can_access_warehouse(auth.uid(), warehouse_id, ''write''::text)) AND ( SELECT warehouse_in_org(schedule_events.bundle_warehouse_id, schedule_events.organization_id) AS warehouse_in_org) AND ( SELECT order_request_in_org(schedule_events.order_request_id, schedule_events.organization_id) AS order_request_in_org) AND ( SELECT bundle_in_org(schedule_events.bundle_id, schedule_events.organization_id) AS bundle_in_org) AND ( SELECT has_permission(schedule_events.organization_id, ''schedule:manage''::text) AS has_permission) AND ( SELECT module_enabled(schedule_events.organization_id, ''schedule''::text) AS module_enabled))\n'
   'schedule_events_select r {authenticated}\n'
   '  USING (( SELECT is_org_member(schedule_events.organization_id) AS is_org_member) AND ((warehouse_id IS NULL) OR user_can_access_warehouse(auth.uid(), warehouse_id, ''read''::text)))\n'
   '  CHECK -\n'
   'schedule_events_update w {authenticated}\n'
-  '  USING (( SELECT is_org_member(schedule_events.organization_id) AS is_org_member) AND ((created_by = auth.uid()) OR ( SELECT has_org_role(schedule_events.organization_id, ''manager''::text) AS has_org_role)))\n'
-  '  CHECK (( SELECT is_org_member(schedule_events.organization_id) AS is_org_member) AND ((created_by = auth.uid()) OR ( SELECT has_org_role(schedule_events.organization_id, ''manager''::text) AS has_org_role)) AND ( SELECT warehouse_in_org(schedule_events.warehouse_id, schedule_events.organization_id) AS warehouse_in_org) AND ( SELECT warehouse_in_org(schedule_events.bundle_warehouse_id, schedule_events.organization_id) AS warehouse_in_org) AND ( SELECT order_request_in_org(schedule_events.order_request_id, schedule_events.organization_id) AS order_request_in_org))',
-  'G8: the four schedule_events policies are exactly 0384''s: insert and update WITH CHECK gain order_request_in_org and keep every earlier term; USING, select and delete unchanged');
+  '  USING (( SELECT is_org_member(schedule_events.organization_id) AS is_org_member) AND ((created_by = auth.uid()) OR ( SELECT has_org_role(schedule_events.organization_id, ''manager''::text) AS has_org_role)) AND ( SELECT has_permission(schedule_events.organization_id, ''schedule:manage''::text) AS has_permission) AND ( SELECT module_enabled(schedule_events.organization_id, ''schedule''::text) AS module_enabled))\n'
+  '  CHECK (( SELECT is_org_member(schedule_events.organization_id) AS is_org_member) AND ((created_by = auth.uid()) OR ( SELECT has_org_role(schedule_events.organization_id, ''manager''::text) AS has_org_role)) AND ( SELECT warehouse_in_org(schedule_events.warehouse_id, schedule_events.organization_id) AS warehouse_in_org) AND ( SELECT warehouse_in_org(schedule_events.bundle_warehouse_id, schedule_events.organization_id) AS warehouse_in_org) AND ( SELECT order_request_in_org(schedule_events.order_request_id, schedule_events.organization_id) AS order_request_in_org) AND ( SELECT bundle_in_org(schedule_events.bundle_id, schedule_events.organization_id) AS bundle_in_org) AND ( SELECT has_permission(schedule_events.organization_id, ''schedule:manage''::text) AS has_permission) AND ( SELECT module_enabled(schedule_events.organization_id, ''schedule''::text) AS module_enabled))',
+  -- Re-pinned by 0451 (docket S3c): insert, update (USING and WITH CHECK) and
+  -- delete ask has_permission(schedule:manage) and module_enabled(schedule);
+  -- insert and update WITH CHECK also ask bundle_in_org. Every 0384 term is
+  -- kept; select is unchanged. Measured on the local stack.
+  'G8: the four schedule_events policies are 0384''s with 0451''s terms: every earlier term kept, schedule:manage and the module on insert, update and delete, the kit on insert and update');
 select is(
   (select string_agg(c || ':' || coalesce(col_description('public.schedule_events'::regclass, a.attnum) ~ 'server', false)::text, ',' order by c)
      from unnest(array['assigned_user_id', 'order_request_id']) c

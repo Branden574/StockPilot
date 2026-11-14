@@ -1178,7 +1178,12 @@ select is(
   -- from production's policy text plus that term (the deparsed shape the 0395
   -- suite H1 predicts) with the local authenticated role's OID (16444, the OID
   -- that reproduces the old pin from production's text); verify on the stack.
-  'order_requests + schedule_events policies|87377ff4c4e4c700e7598e50fadb59c6|8\n'
+  -- Re-pinned by 0451 (docket S3c; was 87377ff4c4e4c700e7598e50fadb59c6|8):
+  -- schedule_events_insert, _update (USING and WITH CHECK) and _delete ask
+  -- has_permission(schedule:manage) and module_enabled(schedule), and insert
+  -- and update WITH CHECK ask bundle_in_org. The order_requests policies are
+  -- unchanged. Measured on the local stack.
+  'order_requests + schedule_events policies|5605f4bac66e5f3ca338556851a9ec77|8\n'
   'PO triggers|b8cf49572ed3d9556416e8d4b89a7094|4\n'
   'purchase_orders + purchase_order_items + idempotency_keys policies|4d66c95449ef3c5127f8d19974023c70|6',
   'Z2: ledger.*, the 0380/0381/0382 objects, the order, schedule, PO and idempotency-key policies, the PO triggers and the 0384 column grants are the ones F2-5 was proven against');
