@@ -74,8 +74,7 @@ function occRow(o: Record<string, unknown> = {}) {
   };
 }
 
-/** A row as a viewer reads it under 0460: the recount pointer is there, the
- *  count embeds are not (she may not read cycle counts). */
+/** A row whose count embeds the caller cannot read: the recount pointer is there, the embeds are null. */
 const viewerRecountRow = (o: Record<string, unknown> = {}) =>
   occRow({ recount_cycle_count_id: CC, recount: null, ...o });
 
@@ -265,7 +264,7 @@ describe('with exception_recount_facts in the database', () => {
       'exception_occurrence_events.select': {
         data: [
           event('e1', 'raised', null, null),
-          // The embeds a viewer reads under 0460: none.
+          // No count embed is readable here.
           event('e2', 'recount_linked', CC_OLD, null),
           event('e3', 'recount_closed', CC_OLD, null),
           event('e4', 'recount_linked', CC, null),
@@ -323,6 +322,71 @@ describe('with exception_recount_facts in the database', () => {
     await svc.list();
     const asked = stub.rpcCalls.map((c) => (c.args as { p_exception_ids: string[] }).p_exception_ids.length);
     expect(asked).toEqual([500, 1]);
+  });
+
+  // 501 rows on one open recount, with their embeds, for the later-batch rows.
+  const batchIds = Array.from({ length: 501 }, (_, i) => `${String(i).padStart(8, '0')}-1111-4111-8111-111111111111`);
+  const batchRows = () =>
+    servedLikePostgrest(
+      batchIds.map((id, i) =>
+        occRow({
+          id,
+          occurrence_number: i + 1,
+          recount_cycle_count_id: CC,
+          recount: { id: CC, count_number: 31, status: 'in_progress', completed_at: null },
+        }),
+      ),
+    );
+  /** The first batch answers facts that differ from the direct reads; the
+   *  second batch gives `second`. */
+  const firstThen = (second: unknown) => {
+    let calls = 0;
+    return () =>
+      (++calls === 1
+        ? factsAnswer([fact({ exception_id: batchIds[0]!, count_number: 99, line_total: 7, line_counted: 3 })])
+        : second) as never;
+  };
+
+  it('PGRST202 naming the function in a later batch: the first batch is dropped and every row takes the direct read', async () => {
+    const { svc, stub } = svcFor(
+      {
+        'exception_occurrences.select': batchRows(),
+        'rpc:exception_recount_facts': firstThen(MISSING_PGRST202),
+        'cycle_counts.select': servedLikePostgrest([{ id: CC, organization_id: ORG, status: 'in_progress' }]),
+        'cycle_count_lines.select': progress(5, 2),
+      },
+      'manager',
+    );
+    const res = await svc.list();
+    expect(stub.rpcCalls.map((c) => (c.args as { p_exception_ids: string[] }).p_exception_ids.length)).toEqual([500, 1]);
+    expect(res.occurrences).toHaveLength(501);
+    for (const o of res.occurrences) {
+      expect(o.recount).toEqual({
+        cycleCountId: CC,
+        countNumber: 31,
+        status: 'in_progress',
+        completedAt: null,
+        outcome: { kind: 'in_progress', counted: 2, total: 5 },
+      });
+    }
+    expect(stub.fromCalls).toContain('cycle_counts');
+    expect(stub.fromCalls).toContain('cycle_count_lines');
+  });
+
+  it('another error in a later batch fails the whole list: no partly filled list', async () => {
+    const { svc, stub } = svcFor(
+      {
+        'exception_occurrences.select': batchRows(),
+        'rpc:exception_recount_facts': firstThen({
+          data: null,
+          error: { code: '57014', message: 'canceling statement due to statement timeout' },
+        }),
+      },
+      'manager',
+    );
+    await expect(svc.list()).rejects.toMatchObject({ code: 'internal_error' });
+    expect(stub.rpcCalls).toHaveLength(2);
+    expect(stub.fromCalls).not.toContain('cycle_counts');
   });
 });
 
