@@ -45,6 +45,16 @@ vi.mock('@/lib/dashboard/request-cache', () => ({
     throw new Error('a staff member never reads the warehouse list');
   }),
 }));
+// assertSessionAccess reads a no-warehouse count's line warehouses with the
+// service role (S48: row level security shows a member only their own
+// warehouses' lines). The count's one line is an item with no warehouse.
+vi.mock('@/lib/supabase/admin', async () => {
+  const { makeSupabaseStub: stub } = await import('@/test/supabase-mock');
+  const admin = stub({
+    'cycle_count_lines.select': { data: [{ warehouse_id: null }], error: null },
+  });
+  return { createAdminClient: vi.fn(() => admin.client) };
+});
 
 const CC = '11111111-1111-4111-8111-111111111111';
 const LINE = '22222222-2222-4222-8222-222222222222';

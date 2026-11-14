@@ -17,6 +17,7 @@ import {
 import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess } from '@/lib/auth/warehouse';
 import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
 import { reportError } from '@/lib/error-reporter';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
 import { dispatchEvent } from './integration-events';
@@ -449,7 +450,11 @@ export class CycleCountsService {
    *
    * The rule is decided HERE, from getWarehouseAccess, and handed to the
    * SECURITY INVOKER RPC as a narrowing list, so it can only ever show less
-   * than org-member RLS allows, never more. A member with no writable
+   * than the database allows, never more. Since S48 the database applies the
+   * warehouse rule itself (cycle_counts_select: a staff member's or viewer's
+   * readable warehouses, every warehouse for managers and all-warehouse
+   * members, a no-warehouse count when assigned to them or touching their
+   * warehouses); this list stays narrower (writable warehouses). A member with no writable
    * warehouse sees no counts (the pre-0358 rule, kept). An access read that
    * FAILED is an error, not an empty history: "No cycle counts yet" would be a
    * wrong answer from a read that did not happen.
@@ -1511,26 +1516,43 @@ export class CycleCountsService {
     // items (start() forces the header null in those cases). The header
     // carries no warehouse to gate on, so fall back to gating on every
     // warehouse the count's LINES actually touch — mirroring start()'s
-    // per-warehouse write gate. Without this a warehouse-scoped staffer
-    // could record/clear lines for a warehouse they have no write access
-    // to: the cycle_count_lines RLS is org-wide, not warehouse-scoped, so
-    // the DB won't catch it. Items with no warehouse require full
-    // (manager+) access, same as start().
+    // per-warehouse write gate. The whole count is refused unless the caller
+    // may write every one of those warehouses. Items with no warehouse
+    // require full (manager+) access, same as start().
+    //
+    // READ PAST RLS ON PURPOSE (S48): cycle_count_lines_select shows a
+    // member only the lines of their own warehouses (and of items they may
+    // open), so a read under RLS would find only the caller's warehouses and
+    // the whole-count refusal would silently become a per-line one. The
+    // header read above, under RLS, has already proved the count is in the
+    // caller's organization and readable to them; the line warehouses are
+    // then read with the service role, by count id, for this decision only.
+    // A failed read throws internal_error and never passes.
     //
     // PAGINATED ON PURPOSE (SP-062): a bare select here is silently clamped
     // to `[api] max_rows = 1000` (pattern #3), which for a >1000-line count
     // turned this gate into "evaluate an ARBITRARY 1000-row subset". If the
     // other warehouse's lines happened to sit past the cap, the gate saw only
-    // the caller's own warehouse, passed, and the org-wide line RLS let the
-    // write through — the exact hole the paragraph above says this code
-    // closes. An authorization check may never read a truncated input.
-    const lineRows = await fetchAllRows<{ warehouse_id: string | null }>((from, to) =>
-      this.ctx.supabase
-        .from('cycle_count_lines')
-        .select('warehouse_id')
-        .eq('cycle_count_id', cycleCountId)
-        .order('id', { ascending: true })
-        .range(from, to),
+    // the caller's own warehouse and passed. An authorization check may never
+    // read a truncated input.
+    let admin: ReturnType<typeof createAdminClient>;
+    try {
+      admin = createAdminClient();
+    } catch (e) {
+      throw new ServiceError(
+        'internal_error',
+        `cycle count line warehouses unreadable: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    const lineRows = await fetchAllRows<{ warehouse_id: string | null }>(
+      (from, to) =>
+        admin
+          .from('cycle_count_lines')
+          .select('warehouse_id')
+          .eq('cycle_count_id', cycleCountId)
+          .order('id', { ascending: true })
+          .range(from, to),
+      { requireList: 'cycle_count_lines' },
     );
     const distinctWh = new Set<string>();
     let hasNullWh = false;

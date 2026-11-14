@@ -420,10 +420,12 @@ export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Perm
   'activity_logs:read',
   'billing:read',
   // Auditor read surfaces (mig 0279) — RLS read floors verified per table:
-  // cycle_counts / bundles / returns SELECT policies allow any active org
-  // member; schedule allows org members (with a warehouse condition);
-  // rentals reads are warehouse-scoped exactly like items:read. The app-layer
-  // gate is therefore the sole restriction, so a grant is fully effective.
+  // bundles / returns SELECT policies allow any active org member; schedule
+  // allows org members (with a warehouse condition); rentals and (since S48)
+  // cycle_counts reads are warehouse-scoped like items:read, so an auditor
+  // who needs every warehouse gets the all-warehouses flag. Within the
+  // member's warehouses the app-layer gate is the sole restriction, so a
+  // grant is fully effective there.
   'cycle_counts:read',
   'schedule:read',
   'bundles:read',

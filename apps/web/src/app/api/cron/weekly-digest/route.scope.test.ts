@@ -15,8 +15,8 @@ import { makeSupabaseStub, type MockCall, type QueryResult } from '@/test/supaba
  * service (only the email renderer and Resend are stubbed) against a service
  * role that answers every row, and checks what each recipient was sent
  * against what the SELECT policies would let them read
- * (inventory_items_select, purchase_orders_select, warehouses_select; see
- * services/digest.ts).
+ * (inventory_items_select, purchase_orders_select, warehouses_select,
+ * cycle_counts_select and cycle_count_lines_select; see services/digest.ts).
  */
 
 vi.mock('@/lib/env', () => ({
@@ -55,7 +55,13 @@ import { GET } from './route';
 interface Payload {
   lowStock: Array<{ warehouseName: string; items: Array<{ id: string }> }>;
   openPos: Array<{ id: string }>;
-  openCycleCounts: Array<{ id: string; scopeLabel: string; warehouseName: string | null }>;
+  openCycleCounts: Array<{
+    id: string;
+    scopeLabel: string;
+    warehouseName: string | null;
+    totalLines: number;
+    countedLines: number;
+  }>;
 }
 
 const ORG = 'org-1';
@@ -112,6 +118,7 @@ const COUNTS = [
     started_at: '2026-10-01T00:00:00Z',
     warehouse_id: 'wh-a',
     scope: 'warehouse',
+    assigned_to: null,
     warehouse: { name: 'North DC' },
   },
   {
@@ -120,6 +127,7 @@ const COUNTS = [
     started_at: '2026-10-02T00:00:00Z',
     warehouse_id: 'wh-b',
     scope: 'warehouse',
+    assigned_to: null,
     warehouse: { name: 'South DC' },
   },
   {
@@ -128,8 +136,41 @@ const COUNTS = [
     started_at: '2026-10-03T00:00:00Z',
     warehouse_id: null,
     scope: 'all',
+    assigned_to: null,
     warehouse: null,
   },
+  // A selection with no header warehouse, assigned to the North staff member,
+  // whose only line is at South DC.
+  {
+    id: 'cc-mine-b',
+    count_number: 4,
+    started_at: '2026-10-04T00:00:00Z',
+    warehouse_id: null,
+    scope: 'selection',
+    assigned_to: 'staff-a',
+    warehouse: null,
+  },
+];
+// Each count's lines: the item, and whether it was counted.
+const itemFor = (id: string) => ITEMS.find((i) => i.id === id)!;
+const line = (cycle_count_id: string, itemId: string, counted: boolean) => {
+  const it = itemFor(itemId);
+  return {
+    cycle_count_id,
+    warehouse_id: it.warehouse_id,
+    counted_quantity: counted ? 1 : null,
+    item: { warehouse_id: it.warehouse_id, charter_id: it.charter_id, category_id: it.category_id },
+  };
+};
+const LINES = [
+  line('cc-a', 'a-generic', true),
+  line('cc-a', 'a-ch1', false),
+  line('cc-a', 'a-ch2', true),
+  line('cc-b', 'b-books', true),
+  line('cc-b', 'b-sports', false),
+  line('cc-all', 'a-generic', true),
+  line('cc-all', 'b-books', true),
+  line('cc-mine-b', 'b-sports', false),
 ];
 
 // ── The recipients ───────────────────────────────────────────────────
@@ -202,12 +243,7 @@ function orgStub(overrides: Record<string, QueryResult | ((call: MockCall) => Qu
     'purchase_orders.select': rows(POS),
     'cycle_counts.select': rows(COUNTS),
     'cycle_count_lines.select': (call) =>
-      rows(
-        inValues(call, 'cycle_count_id').map((id) => ({
-          cycle_count_id: id,
-          counted_quantity: null,
-        })),
-      ),
+      rows(LINES.filter((l) => inValues(call, 'cycle_count_id').includes(l.cycle_count_id))),
     'user_warehouse_assignments.select': (call) =>
       rows(WAREHOUSE_ASSIGNMENTS.filter((r) => inValues(call, 'user_id').includes(r.user_id))),
     'user_category_assignments.select': (call) =>
@@ -234,6 +270,7 @@ function sentTo(name: string) {
     warehouses: p.lowStock.map((g) => g.warehouseName),
     pos: p.openPos.map((x) => x.id).sort(),
     counts: p.openCycleCounts.map((c) => `${c.id}: ${c.scopeLabel}`),
+    countLines: p.openCycleCounts.map((c) => `${c.id} ${c.countedLines}/${c.totalLines}`),
   };
 }
 
@@ -260,7 +297,14 @@ describe('GET /api/cron/weekly-digest — what each recipient is sent', () => {
       ]);
       expect(got.warehouses).toEqual(['North DC', 'South DC']);
       expect(got.pos).toEqual(['po-no-destination', 'po-to-a', 'po-to-b', 'po-to-org-level']);
-      expect(got.counts).toEqual(['cc-a: North DC', 'cc-b: South DC', 'cc-all: All warehouses']);
+      expect(got.counts).toEqual([
+        'cc-a: North DC',
+        'cc-b: South DC',
+        'cc-all: All warehouses',
+        'cc-mine-b: Selected items',
+      ]);
+      // Every line of every count.
+      expect(got.countLines).toEqual(['cc-a 2/3', 'cc-b 1/2', 'cc-all 2/2', 'cc-mine-b 0/1']);
     }
   });
 
@@ -274,13 +318,66 @@ describe('GET /api/cron/weekly-digest — what each recipient is sent', () => {
     expect(got.warehouses).toEqual(['North DC']);
     // POs into North DC, plus the two no purchase order can be scoped by.
     expect(got.pos).toEqual(['po-no-destination', 'po-to-a', 'po-to-org-level']);
-    // Every member reads every cycle count, but a warehouse's name only
-    // where they are assigned (warehouses_select).
+    // Cycle counts follow her warehouses (cycle_counts_select): North DC's
+    // count, the no-warehouse count with a North DC line, and the one
+    // assigned to her; not South DC's.
+    expect(got.counts).toEqual([
+      'cc-a: North DC',
+      'cc-all: All warehouses',
+      'cc-mine-b: Selected items',
+    ]);
+    // Totals count only the lines she may read (cycle_count_lines_select):
+    // North DC lines of items she can open (generic and ch-1, not ch-2); none
+    // of her own count's South DC line.
+    expect(got.countLines).toEqual(['cc-a 1/2', 'cc-all 1/1', 'cc-mine-b 0/0']);
+  });
+
+  it('sends a viewer the counts of her warehouse with only the lines of the categories she may read', async () => {
+    adminHolder.client = orgStub().client;
+    await GET(request());
+
+    expect(sentTo('Vic Books').counts).toEqual([
+      'cc-b: South DC',
+      'cc-all: All warehouses',
+      'cc-mine-b: Selected items',
+    ]);
+    expect(sentTo('Vic Books').countLines).toEqual(['cc-b 1/1', 'cc-all 1/1', 'cc-mine-b 0/0']);
+    expect(sentTo('Val AllCats').countLines).toEqual(['cc-b 1/2', 'cc-all 1/1', 'cc-mine-b 0/1']);
+  });
+
+  it('reads the all-warehouses flag at send time: every count, lines still by assignment', async () => {
+    const stub = orgStub({
+      'organization_members.select.maybeSingle': (call) => {
+        const userId = String(eqValue(call, 'user_id'));
+        return rows([
+          {
+            user_id: userId,
+            accepted_at: '2026-01-01T00:00:00Z',
+            role: MEMBERS[userId]!.role,
+            all_warehouses: userId === 'staff-a',
+          },
+        ]);
+      },
+    });
+    adminHolder.client = stub.client;
+    await GET(request());
+
+    // The re-read before each send asks for the flag.
+    const membershipReads = stub.chainArgsAll.get('organization_members.select') ?? [];
+    expect(
+      membershipReads.some((args) => args.some((a) => String(a[0]).includes('all_warehouses'))),
+    ).toBe(true);
+    const got = sentTo('Sam StaffA');
     expect(got.counts).toEqual([
       'cc-a: North DC',
       'cc-b: Warehouse unavailable',
       'cc-all: All warehouses',
+      'cc-mine-b: Selected items',
     ]);
+    // Lines follow her assignment rows (North DC, ch-1), as my_warehouse_ids.
+    expect(got.countLines).toEqual(['cc-a 1/2', 'cc-b 0/0', 'cc-all 1/1', 'cc-mine-b 0/0']);
+    // Without the flag in the answer, she reads as not having it.
+    expect(sentTo('Nia NoPo').counts).toEqual(['cc-a: North DC', 'cc-all: All warehouses']);
   });
 
   it('sends a category-limited viewer only those categories, and an unlimited viewer every category', async () => {

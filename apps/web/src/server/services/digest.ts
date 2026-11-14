@@ -152,7 +152,17 @@ interface DigestSourcePo extends DigestOpenPo {
   destinationWarehouseId: string | null | undefined;
 }
 
-/** An in-progress cycle count, before its warehouse name is checked. */
+/** One line of an open cycle count: what decides who may read it. */
+interface DigestSourceCountLine {
+  warehouseId: string | null;
+  counted: boolean;
+  /** The line's item as inventory_items_select reads it; null when the read
+   *  returned no item row. */
+  item: { warehouseId: string | null; charterId: string | null; categoryId: string | null } | null;
+}
+
+/** An in-progress cycle count, before it and its lines are checked for one
+ *  recipient. */
 interface DigestSourceCount {
   id: string;
   countNumber: number | null;
@@ -160,8 +170,8 @@ interface DigestSourceCount {
   warehouseName: string | null;
   scope: string | null;
   startedAt: string;
-  totalLines: number;
-  countedLines: number;
+  assignedTo: string | null;
+  lines: DigestSourceCountLine[];
 }
 
 /**
@@ -230,8 +240,22 @@ export async function getDigestSource(
 //   warehouses_select: has_org_role(org, 'manager') OR
 //     user_can_access_warehouse (staff/viewer with an assignment there). The
 //     cycle-count section shows a warehouse's name only to its readers.
-//   cycle_counts_select, cycle_count_lines_select, suppliers_select and
-//     locations_select: any member, so counts and supplier names need no check.
+//   cycle_counts_select (S48):
+//     organization_id IN rls_member_org_ids() AND (
+//         organization_id IN rls_all_warehouses_org_ids()
+//           -- owner/admin/manager, or the all_warehouses flag (0280)
+//       OR warehouse_id IN my_warehouse_ids()
+//       OR (warehouse_id IS NULL AND (assigned_to = auth.uid()
+//           OR id IN rls_cc_unheaded_count_ids())) )
+//           -- a no-warehouse count with a line in one of my warehouses
+//   cycle_count_lines_select (S48): the count is readable AND (
+//         its organization IN rls_manager_org_ids()   -- owner/admin/manager
+//       OR (warehouse_id IN my_warehouse_ids() AND the item is readable,
+//           inventory_items_select nested) )
+//     A line with no warehouse: managers only. The all_warehouses flag
+//     reaches lines through its assignment rows, as my_warehouse_ids does.
+//   suppliers_select and locations_select: any member, so supplier names need
+//     no check.
 //
 // If one of those policies or helpers changes, change its predicate here in
 // the same pull request: supabase/tests/digest_reader_policies.test.sql pins
@@ -255,8 +279,12 @@ export interface DigestReaderAssignment {
 
 /** What one recipient may read in one org. */
 export interface DigestReader {
+  /** The recipient's user id (a count assigned to them). */
+  userId: string;
   /** organization_members.role. */
   role: string;
+  /** organization_members.all_warehouses (0280): every warehouse's counts. */
+  allWarehouses: boolean;
   /** The recipient's user_warehouse_assignments rows in the org. */
   assignments: readonly DigestReaderAssignment[];
   /** The categories a category-limited viewer may read; null = every one. */
@@ -366,11 +394,13 @@ export async function loadDigestReaderData(
   };
 }
 
-/** The reader of one recipient, whose membership role is `role`. */
+/** The reader of one recipient, whose membership role is `role` and whose
+ *  all-warehouses flag is `allWarehouses` (a missing flag reads as false). */
 export function digestReaderFor(
   data: DigestReaderData,
   userId: string,
   role: string,
+  allWarehouses = false,
 ): DigestReader {
   const assigned = data.categories.get(userId);
   const categoryIds = ALL_CATEGORIES_ROLES.has(role)
@@ -385,7 +415,9 @@ export function digestReaderFor(
     role === 'owner' ||
     (data.userPoRead.get(userId) ?? data.rolePoRead.get(role) ?? data.defaultPoReadRoles.has(role));
   return {
+    userId,
     role,
+    allWarehouses: allWarehouses === true,
     assignments: data.assignments.get(userId) ?? [],
     categoryIds,
     canReadPurchaseOrders,
@@ -393,7 +425,10 @@ export function digestReaderFor(
 }
 
 /** inventory_items_select for one item. */
-function canReadItem(reader: DigestReader | null, item: DigestSourceItem): boolean {
+function canReadItem(
+  reader: DigestReader | null,
+  item: Pick<DigestSourceItem, 'warehouseId' | 'charterId' | 'categoryId'>,
+): boolean {
   // No warehouse: no arm of the policy can match, so no member reads it.
   if (item.warehouseId === null) return false;
   if (reader === null) return true;
@@ -426,6 +461,27 @@ function canReadWarehouse(reader: DigestReader | null, warehouseId: string): boo
   if (reader === null) return true;
   if (ALL_WAREHOUSES_ROLES.has(reader.role)) return true;
   return canReachAssignedWarehouse(reader, warehouseId);
+}
+
+/** cycle_counts_select for one open count. */
+function canReadCount(reader: DigestReader | null, cc: DigestSourceCount): boolean {
+  if (reader === null) return true;
+  if (ALL_WAREHOUSES_ROLES.has(reader.role) || reader.allWarehouses) return true;
+  if (cc.warehouseId !== null) return canReachAssignedWarehouse(reader, cc.warehouseId);
+  if (cc.assignedTo !== null && cc.assignedTo === reader.userId) return true;
+  return cc.lines.some(
+    (l) => l.warehouseId !== null && canReachAssignedWarehouse(reader, l.warehouseId),
+  );
+}
+
+/** cycle_count_lines_select for one line of a count the reader may read. */
+function canReadCountLine(reader: DigestReader | null, line: DigestSourceCountLine): boolean {
+  if (reader === null) return true;
+  if (ALL_WAREHOUSES_ROLES.has(reader.role)) return true;
+  if (line.warehouseId === null || !canReachAssignedWarehouse(reader, line.warehouseId)) {
+    return false;
+  }
+  return line.item !== null && canReadItem(reader, line.item);
 }
 
 /** my_warehouse_ids() / user_can_access_warehouse() for staff and viewers. */
@@ -478,32 +534,33 @@ export function buildDigestPayload(
       status: po.status,
       isOverdue: po.isOverdue,
     })),
-    openCycleCounts: source.openCycleCounts.map((cc) => {
-      const warehouseName =
-        cc.warehouseId !== null && canReadWarehouse(reader, cc.warehouseId)
-          ? cc.warehouseName
-          : null;
-      return {
-        id: cc.id,
-        countNumber: cc.countNumber,
-        scopeLabel: cycleCountScopeLabel({
-          warehouseId: cc.warehouseId,
+    openCycleCounts: source.openCycleCounts
+      .filter((cc) => canReadCount(reader, cc))
+      .map((cc) => {
+        const warehouseName =
+          cc.warehouseId !== null && canReadWarehouse(reader, cc.warehouseId)
+            ? cc.warehouseName
+            : null;
+        // Totals from the lines this reader may read only.
+        const lines = cc.lines.filter((l) => canReadCountLine(reader, l));
+        return {
+          id: cc.id,
+          countNumber: cc.countNumber,
+          scopeLabel: cycleCountScopeLabel({
+            warehouseId: cc.warehouseId,
+            warehouseName,
+            scope: cc.scope,
+          }),
           warehouseName,
-          scope: cc.scope,
-        }),
-        warehouseName,
-        startedAt: cc.startedAt,
-        totalLines: cc.totalLines,
-        countedLines: cc.countedLines,
-      };
-    }),
+          startedAt: cc.startedAt,
+          totalLines: lines.length,
+          countedLines: lines.filter((l) => l.counted).length,
+        };
+      }),
   };
 }
 
-async function getLowStock(
-  supabase: SupabaseClient,
-  orgId: string,
-): Promise<DigestSourceItem[]> {
+async function getLowStock(supabase: SupabaseClient, orgId: string): Promise<DigestSourceItem[]> {
   type Row = {
     id: string;
     sku: string;
@@ -658,12 +715,13 @@ async function getOpenCycleCounts(
     started_at: string;
     warehouse_id: string | null;
     scope: string | null;
+    assigned_to: string | null;
     warehouse: { name: string } | { name: string }[] | null;
   }>((from, to) =>
     supabase
       .from('cycle_counts')
       .select(
-        'id, count_number, started_at, warehouse_id, scope, warehouse:warehouses!warehouse_id (name)',
+        'id, count_number, started_at, warehouse_id, scope, assigned_to, warehouse:warehouses!warehouse_id (name)',
       )
       .eq('organization_id', orgId)
       .eq('status', 'in_progress')
@@ -684,31 +742,59 @@ async function getOpenCycleCounts(
   // not unique, so range pages could repeat or skip lines (fetchAllRows needs
   // a stable key). Open counts have no cap, and one `.in()` past ~215 ids
   // fails.
-  type LineRow = { cycle_count_id: string; counted_quantity: number | null };
+  //
+  // Each line keeps its warehouse and its item's warehouse, charter and
+  // category: which lines (and so which totals) a recipient is sent is
+  // decided per recipient (canReadCountLine), and a no-warehouse count is
+  // read by a member with a line in their warehouses (canReadCount). An
+  // answer that is not a list is a failed read, never "no lines".
+  type ItemRow = {
+    warehouse_id: string | null;
+    charter_id: string | null;
+    category_id: string | null;
+  };
+  type LineRow = {
+    cycle_count_id: string;
+    warehouse_id: string | null;
+    counted_quantity: number | null;
+    item: ItemRow | ItemRow[] | null;
+  };
   const lines = await fetchAllRowsByIds<LineRow>(
     countIds,
     (batch) => (from, to) =>
       supabase
         .from('cycle_count_lines')
-        .select('cycle_count_id, counted_quantity')
+        .select(
+          'cycle_count_id, warehouse_id, counted_quantity, item:inventory_items!item_id (warehouse_id, charter_id, category_id)',
+        )
         .in('cycle_count_id', batch)
         .order('id', { ascending: true })
         .range(from, to),
+    { requireList: 'cycle_count_lines' },
   );
 
-  // Group line stats by cycle_count_id.
-  const statsMap = new Map<string, { total: number; counted: number }>();
-  for (const id of countIds) statsMap.set(id, { total: 0, counted: 0 });
+  // Group the lines by cycle_count_id.
+  const linesByCount = new Map<string, DigestSourceCountLine[]>();
+  for (const id of countIds) linesByCount.set(id, []);
   for (const line of lines) {
-    const stats = statsMap.get(line.cycle_count_id);
-    if (!stats) continue;
-    stats.total += 1;
-    if (line.counted_quantity != null) stats.counted += 1;
+    const list = linesByCount.get(line.cycle_count_id);
+    if (!list) continue;
+    const it = Array.isArray(line.item) ? (line.item[0] ?? null) : line.item;
+    list.push({
+      warehouseId: line.warehouse_id ?? null,
+      counted: line.counted_quantity != null,
+      item: it
+        ? {
+            warehouseId: it.warehouse_id ?? null,
+            charterId: it.charter_id ?? null,
+            categoryId: it.category_id ?? null,
+          }
+        : null,
+    });
   }
 
   return counts.map((row) => {
     const wh = Array.isArray(row.warehouse) ? row.warehouse[0] : row.warehouse;
-    const stats = statsMap.get(row.id) ?? { total: 0, counted: 0 };
     return {
       id: row.id,
       countNumber: row.count_number ?? null,
@@ -716,8 +802,8 @@ async function getOpenCycleCounts(
       warehouseName: wh?.name ?? null,
       scope: row.scope ?? null,
       startedAt: row.started_at,
-      totalLines: stats.total,
-      countedLines: stats.counted,
+      assignedTo: row.assigned_to ?? null,
+      lines: linesByCount.get(row.id) ?? [],
     };
   });
 }

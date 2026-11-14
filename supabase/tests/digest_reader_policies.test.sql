@@ -5,7 +5,8 @@
 -- with the service role, which bypasses row-level security. So it builds each
 -- recipient's email with a TypeScript reader that restates the policies below
 -- clause for clause (apps/web/src/server/services/digest.ts: canReadItem,
--- canReadPo, canReadWarehouse, digestReaderFor). If one of them changes and the
+-- canReadPo, canReadWarehouse, canReadCount, canReadCountLine,
+-- digestReaderFor). If one of them changes and the
 -- reader does not, the digest mails people rows the app would not show them, or
 -- leaves out rows it would. The hashes pin the definitions the reader was
 -- written against: these migrations and production were equal on 2026-10-05
@@ -14,7 +15,9 @@
 -- A SNAPSHOT, ON PURPOSE, like postgrest_embed_relationships.test.sql: the
 -- property is "the reader's input is still the database's truth", and a hash is
 -- the cheapest exact comparison. The "any member" policies are pinned too: if
--- counts, lines, suppliers or locations become scoped, the reader must learn it.
+-- suppliers or locations become scoped, the reader must learn it. Cycle counts
+-- and their lines follow the member's warehouses and items since S48
+-- (canReadCount, canReadCountLine).
 --
 -- IF THIS FAILS: read the new definition, change the reader in digest.ts (and
 -- route.scope.test.ts, digest.test.ts) to match in the same pull request, then
@@ -23,7 +26,7 @@
 --    where schemaname = 'public' and tablename = '<table>' and policyname = '<policy>';
 --   select md5(pg_get_functiondef('public.<function>(<argument types>)'::regprocedure));
 begin;
-select plan(19);
+select plan(23);
 
 -- ── SELECT policies ──────────────────────────────────────────────────
 select is(
@@ -47,14 +50,14 @@ select is(
 select is(
   (select md5(qual) from pg_policies
     where schemaname = 'public' and tablename = 'cycle_counts' and policyname = 'cycle_counts_select'),
-  'b3c4a78efa6f1987d04bbe80806f9272',
-  'cycle_counts_select still lets any member read every count'
+  '10215f87131fbf25047b3ae1dd946235',
+  'cycle_counts_select: every count for a manager or an all-warehouses member, else my warehouses'' counts and my no-warehouse counts (assigned to me or with a line in my warehouses); canReadCount restates it'
 );
 select is(
   (select md5(qual) from pg_policies
     where schemaname = 'public' and tablename = 'cycle_count_lines' and policyname = 'cycle_count_lines_select'),
-  'a3986e39d54097dc3292a7803342c22f',
-  'cycle_count_lines_select still lets any member read every line'
+  'dc2f09e85da25932a465423d87ffb2ae',
+  'cycle_count_lines_select: manager, or my warehouse and a readable item; canReadCountLine restates it'
 );
 select is(
   (select md5(qual) from pg_policies
@@ -129,6 +132,27 @@ select is(
   md5(pg_get_functiondef('public.account_is_disabled(uuid)'::regprocedure)),
   '0d0087a069f03aec32f9bf42793e7334',
   'account_is_disabled: disabled_at set'
+);
+-- S48: the helpers the two count policies call.
+select is(
+  md5(pg_get_functiondef('public.rls_member_org_ids()'::regprocedure)),
+  'cc660a641b075b6f3b07f9dbab04072b',
+  'rls_member_org_ids: accepted, unexpired, not disabled memberships'
+);
+select is(
+  md5(pg_get_functiondef('public.rls_manager_org_ids()'::regprocedure)),
+  '818639b69b9c9a37a0042a49f61cdbbf',
+  'rls_manager_org_ids: owner, admin or manager'
+);
+select is(
+  md5(pg_get_functiondef('public.rls_all_warehouses_org_ids()'::regprocedure)),
+  '15b163e6e4d0df41474bb50a72b79e0b',
+  'rls_all_warehouses_org_ids: owner, admin, manager or the all-warehouses flag'
+);
+select is(
+  md5(pg_get_functiondef('public.rls_cc_unheaded_count_ids()'::regprocedure)),
+  '3ac4f7f261cef29b4892f45eb6b55e33',
+  'rls_cc_unheaded_count_ids: no-warehouse counts with a line in one of my warehouses'
 );
 
 select * from finish();
