@@ -31,7 +31,7 @@
 -- Vault secret that is not a connector secret.
 --
 -- F.  The fixture is what the matrices assume.
--- S.  A connection's secret (S1 to S10).
+-- S.  A connection's secret (S1 to S11).
 -- M.  A mapping names a connection of its own organization (M1 to M4).
 -- L.  A sync log entry names a connection and a queued event of its own
 --     organization (L1 to L3).
@@ -49,7 +49,7 @@
 
 begin;
 
-select plan(25);
+select plan(26);
 
 \set orgA     '\'04650000-0000-0000-0000-00000000000a\''
 \set orgB     '\'04650000-0000-0000-0000-00000000000b\''
@@ -414,6 +414,39 @@ select is(
   || ' / 42501:-:permission denied for function connection_secret_is_own'
   || ' / v:true',
   'S10: no member calls the Vault reads or the stored-secret check; a member of A reads its connection''s secret_id handle (disconnect, labels and the Intacct import read it)');
+
+-- The token refresh (drainer, cron drain-outbox and Intacct import), as the
+-- service role: read the row's secret, put the refreshed secret under
+-- 'connector:<connection id>', and write the id back when it changed. For a
+-- connection whose live secret carries 'connector:<organization id>:<provider>',
+-- the put creates the secret named for the connection and the row moves to it.
+create function public.b465_refresh(p_conn uuid) returns text
+language plpgsql security invoker set search_path = public as $$
+declare v_old uuid; v_new uuid; v_s jsonb;
+begin
+  select secret_id into v_old from public.org_connections where id = p_conn;
+  v_s := public.connector_secret_get(v_old);
+  if v_s is null then
+    return 'connector secret not found';
+  end if;
+  v_new := public.connector_secret_put(v_s || '{"accessToken":"b465-rotated-a2"}'::jsonb, 'connector:' || p_conn::text);
+  if v_new is distinct from v_old then
+    update public.org_connections set secret_id = v_new, updated_at = now() where id = p_conn;
+  end if;
+  return 'new_is_old=' || (v_new = v_old)::text
+      || ' row_names_new=' || (select (c.secret_id = v_new)::text from public.org_connections c where c.id = p_conn)
+      || ' new_name_is_connection=' || (select (s.name = 'connector:' || p_conn::text)::text from vault.secrets s where s.id = v_new)
+      || ' new_reads=' || (public.connector_secret_get(v_new) ->> 'accessToken' = 'b465-rotated-a2')::text
+      || ' old_named=' || (select count(*)::text from public.org_connections c where c.secret_id = v_old);
+end $$;
+revoke all on function public.b465_refresh(uuid) from public, anon, authenticated;
+grant execute on function public.b465_refresh(uuid) to service_role;
+select is(
+  pg_temp.val('service_role', null, format('select public.b465_refresh(%L)', :connA2),
+              format($q$update public.org_connections set secret_id = %L, status = 'active' where id = %L$q$, pg_temp.fx('secA2'), :connA2)),
+  'v:new_is_old=false row_names_new=true new_name_is_connection=true new_reads=true old_named=0',
+  'S11: a token refresh as the service role moves a connection from its organization-and-provider secret to the secret named for the connection; the row reads the new secret through connector_secret_get and no connection names the old one');
+drop function public.b465_refresh(uuid);
 
 -- ══ M. Mappings ═══════════════════════════════════════════════════════════
 select is(
