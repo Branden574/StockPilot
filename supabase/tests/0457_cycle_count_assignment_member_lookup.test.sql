@@ -26,6 +26,8 @@
 --   exp     an "act as" seat in organization A (an owner row) that expired
 --   pend    invited to organization A as a manager, not yet accepted
 --   nobody  signed in, a member of no organization
+--   seat    a live "act as" seat in organization A (an owner row that
+--           expires in 30 minutes)
 -- Counts of organization A: cUn (in progress, no assignee), cAsg (in
 -- progress, assigned to asg), cDone (completed, assigned to asg). cZ is an
 -- in-progress count of organization Z with no assignee. cRnd is an id no
@@ -39,7 +41,10 @@
 -- I.  Inside: the answers a member of the count's organization gets are
 --     pinned (success, the permission refusal, the status refusal with its
 --     detail, the assignee refusal, the reason refusals, not found for an
---     unknown id), and a signed-out call is refused first, as before.
+--     unknown id), and a signed-out call is refused first, as before. A
+--     live "act as" seat and the platform console's server client
+--     (service_role, no signed-in user) get the same answers with and
+--     without the S87 block (I9, I10).
 -- R.  One change per function: md5(prosrc) is the new body's, and taking
 --     the one block tagged "S87" out gives the body it replaced exactly.
 -- C.  The block comes before the row lock and before every status or
@@ -47,9 +52,8 @@
 -- P.  Each function keeps its posture (arguments, result, volatility,
 --     SECURITY DEFINER, search_path, owner, EXECUTE), and release's comment
 --     says the not-found rule in words.
--- M.  Mutation: each body with the S87 block taken out (inside an undone
---     attempt) gives callers outside the organization more than one answer,
---     so the O lines are not tautological.
+-- M.  Mutation: the O lines depend on the S87 block (each body re-created
+--     without it inside an undone attempt), so they are not tautological.
 -- Q.  The migration's preflight, replayed: it passes on the bodies it
 --     replaced and stops (55000) on any other body (the new ones).
 -- G.  No body names 40001 or 40P01.
@@ -63,7 +67,7 @@
 
 begin;
 
-select plan(22);
+select plan(24);
 
 \set orgA   '\'58700000-0000-0000-0000-00000000000a\''
 \set orgZ   '\'58700000-0000-0000-0000-00000000000b\''
@@ -77,6 +81,7 @@ select plan(22);
 \set exp    '\'58700000-0000-0000-0000-0000000000b4\''
 \set pend   '\'58700000-0000-0000-0000-0000000000b5\''
 \set nobody '\'58700000-0000-0000-0000-0000000000c1\''
+\set seat   '\'58700000-0000-0000-0000-0000000000c2\''
 \set whA    '\'58700000-0000-0000-0000-0000000000d1\''
 \set whZ    '\'58700000-0000-0000-0000-0000000000d2\''
 \set cUn    '\'58700000-0000-0000-0000-000000000101\''
@@ -96,7 +101,8 @@ insert into auth.users (id, email, raw_user_meta_data) values
   (:dis,    's87-dis@s87.test',    '{}'::jsonb),
   (:exp,    's87-exp@s87.test',    '{}'::jsonb),
   (:pend,   's87-pend@s87.test',   '{}'::jsonb),
-  (:nobody, 's87-nobody@s87.test', '{}'::jsonb)
+  (:nobody, 's87-nobody@s87.test', '{}'::jsonb),
+  (:seat,   's87-seat@s87.test',   '{}'::jsonb)
   on conflict (id) do nothing;
 -- An org insert enables the default modules (cycle counts among them).
 insert into public.organizations (id, name, slug) values
@@ -111,6 +117,7 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgA, :dis,  'manager', now(), null),
   (:orgA, :exp,  'owner',   now(), now() - interval '1 hour'),
   (:orgA, :pend, 'manager', null,  null),
+  (:orgA, :seat, 'owner',   now(), now() + interval '30 minutes'),
   (:orgZ, :outZ, 'manager', now(), null),
   (:orgZ, :rmv,  'staff',   now(), null);
 insert into public.warehouses (id, organization_id, name, code, status) values
@@ -143,7 +150,7 @@ reset role;
 create temp table persona (who text primary key, id uuid);
 insert into persona (who, id) values
   ('mgr', :mgr), ('asg', :asg), ('stf', :stf), ('vwr', :vwr), ('outZ', :outZ), ('rmv', :rmv),
-  ('dis', :dis), ('exp', :exp), ('pend', :pend), ('nobody', :nobody);
+  ('dis', :dis), ('exp', :exp), ('pend', :pend), ('nobody', :nobody), ('seat', :seat);
 create temp table cc (label text primary key, id uuid);
 insert into cc (label, id) values
   ('cUn', :cUn), ('cAsg', :cAsg), ('cDone', :cDone), ('cZ', :cZ), ('cRnd', :cRnd);
@@ -155,13 +162,15 @@ create function pg_temp.assignment(p_count uuid) returns text language sql stabl
          || '/' || c.assignment_version::text
     from public.cycle_counts c where c.id = p_count
 $$;
--- One statement as authenticated with p_sub's claims (null: no sub claim),
+-- One statement as p_role (authenticated unless named) with p_sub's claims
+-- (null: no sub claim),
 -- then ALWAYS undone. 'ok' (plus ':' and p_check's value, read as the
 -- superuser inside the undone subtransaction), else
 -- '<sqlstate>|<message>|<detail or ->|<hint or ->'. p_prep runs first, as
 -- the superuser, inside the same undone subtransaction (the M-section's
 -- mutation). supautils' generic privilege hint reads as '-'.
-create function pg_temp.attempt(p_sub uuid, p_sql text, p_prep text default null, p_check text default null)
+create function pg_temp.attempt(p_sub uuid, p_sql text, p_prep text default null, p_check text default null,
+                                p_role text default 'authenticated')
 returns text language plpgsql as $$
 declare v_state text; v_msg text; v_det text; v_hint text; v_seen text;
 begin
@@ -170,8 +179,8 @@ begin
       execute p_prep;
     end if;
     perform set_config('request.jwt.claim.sub', coalesce(p_sub::text, ''), true);
-    perform set_config('request.jwt.claim.role', 'authenticated', true);
-    perform set_config('role', 'authenticated', true);
+    perform set_config('request.jwt.claim.role', p_role, true);
+    perform set_config('role', p_role, true);
     execute p_sql;
     perform set_config('role', 'none', true);
     if p_check is not null then
@@ -376,6 +385,34 @@ select is(
   'P0001|reassign_reason_required|-|- ; P0001|release_reason_required|-|-',
   'I8: a blank reason is refused before the lookup, for every caller and every id alike, as before (release_reason_required, reassign_reason_required)');
 
+-- A live seat's calls, each undone, run on the live bodies or (p_prep) on
+-- the bodies re-created without the S87 block.
+create function pg_temp.seat_calls(p_prep text) returns text language sql as $$
+  select pg_temp.attempt('58700000-0000-0000-0000-0000000000c2', pg_temp.call('release', '58700000-0000-0000-0000-000000000102'),
+                         p_prep, 'select pg_temp.assignment(''58700000-0000-0000-0000-000000000102'')') || ' / '
+      || pg_temp.attempt('58700000-0000-0000-0000-0000000000c2', pg_temp.call('assign', '58700000-0000-0000-0000-000000000101'),
+                         p_prep, 'select pg_temp.assignment(''58700000-0000-0000-0000-000000000101'')') || ' / '
+      || pg_temp.attempt('58700000-0000-0000-0000-0000000000c2', pg_temp.call('force', '58700000-0000-0000-0000-000000000102'),
+                         p_prep, 'select pg_temp.assignment(''58700000-0000-0000-0000-000000000102'')') || ' / '
+      || pg_temp.attempt('58700000-0000-0000-0000-0000000000c2', pg_temp.call('release', '58700000-0000-0000-0000-000000000103'), p_prep) || ' / '
+      || pg_temp.attempt('58700000-0000-0000-0000-0000000000c2', pg_temp.call('assign', '58700000-0000-0000-0000-0000000001ff'), p_prep)
+$$;
+select is(
+  'live: ' || pg_temp.seat_calls(null) || ' | without the block: ' || pg_temp.seat_calls(pg_temp.cut_all()),
+  'live: ok:-/-/2 / ok:stf/seat/1 / ok:stf/seat/2 / P0001|invalid_status_transition|completed|- / P0002|cycle_count_not_found|-|-'
+  || ' | without the block: ok:-/-/2 / ok:stf/seat/1 / ok:stf/seat/2 / P0001|invalid_status_transition|completed|- / P0002|cycle_count_not_found|-|-',
+  'I9: a live "act as" seat in organization A (an owner row not yet expired) is an active member: it releases, assigns and reassigns, and is told a completed count is closed and an unknown id is not found, exactly as with the bodies the S87 block was added to');
+create function pg_temp.console_calls(p_prep text) returns text language sql as $$
+  select count(*)::text || ' calls: ' || string_agg(distinct pg_temp.attempt(null, pg_temp.call(f.fn, c.id), p_prep, null, 'service_role'), ' ; ')
+    from unnest(array['release', 'assign', 'force']) f(fn)
+    cross join cc c
+   where c.label in ('cAsg', 'cDone', 'cRnd')
+$$;
+select is(
+  'live: ' || pg_temp.console_calls(null) || ' | without the block: ' || pg_temp.console_calls(pg_temp.cut_all()),
+  'live: 9 calls: 42501|unauthenticated|-|- | without the block: 9 calls: 42501|unauthenticated|-|-',
+  'I10: the platform console''s server client (service_role, no signed-in user; a platform admin has no membership of its own in the database) is refused as unauthenticated (42501) by each function for every id, exactly as with the bodies the S87 block was added to; a platform admin signed in without a seat is outside the organization (the O lines)');
+
 -- ══ R. One change per function: the S87 block ════════════════════════════
 select is(
   (select string_agg(p.proname || '=' || md5(p.prosrc) || '|' || md5(replace(p.prosrc, (select t from blk), ''))
@@ -442,7 +479,7 @@ select is(
      select pg_temp.matrix('force', array['outZ', 'rmv', 'dis', 'exp', 'pend', 'nobody'],
                            array['cUn', 'cAsg', 'cDone', 'cRnd'], pg_temp.cut_all()) as v) m),
   'false/false/false',
-  'M1: with the S87 block taken out of each body, callers outside organization A get more than one answer from each function: O1-O3 fail on it');
+  'M1: the O1-O3 answers come from the S87 block: with it taken out of each body (undone) they no longer hold');
 
 -- ══ Q. The preflight, replayed ═══════════════════════════════════════════
 create function pg_temp.mig_pre() returns text language sql stable as $$

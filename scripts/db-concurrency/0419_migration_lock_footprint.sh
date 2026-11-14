@@ -180,6 +180,12 @@ trap 'exit 129' HUP
 if [ "$(q "select count(*) from pg_proc where proname = 'release_cycle_count' and prosrc like '%S42: a count nobody is assigned to%'")" != "1" ]; then
   echo "the S42 migration is not applied on this stack"; exit 1
 fi
+# Step 7's control commits this file again. On a stack where a later
+# migration restated release_cycle_count (the S87 lookup block), that would
+# put this file's body back, so the script refuses there.
+if [ "$(q "select count(*) from pg_proc where proname = 'release_cycle_count' and prosrc like '%-- S87:%'")" != "0" ]; then
+  echo "a later migration restated release_cycle_count: this script would put the 0419 body back; run it on a stack at 0419"; exit 1
+fi
 if grep -qiE '^[[:space:]]*(begin|commit|rollback|start transaction)[[:space:]]*;' "$MIG"; then
   echo "the file has its own transaction control: this script wraps it in one"; exit 1
 fi

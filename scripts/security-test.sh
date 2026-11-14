@@ -866,8 +866,8 @@ PGTAP_TESTS=(
   # (is_org_member) first, and answer a count outside them as an id that does
   # not exist (P0002 cycle_count_not_found, no detail, no hint); a member of
   # the count's organization gets every answer they got before. Each body is the one it replaced plus one block
-  # tagged S87 (taking it out gives the old body, and gives callers outside
-  # the organization more than one answer), and the migration's preflight is
+  # tagged S87 (taking it out gives the body it replaced; a mutation line
+  # shows the answers above depend on it), and the migration's preflight is
   # replayed from the recorded statements.
   supabase/tests/0457_cycle_count_assignment_member_lookup.test.sql
 

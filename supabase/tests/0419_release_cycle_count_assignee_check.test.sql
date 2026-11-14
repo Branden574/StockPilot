@@ -71,6 +71,8 @@
 -- M.  Mutations: each block taken out of the live body (inside an undone
 --     attempt) lets the refused calls through, so the U and A lines are not
 --     tautological.
+--     M3: with only the S87 block taken out, the S42 blocks still refuse the
+--     callers outside organization A (42501 forbidden).
 -- G.  The body names neither 40001 nor 40P01.
 -- Z.  Every undone attempt changed nothing.
 --
@@ -95,7 +97,7 @@
 
 begin;
 
-select plan(24);
+select plan(25);
 
 \set orgA     '\'54200000-0000-0000-0000-00000000000a\''
 \set orgZ     '\'54200000-0000-0000-0000-00000000000b\''
@@ -614,6 +616,47 @@ $c$)),
   'rmv=P0002:-:cycle_count_not_found, dis=P0002:-:cycle_count_not_found, exp=P0002:-:cycle_count_not_found, '
   'vwr=ok:1, noAdj=ok:1',
   'M2: release_cycle_count without the assignee block lets the viewer and the revoked member release their own count: A6 and A7 fail on it (the removed member, the disabled account and the expired seat still get not found from the S87 lookup)');
+
+-- M3: with ONLY the S87 lookup block of the later migration taken out
+-- (the two S42 blocks kept), the S42 blocks refuse on their own the callers
+-- the lookup answers first.
+select is(
+  pg_temp.own(array[array['rmv', :cRmv], array['dis', :cDis], array['exp', :cExp]],
+              format('select pg_temp.unpatch(%L, %L)', 'public.release_cycle_count(uuid, text)', $c$  -- S87: the count is looked up first in the organizations the caller is an
+  -- active member of (is_org_member: an accepted membership, not an expired
+  -- "act as" seat, of an account that is not disabled). A count outside
+  -- them gets the answer an id that does not exist gets, with nothing
+  -- locked; the status and permission checks below come after this one.
+  if not exists (
+    select 1
+      from public.cycle_counts c
+     where c.id = p_count_id
+       and public.is_org_member(c.organization_id)
+  ) then
+    raise exception 'cycle_count_not_found' using errcode = 'P0002';
+  end if;
+$c$))
+  || ' / '
+  || (select string_agg(w || '=' || pg_temp.attempt('authenticated', (select p.id from persona p where p.who = w),
+             format($q$select public.release_cycle_count(%L, 'Not mine')$q$, :cUn),
+             format('select pg_temp.unpatch(%L, %L)', 'public.release_cycle_count(uuid, text)', $c$  -- S87: the count is looked up first in the organizations the caller is an
+  -- active member of (is_org_member: an accepted membership, not an expired
+  -- "act as" seat, of an account that is not disabled). A count outside
+  -- them gets the answer an id that does not exist gets, with nothing
+  -- locked; the status and permission checks below come after this one.
+  if not exists (
+    select 1
+      from public.cycle_counts c
+     where c.id = p_count_id
+       and public.is_org_member(c.organization_id)
+  ) then
+    raise exception 'cycle_count_not_found' using errcode = 'P0002';
+  end if;
+$c$)), ', ' order by u.o)
+        from unnest(array['nobody', 'outZ', 'rmv']) with ordinality u(w, o)),
+  'rmv=42501:-:forbidden, dis=42501:-:forbidden, exp=42501:-:forbidden / '
+  'nobody=42501:-:forbidden, outZ=42501:-:forbidden, rmv=42501:-:forbidden',
+  'M3: with the S87 block taken out, the two S42 blocks still refuse them (42501 forbidden): the removed member, the disabled account and the expired seat on their own counts, and a member of no organization, another organization''s manager and the removed member on a count with no assignee');
 
 -- ══ G. Never a retryable error ════════════════════════════════════════════
 select is(
