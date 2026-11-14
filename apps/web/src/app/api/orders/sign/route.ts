@@ -1,5 +1,3 @@
-import { isIP } from 'node:net';
-
 import { revalidateTag } from 'next/cache';
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
@@ -8,6 +6,7 @@ import { formatOrderNumber } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { refusesCrossSiteCookieWrite } from '@/lib/auth/cross-site-request';
+import { clientIpForRecord } from '@/lib/client-ip';
 import { sendOrderRequestEmail } from '@/lib/email/order-requests';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
@@ -112,15 +111,14 @@ interface SignOrderRow {
 }
 
 /**
- * The IP for the hand-over's audit row: the first x-forwarded-for hop, else
- * x-real-ip, as every other audit row takes it (server/services/audit.ts),
- * and only when it is an IP literal. audit_logs.ip is inet: a value such as
- * the rate-limit helper's "unknown" bucket fails the insert (22P02) and the
- * row, and with it the timeline's "Signature collected", is lost.
+ * The IP for the hand-over's audit row, as every other audit row takes it:
+ * the one rule (lib/client-ip.ts clientIpForRecord), only when it is an IP
+ * literal. audit_logs.ip is inet: a value such as the rate-limit helper's
+ * "unknown" bucket fails the insert (22P02) and the row, and with it the
+ * timeline's "Signature collected", is lost.
  */
 function auditIp(req: Request): string | null {
-  const raw = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || req.headers.get('x-real-ip')?.trim() || null;
-  return raw && isIP(raw) ? raw : null;
+  return clientIpForRecord(req.headers);
 }
 
 /**

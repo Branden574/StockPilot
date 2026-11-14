@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { browserDeviceName } from '@/lib/auth/user-agent';
 import { sendNewDeviceLoginEmail } from '@/lib/email/login-alert';
 import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { dispatchEvent } from '@/server/services/integration-events';
 
@@ -32,6 +33,17 @@ function deviceHash(userId: string, ua: string, deviceKey: string | null): strin
 }
 
 /**
+ * New-device alerts (the email and the organizations' events together) per
+ * account in a window: every new device is still recorded, and shown in the
+ * person's own device list, past this.
+ */
+export const NEW_DEVICE_ALERTS_PER_ACCOUNT = 5;
+export const NEW_DEVICE_ALERT_WINDOW_MS = 24 * 60 * 60_000;
+/** security.new_device_login events per organization in a window. */
+export const NEW_DEVICE_EVENTS_PER_ORGANIZATION = 30;
+export const NEW_DEVICE_EVENT_WINDOW_MS = 60 * 60_000;
+
+/**
  * Record the device a user just signed in from, and email a "new device" alert
  * when it's a device we haven't seen on an ALREADY-established account.
  *
@@ -46,6 +58,16 @@ function deviceHash(userId: string, ua: string, deviceKey: string | null): strin
  * (user_id, device_hash)), and a refused insert emailed about a device that was
  * never recorded. A 23505 means another sign-in recorded it first, and that
  * call alerts; any other refusal is reported, and nothing is sent.
+ *
+ * Alerts are counted (S79), both buckets closed, as every auth front door: a
+ * limiter that cannot answer refuses, and the device is recorded with no
+ * email and no event.
+ *   - per account: NEW_DEVICE_ALERTS_PER_ACCOUNT a day. Past it the device
+ *     is recorded silently; the first device held in a window is reported
+ *     once (auth.new_device_alerts_held), with a hash of the account only.
+ *   - per organization: NEW_DEVICE_EVENTS_PER_ORGANIZATION
+ *     security.new_device_login events an hour, so the organization's
+ *     channels are not flooded; the person's own email is not held by it.
  */
 export async function noteLoginDevice(args: {
   userId: string;
@@ -119,6 +141,16 @@ export async function noteLoginDevice(args: {
     }
 
     if (hadKnownDevices && args.email) {
+      const alert = await checkRateLimit(
+        `new-device-alert:user:${args.userId}`,
+        NEW_DEVICE_ALERTS_PER_ACCOUNT,
+        NEW_DEVICE_ALERT_WINDOW_MS,
+        'closed',
+      );
+      if (!alert.allowed) {
+        await reportAlertsHeld(args.userId);
+        return;
+      }
       await sendNewDeviceLoginEmail({
         to: args.email,
         userAgent: ua,
@@ -142,6 +174,13 @@ export async function noteLoginDevice(args: {
         .is('impersonation_expires_at', null)
         .limit(5);
       for (const m of (memberships ?? []) as { organization_id: string }[]) {
+        const perOrganization = await checkRateLimit(
+          `new-device-event:org:${m.organization_id}`,
+          NEW_DEVICE_EVENTS_PER_ORGANIZATION,
+          NEW_DEVICE_EVENT_WINDOW_MS,
+          'closed',
+        );
+        if (!perOrganization.allowed) continue;
         // The delivery body lands in customer-controlled Slack/Teams/webhook
         // infra, so it must carry NO PII. Send a non-PII user id + the device's
         // name in fixed words only — NOT the email or IP (those go only to the
@@ -156,4 +195,26 @@ export async function noteLoginDevice(args: {
     // Never let an alert failure affect sign-in.
     void reportError(e, { tag: 'auth.login_device_note_failed', level: 'warning' });
   }
+}
+
+/**
+ * One report per account per window when its new-device alerts are held: a
+ * hash of the account id only, never the email, the address or the device.
+ * Its own bucket, closed, so a limiter that cannot answer reports nothing
+ * here (lib/rate-limit logs the failure).
+ */
+async function reportAlertsHeld(userId: string): Promise<void> {
+  const first = await checkRateLimit(
+    `new-device-alert-held:user:${userId}`,
+    1,
+    NEW_DEVICE_ALERT_WINDOW_MS,
+    'closed',
+  );
+  if (!first.allowed) return;
+  void reportError(new Error('New-device alerts held for an account past its daily count'), {
+    tag: 'auth.new_device_alerts_held',
+    level: 'warning',
+    userIdHash: createHash('sha256').update(userId).digest('hex').slice(0, 16),
+    extra: { limit: NEW_DEVICE_ALERTS_PER_ACCOUNT, window_hours: 24 },
+  });
 }

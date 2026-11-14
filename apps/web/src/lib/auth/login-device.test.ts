@@ -142,6 +142,29 @@ const dispatchEvent = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => undefin
 vi.mock('@/server/services/integration-events', () => ({ dispatchEvent }));
 const reportError = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => undefined));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
+// The bucket table, in memory, with lib/rate-limit's own answer when its
+// store cannot be reached: a closed bucket refuses, an open one allows.
+const limiter = vi.hoisted(() => ({
+  buckets: new Map<string, number>(),
+  storeDown: false,
+  /** Only the buckets whose key starts with this cannot answer. */
+  downPrefix: null as string | null,
+  calls: [] as Array<{ key: string; limit: number; windowMs: number; mode?: string }>,
+}));
+vi.mock('@/lib/rate-limit', () => ({
+  checkRateLimit: vi.fn(async (key: string, limit: number, windowMs: number, mode?: string) => {
+    limiter.calls.push({ key, limit, windowMs, mode });
+    if (limiter.storeDown || (limiter.downPrefix && key.startsWith(limiter.downPrefix))) {
+      return mode === 'closed'
+        ? { allowed: false, count: limit, resetAt: Date.now() + windowMs }
+        : { allowed: true, count: 0, resetAt: Date.now() + windowMs };
+    }
+    const count = (limiter.buckets.get(key) ?? 0) + 1;
+    if (count > limit) return { allowed: false, count: limit, resetAt: Date.now() + windowMs };
+    limiter.buckets.set(key, count);
+    return { allowed: true, count, resetAt: Date.now() + windowMs };
+  }),
+}));
 
 import { noteLoginDevice } from './login-device';
 
@@ -177,6 +200,95 @@ beforeEach(() => {
   sendNewDeviceLoginEmail.mockClear();
   dispatchEvent.mockClear();
   reportError.mockClear();
+  limiter.buckets.clear();
+  limiter.storeDown = false;
+  limiter.downPrefix = null;
+  limiter.calls.length = 0;
+});
+
+describe('noteLoginDevice — new-device alerts per account and per organization', () => {
+  const DAY_MS = 24 * 60 * 60_000;
+  const HOUR_MS = 60 * 60_000;
+  const installs = Array.from(
+    { length: 8 },
+    (_, i) => `0f6c2d1e-8a4b-4c5d-9e6f-${String(i).padStart(12, '0')}`,
+  );
+  const memberOf = (...orgs: string[]) => {
+    db.members = orgs.map((organization_id) => ({
+      user_id: USER,
+      organization_id,
+      accepted_at: '2026-01-01T00:00:00Z',
+      impersonation_expires_at: null,
+    }));
+  };
+
+  it('at most 5 alerts a day per account: every device is recorded, the sixth on sends no email and no event', async () => {
+    memberOf('org-a');
+    await web();
+    for (const install of installs) await phone(install);
+    expect(db.devices).toHaveLength(1 + installs.length);
+    expect(sendNewDeviceLoginEmail).toHaveBeenCalledTimes(5);
+    expect(dispatchEvent).toHaveBeenCalledTimes(5);
+    expect(limiter.calls).toContainEqual({
+      key: `new-device-alert:user:${USER}`,
+      limit: 5,
+      windowMs: DAY_MS,
+      mode: 'closed',
+    });
+  });
+
+  it('the account bucket is asked only for a device that would alert', async () => {
+    await phone(installs[0]!);
+    // The first device ever is the silent baseline; a known device is a refresh.
+    await phone(installs[0]!);
+    expect(limiter.calls.filter((c) => c.key.startsWith('new-device-alert:'))).toEqual([]);
+  });
+
+  it('the account bucket held: one report for the account, never the address or the email', async () => {
+    await web();
+    for (const install of installs) await phone(install);
+    const held = reportError.mock.calls.filter(
+      (c) => (c[1] as { tag: string }).tag === 'auth.new_device_alerts_held',
+    );
+    expect(held).toHaveLength(1);
+    expect(JSON.stringify(held)).not.toContain(EMAIL);
+    expect(JSON.stringify(held)).not.toContain('203.0.113.7');
+    expect(JSON.stringify(held)).not.toContain(USER);
+  });
+
+  it('a limiter that cannot answer: the device is recorded, no email and no event go out', async () => {
+    memberOf('org-a');
+    await web();
+    limiter.storeDown = true;
+    await phone(installs[0]!);
+    expect(db.devices).toHaveLength(2);
+    expect(sendNewDeviceLoginEmail).not.toHaveBeenCalled();
+    expect(dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  it('at most 30 new-device events an hour per organization, closed; the email and other organizations are not held by it', async () => {
+    memberOf('org-a', 'org-b');
+    limiter.buckets.set('new-device-event:org:org-a', 30);
+    await web();
+    await phone(installs[0]!);
+    expect(sendNewDeviceLoginEmail).toHaveBeenCalledTimes(1);
+    expect(dispatchEvent.mock.calls.map((c) => c[0])).toEqual(['org-b']);
+    expect(limiter.calls).toContainEqual({
+      key: 'new-device-event:org:org-a',
+      limit: 30,
+      windowMs: HOUR_MS,
+      mode: 'closed',
+    });
+  });
+
+  it('an organization bucket that cannot answer sends no event to it', async () => {
+    memberOf('org-a');
+    await web();
+    limiter.downPrefix = 'new-device-event:';
+    await phone(installs[0]!);
+    expect(sendNewDeviceLoginEmail).toHaveBeenCalledTimes(1);
+    expect(dispatchEvent).not.toHaveBeenCalled();
+  });
 });
 
 describe('noteLoginDevice — the email goes out only for a device this call recorded', () => {

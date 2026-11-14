@@ -6,6 +6,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { bearerTokenFrom } from '@/lib/auth/cross-site-request';
 import { readVerifiedTokenClaims, type VerifiedSessionClaims } from '@/lib/auth/verified-claims';
+import { clientIpForRecord } from '@/lib/client-ip';
 
 /**
  * What the phone's sign-in and sign-out notes share (S5: POST
@@ -69,11 +70,11 @@ export const ACCOUNT_NOTE_WINDOW_MS = 60 * 60_000;
 /** A session's row is written once; a day covers any retry the phone makes. */
 export const SESSION_NOTE_WINDOW_MS = 24 * 60 * 60_000;
 
-/** The caller's address as the web's sign-in reads it (actions/auth.ts). */
+/**
+ * The caller's address for the device row and the new-device email, by the
+ * one rule (lib/client-ip.ts: x-forwarded-for only on Vercel), or null when
+ * it is not an IP literal.
+ */
 export function requestIp(req: Request): string | null {
-  return (
-    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    req.headers.get('x-real-ip') ||
-    null
-  );
+  return clientIpForRecord(req.headers);
 }

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ModuleId } from '@stockpilot/core';
 
@@ -26,6 +26,8 @@ const h = vi.hoisted(() => ({
   reportError: vi.fn(async (..._a: unknown[]) => undefined),
   after: [] as Array<() => unknown>,
   buckets: new Map<string, number>(),
+  /** lib/rate-limit's answer when its store cannot be reached. */
+  storeDown: false,
   rateCalls: [] as Array<{ key: string; limit: number; windowMs: number; mode?: string }>,
 }));
 
@@ -44,6 +46,11 @@ vi.mock('next/server', async (importOriginal) => {
 vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: vi.fn(async (key: string, limit: number, windowMs: number, mode?: string) => {
     h.rateCalls.push({ key, limit, windowMs, mode });
+    if (h.storeDown) {
+      return mode === 'closed'
+        ? { allowed: false, count: limit, resetAt: Date.now() + windowMs }
+        : { allowed: true, count: 0, resetAt: Date.now() + windowMs };
+    }
     const count = (h.buckets.get(key) ?? 0) + 1;
     h.buckets.set(key, count);
     return { allowed: count <= limit, count, resetAt: Date.now() + windowMs };
@@ -111,8 +118,15 @@ beforeEach(() => {
   h.after.length = 0;
   h.buckets.clear();
   h.rateCalls.length = 0;
+  h.storeDown = false;
+  // Production: Vercel sets x-forwarded-for.
+  vi.stubEnv('VERCEL', '1');
   h.withApiContext.mockResolvedValue(ctx());
   h.readVerifiedTokenClaims.mockResolvedValue(claims());
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 async function runAfter() {
@@ -192,13 +206,13 @@ describe('POST /api/v1/auth/signed-in — the row', () => {
     expect(again.status).toBe(200);
     expect(h.emitAuthAudit).toHaveBeenCalledTimes(1);
     expect(h.after).toHaveLength(1);
-    // Counted once per session, by a hash of its id, for a day, open on a
+    // Counted once per session, by a hash of its id, for a day, closed on a
     // store failure.
     expect(h.rateCalls).toContainEqual({
       key: `auth-note:in:${sha256(SESSION)}`,
       limit: 1,
       windowMs: 86_400_000,
-      mode: 'open',
+      mode: 'closed',
     });
   });
 
@@ -226,6 +240,21 @@ describe('POST /api/v1/auth/signed-in — the row', () => {
     });
   });
 
+  it('off Vercel, x-forwarded-for is not the address: x-real-ip, else none', async () => {
+    vi.stubEnv('VERCEL', '');
+    await POST(req());
+    await runAfter();
+    expect(h.noteLoginDevice.mock.calls[0]![0]).toMatchObject({ ip: null });
+
+    vi.clearAllMocks();
+    h.buckets.clear();
+    h.withApiContext.mockResolvedValue(ctx());
+    h.readVerifiedTokenClaims.mockResolvedValue(claims({ sessionId: 'session-real-ip' }));
+    await POST(req(BODY, { authorization: 'Bearer token-1', 'x-real-ip': '198.51.100.2' }));
+    await runAfter();
+    expect(h.noteLoginDevice.mock.calls[0]![0]).toMatchObject({ ip: '198.51.100.2' });
+  });
+
   it('the per-account limit: 30 an hour, then 429 and nothing written', async () => {
     for (let i = 0; i < 30; i += 1) {
       h.readVerifiedTokenClaims.mockResolvedValueOnce(claims({ sessionId: `session-${i}` }));
@@ -240,8 +269,17 @@ describe('POST /api/v1/auth/signed-in — the row', () => {
       key: `auth-note:user:${USER}`,
       limit: 30,
       windowMs: 3_600_000,
-      mode: 'open',
+      mode: 'closed',
     });
+  });
+
+  it('a limiter that cannot answer: 429, no row and no device note', async () => {
+    h.storeDown = true;
+    const res = await POST(req());
+    expect(res.status).toBe(429);
+    await runAfter();
+    expect(h.emitAuthAudit).not.toHaveBeenCalled();
+    expect(h.noteLoginDevice).not.toHaveBeenCalled();
   });
 });
 

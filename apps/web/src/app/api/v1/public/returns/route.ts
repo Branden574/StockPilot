@@ -1,10 +1,11 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
+import { clientIpFromRequest } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
 import { hasArrayLongerThan } from '@/lib/oversized-array';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { publicRequestIp, returnTokenBucketKey } from '@/lib/returns/public-limits';
+import { returnTokenBucketKey } from '@/lib/returns/public-limits';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { createRequesterReturn } from '@/server/services/returns';
@@ -136,7 +137,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Only trusts x-forwarded-for on Vercel (elsewhere a client could rotate it).
-  const ip = publicRequestIp(req.headers);
+  const ip = clientIpFromRequest(req);
   const [ipLimit, tokenLimit] = await Promise.all([
     checkRateLimit(`public-return-request:${ip}`, RATE_LIMIT_PER_IP_PER_HOUR, ONE_HOUR_MS, 'closed'),
     checkRateLimit(returnTokenBucketKey(body.token), RATE_LIMIT_PER_TOKEN_PER_HOUR, ONE_HOUR_MS, 'closed'),

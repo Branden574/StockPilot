@@ -45,6 +45,11 @@ export const dynamic = 'force-dynamic';
  * Once per session: a second note for the same session (a retry, a relaunch)
  * writes nothing, by a hash of the session id, for a day. 30 notes an hour per
  * account. A token with no session id writes nothing (nothing to count by).
+ * Both buckets are closed, as every auth front door (S79): a limiter that
+ * cannot answer writes no row and notes no device, so neither the new-device
+ * email nor the organizations' event goes out without a count. The note
+ * itself counts new-device alerts per account and per organization
+ * (lib/auth/login-device.ts).
  *
  * Body: { installId?, device?: { model?, osName?, osVersion?, appVersion? } },
  * each field checked against an allowlist and a length cap. A field that
@@ -148,7 +153,7 @@ export async function POST(req: Request) {
       accountNoteKey(ctx.userId),
       ACCOUNT_NOTE_LIMIT,
       ACCOUNT_NOTE_WINDOW_MS,
-      'open',
+      'closed',
     );
     if (!perAccount.allowed) {
       return NextResponse.json(
@@ -160,7 +165,7 @@ export async function POST(req: Request) {
       sessionNoteKey('in', sessionId),
       1,
       SESSION_NOTE_WINDOW_MS,
-      'open',
+      'closed',
     );
     if (!firstNote.allowed) return NextResponse.json({ ok: true });
 

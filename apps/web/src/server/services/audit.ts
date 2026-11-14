@@ -3,6 +3,7 @@ import 'server-only';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { headers } from 'next/headers';
 
+import { clientIpForRecord } from '@/lib/client-ip';
 import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
 import { mapWithConcurrency } from '@/lib/supabase/in-filter';
 
@@ -580,7 +581,8 @@ type RequestMeta = { ip: string | null; userAgent: string | null };
 async function readRequestMeta(): Promise<RequestMeta> {
   const h = await headers();
   return {
-    ip: h.get('x-forwarded-for')?.split(',')[0]?.trim() || h.get('x-real-ip') || null,
+    // The one rule (lib/client-ip.ts), null unless an IP literal (inet).
+    ip: clientIpForRecord(h),
     userAgent: h.get('user-agent') || null,
   };
 }
