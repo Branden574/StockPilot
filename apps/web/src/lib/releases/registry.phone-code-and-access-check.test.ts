@@ -177,7 +177,7 @@ describe('the mobile app waits for your authenticator code (S43b)', () => {
       expect(e.link, e.id).toBeUndefined();
     }
     expect(byId(CODE_ID).audience).toBeUndefined();
-    // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: nothing read): the order request alerts release is published later, at the top, and reaches the owner here (its briefing entry), so the owner reads it first and the notice this test checks is the one it checked before. A read of it by a reader it does not reach changes nothing.
+    // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: nothing read): the order request alerts release is published later, at the top, and reaches the owner here, so the owner reads it first and the notice this test checks is the one it checked before. A read of it by a reader it does not reach changes nothing.
     const newerRead = {
       release_id: 'order-request-alerts-follow-approve-2026-11',
       revision: 1,

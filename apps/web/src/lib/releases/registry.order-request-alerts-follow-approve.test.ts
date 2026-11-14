@@ -121,9 +121,9 @@ describe('the order request alerts release: the words', () => {
     expect(release().summary).toBe(
       'The New order request alert now goes to everyone with the "Approve / fulfill orders" permission who can approve orders in the request\'s warehouse, and stops for anyone whose permission was removed. It arrives on the web and in the mobile app, with no app update needed. Today\'s briefing also shows only the lines you can open.',
     );
-    // The last sentence is for a reader who sees only the briefing entry (an
-    // owner, or staff who can open Today's briefing): old phone builds show
-    // only the title and the summary.
+    // The last sentence is for a reader who sees only the briefing entry
+    // (staff who can open Today's briefing): old phone builds show only the
+    // title and the summary.
     expect(
       release().summary.endsWith(" Today's briefing also shows only the lines you can open."),
     ).toBe(true);
@@ -186,8 +186,10 @@ describe('the order request alerts release: the words', () => {
 describe('the order request alerts release: who is told', () => {
   it('is addressed to organizations with Orders on, each entry to the people it changes something for', () => {
     expect(release().audience).toEqual({ modules: ['orders'] });
+    // Admins and managers are the people whose own alert can stop; an owner
+    // can always change who holds the permission, so the owner is told too.
     expect(entry(REMOVED_ID).audience).toEqual({
-      roles: ['admin', 'manager'],
+      roles: ['owner', 'admin', 'manager'],
       modules: ['orders'],
     });
     expect(entry(REMOVED_ID).link).toBeUndefined();
@@ -201,8 +203,11 @@ describe('the order request alerts release: who is told', () => {
     });
   });
 
-  it('reaches admins and managers where Orders is on, briefing readers where the AI module is on too, and nobody where Orders is off', () => {
-    expect(entriesFor(owner)).toEqual([BRIEFING_ID]);
+  it('reaches owners, admins and managers where Orders is on, briefing readers where the AI module is on too, and nobody where Orders is off', () => {
+    expect(entriesFor(owner)).toEqual([REMOVED_ID, BRIEFING_ID]);
+    // An owner where the AI module is off still sees the alert entry.
+    expect(entriesFor(viewer('owner', [...PERMISSIONS], ['orders']))).toEqual([REMOVED_ID]);
+    expect(entriesFor(viewer('owner', [...PERMISSIONS], ['ai']))).toEqual([]);
     expect(entriesFor(viewer('admin', ROLE_PERMISSIONS.admin, EVERY_MODULE))).toEqual([
       REMOVED_ID,
       BRIEFING_ID,

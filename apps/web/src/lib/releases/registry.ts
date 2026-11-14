@@ -216,9 +216,9 @@ export const RELEASES: Release[] = [
     //   member given the permission and promises nothing that entry alone
     //   covered;
     // - the summary gains a last sentence about Today's briefing, so a reader
-    //   who sees only the briefing entry (an owner, or staff who can open
-    //   Today's briefing) is covered by the summary too. The rest of the
-    //   summary is the draft's.
+    //   who sees only the briefing entry (staff who can open Today's
+    //   briefing) is covered by the summary too. The rest of the summary is
+    //   the draft's.
     // Claims checked against the code at a1cd8247a:
     // - The alert: supabase/migrations/0422_notice_audience_follows_permission.sql
     //   section 3: the New order request notice is written for whoever holds
@@ -239,9 +239,12 @@ export const RELEASES: Release[] = [
     //   insights.ts) and the page is titled Today's briefing
     //   (dashboard/insights/page.tsx).
     // Who is told: organizations with Orders on. The alert entry goes to
-    // admins and managers, the people it can change something for. The
-    // briefing entry links to /dashboard/insights, which checks the AI module
-    // and items:update, so it goes to whoever can open that page.
+    // admins and managers, the people whose own alert can stop, and to
+    // owners, who can always change who holds the permission (the plan's
+    // audience was admins and managers; owners were added at review). Its
+    // words are in the third person and hold for an owner. The briefing entry
+    // links to /dashboard/insights, which checks the AI module and
+    // items:update, so it goes to whoever can open that page.
     status: 'published',
     title: 'New order request alerts go to the people who can approve the order',
     summary:
@@ -262,7 +265,7 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Nothing changes for an admin or manager who keeps the permission, which they have by default: they are alerted about requests in every warehouse, as before.',
         whatToDo: 'No action needed.',
-        audience: { roles: ['admin', 'manager'], modules: ['orders'] },
+        audience: { roles: ['owner', 'admin', 'manager'], modules: ['orders'] },
       },
       {
         id: 'briefing-follows-permissions',
