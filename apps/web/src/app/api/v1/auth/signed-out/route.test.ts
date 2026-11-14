@@ -34,6 +34,8 @@ const h = vi.hoisted(() => ({
   revokeError: null as unknown,
   revoked: 2,
   buckets: new Map<string, number>(),
+  /** lib/rate-limit's 'open' answer when its store cannot be reached. */
+  storeDown: false,
 }));
 
 vi.mock('@/lib/auth/api-context', () => ({ withApiContext: h.withApiContext }));
@@ -50,11 +52,15 @@ vi.mock('@/lib/realtime/broadcast', () => ({
 vi.mock('@/lib/error-reporter', () => ({ reportError: h.reportError }));
 vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: vi.fn(async (key: string, limit: number, windowMs: number) => {
+    if (h.storeDown)
+      return { allowed: true, count: 0, resetAt: Date.now() + windowMs, failed: true };
     const count = (h.buckets.get(key) ?? 0) + 1;
     h.buckets.set(key, count);
     return { allowed: count <= limit, count, resetAt: Date.now() + windowMs };
   }),
 }));
+
+import { resetUncountedNoteReportForTests } from '@/lib/auth/session-note';
 
 import { POST } from './route';
 
@@ -102,6 +108,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.log.length = 0;
   h.buckets.clear();
+  h.storeDown = false;
+  resetUncountedNoteReportForTests();
   h.listed = [{ id: OTHER_A }, { id: SESSION }, { id: OTHER_B }];
   h.listError = null;
   h.revokeError = null;
@@ -251,6 +259,33 @@ describe('POST /api/v1/auth/signed-out — the row', () => {
     await POST(req());
     expect(h.emitAuthAudit).toHaveBeenCalledTimes(1);
     expect([...h.buckets.keys()]).toContain(`auth-note:out:${sha256(SESSION)}`);
+  });
+
+  // While the limiter cannot answer, this instance bounds the rows itself
+  // (lib/auth/session-note.ts admitUncountedNote), as for the sign-in note.
+  it('while the limiter cannot answer, a second note of the same session writes no second row', async () => {
+    h.storeDown = true;
+    expect((await POST(req())).status).toBe(200);
+    const res = await POST(req());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(h.emitAuthAudit).toHaveBeenCalledTimes(1);
+    expect(h.emitAuthAudit.mock.calls[0]![0]).toMatchObject({
+      event: 'user.signed_out',
+      extra: { limiter_unavailable: true },
+    });
+  });
+
+  it('while the limiter cannot answer, a token with no session id gets 30 rows an hour on this instance, then none', async () => {
+    h.storeDown = true;
+    h.readVerifiedTokenClaims.mockResolvedValue(claims({ sessionId: null }));
+    for (let i = 0; i < 31; i += 1) expect((await POST(req())).status).toBe(200);
+    expect(h.emitAuthAudit).toHaveBeenCalledTimes(30);
+  });
+
+  it('a row written with a count carries no limiter_unavailable', async () => {
+    await POST(req());
+    expect(h.emitAuthAudit.mock.calls[0]![0].extra).not.toHaveProperty('limiter_unavailable');
   });
 
   it('an unexpected failure answers the fixed sentence and is reported (S16)', async () => {
