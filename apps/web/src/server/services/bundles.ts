@@ -1043,8 +1043,12 @@ export class BundlesService {
       }
       throw new ServiceError('internal_error', msg);
     }
-    // distribute_bundle drew every component off the shelf.
+    // distribute_bundle drew every component off the shelf (or, for a key it
+    // has seen, nothing; a list read again then costs nothing).
     invalidateInventoryListAfterWrite(this.ctx.organizationId, 'bundle.distribute');
+    if (input.idempotencyKey) {
+      await this.assertDistributionOfRequest(data as string | null, id, input);
+    }
     await audit(
       {
         event: 'bundle.distributed',
@@ -1061,5 +1065,53 @@ export class BundlesService {
       this.ctx,
     );
     return { distributionId: data as string };
+  }
+
+  /**
+   * A key distribute_bundle has seen is answered with the distribution id its
+   * stored row names (0347). That answer is used only when it is what a retry
+   * of THIS request gets back: a distribution in this organization of this
+   * kit, from this warehouse, in this quantity, made by this person
+   * (distributed_by = auth.uid() at insert). A first send always answers its
+   * own new row, which matches. Anything else is the conflict a key sent with
+   * other details already gets. A read that fails is an internal error: the
+   * phone keeps the key and sends the same request again, which this check
+   * then passes.
+   */
+  private async assertDistributionOfRequest(
+    distributionId: string | null,
+    bundleId: string,
+    input: DistributeInput,
+  ): Promise<void> {
+    const conflict = () =>
+      new ServiceError(
+        'conflict',
+        'This distribution was already submitted with different details. Start a new distribution.',
+      );
+    if (typeof distributionId !== 'string' || distributionId.length === 0) throw conflict();
+    const { data, error } = await this.ctx.supabase
+      .from('bundle_distributions')
+      .select('id, organization_id, bundle_id, warehouse_id, quantity, distributed_by')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', distributionId)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    const row = data as {
+      organization_id: string;
+      bundle_id: string;
+      warehouse_id: string;
+      quantity: number | string;
+      distributed_by: string | null;
+    } | null;
+    if (
+      !row ||
+      row.organization_id !== this.ctx.organizationId ||
+      row.bundle_id !== bundleId ||
+      row.warehouse_id !== input.warehouseId ||
+      Number(row.quantity) !== Number(input.quantity) ||
+      row.distributed_by !== this.ctx.userId
+    ) {
+      throw conflict();
+    }
   }
 }

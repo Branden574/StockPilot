@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import { NextResponse } from 'next/server';
 
@@ -58,6 +58,98 @@ function digestWeekKey(d: Date): string {
   return monday.toISOString().slice(0, 10);
 }
 
+/**
+ * The claim's request_hash: an HMAC over (organization, key) keyed from
+ * CRON_SECRET, which this route always holds (it refuses to run without it).
+ * idempotency_keys is readable and writable by members (managers write it
+ * through the API), so a row under the key counts as "sent" only when it
+ * carries this value, which nobody without the server's secret can make, and
+ * it cannot be moved to another member, organization or week.
+ */
+function digestClaimSignature(secret: string, orgId: string, claimKey: string): string {
+  return createHmac('sha256', secret)
+    .update(`weekly_digest_claim:v1|${orgId}|${claimKey}`)
+    .digest('hex');
+}
+
+type DigestClaimRead =
+  | { kind: 'ours' }
+  | { kind: 'other'; id: string; hash: string }
+  | { kind: 'none' }
+  | { kind: 'unreadable' };
+
+/** The row under (org, weekly_digest, key), judged against the signature. A
+ *  failed read is reported here. */
+async function readDigestClaim(
+  admin: ReturnType<typeof createAdminClient>,
+  orgId: string,
+  userId: string,
+  claimKey: string,
+  signature: string,
+): Promise<DigestClaimRead> {
+  const { data, error } = await admin
+    .from('idempotency_keys')
+    .select('id, request_hash')
+    .eq('organization_id', orgId)
+    .eq('scope', 'weekly_digest')
+    .eq('key', claimKey)
+    .maybeSingle();
+  if (error) {
+    void reportError(new Error(error.message ?? 'digest claim read failed'), {
+      tag: 'cron.weekly-digest.claim',
+      extra: { orgId, userId },
+    });
+    return { kind: 'unreadable' };
+  }
+  const row = data as { id: string; request_hash: string | null } | null;
+  if (!row) return { kind: 'none' };
+  if (row.request_hash === signature) return { kind: 'ours' };
+  return { kind: 'other', id: row.id, hash: row.request_hash ?? '' };
+}
+
+/**
+ * After the insert met an existing row: true when this run may send.
+ *   * the cron's own claim (signed): already sent, false;
+ *   * a row the cron did not write: taken over by a compare-and-set on the
+ *     hash it was read with, then true. When the take-over misses (another
+ *     writer changed the row first) the row is read once more: the cron's
+ *     own claim (another run won) is false, anything else is reported and
+ *     sent;
+ *   * no row any more: true (nothing marks the week sent);
+ *   * the row cannot be read: reported, false (a row is there; at most once
+ *     wins without proof it is not the cron's).
+ */
+async function mayClaimTakenWeek(
+  admin: ReturnType<typeof createAdminClient>,
+  orgId: string,
+  userId: string,
+  claimKey: string,
+  signature: string,
+): Promise<boolean> {
+  const held = await readDigestClaim(admin, orgId, userId, claimKey, signature);
+  if (held.kind === 'ours') return false;
+  if (held.kind === 'none') return true;
+  if (held.kind === 'unreadable') return false;
+  const { data, error } = await admin
+    .from('idempotency_keys')
+    .update({ request_hash: signature, status: 'completed' })
+    .eq('organization_id', orgId)
+    .eq('id', held.id)
+    .eq('request_hash', held.hash)
+    .select('id');
+  if (!error && Array.isArray(data) && data.length > 0) return true;
+  const again = await readDigestClaim(admin, orgId, userId, claimKey, signature);
+  if (again.kind === 'ours') return false;
+  void reportError(
+    new Error(
+      error?.message ??
+        'digest claim under the key was not written by the cron and could not be taken over',
+    ),
+    { tag: 'cron.weekly-digest.claim', extra: { orgId, userId } },
+  );
+  return true;
+}
+
 // Vercel default function timeout is 10s for Hobby. The cron iterates orgs
 // + sends emails sequentially; bump generously since each Resend send is
 // a network round trip.
@@ -89,6 +181,8 @@ export async function GET(req: Request) {
   if (!secretsEqual(auth, `Bearer ${env.CRON_SECRET}`)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
+  // The claim's signing key (digestClaimSignature), read once.
+  const cronSecret = env.CRON_SECRET;
 
   let sent = 0;
   let skipped = 0;
@@ -334,14 +428,17 @@ export async function GET(req: Request) {
           // Claimed BEFORE the send, like schedule-reminders' stamp-first
           // write: losing one digest to a crash between claim and send
           // beats re-spamming the fleet.
+          //
+          // The row's request_hash is the cron's signature over (org, key)
+          // (digestClaimSignature): a row under the key marks the week sent
+          // only when it carries it (mayClaimTakenWeek).
           const claimKey = `${userId}:${digestWeekKey(runStartedAt)}`;
+          const signature = digestClaimSignature(cronSecret, orgId, claimKey);
           const { error: claimErr } = await admin.from('idempotency_keys').insert({
             organization_id: orgId,
             scope: 'weekly_digest',
             key: claimKey,
-            // request_hash is NOT NULL on the table; the "payload" of a
-            // digest send is exactly its (org, user, week) identity.
-            request_hash: createHash('sha256').update(`${orgId}:${claimKey}`).digest('hex'),
+            request_hash: signature,
             status: 'completed',
           });
           if (claimErr) {
@@ -349,20 +446,24 @@ export async function GET(req: Request) {
               claimErr.code === '23505' ||
               (claimErr.message ?? '').includes('duplicate key value');
             if (duplicate) {
-              // Already sent this week — the whole point.
-              skipped += 1;
-              continue;
+              // Already sent this week (the whole point), unless the row is
+              // not the cron's own claim.
+              if (!(await mayClaimTakenWeek(admin, orgId, userId, claimKey, signature))) {
+                skipped += 1;
+                continue;
+              }
+            } else {
+              // Any OTHER claim failure fails OPEN on the MARKER, never on
+              // the send: a missing table/permission blip must degrade to a
+              // possible duplicate, not a fleet-wide digest outage (the
+              // deploy-before-migrate class — see the account-disable
+              // landmine). Reported so a silent duplicate-forever state is
+              // visible.
+              void reportError(new Error(claimErr.message ?? 'digest claim failed'), {
+                tag: 'cron.weekly-digest.claim',
+                extra: { orgId, userId },
+              });
             }
-            // Any OTHER claim failure fails OPEN on the MARKER, never on
-            // the send: a missing table/permission blip must degrade to a
-            // possible duplicate, not a fleet-wide digest outage (the
-            // deploy-before-migrate class — see the account-disable
-            // landmine). Reported so a silent duplicate-forever state is
-            // visible.
-            void reportError(new Error(claimErr.message ?? 'digest claim failed'), {
-              tag: 'cron.weekly-digest.claim',
-              extra: { orgId, userId },
-            });
           }
 
           // The recipient's own signed one-click link for this org's digest

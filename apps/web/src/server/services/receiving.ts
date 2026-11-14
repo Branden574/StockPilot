@@ -98,6 +98,31 @@ export function hashReceiptRequest(input: PostReceiptInput): string {
   return createHash('sha256').update(normalized).digest('hex');
 }
 
+/**
+ * True when post_receipt_v2's answer is a receipt this request posted: of its
+ * purchase order and warehouse, in the caller's organization, recorded with
+ * its key (receipts.idempotency_key, written with the receipt) by the caller
+ * (received_by = auth.uid() at insert). A missing receipt answers a row of
+ * nulls, which fails on the id.
+ */
+function isReceiptOfRequest(
+  receipt: ReceiptRow | null,
+  input: PostReceiptInput,
+  ctx: Pick<ServiceContext, 'organizationId' | 'userId'>,
+): receipt is ReceiptRow {
+  return (
+    receipt !== null &&
+    typeof receipt === 'object' &&
+    typeof receipt.id === 'string' &&
+    receipt.id.length > 0 &&
+    receipt.organization_id === ctx.organizationId &&
+    receipt.purchase_order_id === input.purchaseOrderId &&
+    receipt.warehouse_id === input.warehouseId &&
+    receipt.idempotency_key === input.idempotencyKey &&
+    receipt.received_by === ctx.userId
+  );
+}
+
 export class ReceivingService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -300,18 +325,7 @@ export class ReceivingService {
       // 40001, which PostgREST < 16 retried forever). Matched on the message,
       // never the code.
       if (error.message.includes('idempotency_conflict')) {
-        await audit(
-          {
-            event: 'idempotency.conflict',
-            entityType: 'receipt',
-            extra: { purchaseOrderId: input.purchaseOrderId },
-          },
-          this.ctx,
-        );
-        throw new ServiceError(
-          'conflict',
-          'A different receipt was already submitted with this idempotency key. Refresh and try again.',
-        );
+        throw await this.receiptKeyConflict(input);
       }
       if (error.message.includes('po_already_closed')) {
         throw new ServiceError(
@@ -392,10 +406,23 @@ export class ReceivingService {
       }
       throw new ServiceError('internal_error', error.message);
     }
+
+    // A key the function has seen is answered with the receipt its stored
+    // row names (0013). That answer is used only when it is what a retry of
+    // THIS request gets back: a receipt of this purchase order, into this
+    // warehouse, in this organization, recorded with this key by this
+    // person. A first post always returns its own new receipt, which matches.
+    // Anything else is the same conflict as a key sent with other lines (the
+    // receipts route tags it idempotency_conflict); the function wrote
+    // nothing for it, so no audit, outbox, webhook or cache step runs.
+    const receipt = data as unknown as ReceiptRow | null;
+    if (!isReceiptOfRequest(receipt, input, this.ctx)) {
+      throw await this.receiptKeyConflict(input);
+    }
+
     // post_receipt_v2 put the accepted units into stock (adjust_stock).
     invalidateInventoryListAfterWrite(this.ctx.organizationId, 'receipt.post');
 
-    const receipt = data as unknown as ReceiptRow;
     const totalAccepted = input.lines.reduce((s, l) => s + l.qtyAccepted, 0);
     const totalRejected = input.lines.reduce((s, l) => s + (l.qtyRejected ?? 0), 0);
 
@@ -460,6 +487,23 @@ export class ReceivingService {
     );
 
     return receipt;
+  }
+
+  /** The one refusal for a key that does not belong to this request: audited,
+   *  and worded as the receipts route and the phone already read it. */
+  private async receiptKeyConflict(input: PostReceiptInput): Promise<ServiceError> {
+    await audit(
+      {
+        event: 'idempotency.conflict',
+        entityType: 'receipt',
+        extra: { purchaseOrderId: input.purchaseOrderId },
+      },
+      this.ctx,
+    );
+    return new ServiceError(
+      'conflict',
+      'A different receipt was already submitted with this idempotency key. Refresh and try again.',
+    );
   }
 
   /**
