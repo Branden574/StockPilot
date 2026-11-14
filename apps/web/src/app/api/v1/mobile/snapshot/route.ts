@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { can, isManagerOrAbove } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { getWarehouseAccess, type WarehouseAccess } from '@/lib/auth/warehouse';
 import { buildWarehouseScope } from '@/lib/warehouse-scope';
 import { reportError } from '@/lib/error-reporter';
@@ -221,6 +222,15 @@ async function snapshotGET(req: NextRequest) {
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
+  // A context without an effective permission set is refused before anything
+  // else, as /api/v1/me/permissions refuses it and as withApiContext refuses
+  // a set it could not read: the handler above answers 500 and reports it.
+  // The phone saves this route's `permissions` list as the member's own set
+  // and gates its screens on it, so an empty list here would close screens
+  // the member may use; on a non-2xx it keeps its saved set and pulls again
+  // later. The read gates below would otherwise fall back to the role's
+  // defaults (can()). A known empty set is still answered, with [].
+  if (!ctx.permissions) throw new PermissionsUnavailableError();
 
   // Manager-and-above see every warehouse because of their ROLE, and the
   // lookup is not made for them. getWarehouseAccess answers hasAllAccess =
@@ -727,8 +737,9 @@ async function snapshotGET(req: NextRequest) {
     // The caller's EFFECTIVE permissions (role defaults + org overrides, mig
     // 0207). Mobile gates its drawer nav on this so a revoked permission hides
     // its link — mirrors the web sidebar's ctx.permissions gating. string[]
-    // over the wire; mobile re-hydrates into a Set<Permission>.
-    permissions: Array.from(ctx.permissions ?? []),
+    // over the wire; mobile re-hydrates into a Set<Permission>. Always the
+    // set that was read: a context without one was refused above.
+    permissions: Array.from(ctx.permissions),
     // Warehouse scoping for the caller — drives the mobile Items screen's
     // scoped-view banner (web parity with ScopedWarehouseNotice). Reuses the
     // access decision computed above; the pure builder also narrows the

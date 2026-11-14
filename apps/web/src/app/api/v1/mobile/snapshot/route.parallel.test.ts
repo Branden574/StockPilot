@@ -265,20 +265,27 @@ const SCOPED_ACCESS = {
   primaryWarehouseId: 'wh1',
 };
 
-function mockContext(respond: Responder, role = 'staff') {
+// A member the web shows purchase orders, counts and kits to
+// (route.read-gates.test.ts covers everyone else).
+const READS_ALL = new Set([
+  'inventory.read',
+  'purchasing.read',
+  'cycle_counts:read',
+  'bundles:read',
+  'purchase_orders:read',
+]);
+
+/** `permissions: null` builds a context that carries no permission set at all. */
+function mockContext(
+  respond: Responder,
+  role = 'staff',
+  permissions: Set<string> | null = READS_ALL,
+) {
   vi.mocked(withApiContext).mockResolvedValue({
     organizationId: 'org-1',
     userId: 'u-1',
     role,
-    // A member the web shows purchase orders, counts and kits to
-    // (route.read-gates.test.ts covers everyone else).
-    permissions: new Set([
-      'inventory.read',
-      'purchasing.read',
-      'cycle_counts:read',
-      'bundles:read',
-      'purchase_orders:read',
-    ]),
+    ...(permissions ? { permissions } : {}),
     enabledModules: new Set(['inventory', 'purchasing', 'bundles', 'cycle_counts', 'purchase_orders']),
     mfaRequired: false,
     mfaSatisfied: true,
@@ -485,6 +492,37 @@ describe('rate limit and authentication still deny', () => {
     expect(checkRateLimit).not.toHaveBeenCalled();
     expect(getWarehouseAccess).not.toHaveBeenCalled();
     expect(queries).toHaveLength(0);
+  });
+
+  it('refuses a context that carries no permission set the same way, never answering an empty list', async () => {
+    // The phone saves the snapshot's `permissions` list as the member's real
+    // set, so an empty list sent for a set nobody read would close screens
+    // the member may use. A refusal keeps its saved set until the next pull.
+    mockContext(respondFor(), 'staff', null);
+
+    const res = await GET(request());
+
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: 'internal_error', code: 'snapshot_uncaught' });
+    expect(reportError).toHaveBeenCalledWith(expect.any(PermissionsUnavailableError), {
+      tag: 'mobile.snapshot.uncaught',
+    });
+    expect(checkRateLimit).not.toHaveBeenCalled();
+    expect(getWarehouseAccess).not.toHaveBeenCalled();
+    expect(queries).toHaveLength(0);
+  });
+
+  it('answers a member whose set is known and empty with 200 and an empty list', async () => {
+    mockContext(respondFor(), 'staff', new Set());
+
+    const res = await GET(request());
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.permissions).toEqual([]);
+    expect(body.openPOs).toEqual([]);
+    expect(body.openCycleCounts).toEqual([]);
+    expect(body.activeBundleIds).toEqual([]);
   });
 });
 
