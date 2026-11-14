@@ -4,9 +4,9 @@ import { z } from 'zod';
 
 import { isUuid } from '@stockpilot/core';
 
-import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { apiContextGate } from '@/server/lib/api-context-gate';
 import { UserCategoriesService } from '@/server/services/user-categories';
 
 import {
@@ -61,10 +61,19 @@ const bodySchema = z
  *       organization;
  *   409 `conflict`: the grant changed meanwhile; reload and try again;
  *   429 `rate_limited`, with Retry-After (120 changes a minute per account);
- *   500 `internal_error`, with a fixed sentence.
+ *   500 `internal_error`, with a fixed sentence;
+ *   503 `check_failed`, with Retry-After 5 and details { reason:
+ *       'context_unavailable', retryable, nothingWritten }: the caller's
+ *       access could not be read, so the request was refused before anything
+ *       here ran (the API context gate). The same request may be sent again.
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const ctx = await withApiContext(req);
+  // First, before the id, the rate limit, the body or the write: a context
+  // that could not be built because the caller's access could not be read
+  // answers the 503 a caller may send again (server/lib/api-context-gate.ts).
+  const gate = await apiContextGate(req);
+  if ('response' in gate) return gate.response;
+  const ctx = gate.ctx;
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }

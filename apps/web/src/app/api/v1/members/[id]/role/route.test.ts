@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { contextUnavailableBody } from '@stockpilot/core';
+
+import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { withApiContext } from '@/lib/auth/api-context';
+import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
+import { MembershipUnavailableError } from '@/lib/auth/membership-unavailable';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { ServiceError } from '@/server/services/context';
@@ -19,12 +24,15 @@ vi.mock('@/server/services/team', () => ({ TeamService: vi.fn() }));
  * Security invariant: PATCH /api/v1/members/[id]/role changes a member's role
  * through TeamService.updateMemberRole and nothing else.
  *
- * The route builds its context with withApiContext (cookie or Bearer), so the
- * service runs as the caller: its permission check, the organization's
- * authenticator rule, the owner and own-row refusals, the audit row and the
- * security event are the Team page's own. The route adds the id and body
+ * The route builds its context with withApiContext (cookie or Bearer), through
+ * the API context gate, so the service runs as the caller: its permission
+ * check, the organization's authenticator rule, the owner and own-row
+ * refusals, the audit row and the security event are the Team page's own. A
+ * context that could not be built because the caller's access could not be
+ * read answers the gate's 503 before any work. The route adds the id and body
  * checks and a per-account rate limit, and answers the service's refusal with
- * its code, its words and its reason.
+ * its code, its words and its reason. The body's role is one of admin,
+ * manager, staff and viewer: 'owner' is refused as a bad body.
  */
 
 const MEMBER = '5a1b2c3d-0000-4000-8000-00000000000a';
@@ -83,6 +91,37 @@ describe('PATCH /api/v1/members/[id]/role', () => {
     expect(call).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['the account status', () => new AccountStatusUnavailableError()],
+    ['the membership', () => new MembershipUnavailableError()],
+    ['the permissions', () => new PermissionsUnavailableError()],
+  ])(
+    'answers the 503 a caller may send again when %s could not be read, before any work',
+    async (_what, make) => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.mocked(withApiContext).mockRejectedValue(make());
+      const call = mockService();
+      const { req, params } = request();
+      const res = await PATCH(req, params);
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual(contextUnavailableBody());
+      expect(res.headers.get('Retry-After')).toBe('5');
+      expect(res.headers.get('Cache-Control')).toBe('no-store');
+      expect(checkRateLimit).not.toHaveBeenCalled();
+      expect(TeamService).not.toHaveBeenCalled();
+      expect(call).not.toHaveBeenCalled();
+    },
+  );
+
+  it('any other failure of the context step is thrown again, unanswered', async () => {
+    const failed = new Error('the context step failed another way');
+    vi.mocked(withApiContext).mockRejectedValue(failed);
+    const call = mockService();
+    const { req, params } = request();
+    await expect(PATCH(req, params)).rejects.toBe(failed);
+    expect(call).not.toHaveBeenCalled();
+  });
+
   it('hands withApiContext the request it was given', async () => {
     mockService();
     const { req, params } = request();
@@ -106,6 +145,7 @@ describe('PATCH /api/v1/members/[id]/role', () => {
     ['a body that is not JSON', { raw: '{not json' }],
     ['no role', { body: {} }],
     ['a role that does not exist', { body: { role: 'superuser' } }],
+    ["the role 'owner', which moves by transfer only", { body: { role: 'owner' } }],
     ['a role that is not text', { body: { role: 3 } }],
   ])('answers 400 for %s, before the service', async (_label, opts) => {
     const call = mockService();
@@ -139,15 +179,30 @@ describe('PATCH /api/v1/members/[id]/role', () => {
     expect(call).toHaveBeenCalledWith(MEMBER, 'manager');
   });
 
-  it("leaves 'owner' to the service, which refuses it", async () => {
-    const call = mockService(async () => {
-      throw new ServiceError('forbidden', 'Use transferOwnership to assign owner');
-    });
-    const { req, params } = request({ body: { role: 'owner' } });
-    const res = await PATCH(req, params);
-    expect(call).toHaveBeenCalledWith(MEMBER, 'owner');
-    expect(res.status).toBe(403);
+  it("a bad role, 'owner' included, is answered in words that name the four roles", async () => {
+    const call = mockService();
+    for (const role of ['owner', 'superuser']) {
+      const { req, params } = request({ body: { role } });
+      const res = await PATCH(req, params);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: 'validation_error',
+        message: 'Choose a role: admin, manager, staff or viewer.',
+      });
+    }
+    expect(call).not.toHaveBeenCalled();
   });
+
+  it.each(['admin', 'manager', 'staff', 'viewer'] as const)(
+    'the role %s reaches the service',
+    async (role) => {
+      const call = mockService();
+      const { req, params } = request({ body: { role } });
+      const res = await PATCH(req, params);
+      expect(res.status).toBe(200);
+      expect(call).toHaveBeenCalledWith(MEMBER, role);
+    },
+  );
 
   it.each([
     ['forbidden', 403, 'Missing permission: members:update_role'],

@@ -19,6 +19,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * The phone's order mutations keep their per-user limiter ahead of the check,
  * as the submission routes do (`limiterFirst`).
  *
+ * The two member routes (a role, a category grant) are held to the same
+ * answers: 401 first, then the strict check, before their limiter.
+ *
  * The static half (every dynamic route, the first use of each id) is
  * app/path-ids.guard.test.ts.
  */
@@ -68,6 +71,7 @@ const PO = { error: 'validation_error', message: 'That purchase order id is not 
 const PO_IMPORT = { error: 'validation_error', message: 'That PO import id is not valid.' };
 const CYCLE_COUNT = { error: 'validation_error', message: 'That cycle count id is not valid.' };
 const INVALID_ID = { error: 'invalid_id' };
+const MEMBER = { error: 'validation_error', message: 'That member id is not valid.' };
 
 interface Row {
   name: string;
@@ -418,6 +422,30 @@ const LOOSE: Row[] = [
   ),
 ];
 
+/** The two member routes: the membership id, by the strict check. */
+const MEMBER_ROUTES: Row[] = [
+  {
+    name: "change a member's role (v1/members/[id]/role)",
+    load: () => import('./v1/members/[id]/role/route'),
+    method: 'PATCH',
+    params: { id: GOOD },
+    bad: 'id',
+    path: (p) => `/api/v1/members/${p.id}/role`,
+    body: { role: 'staff' },
+    json: MEMBER,
+  },
+  {
+    name: "grant or revoke a member's category (v1/members/[id]/category-access)",
+    load: () => import('./v1/members/[id]/category-access/route'),
+    method: 'POST',
+    params: { id: GOOD },
+    bad: 'id',
+    path: (p) => `/api/v1/members/${p.id}/category-access`,
+    body: { categoryId: GOOD, granted: true },
+    json: MEMBER,
+  },
+];
+
 /** Every property read of the database client: none is expected. */
 const clientReads: string[] = [];
 const untouchableClient = new Proxy(
@@ -467,7 +495,7 @@ beforeEach(() => {
   process.env.NEXT_PUBLIC_APP_URL = 'https://test.local';
 });
 
-const ALL = [...UNCHECKED, ...LOOSE];
+const ALL = [...UNCHECKED, ...LOOSE, ...MEMBER_ROUTES];
 
 describe('a malformed record id in an API path answers 400 before anything is read (B63)', () => {
   it('covers the 18 route files that used the id unchecked and the 14 with the loose pattern', async () => {
@@ -475,6 +503,10 @@ describe('a malformed record id in an API path answers 400 before anything is re
     // The signature alias re-exports the same handler: 18 files plus the alias.
     expect(files(UNCHECKED).size).toBe(19);
     expect(files(LOOSE).size).toBe(14);
+    expect([...files(MEMBER_ROUTES)]).toEqual([
+      'v1/members/[id]/role',
+      'v1/members/[id]/category-access',
+    ]);
     // The routes that check a permission themselves, after the 401.
     expect([...files(ALL.filter((r) => r.permission !== undefined))]).toEqual([
       'purchase-orders/[id]/pdf',

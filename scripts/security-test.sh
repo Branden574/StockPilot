@@ -1875,11 +1875,13 @@ WEB_TESTS=(
   # TeamService.updateMemberRole and nothing else, and
   # POST /api/v1/members/[id]/category-access grants or revokes ONE category
   # through UserCategoriesService.setMemberCategoryGrant and nothing else:
-  # each builds its context with withApiContext, so the service's permission
-  # check, the organization's authenticator rule, its audit row and its
-  # security event are the web's own; a refusal keeps its code, words and
-  # reason; a database failure answers a fixed sentence. The category body is
-  # exactly one category and one flag (a list is refused), the member and the
+  # each builds its context with withApiContext, through the API context gate,
+  # so the service's permission check, the organization's authenticator rule,
+  # its audit row and its security event are the web's own; a context that
+  # could not be read answers the gate's 503 before any work; a refusal keeps
+  # its code, words and reason; a database failure answers a fixed sentence.
+  # The role body is one of admin, manager, staff and viewer. The category
+  # body is exactly one category and one flag (a list is refused), the member and the
   # category are read in the caller's organization, and the write is the one
   # row, never the member's set. A save of the role a member already has, or
   # of the authenticator policy an organization already has, changes nothing:

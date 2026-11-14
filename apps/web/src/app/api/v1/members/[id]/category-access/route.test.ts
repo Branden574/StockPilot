@@ -1,7 +1,12 @@
 import { revalidatePath, revalidateTag } from 'next/cache';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { contextUnavailableBody } from '@stockpilot/core';
+
+import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { withApiContext } from '@/lib/auth/api-context';
+import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
+import { MembershipUnavailableError } from '@/lib/auth/membership-unavailable';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { ServiceError } from '@/server/services/context';
@@ -24,7 +29,9 @@ vi.mock('@/server/services/user-categories', () => ({ UserCategoriesService: vi.
  * The body names one category and whether it is granted. It never carries a
  * list: the member's other grants are not read from the request and are not
  * rewritten. The route builds its context with withApiContext (cookie or
- * Bearer), so the service runs as the caller, in the caller's organization.
+ * Bearer), through the API context gate, so the service runs as the caller,
+ * in the caller's organization; a context that could not be built because the
+ * caller's access could not be read answers the gate's 503 before any work.
  */
 
 const MEMBER = '5a1b2c3d-0000-4000-8000-00000000000a';
@@ -84,6 +91,37 @@ describe('POST /api/v1/members/[id]/category-access', () => {
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: 'unauthenticated' });
     expect(UserCategoriesService).not.toHaveBeenCalled();
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the account status', () => new AccountStatusUnavailableError()],
+    ['the membership', () => new MembershipUnavailableError()],
+    ['the permissions', () => new PermissionsUnavailableError()],
+  ])(
+    'answers the 503 a caller may send again when %s could not be read, before any work',
+    async (_what, make) => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.mocked(withApiContext).mockRejectedValue(make());
+      const call = mockService();
+      const { req, params } = request();
+      const res = await POST(req, params);
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual(contextUnavailableBody());
+      expect(res.headers.get('Retry-After')).toBe('5');
+      expect(res.headers.get('Cache-Control')).toBe('no-store');
+      expect(checkRateLimit).not.toHaveBeenCalled();
+      expect(UserCategoriesService).not.toHaveBeenCalled();
+      expect(call).not.toHaveBeenCalled();
+    },
+  );
+
+  it('any other failure of the context step is thrown again, unanswered', async () => {
+    const failed = new Error('the context step failed another way');
+    vi.mocked(withApiContext).mockRejectedValue(failed);
+    const call = mockService();
+    const { req, params } = request();
+    await expect(POST(req, params)).rejects.toBe(failed);
     expect(call).not.toHaveBeenCalled();
   });
 
