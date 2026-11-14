@@ -755,6 +755,10 @@ const TABLE_WRITES: Record<string, ClassifiedWrite> = {
     'not_org_data',
     'Scheduled job: claims and releases the reminder on the rental row it just read; no active organization.',
   ],
+  'app/api/cron/weekly-digest/route.ts#mayClaimTakenWeek::idempotency_keys.update': [
+    'not_org_data',
+    "Scheduled job: takes over the week's claim row it just read under the organization's key, by its id and the hash it was read with; no active organization.",
+  ],
   'app/api/cron/schedule-reminders/route.ts#GET::schedule_events.update': [
     'not_org_data',
     'Scheduled job: claims the reminder on the event row it just read; no active organization.',
@@ -3004,11 +3008,12 @@ describe('every table write in apps/web/src stays in the active organization and
       ([k]) => k === 'row_in_hand' || k === 'not_org_data',
     );
     for (const [, why] of Object.values(TABLE_WRITES)) expect(why.trim()).not.toBe('');
-    // 4 rows in hand and 55 jobs, webhooks, callbacks, public token paths,
-    // platform console and sign-up writes today. A new one is added here on
-    // purpose, with its reason, never to quiet a failure.
+    // 4 rows in hand and 56 jobs, webhooks, callbacks, public token paths,
+    // platform console and sign-up writes today (the 56th: the weekly digest
+    // re-signing its week's claim row). A new one is added here on purpose,
+    // with its reason, never to quiet a failure.
     expect(stated.filter(([k]) => k === 'row_in_hand')).toHaveLength(4);
-    expect(stated.filter(([k]) => k === 'not_org_data')).toHaveLength(55);
+    expect(stated.filter(([k]) => k === 'not_org_data')).toHaveLength(56);
     expect(Object.keys(ROW_PROOF_EXEMPT)).toHaveLength(8);
     // One write serves several tables, and no query builder is kept in a
     // variable.
