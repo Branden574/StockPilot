@@ -40,6 +40,7 @@ import {
   CONFIRM_RECIPIENT_LOOKUP_TIMEOUT_MS,
   confirmLinkUrl,
   EMAIL_CHANGE_REQUEST_SKEW_S,
+  emailChangeRequestTimeMissing,
   lookUpConfirmRecipient,
   pendingEmailChangeFor,
   verifyConfirmRecipient,
@@ -283,6 +284,47 @@ describe('lookUpConfirmRecipient', () => {
     });
   });
 
+  it('found: a request time that is missing or cannot be read as a date is none', async () => {
+    const unreadable: Array<[string, Record<string, unknown>]> = [
+      ['absent', {}],
+      ['null', { email_change_sent_at: null }],
+      ['empty', { email_change_sent_at: '' }],
+      ['blank', { email_change_sent_at: '   ' }],
+      ['not a time', { email_change_sent_at: 'not a time' }],
+      ['a bare number in a string', { email_change_sent_at: '0' }],
+      ['a number', { email_change_sent_at: 0 }],
+      ['milliseconds as a number', { email_change_sent_at: NOW.getTime() }],
+      ['an object', { email_change_sent_at: {} }],
+    ];
+    for (const [label, fields] of unreadable) {
+      getUserById.mockResolvedValueOnce(user({ new_email: 'new@example.com', ...fields }));
+      await expect(lookUpConfirmRecipient(USER_A, NOW), label).resolves.toEqual({
+        kind: 'found',
+        email: 'person@example.com',
+        newEmail: 'new@example.com',
+        emailChangeSentAt: null,
+      });
+    }
+    // GoTrue's own shapes are read as before.
+    for (const sentAt of [
+      '2026-10-31T11:58:30.25Z',
+      '2026-10-31T11:58:30.25+00:00',
+      '2026-10-31T11:58:30.123456Z',
+      // Go drops a zero fraction, writes up to nine digits, and writes the
+      // server's own offset when it is not UTC.
+      '2026-10-31T11:58:30Z',
+      '2026-10-31T11:58:30.123456789Z',
+      '2026-10-31T04:58:30.123456-07:00',
+    ]) {
+      getUserById.mockResolvedValueOnce(
+        user({ new_email: 'new@example.com', email_change_sent_at: sentAt }),
+      );
+      await expect(lookUpConfirmRecipient(USER_A, NOW), sentAt).resolves.toMatchObject({
+        emailChangeSentAt: Date.parse(sentAt),
+      });
+    }
+  });
+
   it('gone: GoTrue has no such account, it has no email, or it is disabled', async () => {
     getUserById.mockResolvedValueOnce({
       data: { user: null },
@@ -379,9 +421,33 @@ describe('pendingEmailChangeFor (an email-change link GoTrue still holds)', () =
     }
   });
 
-  it('no request time from GoTrue (it stores one with every pending change): taken as the live link, as before', () => {
+  it('a pending change without a recorded request time is not the live link: no address', () => {
     expect(
       pendingEmailChangeFor({ newEmail: 'new@example.com', emailChangeSentAt: null }, ISSUED),
-    ).toBe('new@example.com');
+    ).toBeNull();
+    expect(
+      emailChangeRequestTimeMissing({ newEmail: 'new@example.com', emailChangeSentAt: null }),
+    ).toBe(true);
+  });
+
+  it('says the request time is missing only for a pending change without one', () => {
+    for (const newEmail of [null, '']) {
+      expect(emailChangeRequestTimeMissing({ newEmail, emailChangeSentAt: null })).toBe(false);
+      expect(emailChangeRequestTimeMissing({ newEmail, emailChangeSentAt: at(0) })).toBe(false);
+    }
+    for (const sentAt of [at(-3), at(0), at(45), at(10 * 365 * 24 * 3600)]) {
+      expect(
+        emailChangeRequestTimeMissing({ newEmail: 'new@example.com', emailChangeSentAt: sentAt }),
+      ).toBe(false);
+    }
+  });
+
+  it('a request time far past the link is a later request: no address', () => {
+    expect(
+      pendingEmailChangeFor(
+        { newEmail: 'new@example.com', emailChangeSentAt: at(10 * 365 * 24 * 3600) },
+        ISSUED,
+      ),
+    ).toBeNull();
   });
 });
