@@ -310,9 +310,9 @@ declare
   v_actor uuid;
   v_aal   text;
 begin
-  -- The token's subject and its aal claim. A subject that is not a uuid, or
-  -- claims that cannot be read as JSON, count as no subject and no aal: the
-  -- token's form never stops the change.
+  -- The token's subject and its aal claim. A token whose subject is not a
+  -- uuid, or whose claims are not JSON, is recorded with no actor and no
+  -- aal.
   begin
     v_actor := auth.uid();
   exception when invalid_text_representation then
@@ -362,9 +362,10 @@ declare
   v_actor uuid;
   v_aal   text;
 begin
-  -- The token's subject and its aal claim. A subject that is not a uuid, or
-  -- claims that cannot be read as JSON, count as no subject and no aal: the
-  -- token's form never stops the change.
+  -- The token's subject and its aal claim, read as the policy recorder
+  -- reads them: a subject that is not a uuid, or claims that are not JSON,
+  -- count as no actor and no aal. The membership guard refuses such a token
+  -- before this trigger runs.
   begin
     v_actor := auth.uid();
   exception when invalid_text_representation then
