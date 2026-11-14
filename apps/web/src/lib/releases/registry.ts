@@ -214,7 +214,11 @@ export const RELEASES: Release[] = [
     //   given the permission) is left out by the integrator's decision
     //   (items/S36.json), so the summary drops its clause about a staff
     //   member given the permission and promises nothing that entry alone
-    //   covered. The rest of the summary is the draft's.
+    //   covered;
+    // - the summary gains a last sentence about Today's briefing, so a reader
+    //   who sees only the briefing entry (an owner, or staff who can open
+    //   Today's briefing) is covered by the summary too. The rest of the
+    //   summary is the draft's.
     // Claims checked against the code at a1cd8247a:
     // - The alert: supabase/migrations/0422_notice_audience_follows_permission.sql
     //   section 3: the New order request notice is written for whoever holds
@@ -241,7 +245,7 @@ export const RELEASES: Release[] = [
     status: 'published',
     title: 'New order request alerts go to the people who can approve the order',
     summary:
-      'The New order request alert now goes to everyone with the "Approve / fulfill orders" permission who can approve orders in the request\'s warehouse, and stops for anyone whose permission was removed. It arrives on the web and in the mobile app, with no app update needed.',
+      'The New order request alert now goes to everyone with the "Approve / fulfill orders" permission who can approve orders in the request\'s warehouse, and stops for anyone whose permission was removed. It arrives on the web and in the mobile app, with no app update needed. Today\'s briefing also shows only the lines you can open.',
     // Migration 0422 went live at 17:57:33Z, after the web deploy.
     publishedAt: '2026-11-14T17:58:00Z',
     audience: { modules: ['orders'] },

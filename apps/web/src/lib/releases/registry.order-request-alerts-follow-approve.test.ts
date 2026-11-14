@@ -114,13 +114,19 @@ describe('the order request alerts release: order, status and date', () => {
 });
 
 describe('the order request alerts release: the words', () => {
-  it('has the reviewed title, and a summary that names nothing the two entries do not cover', () => {
+  it('has the reviewed title, and a summary that covers both entries and names nothing they do not cover', () => {
     expect(release().title).toBe(
       'New order request alerts go to the people who can approve the order',
     );
     expect(release().summary).toBe(
-      'The New order request alert now goes to everyone with the "Approve / fulfill orders" permission who can approve orders in the request\'s warehouse, and stops for anyone whose permission was removed. It arrives on the web and in the mobile app, with no app update needed.',
+      'The New order request alert now goes to everyone with the "Approve / fulfill orders" permission who can approve orders in the request\'s warehouse, and stops for anyone whose permission was removed. It arrives on the web and in the mobile app, with no app update needed. Today\'s briefing also shows only the lines you can open.',
     );
+    // The last sentence is for a reader who sees only the briefing entry (an
+    // owner, or staff who can open Today's briefing): old phone builds show
+    // only the title and the summary.
+    expect(
+      release().summary.endsWith(" Today's briefing also shows only the lines you can open."),
+    ).toBe(true);
   });
 
   it('says the alert stops with the permission, in the reviewed words', () => {
