@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   insert: vi.fn(),
   headersCalls: 0,
+  headerValues: null as Record<string, string> | null,
   reportError: vi.fn(),
   withContext: vi.fn(),
   after: vi.fn(),
@@ -26,7 +27,7 @@ vi.mock('next/server', () => ({ after: h.after }));
 vi.mock('next/headers', () => ({
   headers: async () => {
     h.headersCalls += 1;
-    const values: Record<string, string> = {
+    const values: Record<string, string> = h.headerValues ?? {
       'x-forwarded-for': '203.0.113.7, 10.0.0.1',
       'user-agent': 'lab-agent/1.0',
     };
@@ -102,11 +103,15 @@ beforeEach(() => {
   h.withContext.mockReset();
   h.after.mockReset();
   h.headersCalls = 0;
+  h.headerValues = null;
+  // Production: Vercel sets x-forwarded-for.
+  vi.stubEnv('VERCEL', '1');
   resetAuditLossReportsForTests();
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 
 describe('audit()', () => {
@@ -146,6 +151,23 @@ describe('audit()', () => {
       },
       expect.any(AbortSignal),
     );
+  });
+
+  it('the IP is read by the one rule (lib/client-ip): off Vercel x-forwarded-for is not read', async () => {
+    h.insert.mockResolvedValue(ok);
+    vi.stubEnv('VERCEL', '');
+    await audit(payload(1), ctx);
+    expect(h.insert.mock.calls[0]![0]).toMatchObject({ ip: null });
+    h.headerValues = { 'x-forwarded-for': '203.0.113.7', 'x-real-ip': '198.51.100.2' };
+    await audit(payload(2), ctx);
+    expect(h.insert.mock.calls[1]![0]).toMatchObject({ ip: '198.51.100.2' });
+  });
+
+  it('an address header that is not an IP literal is stored as null, never as text', async () => {
+    h.insert.mockResolvedValue(ok);
+    h.headerValues = { 'x-forwarded-for': 'not-an-address' };
+    await audit(payload(1), ctx);
+    expect(h.insert.mock.calls[0]![0]).toMatchObject({ ip: null });
   });
 
   it('reports nothing when the row is written', async () => {
