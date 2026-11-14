@@ -61,6 +61,24 @@ describe('switchOrganizationAction', () => {
     expect(revalidatePath).not.toHaveBeenCalled();
   });
 
+  it('a membership read that fails: internal_error (try again), never forbidden, and nothing switched', async () => {
+    stubHolder.stub = makeSupabaseStub({
+      'organization_members.select': {
+        data: null,
+        error: { code: '57014', message: 'canceling statement due to statement timeout' },
+      },
+      'user_profiles.update': { data: null, error: null },
+    });
+    const result = await switchOrganizationAction({ organizationId: VALID_ORG_ID });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('internal_error');
+      expect(result.error.message).not.toMatch(/statement|timeout/);
+    }
+    expect(stubHolder.stub.fromCalls).not.toContain('user_profiles');
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
   it('updates default org and revalidates dashboard layout on success', async () => {
     stubHolder.stub = makeSupabaseStub({
       'organization_members.select': {

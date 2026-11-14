@@ -94,11 +94,7 @@ const state: {
 };
 
 /** Minimal PostgREST-shaped fake: chainable, awaitable, and maybeSingle-able. */
-function table(
-  single: unknown,
-  list: unknown[] = [],
-  error: { message: string } | null = null,
-) {
+function table(single: unknown, list: unknown[] = [], error: { message: string } | null = null) {
   const q: Record<string, unknown> = {};
   const self = () => q;
   q.select = self;
@@ -110,9 +106,9 @@ function table(
   q.order = self;
   q.range = self;
   q.update = self;
-  q.maybeSingle = async () => ({ data: error ? null : single, error });
+  q.maybeSingle = async () => ({ data: error ? null : single, error, status: error ? 500 : 200 });
   q.then = (resolve: (v: unknown) => unknown) =>
-    Promise.resolve({ data: error ? null : list, error }).then(resolve);
+    Promise.resolve({ data: error ? null : list, error, status: error ? 500 : 200 }).then(resolve);
   return q;
 }
 
@@ -120,7 +116,8 @@ function table(
 function userClient() {
   return {
     from: (name: string) => {
-      if (name === 'user_profiles') return table(state.profile, [], state.profileError);
+      if (name === 'user_profiles')
+        return table(state.profile, state.profile ? [state.profile] : [], state.profileError);
       if (name === 'organization_members') return table(state.member, state.memberRows);
       if (name === 'organizations') return table({ mfa_policy: 'optional' });
       if (name === 'organization_modules') return table(null, []);
@@ -157,7 +154,12 @@ function adminClient() {
         return table({ module_id: 'b2b_portal', settings: { pricingMode: 'priced' } });
       }
       if (name === 'organizations') {
-        return table({ name: 'L4L North Region', logo_url: null, plan: null, access_tier: 'business' });
+        return table({
+          name: 'L4L North Region',
+          logo_url: null,
+          plan: null,
+          access_tier: 'business',
+        });
       }
       return table(null);
     },
