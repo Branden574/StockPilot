@@ -29,7 +29,10 @@
 --    The trigger trg_zz_organization_invites_update_pin (BEFORE UPDATE, per
 --    row) pins what an UPDATE from an API member role may change: when
 --    current_user is authenticated or anon, only expires_at may differ
---    (otherwise 42501), and only to a time after now() and no later than
+--    (otherwise 42501; the row is compared with its expiry put back, column
+--    by column in stored form, *=, so a value that compares equal but is
+--    stored differently counts as a change too), and only to a time after
+--    now() and no later than
 --    now() + 7 days 1 hour (otherwise 22023). It keys on current_user, never
 --    on auth.uid(), so the writers that run as the table owner keep working
 --    while a member's claims are set: the account-deletion trigger
@@ -286,9 +289,16 @@ language plpgsql
 security invoker
 set search_path = ''
 as $$
+declare
+  v_rest public.organization_invites;
 begin
   if current_user in ('authenticated', 'anon') then
-    if (to_jsonb(new) - 'expires_at') is distinct from (to_jsonb(old) - 'expires_at') then
+    -- The new row with the old expiry put back must be the old row, compared
+    -- in stored form (*=): every column, a null against a value, and a
+    -- citext or jsonb value that compares equal but is written differently.
+    v_rest := new;
+    v_rest.expires_at := old.expires_at;
+    if not (v_rest *= old) then
       raise exception 'invite_update_expiry_only'
         using errcode = '42501',
               detail = 'An invite''s expiry is the only thing that can change.';

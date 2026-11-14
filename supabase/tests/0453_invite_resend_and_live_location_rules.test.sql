@@ -11,16 +11,18 @@
 --     rules pinned (S5, S6); the helper's shape and privileges (S7); the
 --     helpers the rules call stay executable by authenticated (S8).
 -- I.  Invites. An admin's Resend renews an open invite (I1); the owner too
---     (I2); an admin whose members:invite is restricted is answered by role,
---     as the table's INSERT, SELECT and DELETE rules answer them (I3). A
---     manager, a manager granted members:invite, staff, a viewer, another
+--     (I2); the rule asks the admin role, like the table's other rules (I3).
+--     A manager, a manager granted members:invite, staff, a viewer, another
 --     organization's admin and anon change nothing (I4-I8). A revoked or an
 --     accepted invite stays as it is (I9, I10); an expired open one is
---     renewed (I11). Only the expiry may change, within 7 days (I12-I18).
---     The service role marks an invite used (I19). Account deletion still
+--     renewed (I11). Only the expiry may change, within 7 days (I12-I17).
+--     The service role marks an invite used (I18). Account deletion still
 --     revokes, run by GoTrue's role or postgres while a member's claims are
---     set (I20, I21), and so does a SECURITY DEFINER function called by an
---     admin (I22). Inserting and deleting invites are unchanged (I23, I24).
+--     set (I19, I20), and so does a SECURITY DEFINER function called by an
+--     admin (I21). Sending, revoking and listing invites are unchanged (I22,
+--     I23). An upsert and a MERGE change only the expiry too (I24-I27), and
+--     the pin compares the row in stored form: a JSON null where SQL null was
+--     and a change of letter case count as changes (I28, I29).
 -- L.  Live points. A staff member who is not the assigned driver, holding
 --     orders:approve and orders:assign_delivery by grant, moves and creates
 --     nothing (L1, L2). The assigned driver overwrites the earlier driver's
@@ -35,21 +37,25 @@
 --     (L13). Staff and managers still delete a point (the cancel clean-ups);
 --     a viewer, another organization and anon do not (L14, L15). anon writes
 --     nothing (L16). The service role writes and deletes (L17). Reads are
---     unchanged (L18).
--- H.  rls_orgs_with_module: an enabled module (H1), never another
---     organization (H2), a module that is off (H3), a comped organization
---     (H4), a non-member (H5), an expired Act-as seat (H6), a disabled
---     account (H7), a membership not accepted yet (H8); anon and the service
---     role cannot call it (H9).
+--     unchanged (L18). A member of two organizations who is the assigned
+--     driver of a delivery in one cannot file its point under the other
+--     (L19; M5 shows the order's organization term is what decides it).
+-- H.  rls_orgs_with_module: the caller's organizations with the module on
+--     (H1), never another organization (H2), not a module that is off or has
+--     no row (H3), a comped organization (H4); nothing for a non-member, an
+--     expired Act-as seat, a disabled account or a membership not accepted
+--     yet (H5); anon and the service role cannot call it (H6).
 -- X.  The plan's other two breaking drafts, as controls this slice must
 --     leave working: a receipt by a manager whose items:update is restricted
 --     still writes its serials (the ledger flag on, as post_receipt_v2 sets
 --     it; plan C0), and a member who may create items but not edit them
 --     still duplicates a tagged item (duplicate_inventory_item copies the
---     tags as the caller; plan C6a). S11-A changes neither rule.
+--     tags as the caller; plan C6a). S11-A changes neither rule. X1 stands
+--     in for the receipt: it writes the serial row directly with the ledger
+--     flag set the way post_receipt_v2 sets it, rather than posting one.
 -- M.  Mutation: each control swaps one of this file's rules or its trigger
 --     for another text inside an undone block, and the matching case answers
---     differently (L1, I1, I9, I12). So those cases measure this file's
+--     differently (L1, I1, I9, I12, L19). So those cases measure this file's
 --     terms, not the fixture.
 -- A.  The migration's own preflight and lock prelude, replayed from the
 --     statements the CLI recorded: the preflight refuses a second run,
@@ -65,7 +71,7 @@
 
 begin;
 
-select plan(66);
+select plan(74);
 
 \set orgA '\'511a0000-0000-0000-0000-00000000000a\''
 \set orgC '\'511a0000-0000-0000-0000-00000000000c\''
@@ -91,7 +97,8 @@ select plan(66);
 --   14 staff of A, account disabled
 --   15 staff of A on an expired Act-as seat
 --   16 staff of A, membership not accepted
---   17 admin of A, the sender of an invite, whose account is deleted in I20/I21
+--   17 admin of A, the sender of an invite, whose account is deleted in I19/I20
+--   18 viewer of A and staff of C, the driver of delivery 7 (in A)
 \set p01 '\'511a0000-0000-0000-0000-000000000101\''
 \set p02 '\'511a0000-0000-0000-0000-000000000102\''
 \set p03 '\'511a0000-0000-0000-0000-000000000103\''
@@ -109,15 +116,18 @@ select plan(66);
 \set p15 '\'511a0000-0000-0000-0000-000000000115\''
 \set p16 '\'511a0000-0000-0000-0000-000000000116\''
 \set p17 '\'511a0000-0000-0000-0000-000000000117\''
+\set p18 '\'511a0000-0000-0000-0000-000000000118\''
 
 -- Orders (deliveries): 1 in transit (driver 06, point by 07), 2 in transit
 -- (driver 07), 3 staged (driver 06), 5 in transit (driver 09, a viewer),
--- 6 in transit (driver 11), C1 in transit in organization C (driver 10).
+-- 6 in transit (driver 11), 7 in transit (driver 18), C1 in transit in
+-- organization C (driver 10).
 \set o1  '\'511a0000-0000-0000-0000-0000000002a1\''
 \set o2  '\'511a0000-0000-0000-0000-0000000002a2\''
 \set o3  '\'511a0000-0000-0000-0000-0000000002a3\''
 \set o5  '\'511a0000-0000-0000-0000-0000000002a5\''
 \set o6  '\'511a0000-0000-0000-0000-0000000002a6\''
+\set o7  '\'511a0000-0000-0000-0000-0000000002a7\''
 \set oC1 '\'511a0000-0000-0000-0000-0000000002c1\''
 
 -- Invites of A: open (sent by 02), revoked, accepted, expired but open, open
@@ -132,7 +142,7 @@ select plan(66);
 insert into auth.users (id, email, raw_user_meta_data)
   select ('511a0000-0000-0000-0000-0000000001' || lpad(g::text, 2, '0'))::uuid,
          'person' || g || '@s11a.test', '{}'::jsonb
-    from generate_series(1, 17) g;
+    from generate_series(1, 18) g;
 insert into public.organizations (id, name, slug) values
   (:orgA, 'S11A Org A', 's11a-org-a'),
   (:orgC, 'S11A Org C', 's11a-org-c');
@@ -149,6 +159,8 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgC, :p10, 'staff',   now()),
   (:orgA, :p11, 'manager', now()),
   (:orgC, :p12, 'admin',   now()),
+  (:orgA, :p18, 'viewer',  now()),
+  (:orgC, :p18, 'staff',   now()),
   (:orgA, :p14, 'staff',   now()),
   (:orgA, :p16, 'staff',   null),
   (:orgA, :p17, 'admin',   now());
@@ -182,6 +194,7 @@ insert into public.order_requests (id, organization_id, warehouse_id, source, re
   (:o3,  :orgA, :whA, 'internal', :p06, 'delivery', :chA, 'staged_for_delivery', :p06),
   (:o5,  :orgA, :whA, 'internal', :p06, 'delivery', :chA, 'in_transit',          :p09),
   (:o6,  :orgA, :whA, 'internal', :p06, 'delivery', :chA, 'in_transit',          :p11),
+  (:o7,  :orgA, :whA, 'internal', :p06, 'delivery', :chA, 'in_transit',          :p18),
   (:oC1, :orgC, :whC, 'internal', :p10, 'delivery', :chC, 'in_transit',          :p10);
 insert into public.delivery_locations (organization_id, order_request_id, driver_user_id, lat, lng)
   values (:orgA, :o1, :p07, 36.5, -119.5);
@@ -423,7 +436,7 @@ select is(
   pg_temp.try('authenticated', :p03, pg_temp.resend(:orgA, :iOpen),
     format($q$select pg_temp.inv(%L) || ',' || public.has_permission(%L, 'members:invite')::text$q$, :iOpen, :orgA)),
   '1 / renewed,staff,false',
-  'I3: an admin whose members:invite is restricted is answered by role, as the invite SELECT, INSERT and DELETE rules answer them (the app refuses them first)');
+  'I3: the rule asks the admin role, like the table''s other rules');
 
 select is(
   pg_temp.try('authenticated', :p04, pg_temp.resend(:orgA, :iOpen), format('select pg_temp.inv(%L)', :iOpen)),
@@ -567,6 +580,60 @@ select is(
   'ERR:42501,0',
   'I23: a manager still neither sends nor sees invites (control)');
 
+-- PostgREST's upsert of an invite, and MERGE: only the expiry may change.
+create function pg_temp.upsert_invite(p_conflict text, p_set text, p_role text) returns text language sql immutable as $$
+  select format($q$insert into public.organization_invites (organization_id, email, role, token, expires_at, invited_by)
+                  values ('511a0000-0000-0000-0000-00000000000a', 'invitee1@s11a.test', %L, 's11a-token-open',
+                          now() + interval '7 days', '511a0000-0000-0000-0000-000000000102')
+                  on conflict (%s) do update set %s$q$, p_role, p_conflict, p_set)
+$$;
+
+select is(
+  pg_temp.try('authenticated', :p02, pg_temp.upsert_invite('token', 'role = excluded.role', 'admin'),
+    format('select pg_temp.inv(%L)', :iOpen)),
+  'ERR:42501 / open,staff',
+  'I24: an upsert that changes an invite''s role is refused (42501)');
+
+select is(
+  pg_temp.try('authenticated', :p02,
+    pg_temp.upsert_invite('token', 'organization_id = excluded.organization_id, email = excluded.email, role = excluded.role, '
+                                   'token = excluded.token, expires_at = excluded.expires_at, invited_by = excluded.invited_by', 'admin'),
+    format('select pg_temp.inv(%L)', :iOpen)),
+  'ERR:42501 / open,staff',
+  'I25: so is the upsert that sets every column sent, when one of them changes beside the expiry (42501)');
+
+select is(
+  pg_temp.try('authenticated', :p02, pg_temp.upsert_invite('token', 'expires_at = excluded.expires_at', 'staff'),
+    format('select pg_temp.inv(%L)', :iOpen)),
+  '1 / renewed,staff',
+  'I26: an upsert that changes only the expiry renews the invite');
+
+select is(
+  pg_temp.try('authenticated', :p02,
+    format($q$merge into public.organization_invites i using (select 1) s on i.id = %L
+              when matched then update set role = 'admin'$q$, :iOpen),
+    format('select pg_temp.inv(%L)', :iOpen))
+  || ' | ' || pg_temp.try('authenticated', :p02,
+    format($q$merge into public.organization_invites i using (select 1) s on i.id = %L
+              when matched then update set expires_at = now() + interval '7 days'$q$, :iOpen),
+    format('select pg_temp.inv(%L)', :iOpen)),
+  'ERR:42501 / open,staff | 1 / renewed,staff',
+  'I27: a MERGE that changes an invite''s role is refused (42501); one that changes only the expiry renews it');
+
+select is(
+  pg_temp.try('authenticated', :p02,
+    format($q$update public.organization_invites set deleted_users = 'null'::jsonb where id = %L$q$, :iOpen),
+    format($q$select coalesce(deleted_users::text, 'SQL null') from public.organization_invites where id = %L$q$, :iOpen)),
+  'ERR:42501 / SQL null',
+  'I28: a JSON null written where the row holds SQL null is a change (the pin compares stored values, 42501)');
+
+select is(
+  pg_temp.try('authenticated', :p02,
+    format($q$update public.organization_invites set email = 'INVITEE1@s11a.test' where id = %L$q$, :iOpen),
+    format('select email::text from public.organization_invites where id = %L', :iOpen)),
+  'ERR:42501 / invitee1@s11a.test',
+  'I29: so is an email that compares equal but is written with other letter case (42501)');
+
 -- ══ L. Live points ═════════════════════════════════════════════════════════
 select is(
   pg_temp.try('authenticated', :p08, format('update public.delivery_locations set lat = 1 where order_request_id = %L', :o1),
@@ -687,6 +754,13 @@ select is(
   '1,1,0,0',
   'L18: reads are unchanged: every accepted member reads the point, another organization and anon read none');
 
+select is(
+  pg_temp.try('authenticated', :p18, pg_temp.share(:orgC, :o7, :p18, 19), format('select pg_temp.pt(%L)', :o7))
+  || ' | ' || pg_temp.ask('authenticated', :p18,
+       format($q$select public.has_org_role(%L, 'staff')::text || ',' || public.has_org_role(%L, 'staff')::text$q$, :orgC, :orgA)),
+  'ERR:42501 / none | true,false',
+  'L19: a member of two organizations, staff in C and assigned driver of a delivery in A, cannot file its point under C (42501)');
+
 -- ══ H. rls_orgs_with_module ═══════════════════════════════════════════════
 create function pg_temp.mods(p_role text, p_sub uuid, p_module text, p_prep text default null) returns text language sql as $$
   select pg_temp.ask(p_role, p_sub,
@@ -738,7 +812,7 @@ select is(
                 from public.serial_registry where serial_number = 'S11A-SN-1'$q$, :orgA),
     $p$select set_config('stockpilot.ledger', pg_current_xact_id()::text, true)$p$),
   '1 / 1,false',
-  'X1 (plan C0): a receipt''s serial write (ledger flag on) by a manager whose items:update is restricted still lands');
+  'X1 (plan C0, a stand-in for the receipt): a serial write with the ledger flag on, by a manager whose items:update is restricted, still lands');
 
 select is(
   pg_temp.try('authenticated', :p07,
@@ -784,6 +858,21 @@ select is(
     'drop trigger trg_zz_organization_invites_update_pin on public.organization_invites'),
   '1 / open,admin',
   'M4: I12''s answer comes from the pin trigger (without it, it differs)');
+
+select is(
+  pg_temp.try('authenticated', :p18, pg_temp.share(:orgC, :o7, :p18, 19), format('select pg_temp.pt(%L)', :o7),
+    $p$drop policy delivery_locations_insert on public.delivery_locations;
+       create policy delivery_locations_insert on public.delivery_locations for insert to authenticated
+         with check (
+           delivery_locations.driver_user_id = ( select auth.uid() )
+           and ( select public.has_org_role(delivery_locations.organization_id, 'staff') )
+           and delivery_locations.organization_id in ( select public.rls_orgs_with_module('live_tracking') )
+           and exists (select 1 from public.order_requests o
+                        where o.id = delivery_locations.order_request_id
+                          and o.fulfillment_type = 'delivery' and o.status = 'in_transit'
+                          and o.assigned_delivery_user_id = ( select auth.uid() )))$p$),
+  '1 / 18|19',
+  'M5: L19''s answer comes from the order''s organization term (without it, it differs)');
 
 -- ══ A. The migration's own preflight and lock prelude ══════════════════════
 -- The statements the CLI recorded for this file that contain p_tag, found by
