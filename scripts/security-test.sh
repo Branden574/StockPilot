@@ -860,6 +860,13 @@ PGTAP_TESTS=(
   # user_can_see_item_category answers service_role only. The lock footprint
   # is scripts/db-concurrency/0421_migration_lock_footprint.sh.
   supabase/tests/0421_categories_select_category_sets.test.sql
+  # Portal mappings (0430, docket S64): accepted_at, invited_at, user_id and
+  # customer_id of customer_users are set by the server. For any writer other
+  # than service_role, postgres or supabase_admin an insert is invited now and
+  # not accepted, and an update that changes one of them is refused (42501,
+  # hint customer_users_server_managed). Which customer the portal opens is
+  # src/server/services/portal.resolve-context.test.ts (apps/web, below).
+  supabase/tests/0430_customer_users_server_stamps.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -1072,6 +1079,14 @@ WEB_TESTS=(
   src/server/services/portal.step-up.test.ts
   src/test/action-step-up.guard.test.ts
   src/test/page-step-up.guard.test.ts
+  # Portal mappings (0430, docket S64): which customer a signed-in portal
+  # account opens. An accepted mapping before an invitation, the earliest
+  # acceptance first; an accepted mapping whose organization has the portal
+  # off does not hide the next accepted one, and an invitation is never opened
+  # in its place. The mappings are read in that order, at most as many as are
+  # tried, and the gate read holds the same bound itself. The database half is
+  # supabase/tests/0430_customer_users_server_stamps.test.sql.
+  src/server/services/portal.resolve-context.test.ts
   # The phone's sign-in and sign-out notes (S5a), the other two routes on the
   # AAL1 allowlist: an aal1 session of an account with an authenticator writes
   # the sign-in row (code owed) and the device note, and its sign-out revokes
