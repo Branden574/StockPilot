@@ -253,10 +253,6 @@ const ALLOWED_SERVICES: Record<string, { lines: number; why: string }> = {
     lines: 2,
     why: "DispatchStepError's message for a failed endpoints read or deliveries insert: thrown inside withDispatchRetries and only reported by dispatch's catch; dispatch answers nothing",
   },
-  'server/services/opening-stock-compensation.ts': {
-    lines: 1,
-    why: "verifyErr: a failed re-read's text, only in the console.error line; the thrown ServiceError is internal_error with the app's own sentence",
-  },
   'server/services/po-imports.ts': {
     lines: 3,
     why: "archiveImportCreatedItems' local skip(): its message goes only to reportError(new Error(message)); cancelling the import answers nothing about it",

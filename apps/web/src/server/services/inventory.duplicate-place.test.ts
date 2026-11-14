@@ -73,6 +73,42 @@ describe('InventoryService.duplicateItem puts the copy on the dialog rack', () =
     expect(stub.rpcCalls.find((c) => c.name === 'transfer_stock')).toBeUndefined();
   });
 
+  // The copy's stock opens through open_item_stock, which refuses a
+  // member who may not add stock (42501, hint stock:adjust): the whole copy is
+  // refused. Read by SQLSTATE and hint, never by message text.
+  it('a member who may not add stock is told so in a plain sentence, and nothing is moved', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: { sku: 'SP-POLO', warehouse_id: 'wh-1' }, error: null },
+      'locations.select': { data: [{ id: 'rack-31c', name: '31-C' }], error: null },
+      'rpc:duplicate_inventory_item': {
+        data: null,
+        error: { message: 'forbidden', code: '42501', hint: 'stock:adjust' },
+      },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await expect(svc.duplicateItem(BASE as never)).rejects.toMatchObject({
+      code: 'forbidden',
+      message:
+        'You do not have permission to add stock, so the copy was not made. Set the quantity to 0 to copy it without stock.',
+    });
+    expect(stub.rpcCalls.find((c) => c.name === 'transfer_stock')).toBeUndefined();
+  });
+
+  it('another refusal without that hint keeps the internal error, as before', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: { sku: 'SP-POLO', warehouse_id: 'wh-1' }, error: null },
+      'locations.select': { data: [{ id: 'rack-31c', name: '31-C' }], error: null },
+      'rpc:duplicate_inventory_item': {
+        data: null,
+        error: { message: 'new row violates row-level security policy', code: '42501' },
+      },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    await expect(svc.duplicateItem(BASE as never)).rejects.toMatchObject({ code: 'internal_error' });
+  });
+
   it('never moves a product copy to Unplaced: its stock goes onto the rack', async () => {
     const stub = buildStub();
     const svc = new InventoryService(makeServiceContext(stub.client));

@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import { AddSizedVariantsButton } from '@/components/inventory/add-sized-variants-button';
 import { CustomFieldsInputs } from '@/components/inventory/custom-fields-inputs';
 import { GroupingPreview } from '@/components/inventory/grouping-preview';
+import { openingStockSavedHref } from '@/components/inventory/opening-stock-saved';
 import { touchTargetClass } from '@/components/patterns/touch-target';
 import { BatchProgress, uploadWithProgress } from '@/lib/upload-with-progress';
 import {
@@ -872,6 +873,15 @@ export function ItemForm({
    * well as in the toast, so the person is pointed at the box to fix.
    */
   function reportSaveError(error: ActionError) {
+    // Saved, but its opening quantity was not recorded: the record exists, so
+    // the form must not stay open for a second press (a second item). Show the
+    // sentence (it says where to set the quantity) and go to the record.
+    const savedHref = openingStockSavedHref(error, isBook);
+    if (savedHref) {
+      toast.error(error.message, { duration: 15000 });
+      router.push(savedHref);
+      return;
+    }
     const field = error.details?.field;
     if (sportsFieldsShown && isRequiredAttributeField(field)) {
       setError(field, { type: 'server', message: error.message }, { shouldFocus: true });

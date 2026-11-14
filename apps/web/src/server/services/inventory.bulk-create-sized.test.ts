@@ -3,7 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('./context', () => ({
   withContext: vi.fn(),
   ServiceError: class extends Error {
-    constructor(public code: string, message: string) {
+    constructor(
+      public code: string,
+      message: string,
+      public details?: Record<string, unknown>,
+    ) {
       super(message);
     }
   },
@@ -44,11 +48,12 @@ const BASE_INPUT = {
 };
 
 /**
- * Builds a Supabase stub that handles two tables:
+ * Builds a Supabase stub for the run:
  *   - inventory_items: the insert that returns the rows back so the
- *     service can hand them to the action.
- *   - stock_movements: the post-insert audit-log writeback. The service
- *     swallows movement-log errors, so an absent table just no-ops here.
+ *     service can hand them to the action, and the label update;
+ *   - rpc open_item_stock: the opening of the stocked
+ *     sizes. stock_movements and item_stock_levels are not served at all, so
+ *     a direct write to either fails the test.
  */
 function buildStub(
   customFieldDefs: Array<Record<string, unknown>> = [],
@@ -66,38 +71,37 @@ function buildStub(
   },
   /** (value, normalized) rows for the category's size scale, when it has one. */
   sizeScaleValues: Array<{ value: string; normalized: string }> = [],
-  /** Ledger-invariant tests: make the stock_movements insert (and optionally
-   *  the compensate_opening_stock rollback) fail. */
+  /** Make open_item_stock fail (an error with a SQLSTATE: nothing written). */
   failure: {
-    movements?: { message: string; code?: string };
-    /** The compensate_opening_stock RPC errors. */
-    compensation?: { message: string; code?: string };
-    /** The RPC succeeds but compensates nothing (the ids were not the
-     *  caller's fresh, unledgered items). */
-    compensationSkipsAll?: boolean;
-    /** The RPC reports success, yet the re-read still finds a placement. */
-    levelsSurviveCompensation?: boolean;
+    opening?: { message: string; code?: string; hint?: string };
+    /** The SKU the insert hands back for a row (a SKU the request did not send). */
+    renameSku?: (sku: string) => string;
+    /** The insert hands back one row fewer than it was sent. */
+    dropLastRow?: boolean;
   } = {},
 ) {
   const insertedItems: Array<Record<string, unknown>> = [];
-  const insertedMovements: Array<Record<string, unknown>> = [];
   const itemUpdates: Array<Record<string, unknown>> = [];
-  const levelUpdates: Array<{ payload: Record<string, unknown>; itemIds: string[] }> = [];
-  /** p_item_ids of every compensate_opening_stock call (migration 0359). */
-  const compensations: string[][] = [];
+  /** p_lines of every open_item_stock call. */
+  const openings: Array<Array<{ itemId: string; quantity: number }>> = [];
   return {
     insertedItems,
-    insertedMovements,
     itemUpdates,
-    levelUpdates,
-    compensations,
+    openings,
 
-    rpc(name: string, args: { p_org_id: string; p_item_ids: string[] }): Promise<unknown> {
-      if (name !== 'compensate_opening_stock') throw new Error(`unexpected rpc: ${name}`);
-      compensations.push(args.p_item_ids);
-      if (failure.compensation) return Promise.resolve({ data: null, error: failure.compensation });
+    rpc(
+      name: string,
+      args: { p_org_id: string; p_lines: Array<{ itemId: string; quantity: number }> },
+    ): Promise<unknown> {
+      if (name !== 'open_item_stock') throw new Error(`unexpected rpc: ${name}`);
+      openings.push(args.p_lines);
+      if (failure.opening) return Promise.resolve({ data: null, error: failure.opening });
       return Promise.resolve({
-        data: failure.compensationSkipsAll ? [] : args.p_item_ids,
+        data: args.p_lines.map((l) => ({
+          opened_item_id: l.itemId,
+          opened_location_id: 'loc-unplaced',
+          opened_movement_id: `mv-${l.itemId}`,
+        })),
         error: null,
       });
     },
@@ -142,14 +146,20 @@ function buildStub(
 
                 then: (cb: any) =>
                   cb({
-                    data: rows.map((r, i) => ({ ...r, id: `i-${i}` })),
+                    data: rows
+                      .map((r, i) => ({
+                        ...r,
+                        id: `i-${i}`,
+                        sku: failure.renameSku ? failure.renameSku(r.sku as string) : r.sku,
+                      }))
+                      .slice(0, failure.dropLastRow ? rows.length - 1 : rows.length),
                     error: null,
                   }),
               }),
             };
           },
-          // Recorded so a test can prove the rollback NEVER writes the row
-          // directly: since 0359 compensate_opening_stock does it.
+          // The primary-location label write (and nothing else) updates the
+          // rows; on-hand is open_item_stock's.
           update: (payload: Record<string, unknown>) => {
             itemUpdates.push(payload);
             const builder: any = {
@@ -161,53 +171,6 @@ function buildStub(
             return builder;
           },
         };
-      }
-      if (table === 'stock_movements') {
-        return {
-          insert: (rows: Array<Record<string, unknown>>) => {
-            insertedMovements.push(...rows);
-            return Promise.resolve({ error: failure.movements ?? null });
-          },
-        };
-      }
-      // trg_seed_initial_level (mig 0199, AFTER INSERT) has already seeded one
-      // level row per stocked item by the time the movement insert runs, and
-      // NOTHING syncs levels on UPDATE — so the compensation has to zero these
-      // too or the failure path leaves phantom PLACED stock. It does, inside
-      // compensate_opening_stock; a direct write here would be a regression.
-      if (table === 'item_stock_levels') {
-        const builder: any = {
-          update: (payload: Record<string, unknown>) => {
-            const w: any = {
-              eq: () => w,
-              in: (_col: string, ids: string[]) => {
-                levelUpdates.push({ payload, itemIds: ids });
-                return w;
-              },
-              select: () => w,
-              then: (cb: any) => cb({ data: [], error: null }),
-            };
-            return w;
-          },
-          // The verification re-read: rows still carrying stock after the
-          // compensation. The seeded placement survives until the RPC ran,
-          // and afterwards only when the test asks for it.
-          select: () => {
-            const survivors = failure.levelsSurviveCompensation
-              ? [{ id: 'lvl-1' }]
-              : compensations.length > 0 && !failure.compensation && !failure.compensationSkipsAll
-                ? []
-                : [{ id: 'lvl-1' }];
-            const r: any = {
-              eq: () => r,
-              in: () => r,
-              gt: () => r,
-              then: (cb: any) => cb({ data: survivors, error: null }),
-            };
-            return r;
-          },
-        };
-        return builder;
       }
       if (table === 'warehouse_charters') {
         return {
@@ -257,7 +220,15 @@ describe('InventoryService.bulkCreateSizedVariants', () => {
     expect(stub.insertedItems).toHaveLength(2);
     expect(stub.insertedItems[0]?.name).toBe('L4L Black T-Shirt - S');
     expect(stub.insertedItems[0]?.sku).toBe('SP-OKX68-UAA-S');
-    expect(stub.insertedItems[0]?.quantity_on_hand).toBe(3);
+    // Inserted at 0; the requested quantities are opened through the ledger.
+    expect(stub.insertedItems[0]?.quantity_on_hand).toBe(0);
+    expect(stub.insertedItems[1]?.quantity_on_hand).toBe(0);
+    expect(stub.openings).toEqual([
+      [
+        { itemId: 'i-0', quantity: 3 },
+        { itemId: 'i-1', quantity: 5 },
+      ],
+    ]);
     expect(stub.insertedItems[0]?.unit_of_measure).toBe('unit');
     expect(stub.insertedItems[0]?.charter_id).toBeNull();
     expect((stub.insertedItems[0]?.custom_fields as Record<string, unknown>).size).toBe('S');
@@ -314,7 +285,7 @@ describe('InventoryService.bulkCreateSizedVariants', () => {
     });
   });
 
-  it('writes stock_movements for non-zero variants only', async () => {
+  it('opens stock for the non-zero sizes only, in one call, keyed on the requested quantity', async () => {
     const stub = buildStub();
     const svc = makeSvc(stub);
 
@@ -326,9 +297,17 @@ describe('InventoryService.bulkCreateSizedVariants', () => {
       ],
     });
 
-    expect(stub.insertedMovements).toHaveLength(1);
-    expect(stub.insertedMovements[0]?.quantity_change).toBe(4);
-    expect(stub.insertedMovements[0]?.movement_type).toBe('initial');
+    expect(stub.openings).toEqual([[{ itemId: 'i-1', quantity: 4 }]]);
+    expect(stub.insertedItems.map((r) => r.quantity_on_hand)).toEqual([0, 0]);
+  });
+
+  it('a negative quantity is refused before anything is written', async () => {
+    const stub = buildStub();
+    await expect(
+      makeSvc(stub).bulkCreateSizedVariants({ ...BASE_INPUT, variants: [{ size: 'S', quantity: -1 }] }),
+    ).rejects.toMatchObject({ code: 'validation_error', message: 'Enter 0 or more.' });
+    expect(stub.insertedItems).toHaveLength(0);
+    expect(stub.openings).toHaveLength(0);
   });
 
   it('throws when variants is empty', async () => {
@@ -631,30 +610,75 @@ describe('InventoryService.bulkCreateSizedVariants', () => {
   });
 });
 
-// THE LEDGER INVARIANT IS ABSOLUTE: SUM(stock_movements.quantity_change) for an
-// item equals its quantity_on_hand. This path used to console.warn a failed
-// movement insert and return SUCCESS, leaving rows carrying stock that no
-// movement anywhere explains — invisible to the item Activity feed, to the
-// 14-day sparklines and to every reconciliation that sums the ledger, and
-// silently understating what a later restore or audit would rebuild.
-describe('InventoryService.bulkCreateSizedVariants — movement-insert failure', () => {
+// Opening stock goes through the stock ledger: a failed
+// opening leaves every size at 0 with nothing written, and the run says so.
+describe('InventoryService.bulkCreateSizedVariants: opening failure', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('does NOT report success when the opening movements could not be written', async () => {
-    const stub = buildStub([], undefined, [], { movements: { message: 'ledger down' } });
-    await expect(
-      makeSvc(stub).bulkCreateSizedVariants({
-        ...BASE_INPUT,
-        variants: [{ size: 'S', quantity: 3 }],
-      }),
-    ).rejects.toMatchObject({ code: 'internal_error' });
+  it('does NOT report success when the opening was refused', async () => {
+    const stub = buildStub([], undefined, [], {
+      opening: { message: 'forbidden', code: '42501', hint: 'stock:adjust' },
+    });
+    const err = (await makeSvc(stub)
+      .bulkCreateSizedVariants({ ...BASE_INPUT, variants: [{ size: 'S', quantity: 3 }] })
+      .catch((e: unknown) => e)) as { code: string; message: string };
+
+    expect(err.code).toBe('conflict');
+    expect(err.message).toBe(
+      'These variants were saved with zero on hand: you do not have permission to add stock. Someone who can adjust stock must set their quantities.',
+    );
   });
 
-  it('COMPENSATES by zeroing the on-hand it could not explain, restoring 0 = 0', async () => {
-    const stub = buildStub([], undefined, [], { movements: { message: 'ledger down' } });
+  it('an insert that hands back fewer rows than were sent says could not be confirmed, and opens nothing', async () => {
+    const stub = buildStub([], undefined, [], { dropLastRow: true });
+    const err = (await makeSvc(stub)
+      .bulkCreateSizedVariants({
+        ...BASE_INPUT,
+        variants: [
+          { size: 'S', quantity: 3 },
+          { size: 'M', quantity: 2 },
+        ],
+      })
+      .catch((e: unknown) => e)) as { code: string; message: string; details: { itemIds: string[] } };
+
+    expect(stub.openings).toEqual([]);
+    expect(err.code).toBe('conflict');
+    expect(err.message).toBe(
+      'These variants were saved, but their opening quantities could not be confirmed. Open each one and check its quantity on hand before receiving, picking or counting against it.',
+    );
+    expect(err.details.itemIds).toEqual(['i-0']);
+  });
+
+  it('a size whose SKU comes back other than requested is told, never left at 0 in silence', async () => {
+    const stub = buildStub([], undefined, [], {
+      renameSku: (sku) => (sku.endsWith('-M') ? `${sku}-X` : sku),
+    });
+    const err = (await makeSvc(stub)
+      .bulkCreateSizedVariants({
+        ...BASE_INPUT,
+        variants: [
+          { size: 'S', quantity: 3 },
+          { size: 'M', quantity: 2 },
+        ],
+      })
+      .catch((e: unknown) => e)) as { code: string; message: string; details: { itemIds: string[] } };
+
+    expect(stub.openings).toEqual([[{ itemId: 'i-0', quantity: 3 }]]);
+    expect(err.code).toBe('conflict');
+    expect(err.message).toBe(
+      'These variants were saved, but 1 of 2 have zero on hand: their opening quantities could not be recorded. Open each of those and use Adjust stock to set its quantity.',
+    );
+    expect(err.details.itemIds).toEqual(['i-1']);
+  });
+
+  it('writes nothing else after a refused opening: no label, no ledger table', async () => {
+    const stub = buildStub([], undefined, [], {
+      opening: { message: 'forbidden', code: '42501', hint: 'stock:adjust' },
+    });
     await makeSvc(stub)
       .bulkCreateSizedVariants({
         ...BASE_INPUT,
+        primaryLocationId: 'site-1',
         variants: [
           { size: 'S', quantity: 3 },
           { size: 'M', quantity: 0 },
@@ -662,93 +686,20 @@ describe('InventoryService.bulkCreateSizedVariants — movement-insert failure',
       })
       .catch(() => undefined);
 
-    // One RPC for the stocked variant; the row itself is never written directly.
-    expect(stub.compensations).toEqual([['i-0']]);
+    // One call for the stocked size; the label (written after the opening)
+    // never ran. stock_movements and item_stock_levels are not served by the
+    // stub, so any direct write would have thrown "unexpected table".
+    expect(stub.openings).toEqual([[{ itemId: 'i-0', quantity: 3 }]]);
     expect(stub.itemUpdates).toHaveLength(0);
   });
 
-  // trg_seed_initial_level (0199) fires AFTER INSERT on inventory_items and has
-  // ALREADY written one item_stock_levels row per stocked variant by the time
-  // the movement insert is attempted. Nothing syncs levels on UPDATE, so zeroing
-  // only quantity_on_hand left SUM(levels) = N against on_hand = 0: phantom
-  // PLACED stock that blocks the archive stock-guard (which takes
-  // max(on_hand, Σholdings)) and is pickable straight into negative on-hand.
-  it('rolls back the placements the 0199 trigger seeded in the same RPC, never directly', async () => {
-    const stub = buildStub([], undefined, [], { movements: { message: 'ledger down' } });
-    await makeSvc(stub)
-      .bulkCreateSizedVariants({
-        ...BASE_INPUT,
-        variants: [
-          { size: 'S', quantity: 3 },
-          { size: 'M', quantity: 0 },
-        ],
-      })
-      .catch(() => undefined);
-
-    // Scoped to exactly the variants that were seeded — the zero-quantity one
-    // never got a level row and must not be touched.
-    expect(stub.compensations).toEqual([['i-0']]);
-    expect(stub.levelUpdates).toHaveLength(0);
-  });
-
-  it('fails loudly when the RPC compensated none of the stocked variants', async () => {
-    const stub = buildStub([], undefined, [], {
-      movements: { message: 'ledger down' },
-      compensationSkipsAll: true,
-    });
-    const err = (await makeSvc(stub)
-      .bulkCreateSizedVariants({ ...BASE_INPUT, variants: [{ size: 'S', quantity: 3 }] })
-      .catch((e: unknown) => e)) as { code: string; message: string };
-
-    expect(err.code).toBe('internal_error');
-    expect(err.message).toMatch(/support/i);
-  });
-
-  it('VERIFIES the placements are gone — the RPC reporting success is not proof', async () => {
-    // The RPC's return says which rows it matched, not what the table holds
-    // now, so the compensation is proven by a re-read.
-    const stub = buildStub([], undefined, [], {
-      movements: { message: 'ledger down' },
-      levelsSurviveCompensation: true,
-    });
-    const err = (await makeSvc(stub)
-      .bulkCreateSizedVariants({ ...BASE_INPUT, variants: [{ size: 'S', quantity: 3 }] })
-      .catch((e: unknown) => e)) as { code: string; message: string };
-
-    expect(err.code).toBe('internal_error');
-    expect(err.message).toMatch(/support/i);
-  });
-
-  it('never touches item_stock_levels when the movements DID land', async () => {
+  it('a successful opening writes no row directly when no label is asked for', async () => {
     const stub = buildStub();
     await makeSvc(stub).bulkCreateSizedVariants({
       ...BASE_INPUT,
       variants: [{ size: 'S', quantity: 3 }],
     });
-    expect(stub.levelUpdates).toHaveLength(0);
-    expect(stub.compensations).toHaveLength(0);
-  });
-
-  it('says so loudly when even the rollback fails, instead of swallowing both', async () => {
-    const stub = buildStub([], undefined, [], {
-      movements: { message: 'ledger down' },
-      compensation: { message: 'rollback down' },
-    });
-    const err = (await makeSvc(stub)
-      .bulkCreateSizedVariants({ ...BASE_INPUT, variants: [{ size: 'S', quantity: 3 }] })
-      .catch((e: unknown) => e)) as { code: string; message: string };
-
-    expect(err.code).toBe('internal_error');
-    expect(err.message).toMatch(/support/i);
-  });
-
-  it('never compensates when the movements DID land', async () => {
-    const stub = buildStub();
-    await makeSvc(stub).bulkCreateSizedVariants({
-      ...BASE_INPUT,
-      variants: [{ size: 'S', quantity: 3 }],
-    });
+    expect(stub.openings).toEqual([[{ itemId: 'i-0', quantity: 3 }]]);
     expect(stub.itemUpdates).toHaveLength(0);
-    expect(stub.compensations).toHaveLength(0);
   });
 });

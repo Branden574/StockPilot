@@ -192,19 +192,19 @@ describe('create(): the new item is embedded after the response, held by keepAli
   });
 
   it('embeds the saved item even when create() then throws (its opening stock was refused)', async () => {
-    // The row exists from the insert on; the refused opening movement makes
-    // create() roll the quantity back and throw. The embed must already be
+    // The row exists from the insert on; the refused opening (open_item_stock)
+    // leaves it at 0 and makes create() throw. The embed must already be
     // running by then, not wait for a line the throw never reaches.
     const stub = createStub({
-      'inventory_items.insert': { data: { id: 'itm-new', quantity_on_hand: 5 }, error: null },
-      'stock_movements.insert': { data: null, error: { message: 'refused' } },
+      'inventory_items.insert': { data: { id: 'itm-new', quantity_on_hand: 0 }, error: null },
+      'rpc:open_item_stock': { data: null, error: { message: 'refused', code: '42501', hint: 'stock:adjust' } },
     });
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const svc = new InventoryService(makeServiceContext(stub.client));
 
     await expect(svc.create({ ...CREATE, quantityOnHand: 5 })).rejects.toMatchObject({
-      code: 'internal_error',
-      internalDetail: expect.stringMatching(/opening stock could not be recorded/),
+      code: 'conflict',
+      message: expect.stringMatching(/saved with zero on hand/),
     });
 
     expect(keepAlive).toHaveBeenCalledTimes(1);
@@ -287,7 +287,6 @@ function runStub(over: Record<string, unknown> = {}) {
         error: null,
       };
     },
-    'stock_movements.insert': { data: null, error: null },
     ...over,
   });
 }
@@ -311,7 +310,7 @@ describe('bulkCreateSizedVariants(): every size of the run is embedded when it i
 
   it('embeds every saved size even when the run then throws (its opening stock was refused)', async () => {
     const stub = runStub({
-      'stock_movements.insert': { data: null, error: { message: 'refused' } },
+      'rpc:open_item_stock': { data: null, error: { message: 'refused', code: '42501', hint: 'stock:adjust' } },
     });
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const svc = new InventoryService(makeServiceContext(stub.client));
@@ -322,8 +321,8 @@ describe('bulkCreateSizedVariants(): every size of the run is embedded when it i
         variants: SIZES.map((size) => ({ size, quantity: 2 })),
       }),
     ).rejects.toMatchObject({
-      code: 'internal_error',
-      internalDetail: expect.stringMatching(/opening stock could not be recorded/),
+      code: 'conflict',
+      message: expect.stringMatching(/saved with zero on hand/),
     });
 
     expect(keepAlive).toHaveBeenCalledTimes(1);

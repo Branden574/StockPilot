@@ -137,7 +137,13 @@ function stub() {
       data: [{ id: ITEM_ID, barcode: ISBN }],
       error: null,
     },
-    'stock_movements.insert': { data: null, error: null },
+    // Opening stock goes through the ledger.
+    'rpc:open_item_stock': (call: { args: unknown[][] }) => ({
+      data: (((call.args[0]?.[0] as { p_lines?: Array<{ itemId: string }> } | undefined)?.p_lines) ?? []).map(
+        (l) => ({ opened_item_id: l.itemId }),
+      ),
+      error: null,
+    }),
     'item_images.insert': { data: null, error: null },
   });
 }

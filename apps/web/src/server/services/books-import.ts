@@ -17,7 +17,7 @@ import { PLANS, bookCoverPath, isbnSearchKeys, isUnlimited, type PlanId } from '
 import { assertPermission, ServiceError, type ServiceContext } from './context';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
-import { compensateOpeningStockOrThrow } from './opening-stock-compensation';
+import { openItemStockOrThrow } from './opening-stock';
 
 // Hosts the book-lookup pipeline ever returns thumbnails from
 // (lib/books/cover-hosts.ts, shared with the report cover paths). Anything
@@ -651,7 +651,9 @@ export class BooksImportService {
       primary_location_id: null,
       unit_cost: 0,
       retail_price: 0,
-      quantity_on_hand: defaultQty,
+      // Inserted at 0; the opening below records defaultQty through
+      // open_item_stock.
+      quantity_on_hand: 0,
       reorder_point: 0,
       reorder_quantity: 0,
       unit_of_measure: 'unit',
@@ -692,63 +694,28 @@ export class BooksImportService {
 
     const inserted = (insertedRaw ?? []) as Array<{ id: string; barcode: string }>;
     result.created = inserted.length;
-    // Before the opening movements, whose failure path throws.
+    // Before the opening, whose failure path throws.
     invalidateInventoryListAfterWrite(this.ctx.organizationId, 'books.import');
 
-    // Batch stock_movements for rows with a positive starting quantity.
+    // Opening stock through the stock ledger: one
+    // open_item_stock call writes every book's holding (Unplaced), on-hand and
+    // its 'initial' movement, all or nothing. On a failure every book stays at
+    // 0 with nothing written and the helper throws the "saved with zero on
+    // hand" sentence; cover rehosting (Phase 4) is skipped by the throw, and
+    // backfillCovers() repairs the covers without a re-import. A member with
+    // items:create but without stock:adjust lands there on every stocked
+    // import.
     if (defaultQty > 0 && inserted.length > 0) {
-      const movementInserts = inserted.map((row) => ({
-        organization_id: this.ctx.organizationId,
-        item_id: row.id,
-        movement_type: 'initial' as const,
-        quantity_change: defaultQty,
-        previous_quantity: 0,
-        new_quantity: defaultQty,
-        user_id: this.ctx.userId,
-        to_location_id: null,
-      }));
-      const { error: movementErr } = await this.ctx.supabase
-        .from('stock_movements')
-        .insert(movementInserts);
-      if (movementErr) {
-        // WAS: push one `batch:stock_movements` line into result.failed[] and
-        // "keep result.created as-is", on the reading that stock_movements is
-        // an audit-trail nicety. It is not — it is THE ledger, and the invariant
-        // SUM(stock_movements.quantity_change) = quantity_on_hand is absolute.
-        // Reporting success here left N books each holding defaultQty that no
-        // movement anywhere explains: the item Activity feed shows stock from
-        // nowhere, the Movements report undercounts inbound by the whole import,
-        // and every reconciliation that sums the ledger is wrong for those books
-        // forever — while the operator reads the single failed line as one bad
-        // ISBN. Worse, `trg_seed_initial_level` (0199, AFTER INSERT) has ALREADY
-        // written an item_stock_levels holding per book by this point, so the
-        // phantom stock is PLACED and pickable.
-        //
-        // Not merely a transient hazard. The two RLS floors differ:
-        // inventory_items_insert (0212) admits `items:create` — the permission
-        // this import gates on — while stock_movements_insert (0321) requires
-        // staff or `stock:adjust`. A viewer granted items:create through
-        // configurable permissions therefore lands here on EVERY import
-        // (pattern #4 + #28).
-        //
-        // So: compensate, then fail loudly — the same decision the sibling
-        // InventoryService create/bulkCreate/bulkCreateSizedVariants paths make,
-        // through the one shared compensateOpeningStockOrThrow(). Cover
-        // rehosting (Phase 4) is skipped by the throw; the books keep
-        // custom_fields.thumbnail_url as the list-image fallback and
-        // backfillCovers() repairs them without a re-import.
-        await compensateOpeningStockOrThrow(
-          this.ctx,
-          inserted.map((row) => row.id),
-          movementErr,
-          {
-            tag: '[booksImport]',
-            subject: 'These books were',
-            pronoun: 'their',
-            invalidateLabel: 'books.compensate_opening_stock',
-          },
-        );
-      }
+      await openItemStockOrThrow(
+        this.ctx,
+        inserted.map((row) => ({ itemId: row.id, quantity: defaultQty })),
+        {
+          tag: '[booksImport]',
+          subject: 'These books were',
+          pronoun: 'their',
+          invalidateLabel: 'books.open_stock',
+        },
+      );
     }
 
     // -- Phase 4: rehost cover images in parallel, capped at 5 in flight. -

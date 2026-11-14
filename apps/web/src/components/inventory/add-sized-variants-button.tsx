@@ -15,6 +15,7 @@ import {
 } from '@stockpilot/core';
 
 import { newRackConfirmContent, newRackQuestion } from '@/components/inventory/new-rack-question';
+import { isOpeningStockSaved } from '@/components/inventory/opening-stock-saved';
 import { PlacementConfirmDialog } from '@/components/inventory/placement-confirm-dialog';
 import { touchTargetClass } from '@/components/patterns/touch-target';
 import { Button } from '@/components/ui/button';
@@ -73,6 +74,9 @@ export interface AddSizedVariantsButtonProps {
 
 export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) {
   const router = useRouter();
+  // Books have their own /dashboard/books page; everything else funnels to
+  // /dashboard/inventory.
+  const listBasePath = source.itemType === 'book' ? '/dashboard/books' : '/dashboard/inventory';
   const [open, setOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [baseName, setBaseName] = React.useState(stripSizeSuffix(source.name));
@@ -134,6 +138,16 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
         const question = newRackQuestion(res.error);
         setRackQuestion(question);
         if (question) return;
+        // Saved, but the opening quantities were not recorded: the variants
+        // exist, so the dialog must not stay open for a second press (a second
+        // set). Show the sentence (it says who can set the quantities) and go
+        // to the list, as a saved run does.
+        if (isOpeningStockSaved(res.error)) {
+          toast.error(res.error.message, { duration: 15000 });
+          setOpen(false);
+          router.push(resolveListReturnHref(listBasePath, null));
+          return;
+        }
         toast.error(res.error.message);
         return;
       }
@@ -154,10 +168,7 @@ export function AddSizedVariantsButton({ source }: AddSizedVariantsButtonProps) 
       // Route back to the tab the source item lives on, preserving
       // the page / search / filter state the user was on (read from
       // sessionStorage, written by the list table on every render).
-      // Books have their own /dashboard/books page; everything else
-      // funnels to /dashboard/inventory.
-      const basePath = source.itemType === 'book' ? '/dashboard/books' : '/dashboard/inventory';
-      router.push(resolveListReturnHref(basePath, null));
+      router.push(resolveListReturnHref(listBasePath, null));
     } finally {
       setBusy(false);
     }
