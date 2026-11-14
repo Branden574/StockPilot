@@ -32,10 +32,10 @@
 --      authenticated and service_role, not by anon or PUBLIC.
 --      Whole call:
 --        42501 forbidden    no signed-in user, or no organization;
---        42501 forbidden    hint stock:adjust, unless the caller holds
---                           stock:adjust (has_permission: staff and above
---                           hold it unless it is turned off for them;
---                           adjust_stock asks the same);
+--        42501 forbidden    hint stock:adjust, unless the caller is staff or
+--                           above in p_org_id and holds stock:adjust there
+--                           (has_org_role(p_org_id, 'staff') and
+--                           has_permission(p_org_id, 'stock:adjust'));
 --        22023              p_lines is not an array, has more than 1,000
 --                           lines, repeats an itemId, or a line's itemId is
 --                           not a uuid or its quantity is not a number that
@@ -249,8 +249,8 @@ begin
   if v_uid is null or p_org_id is null then
     raise exception 'forbidden' using errcode = '42501';
   end if;
-  -- The stock:adjust permission, as adjust_stock asks it.
-  if not public.has_permission(p_org_id, 'stock:adjust') then
+  -- Staff or above, holding stock:adjust.
+  if not (public.has_org_role(p_org_id, 'staff') and public.has_permission(p_org_id, 'stock:adjust')) then
     raise exception 'forbidden' using errcode = '42501', hint = 'stock:adjust';
   end if;
 
@@ -573,7 +573,7 @@ comment on function public.open_item_stock(uuid, jsonb) is
   'own items created in the last 15 minutes that is not a kit and has no stock, '
   'no holding and no movement: the holding at _opening_stock_location, on-hand, '
   'and one ''initial'' movement attributed to the caller, in one transaction. '
-  'Needs stock:adjust, and write access to the item''s warehouse '
+  'Needs staff or above with stock:adjust, and write access to the item''s warehouse '
   'unless a manager. Returns (opened_item_id, opened_location_id, '
   'opened_movement_id) per line.';
 

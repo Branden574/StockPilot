@@ -19,9 +19,10 @@
 --               adjustments and receipts after an opening.
 -- PART 7 (G)    The census of invoker writers of stock_movements outside the
 --               ledger schema.
--- PART 8 (N)    The stock:adjust floor for every kind of seat (owner, a viewer
---               granted stock:adjust, staff with it turned off, pending,
---               disabled, an expired act-as seat), quantities that round to 0,
+-- PART 8 (N)    The floor (staff or above, holding stock:adjust) for every
+--               kind of seat (owner, a viewer granted stock:adjust, staff,
+--               manager and admin with it turned off, staff granted it,
+--               pending, disabled, an expired act-as seat), quantities that round to 0,
 --               updated_by, the duplicateOf read check, and Duplicate when the
 --               opening is refused.
 --
@@ -32,7 +33,7 @@
 -- Run via `supabase test db` after `supabase db reset`.
 
 begin;
-select plan(107);
+select plan(112);
 
 \set orgA    '\'04540000-0000-4000-8000-00000000000a\''
 \set orgB    '\'04540000-0000-4000-8000-00000000000b\''
@@ -81,6 +82,12 @@ select plan(107);
 \set u_dis   '\'04540000-0000-4000-8000-0000000000ab\''
 \set u_exp   '\'04540000-0000-4000-8000-0000000000ac\''
 \set u_vsa   '\'04540000-0000-4000-8000-0000000000ad\''
+\set u_mgrno '\'04540000-0000-4000-8000-0000000000ae\''
+\set u_admno '\'04540000-0000-4000-8000-0000000000af\''
+\set u_stfon '\'04540000-0000-4000-8000-0000000000b0\''
+\set iMgrno  '\'04540000-0000-4000-8000-00000000030c\''
+\set iAdmno  '\'04540000-0000-4000-8000-00000000030d\''
+\set iStfon  '\'04540000-0000-4000-8000-00000000030e\''
 \set iOwn    '\'04540000-0000-4000-8000-000000000301\''
 \set iVsa    '\'04540000-0000-4000-8000-000000000302\''
 \set iVsaW   '\'04540000-0000-4000-8000-000000000303\''
@@ -165,7 +172,10 @@ insert into auth.users (id, email, raw_user_meta_data) values
   (:u_pend, 'pend-0454@test.local', '{}'::jsonb),
   (:u_dis,  'dis-0454@test.local',  '{}'::jsonb),
   (:u_exp,  'exp-0454@test.local',  '{}'::jsonb),
-  (:u_vsa,  'vsa-0454@test.local',  '{}'::jsonb)
+  (:u_vsa,  'vsa-0454@test.local',  '{}'::jsonb),
+  (:u_mgrno,'mgrno-0454@test.local','{}'::jsonb),
+  (:u_admno,'admno-0454@test.local','{}'::jsonb),
+  (:u_stfon,'stfon-0454@test.local','{}'::jsonb)
 on conflict (id) do nothing;
 
 insert into public.organizations (id, name, slug) values
@@ -186,7 +196,10 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgA, :u_pend,  'staff',   null),
   (:orgA, :u_dis,   'staff',   now()),
   (:orgA, :u_exp,   'admin',   now()),
-  (:orgA, :u_vsa,   'viewer',  now());
+  (:orgA, :u_vsa,   'viewer',  now()),
+  (:orgA, :u_mgrno, 'manager', now()),
+  (:orgA, :u_admno, 'admin',   now()),
+  (:orgA, :u_stfon, 'staff',   now());
 -- An act-as seat whose time is up, and a disabled account.
 update public.organization_members set impersonation_expires_at = now() - interval '1 minute'
  where organization_id = :orgA and user_id = :u_exp;
@@ -213,7 +226,8 @@ insert into public.user_warehouse_assignments (organization_id, user_id, warehou
   (:orgA, :u_norev, :whA, true),
   (:orgA, :u_pend,  :whA, true),
   (:orgA, :u_dis,   :whA, true),
-  (:orgA, :u_vsa,   :whA, true);
+  (:orgA, :u_vsa,   :whA, true),
+  (:orgA, :u_stfon, :whA, true);
 
 -- u_vic may create items but holds no stock right; u_vsa is a viewer granted
 -- items:create and stock:adjust; u_norev is staff with stock:adjust turned off.
@@ -221,6 +235,9 @@ insert into public.user_permission_overrides (organization_id, user_id, permissi
   (:orgA, :u_vic,   'items:create', true),
   (:orgA, :u_vsa,   'items:create', true),
   (:orgA, :u_vsa,   'stock:adjust', true),
+  (:orgA, :u_mgrno, 'stock:adjust', false),
+  (:orgA, :u_admno, 'stock:adjust', false),
+  (:orgA, :u_stfon, 'stock:adjust', true),
   (:orgA, :u_norev, 'stock:adjust', false);
 
 -- Fresh items at 0, created by the member named (as the create paths leave
@@ -249,6 +266,9 @@ insert into public.inventory_items
   (:iOwn,    :orgA, :whA,  null,    'O0454-OWN',    'Owner item',       0, 'active', 'product', :u_own,  now()),
   (:iVsa,    :orgA, null,  null,    'O0454-VSA',    'Viewer no wh',     0, 'active', 'product', :u_vsa,  now()),
   (:iVsaW,   :orgA, :whA,  null,    'O0454-VSAW',   'Viewer in wh',     0, 'active', 'product', :u_vsa,  now()),
+  (:iMgrno,  :orgA, :whA,  null,    'O0454-MGRNO',  'Manager, off',     0, 'active', 'product', :u_mgrno,now()),
+  (:iAdmno,  :orgA, :whA,  null,    'O0454-ADMNO',  'Admin, off',       0, 'active', 'product', :u_admno,now()),
+  (:iStfon,  :orgA, :whA,  null,    'O0454-STFON',  'Staff, granted',   0, 'active', 'product', :u_stfon,now()),
   (:iNorev,  :orgA, :whA,  null,    'O0454-NOREV',  'Adjust off',       0, 'active', 'product', :u_norev,now()),
   (:iPend,   :orgA, :whA,  null,    'O0454-PEND',   'Pending',          0, 'active', 'product', :u_pend, now()),
   (:iDis,    :orgA, :whA,  null,    'O0454-DIS',    'Disabled',         0, 'active', 'product', :u_dis,  now()),
@@ -642,13 +662,21 @@ select is(
 select is(pg_temp.open(:u_own, :orgA, jsonb_build_array(jsonb_build_object('itemId', :iOwn::uuid, 'quantity', 5))),
   '1', 'N1: an owner opens their own new item');
 select is(pg_temp.open(:u_vsa, :orgA, jsonb_build_array(jsonb_build_object('itemId', :iVsa::uuid, 'quantity', 5))),
-  '1', 'N2: a viewer granted items:create and stock:adjust opens their own new item that has no warehouse');
-select is(pg_temp.st(:iVsa) || '|' || pg_temp.mv(:iVsa),
-  '5.0000|5.0000|1|5.0000|initial|true|' || :u_vsa::text || '|null|null|null|null',
-  'N3: recorded in full and attributed to them');
+  'ERR:42501:forbidden:stock:adjust:',
+  'N2: a viewer granted items:create and stock:adjust is refused on their own new item that has no warehouse (hint stock:adjust)');
+select is(pg_temp.st(:iVsa), '0.0000|none|0|0', 'N3: and nothing was written for it');
 select is(pg_temp.open(:u_vsa, :orgA, jsonb_build_array(jsonb_build_object('itemId', :iVsaW::uuid, 'quantity', 5))),
-  'ERR:42501:forbidden:warehouse_write:' || :iVsaW::text,
-  'N4: the same viewer is refused in a warehouse, which a viewer may not write');
+  'ERR:42501:forbidden:stock:adjust:',
+  'N4: the same viewer is refused in a warehouse too (hint stock:adjust)');
+select is(pg_temp.open(:u_mgrno, :orgA, jsonb_build_array(jsonb_build_object('itemId', :iMgrno::uuid, 'quantity', 5))),
+  'ERR:42501:forbidden:stock:adjust:', 'N4b: a manager whose stock:adjust is turned off is refused');
+select is(pg_temp.open(:u_admno, :orgA, jsonb_build_array(jsonb_build_object('itemId', :iAdmno::uuid, 'quantity', 5))),
+  'ERR:42501:forbidden:stock:adjust:', 'N4c: an admin whose stock:adjust is turned off is refused');
+select is(pg_temp.st(:iMgrno) || ',' || pg_temp.st(:iAdmno), '0.0000|none|0|0,0.0000|none|0|0',
+  'N4d: and nothing was written for either');
+select is(pg_temp.open(:u_stfon, :orgA, jsonb_build_array(jsonb_build_object('itemId', :iStfon::uuid, 'quantity', 5))),
+  '1', 'N4e: staff granted stock:adjust open their own new item');
+select is(pg_temp.st(:iStfon), '5.0000|5.0000|1|5.0000', 'N4f: recorded in full');
 select is(pg_temp.open(:u_norev, :orgA, jsonb_build_array(jsonb_build_object('itemId', :iNorev::uuid, 'quantity', 5))),
   'ERR:42501:forbidden:stock:adjust:', 'N5: staff whose stock:adjust is turned off are refused (hint stock:adjust)');
 select is(pg_temp.st(:iNorev), '0.0000|none|0|0', 'N6: and their item stays at 0 with nothing written');
