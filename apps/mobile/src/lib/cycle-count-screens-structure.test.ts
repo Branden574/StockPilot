@@ -324,6 +324,16 @@ describe('every cycle-count screen draws in the device mode', () => {
 describe('count screen: every word, name and role survives the restyle', () => {
   const words = wordsOf(COUNT);
 
+  // S75: the read-failed state's title comes from countReadFailedView
+  // (count-read-failed.ts), which keeps "Could not load this count" for every
+  // failed read but a refusal and a phone not synced yet.
+  it('says "Could not load this count" through countReadFailedView', () => {
+    expect(sourceOf(COUNT)).toContain('{failedView.title}');
+    expect(
+      sourceOf('src/lib/count-read-failed.ts').match(/title: 'Could not load this count'/g),
+    ).toHaveLength(2);
+  });
+
   it.each([
     '← Back',
     'Back',
@@ -345,7 +355,6 @@ describe('count screen: every word, name and role survives the restyle', () => {
     'an exception',
     'This count has no lines yet. Add lines from the web first.',
     'Check again',
-    'Could not load this count',
     'If the app was just updated, the server may still be catching up.',
     'This count could not be read on this phone.',
     'Not cached for offline use',
@@ -645,7 +654,9 @@ describe('count screen: offline capture and the Post rule', () => {
   // box clears the line's saved count first (pinned below).
   it('a typed count is saved on the phone first and queued, never posted from the box', () => {
     expect(codeOnly(src)).toMatch(
-      /createDraftDebouncer\(SAVE_DEBOUNCE_MS, \(lineId, raw\) => \{[\s\S]*?const num = countFromBox\(raw\);\s*if \(num === null\) \{[\s\S]*?return;\s*\}\s*try \{\s*await updateLocalLine\(lineId, num\);\s*\} catch \(e\) \{[\s\S]*?return;\s*\}\s*setLines\([\s\S]*?\);\s*setDraft\(\(d\) => withoutSavedDraft\(d, lineId, raw\)\);\s*await cycleCountSync\.refreshPendingCount\(\);\s*void cycleCountSync\.forceSync\(\);/,
+      // S75: a line no longer on this phone (updateLocalLine answers null) is
+      // said and never marked saved (count-line-gone.test.ts runs it).
+      /createDraftDebouncer\(SAVE_DEBOUNCE_MS, \(lineId, raw\) => \{[\s\S]*?const num = countFromBox\(raw\);\s*if \(num === null\) \{[\s\S]*?return;\s*\}\s*let queued: Awaited<ReturnType<typeof updateLocalLine>>;\s*try \{\s*queued = await updateLocalLine\(lineId, num\);\s*\} catch \(e\) \{[\s\S]*?return;\s*\}\s*if \(!stillHere\(\)\) return;\s*if \(queued === null\) \{[\s\S]*?return;\s*\}\s*setLines\([\s\S]*?\);\s*setDraft\(\(d\) => withoutSavedDraft\(d, lineId, raw\)\);\s*await cycleCountSync\.refreshPendingCount\(\);\s*void cycleCountSync\.forceSync\(\);/,
     );
     expect(codeOnly(src)).toContain('onChangeText={(v) => setDraftValue(l.id, v)}');
   });
@@ -663,7 +674,7 @@ describe('count screen: offline capture and the Post rule', () => {
   it("an emptied box clears the line's saved count, which syncs like a count; a lone minus saves nothing", () => {
     expect(importsFrom(COUNT, '@/lib/cycle-count-cache')).toContain('clearLocalLine');
     expect(codeOnly(src)).toMatch(
-      /const num = countFromBox\(raw\);\s*if \(num === null\) \{\s*if \(!isEmptyBox\(raw\)\) return;\s*let cleared: Awaited<ReturnType<typeof clearLocalLine>>;\s*try \{\s*cleared = await clearLocalLine\(lineId\);\s*\} catch \(e\) \{[\s\S]*?countNotClearedAlert\(e\)[\s\S]*?return;\s*\}\s*if \(cleared\) \{\s*setLines\(\(curr\) =>\s*curr\.map\(\(l\) =>\s*l\.id === lineId\s*\? \{ \.\.\.l, counted: null, localDirty: true, offlineCapturedAt: null \}\s*: l,\s*\),\s*\);\s*\}\s*setDraft\(\(d\) => withoutSavedDraft\(d, lineId, raw\)\);\s*if \(!cleared\) return;\s*await cycleCountSync\.refreshPendingCount\(\);\s*void cycleCountSync\.forceSync\(\);\s*return;\s*\}/,
+      /const num = countFromBox\(raw\);\s*if \(num === null\) \{\s*if \(!isEmptyBox\(raw\)\) return;\s*let cleared: Awaited<ReturnType<typeof clearLocalLine>>;\s*try \{\s*cleared = await clearLocalLine\(lineId\);\s*\} catch \(e\) \{[\s\S]*?countNotClearedAlert\(e\)[\s\S]*?return;\s*\}\s*if \(!stillHere\(\)\) return;\s*if \(cleared\) \{\s*setLines\(\(curr\) =>\s*curr\.map\(\(l\) =>\s*l\.id === lineId\s*\? \{ \.\.\.l, counted: null, localDirty: true, offlineCapturedAt: null \}\s*: l,\s*\),\s*\);\s*\}\s*setDraft\(\(d\) => withoutSavedDraft\(d, lineId, raw\)\);\s*if \(!cleared\) return;\s*await cycleCountSync\.refreshPendingCount\(\);\s*void cycleCountSync\.forceSync\(\);\s*return;\s*\}/,
     );
     // The box then shows the line's saved count, which is none.
     expect(codeOnly(src)).toMatch(
@@ -688,10 +699,12 @@ describe('count screen: offline capture and the Post rule', () => {
   it('a copy on the phone that cannot be read is said, never an endless spinner', () => {
     const code = codeOnly(src);
     expect(code).toMatch(
-      /let cacheUnreadable = false;\s*try \{\s*cached = await getCycleCount\(id\);\s*\} catch \{\s*cacheUnreadable = true;\s*\}/,
+      /let cacheUnreadable = false;\s*if \(mayReadStored\) \{\s*try \{\s*cached = await getCycleCount\(id\);\s*\} catch \{\s*cacheUnreadable = true;\s*\}\s*if \(!stillHere\(\)\) return;\s*\}/,
     );
+    // S75: not synced yet for this member says so in place of "not cached".
+    // The linked exceptions are read online only, so none are kept offline.
     expect(code).toMatch(
-      /if \(!online\) \{\s*if \(!cached\) \{\s*if \(cacheUnreadable\) \{\s*setReadError\(COUNT_UNREADABLE_ON_PHONE\);\s*setEmptyState\('read-failed'\);\s*\} else \{\s*setEmptyState\('offline-uncached'\);\s*\}\s*setLoading\(false\);/,
+      /if \(!online\) \{\s*(?:\/\/[^\n]*\n\s*)*setLinked\(\{ kind: 'none' \}\);\s*if \(!cached\) \{\s*if \(cacheUnreadable\) \{\s*setReadError\(COUNT_UNREADABLE_ON_PHONE\);\s*setEmptyState\('read-failed'\);\s*\} else if \(access === 'not-synced'\) \{\s*setReadError\(NOT_SYNCED_YET\);\s*setEmptyState\('read-failed'\);\s*\} else \{\s*setEmptyState\('offline-uncached'\);\s*\}\s*setLoading\(false\);/,
     );
     expect(code).toContain(
       "const COUNT_UNREADABLE_ON_PHONE = 'This count could not be read on this phone.';",
@@ -1344,9 +1357,9 @@ describe('Counts tab: words, the filters and the offline view', () => {
     }
     const retry = els.filter((el) => attrText(el, 'style', sf) === 'TAP');
     expect(retry).toHaveLength(1);
-    expect(attrText(retry[0]!, 'onPress', sf)).toBe(
-      '() => void load(view, { withSummary: !summary })',
-    );
+    // Try again asks for the workspace first when none is known
+    // (no-workspace-screens.test.ts runs it).
+    expect(attrText(retry[0]!, 'onPress', sf)).toBe('() => void tryAgain()');
     expect(code).toContain('const TAP = { minHeight: MIN_TAP };');
     // The 44pt target is the shared small Button's own frame (P2.5c; drawn
     // and measured in components/ui/touch-target.test.ts).
@@ -1405,7 +1418,7 @@ describe('Counts tab: words, the filters and the offline view', () => {
     expect(code).toContain(
       '<View style={[styles.offlineBanner, { backgroundColor: c.sunk, borderColor: c.hair }]}>',
     );
-    expect(code).toMatch(/const empty = error \? \(\s*downloaded \? \(/);
+    expect(code).toMatch(/const empty = shownError \? \(\s*downloaded \? \(/);
   });
 });
 
@@ -1464,7 +1477,7 @@ describe('AI shelf scan: every word, name and step survives the restyle', () => 
   // "0 books in this count" over a camera with nothing to match.
   it('lines on the phone that cannot be read are said, and the screen goes back', () => {
     expect(code).toMatch(
-      /try \{\s*snap = await getCycleCount\(cycleCountId\);\s*\} catch \{\s*Alert\.alert\('Could not load this count', 'This count could not be read on this phone\.', \[\s*\{ text: 'OK', onPress: \(\) => router\.back\(\) \},\s*\]\);\s*return;\s*\}\s*if \(!snap\) \{\s*Alert\.alert\(\s*'No cached lines',/,
+      /try \{\s*snap = await getCycleCount\(cycleCountId\);\s*\} catch \{\s*if \(!stillHere\(\)\) return;\s*openNotice\.say\(\s*'Could not load this count',\s*'This count could not be read on this phone\.',\s*leave,\s*\);\s*return;\s*\}\s*if \(!stillHere\(\)\) return;\s*if \(!snap\) \{\s*openNotice\.say\(\s*'No cached lines',/,
     );
   });
 

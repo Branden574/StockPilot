@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { internalErrorResponse, unreadableRequestResponse } from '@/server/lib/api-error-response';
 import { PoImportsService } from '@/server/services/po-imports';
@@ -290,6 +291,16 @@ export async function POST(req: Request) {
           lowConfidenceLines: r.lowConfidenceLines,
         });
       } catch (e) {
+        // A module state that could not be read (docket S81) is no verdict on
+        // the file: the whole request answers a 5xx and can be sent again. The
+        // module check runs before the first file's work, so no import of this
+        // batch exists yet when it refuses.
+        if (e instanceof ModulesUnavailableError) {
+          return internalErrorResponse(e, 'po-imports.scan.separate', {
+            organizationId: ctx.organizationId,
+            userIdHash: ctx.userId,
+          });
+        }
         const message =
           e instanceof ServiceError
             ? e.message

@@ -66,13 +66,13 @@ vi.mock('@/server/services/platform/sessions', () => ({
   revokeAllSessionsForUser: (...args: unknown[]) => revokeAllSessionsForUser(...args),
 }));
 vi.mock('@/lib/supabase/admin', () => {
-  // resolveDefaultOrgAndRole chains .select().eq()[.eq()][.not()][.limit()]
+  // resolveDefaultOrgAndRole chains .select().eq()[.eq()][.not()][.is()][.limit()]
   // .maybeSingle(); a permissive self-returning chain keeps it honest without
   // pinning the exact call order (it is try/catch-wrapped in the action, so a
   // missing link would silently degrade to a null-org audit row instead of
   // failing the test).
   const chain: Record<string, unknown> = {};
-  for (const k of ['select', 'eq', 'not', 'limit', 'order']) chain[k] = () => chain;
+  for (const k of ['select', 'eq', 'not', 'is', 'limit', 'order']) chain[k] = () => chain;
   chain.maybeSingle = async () => ({ data: null, error: null });
   return {
     createAdminClient: () => ({
@@ -230,6 +230,24 @@ describe('completePasswordResetAction', () => {
   // The stored access token of the link's session. Unsigned: the getClaims
   // stub stands in for auth-js's verified read.
   const STORED_ACCESS = `h.${Buffer.from(JSON.stringify({ sub: 'u2' })).toString('base64url')}.s`;
+  /**
+   * The account the link's session verifies as (the getClaims stub). A test
+   * moves it to another account mid-press: a session that refreshed into
+   * another account's while the press ran.
+   */
+  const linkSession: { sub: string; amr: unknown; verifiable: boolean } = {
+    sub: 'u1',
+    amr: [],
+    verifiable: true,
+  };
+  /**
+   * The `amr` of a session an emailed link made `secondsAgo` seconds ago
+   * (S77). `otp` is what the confirm route's verify writes for every emailed
+   * link (the lab's Auth server).
+   */
+  const linkOpened = (secondsAgo = 60, method = 'otp') => [
+    { method, timestamp: Math.floor(Date.now() / 1000) - secondsAgo },
+  ];
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -241,10 +259,27 @@ describe('completePasswordResetAction', () => {
       data: { session: { access_token: STORED_ACCESS } },
       error: null,
     });
-    getClaims.mockResolvedValue({
-      data: { claims: { sub: 'u2', session_id: 's2', aal: 'aal1' } },
-      error: null,
-    });
+    linkSession.sub = 'u1';
+    // Default: the session an emailed link made a minute ago.
+    linkSession.amr = linkOpened();
+    linkSession.verifiable = true;
+    // A session that cannot be verified: getClaims() refuses its token, which
+    // is a verdict (verified-claims.ts), so no other read is made.
+    getClaims.mockImplementation(async () =>
+      linkSession.verifiable
+        ? {
+            data: {
+              claims: {
+                sub: linkSession.sub,
+                session_id: 's1',
+                aal: 'aal1',
+                amr: linkSession.amr,
+              },
+            },
+            error: null,
+          }
+        : { data: null, error: { name: 'AuthInvalidJwtError', message: 'Invalid JWT signature' } },
+    );
     updateUser.mockResolvedValue({ error: null });
     signOut.mockResolvedValue({ error: null });
     // Default: no MFA enrolled.
@@ -424,22 +459,18 @@ describe('completePasswordResetAction', () => {
     expect(updateUser).toHaveBeenCalledWith({ password: RESET_VALUE });
   });
 
-  // B50 review. The action reads the account once, at the start, to name it in
-  // the revoke broadcast and the audit row. When that one read fails (GoTrue
-  // answers 5xx; auth-js returns no user and an AuthRetryableFetchError) and
-  // the rest of the press goes through, the password changed and every session
-  // ended, but no live device was told and no row was written. The update's
-  // own answer names the same account.
+  // B50 review: when the press goes through, the revoke broadcast and the audit
+  // row name the account. Since S77 that account is the one the link's session
+  // verified as, read first (no separate account read is made), and the row's
+  // address is the one the update answered.
   it.each([
     ['an account with no authenticator', false],
     ['an account with an authenticator, on the press that carries the code', true],
   ])(
-    'when the first account read fails and the reset goes through, the revoke and the audit row still name the account: %s',
+    'when the reset goes through, the revoke and the audit row name the link session’s account: %s',
     async (_label, withAuthenticator) => {
-      getUser.mockResolvedValueOnce({
-        data: { user: null },
-        error: { name: 'AuthRetryableFetchError', message: 'Service Unavailable', status: 503 },
-      });
+      // The link's session verifies as the account the update names.
+      linkSession.sub = 'u2';
       if (withAuthenticator) {
         listFactors.mockResolvedValue({
           data: { totp: [{ id: 'f1', status: 'verified' }] },
@@ -599,7 +630,6 @@ describe('completePasswordResetAction', () => {
     // this one out: the SDK answers with its own session-missing error, which
     // carries no code.
     it('a press with no session says the link expired', async () => {
-      getUser.mockResolvedValue({ data: { user: null } });
       listFactors.mockResolvedValue({ data: null, error: { message: 'Auth session missing!' } });
       updateUser.mockResolvedValue({
         error: { name: 'AuthSessionMissingError', message: 'Auth session missing!', status: 400 },
@@ -745,11 +775,10 @@ describe('completePasswordResetAction', () => {
       expect(codeBudgetCalls()).toEqual([]);
     });
 
-    it('when the first account read fails, the verified session names the account for the budget and the row', async () => {
-      getUser.mockResolvedValueOnce({
-        data: { user: null },
-        error: { name: 'AuthRetryableFetchError', message: 'Service Unavailable', status: 503 },
-      });
+    // S77: the account is the one the link's session verifies as (the action
+    // reads no other account first).
+    it('the verified link session names the account for the budget and the row', async () => {
+      linkSession.sub = 'u2';
       verify.mockResolvedValue({ error: WRONG_CODE });
 
       await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
@@ -797,12 +826,85 @@ describe('completePasswordResetAction', () => {
       },
     );
 
+    // S77: the account is the one the link's session verifies as, read first.
+    // With no verified session nothing names an account, and the press is
+    // answered as a gone link before anything else (it was the could-not-check
+    // words while the code step named the account itself).
     it('when nothing names the account, the code is not checked and nothing is spent', async () => {
-      getUser.mockResolvedValue({
-        data: { user: null },
-        error: { name: 'AuthRetryableFetchError', message: 'Service Unavailable', status: 503 },
-      });
       getSession.mockResolvedValue({ data: { session: null }, error: null });
+
+      const res = await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
+
+      expect(res).toEqual({ ok: false, error: { code: 'unauthenticated', message: LINK_GONE } });
+      expect(codeBudgetCalls()).toEqual([]);
+      expect(challenge).not.toHaveBeenCalled();
+    });
+
+    // S78: the account the budget is spent on, and the row names, is the
+    // account the session verifies as AFTER the factor list (the read that can
+    // move the session to another account), held to the account the press
+    // began with; and the answer counts only while it is still that account.
+    it('a session that moved to another account at the factor list spends nothing, is signed out here, and changes nothing', async () => {
+      listFactors.mockImplementation(async () => {
+        linkSession.sub = 'u2';
+        return { data: { totp: [{ id: 'f1', status: 'verified' }] }, error: null };
+      });
+
+      const res = await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
+
+      expect(res).toEqual({ ok: false, error: { code: 'unauthenticated', message: LINK_GONE } });
+      expect(codeBudgetCalls()).toEqual([]);
+      expect(challenge).not.toHaveBeenCalled();
+      expect(refusedRows()).toEqual([]);
+      expect(signOut).toHaveBeenCalledWith({ scope: 'local' });
+      expect(signOut).not.toHaveBeenCalledWith({ scope: 'global' });
+      expect(updateUser).not.toHaveBeenCalled();
+    });
+
+    it('a code accepted while the session moved to another account sets no password, and this session is signed out', async () => {
+      verify.mockImplementation(async () => {
+        linkSession.sub = 'u2';
+        return { error: null };
+      });
+
+      const res = await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
+
+      expect(res).toEqual({ ok: false, error: { code: 'unauthenticated', message: LINK_GONE } });
+      expect(signOut).toHaveBeenCalledWith({ scope: 'local' });
+      expect(updateUser).not.toHaveBeenCalled();
+      expect(broadcastToChannel).not.toHaveBeenCalled();
+    });
+
+    // S78: a read that cannot verify the session is not another account: the
+    // press is refused with could-not-check words and the link's session
+    // stays, so the person can press again.
+    it('a session that cannot be verified after the factor list spends nothing and stays signed in', async () => {
+      listFactors.mockImplementation(async () => {
+        linkSession.verifiable = false;
+        return { data: { totp: [{ id: 'f1', status: 'verified' }] }, error: null };
+      });
+
+      const res = await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
+
+      expect(res).toEqual({
+        ok: false,
+        error: {
+          code: 'internal_error',
+          message:
+            'Could not confirm your reset link just now, so your password was not changed. Try again in a moment.',
+        },
+      });
+      expect(codeBudgetCalls()).toEqual([]);
+      expect(challenge).not.toHaveBeenCalled();
+      expect(signOut).not.toHaveBeenCalled();
+      expect(updateUser).not.toHaveBeenCalled();
+    });
+
+    it('a code GoTrue judged while the session could not be verified: not checked, no row, and the link session stays', async () => {
+      verify.mockImplementation(async () => {
+        linkSession.verifiable = false;
+        return { error: null };
+      });
 
       const res = await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
 
@@ -810,8 +912,9 @@ describe('completePasswordResetAction', () => {
         ok: false,
         error: { code: 'forbidden', message: NOT_CHECKED, details: { reason: 'aal2_required' } },
       });
-      expect(codeBudgetCalls()).toEqual([]);
-      expect(challenge).not.toHaveBeenCalled();
+      expect(signOut).not.toHaveBeenCalled();
+      expect(updateUser).not.toHaveBeenCalled();
+      expect(refusedRows()).toEqual([]);
     });
 
     it("GoTrue's own rate limit is answered as one, and writes nothing", async () => {
@@ -830,6 +933,278 @@ describe('completePasswordResetAction', () => {
         },
       });
       expect(refusedRows()).toEqual([]);
+    });
+  });
+
+  // ── S78: the password is set only for the account the press began with ──
+  describe('the account is checked again before the password update', () => {
+    const LINK_GONE =
+      'That link has expired or was already used. Choose Forgot? on the sign-in page to get a new link by email.';
+
+    it('a session that holds another account at the update is refused, signed out here, and nothing changes', async () => {
+      listFactors.mockImplementation(async () => {
+        linkSession.sub = 'u2';
+        return { data: { totp: [] }, error: null };
+      });
+
+      const res = await completePasswordResetAction(INPUT);
+
+      expect(res).toEqual({ ok: false, error: { code: 'unauthenticated', message: LINK_GONE } });
+      expect(updateUser).not.toHaveBeenCalled();
+      expect(signOut).toHaveBeenCalledTimes(1);
+      expect(signOut).toHaveBeenCalledWith({ scope: 'local' });
+      expect(broadcastToChannel).not.toHaveBeenCalled();
+      expect(auditInsert).not.toHaveBeenCalled();
+    });
+
+    const UNCONFIRMED =
+      'Could not confirm your reset link just now, so your password was not changed. Try again in a moment.';
+
+    it('a session that cannot be verified at the update changes nothing, and the link session stays', async () => {
+      listFactors.mockImplementation(async () => {
+        linkSession.verifiable = false;
+        return { data: { totp: [] }, error: null };
+      });
+
+      const res = await completePasswordResetAction(INPUT);
+
+      expect(res).toEqual({ ok: false, error: { code: 'internal_error', message: UNCONFIRMED } });
+      expect(updateUser).not.toHaveBeenCalled();
+      expect(signOut).not.toHaveBeenCalled();
+      expect(auditInsert).not.toHaveBeenCalled();
+    });
+
+    const LINK_GONE_ANSWER = {
+      ok: false,
+      error: {
+        code: 'unauthenticated',
+        message:
+          'That link has expired or was already used. Choose Forgot? on the sign-in page to get a new link by email.',
+      },
+    };
+
+    it('an update that answers for another account is reported, that account is signed out everywhere, and its row is written', async () => {
+      updateUser.mockResolvedValue({
+        data: { user: { id: 'u9', email: 'other@example.test' } },
+        error: null,
+      });
+
+      const res = await completePasswordResetAction(INPUT);
+
+      // The reset page's own words: a person here may have no working
+      // password to sign in again with.
+      expect(res).toEqual(LINK_GONE_ANSWER);
+      const reports = vi.mocked(reportError).mock.calls.filter(
+        (c) => (c[1] as { tag?: string }).tag === 'auth.password_reset_account_changed',
+      );
+      expect(reports).toHaveLength(1);
+      expect(reports[0]![1]).toEqual({ tag: 'auth.password_reset_account_changed', level: 'error' });
+      expect(signOut).toHaveBeenCalledWith({ scope: 'global' });
+      expect(broadcastToChannel).toHaveBeenCalledWith('user:u9:sessions', 'revoked', {
+        keepId: null,
+      });
+      expect(auditInsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'user.password.reset_completed',
+          user_id: 'u9',
+          metadata: expect.objectContaining({ account_changed: true }),
+        }),
+      );
+      expect(
+        auditInsert.mock.calls.some((c) => (c[0] as { user_id?: string }).user_id === 'u1'),
+      ).toBe(false);
+    });
+
+    it('an update that answers for another account, when the global sign-out fails: that account is ended in the database and this browser loses its auth cookies', async () => {
+      updateUser.mockResolvedValue({
+        data: { user: { id: 'u9', email: 'other@example.test' } },
+        error: null,
+      });
+      signOut.mockResolvedValue({
+        error: { name: 'AuthRetryableFetchError', message: 'Service Unavailable', status: 503 },
+      });
+      revokeAllSessionsForUser.mockResolvedValue({ ok: true, sessionIds: [] });
+      cookieGetAll.mockReturnValue([
+        { name: 'sb-x-auth-token', value: 'a' },
+        { name: 'stockpilot-theme', value: 'dark' },
+      ]);
+
+      const res = await completePasswordResetAction(INPUT);
+
+      expect(res).toEqual(LINK_GONE_ANSWER);
+      expect(revokeAllSessionsForUser).toHaveBeenCalledTimes(1);
+      expect(revokeAllSessionsForUser).toHaveBeenCalledWith('u9');
+      expect(cookieSet.mock.calls.map((c) => c[0])).toEqual(['sb-x-auth-token']);
+      expect(cookieSet.mock.calls[0]!.slice(1)).toEqual(['', { path: '/', maxAge: 0 }]);
+      // The database revoke tells the devices itself when it worked.
+      expect(broadcastToChannel).not.toHaveBeenCalled();
+      expect(auditInsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'user.password.reset_completed',
+          user_id: 'u9',
+          metadata: expect.objectContaining({ account_changed: true, database_revoke: 'ok' }),
+        }),
+      );
+    });
+
+    it('control: the verified session is read after the factor list and before the update', async () => {
+      const res = await completePasswordResetAction(INPUT);
+
+      expect(res).toEqual({ ok: true, data: { next: '/signin?reset=success' } });
+      const listed = listFactors.mock.invocationCallOrder[0]!;
+      const updated = updateUser.mock.invocationCallOrder[0]!;
+      expect(
+        getClaims.mock.invocationCallOrder.some((order) => order > listed && order < updated),
+      ).toBe(true);
+      expect(signOut).toHaveBeenCalledWith({ scope: 'global' });
+      expect(signOut).not.toHaveBeenCalledWith({ scope: 'local' });
+    });
+  });
+
+  // ── S77: a new password is set only from a reset link's session ─────────
+  // The session's VERIFIED amr must hold an entry for an emailed link (a reset
+  // link, or the invite of a new organization's owner) from the last hour.
+  // Any other session is refused in plain words that point a signed-in person
+  // to Change password, and nothing is written: no limiter count, no factor
+  // read, no update, no sign-out, no row.
+  describe('only a session from a reset link sets the password', () => {
+    const NEEDS_LINK =
+      'A new password can be set here only within an hour of opening the link in your email. Choose Forgot? on the sign-in page to get a new link. If you are signed in, use Change password in Settings → Security.';
+    const LINK_GONE =
+      'That link has expired or was already used. Choose Forgot? on the sign-in page to get a new link by email.';
+
+    function expectNothingWritten() {
+      expect(checkRateLimit).not.toHaveBeenCalled();
+      expect(listFactors).not.toHaveBeenCalled();
+      expect(updateUser).not.toHaveBeenCalled();
+      expect(signOut).not.toHaveBeenCalled();
+      expect(broadcastToChannel).not.toHaveBeenCalled();
+      expect(auditInsert).not.toHaveBeenCalled();
+    }
+
+    // What the tests vary is the session's amr: the method name and its age.
+    // `otp` is what the confirm route's verify writes for every emailed link
+    // (every way a person reaches /reset/complete today goes through it);
+    // `recovery` and `invite` are the names a code-exchange path would write.
+    // The senders and their landings are held elsewhere
+    // (lib/auth/password-reset-email, team.password-reset,
+    // platform/users.password-reset, the phone's api/v1/auth/password-reset,
+    // the QA recovery link, platform-admin's invite, lib/auth/confirm-landing).
+    it.each([
+      ['an emailed link through the confirm route', 'otp'],
+      ['a reset link through a code exchange', 'recovery'],
+      ['an invite through a code exchange', 'invite'],
+    ])('%s (%s): sets the password', async (_label, method) => {
+      linkSession.amr = linkOpened(90, method);
+
+      const res = await completePasswordResetAction(INPUT);
+
+      expect(res).toEqual({ ok: true, data: { next: '/signin?reset=success' } });
+      expect(updateUser).toHaveBeenCalledWith({ password: RESET_VALUE });
+      expect(signOut).toHaveBeenCalledWith({ scope: 'global' });
+    });
+
+    it('an authenticator code entered after the link: the read before the update holds both, and the password is set', async () => {
+      listFactors.mockResolvedValue({
+        data: { totp: [{ id: 'f1', status: 'verified' }] },
+        error: null,
+      });
+      verify.mockImplementation(async () => {
+        const now = Math.floor(Date.now() / 1000);
+        linkSession.amr = [
+          { method: 'totp', timestamp: now },
+          { method: 'otp', timestamp: now - 90 },
+        ];
+        return { error: null };
+      });
+
+      const res = await completePasswordResetAction({ ...INPUT, totpCode: '123456' });
+
+      expect(res).toEqual({ ok: true, data: { next: '/signin?reset=success' } });
+      expect(updateUser).toHaveBeenCalledTimes(1);
+    });
+
+    it('a signed-in session that did not come from a reset link is refused, pointed to Change password, and nothing is written', async () => {
+      linkSession.amr = [{ method: 'password', timestamp: Math.floor(Date.now() / 1000) - 60 }];
+
+      const res = await completePasswordResetAction(INPUT);
+
+      expect(res).toEqual({ ok: false, error: { code: 'forbidden', message: NEEDS_LINK } });
+      expectNothingWritten();
+    });
+
+    it.each([
+      ['an emailed link opened more than an hour ago', () => linkOpened(3700)],
+      [
+        'a password sign-in with an authenticator code',
+        () => [...linkOpened(60, 'password'), ...linkOpened(30, 'totp')],
+      ],
+      ['an authenticator code alone', () => linkOpened(60, 'totp')],
+      ['methods without times', () => ['otp']],
+      ['no amr at all', () => undefined],
+    ])('%s is refused the same way', async (_label, amr) => {
+      linkSession.amr = amr();
+
+      const res = await completePasswordResetAction({ ...INPUT, totpCode: '123456' });
+
+      expect(res).toEqual({ ok: false, error: { code: 'forbidden', message: NEEDS_LINK } });
+      expectNothingWritten();
+      expect(challenge).not.toHaveBeenCalled();
+    });
+
+    it('only verified claims count: a stored token that does not verify is refused as a gone link, and nothing is written', async () => {
+      getClaims.mockResolvedValue({
+        data: null,
+        error: { name: 'AuthInvalidJwtError', message: 'Invalid JWT signature' },
+      });
+
+      const res = await completePasswordResetAction(INPUT);
+
+      expect(res).toEqual({ ok: false, error: { code: 'unauthenticated', message: LINK_GONE } });
+      expectNothingWritten();
+    });
+
+    it('with no session at all, says the link expired, and nothing is written', async () => {
+      getSession.mockResolvedValue({ data: { session: null }, error: null });
+
+      const res = await completePasswordResetAction(INPUT);
+
+      expect(res).toEqual({ ok: false, error: { code: 'unauthenticated', message: LINK_GONE } });
+      expectNothingWritten();
+    });
+
+    it('the link entry is read again right before the update: a session without it by then is refused, and nothing changes', async () => {
+      listFactors.mockImplementation(async () => {
+        linkSession.amr = [{ method: 'password', timestamp: Math.floor(Date.now() / 1000) }];
+        return { data: { totp: [] }, error: null };
+      });
+
+      const res = await completePasswordResetAction(INPUT);
+
+      expect(res).toEqual({ ok: false, error: { code: 'forbidden', message: NEEDS_LINK } });
+      expect(updateUser).not.toHaveBeenCalled();
+      expect(signOut).not.toHaveBeenCalled();
+      expect(auditInsert).not.toHaveBeenCalled();
+    });
+
+    it('an account with an authenticator: the link session still needs its code first', async () => {
+      listFactors.mockResolvedValue({
+        data: { totp: [{ id: 'f1', status: 'verified' }] },
+        error: null,
+      });
+
+      const asked = await completePasswordResetAction(INPUT);
+      expect(asked).toMatchObject({
+        ok: false,
+        error: { code: 'forbidden', details: { reason: 'aal2_required' } },
+      });
+      expect(updateUser).not.toHaveBeenCalled();
+
+      const done = await completePasswordResetAction({ ...INPUT, totpCode: '123456' });
+      expect(done).toEqual({ ok: true, data: { next: '/signin?reset=success' } });
+      expect(verify.mock.invocationCallOrder[0]!).toBeLessThan(
+        updateUser.mock.invocationCallOrder[0]!,
+      );
     });
   });
 

@@ -47,9 +47,12 @@ const GET_SESSION_ALLOWED: Record<string, { calls: number; why: string }> = {
 const AAL_ALLOWED: Record<string, { calls: number; why: string }> = {
   'app/(auth)/signin/mfa/page.tsx': { calls: 1, why: 'after getUser() and listFactors()' },
   'server/actions/auth.ts': {
-    calls: 3,
-    why: 'sign in: after signInWithPassword(); password reset and change password: after getUser() and listFactors()',
+    calls: 2,
+    why: 'sign in: after signInWithPassword(); change password: after getUser() and listFactors()',
   },
+  // Not the password reset any more (docket S77, S78): it reads the level
+  // from the link session's verified claims after the factor list, held to
+  // the account the press is for (readVerifiedSessionClaimsOf).
   // Not server/actions/profile.ts or server/actions/email-change.ts any more
   // (docket S50a): account deletion and the email change read the level
   // through readVerifiedSessionClaimsOf, as the account the action validated.

@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { browserDeviceName } from '@/lib/auth/user-agent';
 import { sendNewDeviceLoginEmail } from '@/lib/email/login-alert';
 import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { dispatchEvent } from '@/server/services/integration-events';
 
@@ -32,6 +33,19 @@ function deviceHash(userId: string, ua: string, deviceKey: string | null): strin
 }
 
 /**
+ * New-device alerts (the email and the organizations' events together) per
+ * account in a window. Past it the device is still recorded (the sign-in
+ * monitor, app/api/cron/auth-anomalies, counts it) and the sign-in still
+ * appears among the account's active sessions; no email and no event are
+ * sent. The email that reaches the count says so.
+ */
+export const NEW_DEVICE_ALERTS_PER_ACCOUNT = 5;
+export const NEW_DEVICE_ALERT_WINDOW_MS = 24 * 60 * 60_000;
+/** security.new_device_login events per organization in a window. */
+export const NEW_DEVICE_EVENTS_PER_ORGANIZATION = 30;
+export const NEW_DEVICE_EVENT_WINDOW_MS = 60 * 60_000;
+
+/**
  * Record the device a user just signed in from, and email a "new device" alert
  * when it's a device we haven't seen on an ALREADY-established account.
  *
@@ -46,6 +60,22 @@ function deviceHash(userId: string, ua: string, deviceKey: string | null): strin
  * (user_id, device_hash)), and a refused insert emailed about a device that was
  * never recorded. A 23505 means another sign-in recorded it first, and that
  * call alerts; any other refusal is reported, and nothing is sent.
+ *
+ * Alerts are counted (S79), both buckets closed: nothing is sent without a
+ * count.
+ *   - per account: NEW_DEVICE_ALERTS_PER_ACCOUNT a day. The email that
+ *     reaches the count says that no more will come for 24 hours. Past it the
+ *     device is recorded with no email and no event; the first device held in
+ *     a window is reported once (auth.new_device_alerts_held) with the first
+ *     16 hex characters of the SHA-256 of the account id, which the operator
+ *     matches by hashing account ids. When the limiter cannot answer, the
+ *     device row this call inserted is removed, so the device is still new
+ *     at its next sign-in, and nothing is sent.
+ *   - per organization: NEW_DEVICE_EVENTS_PER_ORGANIZATION
+ *     security.new_device_login events an hour, so the organization's
+ *     channels are not flooded; the person's own email is not held by it.
+ *     The first event held for an organization in a window is reported once
+ *     (auth.new_device_events_held), with the organization id only.
  */
 export async function noteLoginDevice(args: {
   userId: string;
@@ -119,11 +149,37 @@ export async function noteLoginDevice(args: {
     }
 
     if (hadKnownDevices && args.email) {
+      const alert = await checkRateLimit(
+        `new-device-alert:user:${args.userId}`,
+        NEW_DEVICE_ALERTS_PER_ACCOUNT,
+        NEW_DEVICE_ALERT_WINDOW_MS,
+        'closed',
+      );
+      if (alert.failed) {
+        // Could not count: nothing is sent, and the device is not left
+        // recorded as seen, so its next sign-in is still a new device.
+        const { error: deleteError } = await admin
+          .from('user_login_devices')
+          .delete()
+          .eq('user_id', args.userId)
+          .eq('device_hash', hash);
+        if (deleteError) {
+          throw new Error(
+            `user_login_devices delete after an uncounted alert refused (${deleteError.code ?? 'no code'})`,
+          );
+        }
+        return;
+      }
+      if (!alert.allowed) {
+        await reportAlertsHeld(args.userId);
+        return;
+      }
       await sendNewDeviceLoginEmail({
         to: args.email,
         userAgent: ua,
         ip: args.ip,
         deviceLabel: label,
+        lastForADay: alert.count === NEW_DEVICE_ALERTS_PER_ACCOUNT,
       });
       // Security feed: also surface the new device in each of the user's orgs'
       // subscribed channels (the email above only reaches the user — a hijacked
@@ -142,6 +198,16 @@ export async function noteLoginDevice(args: {
         .is('impersonation_expires_at', null)
         .limit(5);
       for (const m of (memberships ?? []) as { organization_id: string }[]) {
+        const perOrganization = await checkRateLimit(
+          `new-device-event:org:${m.organization_id}`,
+          NEW_DEVICE_EVENTS_PER_ORGANIZATION,
+          NEW_DEVICE_EVENT_WINDOW_MS,
+          'closed',
+        );
+        if (!perOrganization.allowed) {
+          if (!perOrganization.failed) await reportEventsHeld(m.organization_id);
+          continue;
+        }
         // The delivery body lands in customer-controlled Slack/Teams/webhook
         // infra, so it must carry NO PII. Send a non-PII user id + the device's
         // name in fixed words only — NOT the email or IP (those go only to the
@@ -156,4 +222,50 @@ export async function noteLoginDevice(args: {
     // Never let an alert failure affect sign-in.
     void reportError(e, { tag: 'auth.login_device_note_failed', level: 'warning' });
   }
+}
+
+/**
+ * One report per account per window when its new-device alerts are held: a
+ * hash of the account id only, never the email, the address or the device.
+ * Its own bucket, closed, so a limiter that cannot answer reports nothing
+ * here (lib/rate-limit logs the failure).
+ */
+async function reportAlertsHeld(userId: string): Promise<void> {
+  const first = await checkRateLimit(
+    `new-device-alert-held:user:${userId}`,
+    1,
+    NEW_DEVICE_ALERT_WINDOW_MS,
+    'closed',
+  );
+  if (!first.allowed) return;
+  void reportError(new Error('New-device alerts held for an account past its daily count'), {
+    tag: 'auth.new_device_alerts_held',
+    level: 'warning',
+    userIdHash: createHash('sha256').update(userId).digest('hex').slice(0, 16),
+    extra: { limit: NEW_DEVICE_ALERTS_PER_ACCOUNT, window_hours: 24 },
+  });
+}
+
+/**
+ * One report per organization per window when its security.new_device_login
+ * events are held: the organization id only, never an account, an email, an
+ * address or a device. Its own bucket, closed.
+ */
+async function reportEventsHeld(organizationId: string): Promise<void> {
+  const first = await checkRateLimit(
+    `new-device-event-held:org:${organizationId}`,
+    1,
+    NEW_DEVICE_EVENT_WINDOW_MS,
+    'closed',
+  );
+  if (!first.allowed) return;
+  void reportError(
+    new Error('New-device events held for an organization past its hourly count'),
+    {
+      tag: 'auth.new_device_events_held',
+      level: 'warning',
+      organizationId,
+      extra: { limit: NEW_DEVICE_EVENTS_PER_ORGANIZATION, window_hours: 1 },
+    },
+  );
 }

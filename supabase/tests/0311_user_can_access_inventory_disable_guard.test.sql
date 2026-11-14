@@ -37,9 +37,9 @@
 -- policy edit could have silently reopened all 25 at once.
 --
 -- Section 11 pins user_can_see_item_category, the fifteenth membership reader.
--- It is now guarded in its own right; its single policy use (categories_select)
--- also ANDs the guarded is_org_member, and that conjunction is asserted so the
--- belt cannot be removed at the same time as the braces.
+-- It is guarded in its own right. Since S49 categories_select no longer calls
+-- it: the policy reads the guarded membership and category sets instead, and
+-- that is asserted, together with a disabled member reading no category.
 --
 -- Wrapped in begin/rollback — nothing leaks. Namespace 03110000.
 
@@ -304,9 +304,12 @@ reset role;
 
 -- ── 11. The fifteenth reader: user_can_see_item_category ──────────────────
 -- Reads organization_members directly and reaches NO guarded helper (the
--- has_org_role in its body is a COMMENT, not a call). Its only policy use ANDs
--- the guarded is_org_member, so it was not a live bypass — but a policy author
--- reaching for it alone would have made one. Guarded in its own right now.
+-- has_org_role in its body is a COMMENT, not a call). Guarded in its own right
+-- since 0310. Since S49 no policy calls it and only service_role may execute
+-- it: categories_select reads rls_member_org_ids and the two category sets
+-- (rls_cat_unrestricted_org_ids, rls_cat_allowed_category_ids), each of which
+-- refuses a disabled account itself (0310), so the direct calls below run as
+-- service_role and the policy line pins the sets instead of the function.
 select matches(
   (select p.prosrc from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public' and p.proname = 'user_can_see_item_category'),
@@ -316,22 +319,26 @@ select matches(
 select is(
   (select count(*) from pg_policies
     where schemaname = 'public' and policyname = 'categories_select'
-      and qual like '%is_org_member%' and qual like '%user_can_see_item_category%'),
+      and qual like '%rls_member_org_ids%' and qual like '%rls_cat_unrestricted_org_ids%'
+      and qual like '%rls_cat_allowed_category_ids%' and qual not like '%user_can_see_item_category%'),
   1::bigint,
-  'categories_select still ANDs the guarded is_org_member with user_can_see_item_category');
+  'categories_select ANDs the guarded membership set with the guarded category sets (S49)');
+
+set local role to 'service_role';
+select ok(public.user_can_see_item_category(:u_peer, :org, :cat),
+  'ACTIVE: user_can_see_item_category is true (service_role, its only API caller since S49)');
+select ok(not public.user_can_see_item_category(:u_dis, :org, :cat),
+  'DISABLED: user_can_see_item_category is false');
+reset role;
 
 set local "request.jwt.claim.sub" to '03110000-0000-0000-0000-0000000000a3';
 set local role to 'authenticated';
-select ok(public.user_can_see_item_category(:u_peer, :org, :cat),
-  'ACTIVE: user_can_see_item_category is true');
 select is((select count(*) from public.categories where id = :cat), 1::bigint,
   'ACTIVE: categories_select lets the member read');
 reset role;
 
 set local "request.jwt.claim.sub" to '03110000-0000-0000-0000-0000000000a2';
 set local role to 'authenticated';
-select ok(not public.user_can_see_item_category(:u_dis, :org, :cat),
-  'DISABLED: user_can_see_item_category is false');
 select is((select count(*) from public.categories where id = :cat), 0::bigint,
   'DISABLED: categories_select refuses');
 reset role;

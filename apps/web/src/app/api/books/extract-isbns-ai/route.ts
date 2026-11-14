@@ -9,6 +9,7 @@ import { detectFileKind } from '@/lib/books/isbn-extract';
 import { reportError } from '@/lib/error-reporter';
 import { classifyAiError } from '@/lib/ai/errors';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { answerModuleState } from '@/server/lib/api-error-response';
 import {
   assertModuleEnabled,
   assertPermission,
@@ -57,7 +58,9 @@ export async function POST(req: Request) {
     if (e instanceof ServiceError && e.code === 'forbidden') {
       return NextResponse.json({ error: 'forbidden', message: e.message }, { status: 403 });
     }
-    throw e;
+    // A module state that could not be read (docket S81); anything else is
+    // thrown on, as before.
+    return answerModuleState(e, 'books.extract-isbns-ai.module_state');
   }
 
   // Rate-limit the Gemini-backed extraction per user. Every other AI endpoint

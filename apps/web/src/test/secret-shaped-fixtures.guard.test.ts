@@ -59,6 +59,18 @@ const FILES = [
   'src/app/auth/confirm/route.email-change-replaced.test.ts',
   'src/app/api/admin/qa-recovery-link/route.test.ts',
   'src/test/confirm-link-check.ts',
+  // S77, S78: the authenticator code, recovery code, set-up, reset and
+  // Change password tests.
+  'src/server/actions/mfa.test.ts',
+  'src/server/actions/mfa.raw-error-words.test.ts',
+  'src/server/actions/mfa-recovery.test.ts',
+  'src/server/actions/mfa-recovery.not-set-up.test.ts',
+  'src/server/actions/auth.password-reset.test.ts',
+  'src/server/actions/auth.change-password.test.ts',
+  'src/lib/auth/mfa-code-attempts.test.ts',
+  'src/lib/auth/reset-link-session.test.ts',
+  // The ownership transfer's password re-confirm, with a stand-in session.
+  'src/server/actions/team.transfer-session-identity.test.ts',
 ];
 
 // A password-, secret- or token-shaped name (identifier, property or quoted

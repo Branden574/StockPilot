@@ -11,6 +11,7 @@ import { retryWorkspace } from '@/lib/use-workspace';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+import { webLink } from '@/lib/web-links';
 
 interface ProcedureRow {
   id: string;
@@ -159,9 +160,7 @@ export default function ProceduresScreen() {
 function ProcedureCard({ proc }: { proc: ProcedureRow }) {
   const { c } = useTheme();
   function openOnWeb() {
-    Linking.openURL(`https://stockpilotusa.com/dashboard/procedures/${proc.id}`).catch(
-      () => undefined,
-    );
+    Linking.openURL(webLink(`/dashboard/procedures/${proc.id}`)).catch(() => undefined);
   }
   return (
     <Pressable

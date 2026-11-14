@@ -3,6 +3,7 @@ import 'server-only';
 import { headers } from 'next/headers';
 
 import { isUserNotFound } from '@/lib/auth/gotrue-user-not-found';
+import { clientIpForRecord } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
 import type { createAdminClient } from '@/lib/supabase/admin';
 import type { createClient } from '@/lib/supabase/server';
@@ -491,7 +492,7 @@ export async function auditAccountDeleted(args: {
   let userAgent: string | null = null;
   try {
     const h = await headers();
-    ip = h.get('x-forwarded-for')?.split(',')[0]?.trim() || h.get('x-real-ip') || null;
+    ip = clientIpForRecord(h);
     userAgent = h.get('user-agent') || null;
   } catch {
     // No request scope: the row is still written without them.

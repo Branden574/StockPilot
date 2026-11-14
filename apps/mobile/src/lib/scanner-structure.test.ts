@@ -1091,7 +1091,8 @@ describe('Scan tab: the flows and their gates are unchanged', () => {
       expect(attrText(el, 'result', sf)).toBe(card === 'AddBookCard' ? 'addBook' : 'addItem');
       expect(attrText(el, 'onCancel', sf)).toBe('reset');
       expect(codeOnly(attrText(el, 'onCreated', sf)!)).toMatch(
-        /const found = await loadItemById\(id\);\s*if \(found\) showScannedItem\(found\);\s*else reset\(\);/,
+        // A read that failed ('failed', B124) resets, as an empty one did.
+        /const found = await loadItemById\(id\);\s*if \(found && found !== 'failed'\) showScannedItem\(found\);\s*else reset\(\);/,
       );
     }
   });

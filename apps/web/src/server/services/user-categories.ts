@@ -6,8 +6,9 @@ import { ServiceContext, ServiceError, assertPermission } from './context';
  *
  * Background: viewer accounts can be restricted to a subset of
  * categories via rows in `user_category_assignments`. The Postgres
- * RLS policy `inventory_items_category_visibility` (migration 0128)
- * enforces the restriction at the database level — this service is
+ * RLS policies `inventory_items_select` and `categories_select`
+ * enforce the restriction at the database level (0128 added it as two
+ * separate policies; 0129 folded it into these two) — this service is
  * defense-in-depth + the management surface for grants.
  *
  * Truth table:
@@ -25,7 +26,9 @@ export class UserCategoriesService {
    *     or a viewer with zero grants)
    *   - `Set<string>` = explicit allow-list (restricted viewer)
    *
-   * Mirrors the RLS truth table in `user_can_see_item_category`. Used
+   * Mirrors the truth table RLS applies through
+   * `rls_cat_unrestricted_org_ids` and `rls_cat_allowed_category_ids`
+   * (read by `categories_select` and `inventory_items_select`). Used
    * by the orders/new picker cache-key hash and by `InventoryService.list`
    * for defense-in-depth filtering.
    */
@@ -63,15 +66,17 @@ export class UserCategoriesService {
     // In production this shouldn't happen because ctx.organizationId is
     // only set after auth has verified org membership; returning null
     // here means "no extra service-layer filter" while RLS still
-    // enforces the visibility boundary (user_can_see_item_category
-    // returns false when no role row exists in the requested org).
+    // enforces the visibility boundary (categories_select and
+    // inventory_items_select read rls_cat_unrestricted_org_ids and
+    // rls_cat_allowed_category_ids, which hold nothing for a user with
+    // no membership row in the requested org).
     if (!role) return null;
     if (role !== 'viewer') return null;    // unrestricted by role
 
     // org-scoped — a user may be a viewer here AND in another org;
-    // we MUST only consider grants for THIS org. Mirrors the
-    // organization_id filter applied inside user_can_see_item_category
-    // in migration 0129.
+    // we MUST only consider grants for THIS org. Mirrors RLS, which
+    // matches the (organization_id, category_id) pairs
+    // rls_cat_allowed_category_ids returns.
     const { data: rows } = await this.ctx.supabase
       .from('user_category_assignments')
       .select('category_id')
