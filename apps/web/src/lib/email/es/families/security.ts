@@ -201,18 +201,18 @@ export interface SigninAlertEmailParams {
   firstName?: string | null;
   appUrl?: string;
   /**
-   * This is the last new-device email the account gets in 24 hours
-   * (lib/auth/login-device.ts NEW_DEVICE_ALERTS_PER_ACCOUNT): one more
-   * sentence says so, in both parts.
+   * This is the last new-device email the account gets until its 24-hour
+   * count starts again (lib/auth/login-device.ts
+   * NEW_DEVICE_ALERTS_PER_ACCOUNT): one more sentence says so, in both parts.
    */
   lastForADay?: boolean;
 }
 
-/** The sentence on the last new-device email of a 24-hour window (text part). */
+/** The sentence on the email that reaches the 24-hour count (text part). */
 export const SIGNIN_ALERT_LAST_FOR_A_DAY_TEXT =
-  'Further new-device sign-ins in the next 24 hours won’t send more emails, so if these sign-ins weren’t you, change your password and review your devices in your security settings now.';
+  'Further new-device sign-ins won’t send more emails for up to 24 hours, so if these sign-ins weren’t you, change your password and review your devices under Active sessions in your security settings now.';
 const SIGNIN_ALERT_LAST_FOR_A_DAY_HTML =
-  'Further new-device sign-ins in the next 24 hours won&rsquo;t send more emails, so if these sign-ins weren&rsquo;t you, change your password and review your devices in your security settings now.';
+  'Further new-device sign-ins won&rsquo;t send more emails for up to 24 hours, so if these sign-ins weren&rsquo;t you, change your password and review your devices under Active sessions in your security settings now.';
 
 export function renderSigninAlertEmail(params: SigninAlertEmailParams): RenderedEsEmail {
   const def = esEmailById('signin');
@@ -292,7 +292,7 @@ export function renderSigninAlertEmail(params: SigninAlertEmailParams): Rendered
       ),
       footer({
         kind: 'ess',
-        reasonHtml: `Sent to <span class="ink2" style="color:${L.ink2};text-decoration:underline">${email}</span> whenever a new device signs in — a core account-safety notice.`,
+        reasonHtml: `Sent to <span class="ink2" style="color:${L.ink2};text-decoration:underline">${email}</span> when a new device signs in — a core account-safety notice.`,
         urls,
       }),
     ].join('\n    '),

@@ -51,8 +51,8 @@ export const dynamic = 'force-dynamic';
  * way: the user.signed_in row is still written (with limiter_unavailable),
  * the device is not noted, so no new-device email or organization event goes
  * out without a count and the device is still new at its next sign-in, and
- * the hold is reported (at most once in five minutes on an instance, lib/auth/session-note.ts).
- * The phone's sign-in itself has already happened at the Auth server, so the
+ * the hold is reported (at most once in five minutes on an instance,
+ * lib/auth/session-note.ts). The phone's sign-in itself has already happened at the Auth server, so the
  * row is kept. The note counts new-device alerts per account and per
  * organization (lib/auth/login-device.ts).
  *

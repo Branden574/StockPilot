@@ -44,7 +44,7 @@ describe('sendNewDeviceLoginEmail', () => {
     expect(msg.html).toContain('/dashboard/settings/security');
   });
 
-  it('the last email of 24 hours carries the sentence in both parts; others do not', async () => {
+  it('the email that reaches the count carries the sentence in both parts; others do not', async () => {
     await sendNewDeviceLoginEmail({
       to: 'owner@example.com',
       userAgent: 'Mozilla/5.0 (Windows NT 10.0) Firefox/127.0',
@@ -52,8 +52,8 @@ describe('sendNewDeviceLoginEmail', () => {
       lastForADay: true,
     });
     const last = sendEmail.mock.calls[0]![0] as { html: string; text: string };
-    expect(last.text).toContain('Further new-device sign-ins in the next 24 hours won’t send more emails');
-    expect(last.html).toContain('Further new-device sign-ins in the next 24 hours won&rsquo;t send more emails');
+    expect(last.text).toContain('Further new-device sign-ins won’t send more emails for up to 24 hours');
+    expect(last.html).toContain('Further new-device sign-ins won&rsquo;t send more emails for up to 24 hours');
 
     sendEmail.mockClear();
     await sendNewDeviceLoginEmail({
@@ -62,8 +62,8 @@ describe('sendNewDeviceLoginEmail', () => {
       ip: '203.0.113.7',
     });
     const other = sendEmail.mock.calls[0]![0] as { html: string; text: string };
-    expect(other.text).not.toContain('next 24 hours');
-    expect(other.html).not.toContain('next 24 hours');
+    expect(other.text).not.toContain('up to 24 hours');
+    expect(other.html).not.toContain('up to 24 hours');
   });
 
   it('never claims the alert is a manageable preference (registry flag)', async () => {

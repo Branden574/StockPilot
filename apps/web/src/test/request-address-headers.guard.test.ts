@@ -21,9 +21,10 @@ import { describe, expect, it } from 'vitest';
  *      unless the literal is the first argument of `.set(`, `.append(` or
  *      `.delete(` (writing a header, as the analytics proxy sets
  *      x-forwarded-for from the helper's answer, is not a read); and the other
- *      ways to the address: `request.ip` / `req.ip`, a socket's
- *      `remoteAddress`, and `ipAddress` or `geolocation` from
- *      `@vercel/functions`.
+ *      ways to the address: `request.ip` / `req.ip`, `const { ip } = request`,
+ *      a socket's `remoteAddress`, and `ipAddress` or `geolocation` in a file
+ *      that names `@vercel/functions` or `@vercel/edge` (a named, namespace
+ *      or dynamic import).
  * Only lib/client-ip.ts may do either. The self-test at the bottom runs both
  * readings over inline sources written to fail, and to pass, so this cannot
  * pass by reading nothing.
@@ -83,18 +84,75 @@ const LITERAL = /(['"`])((?:(?!\1)[^\\\n$]|\\.|\$(?!\{))*)\1/g;
 const WRITE_BEFORE = /\.(?:set|append|delete)\(\s*$/;
 const OTHER_WAYS: Array<[string, RegExp]> = [
   ['request.ip', /\b(?:req|request)\??\.ip\b(?!\w)/g],
+  ['{ ip } = request', /\{[^}]*\bip\b[^}]*\}\s*=\s*(?:req|request)\b/g],
   ['remoteAddress', /\bremoteAddress\b/g],
-  [
-    '@vercel/functions ipAddress or geolocation',
-    /import\s*\{[^}]*\b(?:ipAddress|geolocation)\b[^}]*\}\s*from\s*['"]@vercel\/functions['"]/g,
-  ],
 ];
+/** A file that names one of these packages may not name ipAddress or geolocation. */
+const VERCEL_IP_PACKAGES = /(['"`])@vercel\/(?:functions|edge)\1/;
+const VERCEL_IP_HELPERS = /\b(?:ipAddress|geolocation)\b/g;
 
-/** The source with comments taken out (a `//` after a `:` is kept, for URLs). */
-function code(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
-    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+/**
+ * The source with comments turned to spaces; strings and templates are kept,
+ * and every line stays where it was. A `/*` or `//` inside a string is not a
+ * comment, and a comment ends where it ends. Where it is unsure (a quote
+ * inside a regex literal) it keeps text, so the worst case is a finding to
+ * look at, never a blanked span.
+ */
+function code(src: string): string {
+  let out = '';
+  let i = 0;
+  let st: 'code' | "'" | '"' | '`' | 'line' | 'block' = 'code';
+  while (i < src.length) {
+    const c = src[i]!;
+    const d = src[i + 1];
+    if (st === 'code') {
+      if (c === '/' && d === '/') {
+        st = 'line';
+        out += '  ';
+        i += 2;
+        continue;
+      }
+      if (c === '/' && d === '*') {
+        st = 'block';
+        out += '  ';
+        i += 2;
+        continue;
+      }
+      if (c === "'" || c === '"' || c === '`') st = c;
+      out += c;
+      i++;
+      continue;
+    }
+    if (st === 'line') {
+      if (c === '\n') {
+        st = 'code';
+        out += c;
+      } else out += ' ';
+      i++;
+      continue;
+    }
+    if (st === 'block') {
+      if (c === '*' && d === '/') {
+        st = 'code';
+        out += '  ';
+        i += 2;
+        continue;
+      }
+      out += c === '\n' ? c : ' ';
+      i++;
+      continue;
+    }
+    // Inside a string or a template.
+    if (c === '\\') {
+      out += c + (d ?? '');
+      i += 2;
+      continue;
+    }
+    if (c === st || (c === '\n' && st !== '`')) st = 'code';
+    out += c;
+    i++;
+  }
+  return out;
 }
 
 const lineOf = (source: string, index: number) => source.slice(0, index).split('\n').length;
@@ -118,6 +176,11 @@ function strictFindings(source: string): string[] {
   }
   for (const [what, re] of OTHER_WAYS) {
     for (const m of text.matchAll(re)) found.push(`${lineOf(text, m.index)}: ${what}`);
+  }
+  if (VERCEL_IP_PACKAGES.test(text)) {
+    for (const m of text.matchAll(VERCEL_IP_HELPERS)) {
+      found.push(`${lineOf(text, m.index)}: @vercel ${m[0]}`);
+    }
   }
   return found;
 }
@@ -173,6 +236,18 @@ describe('the caller address is read only through lib/client-ip.ts', () => {
     expect(found).toEqual([]);
   });
 
+  it('a reader planted in the middle of a real file is found by both readings (no span is blanked)', () => {
+    const lines = read('lib/auth/session.ts').split('\n');
+    expect(lines.length).toBeGreaterThan(300);
+    const planted = [
+      ...lines.slice(0, 249),
+      "const probeIp = (await headers()).get('x-real-ip');",
+      ...lines.slice(249),
+    ].join('\n');
+    expect(addressHeaderReads(planted)).toEqual([250]);
+    expect(strictFindings(planted).some((f) => f.startsWith('250: '))).toBe(true);
+  });
+
   it('lib/client-ip.ts itself still reads them (the reading is not blind)', () => {
     const source = read('lib/client-ip.ts');
     expect(addressHeaderReads(source).length).toBeGreaterThanOrEqual(2);
@@ -194,6 +269,18 @@ describe('self-test: the readings find what they must', () => {
   });
 
   it.each([
+    ["const ACCEPT = 'image/*,application/pdf';\nconst ip = h.get('x-real-ip');\n/** later */"],
+    ["// on `/api/**` the header is the client's\nconst ip = h.get('x-real-ip');\n/** later */"],
+    ["const u = base + '//x'; const ip = h.get('x-real-ip');"],
+    [
+      "// the matcher covers /api/** and the pages\nexport const a = 1;\nconst ip = req.headers.get('x-forwarded-for');\n/* end */",
+    ],
+  ])('both readings find a reader after text the comment strip must keep: %s', (src) => {
+    expect(addressHeaderReads(src).length).toBeGreaterThanOrEqual(1);
+    expect(strictFindings(src).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it.each([
     ["const H = 'x-forwarded-for';\nh.get(H);"],
     ["h.get('x-real-ip' as string)"],
     ["h.get('x-' + 'forwarded-for')"],
@@ -205,6 +292,11 @@ describe('self-test: the readings find what they must', () => {
     ["const ip = req.socket.remoteAddress;"],
     ["import { ipAddress } from '@vercel/functions';"],
     ["import { geolocation, waitUntil } from '@vercel/functions';"],
+    ['const { ip } = request;'],
+    ['const { ip, geo } = req;'],
+    ["import * as vf from '@vercel/functions';\nconst a = vf.ipAddress(req);"],
+    ["const { ipAddress } = await import('@vercel/functions');"],
+    ["import { ipAddress } from '@vercel/edge';"],
   ])('reading 2 finds %s', (src) => {
     expect(strictFindings(src).length).toBeGreaterThanOrEqual(1);
   });
@@ -220,6 +312,9 @@ describe('self-test: the readings find what they must', () => {
     ["const url = 'https://example.com/x';"],
     ["const shipping = request.ipAllowList;"],
     ["import { waitUntil } from '@vercel/functions';"],
+    ["import * as vf from '@vercel/functions';\nvf.waitUntil(p);"],
+    ['const { ipAllowList } = request;'],
+    ['const { ip } = settings;'],
   ])('neither reading counts %s', (src) => {
     expect(addressHeaderReads(src)).toEqual([]);
     expect(strictFindings(src)).toEqual([]);

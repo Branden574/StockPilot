@@ -194,6 +194,14 @@ describe('signin (renderSigninAlertEmail)', () => {
     expect(res.html).toContain('a core account-safety notice');
   });
 
+  it('the footer says it is sent when a new device signs in', () => {
+    const res = render();
+    expect(res.html).toContain(
+      `>${SEED.email}</span> when a new device signs in — a core account-safety notice.`,
+    );
+    expect(res.html).not.toContain('whenever a new device signs in');
+  });
+
   it('embeds the pulse hero with reserved dimensions and alt text', () => {
     const res = render();
     expect(res.html).toContain('https://stockpilotusa.com/email/motion/pulse@2x.gif');
@@ -201,9 +209,9 @@ describe('signin (renderSigninAlertEmail)', () => {
     expect(res.html).toMatch(/alt="[^"]*new device signed in[^"]*"/);
   });
 
-  it('the last new-device email of 24 hours says so in one sentence, in both parts', () => {
+  it('the email that reaches the 24-hour count says so in one sentence, in both parts', () => {
     const sentence =
-      'Further new-device sign-ins in the next 24 hours won’t send more emails, so if these sign-ins weren’t you, change your password and review your devices in your security settings now.';
+      'Further new-device sign-ins won’t send more emails for up to 24 hours, so if these sign-ins weren’t you, change your password and review your devices under Active sessions in your security settings now.';
     expect(SIGNIN_ALERT_LAST_FOR_A_DAY_TEXT).toBe(sentence);
     const res = renderSigninAlertEmail({
       email: SEED.email,
@@ -219,14 +227,14 @@ describe('signin (renderSigninAlertEmail)', () => {
     assertWeight(res);
     expect(res.text).toContain(sentence);
     expect(res.html).toContain(
-      'Further new-device sign-ins in the next 24 hours won&rsquo;t send more emails, so if these sign-ins weren&rsquo;t you, change your password and review your devices in your security settings now.',
+      'Further new-device sign-ins won&rsquo;t send more emails for up to 24 hours, so if these sign-ins weren&rsquo;t you, change your password and review your devices under Active sessions in your security settings now.',
     );
   });
 
   it('every other new-device email carries no such sentence', () => {
     const res = render();
     for (const surface of [res.html, res.text]) {
-      expect(surface).not.toMatch(/next 24 hours/);
+      expect(surface).not.toMatch(/up to 24 hours/);
     }
   });
 
