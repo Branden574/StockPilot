@@ -59,6 +59,7 @@ vi.mock('@/lib/rate-limit', () => ({
   }),
 }));
 
+import { MembershipUnavailableError } from '@/lib/auth/membership-unavailable';
 import { resetUncountedNoteReportForTests } from '@/lib/auth/session-note';
 
 import { POST } from './route';
@@ -315,6 +316,45 @@ describe('POST /api/v1/auth/signed-in — the row', () => {
     expect(h.reportError).toHaveBeenCalledTimes(1);
   });
 
+  // While the limiter cannot answer, this instance bounds the rows itself
+  // (lib/auth/session-note.ts admitUncountedNote): once per session, and the
+  // account's hourly limit.
+  it.each([
+    ['both buckets', () => (h.storeDown = true)],
+    ['the session bucket', () => (h.downPrefix = 'auth-note:in:')],
+  ])(
+    'while the limiter cannot answer for %s, a second note of the same session writes no row',
+    async (_name, arrange) => {
+      arrange();
+      expect((await POST(req())).status).toBe(200);
+      const res = await POST(req());
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      expect(h.emitAuthAudit).toHaveBeenCalledTimes(1);
+      expect(h.noteLoginDevice).not.toHaveBeenCalled();
+    },
+  );
+
+  it('while the limiter cannot answer, an account gets 30 rows an hour on this instance, then 429 and no row', async () => {
+    h.storeDown = true;
+    for (let i = 0; i < 30; i += 1) {
+      h.readVerifiedTokenClaims.mockResolvedValueOnce(claims({ sessionId: `uncounted-${i}` }));
+      expect((await POST(req())).status).toBe(200);
+    }
+    h.readVerifiedTokenClaims.mockResolvedValueOnce(claims({ sessionId: 'uncounted-31' }));
+    const res = await POST(req());
+    expect(res.status).toBe(429);
+    expect((await res.json()).error).toBe('rate_limited');
+    expect(h.emitAuthAudit).toHaveBeenCalledTimes(30);
+    // Another account is counted on its own.
+    h.withApiContext.mockResolvedValueOnce(ctx({ userId: '33333333-3333-4333-8333-333333333333' }));
+    h.readVerifiedTokenClaims.mockResolvedValueOnce(
+      claims({ userId: '33333333-3333-4333-8333-333333333333', sessionId: 'other-account' }),
+    );
+    expect((await POST(req())).status).toBe(200);
+    expect(h.emitAuthAudit).toHaveBeenCalledTimes(31);
+  });
+
   it('a row written with a count carries no limiter_unavailable', async () => {
     await POST(req());
     expect(h.emitAuthAudit.mock.calls[0]![0].extra).not.toHaveProperty('limiter_unavailable');
@@ -518,6 +558,23 @@ describe('POST /api/v1/auth/signed-in — the device’s name: the model in the 
     expect(
       (await note({ model: 'iPhone 15 Pro', osName: 'iOS', osVersion: '18.1.1.1.1.1.1.1' })).label,
     ).toBe('StockPilot app on iPhone 15 Pro (iOS 18.1.1.1.1.1.1.1)');
+  });
+});
+
+describe('POST /api/v1/auth/signed-in — the membership choice could not be read', () => {
+  it('answers the 5xx the phone retries with the try-again sentence, counts nothing and writes nothing', async () => {
+    h.withApiContext.mockRejectedValue(new MembershipUnavailableError());
+    const res = await POST(req());
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      error: 'internal_error',
+      message: 'Your access could not be checked. Please try again.',
+    });
+    expect(h.rateCalls).toEqual([]);
+    expect(h.emitAuthAudit).not.toHaveBeenCalled();
+    await runAfter();
+    expect(h.noteLoginDevice).not.toHaveBeenCalled();
+    expect(h.reportError.mock.calls[0]![1]).toMatchObject({ level: 'warning' });
   });
 });
 

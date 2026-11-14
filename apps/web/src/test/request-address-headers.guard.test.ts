@@ -22,9 +22,9 @@ import { describe, expect, it } from 'vitest';
  *      `.delete(` (writing a header, as the analytics proxy sets
  *      x-forwarded-for from the helper's answer, is not a read); and the other
  *      ways to the address: `request.ip` / `req.ip`, `const { ip } = request`,
- *      a socket's `remoteAddress`, and `ipAddress` or `geolocation` in a file
+ *      a socket's `remoteAddress`, `ipAddress` or `geolocation` in a file
  *      that names `@vercel/functions` or `@vercel/edge` (a named, namespace
- *      or dynamic import).
+ *      or dynamic import), and a wildcard re-export of either package.
  * Only lib/client-ip.ts may do either. The self-test at the bottom runs both
  * readings over inline sources written to fail, and to pass, so this cannot
  * pass by reading nothing.
@@ -86,6 +86,9 @@ const OTHER_WAYS: Array<[string, RegExp]> = [
   ['request.ip', /\b(?:req|request)\??\.ip\b(?!\w)/g],
   ['{ ip } = request', /\{[^}]*\bip\b[^}]*\}\s*=\s*(?:req|request)\b/g],
   ['remoteAddress', /\bremoteAddress\b/g],
+  // A wildcard re-export of the package: the file that names it names no
+  // helper, and the file that uses the helper names no package.
+  ['export * from @vercel', /export\s*\*[^;\n]*from\s*(['"`])@vercel\/(?:functions|edge)\1/g],
 ];
 /** A file that names one of these packages may not name ipAddress or geolocation. */
 const VERCEL_IP_PACKAGES = /(['"`])@vercel\/(?:functions|edge)\1/;
@@ -94,25 +97,46 @@ const VERCEL_IP_HELPERS = /\b(?:ipAddress|geolocation)\b/g;
 /**
  * The source with comments turned to spaces; strings and templates are kept,
  * and every line stays where it was. A `/*` or `//` inside a string is not a
- * comment, and a comment ends where it ends. Where it is unsure (a quote
- * inside a regex literal) it keeps text, so the worst case is a finding to
- * look at, never a blanked span.
+ * comment, and a comment ends where it ends. Outside a string a backslash
+ * and the character after it are read as one (an escape in a regex literal),
+ * and a slash right after such an escape closes the regex, so neither opens a
+ * comment: `/Chrome\//i`, `/\/*$/` and `/\//* 2` keep the rest of their
+ * line. This is a simple scanner, not a parser: it does not track regex
+ * literals or JSX text as such, so some regex and JSX shapes (a quote, a
+ * backtick or a comment opener inside a regex, or a comment opener in JSX
+ * text) can hide the lines that follow from this guard.
  */
 function code(src: string): string {
   let out = '';
   let i = 0;
   let st: 'code' | "'" | '"' | '`' | 'line' | 'block' = 'code';
+  /** The last thing read in code was an escape (`\x`). */
+  let afterEscape = false;
   while (i < src.length) {
     const c = src[i]!;
     const d = src[i + 1];
     if (st === 'code') {
-      if (c === '/' && d === '/') {
+      if (c === '\\') {
+        out += c + (d ?? '');
+        i += 2;
+        afterEscape = true;
+        continue;
+      }
+      if (c === '/' && afterEscape) {
+        // Closes the regex the escape was in.
+        afterEscape = false;
+        out += c;
+        i++;
+        continue;
+      }
+      afterEscape = false;
+      if (c === '/' && d === '/' && src[i - 1] !== '\\') {
         st = 'line';
         out += '  ';
         i += 2;
         continue;
       }
-      if (c === '/' && d === '*') {
+      if (c === '/' && d === '*' && src[i - 1] !== '\\') {
         st = 'block';
         out += '  ';
         i += 2;
@@ -275,6 +299,11 @@ describe('self-test: the readings find what they must', () => {
     [
       "// the matcher covers /api/** and the pages\nexport const a = 1;\nconst ip = req.headers.get('x-forwarded-for');\n/* end */",
     ],
+    // A regex literal with an escaped slash: `\//` and `\/*` open no comment.
+    ["const b = /Chrome\\//i.test(ua) ? h.get('x-real-ip') : null;"],
+    ["const t = s.replace(/\\/*$/, '');\nconst ip = h.get('x-real-ip');\n/* end */"],
+    // A slash that closes a regex right after an escaped slash, then `*`.
+    ["const n = /\\//* 2;\nconst ip = h.get('x-real-ip');\n/* end */"],
   ])('both readings find a reader after text the comment strip must keep: %s', (src) => {
     expect(addressHeaderReads(src).length).toBeGreaterThanOrEqual(1);
     expect(strictFindings(src).length).toBeGreaterThanOrEqual(1);
@@ -297,6 +326,9 @@ describe('self-test: the readings find what they must', () => {
     ["import * as vf from '@vercel/functions';\nconst a = vf.ipAddress(req);"],
     ["const { ipAddress } = await import('@vercel/functions');"],
     ["import { ipAddress } from '@vercel/edge';"],
+    // A wildcard re-export names no helper here and no package where it is used.
+    ["export * from '@vercel/functions';"],
+    ["export * as vf from '@vercel/edge';"],
   ])('reading 2 finds %s', (src) => {
     expect(strictFindings(src).length).toBeGreaterThanOrEqual(1);
   });
@@ -315,6 +347,8 @@ describe('self-test: the readings find what they must', () => {
     ["import * as vf from '@vercel/functions';\nvf.waitUntil(p);"],
     ['const { ipAllowList } = request;'],
     ['const { ip } = settings;'],
+    ["export * from './client-ip-labels';"],
+    ["export { waitUntil } from '@vercel/functions';"],
   ])('neither reading counts %s', (src) => {
     expect(addressHeaderReads(src)).toEqual([]);
     expect(strictFindings(src)).toEqual([]);

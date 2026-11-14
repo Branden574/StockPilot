@@ -84,9 +84,63 @@ export function requestIp(req: Request): string | null {
 const REPORT_WINDOW_MS = 5 * 60_000;
 let lastUncountedReportAt = 0;
 
-/** Test-only: forget the last report, so each test starts with none. */
+/** Keys each in-memory bound below holds at most; the oldest is forgotten first. */
+export const UNCOUNTED_NOTES_REMEMBERED = 5_000;
+
+/** Note and full session-id hash -> when its uncounted row was written, on this instance. */
+const uncountedSessions = new Map<string, number>();
+/** Account id -> its uncounted rows in the hour that started at `since`, on this instance. */
+const uncountedAccounts = new Map<string, { since: number; count: number }>();
+
+/** Insert or refresh a key, forgetting the oldest past the cap. */
+function remember<V>(map: Map<string, V>, key: string, value: V): void {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > UNCOUNTED_NOTES_REMEMBERED) {
+    const oldest = map.keys().next().value;
+    if (oldest === undefined) break;
+    map.delete(oldest);
+  }
+}
+
+/**
+ * While the limiter cannot answer, this instance bounds the phone notes' rows
+ * itself, in memory, as the buckets do when it can: a session's sign-in row
+ * and its sign-out row once a day each (SESSION_NOTE_WINDOW_MS), and an
+ * account's ACCOUNT_NOTE_LIMIT rows an hour. In memory every written note of
+ * the account, sign-in or sign-out, with a session id or without one, counts
+ * toward its 30 an hour, so this is stricter than the buckets (which count a
+ * sign-out note with a session id against its session only): past 30 written
+ * notes in the hour, a sign-in note and a sign-out note both answer
+ * 'account_limit'. The memory is this instance's own and goes with it.
+ *   'write'          the row is written (and counted here);
+ *   'repeat'         this session's note was already written here: no row;
+ *   'account_limit'  the account's hour is used up here: no row, answered as
+ *                    the route answers a counted refusal.
+ */
+export function admitUncountedNote(
+  note: 'in' | 'out',
+  userId: string,
+  sessionId: string | null,
+  now: number = Date.now(),
+): 'write' | 'repeat' | 'account_limit' {
+  const sessionKey = sessionId ? `${note}:${sha256(sessionId)}` : null;
+  const writtenAt = sessionKey ? uncountedSessions.get(sessionKey) : undefined;
+  if (writtenAt !== undefined && now - writtenAt < SESSION_NOTE_WINDOW_MS) return 'repeat';
+  const account = uncountedAccounts.get(userId);
+  const hour =
+    account && now - account.since < ACCOUNT_NOTE_WINDOW_MS ? account : { since: now, count: 0 };
+  if (hour.count >= ACCOUNT_NOTE_LIMIT) return 'account_limit';
+  remember(uncountedAccounts, userId, { since: hour.since, count: hour.count + 1 });
+  if (sessionKey) remember(uncountedSessions, sessionKey, now);
+  return 'write';
+}
+
+/** Test-only: forget the last report and both in-memory bounds, so each test starts with none. */
 export function resetUncountedNoteReportForTests(): void {
   lastUncountedReportAt = 0;
+  uncountedSessions.clear();
+  uncountedAccounts.clear();
 }
 
 /**
