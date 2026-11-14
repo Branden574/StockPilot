@@ -2,17 +2,19 @@
 --
 -- These references belong to the row's own organization, for every rank (a
 -- NULL reference passes):
---   * a stock row's bin and a put-away row's source and destination bins:
---     inventory_stock_write and putaway_moves_write ask the new
---     bin_in_org(bin_id, organization_id) of the new row;
+--   * a stock row's bin and item and a put-away row's item and source and
+--     destination bins: inventory_stock_write and putaway_moves_write ask the
+--     new bin_in_org(bin_id, organization_id) and item_in_org(item_id,
+--     organization_id) of the new row;
 --   * a category's parent: categories_insert and categories_update ask
 --     category_in_org(parent_id, organization_id) of the new row;
 --   * a category assignment's category: user_category_assignments_write asks
 --     category_in_org(category_id, organization_id) of the new row, and
 --     set_user_category_access asks it of every category it is given.
--- And a warehouse's and a location's organization_id stays what it is: for
--- the API roles an update that changes it is refused (the new
--- tg_organization_id_fixed, bound on public.warehouses and public.locations).
+-- And the organization_id of a warehouse, a location, a bin and a category
+-- stays what it is: for the API roles an update that changes it is refused
+-- (the new tg_organization_id_fixed, bound on public.warehouses,
+-- public.locations, public.bins and public.categories).
 -- No row of any table changes.
 --
 -- ── WHAT ──────────────────────────────────────────────────────────────────
@@ -21,15 +23,18 @@
 -- DEFINER, stable, search_path public, owned by postgres, executable by
 -- authenticated and service_role only (the *_in_org posture of 0203 and
 -- 0318), so it answers inside a rule whatever bins the writer may read.
+-- item_in_org (0261, 0318) is the same shape for items.
 --
 -- The stock and put-away rules (0046, 0140, 0203) are FOR ALL: USING asks a
 -- staff member of the row's organization (which rows a member may change or
 -- remove), WITH CHECK asks that and a warehouse of the row's organization.
 --   inventory_stock_write   WITH CHECK  0203's, AND bin_in_org(bin_id, organization_id)
+--                                              AND item_in_org(item_id, organization_id)
 --   putaway_moves_write     WITH CHECK  0203's, AND bin_in_org(from_bin_id, organization_id)
 --                                              AND bin_in_org(to_bin_id, organization_id)
+--                                              AND item_in_org(item_id, organization_id)
 --   USING of both                       0140's, unchanged
--- The three bin columns are NOT NULL. No application code writes either
+-- The bin and item columns are NOT NULL. No application code writes either
 -- table; putaway_transfer (0019), their one SQL writer, is executable by
 -- service_role only (0356).
 --
@@ -53,21 +58,24 @@
 -- tg_organization_id_fixed: BEFORE UPDATE FOR EACH ROW, bound with WHEN
 -- (new.organization_id is distinct from old.organization_id), so an
 -- ordinary update never enters it. For authenticated and anon it raises
--- 42501 "A warehouse (location) cannot be moved to another organization.";
--- every other role (service_role, SECURITY DEFINER bodies owned by postgres,
--- foreign key actions) returns the row as it is, as tg_inventory_items_guard
--- and tg_bundles_guard do. SECURITY INVOKER on purpose (a DEFINER trigger
--- sees postgres and never enforces). No application code sends a changed
--- organization_id for either table; the web's warehouse and location saves
--- name the row in the active organization and leave organization_id out.
+-- 42501 "A warehouse (location, bin, category) cannot be moved to another
+-- organization."; every other role (service_role, SECURITY DEFINER bodies
+-- owned by postgres, foreign key actions) returns the row as it is, as
+-- tg_inventory_items_guard and tg_bundles_guard do. SECURITY INVOKER on
+-- purpose (a DEFINER trigger sees postgres and never enforces). No
+-- application code sends a changed organization_id for any of the four
+-- tables; the web's warehouse, location, bin and category saves name the row
+-- in the active organization and leave organization_id out.
 --
 --   0. Preflight: refuse (55000, hint organization_reference_preflight,
---      nothing applied) unless the four tables' INSERT, UPDATE and ALL rules
---      are exactly the ones above, set_user_category_access is 0129's body
---      (SECURITY DEFINER, search_path public, owned by postgres, executable
---      by authenticated), warehouse_in_org and category_in_org are the
---      bodies the rules expect, and bin_in_org and tg_organization_id_fixed
---      do not exist yet.
+--      nothing applied) unless 0423 is applied in its own form (the item
+--      guard's body and the item, location and event rules), the four
+--      tables' INSERT, UPDATE and ALL rules are exactly the ones above,
+--      set_user_category_access is 0129's body (SECURITY DEFINER,
+--      search_path public, owned by postgres, executable by authenticated),
+--      warehouse_in_org, category_in_org and item_in_org are the bodies the
+--      rules expect, and bin_in_org and tg_organization_id_fixed do not
+--      exist yet.
 --   1. The lock prelude (LOCKS below).
 --   2. bin_in_org, with its EXECUTE decided here.
 --   3. The five rules are dropped and created in this one transaction
@@ -75,7 +83,7 @@
 --      column of the rule's own table qualified (pattern 25).
 --   4. set_user_category_access: 0129's body with the category check added;
 --      SECURITY DEFINER, search_path, owner and EXECUTE as they are.
---   5. tg_organization_id_fixed and its two triggers.
+--   5. tg_organization_id_fixed and its four triggers.
 --   6. Comments on the five rules and the three functions.
 --
 -- ── LOCKS ─────────────────────────────────────────────────────────────────
@@ -85,36 +93,38 @@
 -- table supautils.policy_grants lists for this role (auth, storage and
 -- realtime tables, auth.users and auth.sessions among them; 0390, 0395,
 -- 0400, 0420, 0421, 0423). CREATE TRIGGER takes SHARE ROW EXCLUSIVE on
--- public.warehouses and public.locations, which lets their reads go on. The
--- preflight reads catalogs and deparses the rules in a block that is always
--- undone, so it ends holding no table lock. CREATE FUNCTION, CREATE OR
--- REPLACE FUNCTION, REVOKE, GRANT and COMMENT ON FUNCTION take no table
--- lock. So the prelude takes all of those tables at once, NOWAIT, retrying
--- up to 40 times with a 50 to 150 ms pause that holds nothing (the 0390,
--- 0395, 0420, 0421 and 0423 pattern), and no later statement takes a new
--- table lock: the file never waits while holding one, so it cannot
--- deadlock. From the prelude to the commit (milliseconds), stock, put-away,
--- category and category assignment reads and writes, warehouse and location
--- writes, sign-ins, token refreshes, and storage and realtime requests wait
--- for the hold. lock_timeout 900ms bounds anything unforeseen.
+-- public.warehouses, public.locations and public.bins, which lets their
+-- reads go on (categories is already held). CREATE FUNCTION bin_in_org
+-- checks its body and takes ACCESS SHARE on public.bins, which the prelude
+-- already holds; CREATE OR REPLACE FUNCTION, REVOKE, GRANT and COMMENT ON
+-- FUNCTION take no table lock. The preflight reads catalogs and deparses the
+-- rules in a block that is always undone, so it ends holding no table lock.
+-- So the prelude takes all of those tables at once, NOWAIT, retrying up to
+-- 40 times with a 50 to 150 ms pause that holds nothing (the 0390, 0395,
+-- 0420, 0421 and 0423 pattern), and no later statement takes a new table
+-- lock: the file never waits while holding one, so it cannot deadlock. From
+-- the prelude to the commit (milliseconds), stock, put-away, category and
+-- category assignment reads and writes, warehouse, location and bin writes,
+-- sign-ins, token refreshes, and storage and realtime requests wait for the
+-- hold. lock_timeout 900ms bounds anything unforeseen.
 --
 -- ── ERRORS ────────────────────────────────────────────────────────────────
--- 55000 hint organization_reference_preflight: drift, or a second run;
--- nothing applied. 55P03: busy after 40 attempts, or the 900 ms cap; nothing
--- applied, run it again. Afterwards a stock or put-away write that names
--- another organization's bin, a category write that names another
--- organization's category as the parent, an assignment that names another
--- organization's category, a set_user_category_access call with another
--- organization's category, and an API-role update that changes a
--- warehouse's or a location's organization get 42501. Never 40001 or 40P01
--- (PostgREST retries those, 0367).
+-- 55000 hint organization_reference_preflight: drift, 0423 not applied, or a
+-- second run; nothing applied. 55P03: busy after 40 attempts, or the 900 ms
+-- cap; nothing applied, run it again. Afterwards a stock or put-away write
+-- that names another organization's bin or item, a category write that
+-- names another organization's category as the parent, an assignment that
+-- names another organization's category, a set_user_category_access call
+-- with another organization's category, and an API-role update that changes
+-- a warehouse's, a location's, a bin's or a category's organization get
+-- 42501. Never 40001 or 40P01 (PostgREST retries those, 0367).
 --
 -- ── ORDER ─────────────────────────────────────────────────────────────────
--- After every lower number, 0423 among them. No queued migration restates,
--- drops or pins the five rules or set_user_category_access. Queued
--- migrations that pin the bodies of has_org_role, has_permission or the
--- *_in_org helpers leave them alone, as this file does (it adds
--- bin_in_org).
+-- After every lower number, 0423 among them (the preflight asks it). No
+-- queued migration restates, drops or pins the five rules or
+-- set_user_category_access. Queued migrations that pin the bodies of
+-- has_org_role, has_permission or the *_in_org helpers leave them alone, as
+-- this file does (it adds bin_in_org).
 
 set lock_timeout = '900ms';
 
@@ -127,7 +137,7 @@ declare
 begin
   -- md5(prosrc) of the bodies this file replaces or calls, by short alias:
   --   w = public.warehouse_in_org(uuid,uuid) (0203), c = public.category_in_org(uuid,uuid) (0298),
-  --   s = public.set_user_category_access(uuid,uuid,uuid,uuid[]) (0129).
+  --   s = public.set_user_category_access(uuid,uuid,uuid,uuid[]) (0129), i = public.item_in_org(uuid,uuid) (0261).
   -- Each md5 is written in two halves.
   for r in
     select v.alias, v.sig, v.want, v.definer, v.vol,
@@ -139,7 +149,8 @@ begin
       from (values
         ('w', 'public.warehouse_in_org(uuid,uuid)', 'f2be5534bb6d64be' || '28a9ee2dacc3d46d', true, 's'),
         ('c', 'public.category_in_org(uuid,uuid)', '1c17782ea6605997' || 'adecfd33cac0d05a', true, 's'),
-        ('s', 'public.set_user_category_access(uuid,uuid,uuid,uuid[])', '1b6c5d0ca4e8f37c' || '3774c3c22a02252e', true, 'v')
+        ('s', 'public.set_user_category_access(uuid,uuid,uuid,uuid[])', '1b6c5d0ca4e8f37c' || '3774c3c22a02252e', true, 'v'),
+        ('i', 'public.item_in_org(uuid,uuid)', '28a1ed8cd1c2adec' || '840215fd94ed5db1', true, 's')
       ) v(alias, sig, want, definer, vol)
       left join pg_proc p on p.oid = to_regprocedure(v.sig)
   loop
@@ -152,6 +163,15 @@ begin
     end if;
   end loop;
 
+  -- 0423 is applied in its own form: this file's terms sit beside its item,
+  -- location and event terms, and its locations trigger runs ahead of 0423's
+  -- locations rules. 0423's item guard body (4737d359...) is read here; its
+  -- three tables' rules in the loop below.
+  if md5(coalesce((select p.prosrc from pg_proc p where p.oid = to_regprocedure('public.tg_inventory_items_guard()')), ''))
+     is distinct from ('4737d3598864d9a7' || 'aad542ad19a9632e') then
+    v_bad := v_bad || ' 0423 is not applied in its own form (public.tg_inventory_items_guard() is not 0423''s body);';
+  end if;
+
   -- The two new functions do not exist yet (a second run stops here).
   if to_regprocedure('public.bin_in_org(uuid,uuid)') is not null then
     v_bad := v_bad || ' public.bin_in_org(uuid,uuid) already exists;';
@@ -163,7 +183,9 @@ begin
   -- Each table's INSERT, UPDATE and ALL rules, compared by md5 of their
   -- deparse (the lines joined): inventory_stock's and putaway_moves' are
   -- 0203's (k = b838eaae..., p = d34b5ee0...), categories' are 0212's two
-  -- (g = 61345a5f...), user_category_assignments' is 0140's (u = fea176c3...).
+  -- (g = 61345a5f...), user_category_assignments' is 0140's (u = fea176c3...);
+  -- and 0423's three: inventory_items' (860b53b2...), locations' (df4952ad...)
+  -- and schedule_events' (f534d605...).
   -- Deparsed in a block that is always undone, with search_path pinned
   -- inside it (0420's method), so the text does not depend on the session's
   -- search_path and nothing the deparse locks outlives the block. Variables
@@ -174,7 +196,10 @@ begin
         ('k', 'public.inventory_stock',           'b838eaaedbf3078b' || 'e5ffdf0388d933c1'),
         ('p', 'public.putaway_moves',             'd34b5ee0fefab391' || '641282258baa66a4'),
         ('g', 'public.categories',                '61345a5faa6e4191' || '66f81bc0b7fd7047'),
-        ('u', 'public.user_category_assignments', 'fea176c320914529' || '62946e8bacb908a4')
+        ('u', 'public.user_category_assignments', 'fea176c320914529' || '62946e8bacb908a4'),
+        ('0423', 'public.inventory_items',        '860b53b2fc60ced5' || '04eb35dc86e70152'),
+        ('0423', 'public.locations',              'df4952ad189fda0e' || 'defaec0f4d25c67c'),
+        ('0423', 'public.schedule_events',        'f534d605adee75dd' || '47f6bb3ceb779ca3')
       ) v(alias, tbl, want)
   loop
     v_pol := null;
@@ -193,7 +218,11 @@ begin
       null;
     end;
     if md5(coalesce(v_pol, '')) is distinct from r.want then
-      v_bad := v_bad || format(' %s INSERT/UPDATE rules are not the expected ones (md5 %s);', r.tbl, md5(coalesce(v_pol, '')));
+      if r.alias = '0423' then
+        v_bad := v_bad || format(' 0423 is not applied in its own form (%s INSERT/UPDATE rules md5 %s);', r.tbl, md5(coalesce(v_pol, '')));
+      else
+        v_bad := v_bad || format(' %s INSERT/UPDATE rules are not the expected ones (md5 %s);', r.tbl, md5(coalesce(v_pol, '')));
+      end if;
     end if;
   end loop;
 
@@ -209,8 +238,9 @@ $pre_org_ref$;
 --   * public.inventory_stock, public.putaway_moves, public.categories and
 --     public.user_category_assignments: ACCESS EXCLUSIVE (their rule
 --     statements);
---   * public.warehouses and public.locations: SHARE ROW EXCLUSIVE (CREATE
---     TRIGGER);
+--   * public.warehouses, public.locations and public.bins: SHARE ROW
+--     EXCLUSIVE (CREATE TRIGGER; bins also covers CREATE FUNCTION
+--     bin_in_org's ACCESS SHARE);
 --   * every existing table supautils.policy_grants lists for this role, the
 --     parent only of a partitioned one: ACCESS EXCLUSIVE (supautils takes it
 --     whenever this role runs a rule statement).
@@ -229,7 +259,7 @@ begin
     begin
       lock table only public.inventory_stock, public.putaway_moves, public.categories, public.user_category_assignments
         in access exclusive mode nowait;
-      lock table only public.warehouses, public.locations
+      lock table only public.warehouses, public.locations, public.bins
         in share row exclusive mode nowait;
       if v_grants is not null then
         for v_name in
@@ -281,14 +311,16 @@ create policy inventory_stock_write on public.inventory_stock
     ( select public.has_org_role(inventory_stock.organization_id, 'staff') )
   )
   with check (
-    -- CONJUNCT 1 of 3: a staff member of the row's organization (0046, 0140).
+    -- CONJUNCT 1 of 4: a staff member of the row's organization (0046, 0140).
     ( select public.has_org_role(inventory_stock.organization_id, 'staff') )
 
-    -- CONJUNCT 2 of 3: the warehouse is the row's organization's (0203).
+    -- CONJUNCT 2 of 4: the warehouse is the row's organization's (0203).
     and ( select public.warehouse_in_org(inventory_stock.warehouse_id, inventory_stock.organization_id) )
 
-    -- CONJUNCT 3 of 3: and so is the bin, for every rank.
+    -- CONJUNCTS 3 and 4 of 4: and so are the bin and the item, for every
+    -- rank.
     and ( select public.bin_in_org(inventory_stock.bin_id, inventory_stock.organization_id) )
+    and ( select public.item_in_org(inventory_stock.item_id, inventory_stock.organization_id) )
   );
 
 drop policy if exists putaway_moves_write on public.putaway_moves;
@@ -299,16 +331,17 @@ create policy putaway_moves_write on public.putaway_moves
     ( select public.has_org_role(putaway_moves.organization_id, 'staff') )
   )
   with check (
-    -- CONJUNCT 1 of 4: a staff member of the row's organization (0046, 0140).
+    -- CONJUNCT 1 of 5: a staff member of the row's organization (0046, 0140).
     ( select public.has_org_role(putaway_moves.organization_id, 'staff') )
 
-    -- CONJUNCT 2 of 4: the warehouse is the row's organization's (0203).
+    -- CONJUNCT 2 of 5: the warehouse is the row's organization's (0203).
     and ( select public.warehouse_in_org(putaway_moves.warehouse_id, putaway_moves.organization_id) )
 
-    -- CONJUNCTS 3 and 4 of 4: and so are the source and destination bins,
-    -- for every rank.
+    -- CONJUNCTS 3 to 5 of 5: and so are the source and destination bins and
+    -- the item, for every rank.
     and ( select public.bin_in_org(putaway_moves.from_bin_id, putaway_moves.organization_id) )
     and ( select public.bin_in_org(putaway_moves.to_bin_id, putaway_moves.organization_id) )
+    and ( select public.item_in_org(putaway_moves.item_id, putaway_moves.organization_id) )
   );
 
 drop policy if exists categories_insert on public.categories;
@@ -413,7 +446,8 @@ grant execute on function public.set_user_category_access(uuid, uuid, uuid, uuid
 
 -- ═══ 5. tg_organization_id_fixed ════════════════════════════════════════════
 -- Modelled on tg_bundles_guard (0415) and tg_pin_product_group_org (0300).
--- TG_ARGV[0] names the row in the message ('warehouse', 'location').
+-- TG_ARGV[0] names the row in the message ('warehouse', 'location', 'bin',
+-- 'category').
 create function public.tg_organization_id_fixed()
 returns trigger
 language plpgsql
@@ -439,8 +473,9 @@ $$;
 revoke all on function public.tg_organization_id_fixed() from public, anon, authenticated, service_role;
 
 -- No column list: a change made by an earlier BEFORE trigger is still seen
--- (the WHEN is evaluated just before the function would run), and 'zz' sorts
--- it after the tables' other BEFORE UPDATE triggers.
+-- (the WHEN is evaluated just before the function would run). The tables'
+-- other BEFORE UPDATE triggers (tg_set_updated_at) never change
+-- organization_id, so their order with this one does not matter.
 create trigger trg_zz_warehouses_organization_fixed
   before update on public.warehouses
   for each row
@@ -453,16 +488,28 @@ create trigger trg_zz_locations_organization_fixed
   when (new.organization_id is distinct from old.organization_id)
   execute function public.tg_organization_id_fixed('location');
 
+create trigger trg_zz_bins_organization_fixed
+  before update on public.bins
+  for each row
+  when (new.organization_id is distinct from old.organization_id)
+  execute function public.tg_organization_id_fixed('bin');
+
+create trigger trg_zz_categories_organization_fixed
+  before update on public.categories
+  for each row
+  when (new.organization_id is distinct from old.organization_id)
+  execute function public.tg_organization_id_fixed('category');
+
 -- ═══ 6. Comments ════════════════════════════════════════════════════════════
 -- None of the texts names this file's number, so a rename leaves them (and
 -- the md5s the test pins) alone.
 comment on policy inventory_stock_write on public.inventory_stock is
-  'A staff member of the row''s organization writes its per-bin stock rows; the row''s warehouse and bin are its own '
-  'organization''s (warehouse_in_org and bin_in_org, for every rank).';
+  'A staff member of the row''s organization writes its per-bin stock rows; the row''s warehouse, bin and item are its '
+  'own organization''s (warehouse_in_org, bin_in_org and item_in_org, for every rank).';
 
 comment on policy putaway_moves_write on public.putaway_moves is
-  'A staff member of the row''s organization writes its put-away rows; the row''s warehouse and its source and '
-  'destination bins are its own organization''s (warehouse_in_org and bin_in_org, for every rank).';
+  'A staff member of the row''s organization writes its put-away rows; the row''s warehouse, item and source and '
+  'destination bins are its own organization''s (warehouse_in_org, item_in_org and bin_in_org, for every rank).';
 
 comment on policy categories_insert on public.categories is
   'A manager, or a member with categories:manage, adds a category of their organization; its parent category is its '
@@ -486,8 +533,8 @@ comment on function public.set_user_category_access(uuid, uuid, uuid, uuid[]) is
   'organization." otherwise, nothing changed).';
 
 comment on function public.tg_organization_id_fixed() is
-  'BEFORE UPDATE guard on warehouses and locations (WHEN organization_id changes): for an API role the row''s '
-  'organization never changes (42501). service_role, SECURITY DEFINER bodies and foreign key actions are not held. '
+  'BEFORE UPDATE guard on warehouses, locations, bins and categories (WHEN organization_id changes): for an API role '
+  'the row''s organization never changes (42501). service_role, SECURITY DEFINER bodies and foreign key actions are not held. '
   'SECURITY INVOKER on purpose (a DEFINER trigger sees postgres and never enforces).';
 
 reset lock_timeout;

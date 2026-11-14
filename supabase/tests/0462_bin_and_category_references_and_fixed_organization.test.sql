@@ -2,17 +2,19 @@
 -- (NNNN = the migration's number, given in ship order; nothing in this file
 -- reads it)
 -- pgTAP proof for the migration that holds these references to the row's
--- own organization, for every rank (a NULL reference passes), and keeps a
--- warehouse's and a location's organization fixed:
---   * a stock row's bin and a put-away row's two bins: inventory_stock_write
---     and putaway_moves_write ask bin_in_org of the new row;
+-- own organization, for every rank (a NULL reference passes), and keeps the
+-- organization of a warehouse, a location, a bin and a category fixed:
+--   * a stock row's bin and item and a put-away row's two bins and item:
+--     inventory_stock_write and putaway_moves_write ask bin_in_org and
+--     item_in_org of the new row;
 --   * a category's parent: categories_insert and categories_update ask
 --     category_in_org(parent_id, organization_id) of the new row;
 --   * a category assignment's category: user_category_assignments_write asks
 --     category_in_org(category_id, organization_id) of the new row, and
 --     set_user_category_access asks it of every category it is given;
---   * a warehouse's and a location's organization_id: for the API roles it
---     does not change on update (tg_organization_id_fixed).
+--   * the organization_id of a warehouse, a location, a bin and a category:
+--     for the API roles it does not change on update
+--     (tg_organization_id_fixed).
 -- No stored row changes. Every line states what the database does with the
 -- migration applied.
 --
@@ -26,8 +28,10 @@
 --   both    admin of A and admin of B
 --   mgrB    manager of B
 -- Warehouses: whA and whS of A, whB of B. Bins binA and binA2 (whA) of A,
--- binB (whB) of B. Items itA of A, itB of B. Stock row stkA (whA, binA, itA)
--- and put-away row mvA (binA to binA2) of A. Categories catA and catA2 of A,
+-- binB and binB2 (whB) of B. Items itA and itA2 of A, itB of B. Stock row
+-- stkA (whA, binA, itA) and put-away row mvA (binA to binA2) of A; stkX (whA,
+-- binB, itA2), a stock row of A naming B's bin written by the superuser past
+-- the rules (the row B11 acts on). Categories catA and catA2 of A,
 -- catB of B; assignment ucaA (vwr, catA) of A. Locations locA (whA) and
 -- locSite (no warehouse, no parent) of A, locB of B.
 --
@@ -44,7 +48,13 @@
 --     (B4); A's own bins, as before (B5). The service role writes past the
 --     rules as before (B6). B's own bin with nothing of A naming it is
 --     deleted by B's manager (B7). The two tables' rules are exactly the new
---     ones, USING unchanged (B8).
+--     ones, USING unchanged (B8). Items: a stock or put-away row of A naming
+--     B's item, inserted or set by an update: refused; A's other item, as
+--     before (B9). Upserts: one that updates a stock row of A to B's bin, and
+--     one whose insert names B's bin, are refused; one that changes the
+--     quantity in A's own bin is as before (B10). A stored row naming B's bin
+--     takes no quantity change, may be pointed back at A's bin, and may be
+--     removed by staff (not by a viewer) (B11).
 -- C.  Categories: a category of A whose parent is B's, inserted (C1) or set
 --     by an update (C2): refused 42501. A's own parent and no parent, insert
 --     and update, for every rank, as before (C3, C4). An assignment of A
@@ -59,8 +69,11 @@
 --     organization (a rename, an archive, the same organization_id sent
 --     again) and inserts are as before (O4, O5). The service role is not
 --     held (O6). The guard is SECURITY INVOKER, search_path public, owned by
---     postgres, executable by no API role, and bound once on each table
---     (O7).
+--     postgres, executable by no API role (O7), and bound once on each of
+--     the four tables (O8). A bin's organization (with its warehouse, or
+--     alone) and a category's: refused by update and by upsert (O9, O10);
+--     renames, an archive, a soft delete and the same organization_id sent
+--     again, as before (O11); the service role is not held (O12).
 -- Z.  Nothing the refused writes and the undone attempts touched was left
 --     changed.
 --
@@ -72,7 +85,7 @@
 
 begin;
 
-select plan(31);
+select plan(38);
 
 \set orgA    '\'04620000-0000-0000-0000-00000000000a\''
 \set orgB    '\'04620000-0000-0000-0000-00000000000b\''
@@ -102,6 +115,8 @@ select plan(31);
 \set stkA    '\'04620000-0000-0000-0000-000000000601\''
 \set mvA     '\'04620000-0000-0000-0000-000000000701\''
 \set ucaA    '\'04620000-0000-0000-0000-000000000801\''
+\set itA2    '\'04620000-0000-0000-0000-000000000102\''
+\set stkX    '\'04620000-0000-0000-0000-000000000602\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
@@ -143,9 +158,11 @@ insert into public.bins (id, organization_id, warehouse_id, code, name, bin_type
   (:binB2, :orgB, :whB, 'B462-B2', 'Spare shelf',   'storage');
 insert into public.inventory_items (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, item_type) values
   (:itA, :orgA, :whA, 'B462-A', 'Folding table', 0, 'active', 'asset'),
+  (:itA2, :orgA, :whA, 'B462-A2', 'Stack chair', 0, 'active', 'asset'),
   (:itB, :orgB, :whB, 'B462-B', 'Floor lamp',    0, 'active', 'asset');
 insert into public.inventory_stock (id, organization_id, warehouse_id, bin_id, item_id, qty_on_hand) values
-  (:stkA, :orgA, :whA, :binA, :itA, 5);
+  (:stkA, :orgA, :whA, :binA, :itA, 5),
+  (:stkX, :orgA, :whA, :binB, :itA2, 3);
 insert into public.putaway_moves (id, organization_id, warehouse_id, item_id, from_bin_id, to_bin_id, qty_base, movement_type, performed_by) values
   (:mvA, :orgA, :whA, :itA, :binA, :binA2, 2, 'putaway', :stf);
 insert into public.categories (id, organization_id, name) values
@@ -392,10 +409,62 @@ select is(
   md5(pg_temp.rules('public.inventory_stock')) || '|' || md5(pg_temp.rules('public.putaway_moves'))
   || '|' || pg_temp.using_of('public.inventory_stock', 'inventory_stock_write')
   || '|' || pg_temp.using_of('public.putaway_moves', 'putaway_moves_write'),
-  'cf6be1b1b05ae939' || '4c0904e67ec4fc61' || '|' || 'd39f8c2da28af6d6' || 'ca277fd558de1561'
+  '4ee3d63a266f1d25' || 'b558709899cb029d' || '|' || 'a819d76e7bc5a30e' || '9188fa257e262366'
   || '|( SELECT has_org_role(inventory_stock.organization_id, ''staff''::text) AS has_org_role)'
   || '|( SELECT has_org_role(putaway_moves.organization_id, ''staff''::text) AS has_org_role)',
   'B8: the inventory_stock and putaway_moves INSERT, UPDATE and ALL rules are exactly the new ones, and their USING is unchanged');
+
+
+select is(
+  pg_temp.each(array['own', 'adm', 'mgr', 'stf', 'two', 'both'],
+    format($q$insert into public.inventory_stock (organization_id, warehouse_id, bin_id, item_id, qty_on_hand)
+              values (%L, %L, %L, %L, 1)$q$, :orgA, :whA, :binA2, :itB))
+  || ' / ' || pg_temp.each(array['mgr', 'stf', 'both'],
+    format('update public.inventory_stock set item_id = %L where id = %L', :itB, :stkA))
+  || ' / ' || pg_temp.each(array['mgr', 'stf', 'both'],
+    format($q$insert into public.putaway_moves (organization_id, warehouse_id, item_id, from_bin_id, to_bin_id, qty_base, movement_type, performed_by)
+              values (%L, %L, %L, %L, %L, 1, 'putaway', auth.uid())$q$, :orgA, :whA, :itB, :binA, :binA2))
+  || ' / ' || pg_temp.each(array['mgr', 'both'],
+    format('update public.putaway_moves set item_id = %L where id = %L', :itB, :mvA))
+  || ' // ' || pg_temp.each(array['mgr', 'stf'],
+    format('update public.inventory_stock set item_id = %L where id = %L', :itA2, :stkA))
+  || ' / ' || pg_temp.each(array['mgr', 'stf'],
+    format($q$insert into public.putaway_moves (organization_id, warehouse_id, item_id, from_bin_id, to_bin_id, qty_base, movement_type, performed_by)
+              values (%L, %L, %L, %L, %L, 1, 'putaway', auth.uid())$q$, :orgA, :whA, :itA2, :binA, :binA2))
+  || ' / ' || pg_temp.each(array['mgr', 'stf'],
+    format('update public.putaway_moves set item_id = %L where id = %L', :itA2, :mvA)),
+  'own=42501:-:new row violates row-level security policy for table "inventory_stock", adm=42501:-:new row violates row-level security policy for table "inventory_stock", '
+  || 'mgr=42501:-:new row violates row-level security policy for table "inventory_stock", stf=42501:-:new row violates row-level security policy for table "inventory_stock", '
+  || 'two=42501:-:new row violates row-level security policy for table "inventory_stock", both=42501:-:new row violates row-level security policy for table "inventory_stock"'
+  || ' / mgr=42501:-:new row violates row-level security policy for table "inventory_stock", stf=42501:-:new row violates row-level security policy for table "inventory_stock", both=42501:-:new row violates row-level security policy for table "inventory_stock"'
+  || ' / mgr=42501:-:new row violates row-level security policy for table "putaway_moves", stf=42501:-:new row violates row-level security policy for table "putaway_moves", both=42501:-:new row violates row-level security policy for table "putaway_moves"'
+  || ' / mgr=42501:-:new row violates row-level security policy for table "putaway_moves", both=42501:-:new row violates row-level security policy for table "putaway_moves"'
+  || ' // mgr=ok:1, stf=ok:1 / mgr=ok:1, stf=ok:1 / mgr=ok:1, stf=ok:1',
+  'B9: a stock or put-away row of A naming B''s item, inserted or set by an update, by each rank and by members of both: refused 42501; A''s other item, as before');
+select is(
+  pg_temp.each(array['stf', 'both'],
+    format($q$insert into public.inventory_stock (id, organization_id, warehouse_id, bin_id, item_id, qty_on_hand)
+              values (%L, %L, %L, %L, %L, 1)
+              on conflict (id) do update set bin_id = %L$q$, :stkA, :orgA, :whA, :binA, :itA, :binB))
+  || ' / ' || pg_temp.each(array['stf', 'both'],
+    format($q$insert into public.inventory_stock (organization_id, warehouse_id, bin_id, item_id, qty_on_hand)
+              values (%L, %L, %L, %L, 1)
+              on conflict do nothing$q$, :orgA, :whA, :binB, :itA))
+  || ' / ' || pg_temp.each(array['stf', 'both'],
+    format($q$insert into public.inventory_stock (id, organization_id, warehouse_id, bin_id, item_id, qty_on_hand)
+              values (%L, %L, %L, %L, %L, 1)
+              on conflict (id) do update set qty_on_hand = 9$q$, :stkA, :orgA, :whA, :binA, :itA)),
+  'stf=42501:-:new row violates row-level security policy for table "inventory_stock", both=42501:-:new row violates row-level security policy for table "inventory_stock"'
+  || ' / stf=42501:-:new row violates row-level security policy for table "inventory_stock", both=42501:-:new row violates row-level security policy for table "inventory_stock"'
+  || ' / stf=ok:1, both=ok:1',
+  'B10: an upsert that updates a stock row of A to B''s bin, and one whose insert names B''s bin: refused 42501; an upsert of the quantity in A''s own bin, as before');
+select is(
+  pg_temp.each(array['stf'], format('update public.inventory_stock set qty_on_hand = 4 where id = %L', :stkX))
+  || ' / ' || pg_temp.each(array['stf'],
+    format('update public.inventory_stock set bin_id = %L where id = %L', :binA2, :stkX), $c$select (select bin_id::text from public.inventory_stock where id = '04620000-0000-0000-0000-000000000602')$c$)
+  || ' / ' || pg_temp.each(array['stf', 'vwr'], format('delete from public.inventory_stock where id = %L', :stkX)),
+  'stf=42501:-:new row violates row-level security policy for table "inventory_stock" / stf=ok:1:' || :binA2 || ' / stf=ok:1, vwr=ok:0',
+  'B11: a stored stock row of A naming B''s bin takes no quantity change, may be pointed back at A''s bin, and may be removed by staff (a viewer removes nothing)');
 
 -- ══ C. Categories ═════════════════════════════════════════════════════════
 select is(
@@ -551,13 +620,59 @@ select is(
   (select string_agg(t.tgrelid::regclass::text || ':' || t.tgname || ':' || t.tgtype::text || ':' || t.tgenabled::text
                      || ':' || pg_get_triggerdef(t.oid), E'\n' order by t.tgrelid::regclass::text)
      from pg_trigger t where t.tgfoid = to_regprocedure('public.tg_organization_id_fixed()')),
-  'locations:trg_zz_locations_organization_fixed:19:O:CREATE TRIGGER trg_zz_locations_organization_fixed'
+  'bins:trg_zz_bins_organization_fixed:19:O:CREATE TRIGGER trg_zz_bins_organization_fixed'
+  || ' BEFORE UPDATE ON public.bins FOR EACH ROW WHEN ((new.organization_id IS DISTINCT FROM old.organization_id))'
+  || ' EXECUTE FUNCTION tg_organization_id_fixed(''bin'')' || E'\n'
+  || 'categories:trg_zz_categories_organization_fixed:19:O:CREATE TRIGGER trg_zz_categories_organization_fixed'
+  || ' BEFORE UPDATE ON public.categories FOR EACH ROW WHEN ((new.organization_id IS DISTINCT FROM old.organization_id))'
+  || ' EXECUTE FUNCTION tg_organization_id_fixed(''category'')' || E'\n'
+  || 'locations:trg_zz_locations_organization_fixed:19:O:CREATE TRIGGER trg_zz_locations_organization_fixed'
   || ' BEFORE UPDATE ON public.locations FOR EACH ROW WHEN ((new.organization_id IS DISTINCT FROM old.organization_id))'
   || ' EXECUTE FUNCTION tg_organization_id_fixed(''location'')' || E'\n'
   || 'warehouses:trg_zz_warehouses_organization_fixed:19:O:CREATE TRIGGER trg_zz_warehouses_organization_fixed'
   || ' BEFORE UPDATE ON public.warehouses FOR EACH ROW WHEN ((new.organization_id IS DISTINCT FROM old.organization_id))'
   || ' EXECUTE FUNCTION tg_organization_id_fixed(''warehouse'')',
-  'O8: the guard is bound once on warehouses and once on locations, BEFORE UPDATE FOR EACH ROW, only when organization_id changes');
+  'O8: the guard is bound once on each of warehouses, locations, bins and categories, BEFORE UPDATE FOR EACH ROW, only when organization_id changes');
+
+
+select is(
+  pg_temp.each(array['own', 'adm', 'mgr', 'both'],
+    format('update public.bins set organization_id = %L, warehouse_id = %L where id = %L', :orgB, :whB, :binA))
+  || ' / ' || pg_temp.each(array['both'],
+    format('update public.bins set organization_id = %L where id = %L', :orgB, :binA))
+  || ' / ' || pg_temp.attempt('authenticated', :both,
+    format($q$insert into public.bins (id, organization_id, warehouse_id, code, name, bin_type) values (%L, %L, %L, 'B462-A1', 'Aisle 1 shelf', 'storage')
+              on conflict (id) do update set organization_id = excluded.organization_id, warehouse_id = excluded.warehouse_id$q$, :binA, :orgB, :whB)),
+  'own=42501:-:A bin cannot be moved to another organization., adm=42501:-:A bin cannot be moved to another organization., '
+  || 'mgr=42501:-:A bin cannot be moved to another organization., both=42501:-:A bin cannot be moved to another organization.'
+  || ' / both=42501:-:A bin cannot be moved to another organization.'
+  || ' / 42501:-:A bin cannot be moved to another organization.',
+  'O9: a bin of A moved to B with B''s warehouse, or alone, by an owner, an admin, a manager and an admin of both, and by upsert: refused 42501');
+select is(
+  pg_temp.each(array['own', 'adm', 'mgr', 'both'],
+    format('update public.categories set organization_id = %L where id = %L', :orgB, :catA))
+  || ' / ' || pg_temp.attempt('authenticated', :both,
+    format($q$insert into public.categories (id, organization_id, name) values (%L, %L, 'B462 Furniture')
+              on conflict (id) do update set organization_id = excluded.organization_id$q$, :catA, :orgB)),
+  'own=42501:-:A category cannot be moved to another organization., adm=42501:-:A category cannot be moved to another organization., '
+  || 'mgr=42501:-:A category cannot be moved to another organization., both=42501:-:A category cannot be moved to another organization.'
+  || ' / 42501:-:A category cannot be moved to another organization.',
+  'O10: a category of A moved to B by an owner, an admin, a manager and an admin of both, and by upsert: refused 42501');
+select is(
+  pg_temp.each(array['mgr', 'both'],
+    format($q$update public.bins set name = 'Aisle 1 shelf %%1$s', organization_id = %L where id = %L$q$, :orgA, :binA))
+  || ' / ' || pg_temp.each(array['mgr'], format($q$update public.bins set status = 'archived' where id = %L$q$, :binA2))
+  || ' / ' || pg_temp.each(array['mgr', 'both'],
+    format($q$update public.categories set name = 'B462 Furniture %%1$s', organization_id = %L where id = %L$q$, :orgA, :catA))
+  || ' / ' || pg_temp.each(array['mgr'], format('update public.categories set deleted_at = now() where id = %L', :catA2))
+  || ' / ' || pg_temp.each(array['stf'], format($q$update public.bins set name = 'Aisle 1' where id = %L$q$, :binA)),
+  'mgr=ok:1, both=ok:1 / mgr=ok:1 / mgr=ok:1, both=ok:1 / mgr=ok:1 / stf=ok:0',
+  'O11: a bin''s rename sending the same organization_id, a bin''s archive, a category''s rename sending the same organization_id and its soft delete: as before');
+select is(
+  pg_temp.attempt('service_role', null, format('update public.bins set organization_id = %L, warehouse_id = %L where id = %L', :orgB, :whB, :binA2))
+  || ' / ' || pg_temp.attempt('service_role', null, format('update public.categories set organization_id = %L where id = %L', :orgB, :catA2)),
+  'ok:1 / ok:1',
+  'O12: the service role is not held by the guard on bins and categories');
 
 -- ══ Z. Nothing left changed ═══════════════════════════════════════════════
 select is(pg_temp.state(), (select v from snap),
