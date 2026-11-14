@@ -105,6 +105,11 @@ export type AccountStatusState = 'active' | 'disabled' | 'unreadable';
  * problem. Try again in a moment." (apps/mobile/src/lib/api.ts) and which the
  * web error boundary (app/error.tsx) renders as "Something went wrong / Try
  * again" — a transient outcome, which is what this actually is.
+ *
+ * The routes that build their context through apiContextGate
+ * (server/lib/api-context-gate.ts: the stock adjustment, rental checkout and
+ * exception escalation the phone sends) answer this throw as a 503 marked as
+ * refused before any write (docket S26), which the phone may send again.
  */
 export class AccountStatusUnavailableError extends Error {
   readonly code = 'ACCOUNT_STATUS_UNAVAILABLE';

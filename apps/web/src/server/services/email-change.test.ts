@@ -11,7 +11,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *     user_profiles, and the unverified address gets exactly one message;
  *   * the refusal order: same-address → rate limit → MFA step-up → password
  *     → duplicate, each stopping before the next spends anything;
- *   * reconcile is idempotent and complete() tells the OLD address once.
+ *   * reconcile is idempotent and complete() tells the OLD address once;
+ *   * (docket S25) both links carry `r`, signed for the account whose change
+ *     it is, and a link that cannot be signed stops the request before
+ *     anything is sent.
  */
 
 const generateLink = vi.fn();
@@ -69,10 +72,24 @@ vi.mock('@/lib/auth/verify-password', () => ({
 vi.mock('@/lib/email/resend', () => ({
   sendEmail: (args: unknown) => sendEmail(args),
 }));
-vi.mock('@/lib/env', () => ({
-  env: { NEXT_PUBLIC_APP_URL: 'https://app.example.com' },
-}));
+// The signing value is a dull one under a neutral name, restored from a copy
+// (src/test/secret-shaped-fixtures.guard.test.ts).
+const envState = vi.hoisted(() => {
+  const SIGNING_INPUT = 'test-only-signing-input';
+  return {
+    NEXT_PUBLIC_APP_URL: 'https://app.example.com',
+    SUPABASE_SERVICE_ROLE_KEY: SIGNING_INPUT,
+  };
+});
+vi.mock('@/lib/env', () => ({ env: envState }));
+const INITIAL_ENV = { ...envState };
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+// The organization an audit row is filed under is the membership rule's
+// answer (docket S74); that rule is tested over real membership rows in
+// email-change.audit-organization.test.ts. Here the person is a member of org-1.
+vi.mock('@/server/services/auth-audit', () => ({
+  resolveDefaultOrgAndRole: vi.fn(async () => ({ organizationId: 'org-1', role: 'staff' })),
+}));
 
 import {
   cancelEmailChange,
@@ -84,7 +101,11 @@ import {
   resendEmailChange,
 } from './email-change';
 
-const USER_ID = 'u-1';
+import { emailedConfirmLink } from '@/test/confirm-link-check';
+
+const USER_ID = '44444444-4444-4444-8444-444444444444';
+/** What generateLink returns for the current side: a sha224 in hex, 56 characters. */
+const CURRENT_SIDE_HASH = 'cd'.repeat(28);
 const OLD = 'old@example.com';
 const NEW = 'new@example.com';
 const OTP_NEW = '12345678';
@@ -96,6 +117,7 @@ function authUser(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  Object.assign(envState, INITIAL_ENV);
   for (const k of Object.keys(tables)) delete tables[k];
   auditRows.length = 0;
   updates.length = 0;
@@ -119,7 +141,10 @@ beforeEach(() => {
   });
   generateLink.mockImplementation(async (params: { type: string }) => {
     if (params.type === 'email_change_current') {
-      return { data: { properties: { hashed_token: 'CURRENT-HASH', email_otp: '00000000' } }, error: null };
+      return {
+        data: { properties: { hashed_token: CURRENT_SIDE_HASH, email_otp: '00000000' } },
+        error: null,
+      };
     }
     // The GoTrue bug: the returned hash is computed with the CURRENT email.
     return {
@@ -139,23 +164,54 @@ const REQUEST = {
 
 describe('mintEmailChangeLinks — the GoTrue new-side hash bug', () => {
   it('builds the new-side link from sha224(newEmail + otp), NOT the returned hashed_token', async () => {
-    const links = await mintEmailChangeLinks(OLD, NEW);
+    const links = await mintEmailChangeLinks(OLD, NEW, USER_ID);
     const expectedNew = sha224(`${NEW}${OTP_NEW}`);
-    expect(links.newUrl).toBe(
-      `https://app.example.com/auth/confirm?token_hash=${expectedNew}&type=email_change`,
+    expect(links.newUrl).toMatch(
+      new RegExp(
+        `^https://app\\.example\\.com/auth/confirm\\?token_hash=${expectedNew}&type=email_change&r=v1\\.[^&]+$`,
+      ),
     );
     // The returned value (sha224(OLD + otp)) must not appear anywhere.
     expect(links.newUrl).not.toContain(sha224(`${OLD}${OTP_NEW}`));
-    expect(links.currentUrl).toBe(
-      'https://app.example.com/auth/confirm?token_hash=CURRENT-HASH&type=email_change',
+    expect(links.currentUrl).toMatch(
+      new RegExp(
+        `^https://app\\.example\\.com/auth/confirm\\?token_hash=${CURRENT_SIDE_HASH}&type=email_change&r=v1\\.[^&]+$`,
+      ),
     );
     // No `next` on either: the route hard-codes its destination.
     expect(links.newUrl).not.toContain('next=');
     expect(links.currentUrl).not.toContain('next=');
   });
 
+  it('both links name the account whose change it is (S25), each signed for its own token', async () => {
+    const links = await mintEmailChangeLinks(OLD, NEW, USER_ID);
+    const current = emailedConfirmLink(links.currentUrl);
+    const next = emailedConfirmLink(links.newUrl);
+    expect(current).toMatchObject({
+      type: 'email_change',
+      tokenHash: CURRENT_SIDE_HASH,
+      recipient: USER_ID,
+    });
+    expect(next).toMatchObject({
+      type: 'email_change',
+      tokenHash: sha224(`${NEW}${OTP_NEW}`),
+      recipient: USER_ID,
+    });
+    expect(current.r).not.toBe(next.r);
+  });
+
+  it('mints nothing it cannot sign: no service key, or an account id that is not a UUID', async () => {
+    await expect(mintEmailChangeLinks(OLD, NEW, 'u-1')).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+    envState.SUPABASE_SERVICE_ROLE_KEY = '';
+    await expect(mintEmailChangeLinks(OLD, NEW, USER_ID)).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+  });
+
   it('mints both sides with the CURRENT email as `email` and the target as `newEmail`', async () => {
-    await mintEmailChangeLinks(OLD, NEW);
+    await mintEmailChangeLinks(OLD, NEW, USER_ID);
     expect(generateLink).toHaveBeenCalledTimes(2);
     expect(generateLink).toHaveBeenNthCalledWith(1, { type: 'email_change_current', email: OLD, newEmail: NEW });
     expect(generateLink).toHaveBeenNthCalledWith(2, { type: 'email_change_new', email: OLD, newEmail: NEW });
@@ -175,9 +231,12 @@ describe('requestEmailChange — the happy path leaves the current address canon
     expect(byTo[NEW]!.subject).toBe('Confirm your new StockPilot email');
     expect(byTo[NEW]!.text).toContain(`token_hash=${sha224(`${NEW}${OTP_NEW}`)}`);
     expect(byTo[OLD]!.subject).toBe(`Approve changing your StockPilot email to ${NEW}`);
-    expect(byTo[OLD]!.text).toContain('token_hash=CURRENT-HASH');
+    expect(byTo[OLD]!.text).toContain(`token_hash=${CURRENT_SIDE_HASH}`);
     // The new address must never receive the current-side (approval) token.
-    expect(byTo[NEW]!.html).not.toContain('CURRENT-HASH');
+    expect(byTo[NEW]!.html).not.toContain(CURRENT_SIDE_HASH);
+    // S25: each email's link names this account.
+    expect(emailedConfirmLink(byTo[NEW]!.text).recipient).toBe(USER_ID);
+    expect(emailedConfirmLink(byTo[OLD]!.text).recipient).toBe(USER_ID);
 
     // THE canonical-until-verified guarantee: no profile write of any kind.
     expect(updates.filter((u) => u.table === 'user_profiles')).toHaveLength(0);
@@ -305,6 +364,13 @@ describe('requestEmailChange — refusal order (each stops before the next spend
     expect(generateLink).not.toHaveBeenCalled();
   });
 
+  it('a link that cannot be signed stops the request before anything is sent (S25)', async () => {
+    envState.SUPABASE_SERVICE_ROLE_KEY = '';
+    await expect(requestEmailChange(REQUEST)).rejects.toMatchObject({ code: 'internal_error' });
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(inserts.filter((i) => i.table === 'audit_logs')).toHaveLength(0);
+  });
+
   it('a failed delivery to EITHER address is an error (both confirmations are required)', async () => {
     sendEmail.mockImplementation(async (args: { to: string }) => ({ ok: args.to !== OLD }));
     await expect(requestEmailChange(REQUEST)).rejects.toMatchObject({ code: 'internal_error' });
@@ -330,6 +396,10 @@ describe('getEmailChangeStatus / resend / cancel', () => {
     getUserById.mockResolvedValue(authUser({ new_email: NEW, email_change_sent_at: new Date().toISOString() }));
     const r = await resendEmailChange({ userId: USER_ID, mfa: { enrolled: false, aal2: false }, source: 'web' });
     expect(r.pendingEmail).toBe(NEW);
+    // Both re-sent links name this account (S25).
+    for (const call of sendEmail.mock.calls) {
+      expect(emailedConfirmLink((call[0] as { text: string }).text).recipient).toBe(USER_ID);
+    }
     expect(generateLink).toHaveBeenNthCalledWith(1, { type: 'email_change_current', email: OLD, newEmail: NEW });
     expect(checkRateLimit).toHaveBeenCalledWith(`emailchange-resend:${USER_ID}`, 3, 15 * 60_000, 'closed');
     expect(inserts.find((i) => i.table === 'audit_logs')?.payload).toMatchObject({ event: 'user.email.change_resent' });

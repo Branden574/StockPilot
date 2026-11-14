@@ -29,6 +29,16 @@ vi.mock('next/headers', () => ({
 const reportError = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => {}));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
 
+// requireOrgContext() also asks whether the session still owes its
+// authenticator code (lib/auth/step-up-gate), which reads the session's claims
+// and, below aal2, the factor list. That gate has its own suite
+// (session.step-up.test.ts) and is taken out here, so every count and every
+// read below is the session loader's alone.
+vi.mock('@/lib/auth/step-up-gate', () => ({
+  startStepUpReads: () => ({}),
+  stepUpIsOwed: async () => false,
+}));
+
 interface Fixture {
   profile: Record<string, unknown> | null;
   members: Array<{

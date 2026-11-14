@@ -50,7 +50,10 @@
 --   * INV-15 add a `*_path` column to a table in public with no CHECK.
 --   * INV-25 create a SECURITY DEFINER function in public, grant EXECUTE to
 --            `authenticated`, and write a body with no auth.uid()/has_org_role/
---            has_permission/is_org_member in it (this is the 0342 shape).
+--            has_permission/is_org_member in its code (this is the 0342
+--            shape). Since S49 a mention in a comment, in a quoted string or
+--            inside a longer name does not count (see _sec_inv_gate_re
+--            below).
 --   * INV-27 create a function in public or ledger without `set search_path`
 --            (or `alter function ... reset search_path` on an existing one).
 --
@@ -74,7 +77,7 @@
 
 begin;
 
-select plan(58);
+select plan(60);
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -324,6 +327,24 @@ create temporary table _sec_inv_setting_call_re (any_re text not null, literal_r
 insert into _sec_inv_setting_call_re (any_re, literal_re) values
   ($re$\mset_config"?\s*\($re$, $re$\mset_config"?\s*\(\s*''\s*,$re$);
 
+-- ── The gate detector INV-2, INV-25 and INV-31 share (S49) ─────────────────
+--
+-- A body counts as gated when one of the four gate names appears as a whole
+-- word in its code skeleton: the body read through _sec_inv_strip_re above,
+-- the one pass the text censuses share, which turns each comment into a space
+-- and each single-quoted literal into '' and keeps a double-quoted identifier
+-- whole, so the construct that starts first wins: a quote inside a comment,
+-- or -- inside a string, is consumed by the construct it sits in. INV-27b
+-- refuses a first-party body that pass does not follow (a backslash-escaped
+-- quote in an E'' string, a dollar-quoted literal, a comment inside a
+-- comment, a quote left once the pass is done), so for those bodies the
+-- skeleton is the code that runs. gate_re is matched on that skeleton. A name
+-- proves the gate is called, not that the call decides anything (an identity
+-- comparison passes too).
+create temporary table _sec_inv_gate_re (gate_re text not null);
+insert into _sec_inv_gate_re (gate_re) values
+  ($re$\m(auth\.uid|has_org_role|has_permission|is_org_member)\M$re$);
+
 -- ── F. SECURITY DEFINER functions in `ledger` that `authenticated` may execute
 --       WITHOUT an authorization token in their own body (0371) ──────────────
 --
@@ -500,16 +521,18 @@ select is(
 -- INV-1 if the function carries its own authorization gate, because that gate
 -- is the entire reason the exemption is defensible. This is what stops "add the
 -- name to the allowlist" from being a way to ship an ungated anon-callable
--- SECURITY DEFINER function.
+-- SECURITY DEFINER function. The gate must be in the CODE (_sec_inv_gate_re,
+-- S49); offenders are named in the failure output.
 select is(
-  (select count(*)::int
+  (select coalesce(string_agg(p.oid::regprocedure::text, ', ' order by p.oid::regprocedure::text), '')
      from _sec_inv_anon_secdef_allow a
      join pg_proc p on p.proname = a.proname
      join pg_namespace n on n.oid = p.pronamespace and n.nspname = 'public'
     where p.prosecdef
-      and p.prosrc !~* '(auth\.uid|has_org_role|has_permission|is_org_member)'),
-  0,
-  'INV-2: every anon-EXECUTE allowlist entry gates authorization inside its own body'
+      and regexp_replace(p.prosrc, (select re from _sec_inv_strip_re), (select rep from _sec_inv_strip_re), 'g')
+          !~* (select gate_re from _sec_inv_gate_re)),
+  '',
+  'INV-2: every anon-EXECUTE allowlist entry gates authorization inside its own body (in code, not a comment or a string)'
 );
 
 -- INV-3. No stale entry. An allowlist that outlives its function is dead weight
@@ -536,6 +559,53 @@ select ok(
   and not has_function_privilege('anon', 'public.purge_read_notifications(interval)', 'execute'),
   'INV-4 control: the anon EXECUTE probe still discriminates open from closed'
 );
+
+-- INV-4b. MUTATION CONTROL for INV-2 (S49). Until S49 nothing proved INV-2
+-- could fail. Two probes are planted with allowlist-A rows: one names
+-- auth.uid() and has_org_role only in a comment and has_permission only in a
+-- string, and must be caught; one calls is_org_member in code after a comment
+-- with a quote in it, and must not be. INV-2 judges the body, not the grant,
+-- so both are revoked from PUBLIC and anon at once; they are dropped and
+-- their rows deleted right after. Like INV-29, this restates INV-2's
+-- predicate narrowed to the probe names.
+create function public._sec_inv_probe_anon_comment_gate() returns int
+  language sql
+  security definer
+  set search_path = public
+  as $probe$
+  -- gated upstream: auth.uid() and has_org_role(org, 'manager')
+  select length('has_permission is the caller''s job')
+$probe$;
+create function public._sec_inv_probe_anon_real_gate(p_org uuid) returns boolean
+  language sql
+  security definer
+  set search_path = public
+  as $probe$
+  -- the caller's org
+  select public.is_org_member(p_org)
+$probe$;
+revoke all on function public._sec_inv_probe_anon_comment_gate() from public, anon;
+revoke all on function public._sec_inv_probe_anon_real_gate(uuid) from public, anon;
+insert into _sec_inv_anon_secdef_allow (proname, why) values
+  ('_sec_inv_probe_anon_comment_gate', 'control probe: gate named only in a comment and a string; deleted below'),
+  ('_sec_inv_probe_anon_real_gate',    'control probe: a real gate in code; deleted below');
+
+select is(
+  (select coalesce(string_agg(p.proname, ',' order by p.proname), '')
+     from _sec_inv_anon_secdef_allow a
+     join pg_proc p on p.proname = a.proname
+     join pg_namespace n on n.oid = p.pronamespace and n.nspname = 'public'
+    where p.prosecdef
+      and regexp_replace(p.prosrc, (select re from _sec_inv_strip_re), (select rep from _sec_inv_strip_re), 'g')
+          !~* (select gate_re from _sec_inv_gate_re)
+      and a.proname like '\_sec\_inv\_probe\_%'),
+  '_sec_inv_probe_anon_comment_gate',
+  'INV-4b control: the allowlist-A gate check (INV-2) catches a gate named only in a comment or a string, and not a real call'
+);
+
+drop function public._sec_inv_probe_anon_comment_gate();
+drop function public._sec_inv_probe_anon_real_gate(uuid);
+delete from _sec_inv_anon_secdef_allow where why like 'control probe:%';
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -1063,19 +1133,22 @@ select is(
 -- either gate authorization inside its own body or be a defended read-only
 -- predicate in allowlist E. This is the check that would have failed on the
 -- 0342 head: apply_cycle_count_location_delta wrote stock for any signed-in
--- caller with none of these tokens in its body.
+-- caller with none of these tokens in its body. Since S49 the token must be in
+-- the CODE (_sec_inv_strip_re, then _sec_inv_gate_re). Offenders are named in
+-- the failure output.
 select is(
-  (select count(*)::int
+  (select coalesce(string_agg(p.oid::regprocedure::text, ', ' order by p.oid::regprocedure::text), '')
      from pg_proc p
      join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public'
       and p.prosecdef
       and p.prorettype <> 'trigger'::regtype
       and has_function_privilege('authenticated', p.oid, 'execute')
-      and p.prosrc !~* '(auth\.uid|has_org_role|has_permission|is_org_member)'
+      and regexp_replace(p.prosrc, (select re from _sec_inv_strip_re), (select rep from _sec_inv_strip_re), 'g')
+          !~* (select gate_re from _sec_inv_gate_re)
       and p.proname not in (select proname from _sec_inv_auth_secdef_nogate_allow)),
-  0,
-  'INV-25: every authenticated-EXECUTE SECURITY DEFINER function in public gates in its body or is an allowlisted read-only predicate'
+  '',
+  'INV-25: every authenticated-EXECUTE SECURITY DEFINER function in public gates in its body (in code, not a comment or a string) or is an allowlisted read-only predicate'
 );
 
 -- The allowlist audit (T23), read by INV-26 (allowlists E and K), INV-30,
@@ -1515,18 +1588,28 @@ drop schema _sec_inv_probe_schema;
 -- (T23), the way section 14's controls read its detector views: each plants
 -- probes and expects their exact lines, so a view that stopped discriminating
 -- fails here, and the call walk exists once instead of in copies that drift.
+-- The pieces INV-29 shares with INV-25 are the strip pass (_sec_inv_strip_re,
+-- T23) and the gate expression (_sec_inv_gate_re, S49), read the way INV-26
+-- and INV-30 read _sec_inv_writer_re: an emptied or deleted row of either
+-- turns INV-29 and INV-29b red, because each names the answer it expects. A
+-- sweep that stopped reading the rows at all would not be noticed here; that
+-- is a review matter.
 -- ═══════════════════════════════════════════════════════════════════════════
 
 -- INV-29. VACUITY + MUTATION CONTROL for INV-25, both halves of the detector.
 --   * The population is non-empty. `has_function_privilege('authenticated', …)`
 --     is the fragile clause — a grants-posture change that emptied it would
 --     leave INV-25 passing having judged nothing at all.
---   * The detector still FIRES. The probe below is created with exactly the
---     shape 0346 closed: SECURITY DEFINER, non-trigger return type, EXECUTE to
---     `authenticated`, and not one authorization token anywhere in its body.
---     INV-25's predicate must pick it out. The count is narrowed to the probe's
---     own name so this control stays truthful (and diagnostic) on a day when
---     INV-25 is legitimately red for some other function.
+--   * The detector still FIRES. The first probe below is created with exactly
+--     the shape 0346 closed: SECURITY DEFINER, non-trigger return type,
+--     EXECUTE to `authenticated`, and not one authorization token anywhere in
+--     its body. Three more (S49) name every gate only where it is not code:
+--     in comments, in a quoted string, inside longer names. INV-25's predicate
+--     must pick out all four. A fifth calls has_org_role after a comment with a
+--     quote in it and a string with -- in it, and must NOT be picked out (the
+--     stripping stops where each construct ends). The result is narrowed to
+--     the probes' own names so this control stays truthful (and diagnostic) on
+--     a day when INV-25 is legitimately red for some other function.
 --
 -- A bare `create function` grants EXECUTE to PUBLIC, which would make the probe
 -- an anon-reachable definer function — the very thing INV-1 exists to catch —
@@ -1537,30 +1620,111 @@ create function public._sec_inv_probe_ungated_secdef() returns int
   security definer
   set search_path = public
   as $probe$ select 1 $probe$;
+create function public._sec_inv_probe_comment_gate_secdef() returns int
+  language sql
+  security definer
+  set search_path = public
+  as $probe$
+  -- the caller's own check: auth.uid() and has_org_role(org, 'manager')
+  /* has_permission and is_org_member ** are the caller's job ** */
+  select 1
+$probe$;
+create function public._sec_inv_probe_string_gate_secdef() returns int
+  language sql
+  security definer
+  set search_path = public
+  as $probe$ select length('auth.uid() has_org_role -- it''s has_permission and is_org_member') $probe$;
+create function public._sec_inv_probe_longname_gate_secdef() returns int
+  language plpgsql
+  security definer
+  set search_path = public
+  as $probe$
+declare
+  v_has_org_role_seen   boolean := false;
+  v_has_permission_seen boolean := false;
+  v_is_org_member_seen  boolean := false;
+begin
+  return 1;
+end;
+$probe$;
+create function public._sec_inv_probe_real_gate_secdef(p_org uuid) returns int
+  language plpgsql
+  security definer
+  set search_path = public
+  as $probe$
+begin
+  -- a comment with the caller's quote in it, and a /* that never closes here
+  raise notice 'a string with -- and /* in it, and it''s fine';
+  if not public.has_org_role(p_org, 'manager') then
+    raise exception 'forbidden' using errcode = '42501';
+  end if;
+  return 1;
+end;
+$probe$;
 revoke all on function public._sec_inv_probe_ungated_secdef() from public, anon;
+revoke all on function public._sec_inv_probe_comment_gate_secdef() from public, anon;
+revoke all on function public._sec_inv_probe_string_gate_secdef() from public, anon;
+revoke all on function public._sec_inv_probe_longname_gate_secdef() from public, anon;
+revoke all on function public._sec_inv_probe_real_gate_secdef(uuid) from public, anon;
 grant execute on function public._sec_inv_probe_ungated_secdef() to authenticated;
+grant execute on function public._sec_inv_probe_comment_gate_secdef() to authenticated;
+grant execute on function public._sec_inv_probe_string_gate_secdef() to authenticated;
+grant execute on function public._sec_inv_probe_longname_gate_secdef() to authenticated;
+grant execute on function public._sec_inv_probe_real_gate_secdef(uuid) to authenticated;
 
-select ok(
-  (select count(*)
-     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'public'
-      and p.prosecdef
-      and p.prorettype <> 'trigger'::regtype
-      and has_function_privilege('authenticated', p.oid, 'execute')) > 20
-  and
-  (select count(*)::int
+select is(
+  (select coalesce(string_agg(p.proname, ',' order by p.proname), '')
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public'
       and p.prosecdef
       and p.prorettype <> 'trigger'::regtype
       and has_function_privilege('authenticated', p.oid, 'execute')
-      and p.prosrc !~* '(auth\.uid|has_org_role|has_permission|is_org_member)'
+      and regexp_replace(p.prosrc, (select re from _sec_inv_strip_re), (select rep from _sec_inv_strip_re), 'g')
+          !~* (select gate_re from _sec_inv_gate_re)
       and p.proname not in (select proname from _sec_inv_auth_secdef_nogate_allow)
-      and p.proname = '_sec_inv_probe_ungated_secdef') = 1,
-  'INV-29 control: the authenticated sweep has definer functions to judge, and its ungated-body detector still fires on a planted probe'
+      and p.proname like '\_sec\_inv\_probe\_%')
+  || '|' ||
+  ((select count(*)
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and p.prosecdef
+       and p.prorettype <> 'trigger'::regtype
+       and has_function_privilege('authenticated', p.oid, 'execute')) > 20)::text,
+  '_sec_inv_probe_comment_gate_secdef,_sec_inv_probe_longname_gate_secdef,_sec_inv_probe_string_gate_secdef,_sec_inv_probe_ungated_secdef|true',
+  'INV-29 control: the authenticated sweep has definer functions to judge; its detector fires on a body with no gate and on gates named only in comments, a string or longer names, and not on a real call'
 );
 
 drop function public._sec_inv_probe_ungated_secdef();
+drop function public._sec_inv_probe_comment_gate_secdef();
+drop function public._sec_inv_probe_string_gate_secdef();
+drop function public._sec_inv_probe_longname_gate_secdef();
+drop function public._sec_inv_probe_real_gate_secdef(uuid);
+
+-- INV-29b. MUTATION CONTROL for the gate detector's lexical rules (S49), the
+-- way INV-30b controls the writer detector: one sample per rule, each read
+-- through _sec_inv_strip_re and _sec_inv_gate_re exactly as INV-2, INV-25 and
+-- INV-31 read a body. A detector that lost a rule (or a stripper that ran past
+-- a terminator and ate the code after it) changes one of these words.
+select is(
+  (select string_agg(v.k || '=' || (regexp_replace(v.src, (select re from _sec_inv_strip_re), (select rep from _sec_inv_strip_re), 'g')
+                                    ~* (select gate_re from _sec_inv_gate_re))::text, ', ' order by v.n)
+     from (values
+       (1,  'call',              $s$if not public.has_org_role(p_org, 'manager') then raise exception 'forbidden'; end if;$s$),
+       (2,  'uid',               $s$v_user := auth.uid();$s$),
+       (3,  'line comment',      $s$-- checked by has_org_role upstream
+select 1$s$),
+       (4,  'block comment',     $s$/* is_org_member ** with stars ** inside */ select 1$s$),
+       (5,  'string',            $s$raise exception 'has_permission required';$s$),
+       (6,  'string with quote', $s$select 'it''s auth.uid() here';$s$),
+       (7,  'longer name',       $s$v_has_permission_cache := true;$s$),
+       (8,  'quote in comment',  $s$-- the caller's org
+if not public.is_org_member(p_org) then raise exception 'x'; end if;$s$),
+       (9,  'dashes in string',  $s$select '-- not a comment' || public.has_permission(p_org, 'x')::text;$s$),
+       (10, 'between comments',  $s$/* a */ select auth.uid() /* b */$s$)) v(n, k, src)),
+  'call=true, uid=true, line comment=false, block comment=false, string=false, string with quote=false, '
+  'longer name=false, quote in comment=true, dashes in string=true, between comments=true',
+  'INV-29b control: the gate detector counts a gate name only in code: not in a -- or /* */ comment, a quoted string (with '''' inside) or a longer name, and a quote in a comment or -- in a string does not hide the code after it'
+);
 
 -- INV-30. MUTATION CONTROL for INV-26, both of ITS detectors. INV-26 is what
 -- stops allowlist E from becoming a place to hide: an entry naming a function
@@ -1846,8 +2010,8 @@ drop function public._sec_inv_probe_notifier();
 -- INV-31. The sweep, plus allowlist F's own audit (the view INV-26 reads: no
 -- stale entry, and no entry that writes, runs EXECUTE or has a side effect,
 -- reaches a function that does, or reaches a function with no first-party
--- body that allowlist K does not list). Offenders are named in the failure
--- output.
+-- body that allowlist K does not list). The gate must be in the CODE
+-- (_sec_inv_gate_re, S49). Offenders are named in the failure output.
 select is(
   (select coalesce(string_agg(x, ', ' order by x collate "C"), '') from (
      select 'ungated: ledger.' || p.proname as x
@@ -1856,26 +2020,45 @@ select is(
         and p.prosecdef
         and p.prorettype <> 'trigger'::regtype
         and has_function_privilege('authenticated', p.oid, 'execute')
-        and p.prosrc !~* '(auth\.uid|has_org_role|has_permission|is_org_member)'
+        and regexp_replace(p.prosrc, (select re from _sec_inv_strip_re), (select rep from _sec_inv_strip_re), 'g')
+            !~* (select gate_re from _sec_inv_gate_re)
         and p.proname not in (select proname from _sec_inv_ledger_secdef_nogate_allow)
      union all
      select a.x from _sec_inv_allowlist_audit a where a.list = 'F') v),
   '',
-  'INV-31: every authenticated-EXECUTE SECURITY DEFINER function in ledger gates in its body or is an allowlisted read-only predicate'
+  'INV-31: every authenticated-EXECUTE SECURITY DEFINER function in ledger gates in its body (in code, not a comment or a string) or is an allowlisted read-only predicate'
 );
 
 -- INV-32. VACUITY + MUTATION CONTROL for INV-31: the population is non-empty,
 -- the ungated detector fires on a planted probe of the 0346 shape (in
--- ledger), and the allowlist audit fires on a planted stale entry. Counts are
--- narrowed to the probe names so this stays truthful on a day INV-31 is
--- legitimately red for something else.
+-- ledger) and on two that name the gates only in a comment or only in a
+-- string (S49), and the allowlist audit fires on a planted stale entry.
+-- Counts are narrowed to the probe names so this stays truthful on a day
+-- INV-31 is legitimately red for something else.
 create function ledger._sec_inv_probe_ungated_ledger_secdef() returns int
   language sql
   security definer
   set search_path = public
   as $probe$ select 1 $probe$;
+create function ledger._sec_inv_probe_comment_ledger_secdef() returns int
+  language sql
+  security definer
+  set search_path = public
+  as $probe$
+  -- gated by the caller: auth.uid(), has_org_role, has_permission, is_org_member
+  select 1
+$probe$;
+create function ledger._sec_inv_probe_string_ledger_secdef() returns int
+  language sql
+  security definer
+  set search_path = public
+  as $probe$ select length('auth.uid() has_org_role has_permission is_org_member') $probe$;
 revoke all on function ledger._sec_inv_probe_ungated_ledger_secdef() from public, anon;
+revoke all on function ledger._sec_inv_probe_comment_ledger_secdef() from public, anon;
+revoke all on function ledger._sec_inv_probe_string_ledger_secdef() from public, anon;
 grant execute on function ledger._sec_inv_probe_ungated_ledger_secdef() to authenticated;
+grant execute on function ledger._sec_inv_probe_comment_ledger_secdef() to authenticated;
+grant execute on function ledger._sec_inv_probe_string_ledger_secdef() to authenticated;
 insert into _sec_inv_ledger_secdef_nogate_allow (proname, why) values
   ('_sec_inv_probe_absent_ledger_function', 'control probe: stale entry; deleted below');
 
@@ -1887,24 +2070,28 @@ select ok(
       and p.prorettype <> 'trigger'::regtype
       and has_function_privilege('authenticated', p.oid, 'execute')) >= 3
   and
-  (select count(*)::int
+  (select string_agg(p.proname, ',' order by p.proname)
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'ledger'
       and p.prosecdef
       and p.prorettype <> 'trigger'::regtype
       and has_function_privilege('authenticated', p.oid, 'execute')
-      and p.prosrc !~* '(auth\.uid|has_org_role|has_permission|is_org_member)'
+      and regexp_replace(p.prosrc, (select re from _sec_inv_strip_re), (select rep from _sec_inv_strip_re), 'g')
+          !~* (select gate_re from _sec_inv_gate_re)
       and p.proname not in (select proname from _sec_inv_ledger_secdef_nogate_allow)
-      and p.proname = '_sec_inv_probe_ungated_ledger_secdef') = 1
+      and p.proname like '\_sec\_inv\_probe\_%')
+    is not distinct from '_sec_inv_probe_comment_ledger_secdef,_sec_inv_probe_string_ledger_secdef,_sec_inv_probe_ungated_ledger_secdef'
   and
   (select count(*)::int
      from _sec_inv_allowlist_audit v
     where v.list = 'F' and v.entry = '_sec_inv_probe_absent_ledger_function'
       and v.x = 'stale allowlist-F entry: _sec_inv_probe_absent_ledger_function') = 1,
-  'INV-32 control: the ledger sweep has definer functions to judge, its ungated detector fires on a planted probe, and its allowlist audit fires on a stale entry'
+  'INV-32 control: the ledger sweep has definer functions to judge, its ungated detector fires on a planted probe and on gates named only in a comment or a string, and its allowlist audit fires on a stale entry'
 );
 
 drop function ledger._sec_inv_probe_ungated_ledger_secdef();
+drop function ledger._sec_inv_probe_comment_ledger_secdef();
+drop function ledger._sec_inv_probe_string_ledger_secdef();
 delete from _sec_inv_ledger_secdef_nogate_allow where why like 'control probe:%';
 
 

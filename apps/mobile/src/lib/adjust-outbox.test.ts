@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { contextUnavailableBody } from '@stockpilot/core';
+
 import {
   adjustDrainVerdict,
   createAdjustSendGate,
@@ -138,6 +140,57 @@ describe('adjustDrainVerdict — AT MOST ONCE', () => {
       adjustDrainVerdict(new Error('Request timed out. Check your connection and try again.'), live),
     ).toBe('unconfirmed');
     expect(adjustDrainVerdict(null, live)).toBe('unconfirmed');
+  });
+});
+
+// Docket S26. The server's API context gate answers a 503 marked as
+// written-nothing when it refused the request before any work, because the
+// caller's access could not be checked. A queued adjustment that meets it is
+// provably not written, so it stays queued and is sent again, where a bare
+// 5xx is parked as not confirmed.
+describe('adjustDrainVerdict: a refusal marked as before any write', () => {
+  const live = { accountDisabled: false, handedOff: true };
+  const body = contextUnavailableBody();
+  const marker = (o: { status?: number; code?: unknown; details?: unknown } = {}) =>
+    Object.assign(new Error(body.message), {
+      name: 'ApiError',
+      status: 503,
+      code: body.error,
+      details: { ...body.details },
+      ...o,
+    });
+
+  it("is 'refused-before-write', on a live account and on a disabled one", () => {
+    expect(adjustDrainVerdict(marker(), live)).toBe('refused-before-write');
+    // The disabled flag decides a 401 only; a disabled account's rows are
+    // rejected in bulk by the eviction (drain-failure.ts), never here.
+    expect(adjustDrainVerdict(marker(), { ...live, accountDisabled: true })).toBe(
+      'refused-before-write',
+    );
+  });
+
+  it("before the hand-off it is still 'failed', and a malformed row is still rejected", () => {
+    expect(adjustDrainVerdict(marker(), { ...live, handedOff: false })).toBe('failed');
+    expect(adjustDrainVerdict(new QueuedAdjustInvalidError('no item'), live)).toBe('rejected');
+  });
+
+  it.each([
+    ['500', { status: 500 }],
+    ['502', { status: 502 }],
+    ['504', { status: 504 }],
+    ['no details (unreadable warehouse access, account delete)', { details: undefined }],
+    ['nothingWritten missing', { details: { reason: 'context_unavailable', retryable: true } }],
+    [
+      'retryable false',
+      { details: { reason: 'context_unavailable', retryable: false, nothingWritten: true } },
+    ],
+    [
+      'another reason',
+      { details: { reason: 'warehouse_access', retryable: true, nothingWritten: true } },
+    ],
+    ['another code', { code: 'busy' }],
+  ])('a near miss (%s) is unconfirmed, as any 5xx', (_label, o) => {
+    expect(adjustDrainVerdict(marker(o), live)).toBe('unconfirmed');
   });
 });
 

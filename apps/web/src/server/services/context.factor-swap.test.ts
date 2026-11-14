@@ -24,6 +24,13 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
  * get_request_context() as the token's subject. Every round trip moves the
  * clock on. One case starts the factor list once get_request_context() has
  * answered, as a later reader of the list would.
+ *
+ * TWO GATES NOW READ THAT LIST (docket S43c). requireOrgContext() asks first
+ * whether the session still owes its authenticator code (lib/auth/
+ * step-up-gate) and sends it to /signin/mfa, on the same list, held to the
+ * same member. The first block below takes that gate out, so it still shows
+ * what it always did: resolveMfaState does not rely on anything in front of
+ * it. The second block runs the same sessions through the real gate.
  */
 
 const state = vi.hoisted(() => ({
@@ -31,7 +38,21 @@ const state = vi.hoisted(() => ({
   onContextAnswered: null as null | (() => void),
   /** Who each Auth request was made as, in order (`/user as <sub>`). */
   authAs: [] as string[],
+  /** Take requireOrgContext()'s own code gate out, leaving resolveMfaState alone. */
+  codeGateOut: true,
 }));
+vi.mock('@/lib/auth/step-up-gate', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/auth/step-up-gate')>();
+  return {
+    ...real,
+    startStepUpReads: () =>
+      state.codeGateOut
+        ? ({} as ReturnType<typeof real.startStepUpReads>)
+        : real.startStepUpReads(),
+    stepUpIsOwed: async (...args: Parameters<typeof real.stepUpIsOwed>) =>
+      state.codeGateOut ? false : real.stepUpIsOwed(...args),
+  };
+});
 vi.mock('@/lib/dashboard/request-cache', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/lib/dashboard/request-cache')>();
   state.realFactorsRead = real.getMfaFactorsForRequest;
@@ -165,6 +186,7 @@ beforeEach(() => {
   restSubjects = [];
   state.onContextAnswered = null;
   state.authAs = [];
+  state.codeGateOut = true;
   server = fakeAuthServer(projectKey);
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(
@@ -273,7 +295,7 @@ function mfaGateRefusal(ctx: Awaited<ReturnType<typeof withContext>>): ServiceEr
   }
 }
 
-describe('withContext: the MFA gate counts only the factor list of the member the context resolved', () => {
+describe('withContext: the MFA gate counts only the factor list of the member the context resolved (the code gate in front taken out)', () => {
   it("today's order (the list first): an enrolled member at aal1 with a no-factor account's refresh token is held at the gate", async () => {
     await memberCookie('aal1', NO_FACTOR_REFRESH, CROSSES_DURING_FIRST_ROUND_TRIP);
     await noFactorAccountSession();
@@ -324,5 +346,65 @@ describe('withContext: the MFA gate counts only the factor list of the member th
     expect(ctx.mfaSatisfied).toBe(true);
     expect(ctx.mfaEnrolled).toBe(true);
     expect(mfaGateRefusal(ctx)).toBeNull();
+  });
+});
+
+describe("requireOrgContext's code gate, on the same sessions: held to the member the context resolved", () => {
+  beforeEach(() => {
+    state.codeGateOut = false;
+  });
+
+  it("today's order (the list first): an enrolled member at aal1 with a no-factor account's refresh token is sent to the code page", async () => {
+    await memberCookie('aal1', NO_FACTOR_REFRESH, CROSSES_DURING_FIRST_ROUND_TRIP);
+    await noFactorAccountSession();
+    await expect(withContext()).rejects.toThrow('REDIRECT:/signin/mfa');
+  });
+
+  it("the list read after the context, refreshed into a no-factor account, is no answer: the code page, never 'not enrolled'", async () => {
+    startFactorsReadAfterTheContext();
+    await memberCookie('aal1', NO_FACTOR_REFRESH, CROSSES_DURING_FIRST_ROUND_TRIP);
+    await noFactorAccountSession();
+    await expect(withContext()).rejects.toThrow('REDIRECT:/signin/mfa');
+    // The context was the member's, and the list did refresh into the
+    // no-factor account.
+    expect(restSubjects).toEqual([MEMBER]);
+    expect(authCalls).toContain('/token');
+    expect(state.authAs).toContain(`/user as ${NO_FACTOR}`);
+  });
+
+  it("control: the member's own aal1 session refreshing before the late list is sent to the code page", async () => {
+    startFactorsReadAfterTheContext();
+    await memberCookie('aal1', MEMBER_REFRESH, CROSSES_DURING_FIRST_ROUND_TRIP);
+    await memberOwnRefresh('aal1');
+    await expect(withContext()).rejects.toThrow('REDIRECT:/signin/mfa');
+    expect(authCalls).toContain('/token');
+  });
+
+  it("control: the member's own aal2 session refreshing before the late list gets its context, satisfied", async () => {
+    startFactorsReadAfterTheContext();
+    await memberCookie('aal2', MEMBER_REFRESH, CROSSES_DURING_FIRST_ROUND_TRIP);
+    await memberOwnRefresh('aal2');
+    const ctx = await withContext();
+    expect(authCalls).toContain('/token');
+    expect(ctx.userId).toBe(MEMBER);
+    expect(ctx.mfaSatisfied).toBe(true);
+    expect(mfaGateRefusal(ctx)).toBeNull();
+  });
+
+  it('one factor read serves both gates: the Auth server is asked for the user once', async () => {
+    // At aal2 the code gate reads no list; withContext() reads its own.
+    await memberCookie('aal2', MEMBER_REFRESH, 3_600_000);
+    const atAal2 = await withContext();
+    expect(atAal2.mfaSatisfied).toBe(true);
+    expect(authCalls.filter((p) => p === '/user')).toHaveLength(1);
+
+    // Below aal2 the code gate needs the list, and takes the read
+    // withContext() already started instead of a second one.
+    authCalls = [];
+    server.unenrolledUsers.add(MEMBER);
+    await memberCookie('aal1', MEMBER_REFRESH, 3_600_000);
+    const noFactor = await withContext();
+    expect(noFactor.mfaRequired).toBe(false);
+    expect(authCalls.filter((p) => p === '/user')).toHaveLength(1);
   });
 });

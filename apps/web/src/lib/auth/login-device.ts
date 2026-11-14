@@ -2,6 +2,7 @@ import 'server-only';
 
 import { createHash } from 'node:crypto';
 
+import { browserDeviceName } from '@/lib/auth/user-agent';
 import { sendNewDeviceLoginEmail } from '@/lib/email/login-alert';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -59,7 +60,9 @@ export async function noteLoginDevice(args: {
   deviceLabel?: string | null;
   /** What the organization's activity (the webhook event) calls the device
    *  when the caller gives it: the phone's family only ("StockPilot app on
-   *  iPhone"), from fixed words (S5, integrator decision 2026-11-02). */
+   *  iPhone"), from fixed words (S5, integrator decision 2026-11-02). Without
+   *  it (a web sign-in) the event names the browser and system, also from
+   *  fixed words ("Chrome on macOS", S56). */
   deviceFamily?: string | null;
 }): Promise<void> {
   try {
@@ -67,8 +70,10 @@ export async function noteLoginDevice(args: {
     const label = args.deviceLabel?.trim() || null;
     // What the device is called in the person's own device list and email.
     const shown = label ?? ua;
-    // What the webhook event calls it: the family when the caller gave one.
-    const forOrganization = args.deviceFamily?.trim() || shown;
+    // What the webhook event calls it, always fixed words: the family when
+    // the caller gave one, else the browser and system the agent names. The
+    // agent's own text and the label stay in the person's own list and email.
+    const forOrganization = args.deviceFamily?.trim() || browserDeviceName(ua);
     const hash = deviceHash(args.userId, ua, args.deviceKey?.trim() || null);
     const admin = createAdminClient();
 
@@ -138,9 +143,9 @@ export async function noteLoginDevice(args: {
         .limit(5);
       for (const m of (memberships ?? []) as { organization_id: string }[]) {
         // The delivery body lands in customer-controlled Slack/Teams/webhook
-        // infra, so it must carry NO PII. Send a non-PII user id + the device
-        // string only — NOT the email or IP (those go only to the user's own
-        // email alert above + the internal audit_logs in Supabase).
+        // infra, so it must carry NO PII. Send a non-PII user id + the device's
+        // name in fixed words only — NOT the email or IP (those go only to the
+        // user's own email alert above + the internal audit_logs in Supabase).
         void dispatchEvent(m.organization_id, 'security.new_device_login', {
           userId: args.userId,
           device: forOrganization.slice(0, 120),

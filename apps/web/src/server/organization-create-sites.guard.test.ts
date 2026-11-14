@@ -582,7 +582,7 @@ const REVIEWED_SEATS: ReviewedSeat[] = [
     role: 'unknown',
     verb: 'upsert',
     receiver: 'admin',
-    why: "Invite acceptance writes the invite's own role, and organization_invites.role is checked to admin, manager, staff or viewer (0001_init.sql, never altered), so it never seats an owner. The invite token gates it.",
+    why: "Invite acceptance writes the invite's own role, and organization_invites.role is checked to admin, manager, staff or viewer (0001_init.sql, never altered), so it never seats an owner. The invite token gates it, and an accepted member's row is left as it is (services/team.accept-invite-existing-member.test.ts).",
   },
   {
     key: 'server/services/team.ts#TeamService.updateMemberRole',

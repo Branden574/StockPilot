@@ -33,6 +33,9 @@ vi.mock('@/server/services/audit', () => ({
   }),
 }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn() }));
+vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }));
+
+import { verifiedSessionAuth } from '@/test/verified-session-stub';
 
 import {
   MFA_CODE_ACCOUNT_LIMIT,
@@ -55,6 +58,32 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
 });
+
+/**
+ * A cookie client whose session verifies as `holder.sub` (u1 unless a test
+ * changes it, for instance from inside the verify: a session that refreshed
+ * into another account while GoTrue checked the code).
+ */
+function fakeClient(
+  verifyError: unknown,
+  holder: { sub: string; read?: 'answer' | 'error' } = { sub: 'u1' },
+) {
+  const challenge = vi.fn(async () => ({ data: { id: 'challenge-1' }, error: null }));
+  const verify = vi.fn(async () => ({ data: null, error: verifyError }));
+  const signOut = vi.fn(async () => ({ error: null }));
+  const reads: string[] = [];
+  const client = {
+    auth: {
+      mfa: { challenge, verify },
+      signOut,
+      ...verifiedSessionAuth(
+        () => ({ sub: holder.sub, aal: 'aal1', read: holder.read ?? 'answer' }),
+        (call) => reads.push(call),
+      ),
+    },
+  };
+  return { client, challenge, verify, signOut, reads };
+}
 
 describe('allowMfaCodeAttempt — per account and client address, and per account', () => {
   it('on Vercel, keys on the account and the first forwarded address, 10 per 15 minutes, closed', async () => {
@@ -209,11 +238,6 @@ describe('checkMfaCode', () => {
     message: 'Invalid TOTP code entered',
   };
 
-  function fakeClient(verifyError: unknown) {
-    const challenge = vi.fn(async () => ({ data: { id: 'challenge-1' }, error: null }));
-    const verify = vi.fn(async () => ({ data: null, error: verifyError }));
-    return { client: { auth: { mfa: { challenge, verify } } }, challenge, verify };
-  }
 
   it('a refused code writes a row with neither the code, GoTrue’s message nor the factor id', async () => {
     const { client } = fakeClient(GOTRUE_WRONG_CODE);
@@ -311,6 +335,155 @@ describe('checkMfaCode', () => {
       extra: { name: 'AuthApiError', code: 'something_new', status: 400 },
     });
     expect(JSON.stringify(reportError.mock.calls)).not.toContain('GoTrue words');
+  });
+});
+
+/**
+ * The account a code press spends its budget on and names in its row is the
+ * account GoTrue checked the code for (S78). After GoTrue's answer the
+ * session is read again, held to that account (readVerifiedSessionClaimsOf):
+ * a session that now holds another account is signed out here, the press
+ * does not count as verified, and no row names the account it was checked for.
+ */
+describe('checkMfaCode — the answer counts only for the account the press was checked for', () => {
+  const GOTRUE_WRONG_CODE = {
+    name: 'AuthApiError',
+    status: 422,
+    code: 'mfa_verification_failed',
+    message: 'Invalid TOTP code entered',
+  };
+
+  it('a code accepted while the session moved to another account is not verified, and this session is signed out', async () => {
+    const holder = { sub: 'u1' };
+    const { client, verify, signOut } = fakeClient(null, holder);
+    verify.mockImplementation(async () => {
+      holder.sub = 'u2';
+      return { data: null, error: null };
+    });
+
+    const res = await checkMfaCode(client as never, {
+      userId: 'u1',
+      factorId: 'f1',
+      code: WRONG_CODE,
+      path: 'challenge',
+      sessionAal: 'aal1',
+    });
+
+    expect(res).toEqual({ kind: 'account_changed' });
+    expect(signOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(auditInsert).not.toHaveBeenCalled();
+  });
+
+  it('a code refused while the session moved to another account writes no row for the account it was checked for', async () => {
+    const holder = { sub: 'u1' };
+    const { client, verify, signOut } = fakeClient(null, holder);
+    verify.mockImplementation(async () => {
+      holder.sub = 'u2';
+      return { data: null, error: GOTRUE_WRONG_CODE };
+    });
+
+    const res = await checkMfaCode(client as never, {
+      userId: 'u1',
+      factorId: 'f1',
+      code: WRONG_CODE,
+      path: 'password_reset',
+    });
+
+    expect(res).toEqual({ kind: 'account_changed' });
+    expect(signOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(auditInsert).not.toHaveBeenCalled();
+  });
+
+  // S78: a read that cannot verify the session is not another account. The
+  // attempt spent before the challenge stays spent, the answer is not used
+  // (not verified, no row), and the session stays.
+  it.each([
+    ['accepted', null, 'challenge'],
+    ['refused', GOTRUE_WRONG_CODE, 'password_reset'],
+  ] as const)(
+    'a code GoTrue %s while the session could not be verified is unconfirmed: no row, nobody signed out',
+    async (_label, verifyError, path) => {
+      const holder: { sub: string; read?: 'answer' | 'error' } = { sub: 'u1' };
+      const { client, verify, signOut } = fakeClient(null, holder);
+      verify.mockImplementation(async () => {
+        holder.read = 'error';
+        return { data: null, error: verifyError };
+      });
+
+      const res = await checkMfaCode(client as never, {
+        userId: 'u1',
+        factorId: 'f1',
+        code: WRONG_CODE,
+        path,
+      });
+
+      expect(res).toEqual({ kind: 'unconfirmed' });
+      expect(signOut).not.toHaveBeenCalled();
+      expect(auditInsert).not.toHaveBeenCalled();
+    },
+  );
+
+  it('an unconfirmed press still spends one code attempt, before the challenge', async () => {
+    const holder: { sub: string; read?: 'answer' | 'error' } = { sub: 'u1' };
+    const { client, challenge, verify } = fakeClient(null, holder);
+    verify.mockImplementation(async () => {
+      holder.read = 'error';
+      return { data: null, error: GOTRUE_WRONG_CODE };
+    });
+
+    const res = await checkMfaCode(client as never, {
+      userId: 'u1',
+      factorId: 'f1',
+      code: WRONG_CODE,
+      path: 'challenge',
+    });
+
+    expect(res).toEqual({ kind: 'unconfirmed' });
+    const keys = checkRateLimit.mock.calls.map((call) => call[0]);
+    expect(keys.filter((k) => String(k).startsWith('mfa-code:u1:'))).toHaveLength(1);
+    expect(keys).toContain('mfa-code-account:u1');
+    expect(checkRateLimit.mock.invocationCallOrder.at(-1)!).toBeLessThan(
+      challenge.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('control: the same account throughout is verified, read again only after GoTrue answered', async () => {
+    const { client, verify, signOut, reads } = fakeClient(null);
+    let readsBeforeVerify = -1;
+    verify.mockImplementation(async () => {
+      readsBeforeVerify = reads.length;
+      return { data: null, error: null };
+    });
+
+    const res = await checkMfaCode(client as never, {
+      userId: 'u1',
+      factorId: 'f1',
+      code: WRONG_CODE,
+      path: 'challenge',
+      sessionAal: 'aal1',
+    });
+
+    expect(res).toEqual({ kind: 'verified' });
+    expect(readsBeforeVerify).toBe(0);
+    expect(reads).toEqual(['getSession', 'getClaims']);
+    expect(signOut).not.toHaveBeenCalled();
+  });
+
+  it('control: a refused code of the same account writes its one row', async () => {
+    const { client, signOut } = fakeClient(GOTRUE_WRONG_CODE);
+
+    const res = await checkMfaCode(client as never, {
+      userId: 'u1',
+      factorId: 'f1',
+      code: WRONG_CODE,
+      path: 'challenge',
+      sessionAal: 'aal1',
+    });
+
+    expect(res).toEqual({ kind: 'verify_failed', outcome: 'refused' });
+    expect(auditInsert).toHaveBeenCalledTimes(1);
+    expect(auditInsert).toHaveBeenCalledWith(expect.objectContaining({ user_id: 'u1' }));
+    expect(signOut).not.toHaveBeenCalled();
   });
 });
 

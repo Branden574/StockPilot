@@ -155,9 +155,12 @@ describe('the two releases of 2026-11-02 evening: order, status and dates', () =
     // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
     // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[10]?.id).toBe(WEB_FIXES_ID);
-    expect(RELEASES[11]?.id).toBe(CHARTERS_ID);
-    expect(RELEASES[12]?.id).toBe(AUTH_CODE_ID);
+    // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    expect(RELEASES[16]?.id).toBe(WEB_FIXES_ID);
+    expect(RELEASES[17]?.id).toBe(CHARTERS_ID);
+    expect(RELEASES[18]?.id).toBe(AUTH_CODE_ID);
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: WEB_FIXES_ID): the Export items release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: export-items-permission-2026-11): the S2 release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: approver-controls-own-warehouses-2026-11): the count sheet release is published after it, at the top, the newest published release.
@@ -165,7 +168,10 @@ describe('the two releases of 2026-11-02 evening: order, status and dates', () =
       // Re-pinned by feat/order-add-all (2026-11-10; was: the count sheet release): the Add all release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: the Add all release): the returns request and names release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: the returns request and names release, the newest published): the phone appearance and returns release is published later, at the top, directly below the Liquid Glass draft.
-      'phone-appearance-returns-2026-11',
+      // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: the phone appearance and returns release): the Release count release is published after it, at the top, the newest published release.
+      // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: the Release count release): the emailed links release is published after it, at the top, the newest published release.
+      // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: the emailed links release): the phone authenticator code release is published after it, at the top, the newest published release.
+      'phone-authenticator-code-2026-11',
     );
   });
 
@@ -188,9 +194,13 @@ describe('the two releases of 2026-11-02 evening: order, status and dates', () =
     // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
     // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(web).toBe(Math.max(...RELEASES.slice(10).map((r) => Date.parse(r.publishedAt))));
+    // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    expect(web).toBe(Math.max(...RELEASES.slice(16).map((r) => Date.parse(r.publishedAt))));
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
-    for (const r of RELEASES.slice(12)) {
+    // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
+    for (const r of RELEASES.slice(18)) {
       expect(charters, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -254,6 +264,15 @@ describe('the web fixes release (B20a and S45)', () => {
       // Re-pinned by feat/order-add-all (2026-11-10; was: without it): the Add all release is published later, at the top, and reaches whoever may place orders where Orders is on, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
       // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: without it): the returns request and names release is published later, at the top, and reaches returns readers and requesters where Returns is on, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
       // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: without it): the phone appearance and returns release is published later, at the top, and reaches every member (its Appearance entry has no audience), so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+      // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: without them): the Release count, AI Assistant and not found releases are published later, at the top, and reach an owner with every permission and module, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+      // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: without it): the emailed links release is published later, at the top, and reaches every member (it has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+      // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: without them): the phone authenticator code and access check releases are published later, at the top; the authenticator code release reaches every member and the access check release reaches whoever can adjust stock, check out rentals or escalate exceptions, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+      'phone-authenticator-code-2026-11',
+      'phone-access-check-retry-2026-11',
+      'emailed-links-name-their-account-2026-11',
+      'cycle-count-already-released-2026-11',
+      'ai-assistant-plain-words-2026-11',
+      'changes-that-did-not-happen-2026-11',
       'phone-appearance-returns-2026-11',
       'returns-request-email-names-2026-11',
       'order-add-all-2026-11',

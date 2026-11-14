@@ -4,7 +4,10 @@ import type { ModuleId } from '@stockpilot/core';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
-const { sendMock, resendMock, reportErrorMock, prefsResult } = vi.hoisted(() => ({
+const { sendMock, resendMock, reportErrorMock, prefsResult, adminStubs } = vi.hoisted(() => ({
+  // Every service client a test created: export events are recorded through
+  // one (server/lib/outbox-events.ts), so the event is read from these.
+  adminStubs: [] as Array<{ rpcCalls: Array<{ name: string; args: unknown }> }>,
   sendMock: vi.fn(async () => {}),
   // The hand-over notices (order-handover-notify.ts) send through Resend
   // directly, not through sendOrderRequestEmail.
@@ -30,8 +33,8 @@ vi.mock('@/lib/error-reporter', () => ({
 vi.mock('@/lib/supabase/admin', async () => {
   const { makeSupabaseStub: stub, servedLikePostgrest } = await import('@/test/supabase-mock');
   return {
-    createAdminClient: () =>
-      stub({
+    createAdminClient: () => {
+      const made = stub({
         'notification_preferences.select.maybeSingle': prefsResult.value as never,
         // S36: the live requester is still a current member of the order's
         // organization, on an account that is not disabled
@@ -45,7 +48,10 @@ vi.mock('@/lib/supabase/admin', async () => {
             impersonation_expires_at: null,
           },
         ]),
-      }).client,
+      });
+      adminStubs.push(made);
+      return made.client;
+    },
   };
 });
 
@@ -95,6 +101,7 @@ const base = {
 beforeEach(() => {
   vi.clearAllMocks();
   prefsResult.value = { data: null, error: null };
+  adminStubs.length = 0;
 });
 
 describe('order status email: a deleted requester is never emailed (A3)', () => {
@@ -282,10 +289,22 @@ describe('denied order ticket: a deleted requester is not handed to Zendesk (A3 
     });
   }
 
+  /** The order.problem event: recorded once, through a service client, never the member's. */
   function outboxPayload(stub: ReturnType<typeof makeSupabaseStub>): Record<string, unknown> {
-    const call = stub.rpcCalls.find((c) => c.name === 'publish_outbox');
-    expect(call).toBeDefined();
-    return (call?.args as { p_payload: Record<string, unknown> }).p_payload;
+    expect(stub.rpcCalls.filter((c) => c.name === 'publish_outbox')).toHaveLength(0);
+    const calls = adminStubs.flatMap((a) => a.rpcCalls).filter((c) => c.name === 'publish_outbox');
+    expect(calls).toHaveLength(1);
+    const args = calls[0]!.args as Record<string, unknown> & { p_payload: Record<string, unknown> };
+    // Everything but the payload, as it has always been sent.
+    expect({ ...args, p_payload: undefined }).toEqual({
+      p_org_id: 'org-test',
+      p_topic: 'order.problem',
+      p_aggregate_type: 'order_request',
+      p_aggregate_id: 'ord-1',
+      p_payload: undefined,
+      p_dedupe_key: 'order.problem:ord-1',
+    });
+    return args.p_payload;
   }
 
   it('omits the kept address and name when requester_deleted_at is set', async () => {
@@ -302,6 +321,14 @@ describe('denied order ticket: a deleted requester is not handed to Zendesk (A3 
     expect(payload.requesterEmail).toBeNull();
     expect(payload.requesterName).toBeNull();
     expect(payload.reason).toBe('Out of stock');
+    expect(JSON.stringify(payload)).toBe(
+      JSON.stringify({
+        orderRequestId: 'ord-1',
+        requesterEmail: null,
+        requesterName: null,
+        reason: 'Out of stock',
+      }),
+    );
     expect(sendMock).not.toHaveBeenCalled();
   });
 
@@ -317,5 +344,50 @@ describe('denied order ticket: a deleted requester is not handed to Zendesk (A3 
     const payload = outboxPayload(stub);
     expect(payload.requesterEmail).toBe('guest@example.org');
     expect(payload.requesterName).toBe('Pat Example');
+    expect(JSON.stringify(payload)).toBe(
+      JSON.stringify({
+        orderRequestId: 'ord-1',
+        requesterEmail: 'guest@example.org',
+        requesterName: 'Pat Example',
+        reason: 'Out of stock',
+      }),
+    );
+  });
+
+  it('a member without orders:approve is refused before anything, and no event is recorded', async () => {
+    const stub = denyStub({
+      ...base,
+      status: 'denied',
+      requester_user_id: null,
+      requester_email: 'guest@example.org',
+    });
+    const staff = new (
+      OrderRequestsService as unknown as new (ctx: unknown) => OrderRequestsService
+    )(
+      makeServiceContext(stub.client, {
+        role: 'staff',
+        userId: 'staff-1',
+        enabledModules: new Set<ModuleId>(['orders']),
+      }),
+    );
+    await expect(staff.deny('ord-1', 'Out of stock')).rejects.toMatchObject({ code: 'forbidden' });
+    expect(stub.chainsAll.get('order_requests.update')).toBeUndefined();
+    expect(
+      adminStubs.flatMap((a) => a.rpcCalls).filter((c) => c.name === 'publish_outbox'),
+    ).toHaveLength(0);
+    expect(reportErrorMock).not.toHaveBeenCalled();
+  });
+
+  it('a denial that did not land (no longer pending) records no event', async () => {
+    const stub = makeSupabaseStub({
+      'order_requests.select.maybeSingle': { data: { warehouse_id: 'wh-1' }, error: null },
+      'order_requests.update': { data: null, error: null },
+    });
+    await expect(svc(stub).deny('ord-1', 'Out of stock')).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(
+      adminStubs.flatMap((a) => a.rpcCalls).filter((c) => c.name === 'publish_outbox'),
+    ).toHaveLength(0);
   });
 });

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { orphanAccountNotices } from '@/components/platform/remove-org-notices';
 import { callArgs, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
 
 /**
@@ -20,6 +21,11 @@ import { callArgs, makeSupabaseStub, type MockCall } from '@/test/supabase-mock'
  * account while its email is on the allowlist (O-A3-7), read from GoTrue
  * first; an email read that fails is FAILED; and each deleted account's
  * avatar files are removed (O-A3-9).
+ *
+ * A read that answers an error (or a count with no number) is never read as
+ * "no passphrase", "no organization" or "no other organization": a failed read
+ * before the organization is deleted removes nothing, and a failed count taken
+ * again right before an account's delete keeps it, counted as failed.
  */
 
 const { deleteUser, getUserById, recordPlatformAudit, reportError, avatarList, avatarRemove } = vi.hoisted(() => ({
@@ -62,16 +68,48 @@ const ORG_ID = '0a000000-0000-0000-0000-000000000099';
 /** account_deletion_check's answer per orphan. */
 const answers: Record<string, unknown> = {};
 
+/**
+ * Per test: a failed read of the stored passphrase or of the organization, the
+ * member list to answer, a failed read of it, and a failed membership count for
+ * one account (`otherOrgsOnly`: the count taken before the organization is
+ * deleted, of the account's OTHER organizations; else the count taken again
+ * right before the account would be deleted). `noCount`: the count answers no
+ * number and no error.
+ */
+const memberReads: {
+  settingsFail: boolean;
+  orgFail: boolean;
+  memberIds: string[] | null;
+  membersFail: boolean;
+  countFails: { uid: string; otherOrgsOnly: boolean; noCount?: boolean } | null;
+} = { settingsFail: false, orgFail: false, memberIds: null, membersFail: false, countFails: null };
+
+const READ_FAILED = { message: 'canceling statement due to statement timeout', code: '57014' };
+
+/** Made-up values: the stored row, and what the operator types. */
+const STORED_DIGEST = 'h';
+const STORED_SALT_VALUE = 's';
+const TYPED_VALUE = 'pp';
+
 const adminStub = makeSupabaseStub({
-  'platform_settings.select': {
-    data: { org_deletion_passphrase_hash: 'h', org_deletion_passphrase_salt: 's' },
-    error: null,
-  },
-  'organizations.select': { data: { id: ORG_ID, name: 'Throwaway', slug: 'throwaway' }, error: null },
+  'platform_settings.select': () =>
+    memberReads.settingsFail
+      ? { data: null, error: READ_FAILED }
+      : {
+          data: { org_deletion_passphrase_hash: STORED_DIGEST, org_deletion_passphrase_salt: STORED_SALT_VALUE },
+          error: null,
+        },
+  'organizations.select': () =>
+    memberReads.orgFail
+      ? { data: null, error: READ_FAILED }
+      : { data: { id: ORG_ID, name: 'Throwaway', slug: 'throwaway' }, error: null },
   'organizations.delete': { data: null, error: null },
   'organization_members.select': (call: MockCall) => {
     // The pre-delete member list, then the membership counts (0 = orphan).
     if (callArgs(call, 'select')?.[0] === 'user_id') {
+      if (memberReads.membersFail) return { data: null, error: READ_FAILED };
+      const ids = memberReads.memberIds;
+      if (ids) return { data: ids.map((user_id) => ({ user_id })), error: null };
       return {
         data: [
           { user_id: 'u-free' },
@@ -87,6 +125,12 @@ const adminStub = makeSupabaseStub({
         ],
         error: null,
       };
+    }
+    const uid = callArgs(call, 'eq')?.[1];
+    const otherOrgsOnly = call.methods.includes('neq');
+    const fails = memberReads.countFails;
+    if (fails && fails.uid === uid && fails.otherOrgsOnly === otherOrgsOnly) {
+      return fails.noCount ? { data: null, error: null } : { data: null, error: READ_FAILED, count: null };
     }
     return { data: null, error: null, count: 0 };
   },
@@ -108,6 +152,11 @@ import { removeOrgAction } from './platform-admin';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  memberReads.settingsFail = false;
+  memberReads.orgFail = false;
+  memberReads.memberIds = null;
+  memberReads.membersFail = false;
+  memberReads.countFails = null;
   for (const k of Object.keys(answers)) delete answers[k];
   answers['u-blocked'] = {
     deletable: false,
@@ -233,5 +282,97 @@ describe('removeOrgAction orphan cleanup', () => {
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data).toEqual({ deletedUsers: 0, keptUsers: 0, failedUsers: 0 });
     expect(deleteUser).not.toHaveBeenCalled();
+  });
+});
+
+describe('removeOrgAction when a read fails', () => {
+  const orgDeletes = () => adminStub.chainsAll.get('organizations.delete')?.length ?? 0;
+  const REMOVE = { orgId: ORG_ID, passphrase: TYPED_VALUE, confirmName: 'Throwaway', alsoDeleteOrphanedUsers: true };
+
+  /** Nothing removed: the organization, every account and the audit are untouched. */
+  async function expectNothingRemoved(message: string, tag: string) {
+    const before = orgDeletes();
+    const res = await removeOrgAction(REMOVE);
+    expect(res).toEqual({ ok: false, error: { code: 'internal_error', message } });
+    expect(orgDeletes()).toBe(before);
+    expect(deleteUser).not.toHaveBeenCalled();
+    expect(recordPlatformAudit).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ tag }));
+  }
+
+  it('removes nothing when the stored passphrase could not be read', async () => {
+    memberReads.settingsFail = true;
+    await expectNothingRemoved(
+      'Could not read the deletion passphrase, so nothing was removed. Try again.',
+      'platform-admin.remove-org-passphrase-read',
+    );
+  });
+
+  it('removes nothing when the organization could not be read', async () => {
+    memberReads.orgFail = true;
+    await expectNothingRemoved(
+      'Could not read the organization, so nothing was removed. Try again.',
+      'platform-admin.remove-org-read',
+    );
+  });
+
+  it('removes nothing when the member list could not be read', async () => {
+    memberReads.membersFail = true;
+    await expectNothingRemoved(
+      "Could not read the organization's members, so nothing was removed. Try again.",
+      'platform-admin.orphan-members-read',
+    );
+  });
+
+  it("removes nothing when a member's other-organizations count could not be read", async () => {
+    memberReads.memberIds = ['u-free', 'u-unread'];
+    memberReads.countFails = { uid: 'u-unread', otherOrgsOnly: true };
+    await expectNothingRemoved(
+      'Could not read whether each member belongs to another organization, so nothing was removed. Try again.',
+      'platform-admin.orphan-membership-read',
+    );
+  });
+
+  it("removes nothing when a member's other-organizations count answers no number", async () => {
+    memberReads.memberIds = ['u-free', 'u-unread'];
+    memberReads.countFails = { uid: 'u-unread', otherOrgsOnly: true, noCount: true };
+    await expectNothingRemoved(
+      'Could not read whether each member belongs to another organization, so nothing was removed. Try again.',
+      'platform-admin.orphan-membership-read',
+    );
+  });
+
+  it('keeps a member whose membership count could not be read again right before the delete', async () => {
+    memberReads.memberIds = ['u-free', 'u-unread'];
+    memberReads.countFails = { uid: 'u-unread', otherOrgsOnly: false };
+    const res = await removeOrgAction(REMOVE);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(deleteUser.mock.calls.map((c) => c[0])).toEqual(['u-free']);
+    expect(res.data).toEqual({ deletedUsers: 1, keptUsers: 0, failedUsers: 1 });
+    // The dialog's sentence for it: left in place, the report has the details.
+    expect(orphanAccountNotices(res.data).failed).toBe(
+      '1 account could not be deleted right now and was left in place. The error report has the details.',
+    );
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'platform-admin.orphan-membership-read', extra: { uid: 'u-unread' } }),
+    );
+    expect(recordPlatformAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'org_deleted',
+        detail: expect.objectContaining({ deletedOrphanUsers: 1, keptOrphanUsers: 0, failedOrphanUsers: 1 }),
+      }),
+    );
+  });
+
+  it('keeps a member whose membership count answers no number right before the delete', async () => {
+    memberReads.memberIds = ['u-free', 'u-unread'];
+    memberReads.countFails = { uid: 'u-unread', otherOrgsOnly: false, noCount: true };
+    const res = await removeOrgAction(REMOVE);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(deleteUser.mock.calls.map((c) => c[0])).toEqual(['u-free']);
+    expect(res.data).toEqual({ deletedUsers: 1, keptUsers: 0, failedUsers: 1 });
   });
 });

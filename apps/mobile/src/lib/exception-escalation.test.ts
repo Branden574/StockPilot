@@ -12,6 +12,7 @@ import {
   ESCALATION_CHANGED_COPY,
   ESCALATION_IN_PROGRESS_COPY,
   ESCALATION_IN_PROGRESS_ELSEWHERE_COPY,
+  contextUnavailableBody,
   escalationAlreadyEscalatedCopy,
   escalationDuplicateCopy,
   escalationSourceLines as coreSourceLines,
@@ -731,6 +732,46 @@ describe('describeEscalateError', () => {
       retryable: true,
     });
     expect(describeEscalateError(new TypeError('Network request failed')).message).toBe(ESCALATE_UNCONFIRMED_COPY);
+  });
+});
+
+// Docket S26. The server could not check the caller's access and refused the
+// escalation before doing anything: a 503 marked as written-nothing (core
+// contextUnavailableBody, sent only by the API context gate). It used to be a
+// bare 500, worded "it is not known whether the request was saved".
+describe('describeEscalateError: a refusal marked as before any write', () => {
+  const body = contextUnavailableBody();
+  const marker = (o: { status?: number; code?: unknown; details?: unknown } = {}) =>
+    Object.assign(new Error(body.message), {
+      status: 503,
+      code: body.error,
+      details: { ...body.details },
+      ...o,
+    });
+
+  it('says nothing was saved, keeps the form (retryable) and opens no request', () => {
+    expect(describeEscalateError(marker())).toEqual({
+      message:
+        'Your access could not be checked just now, so nothing was saved. Try again in a moment.',
+      duplicate: null,
+      retryable: true,
+    });
+  });
+
+  it('a bare 5xx, and every near miss, keeps the server-problem words, not retryable', () => {
+    for (const o of [
+      { status: 500 },
+      { status: 502 },
+      { details: undefined },
+      { details: { reason: 'context_unavailable', retryable: true } },
+      { code: 'internal_error' },
+    ]) {
+      expect(describeEscalateError(marker(o))).toEqual({
+        message: ESCALATE_SERVER_PROBLEM_COPY,
+        duplicate: null,
+        retryable: false,
+      });
+    }
   });
 });
 

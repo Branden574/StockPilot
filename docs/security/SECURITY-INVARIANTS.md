@@ -37,6 +37,45 @@
      section 8 row updated. The GET list was read from the route files on
      that date; it is not a sweep.
 
+     AMENDED 2026-10-31 (docket S25, first of two releases): INV-E5's
+     Enforced by, Tested at and "Also not covered" texts rewritten for the
+     signed account reference every /auth/confirm link now carries and the
+     page's press gate. The sentence on links written before the first
+     release is transitional: the second release requires the reference on
+     every link and removes it. Nothing else in this document was re-verified.
+
+     AMENDED 2026-11-01 (docket S25 review): INV-E5 said the press gate meant
+     a window swap "cannot land a press on it unseen". It could: another site
+     can open a link in a small window scrolled to the button (the form's
+     fragment id did it in Chromium, Firefox and WebKit), and the gate armed
+     with the account's address never on screen. The gate now waits until
+     every address the page names has been on screen through its quiet
+     second, wholly or, for one taller than the window, line by line (part
+     of it is not enough: a tiny window another site opens at a text
+     fragment inside a long address it chose shows five of its characters),
+     and the page gives no element an id; the Enforced by, Tested at and
+     "Also not covered" texts say so. An email-change link whose change
+     GoTrue no longer holds now gets the expired answer without the addresses.
+     Nothing else in this document was re-verified.
+
+     AMENDED 2026-11-12 (docket S25, merge of main and review): INV-E5's
+     Tested at text says what the wider sweeps of confirm-landing.test.ts
+     hold. Its Enforced by text says the confirmation page's button is
+     disabled in the markup until the page's script has run and that POST
+     refuses a press that script did not let through, and names the three
+     headers that stand behind the gate as a second line (the opener policy
+     and the two that refuse a frame), now pinned on that path in
+     security-headers.test.ts. The sentences on links written before the
+     first release were reworded. Nothing else in this document was
+     re-verified.
+
+     AMENDED 2026-11-13 (docket S25, second of two releases): INV-E5 says
+     that a link without the signed account reference is refused on GET and
+     POST before anything is read or spent, in its Enforced by, Tested at and
+     "Also not covered" texts; the transitional sentences on links written
+     before the first release were removed. Nothing else in this document was
+     re-verified.
+
      AMENDED 2026-11-12 (docket T23): the "Tested at" fields of INV-B3,
      INV-B4 and INV-D2 were rewritten for the detectors as they now stand
      (INV-15/16 bind a CHECK to its column by conkey; INV-26 and INV-31 share
@@ -69,7 +108,33 @@
      in INV-B6 were read on a local Postgres with migrations 0001-0418
      applied; the assertion count in section 10 was re-derived from
      `select plan(58)`, and the two file counts beside it were counted from
-     the manifests in `scripts/security-test.sh` on that date. -->
+     the manifests in `scripts/security-test.sh` on that date.
+
+     AMENDED 2026-11-12 (docket S62, migration 0420): INV-C8 added. Its
+     policy facts were read from migrations 0215, 0322 and 0420 and checked
+     by the 0420 test on a local Postgres with migrations 0001-0418 and 0420
+     applied. The two file counts in section 10 were counted again from the
+     manifests in `scripts/security-test.sh`, which gain one pgTAP file and
+     one vitest file with this entry; the assertion count beside them was
+     not re-derived.
+
+     AMENDED 2026-11-02, brought up to date with T23 and T24 on 2026-11-13
+     (docket S49, migration 0421): INV-B1, INV-B3 and INV-B4 now say a gate
+     counts only in code. INV-2, INV-25 and INV-31 match the four gate names
+     as whole words (`_sec_inv_gate_re`) on the code skeleton T23's strip
+     pass makes (`_sec_inv_strip_re`), the pass INV-27b holds every
+     first-party body to; INV-4b and INV-29b were added, and INV-29 and
+     INV-32 plant comment-only and string-only probes. INV-B3's grants
+     paragraph gained the exception 0310 and 0421 use, INV-B2 names INV-22's
+     string-literal residual and gives the measured current state (18
+     policies, 15 gated; the figure it had carried since this document's
+     first version was 19, 16 gated), and section 10 records the second
+     recurrence. The census figures in those entries were read by a scratch
+     pgTAP probe on a local Postgres with migrations 0001-0418 and 0421
+     applied; the assertion count in section 10 was re-derived from
+     `select plan(60)`, and the two file counts beside it were counted from
+     the manifests in `scripts/security-test.sh` after main's 0419 and 0420
+     were merged in. -->
 
 # Security invariants
 
@@ -313,10 +378,15 @@ section 2 as "the anon posture" is what let 0342's helper stand from 0342 to
   `locations` rows into an arbitrary tenant.
 - **Enforced by**: explicit `revoke execute ... from public, anon` in migration
   0318, plus an in-body gate (`auth.uid()`, `has_org_role`, `has_permission`,
-  `is_org_member`) on each function that legitimately stays open.
+  `is_org_member`) on each function that legitimately stays open. The gate
+  must be in the function's code: a name in a comment, in a quoted string or
+  inside a longer name is not a gate (S49).
 - **Tested at**: INV-1 (the sweep), INV-2 (the allowlist polices itself),
-  INV-3 (no stale entries), INV-4 (control). Per-function posture for the 15
-  fixed functions is pinned in
+  INV-3 (no stale entries), INV-4 (control), INV-4b (INV-2's mutation control:
+  it plants two allowlisted probes, one that names the gates only in a comment
+  and a string, which must be caught, and one that calls `is_org_member` after
+  a comment with a quote in it, which must not). Per-function posture for the
+  15 fixed functions is pinned in
   [`0318_secdef_grants.test.sql`](../../supabase/tests/0318_secdef_grants.test.sql).
 
 Two design points in that test are load-bearing.
@@ -330,6 +400,12 @@ return type, not an observation about today's catalog — which is precisely why
 **The allowlist cannot be used as a bypass.** INV-2 requires every allowlisted
 function to reference an authorization gate in its own body. Adding a name to
 the allowlist for an ungated function fails INV-2 instead of buying an exemption.
+Since S49 the reference must be code: INV-2 reads each body through the
+test's strip pass (`_sec_inv_strip_re`, which turns `--` and `/* */` comments
+into a space and single-quoted strings into `''` in one left-to-right pass)
+and then looks for the four names as whole words (`_sec_inv_gate_re`), so a
+gate named only in a comment or an error message buys nothing. INV-2 names
+its offenders in the failure output.
 
 Current state: 42 anon-executable `SECURITY DEFINER` functions — 17
 trigger-returning (not RPC-invocable) and 25 RPC-invocable with in-body gates,
@@ -365,16 +441,23 @@ null ACL — which is itself `PUBLIC`-executable, and is what a
   unremarkable in a migration diff.
 - **Enforced by**: the predicate on each policy.
 - **Tested at**: INV-22, with INV-23 as the control that the population being
-  judged is non-empty. Current state: 19 such policies — 16 gated, 3 explicit
-  denies (the `mfa_recovery_codes_no_*` idiom that makes that table
-  trigger-write-only).
+  judged is non-empty. Current state, measured on 2026-11-13 (migrations
+  0001-0418 and 0421): 18 such policies — 15 gated, 3 explicit denies (the
+  `mfa_recovery_codes_no_*` idiom that makes that table trigger-write-only).
+  One residual, named since S49: INV-22 searches the deparsed predicate,
+  which carries no comment but can carry a string literal, so an identity
+  name inside a quoted string in a predicate would still count as a gate.
+  INV-22 does not strip strings; a predicate is short enough that a reviewer
+  reads it whole. All 15 gated policies are still gated with their strings
+  removed, so none passes on a string alone.
 
 ### INV-B3 — no ungated SECURITY DEFINER function is authenticated-executable
 
 - **Invariant**: every `SECURITY DEFINER` function in `public` that can be
   invoked as an RPC and that `authenticated` can execute either names an
   authorization gate (`auth.uid()`, `has_org_role`, `has_permission`,
-  `is_org_member`) inside its own body, or is on **allowlist E** — the
+  `is_org_member`) in its own code (not in a comment, a quoted string or a
+  longer name, S49), or is on **allowlist E** — the
   `_sec_inv_auth_secdef_nogate_allow` table in the invariant test, every entry
   of which is a read-only predicate that writes nothing. (Go by the table name:
   the test file currently letters two blocks `E`, this one and the storage
@@ -404,6 +487,16 @@ null ACL — which is itself `PUBLIC`-executable, and is what a
   that legitimately calls the helper (INV-C1). That is why each of these
   migrations re-states its `grant execute ... to authenticated, service_role`
   unchanged and puts the entire fix in the body.
+
+  The one exception is a helper that nothing evaluates as the user: no policy
+  names it, no `SECURITY INVOKER` function calls it, and no app path calls it.
+  Revoking `authenticated`'s `EXECUTE` on such a helper breaks nothing, so it
+  may lose the grant instead of gaining a gate. 0310 did that for
+  `account_is_disabled`, and 0421 (S49) for `user_can_see_item_category` once
+  `categories_select` stopped calling it. The condition is checked, not
+  assumed: 0421's test (S4) asserts that no policy names the function, that
+  nothing depends on it and that no other function's code calls it, and S2
+  and S5 that only `postgres` and `service_role` may execute it.
 - **Tested at**: INV-25 (the sweep), INV-26 (allowlist E polices itself: no
   stale entry, and no entry that writes), with INV-29, INV-30, INV-30b and
   INV-30c as the controls. What INV-26 judges:
@@ -455,13 +548,21 @@ null ACL — which is itself `PUBLIC`-executable, and is what a
   separately: `EXECUTE` in an entry or in a callee withdraws the exemption),
   an operator, a cast, a trigger or a view; of `pg_catalog`'s functions only
   the side-effect forms are judged.
-  Per-function posture is pinned
+  Since S49, INV-25 reads each body through the same strip pass and then
+  `_sec_inv_gate_re` (comments and quoted strings do not count, the four
+  names are matched as whole words) and
+  names its offenders; INV-29 also plants probes that name every gate only
+  in comments, only in a quoted string and only inside longer names, all of
+  which must be caught, and one that calls `has_org_role` after a comment
+  with a quote and a string with `--` in it, which must not; INV-29b checks
+  the expression's lexical rules on ten samples, the way INV-30b checks the
+  writer detector. Per-function posture is pinned
   in
   [`0346_gate_secdef_stock_helpers.test.sql`](../../supabase/tests/0346_gate_secdef_stock_helpers.test.sql)
   and
   [`0350_location_facts_gate_and_catalog_metadata.test.sql`](../../supabase/tests/0350_location_facts_gate_and_catalog_metadata.test.sql).
 
-Two design points in that pair of assertions are load-bearing, the same way
+Three design points in that pair of assertions are load-bearing, the same way
 the trigger-return exclusion and the self-policing allowlist are under INV-B1.
 
 **The allowlist cannot be used as a bypass, and it is not a place to park a
@@ -487,12 +588,34 @@ now judges it on its body like everything else. "Reading past RLS is the point"
 justifies the `SECURITY DEFINER`; it never justified the missing authorization
 check.
 
-Reproduce (the `authenticated` twin of the INV-B1 query above):
+**A gate named in a comment is not a gate, and a predicate about a user
+belongs in the zero-argument set form.** Since S49 the sweep reads a body's
+code only: a gate name in a comment, a quoted string or a longer name does
+not count. `user_can_see_item_category` (0310) is a predicate about the user
+it is given. 0421 moved
+`categories_select` onto zero-argument sets that read `auth.uid()`
+themselves: the two category sets `inventory_items_select` already read
+(0229) and the membership set `stock_movements_select` reads. It took
+`authenticated`'s `EXECUTE` away from the function under the exception
+above, so the function left INV-25's population. The lesson for the next
+helper: a policy should read sets that derive the user from the session,
+not pass `auth.uid()` into a function that takes a user id and that
+`authenticated` may execute. The strip pass reads only bodies INV-27b
+accepts: a body with a form the pass does not follow (an `E''` string with
+`\'`, a dollar-quoted literal, a comment inside a comment, a quote left once
+the pass is done) is refused there. And a name proves a gate is called, not
+that the call decides anything.
+
+Reproduce (the `authenticated` twin of the INV-B1 query above; the body is read
+the way INV-25 reads it, comments and quoted strings removed first):
 
 ```sql
 select p.proname,
        pg_get_function_identity_arguments(p.oid) as args,
-       (p.prosrc ~* '(auth\.uid|has_org_role|has_permission|is_org_member)')
+       (regexp_replace(p.prosrc,
+                       $re$/\*(?:[^*]|\*+[^*/])*\*+/|--[^\n\r]*|(')(?:[^']|'')*(')|("(?:[^"]|"")*")$re$,
+                       ' \1\2\3 ', 'g')
+          ~* $re$\m(auth\.uid|has_org_role|has_permission|is_org_member)\M$re$)
          as gated_in_body
   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
  where n.nspname = 'public' and p.prosecdef
@@ -504,9 +627,10 @@ select p.proname,
 ### INV-B4 — the same rule holds in the `ledger` schema
 
 - **Invariant**: every `SECURITY DEFINER` function in `ledger` that
-  `authenticated` can execute names an authorization gate in its own body, or
-  is on **allowlist F** (`_sec_inv_ledger_secdef_nogate_allow`), every entry of
-  which is a read-only predicate.
+  `authenticated` can execute names an authorization gate in its own code (not
+  in a comment or a quoted string, S49), or is on **allowlist F**
+  (`_sec_inv_ledger_secdef_nogate_allow`), every entry of which is a read-only
+  predicate.
 - **Why it matters**: PostgREST does not publish `ledger` (0359), but that
   schema is not private. `authenticated` holds `USAGE` on it and `EXECUTE` on
   its bodies, because the `SECURITY INVOKER` public wrappers call them as the
@@ -520,12 +644,14 @@ select p.proname,
   manager+ or `caller_can_write_location`. The one allowlisted entry,
   `ledger.cycle_count_line_superseded` (0369), returns a boolean, writes
   nothing, and answers only inside a ledger transaction.
-- **Tested at**: INV-31 (the sweep, plus allowlist F's own audit, which is
-  the view INV-26 reads: no stale entry, and no entry that writes, runs
+- **Tested at**: INV-31 (the sweep, reading bodies through the same strip
+  pass and `_sec_inv_gate_re` as INV-25, plus allowlist F's own audit, which
+  is the view INV-26 reads: no stale entry, and no entry that writes, runs
   `EXECUTE` or has a side effect, reaches a function that does, or reaches a
   function with no first-party body that allowlist K does not list) and
-  INV-32 (plants an ungated definer probe in `ledger` and a stale allowlist
-  row; both must be caught). INV-30c plants an allowlist-F entry that reaches
+  INV-32 (plants an ungated definer probe in `ledger`, two that name the
+  gates only in a comment or only in a quoted string, and a stale allowlist
+  row; all must be caught). INV-30c plants an allowlist-F entry that reaches
   a writer, and INV-30e one that runs `SET LOCAL`. The
   helper's gate is pinned line by line in
   [`0371_holdings_staff_scope.test.sql`](../../supabase/tests/0371_holdings_staff_scope.test.sql)
@@ -1409,6 +1535,40 @@ actually fire.
   route tests, and core `return-actions.test.ts`, `exchange-status.test.ts`
   and `exchange-view.test.ts`.
 
+### INV-C8 — a permission restriction changes only for someone who holds that permission
+
+- **Invariant**: a `user_permission_overrides` or `role_permission_overrides`
+  row with `granted = false` (a restriction) is changed or deleted with a
+  member's own token only by an admin or owner of its organization who holds
+  the permission the row is about (`has_permission`). A grant row
+  (`granted = true`) may be changed or deleted by any admin, and a row
+  written as a grant needs the permission too. An owner holds every
+  permission, so an owner changes any row.
+- **Why it matters**: this is the rule the Roles page applies
+  (`assertCanGrant` in `apps/web/src/server/actions/permissions.ts`): anyone
+  who configures permissions can take a permission away, but can give,
+  clear or change a restriction only on a permission they hold themselves.
+  The database asks the same, so the rule does not depend on which client
+  wrote the row.
+- **Enforced by**: each table's write rules. INSERT, and UPDATE's
+  `WITH CHECK`: a grant needs the permission (0215). DELETE: a restriction
+  needs it (0322). UPDATE's `USING`: the row an update starts from is read as
+  the DELETE rule reads it (0420). In the app, the two single-toggle
+  actions re-read the row when the database refuses re-writing a
+  restriction that is already there, and answer as before (nothing changed,
+  so no audit row and no broadcast).
+- **Tested at**: [`0215_permission_override_no_escalation.test.sql`](../../supabase/tests/0215_permission_override_no_escalation.test.sql)
+  (grants), section 3 of
+  [`0322_quantity_guards_avatar_scope_override_clears.test.sql`](../../supabase/tests/0322_quantity_guards_avatar_scope_override_clears.test.sql)
+  (deletes), and
+  [`0420_permission_override_updates_follow_0322.test.sql`](../../supabase/tests/0420_permission_override_updates_follow_0322.test.sql)
+  (updates: S1-S6 pin each UPDATE rule's `USING` to the table's DELETE rule
+  and its `WITH CHECK` to the INSERT rule; R, W, H, O and N run the app's
+  shapes and plain updates per persona; M1 is the mutation control). App
+  side:
+  `permissions.override-clear.test.ts` and
+  `permissions.restriction-rewrite.test.ts`.
+
 ---
 
 ## 4. Storage — path shape and bucket exposure
@@ -1707,9 +1867,50 @@ application structure.
   there with no `Sec-Fetch-Site` is verified and logged (type only), by
   decision: without that header no header tells its own post from another
   site's, so refusing would refuse every browser without Fetch Metadata on a
-  page that loads no script and opens on whatever device holds the email.
-  Its page names the account the browser is already signed in as, and where a
-  link lands is fixed by its type
+  page that opens on whatever device holds the email. Every link the app emails names the account it is for (docket
+  S25): `r` carries the user id GoTrue returned with the token and the time
+  the link was built, with an HMAC-SHA256 tag over those, the link's type and
+  its token hash, keyed with a key derived from the service key under a fixed
+  label ([`confirm-recipient.ts`](../../apps/web/src/lib/auth/confirm-recipient.ts);
+  [`confirm-link.ts`](../../apps/web/src/lib/auth/confirm-link.ts) is the only
+  code that writes such a link). The page checks `r` before anything else (a
+  changed, moved or relabelled one gets the type's refused answer and one past
+  65 minutes the expired answer, with no lookup), looks the account up with
+  the service client and prints its full address above the form, and names
+  both accounts when the browser is signed in as another one (compared by id).
+  A failed or slow lookup gets a "try again" page with no form, and an
+  email-change link whose change GoTrue no longer holds (completed, cancelled,
+  or replaced by a newer request) gets the expired answer with neither
+  address. `POST` checks `r` again before `verifyOtp`, and a session GoTrue
+  made for another account than `r` names is signed out again in the same
+  answer. The press counts only once the page has been visible, in front and
+  quiet for a second (no press, key, scroll or resize in it), and every
+  address the page names has been on screen through such a second: wholly,
+  or, for one taller than the window, each of its lines
+  ([`press-gate.ts`](../../apps/web/src/app/auth/confirm/press-gate.ts)); the
+  page gives no element an id, so no link opens it scrolled to the button. A
+  window swap (DoubleClickjacking), or a window another site opens small and
+  scrolled past the line or into the middle of a long address, therefore
+  gets no press before the account's address has been on screen for a
+  second. The button is disabled in the markup and enabled only by that
+  script, as its last step, and the script adds a field to the form when it
+  lets a press through and takes it away whenever the page is not armed;
+  `POST` gives a post without the field the type's refused answer (logged,
+  type only) before `r` is read or `verifyOtp` is called. So nothing can be
+  pressed where the script does not run, or before the end of it has
+  arrived, and a browser that runs no script reads on the page that it needs
+  JavaScript. A change to the CSP that stops inline scripts therefore stops
+  every emailed link until the gate gets a nonce (the B17 test in
+  `security-headers.test.ts` says so). Three of the app's headers stand
+  behind the gate as a second line: the two that refuse a frame
+  (`X-Frame-Options: DENY`, `frame-ancestors 'none'`) and the opener policy;
+  [`security-headers.test.ts`](../../apps/web/src/test/security-headers.test.ts)
+  holds all three to the page's path. A link without `r` gets the type's
+  refused answer, on `GET` before the session is read or any account is
+  looked up and on `POST` before `verifyOtp`, and is logged (type only):
+  every link the app writes carries one. A link GoTrue's own mailer writes
+  from a dashboard email template carries none, so it is refused as well.
+  Where a link lands is fixed by its type
   ([`confirm-landing.ts`](../../apps/web/src/lib/auth/confirm-landing.ts)),
   not chosen by the link. The two `GET`s that spend something of the person's
   ask `sentFromAnotherOrigin` (`Sec-Fetch-Site` present and neither
@@ -1731,11 +1932,45 @@ application structure.
   and release-state's `route.cross-site.test.ts` (end to end through Next's
   App Route module);
   [`auth/confirm/route.test.ts`](../../apps/web/src/app/auth/confirm/route.test.ts)
-  (login CSRF: a post from another site, the signed-in notice, the fixed
-  landing) and
+  (login CSRF: a post from another site, `r` checked on `GET` and `POST`
+  before any lookup or `verifyOtp`, a link without `r` refused on both, the
+  account's address and the notices, the failed lookup, a session made for another account, the gate on the
+  page after a form whose one button is disabled as sent, the words for a
+  browser that runs no script, a post without the gate's field refused
+  before anything is spent, the fixed landing);
+  [`route.recipient-session.test.ts`](../../apps/web/src/app/auth/confirm/route.recipient-session.test.ts)
+  (the real `@supabase/ssr` and auth-js: a press that GoTrue answers for
+  another account leaves with no session cookie, signed out of that session
+  only);
+  [`confirm-recipient.test.ts`](../../apps/web/src/lib/auth/confirm-recipient.test.ts)
+  (the signature: a known-answer vector, every changed part refused, the issue
+  time's bounds, the lab harness's copy held to the same vector);
+  [`confirm-link.test.ts`](../../apps/web/src/lib/auth/confirm-link.test.ts)
+  (the one link writer, and the account lookup's found, gone and failed
+  answers within five seconds);
+  [`press-gate.test.ts`](../../apps/web/src/app/auth/confirm/press-gate.test.ts)
+  (the page's own script: the quiet second, focus, visibility, the window swap,
+  every address on screen through the second at any window size or scroll,
+  line by line for one taller than the window, a browser that never reports
+  focus, the button enabled as the script's last step, and the field on the
+  form only for a press the gate let through);
+  [`route.email-change-replaced.test.ts`](../../apps/web/src/app/auth/confirm/route.email-change-replaced.test.ts)
+  (the real email-change link builder and route: a link sent to a mistyped
+  address, opened after the change was corrected or completed, shows neither
+  address);
   [`confirm-landing.test.ts`](../../apps/web/src/lib/auth/confirm-landing.test.ts)
-  (each type's landings, and sweeps over the five link builders and the
-  repository's sign-in harnesses);
+  (each type's landings, and sweeps over the syntax tree of every source: the
+  five link builders are the only ones that ask GoTrue for a link token, each
+  as many times as reviewed and each signing for the id GoTrue returned with
+  its link; no source but the link writer and the page names the page's
+  path; in the rest of the repository only the two sign-in harnesses do
+  either, each signing `r` and waiting for the gate; and the page's `POST`
+  is the only code in the repository that spends a link's token, after it
+  has asked for the gate's field);
+  [`security-headers.test.ts`](../../apps/web/src/test/security-headers.test.ts)
+  (the opener policy header and the two headers that refuse a frame reach
+  the page, each in one value; `route.test.ts` holds the page to setting
+  none of the three itself);
   [`auth/session-ended/route.test.ts`](../../apps/web/src/app/auth/session-ended/route.test.ts)
   (another origin's link, image or frame leaves a live session alone and still
   clears a gone one); and
@@ -1789,18 +2024,23 @@ application structure.
   closed.**
   - Navigate and press. Another site can send a browser to `/auth/confirm` with
     a link it holds for its own account (a reset link for its own address is
-    one form away) and with the type it likes. The page must render for that
-    navigation, because a click in webmail is a cross-site navigation too, and
-    its form then posts from the app's own page, so `Sec-Fetch-Site` says
-    `same-origin` and the press is verified. The page now names the account
-    the browser is already signed in as, another site can no longer sign the
-    browser out first, and the link lands where its type says, not on a page
-    the other site chose. A browser that is signed out, whose person presses on
-    for a link they did not ask for, is still signed in to the account the link
-    belongs to. Closing that needs the link builders to add a recipient hint,
-    signed so the page can show it ("this link signs in as j***@..."); that is
-    an owner question. The first version of this entry presented the login
-    CSRF as closed for every browser that sends Fetch Metadata; it was not.
+    one form away). The page must render for that navigation, because a click
+    in webmail is a cross-site navigation too, and its form then posts from the
+    app's own page, so `Sec-Fetch-Site` says `same-origin` and the press is
+    verified. Since docket S25 the page prints the full address of the account
+    the link is for before anyone presses (and both addresses when the browser
+    is signed in as another account), the press counts only after a quiet
+    second in front with every address it names on screen, another site can
+    no longer sign the browser out first, and the link lands where its type
+    says. What stays open: a person who reads another account's address and
+    presses anyway; a person talked into stopping on the page and pressing
+    again later, which the gate cannot tell from a real press (the address has
+    then been on screen for at least a second, though the page may have been
+    scrolled on since); and a lookalike address made to match the full one
+    (much harder than matching a mask). A link without `r` names no account,
+    and is refused before anything is read or spent. The first version of
+    this entry presented the login CSRF as closed for every browser that
+    sends Fetch Metadata; it was not.
   - A post from a browser that sends no `Sec-Fetch-Site` (one without Fetch
     Metadata, or one whose header an extension strips), which needs an unspent
     link for an account the attacker holds; the log line shows whether such
@@ -2148,18 +2388,21 @@ checked.
   A-E. The P0 (anon `EXECUTE` on ungated `SECURITY DEFINER` functions) is closed
   by migration 0318 for all 15 exploitable functions, and the class — not just
   those 15 — is now covered by an allowlist-based sweep.
-- **The same class recurred once on the `authenticated` role** and is closed:
+- **The same class has recurred on the `authenticated` role** and is closed:
   SP-001, SP-059 and the `_cycle_count_location_facts` leak (section 2, INV-B3)
   — four definer functions any signed-in user could execute with no
   authorization in their bodies — closed by migrations 0346 and 0350 and swept
   from then on by INV-25/26. It is recorded on its own line rather than folded
   into the one above because it is the counterexample to reading that line as
   permanent: the sweep that would have caught it did not exist on the day the
-  first P0 was declared closed.
+  first P0 was declared closed. S49 found a second instance in the sweep
+  itself: INV-25 counted a gate name in a comment as a gate. Since 0421 it
+  reads code only, and `user_can_see_item_category` is no longer one of the
+  functions it judges.
 - **A high-assurance baseline is implemented and covered by executable
-  invariants**: 58 class-wide assertions in
-  `supabase/tests/security_invariants.test.sql`, plus the 101 other pgTAP
-  files and the 345 vitest files on the manifests of
+  invariants**: 60 class-wide assertions in
+  `supabase/tests/security_invariants.test.sql`, plus the 104 other pgTAP
+  files and the 368 vitest files on the manifests of
   `scripts/security-test.sh`, gated together as `pnpm security:test` and
   wired into CI.
 - **Two risks are accepted and tracked**, not closed (section 7), each with a

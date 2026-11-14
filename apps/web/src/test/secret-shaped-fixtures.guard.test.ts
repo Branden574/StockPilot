@@ -26,7 +26,9 @@ import { describe, expect, it } from 'vitest';
  * again. An empty string (the unset secret) is no secret and stays.
  *
  * The member one-click unsubscribe tests (B15) hold a signing value too, kept
- * the same way, and are checked here from the start.
+ * the same way, and are checked here from the start. So do the confirmation
+ * link's recipient tests (S25), whose signing value stands in for the service
+ * key.
  *
  * IF THIS FAILS: hold the value in a constant with a neutral name and give the
  * secret-shaped name the constant. Do not make the value look random.
@@ -48,6 +50,25 @@ const FILES = [
   // guarded for fictional-only data by fidelity-fixture.guard.test.ts).
   'tests/e2e/appearance/fixtures/seed-fidelity.sql',
   'tests/e2e/appearance/fixtures/seed-fidelity.mjs',
+  // S25: the signed recipient reference on confirmation links, keyed on a
+  // value derived from the service key.
+  'src/lib/auth/confirm-recipient.test.ts',
+  'src/lib/auth/confirm-link.test.ts',
+  'src/app/auth/confirm/press-gate.test.ts',
+  'src/app/auth/confirm/route.recipient-session.test.ts',
+  'src/app/auth/confirm/route.email-change-replaced.test.ts',
+  'src/app/api/admin/qa-recovery-link/route.test.ts',
+  'src/test/confirm-link-check.ts',
+  // S77, S78: the authenticator code, recovery code, set-up, reset and
+  // Change password tests.
+  'src/server/actions/mfa.test.ts',
+  'src/server/actions/mfa.raw-error-words.test.ts',
+  'src/server/actions/mfa-recovery.test.ts',
+  'src/server/actions/mfa-recovery.not-set-up.test.ts',
+  'src/server/actions/auth.password-reset.test.ts',
+  'src/server/actions/auth.change-password.test.ts',
+  'src/lib/auth/mfa-code-attempts.test.ts',
+  'src/lib/auth/reset-link-session.test.ts',
 ];
 
 // A password-, secret- or token-shaped name (identifier, property or quoted

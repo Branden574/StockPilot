@@ -2,6 +2,7 @@ import 'server-only';
 
 import { createHash } from 'node:crypto';
 
+import { confirmLinkUrl } from '@/lib/auth/confirm-link';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import {
   renderEmailChangeCurrentEmail,
@@ -16,6 +17,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { ServiceError } from '@/server/services/context';
 
 import { insertAuditRowReported, type AuditEvent } from '@/server/services/audit';
+import { resolveDefaultOrgAndRole } from '@/server/services/auth-audit';
 
 /**
  * VERIFIED SELF-SERVICE EMAIL CHANGE — the one module that changes a user's
@@ -141,12 +143,6 @@ function isoPlus(iso: string, ms: number): string {
   return new Date(new Date(iso).getTime() + ms).toISOString();
 }
 
-/** The /auth/confirm URL for an email-change token. `next` is deliberately
- *  absent: the route hard-codes its destination for this type. */
-export function emailChangeConfirmUrl(tokenHash: string): string {
-  return `${env.NEXT_PUBLIC_APP_URL}/auth/confirm?token_hash=${encodeURIComponent(tokenHash)}&type=email_change`;
-}
-
 async function loadAuthUser(userId: string) {
   const admin = createAdminClient();
   const { data, error } = await admin.auth.admin.getUserById(userId);
@@ -166,7 +162,6 @@ export async function resolveUserEmail(userId: string): Promise<string | null> {
 }
 
 interface ProfileGuard {
-  organizationId: string | null;
   firstName: string | null;
 }
 
@@ -180,7 +175,7 @@ async function loadProfileGuard(userId: string): Promise<ProfileGuard> {
   const admin = createAdminClient();
   const { data, error } = await admin
     .from('user_profiles')
-    .select('default_organization_id, full_name, disabled_at, deleted_at')
+    .select('full_name, disabled_at, deleted_at')
     .eq('id', userId)
     .maybeSingle();
   if (error) {
@@ -191,18 +186,26 @@ async function loadProfileGuard(userId: string): Promise<ProfileGuard> {
   if (data.disabled_at) throw new ServiceError('forbidden', 'This account has been disabled.');
   const fullName = (data.full_name as string | null)?.trim() ?? '';
   return {
-    organizationId: (data.default_organization_id as string | null) ?? null,
     firstName: fullName ? fullName.split(/\s+/)[0]! : null,
   };
 }
 
+/**
+ * The one audit writer of this module. The row is filed under an organization
+ * only when the person is a current, accepted member of it, by the rule the
+ * sign-in row uses (resolveDefaultOrgAndRole): the profile's default
+ * organization when it is such a membership, else the person's oldest
+ * accepted membership, else none. A row with no organization is still
+ * written. It takes no organization from its callers
+ * (audit-organization.guard.test.ts).
+ */
 async function writeAudit(
   event: AuditEvent,
   userId: string,
-  organizationId: string | null,
   extra: Record<string, unknown>,
 ): Promise<void> {
   try {
+    const { organizationId } = await resolveDefaultOrgAndRole(userId);
     // Reads the INSERT's own result: supabase-js returns a refused write as
     // { error } rather than throwing, so the catch below never saw one.
     await insertAuditRowReported({
@@ -233,10 +236,17 @@ export interface MintedEmailChangeLinks {
 /**
  * Mints both one-time links. Exported for tests: the new-side hash MUST be
  * sha224(newEmail + otp), never the value generateLink returns (see header).
+ *
+ * Both are /auth/confirm links with no `next` (the route fixes where an email
+ * change lands), and both name `userId`, the account whose change it is (`r`,
+ * docket S25), so the page shows its address and the one waiting to replace
+ * it. A link that cannot be signed (no key, or an id that is not a UUID)
+ * fails the request before anything is sent.
  */
 export async function mintEmailChangeLinks(
   currentEmail: string,
   newEmail: string,
+  userId: string,
 ): Promise<MintedEmailChangeLinks> {
   const admin = createAdminClient();
 
@@ -263,11 +273,15 @@ export async function mintEmailChangeLinks(
   // hash computed with the CURRENT email. Compute the stored value ourselves.
   const newHash = sha224Hex(`${newEmail}${otp}`);
 
-  return {
-    currentUrl: emailChangeConfirmUrl(currentHash),
-    newUrl: emailChangeConfirmUrl(newHash),
-    sentAt: new Date().toISOString(),
-  };
+  const currentUrl = confirmLinkUrl({ tokenHash: currentHash, type: 'email_change', userId });
+  const newUrl = confirmLinkUrl({ tokenHash: newHash, type: 'email_change', userId });
+  if (!currentUrl || !newUrl) {
+    throw new ServiceError(
+      'internal_error',
+      'The email change links could not be signed for the account.',
+    );
+  }
+  return { currentUrl, newUrl, sentAt: new Date().toISOString() };
 }
 
 async function deliverEmailChangeLinks(args: {
@@ -406,7 +420,7 @@ export async function requestEmailChange(args: RequestEmailChangeArgs): Promise<
     // event as a real request so an operator can see one user producing a run
     // of `target_exists` rows. Before this, the throw came before writeAudit
     // and a probe left no trace at all.
-    await writeAudit('user.email.change_requested', args.userId, guard.organizationId, {
+    await writeAudit('user.email.change_requested', args.userId, {
       from: currentEmail,
       to: newEmail,
       source: args.source,
@@ -415,10 +429,10 @@ export async function requestEmailChange(args: RequestEmailChangeArgs): Promise<
     throw new ServiceError('conflict', 'This email address cannot be used.');
   }
 
-  const links = await mintEmailChangeLinks(currentEmail, newEmail);
+  const links = await mintEmailChangeLinks(currentEmail, newEmail, args.userId);
   await deliverEmailChangeLinks({ currentEmail, newEmail, links, firstName: guard.firstName });
 
-  await writeAudit('user.email.change_requested', args.userId, guard.organizationId, {
+  await writeAudit('user.email.change_requested', args.userId, {
     from: currentEmail,
     to: newEmail,
     source: args.source,
@@ -457,9 +471,9 @@ export async function resendEmailChange(args: {
     });
   }
 
-  const links = await mintEmailChangeLinks(user.email, pending);
+  const links = await mintEmailChangeLinks(user.email, pending, args.userId);
   await deliverEmailChangeLinks({ currentEmail: user.email, newEmail: pending, links, firstName: guard.firstName });
-  await writeAudit('user.email.change_resent', args.userId, guard.organizationId, {
+  await writeAudit('user.email.change_resent', args.userId, {
     from: user.email,
     to: pending,
     source: args.source,
@@ -476,7 +490,7 @@ export async function cancelEmailChange(args: {
   userId: string;
   source: 'web' | 'mobile';
 }): Promise<{ cancelled: boolean }> {
-  const guard = await loadProfileGuard(args.userId);
+  await loadProfileGuard(args.userId);
   const user = await loadAuthUser(args.userId);
   const pending = user.new_email?.trim() ? user.new_email : null;
   if (!pending) throw new ServiceError('not_found', 'No email change is pending.');
@@ -486,7 +500,7 @@ export async function cancelEmailChange(args: {
   if (error) {
     throw new ServiceError('internal_error', error.message);
   }
-  await writeAudit('user.email.change_cancelled', args.userId, guard.organizationId, {
+  await writeAudit('user.email.change_cancelled', args.userId, {
     from: user.email ?? null,
     to: pending,
     source: args.source,
@@ -510,7 +524,7 @@ export async function reconcileProfileEmail(
   const admin = createAdminClient();
   const { data: profile, error } = await admin
     .from('user_profiles')
-    .select('email, default_organization_id')
+    .select('email')
     .eq('id', userId)
     .maybeSingle();
   if (error || !profile) return { changed: false, email: authEmail, previous: null };
@@ -528,7 +542,7 @@ export async function reconcileProfileEmail(
     void reportError(updateError, { tag: 'email_change.reconcile_failed', level: 'warning' });
     return { changed: false, email: authEmail, previous: current };
   }
-  await writeAudit('user.email.changed', userId, (profile.default_organization_id as string | null) ?? null, {
+  await writeAudit('user.email.changed', userId, {
     before: current,
     after: authEmail,
     source: 'reconcile',

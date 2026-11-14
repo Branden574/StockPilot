@@ -50,6 +50,30 @@ const APPEARANCE = 'app-appearance-design-theme';
 const ONE_DRAFT = 'web-return-request-one-draft';
 const TOASTS = 'web-glass-messages-bottom-right';
 const RETURNS_REQUEST_ID = 'returns-request-email-names-2026-11';
+// Added by docs/whats-new-2026-11-13 (2026-11-13): the Release count, AI Assistant and not found
+// releases, published later, at the top, read or seen. Each reaches an owner with every permission
+// and module or nobody here, so a test that expects an older notice reads or sees them first, and
+// the notice it checks is the one it checked before.
+const NEWER_IDS_1113 = [
+  // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: without it): the emailed links release is published later, at the top, and reaches every member (it has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+  // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: without them): the phone authenticator code and access check releases are published later, at the top; the authenticator code release reaches every member and the access check release reaches whoever can adjust stock, check out rentals or escalate exceptions, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+  'phone-authenticator-code-2026-11',
+  'phone-access-check-retry-2026-11',
+  'emailed-links-name-their-account-2026-11',
+  'cycle-count-already-released-2026-11',
+  'ai-assistant-plain-words-2026-11',
+  'changes-that-did-not-happen-2026-11',
+];
+const NEWER_READS = NEWER_IDS_1113.map((id) => ({
+  release_id: id,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-13T08:18:00Z',
+  read_at: '2026-11-13T08:18:00Z',
+}));
+const NEWER_SEEN: Record<string, boolean> = Object.fromEntries(
+  NEWER_IDS_1113.map((id) => [id, true]),
+);
 const release = () => RELEASES.find((r) => r.id === ID)!;
 const entry = (id: string) => release().entries.find((e) => e.id === id)!;
 
@@ -122,9 +146,27 @@ describe('the phone appearance and returns release: order, status and date', () 
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
     expect(RELEASES[0]?.id).toBe('liquid-glass-2026-11');
-    expect(RELEASES[1]?.id).toBe(ID);
-    expect(RELEASES[2]?.id).toBe(RETURNS_REQUEST_ID);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    expect(RELEASES[7]?.id).toBe(ID);
+    expect(RELEASES[8]?.id).toBe(RETURNS_REQUEST_ID);
+    // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: this release, the newest published): the Release count, AI Assistant and not found releases are published later, directly above it.
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: RELEASES.slice(1, 4), without it): the emailed links release is published later, directly above the Release count release.
+    // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: RELEASES.slice(1, 5), without them): the phone authenticator code and access check releases are published later, directly above the emailed links release.
+    expect(RELEASES.slice(1, 7).map((r) => [r.id, r.status])).toEqual([
+      ['phone-authenticator-code-2026-11', 'published'],
+      ['phone-access-check-retry-2026-11', 'published'],
+      ['emailed-links-name-their-account-2026-11', 'published'],
+      ['cycle-count-already-released-2026-11', 'published'],
+      ['ai-assistant-plain-words-2026-11', 'published'],
+      ['changes-that-did-not-happen-2026-11', 'published'],
+    ]);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
+      // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: the Release count release): the emailed links release is published after it, at the top, the newest published release.
+      // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: the emailed links release): the phone authenticator code release is published after it, at the top, the newest published release.
+      'phone-authenticator-code-2026-11',
+    );
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
       'liquid-glass-2026-11',
     ]);
@@ -155,7 +197,10 @@ describe('the phone appearance and returns release: order, status and date', () 
     // #502 and #504 went live at 19:18Z; the phone update was published about 19:22Z.
     expect(at).toBeGreaterThanOrEqual(Date.parse('2026-11-12T19:18:00Z'));
     expect(at).toBeGreaterThanOrEqual(Date.parse('2026-11-12T19:22:00Z'));
-    for (const r of RELEASES.slice(2)) {
+    // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    for (const r of RELEASES.slice(8)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -289,12 +334,13 @@ describe('the phone appearance and returns release: who is told', () => {
   });
 
   it('is the first notice for every member, and an old phone build lists it first with its title and summary', () => {
+    // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: without them): the Release count, AI Assistant and not found releases are published later, at the top; an owner with every permission and module reads or sees them first (NEWER_READS, NEWER_SEEN), and every notice this test checks is the one it checked before.
     for (const v of [everyone, member, requester, returnsReader, requesterReturnsOff]) {
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
+      expect(buildReleaseList(RELEASES, v, NEWER_READS, null).latestUnread?.id, v.role).toBe(ID);
     }
     // The first link the reader is told about, if any.
     for (const v of [everyone, returnsReader]) {
-      expect(legacyAnnouncementsFor(RELEASES, v, {})[0], v.role).toEqual({
+      expect(legacyAnnouncementsFor(RELEASES, v, NEWER_SEEN)[0], v.role).toEqual({
         id: ID,
         date: '2026-11-12',
         title: release().title,
@@ -303,7 +349,7 @@ describe('the phone appearance and returns release: who is told', () => {
       });
     }
     for (const v of [member, requester]) {
-      expect(legacyAnnouncementsFor(RELEASES, v, {})[0], v.role).toEqual({
+      expect(legacyAnnouncementsFor(RELEASES, v, NEWER_SEEN)[0], v.role).toEqual({
         id: ID,
         date: '2026-11-12',
         title: release().title,

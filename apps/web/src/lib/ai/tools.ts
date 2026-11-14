@@ -5,14 +5,19 @@ import { GoogleGenerativeAI, SchemaType, type FunctionDeclaration, type Response
 import { lookupIsbn as lookupIsbnLib } from '@/lib/books/lookup';
 import { claudeGenerateJsonString } from './claude';
 import { resolveAiProvider } from './provider';
+import { aiProviderFailureKind, ToolRefusal, toolFailureSentence, ToolUnavailableError } from './tool-errors';
 import { dataTag, untrustedDeep, untrustedTag } from './untrusted';
 import { env } from '@/lib/env';
 import { EXPORT_FORBIDDEN_COPY } from '@/lib/exports/export-refusal';
-import { reportError } from '@/lib/error-reporter';
 import { movementActorLabel } from '@/lib/movements/actor-label';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { safeFetch, SsrfBlockedError } from '@/lib/ssrf-guard';
-import { assertPermission, type ServiceContext } from '@/server/services/context';
+import { safeFetch, SsrfBlockedError, SsrfLookupFailedError } from '@/lib/ssrf-guard';
+import {
+  assertPermission,
+  mfaGateError,
+  ServiceError,
+  type ServiceContext,
+} from '@/server/services/context';
 import { fetchAllRowsByIds, reportDegradedRead } from '@/server/services/lib/fetch-by-ids';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { BooksImportService } from '@/server/services/books-import';
@@ -932,7 +937,9 @@ const listSuppliersTool: ToolExecutor = {
       query = query.ilike('name', `%${escaped}%`);
     }
     const { data, error } = await query;
-    if (error) throw new Error(error.message);
+    // The database's text stays on the server (the error's internal detail,
+    // which the report carries); the model reads the generic sentence.
+    if (error) throw new ServiceError('internal_error', error.message);
     const rows = (data ?? []) as Array<{
       id: string;
       name: string;
@@ -971,7 +978,7 @@ function resolveAdjustMovementType(raw: unknown): MovementType {
   ) {
     return raw as MovementType;
   }
-  throw new Error(
+  throw new ToolRefusal(
     `movementType must be one of ${AI_ADJUST_MOVEMENT_TYPES.join(', ')} (got ${JSON.stringify(raw)})`,
   );
 }
@@ -1028,11 +1035,11 @@ const adjustStockTool: ToolExecutor = {
     // values, so an unknown one means the model guessed, and a guessed audit
     // classification is worse than a retry.
     const movementType = resolveAdjustMovementType(args.movementType);
-    if (!itemId) throw new Error('itemId is required');
+    if (!itemId) throw new ToolRefusal('itemId is required');
     if (!Number.isFinite(delta) || delta === 0) {
-      throw new Error('delta must be a non-zero number');
+      throw new ToolRefusal('delta must be a non-zero number');
     }
-    if (!reason) throw new Error('reason is required');
+    if (!reason) throw new ToolRefusal('reason is required');
 
     // Role gate. The service-level assertPermission also enforces this,
     // but checking up front gives a clear, AI-friendly error string
@@ -1100,7 +1107,7 @@ const lookupIsbnTool: ToolExecutor = {
   },
   async execute(args, ctx) {
     const isbn = String(args.isbn ?? '');
-    if (!isbn) throw new Error('isbn is required');
+    if (!isbn) throw new ToolRefusal('isbn is required');
     // Per-user rate limit. The AI calls this tool freely when users
     // upload PDFs of ISBN lists, but each call hits Google Books +
     // Open Library + LoC in parallel. Without a cap, a curious user
@@ -1152,7 +1159,7 @@ const previewBulkBookImportTool: ToolExecutor = {
   },
   async execute(args, ctx) {
     const isbns = Array.isArray(args.isbns) ? args.isbns.map((v) => String(v)) : [];
-    if (isbns.length === 0) throw new Error('isbns must be a non-empty array');
+    if (isbns.length === 0) throw new ToolRefusal('isbns must be a non-empty array');
     const svc = new BooksImportService(ctx);
     const preview = await svc.preview(isbns);
     return preview;
@@ -1198,9 +1205,9 @@ const executeBulkBookImportTool: ToolExecutor = {
     // burning tokens setting up the import.
     assertPermission(ctx, 'items:create');
     const isbns = Array.isArray(args.isbns) ? args.isbns.map((v) => String(v)) : [];
-    if (isbns.length === 0) throw new Error('isbns must be a non-empty array');
+    if (isbns.length === 0) throw new ToolRefusal('isbns must be a non-empty array');
     const warehouseId = String(args.warehouseId ?? '');
-    if (!warehouseId) throw new Error('warehouseId is required');
+    if (!warehouseId) throw new ToolRefusal('warehouseId is required');
     const charterId =
       typeof args.charterId === 'string' && args.charterId.length > 0
         ? args.charterId
@@ -1475,7 +1482,7 @@ const predictRunoutTool: ToolExecutor = {
   },
   async execute(args, ctx) {
     const itemId = String(args.itemId ?? '');
-    if (!itemId) throw new Error('itemId is required');
+    if (!itemId) throw new ToolRefusal('itemId is required');
     const windowDays = Math.min(
       365,
       Math.max(7, Number(args.windowDays) || 90),
@@ -1517,7 +1524,7 @@ const suggestReorderPointTool: ToolExecutor = {
   },
   async execute(args, ctx) {
     const itemId = String(args.itemId ?? '');
-    if (!itemId) throw new Error('itemId is required');
+    if (!itemId) throw new ToolRefusal('itemId is required');
     return suggestReorderPointLib(ctx.supabase, ctx.organizationId, itemId, {
       leadTimeDays:
         typeof args.leadTimeDays === 'number' ? args.leadTimeDays : undefined,
@@ -1558,9 +1565,9 @@ const applyReorderPointTool: ToolExecutor = {
   async execute(args, ctx) {
     const itemId = String(args.itemId ?? '').trim();
     const reorderPoint = Number(args.reorderPoint);
-    if (!itemId) throw new Error('itemId is required');
+    if (!itemId) throw new ToolRefusal('itemId is required');
     if (!Number.isFinite(reorderPoint) || reorderPoint < 0) {
-      throw new Error('reorderPoint must be a number ≥ 0');
+      throw new ToolRefusal('reorderPoint must be a number ≥ 0');
     }
     // Explicit gate at the tool boundary. InventoryService.update() asserts
     // items:update too, but this tool reads the item FIRST (to report old →
@@ -1577,7 +1584,7 @@ const applyReorderPointTool: ToolExecutor = {
     if (args.reorderQuantity !== undefined && args.reorderQuantity !== null) {
       const reorderQuantity = Number(args.reorderQuantity);
       if (!Number.isFinite(reorderQuantity) || reorderQuantity < 0) {
-        throw new Error('reorderQuantity must be a number ≥ 0');
+        throw new ToolRefusal('reorderQuantity must be a number ≥ 0');
       }
       patch.reorderQuantity = reorderQuantity;
     }
@@ -1590,7 +1597,7 @@ const applyReorderPointTool: ToolExecutor = {
     // would only make the reorder paths suggest buying a kit. get() selects
     // every column, so is_bundle is read, not assumed.
     if ((before as { is_bundle?: boolean | null }).is_bundle === true) {
-      throw new Error(
+      throw new ToolRefusal(
         "That item is a kit's pre-assembled stock, which is built from its components and never ordered, so it has no reorder point. Set reorder points on the kit's components instead.",
       );
     }
@@ -1598,7 +1605,7 @@ const applyReorderPointTool: ToolExecutor = {
     // Echo what the DB actually holds — never report the input as applied.
     const updatedRow = updated as { name?: string; reorder_point?: number; reorder_quantity?: number };
     if (Number(updatedRow.reorder_point) !== reorderPoint) {
-      throw new Error('reorder point write did not land — item unchanged');
+      throw new ToolRefusal('The reorder point was not saved. The item is unchanged.');
     }
     return {
       itemId,
@@ -1786,6 +1793,37 @@ const VISION_HOST_ALLOWLIST: ReadonlyArray<string> = (() => {
   return Array.from(hosts);
 })();
 
+/**
+ * What the model reads when identifyFromPhoto will not use an image address.
+ * Fixed words: the answer's status text, its content type and the lookup's
+ * own text stay in the report.
+ */
+const PHOTO_ADDRESS_NOT_ALLOWED =
+  'That image address is not allowed. Attach the photo in the chat instead.';
+const PHOTO_NOT_DOWNLOADED =
+  'The image could not be downloaded from that address. Attach the photo again.';
+const PHOTO_NOT_AN_IMAGE = 'That address did not return an image.';
+const PHOTO_TOO_LARGE = 'That image is too large to read. The limit is 6 MB.';
+
+/**
+ * The address guard's two answers, told apart by type. A failed lookup of the
+ * host is not a refusal (the same address can resolve on the next try, as the
+ * export's image fetch treats it): photo identification is unavailable right
+ * now. Anything else the guard throws is a refusal of the address itself.
+ */
+function photoAddressFailure(e: unknown): Error | null {
+  if (e instanceof SsrfLookupFailedError) {
+    return new ToolUnavailableError('identifyFromPhoto', 'unavailable', { cause: e });
+  }
+  if (e instanceof SsrfBlockedError) return new ToolRefusal(PHOTO_ADDRESS_NOT_ALLOWED, { cause: e });
+  return null;
+}
+
+/** The image host's answer, for the report: the status only. */
+function photoStatus(method: 'HEAD' | 'GET', status: number): Error {
+  return new Error(`image ${method} answered ${status}`);
+}
+
 const identifyFromPhotoTool: ToolExecutor = {
   declaration: {
     name: 'identifyFromPhoto',
@@ -1811,7 +1849,7 @@ const identifyFromPhotoTool: ToolExecutor = {
   async execute(args, ctx) {
     const usingClaude = resolveAiProvider() === 'claude';
     if (usingClaude ? !env.ANTHROPIC_API_KEY : !env.GEMINI_API_KEY) {
-      throw new Error(usingClaude ? 'ANTHROPIC_API_KEY not configured' : 'GEMINI_API_KEY not configured');
+      throw new ToolUnavailableError('identifyFromPhoto', 'not_set_up');
     }
     // MED-18: per-user rate limit. This tool does an outbound fetch AND a
     // multimodal model call, both of which the MODEL can trigger in a loop —
@@ -1825,7 +1863,7 @@ const identifyFromPhotoTool: ToolExecutor = {
     }
     const url = String(args.imageUrl ?? '');
     if (!/^https?:\/\//i.test(url)) {
-      throw new Error('imageUrl must be an http or https URL');
+      throw new ToolRefusal('imageUrl must be an http or https URL');
     }
     const hint = typeof args.hint === 'string' ? args.hint.slice(0, 500) : '';
 
@@ -1858,15 +1896,11 @@ const identifyFromPhotoTool: ToolExecutor = {
             ?.split(';')[0]
             ?.trim();
           if (advertisedType && !advertisedType.startsWith('image/')) {
-            throw new Error(
-              `URL did not return an image (content-type: ${advertisedType})`,
-            );
+            throw new ToolRefusal(PHOTO_NOT_AN_IMAGE);
           }
           const advertisedLen = Number(headRes.headers.get('content-length') ?? 0);
           if (advertisedLen > VISION_MAX_BYTES) {
-            throw new Error(
-              `image too large (${advertisedLen} bytes; max ${VISION_MAX_BYTES})`,
-            );
+            throw new ToolRefusal(PHOTO_TOO_LARGE);
           }
         } else if (
           headRes.status === 401 ||
@@ -1874,7 +1908,9 @@ const identifyFromPhotoTool: ToolExecutor = {
           headRes.status === 404 ||
           headRes.status === 410
         ) {
-          throw new Error(`fetch failed: ${headRes.status} ${headRes.statusText}`);
+          throw new ToolRefusal(PHOTO_NOT_DOWNLOADED, {
+            cause: photoStatus('HEAD', headRes.status),
+          });
         }
         // Other non-2xx (405, 501, 5xx) — many CDNs (incl. some Supabase
         // signed-URL paths) reject HEAD. Fall through to GET.
@@ -1882,17 +1918,12 @@ const identifyFromPhotoTool: ToolExecutor = {
         clearTimeout(headTimer);
       }
     } catch (e) {
-      if (e instanceof SsrfBlockedError) {
-        throw new Error(`imageUrl rejected: ${e.reason}`);
-      }
-      // Re-throw only our own size/type/auth errors — network errors on
-      // HEAD shouldn't block a working GET.
-      if (
-        e instanceof Error &&
-        /image too large|did not return an image|fetch failed: 40|fetch failed: 41/.test(e.message)
-      ) {
-        throw e;
-      }
+      // By type, never by the failure's text. Our own refusals above and the
+      // address guard's answers end the call; a network error on HEAD
+      // shouldn't block a working GET.
+      if (e instanceof ToolRefusal || e instanceof ToolUnavailableError) throw e;
+      const address = photoAddressFailure(e);
+      if (address) throw address;
     }
 
     // Fetch the image with a hard timeout + size cap so a malicious or
@@ -1907,32 +1938,35 @@ const identifyFromPhotoTool: ToolExecutor = {
         hostAllowlist: VISION_HOST_ALLOWLIST,
       });
       if (!res.ok) {
-        throw new Error(`fetch failed: ${res.status} ${res.statusText}`);
+        // A 429 or a 5xx can pass on the next try; any other answer is the
+        // address itself (expired, missing, not ours to read).
+        const cause = photoStatus('GET', res.status);
+        if (res.status === 429 || res.status >= 500) {
+          throw new ToolUnavailableError('identifyFromPhoto', 'unavailable', { cause });
+        }
+        throw new ToolRefusal(PHOTO_NOT_DOWNLOADED, { cause });
       }
       mimeType = res.headers.get('content-type')?.split(';')[0]?.trim() ?? 'image/jpeg';
       if (!mimeType.startsWith('image/')) {
-        throw new Error(`URL did not return an image (content-type: ${mimeType})`);
+        throw new ToolRefusal(PHOTO_NOT_AN_IMAGE);
       }
       // Belt-and-suspenders: if the GET response advertises a length
       // that already exceeds the cap, bail before allocating the
       // ArrayBuffer.
       const advertisedLen = Number(res.headers.get('content-length') ?? 0);
       if (advertisedLen > VISION_MAX_BYTES) {
-        throw new Error(
-          `image too large (${advertisedLen} bytes; max ${VISION_MAX_BYTES})`,
-        );
+        throw new ToolRefusal(PHOTO_TOO_LARGE);
       }
       bytes = await res.arrayBuffer();
       if (bytes.byteLength > VISION_MAX_BYTES) {
-        throw new Error(
-          `image too large (${bytes.byteLength} bytes; max ${VISION_MAX_BYTES})`,
-        );
+        throw new ToolRefusal(PHOTO_TOO_LARGE);
       }
     } catch (e) {
-      if (e instanceof SsrfBlockedError) {
-        throw new Error(`imageUrl rejected: ${e.reason}`);
-      }
-      throw e;
+      if (e instanceof ToolRefusal || e instanceof ToolUnavailableError) throw e;
+      const address = photoAddressFailure(e);
+      if (address) throw address;
+      // A network failure or the timeout: nothing about the address is known.
+      throw new ToolUnavailableError('identifyFromPhoto', 'unavailable', { cause: e });
     } finally {
       clearTimeout(timer);
     }
@@ -1970,23 +2004,29 @@ the title. Confidence rubric:
 ${hint ? `\nUser hint: ${hint}` : ''}`;
 
     let raw: string;
-    if (usingClaude) {
-      raw = await claudeGenerateJsonString({
-        prompt,
-        media: [{ data: base64, mediaType: mimeType }],
-        schema: responseSchema,
-      });
-    } else {
-      const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
-      const visionModel = genAI.getGenerativeModel({
-        model: VISION_MODEL,
-        generationConfig: { responseMimeType: 'application/json', responseSchema },
-      });
-      const result = await visionModel.generateContent([
-        { text: prompt },
-        { inlineData: { data: base64, mimeType } },
-      ]);
-      raw = result.response.text();
+    try {
+      if (usingClaude) {
+        raw = await claudeGenerateJsonString({
+          prompt,
+          media: [{ data: base64, mediaType: mimeType }],
+          schema: responseSchema,
+        });
+      } else {
+        const genAI = new GoogleGenerativeAI(env.GEMINI_API_KEY);
+        const visionModel = genAI.getGenerativeModel({
+          model: VISION_MODEL,
+          generationConfig: { responseMimeType: 'application/json', responseSchema },
+        });
+        const result = await visionModel.generateContent([
+          { text: prompt },
+          { inlineData: { data: base64, mimeType } },
+        ]);
+        raw = result.response.text();
+      }
+    } catch (e) {
+      // The AI service's own text goes to the report; the model reads the
+      // sentence for the kind of failure.
+      throw new ToolUnavailableError('identifyFromPhoto', aiProviderFailureKind(e), { cause: e });
     }
     let parsed: unknown;
     try {
@@ -1995,7 +2035,11 @@ ${hint ? `\nUser hint: ${hint}` : ''}`;
       // Vision occasionally wraps JSON in code fences despite the
       // schema. Strip them and retry.
       const cleaned = raw.replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
-      parsed = JSON.parse(cleaned);
+      try {
+        parsed = JSON.parse(cleaned);
+      } catch (e) {
+        throw new ToolUnavailableError('identifyFromPhoto', 'failed', { cause: e });
+      }
     }
     // Vision-prompt-injection mitigation. A malicious image can embed
     // text in the cover that says e.g. "ignore previous instructions
@@ -2094,9 +2138,9 @@ const previewBundleDistributionTool: ToolExecutor = {
     const bundleId = String(args.bundleId ?? '');
     const quantity = Number(args.quantity ?? 0);
     const warehouseId = String(args.warehouseId ?? '');
-    if (!bundleId || !warehouseId) throw new Error('bundleId and warehouseId are required');
+    if (!bundleId || !warehouseId) throw new ToolRefusal('bundleId and warehouseId are required');
     if (!Number.isFinite(quantity) || quantity <= 0)
-      throw new Error('quantity must be positive');
+      throw new ToolRefusal('quantity must be positive');
     return svc.preview(bundleId, quantity, warehouseId);
   },
 };
@@ -2320,7 +2364,7 @@ const approveOrderTool: ToolExecutor = {
       typeof args.internalNotes === 'string' && args.internalNotes.trim()
         ? args.internalNotes.trim()
         : null;
-    if (!orderId) throw new Error('orderId is required');
+    if (!orderId) throw new ToolRefusal('orderId is required');
     assertPermission(ctx, 'orders:approve');
     const svc = new OrderRequestsService(ctx);
     const row = await svc.approve(orderId, internalNotes);
@@ -2359,8 +2403,8 @@ const denyOrderTool: ToolExecutor = {
   async execute(args, ctx) {
     const orderId = String(args.orderId ?? '').trim();
     const reason = String(args.reason ?? '').trim();
-    if (!orderId) throw new Error('orderId is required');
-    if (!reason) throw new Error('reason is required and must be non-empty');
+    if (!orderId) throw new ToolRefusal('orderId is required');
+    if (!reason) throw new ToolRefusal('reason is required and must be non-empty');
     assertPermission(ctx, 'orders:approve');
     const svc = new OrderRequestsService(ctx);
     const row = await svc.deny(orderId, reason);
@@ -2402,7 +2446,7 @@ const cancelOrderTool: ToolExecutor = {
       typeof args.reason === 'string' && args.reason.trim()
         ? args.reason.trim()
         : null;
-    if (!orderId) throw new Error('orderId is required');
+    if (!orderId) throw new ToolRefusal('orderId is required');
     assertPermission(ctx, 'orders:request');
     const svc = new OrderRequestsService(ctx);
     const row = await svc.cancel(orderId, reason);
@@ -2871,31 +2915,6 @@ const getStaleItemsTool: ToolExecutor = {
 // name/SKU fails to find a concept the user is describing.
 // ──────────────────────────────────────────────────────────────────
 
-/**
- * What the model reads when semantic search fails (S31 review). A tool's
- * result goes into the model's context and its reply goes to the person, so a
- * failure's own text (the database's words about tables and policies, or the
- * AI vendor's quota text) is reported here and never returned.
- */
-export const SEMANTIC_SEARCH_UNAVAILABLE =
-  'Semantic search is unavailable right now. Use searchInventory (keyword search) instead.';
-export const EMBEDDING_BACKFILL_FAILED =
-  'The embedding backfill could not finish. Try again in a few minutes.';
-
-function semanticSearchFailed(
-  code: 'embedding_failed' | 'search_failed',
-  step: 'embed' | 'search' | 'confirm',
-  failure: unknown,
-  ctx: ServiceContext,
-): { error: string; message: string } {
-  void reportError(failure, {
-    tag: 'ai.tool.semantic_search',
-    organizationId: ctx.organizationId,
-    extra: { step },
-  });
-  return { error: code, message: SEMANTIC_SEARCH_UNAVAILABLE };
-}
-
 const searchInventorySemanticTool: ToolExecutor = {
   declaration: {
     name: 'searchInventorySemantic',
@@ -2919,8 +2938,12 @@ const searchInventorySemanticTool: ToolExecutor = {
   },
   async execute(args, ctx) {
     const query = typeof args.query === 'string' ? args.query.trim() : '';
-    if (!query) {
-      return { error: 'query is required' };
+    // Every failure below is thrown (tool-errors.ts): the chat loop reports it
+    // once and hands the model the sentence for its kind. The database's and
+    // the AI service's own words go to the report, never to the model.
+    if (!query) throw new ToolRefusal('query is required');
+    if (!env.GEMINI_API_KEY) {
+      throw new ToolUnavailableError('searchInventorySemantic', 'not_set_up');
     }
     const limit = Math.min(25, Math.max(1, Number(args.limit) || 8));
     const minScore = Math.min(1, Math.max(0, Number(args.minScore) || 0.5));
@@ -2932,7 +2955,9 @@ const searchInventorySemanticTool: ToolExecutor = {
     try {
       vec = await embedQuery(query);
     } catch (err) {
-      return semanticSearchFailed('embedding_failed', 'embed', err, ctx);
+      throw new ToolUnavailableError('searchInventorySemantic', aiProviderFailureKind(err), {
+        cause: err,
+      });
     }
 
     // HI-3, layer 2 (database). Migration 0320 adds `p_org_id` and filters
@@ -2949,7 +2974,7 @@ const searchInventorySemanticTool: ToolExecutor = {
       },
     );
     if (error) {
-      return semanticSearchFailed('search_failed', 'search', error, ctx);
+      throw new ToolUnavailableError('searchInventorySemantic', 'failed', { cause: error });
     }
     const rows = (data ?? []) as Array<{
       id: string;
@@ -2973,7 +2998,7 @@ const searchInventorySemanticTool: ToolExecutor = {
     //
     // Post-filter by asking the DB which of the returned ids are actually in
     // ctx.organizationId. One extra round-trip on ≤25 ids, and it fails CLOSED:
-    // if the confirmation query errors we return the error rather than the
+    // if the confirmation query errors we throw rather than return the
     // unverified rows.
     if (rows.length === 0) return [];
     const { data: owned, error: ownedError } = await ctx.supabase
@@ -2986,7 +3011,7 @@ const searchInventorySemanticTool: ToolExecutor = {
         rows.map((r) => r.id),
       );
     if (ownedError) {
-      return semanticSearchFailed('search_failed', 'confirm', ownedError, ctx);
+      throw new ToolUnavailableError('searchInventorySemantic', 'failed', { cause: ownedError });
     }
     const inOrg = new Set((owned ?? []).map((r) => (r as { id: string }).id));
 
@@ -3008,7 +3033,7 @@ const backfillEmbeddingsTool: ToolExecutor = {
   declaration: {
     name: 'backfillEmbeddings',
     description:
-      "Admin-only. Embed up to `limit` items that don't yet have a vector embedding (used for semantic search). Returns embedded/failed/remaining counts. Call repeatedly until `remaining` is 0. Use when the user asks to 'backfill embeddings', 'enable semantic search for old items', or 'fill in embeddings'.",
+      "Admin-only. Embed up to `limit` items that don't yet have a vector embedding (used for semantic search). Returns embedded/failed/remaining counts. Call repeatedly until `remaining` is 0. When `note` is present the batch stopped early: tell the user the note instead of calling again. Use when the user asks to 'backfill embeddings', 'enable semantic search for old items', or 'fill in embeddings'.",
     parameters: {
       type: SchemaType.OBJECT,
       properties: {
@@ -3017,26 +3042,48 @@ const backfillEmbeddingsTool: ToolExecutor = {
     },
   },
   async execute(args, ctx) {
-    // Admin gate. The model's role-check pattern from other write tools.
+    // The multi-factor gate first, as assertPermission runs it for every other
+    // write tool and as the Settings backfill does
+    // (server/actions/embeddings.ts): this tool checks a role, not a
+    // permission, so it asks the gate itself.
+    if (ctx.mfaRequired && !ctx.mfaSatisfied) throw mfaGateError(ctx);
+    // Admin gate. Thrown, like every other write tool's refusal, so the
+    // attempt is audited as failed.
     if (ctx.role !== 'owner' && ctx.role !== 'admin') {
-      return { error: 'forbidden', message: 'Embedding backfill requires admin role.' };
+      throw new ToolRefusal(
+        'You do not have permission to fill in the search data. Only an owner or admin can.',
+      );
     }
+    if (!env.GEMINI_API_KEY) throw new ToolUnavailableError('backfillEmbeddings', 'not_set_up');
     const { embedItemsBatch } = await import('@/lib/ai/embeddings');
+    let result: Awaited<ReturnType<typeof embedItemsBatch>>;
     try {
-      const result = await embedItemsBatch(ctx, {
+      // stopWhenGeminiFails: the batch stops at the AI service's first refusal
+      // for rate, its first refusal of the key, or a few failed calls in a
+      // row, and says so in `stopped`, so one chat request never waits out a
+      // timeout per item.
+      result = await embedItemsBatch(ctx, {
         limit: Math.min(200, Math.max(1, Number(args.limit) || 50)),
+        stopWhenGeminiFails: true,
       });
-      // The counts only: the batch's first error (for the hourly sweep's
-      // summary) can carry the database's own words.
-      const { embedded, failed, changed, remaining } = result;
-      return { embedded, failed, changed, remaining };
     } catch (e) {
-      void reportError(e, {
-        tag: 'ai.tool.backfill_embeddings',
-        organizationId: ctx.organizationId,
-      });
-      return { error: 'backfill_failed', message: EMBEDDING_BACKFILL_FAILED };
+      // The batch throws only when its own read of the items fails.
+      throw new ToolUnavailableError('backfillEmbeddings', 'failed', { cause: e });
     }
+    // The counts only: the batch's first error (for the hourly sweep's
+    // summary) can carry the database's own words.
+    const { embedded, failed, changed, remaining, stopped } = result;
+    const counts = { embedded, failed, changed, remaining };
+    if (!stopped) return counts;
+    // Stopped early: say why in a fixed sentence, so the model tells the
+    // person instead of calling again.
+    return {
+      ...counts,
+      note: toolFailureSentence(
+        'backfillEmbeddings',
+        stopped === 'gemini_key_invalid' ? 'not_set_up' : 'unavailable',
+      ),
+    };
   },
 };
 
@@ -3113,7 +3160,7 @@ const createScheduleEventTool: ToolExecutor = {
       status: 'scheduled',
     });
     if (!parsed.success) {
-      throw new Error(parsed.error.issues[0]?.message ?? 'Invalid event input');
+      throw new ToolRefusal(parsed.error.issues[0]?.message ?? 'Invalid event input');
     }
     const svc = new ScheduleService(ctx);
     const row = await svc.create(parsed.data);

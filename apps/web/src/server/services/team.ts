@@ -1156,11 +1156,38 @@ export class TeamService {
 }
 
 /**
+ * Marks an accepted invite used so its link cannot be pressed again. A failed
+ * write is reported, not thrown: the person's outcome is the same either way,
+ * and the report shows a link that stays pressable.
+ */
+async function markInviteUsed(
+  admin: ReturnType<typeof createAdminClient>,
+  inviteId: string,
+  organizationId: string,
+  now: string,
+): Promise<void> {
+  const res = await admin.from('organization_invites').update({ accepted_at: now }).eq('id', inviteId);
+  if (res.error) {
+    void reportError(
+      new Error(`invite mark used failed: ${postgrestErrorText(res.error, res)}`),
+      { tag: 'team.invite.accept_mark_used', organizationId, extra: { inviteId } },
+    );
+  }
+}
+
+/**
  * Validates and consumes an invite token, then creates the membership.
  * Uses the admin client because the recipient may not yet have RLS access
  * to organization_invites for this org.
+ *
+ * A person who is already an accepted member of the invite's organization,
+ * or whose row there is the owner's, keeps their membership exactly as it is:
+ * the invite is only marked used and the result says `alreadyMember: true`.
  */
-export async function acceptInviteWithToken(token: string, userId: string) {
+export async function acceptInviteWithToken(
+  token: string,
+  userId: string,
+): Promise<{ organizationId: string; alreadyMember: boolean }> {
   const admin = createAdminClient();
 
   const { data: invite, error: inviteErr } = await admin
@@ -1204,9 +1231,37 @@ export async function acceptInviteWithToken(token: string, userId: string) {
   const charters: Array<string | null> =
     inviteCharterIds.length > 0 ? inviteCharterIds : [charterId];
 
+  // An accepted member, and an owner row whatever its accepted_at, keep their
+  // role, flags, warehouse access and default organization: nothing below is
+  // written for them. A failed read refuses (it is never read as "no
+  // membership"). Any other row that is not accepted yet is completed by the
+  // upsert below, as before.
+  const { data: existingMembership, error: existingErr } = await admin
+    .from('organization_members')
+    .select('id, role, accepted_at')
+    .eq('organization_id', orgId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (existingErr) throw new ServiceError('internal_error', existingErr.message);
+  if (existingMembership?.accepted_at || existingMembership?.role === 'owner') {
+    await markInviteUsed(admin, invite.id as string, orgId, now);
+    await insertAuditRowReported({
+      organization_id: orgId,
+      user_id: userId,
+      event: 'user.invite.accepted',
+      metadata: {
+        invite_id: invite.id,
+        already_member: true,
+        invite_role: role,
+        member_role: existingMembership.role as string,
+      },
+    });
+    return { organizationId: orgId, alreadyMember: true };
+  }
+
   // Create membership (idempotent on unique constraint). all_warehouses is
-  // only included when TRUE so a (theoretical) re-accept of a plain invite
-  // by an existing member never clears a previously granted flag.
+  // only included when TRUE so a re-accept of a plain invite that completes
+  // a not-yet-accepted row never clears a previously granted flag.
   const { error: memberErr } = await admin
     .from('organization_members')
     .upsert(
@@ -1339,7 +1394,7 @@ export async function acceptInviteWithToken(token: string, userId: string) {
   }
 
   // Mark invite accepted.
-  await admin.from('organization_invites').update({ accepted_at: now }).eq('id', invite.id as string);
+  await markInviteUsed(admin, invite.id as string, orgId, now);
 
   // If user has no default org, set this as default.
   const { data: prof2 } = await admin
@@ -1371,5 +1426,5 @@ export async function acceptInviteWithToken(token: string, userId: string) {
     },
   });
 
-  return { organizationId: orgId };
+  return { organizationId: orgId, alreadyMember: false };
 }

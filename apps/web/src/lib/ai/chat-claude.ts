@@ -7,7 +7,6 @@ import { reportError } from '@/lib/error-reporter';
 
 import { TOOL_CATALOG, toolDeclarations } from './tools';
 import {
-  classifyToolErrorMessage,
   executeToolCall,
   MAX_HISTORY_TURNS,
   MAX_TOOL_CALLS_PER_ROUND,
@@ -16,6 +15,7 @@ import {
   runWithUntrustedOrigins,
   scrubDataTags,
   SYSTEM_PROMPT,
+  toolFailureForModel,
   type ChatStreamEvent,
   type ChatTurn,
   type ToolCallRecord,
@@ -236,16 +236,12 @@ export async function* streamChatClaude(
           );
           return { type: 'tool_result', tool_use_id: call.id, content: JSON.stringify(out ?? null) };
         } catch (err) {
-          void reportError(err, {
-            tag: 'ai.tool.claude',
-            extra: { tool: call.name },
-            organizationId: ctx.organizationId,
-          });
-          // Canned safe message — never leak raw DB errors/stack traces.
+          // One report, and one sentence of the app's own for the model
+          // (shared with the Gemini loop).
           return {
             type: 'tool_result',
             tool_use_id: call.id,
-            content: classifyToolErrorMessage(err),
+            content: toolFailureForModel(err, ctx, call.name, 'ai.tool.claude'),
             is_error: true,
           };
         }

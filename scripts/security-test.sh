@@ -830,6 +830,36 @@ PGTAP_TESTS=(
   # own preflight is replayed from the recorded statements. The lock footprint
   # is scripts/db-concurrency/0417_migration_lock_footprint.sh.
   supabase/tests/0417_recovery_codes_need_aal2.test.sql
+  # Cycle count release (0419, docket item S42): release_cycle_count refuses
+  # everyone but a manager of the count's organization on a count with no
+  # assignee (the old check was NULL there and refused no one: any signed-in
+  # account of any organization that knew the id released the count and got
+  # its row back past row level security; a non-manager assignee's second
+  # release after the first went through is refused now too), and refuses
+  # the assignee once has_permission stock:adjust no longer holds for them in
+  # the count's organization (a member removed from it, a disabled account,
+  # an expired act-as seat, a viewer, a member whose stock:adjust was
+  # revoked). Managers are unaffected, with or without stock:adjust, on their
+  # own counts too, and the assignee's rule is that permission, not a rank (a
+  # viewer granted stock:adjust releases their own count, as the app
+  # allows). The restated body is production's with its two added blocks
+  # removed, and taking each block out lets the refused calls through. The
+  # two-session proof is scripts/db-concurrency/0419_release_race.sh; the
+  # lock footprint is scripts/db-concurrency/0419_migration_lock_footprint.sh.
+  supabase/tests/0419_release_cycle_count_assignee_check.test.sql
+  # Permission override updates (0420, docket S62): the database asks for the
+  # same permission the app asks before a restriction changes. The UPDATE
+  # rules of user_permission_overrides and role_permission_overrides ask of
+  # the row being changed what their DELETE rules ask (0322); WITH CHECK
+  # stays 0215's. The lock footprint is
+  # scripts/db-concurrency/0420_migration_lock_footprint.sh.
+  supabase/tests/0420_permission_override_updates_follow_0322.test.sql
+  # Category reads (0421, docket S49): categories_select reads the membership
+  # set stock_movements_select reads and the two category sets
+  # inventory_items_select reads (the same rows for 13 personas), and
+  # user_can_see_item_category answers service_role only. The lock footprint
+  # is scripts/db-concurrency/0421_migration_lock_footprint.sh.
+  supabase/tests/0421_categories_select_category_sets.test.sql
   # Notice audience (0422, docket S36a): the New order request alert goes to
   # the members who hold orders:approve and can write in the order's
   # warehouse, and every notice the database writes goes only to a current
@@ -932,6 +962,17 @@ WEB_TESTS=(
   # other than http or https, a Slack or Teams URL on another host) is final
   # and never sent, while a failed lookup of the host is retried with backoff.
   src/server/services/integration-events.delivery-lookup.test.ts
+  # Slack and Teams show an event's text as text (docket S56): every text field
+  # of every alert card type, and the operator's error report, is escaped for
+  # its channel by one rule (lib/chat-text.ts); a card field is also put on one
+  # line and capped, a report keeps its lines and its length, and the generic
+  # webhook body is the data as it was sent. A web sign-in's device is named in
+  # the organization's alerts by browser and system, from fixed words
+  # (login-device.test.ts, listed with the sign-in notes).
+  src/lib/chat-text.test.ts
+  src/server/services/integration-events.chat-text.test.ts
+  src/lib/error-reporter.chat-text.test.ts
+  src/lib/auth/user-agent.test.ts
   # That routing itself, with the real fetch against loopback servers: plain
   # fetch only for a Storage read on the exact project origin, and it never
   # follows a redirect (the origin's GoTrue verify answers a bogus token with a
@@ -981,6 +1022,7 @@ WEB_TESTS=(
 
   # Permissions and escalation.
   src/server/actions/permissions.override-clear.test.ts
+  src/server/actions/permissions.restriction-rewrite.test.ts
   src/server/actions/permissions.auditor-preset.test.ts
   'src/app/(dashboard)/dashboard/auditor-read-gates.test.tsx'
 
@@ -1006,6 +1048,29 @@ WEB_TESTS=(
   src/lib/auth/api-context.refresh-swap.test.ts
   src/app/api/v1/mobile/snapshot/route.step-up.test.ts
   src/app/api/client-error/route.test.ts
+  # A session that still owes its authenticator code gets no organization
+  # context (docket S43c): requireOrgContext() sends it to /signin/mfa, so
+  # every dashboard page by itself and every Server Action that works for an
+  # organization is held to the rule (the real loader, gate and withContext());
+  # the code page shows its form to exactly that session, and the actions that
+  # run before the code still run; an /api route keeps its own 401 or 403
+  # instead of the page redirect; and two sweeps on the TypeScript syntax tree
+  # hold every Server Action, and every dashboard page and layout, to the gate
+  # or to a reviewed list (src/test/gate-reach.ts reads what each can call).
+  # platform-admin.gates.test.ts and platform-admin.refresh-swap.test.ts
+  # (below) hold the platform-admin gates to the same rule, on the allowlisted
+  # account's own session level. The customer portal is its own identity
+  # funnel (resolvePortalContext, service-role reads): portal.step-up.test.ts
+  # holds it to the rule too, on the real session client, before the
+  # service-role client is made. Each file carries the "Security invariant"
+  # marker.
+  src/lib/auth/session.step-up.test.ts
+  src/server/actions/step-up.actions.test.ts
+  'src/app/(auth)/signin/mfa/page.step-up.test.tsx'
+  src/app/api/v1/me/permissions/route.step-up.test.ts
+  src/server/services/portal.step-up.test.ts
+  src/test/action-step-up.guard.test.ts
+  src/test/page-step-up.guard.test.ts
   # The phone's sign-in and sign-out notes (S5a), the other two routes on the
   # AAL1 allowlist: an aal1 session of an account with an authenticator writes
   # the sign-in row (code owed) and the device note, and its sign-out revokes
@@ -1030,6 +1095,16 @@ WEB_TESTS=(
   # (auth/session-ended) or spend the export budget (export-rate-limit, and
   # export-routes.limit-order below holds every export route to it), and a
   # confirmation link lands where its type says (confirm-landing).
+  # Docket S25 adds the navigate-and-press half: every emailed link carries a
+  # signed reference to the account it is for (confirm-recipient, its server
+  # side confirm-link), which the page checks and names before anyone presses,
+  # and the press counts only after a quiet second in front, with every
+  # address the page names on screen (press-gate).
+  # route.recipient-session runs the real session libraries: a press that
+  # GoTrue answers for another account leaves the browser with no session.
+  # route.email-change-replaced runs the real email-change link builder: a
+  # link GoTrue no longer holds (corrected, completed, resent) names no
+  # address.
   src/lib/auth/cross-site-request.test.ts
   src/lib/auth/api-context.cross-site.test.ts
   src/test/cookie-write-routes.guard.test.ts
@@ -1038,6 +1113,11 @@ WEB_TESTS=(
   src/app/auth/session-ended/route.test.ts
   src/lib/export-rate-limit.test.ts
   src/lib/auth/confirm-landing.test.ts
+  src/lib/auth/confirm-recipient.test.ts
+  src/lib/auth/confirm-link.test.ts
+  src/app/auth/confirm/press-gate.test.ts
+  src/app/auth/confirm/route.recipient-session.test.ts
+  src/app/auth/confirm/route.email-change-replaced.test.ts
   src/lib/auth/platform-admin.test.ts
   src/lib/auth/platform-passphrase.test.ts
   src/lib/auth/api-key.test.ts
@@ -1726,6 +1806,17 @@ WEB_TESTS=(
   src/server/services/notifications.requester-paths.test.ts
   src/server/services/order-requests.member-email.test.ts
   src/server/email/maintenance-resolved.member.test.ts
+
+  # Connector export events (outbox_events) are recorded only by
+  # server/lib/outbox-events.ts, through the service client, after the action
+  # that causes them: a member action in the organization of its checked
+  # context, once that context holds the action's permission; a requester's
+  # return or a public request in the organization the server resolved. The
+  # guard pins the one publish_outbox call to createAdminClient(), every site
+  # to its topic and its permission check, and refuses the function's name
+  # anywhere else on the web, the phone and core.
+  src/test/outbox-publish-sites.guard.test.ts
+  src/server/lib/outbox-events.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1831,6 +1922,21 @@ MOBILE_TESTS=(
   src/lib/session-check.test.ts
   src/lib/supabase.fetch-auth-user.test.ts
   src/lib/install-id.test.ts
+
+  # S43b: the phone asks for the authenticator code before anything of the
+  # account renders or syncs. Whether a session still owes its code is worked
+  # out from the session itself (the token's level and the user's factors), so
+  # the code screen shows with no connection and in the same render the
+  # session arrives in; the sync, the held order requests, the "last seen"
+  # beacon and both outbox drains wait for the code (the drains' own hold is
+  # executed in sync.drain.test.ts and cycle-count-sync.drain.test.ts, listed
+  # under S4); the gate follows the server's own factor list in both
+  # directions and comes down only through a session the server issued. The
+  # wiring test lists every file of the phone that reads the level, the factors
+  # or the gate. All three files carry the "Security invariant" marker.
+  src/lib/mfa-level.test.ts
+  src/lib/mfa-reconcile.test.ts
+  src/lib/code-gate-wiring.test.ts
 
   # The saved workspace records the account that saved it, and only that
   # account's requests, queued work and workspace load use it: another

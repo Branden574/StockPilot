@@ -102,7 +102,14 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whatsnew-phone-1112 (2026-11-12; was: '2026-11-12T08:42:00Z'): the phone appearance and
     // returns release below is dated 2026-11-12T19:30:00Z, so the placeholder is that same minute. If the
     // integrator moves that release's minute, move this one with it.
-    publishedAt: '2026-11-12T19:30:00Z',
+    // Moved again by docs/whats-new-2026-11-13 (2026-11-13; was: '2026-11-12T19:30:00Z'): the Release count
+    // release below is dated 2026-11-13T08:18:00Z, so the placeholder is that same minute.
+    // Moved again by docs/whatsnew-emailed-links-1113 (2026-11-13; was: '2026-11-13T08:18:00Z'): the emailed
+    // links release below is dated 2026-11-13T17:39:00Z, so the placeholder is that same minute.
+    // Moved again by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: '2026-11-13T17:39:00Z'): the
+    // phone authenticator code and access check releases below share one minute, so the placeholder is that
+    // same minute. Set at merge (2026-11-14): the same value as those two releases' publishedAt.
+    publishedAt: '2026-11-14T01:24:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -187,6 +194,418 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'phone-authenticator-code-2026-11',
+    revision: 1,
+    // S43b, release 2 of the authenticator entry (release 1 is
+    // authenticator-code-requests-2026-11). Phone code only: the web half of
+    // #510 (squash d5bcaa5c3, live 2026-11-13 18:05:33Z) changes nothing on
+    // the web; the phone has it from the update published 2026-11-13
+    // 20:08:51Z (group c6f9ebd1, runtime 1.4.0). SET AT MERGE: publishedAt is
+    // the whole minute at or after the first iOS launch of that update (the
+    // integrator's record, not readable from the code); the access check
+    // release below and the Liquid Glass placeholder above take the same
+    // minute.
+    // From the plan's release 2 draft (S43 section 8), reworded where the lab
+    // and simulator walk of 2026-11-13 (head 0fd0250b3) decided it:
+    // - the plan's second entry (the phone after an authenticator is turned
+    //   on on the web) is left out: the walk showed the phone is asked to sign
+    //   in again, which is not a change of this update (release 1's note
+    //   below records that outcome from 2026-11-02);
+    // - the words never say that nothing at all is read before the code: one
+    //   read of the member's own tour state remains (filed as S69). They say
+    //   the organization's data.
+    // Claims checked against the code at 8e1330dcd (paths under
+    // apps/mobile/src): the code is owed when the account has a verified
+    // factor and the session is not at the code's level, read from the
+    // session the phone holds, with or without a connection
+    // (lib/mfa-level.ts header); the data reads, both outbox drains and push
+    // registration wait for it (lib/auth-context.tsx, lib/session-scope.ts,
+    // lib/sync.ts, lib/use-push-notifications.ts:112, :172); the places are
+    // listed by code-gate-wiring.test.ts.
+    // Who is told: every member (no audience), as release 1: whoever uses an
+    // authenticator app. Platform: the mobile app. No link.
+    status: 'published',
+    title: 'The mobile app waits for your authenticator code',
+    summary:
+      "If you use an authenticator app, the mobile app now shows the code screen before your organization's data and waits for your 6-digit code before it loads your items and orders or sends changes waiting on the phone.",
+    // Set at merge: EAS showed the first iOS launch of the update on 2026-11-14 (read 01:22Z).
+    publishedAt: '2026-11-14T01:24:00Z',
+    entries: [
+      {
+        id: 'phone-waits-for-authenticator-code',
+        category: 'fixed',
+        area: 'Mobile app',
+        title:
+          "The mobile app waits for your authenticator code before it loads your organization's data",
+        whatChanged:
+          "If you use an authenticator app, the mobile app now shows the code screen first. It waits for your 6-digit code before it loads your organization's items, orders and other data, before it sends changes waiting on the phone, and before it turns on notifications for the phone. Without a connection, it shows the code screen and waits.",
+        whyItMatters:
+          "The mobile app now asks for your code before it shows or loads your organization's data, as the web app does.",
+        howItAffectsYou:
+          'After you enter your code, the app works as before, and changes that were waiting are sent. Entering the code needs a connection.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'phone-access-check-retry-2026-11',
+    revision: 1,
+    // S26: the web half is #510 (squash d5bcaa5c3, live 2026-11-13
+    // 18:05:33Z): the three phone routes answer a marked 503 before any work
+    // when access cannot be checked. The phone reads the mark from the update
+    // published 2026-11-13 20:08:51Z (group c6f9ebd1, runtime 1.4.0); phones
+    // without it read it as any other server error, so this is told once
+    // phones have it. SET AT MERGE: publishedAt is the same minute as the
+    // authenticator code release above.
+    // The words are the plan's draft (S26 section 7), word for word, except
+    // "Settings > Unsent work", written "Unsent work in Settings" because the
+    // schema allows no markup characters; the plan gave no entry ids or entry
+    // titles, so those are chosen here. The integrator decided to publish it
+    // (items/S26.json integrator_decision_whats_new).
+    // Claims checked against the code at 8e1330dcd (phone paths under
+    // apps/mobile/src):
+    // - Entry 1: "Adjustment not saved" with core's CONTEXT_UNAVAILABLE_COPY,
+    //   "... so nothing was changed. Try again in a moment."
+    //   (lib/item-adjust.ts:137-140, :173; packages/core/src/auth/
+    //   context-unavailable.ts:49-50); an adjustment saved offline stays
+    //   queued and its scope waits for the next pass instead of going to
+    //   Settings > Unsent work (lib/adjust-outbox.ts:179, lib/sync.ts:907-914).
+    //   The route checks stock:adjust (app/api/v1/items/[id]/adjust/route.ts
+    //   in apps/web/src).
+    // - Entry 2: "Could not check out" with "... so nothing was checked out.
+    //   Try again in a moment." (lib/rental-view.ts:110-111, :152-153); the
+    //   route needs the rentals module and rentals:create (server/services/
+    //   rentals.ts:212-213 in apps/web/src).
+    // - Entry 3: "Could not escalate" (app/maintenance/new.tsx:498, under
+    //   apps/mobile) with "... so nothing was saved. Try again in a moment.",
+    //   retryable, so the form stays (lib/exception-escalation.ts:531-532,
+    //   :630-631); the route needs the maintenance_requests module and
+    //   maintenance_requests:submit (app/api/v1/exceptions/[id]/escalate/
+    //   route.ts:24 in apps/web/src).
+    // Who is told: per entry, the permission and module each route checks.
+    // Platform: the mobile app. No links.
+    status: 'published',
+    title: 'Clearer words on the phone when your access cannot be checked',
+    summary:
+      'If StockPilot cannot check your access for a moment, the phone app now says that a stock adjustment, a rental checkout or an escalation was not saved, and asks you to try again. An adjustment saved offline now waits and is sent later, instead of being moved to Unsent work.',
+    // Set at merge: EAS showed the first iOS launch of the update on 2026-11-14 (read 01:22Z).
+    publishedAt: '2026-11-14T01:24:00Z',
+    entries: [
+      {
+        id: 'phone-adjustment-access-not-checked',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'A stock adjustment says it was not saved when your access cannot be checked',
+        whatChanged:
+          'When StockPilot cannot check your access for a moment, a stock adjustment on the phone now says Adjustment not saved and that nothing was changed. An adjustment saved offline stays queued and is sent once the check works again.',
+        whyItMatters:
+          'Before, the app said the adjustment may or may not have been saved, and an adjustment saved offline was moved to Unsent work in Settings, to be entered again by hand.',
+        howItAffectsYou:
+          'This is rare. If you see Adjustment not saved, nothing was changed: try again after a moment.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['stock:adjust'] },
+      },
+      {
+        id: 'phone-rental-checkout-access-not-checked',
+        category: 'fixed',
+        area: 'Rentals',
+        title: 'A rental checkout says nothing was checked out when your access cannot be checked',
+        whatChanged:
+          'A rental checkout refused for the same reason now says nothing was checked out and asks you to try again.',
+        whyItMatters:
+          'Before, it said the checkout may or may not have happened and asked you to check the Rentals list first.',
+        howItAffectsYou:
+          'Rarely, you may see Could not check out. Nothing was checked out: try again after a moment.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['rentals:create'], modules: ['rentals'] },
+      },
+      {
+        id: 'phone-escalation-access-not-checked',
+        category: 'fixed',
+        area: 'Maintenance',
+        title: 'Escalating an exception says nothing was saved when your access cannot be checked',
+        whatChanged:
+          'Escalating an exception refused for the same reason now says nothing was saved and keeps your form so you can try again.',
+        whyItMatters:
+          'Before, it said it was not known whether the request was saved and asked you to check your maintenance requests first.',
+        howItAffectsYou:
+          'Rarely, you may see Could not escalate. Nothing was saved: try again after a moment.',
+        whatToDo: 'No action needed.',
+        audience: {
+          anyPermission: ['maintenance_requests:submit'],
+          modules: ['maintenance_requests'],
+        },
+      },
+    ],
+  },
+  {
+    id: 'emailed-links-name-their-account-2026-11',
+    revision: 1,
+    // S25, first of two releases: #429 (squash ae9768972), web only, live on
+    // production 2026-11-13 17:38:06Z (build 40fed138abc4), so dated 17:39Z,
+    // the whole minute after (the integrator's record, not readable from the
+    // code). Its own release, not an entry added to an earlier release of the
+    // same day: each change published on 2026-11-13 has its own release.
+    // The words are the plan's draft to publish (S25 section 7, amended
+    // 2026-11-12, fix round 2), word for word.
+    // Claims checked against the code at ae9768972 (paths under apps/web/src):
+    // - "shows the email address of the account the link is for, before you
+    //   press the button": the line above the form names the full address for
+    //   a password reset and an invite (app/auth/confirm/route.ts:328-338,
+    //   :421, :517); the links come from the one link writer
+    //   (lib/auth/confirm-link.ts:53), used by the password reset email
+    //   (lib/auth/password-reset-email.ts:62), the email change
+    //   (server/services/email-change.ts:268-269) and the invites that open
+    //   this page (server/services/customers.ts:524, server/actions/
+    //   platform-admin.ts:257).
+    // - "An email change link shows the current address and the new one":
+    //   route.ts:345-347, :501.
+    // - "If this browser is signed in to a different account, the page names
+    //   both": route.ts:355-360 and :371-379, chosen at :506-511, by user id;
+    //   a browser signed in as the link's own account gets no notice (:507),
+    //   which is the howItAffectsYou sentence on it.
+    // - "The button becomes active a moment after the page opens": the
+    //   button is disabled in the markup (route.ts:431) and enabled by the
+    //   page's script after one quiet second (app/auth/confirm/press-gate.ts:
+    //   75, PRESS_GATE_QUIET_MS 1000).
+    // - "The page now needs JavaScript": the noscript line (route.ts:382-383,
+    //   :425); the button stays disabled without the script.
+    // Not said: a link emailed before this release shows the earlier page
+    // until it expires, within the hour.
+    // It supersedes the howItAffectsYou sentence of the published entry
+    // reset-and-email-change-pages-name-your-account ("the notice names your
+    // own address"): a link emailed from this release on names its account,
+    // and a browser signed in as that account is shown no notice. That
+    // entry's published text is left as it is.
+    // Who is told: every member (no audience): every member can reset a
+    // password or change their email. No link: the page opens from an email.
+    status: 'published',
+    title: 'Emailed links show which account they are for',
+    summary:
+      'When you open a password reset, email change or invite link from StockPilot, the page now shows the email address of the account the link is for, before you press the button. The button becomes active a moment after the page opens. The page now needs JavaScript: if it is turned off in your browser, the page says so and the button stays inactive.',
+    publishedAt: '2026-11-13T17:39:00Z',
+    entries: [
+      {
+        id: 'emailed-links-name-their-account',
+        category: 'improved',
+        area: 'Account',
+        title: 'Emailed links show which account they are for',
+        whatChanged:
+          'When you open a password reset, email change or invite link from StockPilot, the page now shows the email address of the account the link is for, before you press the button. An email change link shows the current address and the new one. If this browser is signed in to a different account, the page names both. The button becomes active a moment after the page opens. The page now needs JavaScript: if it is turned off in your browser, the page says so and the button stays inactive.',
+        whyItMatters: 'You can check that a link is for your own account before you use it.',
+        howItAffectsYou:
+          'When you open your own link, the page shows your own address: press the button as before, once it is active. If this browser is already signed in as you, the page no longer warns you about your own link.',
+        whatToDo:
+          'If the page shows an address that is not yours, close it without pressing the button. If the page says it needs JavaScript, turn JavaScript on for StockPilot or open the link from your email in another browser.',
+      },
+    ],
+  },
+  {
+    id: 'cycle-count-already-released-2026-11',
+    revision: 1,
+    // #444 (squash 88c8382f2, web live 2026-11-13 07:54Z) and its migration
+    // 0419 (pushed to production 08:17:32Z). The words need both: the server
+    // answer below follows the database function's refusal, so the release is
+    // dated 08:18Z, the whole minute after the push. Both minutes are the
+    // integrator's record, not readable from the code.
+    // Claims checked against the code at 88c8382f2 (web paths under
+    // apps/web/src, phone paths under apps/mobile/src):
+    // - "This count was already released.": CycleCountsService.release answers
+    //   a conflict with that sentence after the function refused and
+    //   countIsAlreadyReleased finds the count in progress with no assignee
+    //   (server/services/cycle-counts.ts:750-755); the phone's route sends it
+    //   as 409 with the sentence as `message` (app/api/v1/cycle-counts/[id]/
+    //   release/route.ts:68-80).
+    // - "by you a moment earlier or by a manager": the 0419 header (supabase/
+    //   migrations/0419_release_cycle_count_assignee_check.sql:58-69): an
+    //   assignee who is not a manager, after a manager released the count, or
+    //   after their own release went through and its answer was lost; before,
+    //   a silent success and a second "released" audit row. No audit row now:
+    //   the conflict is thrown before audit() (cycle-counts.ts:754, :763).
+    // - "the release sheet shows ... and stays open": the sheet shows the
+    //   server's sentence as sent and only a success calls onReleased
+    //   (components/cycle-count-release-sheet.tsx:117-129, :232-235), pinned by
+    //   components/cycle-count-release-sheet.refusal.test.ts. The phone needs
+    //   no update for it. The web has no Release.
+    // - "Managers release counts as before": a manager's call goes through as
+    //   before (0419 header :56-57).
+    // Not said: the case where a manager reassigned the count to someone else
+    // (the answer is the earlier refusal, as before).
+    // Who is told: staff and viewers who can adjust stock where Cycle counts
+    // is on (managers and above are not refused, so nothing changes for them).
+    // The link is the page every sibling cycle count entry opens; it checks
+    // cycle_counts:read or stock:adjust where the module is on
+    // (app/(dashboard)/dashboard/cycle-counts/page.tsx:81, :90).
+    status: 'published',
+    title: 'Release count says when a count was already released',
+    summary:
+      'In the mobile app, if a count you are releasing was already released, by you a moment earlier or by a manager, Release now says so instead of appearing to work again. The release sheet shows "This count was already released." and stays open.',
+    publishedAt: '2026-11-13T08:18:00Z',
+    entries: [
+      {
+        id: 'release-count-already-released',
+        category: 'fixed',
+        area: 'Cycle counts',
+        title: 'Release count says when a count was already released',
+        whatChanged:
+          'In the mobile app, if a count you are releasing was already released, by you a moment earlier or by a manager, Release now says so instead of appearing to work again.',
+        whyItMatters: 'You can see that the count is already free and that nothing was done twice.',
+        howItAffectsYou:
+          'In the mobile app, the release sheet shows "This count was already released." and stays open. Managers release counts as before.',
+        whatToDo: 'No action needed. If you see it, close the sheet.',
+        link: { href: '/dashboard/cycle-counts', label: 'Open Cycle counts' },
+        audience: {
+          roles: ['staff', 'viewer'],
+          anyPermission: ['stock:adjust'],
+          modules: ['cycle_counts'],
+        },
+      },
+    ],
+  },
+  {
+    id: 'ai-assistant-plain-words-2026-11',
+    revision: 1,
+    // #509 (squash ac6bd3719), live on production 2026-11-13 07:07:42Z, so
+    // dated 07:08Z (the integrator's record, not readable from the code).
+    // From the reviewed draft of that change, release 1, entries 1 and 2. Its
+    // second release (the Slack and Teams alert text) is not published here:
+    // it waits on a hand check.
+    // Entry 3 of that draft (filling in search data) is left out: almost
+    // nobody would see what it describes.
+    // Claims checked against the code at 88c8382f2 (paths under apps/web/src):
+    // - Entry 1: a search by meaning, the search data fill and the photo
+    //   reading each have three fixed sentences, not set up, not available
+    //   right now, could not finish (lib/ai/tool-errors.ts:30, :36-59), and
+    //   the model reads that sentence (lib/ai/chat.ts:119). Seven of the nine
+    //   say what to try (search by name, SKU or barcode, or try again); the two
+    //   "not set up" sentences of the search data and the photo do not, hence
+    //   "when there is something to try". Not said: that the assistant then
+    //   searches by name, SKU or barcode by itself (the production check did
+    //   not show it).
+    // - Entry 2: the classifier (lib/ai/chat.ts:118-169): a tool's own refusal
+    //   (ToolRefusal, :123) and a service's validation_error (:127-130) give
+    //   their own words; "not enough stock for that adjustment" is
+    //   InventoryService's validation_error (server/services/inventory.ts:6885);
+    //   the outside-text refusal names a public form submission, an outside
+    //   lookup or text read from an image and asks for the values from the
+    //   person (lib/ai/untrusted.ts:325-331; chat.ts:120-121); a permission
+    //   refusal (:124, :140), the multi-factor refusal (:136-139, sentences
+    //   :75-78), not found (:132, :56) and a clash with what is saved (:134,
+    //   :66-67) each give their own sentence.
+    // Who is told: who can open the AI Assistant, the gate of the linked page
+    // (app/(dashboard)/dashboard/ai/page.tsx:25, :33), as every sibling AI
+    // Assistant entry.
+    status: 'published',
+    title: 'The AI Assistant says plainly why it could not search or make a change',
+    summary:
+      'When the AI Assistant cannot search by what an item is, fill in its search data, read a photo or make a change you asked for, it says why in plain words and, when there is something to try, what to try next.',
+    publishedAt: '2026-11-13T07:08:00Z',
+    entries: [
+      {
+        id: 'ai-assistant-plain-failure-sentences',
+        category: 'fixed',
+        area: 'AI Assistant',
+        title: 'The AI Assistant says in one sentence why a search or a photo did not work',
+        whatChanged:
+          'When the AI Assistant cannot search by what an item is, fill in its search data or read a photo, it says why in one sentence (not set up, not available right now, or could not finish) and, when there is something to try, what to try next.',
+        whyItMatters:
+          'The sentence tells you whether to try again, wait a few minutes or ask an admin.',
+        howItAffectsYou:
+          'Answers that work are the same. When something cannot be done, the answer says what happened.',
+        whatToDo:
+          'No action needed. If it keeps saying a feature is not available, tell us through Support.',
+        link: { href: '/dashboard/ai', label: 'Open AI Assistant' },
+        audience: { anyPermission: ['items:update'], modules: ['ai'] },
+      },
+      {
+        id: 'ai-assistant-says-why-refused',
+        category: 'fixed',
+        area: 'AI Assistant',
+        title: 'The AI Assistant says why it did not make a change',
+        whatChanged:
+          'When the AI Assistant does not make a change you asked for, it tells you why. When one of its own checks stops the change, or what you asked for is not valid, it gives the reason: for example, an item does not have enough stock for that adjustment, or a value came from outside your team (a public request form, an outside lookup or text read from a photo), so you need to type it yourself. When your permissions, multi-factor sign-in, a record that is not there or a clash with what is already saved stops the change, it says which one.',
+        whyItMatters:
+          'The reason tells you whether to change what you asked for, ask an admin, set up multi-factor sign-in or look at the record again.',
+        howItAffectsYou:
+          'The changes it can make are the same. When it does not make one, it tells you why.',
+        whatToDo: 'When it asks, type the values yourself, then confirm.',
+        link: { href: '/dashboard/ai', label: 'Open AI Assistant' },
+        audience: { anyPermission: ['items:update'], modules: ['ai'] },
+      },
+    ],
+  },
+  {
+    id: 'changes-that-did-not-happen-2026-11',
+    revision: 1,
+    // #507 (squash 968435cad), web only, live on production 2026-11-13
+    // 04:08:17Z, so dated 04:09Z (the integrator's record, not readable from
+    // the code). From the reviewed draft of that change.
+    // Claims checked against the code at 88c8382f2 (paths under apps/web/src;
+    // screen names from packages/core/src/modules/registry.ts):
+    // - Each action answers not found when its write changed no row, before
+    //   any audit row: bundle archive and restore (server/services/
+    //   bundles.ts:831, :855; the screen is Bundles, registry.ts:402, so the
+    //   draft's "kit" is "bundle"); warehouse save (warehouses.ts:337, :375;
+    //   Admin, Warehouses :203); charter save (charters.ts:247, :264; Admin,
+    //   Charters :319); tag delete (tags.ts:179; Tags :147); unit conversion
+    //   delete (uom-conversions.ts:185; Admin, UoM conversions :287); vendor
+    //   item mapping delete (vendor-item-mappings.ts:226; Admin, Vendor
+    //   mappings :286); schedule event delete (schedule.ts:774, :786;
+    //   Schedule :531); a warehouse's Open or Closed under Public-orderable
+    //   warehouses in Settings, Public requests (order-requests.ts:5329;
+    //   components/settings/public-requests-global-settings.tsx:71-79, :146);
+    //   invite revoke (team.ts:361; Team, Pending invites,
+    //   components/team/team-manager.tsx:233); API key revoke (api-keys.ts:126;
+    //   Settings, Integrations, API keys, components/settings/
+    //   api-keys-panel.tsx:86). Each screen shows the message
+    //   (archive-bundle-button.tsx:28, api-keys-panel.tsx:76, and the others'
+    //   error lines).
+    // - "the audit log": the screen's own name (registry.ts:294); the draft's
+    //   "activity log" is that screen.
+    // - Left out of the draft: switching a bundle on or off (BundlesService.
+    //   setActive has no screen that calls it), and the sentence on removing a
+    //   price, a catalog item or a portal user (the field was over its 600
+    //   characters; the screen is named Accounts, not Customers).
+    // Who is told: whoever can take one of these actions, by the permission
+    // each checks (bundles:manage, organization:update for warehouses,
+    // charters and the public request switch, categories:manage for tags,
+    // purchase_orders:manage for vendor mappings, schedule:manage,
+    // members:invite); unit conversions and API keys are on owner and admin
+    // screens, and owners and admins hold organization:update. No link: the
+    // entry spans many pages.
+    status: 'published',
+    title: 'A success message means the change was saved',
+    summary:
+      'When a bundle, warehouse, charter, tag, unit conversion, vendor item mapping, schedule event, invite or API key is no longer there to change, you are told it cannot be found.',
+    publishedAt: '2026-11-13T04:09:00Z',
+    entries: [
+      {
+        id: 'not-found-when-nothing-to-change',
+        category: 'fixed',
+        area: 'Web app',
+        title: '"Not found" when there is nothing to change',
+        whatChanged:
+          'These actions check that the change was saved before they say so: archiving or restoring a bundle, saving a warehouse or a charter, deleting a tag, a unit conversion, a vendor item mapping or a schedule event, opening or closing a warehouse for public requests, revoking an invite and revoking an API key. If the thing is no longer there, for example because someone else removed it a moment earlier or the page was left open from another organization, you are told it cannot be found.',
+        whyItMatters:
+          'A success message means the change was saved, and the audit log lists only changes that happened.',
+        howItAffectsYou:
+          'Everything you do in the organization you are working in works as before. When the thing you are changing is no longer there, you see "not found" and nothing is changed.',
+        whatToDo:
+          'If you see it, refresh the page. If you belong to more than one organization, switch back to the one the page belongs to and try again.',
+        audience: {
+          anyPermission: [
+            'bundles:manage',
+            'organization:update',
+            'categories:manage',
+            'purchase_orders:manage',
+            'schedule:manage',
+            'members:invite',
+          ],
+        },
       },
     ],
   },

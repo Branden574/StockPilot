@@ -55,18 +55,21 @@ export async function inviteMemberAction(
   // of truth — owner is only reassigned via the ownership-transfer flow.
 
   try {
+    // The invitation is created in the organization the context resolves from
+    // the inviter's accepted memberships, and the email names that same
+    // organization (never the profile's default read on its own).
+    const ctx = await withContext();
+    const svc = new TeamService(ctx);
     const session = await requireSession();
-    const supabase = await createClient();
 
-    const { data: orgRow } = await supabase
+    const { data: orgRow } = await ctx.supabase
       .from('organizations')
       .select('name')
-      .eq('id', session.defaultOrganizationId ?? '')
+      .eq('id', ctx.organizationId)
       .maybeSingle();
     const orgName = (orgRow?.name as string | undefined) ?? 'StockPilot';
     const inviter = session.fullName ?? session.email;
 
-    const svc = await TeamService.forCurrentUser();
     const result = await svc.invite({
       email: parsed.data.email,
       role: parsed.data.role as Exclude<Role, 'owner'>,
@@ -490,14 +493,18 @@ export async function transferOwnershipAction(input: {
   }
 }
 
-export async function acceptInviteAction(input: AcceptInviteInput): Promise<ActionResult<{ organizationId: string }>> {
+export async function acceptInviteAction(
+  input: AcceptInviteInput,
+): Promise<ActionResult<{ organizationId: string; alreadyMember: boolean }>> {
   const parsed = acceptInviteSchema.safeParse(input);
   if (!parsed.success) return err('validation_error', 'Invalid token');
   try {
     const session = await requireSession();
     const result = await acceptInviteWithToken(parsed.data.token, session.userId);
     revalidatePath('/dashboard');
-    return ok({ organizationId: result.organizationId });
+    // alreadyMember: the person was already a member, and their membership
+    // was left as it was (the button says so instead of "Welcome").
+    return ok({ organizationId: result.organizationId, alreadyMember: result.alreadyMember });
   } catch (e) {
     return toResult(e);
   }

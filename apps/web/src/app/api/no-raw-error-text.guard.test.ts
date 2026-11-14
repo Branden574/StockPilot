@@ -68,16 +68,44 @@ import { describe, expect, it } from 'vitest';
  *                                   that is returned, thrown or passed to err()
  *                                   or ok(), and as err()'s message; in every
  *                                   scope, as the words of a ServiceError other
- *                                   than internal_error or of a ForbiddenError
+ *                                   than internal_error, of a ForbiddenError
  *                                   (actions and routes answer those as they
- *                                   are); a name that holds an error counts
- *                                   there too (S31 review)
+ *                                   are) or of a ToolRefusal (the AI chat's
+ *                                   model reads those as they are, S30); a
+ *                                   name that holds an error counts there too
+ *                                   (S31 review)
  *   .catch(nonErrorText), .map(rawErrorText), const d = rawErrorText
  *                                   an error-to-text helper used as a value,
  *                                   not called (S31 review)
  *   'Server is missing FOO_KEY'     a literal naming a server setting (FOO_KEY,
  *                                   FOO_SECRET, FOO_TOKEN, FOO_PASSWORD, .env,
  *                                   .env.local, env vars, Vercel env)
+ *
+ * Also counted (S30 review):
+ *
+ *   error.hint, error.details, e.internalDetail
+ *                                   what else an error says about itself: in
+ *                                   the words of a ServiceError other than
+ *                                   internal_error, of a ForbiddenError or of
+ *                                   a ToolRefusal in every scope, and anywhere
+ *                                   under lib/ai. internalDetail is the
+ *                                   database's text S13 keeps on the server,
+ *                                   so it counts on any value, proved an app
+ *                                   error or not
+ *   return { error }, return { ok: false, failure: e }, throw { ...err },
+ *   return { note: res.error }      under lib/ai only: a whole error, or an
+ *                                   error field, in an object that is returned
+ *                                   or thrown. What a tool returns is the
+ *                                   model's input, and the model's reply is
+ *                                   answered
+ *
+ * WHAT THE MODEL CAN READ OF A REFUSAL (S30 review), the last part of this
+ * file: the AI chat tells the model about a failed tool by the error's type
+ * and code, and passes a service's own words for validation_error only. Every
+ * validation_error message an AI tool can reach that is not a fixed sentence
+ * is listed there with what is put into it and why, with the ServiceError
+ * codes the tools can reach. Reachability is read with TypeScript's type
+ * checker, from every function in lib/ai/tools.ts.
  *
  * WHAT DOES NOT COUNT: text that goes only to the server, or becomes a yes or
  * no. Inside `new Error(...)` (it is only thrown or reported, and every catch
@@ -86,8 +114,9 @@ import { describe, expect, it } from 'vitest';
  * `console.*(...)`; tested with `.includes()`, `.startsWith()`, a RegExp's
  * `.test()`, `===`, `.length`, `!` or `typeof`, or as a condition (`if`,
  * `while`, the test of `?:`); read after `instanceof ServiceError`,
- * `instanceof ForbiddenError`, `instanceof PermissionsUnavailableError` or
- * `instanceof AccountStatusUnavailableError` (the app wrote those words); or
+ * `instanceof ForbiddenError`, `instanceof PermissionsUnavailableError`,
+ * `instanceof AccountStatusUnavailableError` or `instanceof ToolRefusal` (the
+ * app wrote those words); or
  * held in a const (or a destructured name) whose every use is one of these.
  * The left side of `=` is a write, never a read.
  *
@@ -125,12 +154,8 @@ const ALLOWED: Record<string, { lines: number; why: string }> = {
     why: "namesResult.error: parseDisplayNames' own sentences about the file names the caller sent, never an error's text",
   },
   'lib/ai/embeddings.ts': {
-    lines: 5,
-    why: "errorText's body and its three callers, read here through the AI tools (S31 review): the text feeds console lines and a batch's firstError, which only the hourly sweep cron answers (to the CRON_SECRET holder); the backfill tool answers counts only, and a failed query embedding is reported, never handed to the model",
-  },
-  'lib/ai/chat.ts': {
-    lines: 1,
-    why: "classifyToolErrorMessage: what a failed AI tool call tells the model (not an API answer): a fixed sentence, except a validation message (a ServiceError or the tool's own argument check), passed on at most 200 characters",
+    lines: 6,
+    why: "errorText's body and its three callers, read here through the AI tools (S31 review), and the batch result that carries firstError whole (S30 review): the text feeds console lines and a batch's firstError, which only the hourly sweep cron answers (to the CRON_SECRET holder); the backfill tool picks the counts out of the result and never returns it, and a failed query embedding is reported, never handed to the model",
   },
   'lib/auth/public-api.ts': {
     lines: 1,
@@ -265,8 +290,8 @@ const ALLOWED_SERVICES: Record<string, { lines: number; why: string }> = {
     why: "failureMessage answers a ServiceError's words after its non-ServiceError return; shortfallPoRpcError matches our RAISE text",
   },
   'server/services/order-requests.ts': {
-    lines: 6,
-    why: "orderGuardRefusal answers only the guard's own sentences; the needed-by mapper matches our RAISE text; three go to the local report(); one is a ServiceError's words",
+    lines: 7,
+    why: "orderGuardRefusal answers only the guard's own sentences; the needed-by mapper matches our RAISE text; three go to the local report(); one is a ServiceError's words; addLinesRefusal words a closed order with its status, the DETAIL of our own order_closed refusal (0413), never an error's text (S30 review)",
   },
   'server/services/public-catalog.ts': {
     lines: 2,
@@ -480,15 +505,30 @@ function serviceScope(): string[] {
 const ERROR_NAME = /^(?:e|err|error|ex)$|(?:Err|Error|err|error)$/;
 const TEXT_PROPERTIES = new Set(['message', 'stack']);
 /**
+ * What else an error says about itself (S30 review): a database error's
+ * `hint` and `details`, and a ServiceError's `internalDetail`, the database's
+ * text that S13 keeps on the server. They count as the error's text in the
+ * words of an app error (every scope) and anywhere under lib/ai. Reading
+ * `hint` or `details` off a proved app error does not count (a ServiceError's
+ * `details` is the object the app built); `internalDetail` always does, on
+ * any value.
+ */
+const DETAIL_PROPERTIES = new Set(['hint', 'details']);
+const SERVER_ONLY_PROPERTY = 'internalDetail';
+/**
  * Classes whose message the app wrote (ServiceError: generic for internal_error,
- * S13). The last two pass one fixed sentence to super and take no argument
- * (pinned below).
+ * S13). PermissionsUnavailableError and AccountStatusUnavailableError pass one
+ * fixed sentence to super and take no argument (pinned below). ToolRefusal
+ * (lib/ai/tool-errors.ts, S30) is an AI chat tool's refusal in the tool's own
+ * words, which the model reads: it is built only under lib/ai (pinned below),
+ * and its words are held to the same rule as a ServiceError's.
  */
 const APP_ERRORS = new Set([
   'ServiceError',
   'ForbiddenError',
   'PermissionsUnavailableError',
   'AccountStatusUnavailableError',
+  'ToolRefusal',
 ]);
 const BUILTIN_ERRORS = new Set(['Error', 'TypeError', 'RangeError', 'SyntaxError']);
 /**
@@ -1133,15 +1173,53 @@ function isWriteTarget(node: ts.Node): boolean {
  */
 type Scope = 'api' | 'actions' | 'services';
 
+/**
+ * A module under lib/ai. What it returns can be a tool's result, which the
+ * model reads as it is, so the API scope holds it to three more rules (S30
+ * review): an error placed whole into a returned or thrown object, an error
+ * field as a returned object's value, and an error's `hint`, `details` and
+ * `internalDetail` as its text.
+ */
+function isAiModule(fileName: string): boolean {
+  return fileName.startsWith(AI + path.sep);
+}
+
+/** `x.hint`, `x.details` of an error, or `x.internalDetail` of anything: a read, not a test. */
+function isDetailRead(node: ts.Node): node is ts.PropertyAccessExpression {
+  if (!ts.isPropertyAccessExpression(node) || isWriteTarget(node)) return false;
+  if (node.name.text === SERVER_ONLY_PROPERTY) return !staysOnServer(node);
+  return (
+    DETAIL_PROPERTIES.has(node.name.text) &&
+    isError(node.expression) &&
+    !narrowedToAppError(node, nameOf(node.expression)) &&
+    !staysOnServer(node)
+  );
+}
+
 /** The lines of `source` that answer, or may answer, an error's own text. */
 function hitsIn(fileName: string, source: string, scope: Scope = 'api'): Hit[] {
   const sf = parse(fileName, source);
+  const ai = scope === 'api' && isAiModule(fileName);
   const lines = new Set<number>();
   const hit = (node: ts.Node) =>
     lines.add(sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1);
   const text = (node: ts.Node, error: ts.Expression) => {
     if (isWriteTarget(node)) return;
     if (!narrowedToAppError(node, nameOf(error)) && !staysOnServer(node)) hit(node);
+  };
+  /** An object literal whose values are answered: a JSON body, or what an AI module returns. */
+  const isAnswer = (literal: ts.Node) =>
+    scope === 'api'
+      ? isJsonAnswer(literal) || (ai && isReturnedAnswer(literal))
+      : isReturnedAnswer(literal);
+  /** The words of an app error: an error field, a name that holds an error, or what else an error says. */
+  const words = (value: ts.Expression) => {
+    field(value);
+    const inside = (node: ts.Node) => {
+      if (isDetailRead(node)) hit(node);
+      ts.forEachChild(node, inside);
+    };
+    inside(value);
   };
   const field = (value: ts.Expression) => {
     for (const side of answerSides(value)) {
@@ -1154,12 +1232,7 @@ function hitsIn(fileName: string, source: string, scope: Scope = 'api'): Hit[] {
   };
   const visit = (node: ts.Node) => {
     // An error-named field used as answer text (S31).
-    if (
-      ts.isPropertyAssignment(node) &&
-      (scope === 'api' ? isJsonAnswer(node.parent) : isReturnedAnswer(node.parent))
-    ) {
-      field(node.initializer);
-    }
+    if (ts.isPropertyAssignment(node) && isAnswer(node.parent)) field(node.initializer);
     if (
       scope !== 'api' &&
       ts.isCallExpression(node) &&
@@ -1173,15 +1246,20 @@ function hitsIn(fileName: string, source: string, scope: Scope = 'api'): Hit[] {
     // than internal_error, and a ForbiddenError (S31 review).
     if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.arguments) {
       const [first, second] = node.arguments;
-      if (node.expression.text === 'ForbiddenError' && first) field(first);
+      if (node.expression.text === 'ForbiddenError' && first) words(first);
+      // An AI chat tool's refusal is read by the model as it is (S30).
+      if (node.expression.text === 'ToolRefusal' && first) words(first);
       if (
         node.expression.text === 'ServiceError' &&
         second &&
         !(first && ts.isStringLiteralLike(first) && first.text === 'internal_error')
       ) {
-        field(second);
+        words(second);
       }
     }
+    // Under lib/ai, what else an error says about itself is its text wherever
+    // it is read (S30 review).
+    if (ai && isDetailRead(node)) hit(node);
     // An error-to-text helper used as a value (S31 review).
     if (isHelperReference(node) && !staysOnServer(helperUse(node))) hit(node);
     // A server setting's name in text that can be answered (S31).
@@ -1239,7 +1317,9 @@ function hitsIn(fileName: string, source: string, scope: Scope = 'api'): Hit[] {
         isError(node.initializer)) ||
       (ts.isSpreadAssignment(node) && isError(node.expression))
     ) {
-      if (isJsonAnswer(node.parent)) hit(node);
+      // A whole error in an answer: a JSON body, or (under lib/ai) an object
+      // that is returned or thrown.
+      if (isJsonAnswer(node.parent) || (ai && isReturnedAnswer(node.parent))) hit(node);
     } else if (ts.isObjectBindingPattern(node)) {
       const owner = node.parent;
       const fromError =
@@ -1682,5 +1762,1148 @@ describe("Server Actions and services never answer an error's own text (S31)", (
       expect(superCalls[0]!.arguments.length, name).toBe(1);
       expect(ts.isStringLiteralLike(superCalls[0]!.arguments[0]!), name).toBe(true);
     }
+  });
+});
+
+describe("an AI chat tool's refusal is the tool's own words (S30)", () => {
+  /** `body` as a tool's execute, one statement per line from line 2. */
+  const inTool = (body: string[]) =>
+    ['async function execute(args, ctx) { try { await work(); } catch (e) {', ...body, '} }'].join(
+      '\n',
+    );
+
+  it("a refusal built from an error's text or an error field counts (control: one per line)", () => {
+    const sample = inTool([
+      'throw new ToolRefusal(e.message);',
+      'throw new ToolRefusal(`not saved: ${e}`);',
+      'throw new ToolRefusal(String(e));',
+      "throw new ToolRefusal(write.error ?? 'not saved');",
+      'throw new ToolRefusal(rawErrorText(e));',
+    ]);
+    expect(hitsIn('sample.ts', sample).map((hit) => hit.line)).toEqual([2, 3, 4, 5, 6]);
+  });
+
+  it("fixed words, a refusal's own message once it is proved one, and a cause kept for the report do not count (control)", () => {
+    const sample = inTool([
+      "throw new ToolRefusal('itemId is required');",
+      "throw new ToolRefusal('That image address is not allowed.', { cause: e });",
+      "throw new ToolUnavailableError('identifyFromPhoto', 'unavailable', { cause: e });",
+      "throw new ToolUnavailableError('searchInventorySemantic', 'failed', { cause: res.error });",
+      'if (e instanceof ToolRefusal) return e.message;',
+      'const words = e instanceof ToolRefusal ? e.message.slice(0, 200) : TOOL_FAILED_MESSAGE; return words;',
+    ]);
+    expect(hitsIn('sample.ts', sample)).toEqual([]);
+    // Any other typed failure's message is not proved the app's words here.
+    expect(
+      hitsIn('sample.ts', inTool(['if (e instanceof ToolUnavailableError) return e.message;'])).map(
+        (hit) => hit.line,
+      ),
+    ).toEqual([2]);
+  });
+
+  it('a ToolRefusal is built only under lib/ai, which the API census reads (why APP_ERRORS lists it)', () => {
+    const read = new Set(scope());
+    const builders = files(SRC).filter((file) => {
+      const source = readFileSync(file, 'utf8');
+      if (!source.includes('ToolRefusal(')) return false;
+      let builds = false;
+      const visit = (node: ts.Node) => {
+        if (builds) return;
+        if (
+          ts.isNewExpression(node) &&
+          ts.isIdentifier(node.expression) &&
+          node.expression.text === 'ToolRefusal'
+        ) {
+          builds = true;
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(parse(file, source));
+      return builds;
+    });
+    expect(builders.length).toBeGreaterThan(0);
+    for (const file of builders) {
+      const rel = path.relative(SRC, file);
+      expect(rel.startsWith('lib/ai/'), rel).toBe(true);
+      expect(read.has(file), rel).toBe(true);
+    }
+    expect(scope().map((file) => path.relative(SRC, file))).toContain('lib/ai/tool-errors.ts');
+  });
+
+  it('every ToolRefusal is built with fixed words, except two that name what the model sent', () => {
+    // The model reads a ToolRefusal's words (at most 200 characters). These
+    // two are the only ones not written out in full: the stock adjustment's
+    // movement type quotes the value the model passed, and the new schedule
+    // event passes the event schema's first message about the model's
+    // arguments (the schema's and zod's own words, which do not quote it).
+    const BUILT = [
+      'lib/ai/tools.ts: `movementType must be one of ${AI_ADJUST_MOVEMENT_TYPES.join(\', \')} (got ${JSON.stringify(raw)})`',
+      "lib/ai/tools.ts: parsed.error.issues[0]?.message ?? 'Invalid event input'",
+    ];
+    const built: string[] = [];
+    for (const file of files(AI)) {
+      const source = readFileSync(file, 'utf8');
+      if (!source.includes('ToolRefusal(')) continue;
+      const sf = parse(file, source);
+      // A module-level `const NAME = '...'` counts as fixed words.
+      const fixedNames = new Set<string>();
+      for (const statement of sf.statements) {
+        if (!ts.isVariableStatement(statement)) continue;
+        if (!(statement.declarationList.flags & ts.NodeFlags.Const)) continue;
+        for (const decl of statement.declarationList.declarations) {
+          if (
+            ts.isIdentifier(decl.name) &&
+            decl.initializer &&
+            (ts.isStringLiteral(decl.initializer) ||
+              ts.isNoSubstitutionTemplateLiteral(decl.initializer))
+          ) {
+            fixedNames.add(decl.name.text);
+          }
+        }
+      }
+      const fixed = (arg: ts.Expression) =>
+        ts.isStringLiteral(arg) ||
+        ts.isNoSubstitutionTemplateLiteral(arg) ||
+        (ts.isIdentifier(arg) && fixedNames.has(arg.text));
+      const visit = (node: ts.Node) => {
+        if (
+          ts.isNewExpression(node) &&
+          ts.isIdentifier(node.expression) &&
+          node.expression.text === 'ToolRefusal'
+        ) {
+          const first = node.arguments?.[0];
+          if (!first || !fixed(first)) {
+            const words = first ? first.getText(sf).replace(/\s+/g, ' ') : '(none)';
+            built.push(`${path.relative(SRC, file)}: ${words}`);
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sf);
+    }
+    expect(built).toEqual(BUILT);
+  });
+
+  it('every fixed tool failure sentence is a string literal', () => {
+    const file = path.join(AI, 'tool-errors.ts');
+    const sf = parse(file, readFileSync(file, 'utf8'));
+    const sentences: ts.Expression[] = [];
+    const collect = (node: ts.Node, inTable: boolean) => {
+      const here =
+        inTable ||
+        (ts.isVariableDeclaration(node) &&
+          ts.isIdentifier(node.name) &&
+          node.name.text === 'TOOL_FAILURE_SENTENCES');
+      if (
+        inTable &&
+        ts.isPropertyAssignment(node) &&
+        !ts.isObjectLiteralExpression(node.initializer)
+      ) {
+        sentences.push(node.initializer);
+      }
+      ts.forEachChild(node, (child) => collect(child, here));
+    };
+    collect(sf, false);
+    expect(sentences.length).toBe(9);
+    for (const sentence of sentences) {
+      expect(ts.isStringLiteral(sentence), sentence.getText(sf)).toBe(true);
+    }
+  });
+});
+
+describe('an AI module never hands the model an error, whole or in part (S30 review)', () => {
+  /** `body` as a tool's execute, one statement per line from line 2. */
+  const inTool = (body: string[]) =>
+    ['async function execute(args, ctx) { try { await work(); } catch (e) {', ...body, '} }'].join(
+      '\n',
+    );
+  /** A module under lib/ai: the model reads what it returns. */
+  const aiModule = path.join(AI, 'sample.ts');
+
+  it('under lib/ai an error placed whole into what is returned or thrown, and an error field as a returned value, count (control: one per line)', () => {
+    const sample = inTool([
+      'return { error };',
+      'return { ok: false, failure: e };',
+      'return { rows: [], firstError };',
+      'throw { ...e };',
+      'return { ok: false, note: res.error };',
+      "return { ok: false, note: write.error ?? 'not saved' };",
+      'return rows.map((row) => ({ id: row.id, problem: row.lastError }));',
+    ]);
+    expect(hitsIn(aiModule, sample).map((hit) => hit.line)).toEqual([2, 3, 4, 5, 6, 7, 8]);
+    // Outside lib/ai the API scope reads JSON answers only: what a helper
+    // returns goes to its route, which is read where it answers.
+    expect(hitsIn('sample.ts', sample)).toEqual([]);
+  });
+
+  it("under lib/ai an error's hint, details and internalDetail count as its text (control: one per line)", () => {
+    const sample = inTool([
+      'throw new ToolRefusal(error.hint);',
+      'throw new ToolRefusal(String(error.details));',
+      "throw new ToolRefusal(`not saved: ${e.hint ?? 'no hint'}`);",
+      'return { ok: false, note: error.details };',
+      'if (e instanceof ServiceError) return e.internalDetail;',
+      "return e instanceof ServiceError ? (e.internalDetail ?? e.message) : 'failed';",
+      'return String(dataTag(failure.internalDetail));',
+    ]);
+    expect(hitsIn(aiModule, sample).map((hit) => hit.line)).toEqual([2, 3, 4, 5, 6, 7, 8]);
+    // In every scope they count in the words of an app error: here the three
+    // refusals. The rest is counted under lib/ai only.
+    expect(hitsIn('sample.ts', sample).map((hit) => hit.line)).toEqual([2, 3, 4]);
+  });
+
+  it("an app error's words built from an error's hint, details or internalDetail count in every scope (control: one per line)", () => {
+    const sample = inActionCatch([
+      "throw new ServiceError('validation_error', error.details ?? 'Not saved.');",
+      "throw new ServiceError('conflict', `This order is ${error.details ?? 'closed'}.`);",
+      'throw new ForbiddenError(error.hint);',
+      "if (e instanceof ServiceError) throw new ServiceError('conflict', e.internalDetail ?? e.message);",
+    ]);
+    for (const scope of ['api', 'actions', 'services'] as const) {
+      expect(
+        hitsIn('sample.ts', sample, scope).map((hit) => hit.line),
+        scope,
+      ).toEqual([2, 3, 4, 5]);
+    }
+  });
+
+  it("a test of the hint, a proved app error's details, a cause, a report and a tool's fixed results do not count (control)", () => {
+    const sample = inTool([
+      "if (error.hint === 'order_closed') throw new ToolRefusal('That order is closed.');",
+      "throw new ToolRefusal(error.details === 'quantity' ? 'Quantities are whole numbers.' : 'Pick fewer items.');",
+      "if (e instanceof ServiceError) { const reason = e.details?.reason; if (reason === 'mfa_required') return 'Enroll first.'; }",
+      "void reportError(e, { tag: 't', extra: { hint: error.hint, detail: error.details, internal: e.internalDetail ?? null } });",
+      "console.error('[tool] failed', error.hint, error.details, e.internalDetail);",
+      "if ((e.internalDetail ?? '').includes('insufficient_stock')) throw new ToolRefusal('There is not enough stock.');",
+      "throw new ToolUnavailableError('searchInventorySemantic', 'failed', { cause: error });",
+      "throw new ServiceError('internal_error', `read failed: ${error.details}`);",
+      "return { error: 'unknown_status', received: raw, allowed: [...KEYS] };",
+      "return { error: 'forbidden', message: EXPORT_FORBIDDEN_COPY };",
+      'return { ok: true, itemId, delta, reason, details: args.details, hint: args.hint };',
+    ]);
+    expect(hitsIn(aiModule, sample)).toEqual([]);
+    expect(hitsIn('sample.ts', sample, 'services')).toEqual([]);
+  });
+
+  it('the tools return an `error` key in two deliberate results only: a failure is thrown, never returned', () => {
+    // A returned `{ error }` is a result: the chat loop would count it, badge
+    // it and audit it as a success, and nothing would report it.
+    const file = path.join(AI, 'tools.ts');
+    const sf = parse(file, readFileSync(file, 'utf8'));
+    const found: string[] = [];
+    const visit = (node: ts.Node) => {
+      if (
+        (ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) &&
+        ts.isObjectLiteralExpression(node.parent) &&
+        node.name.getText(sf) === 'error'
+      ) {
+        found.push(node.getText(sf));
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    expect(found).toEqual([
+      // resolveOrderStatusArg: an order status the model made up, with the
+      // list it can retry from.
+      "error: 'unknown_status'",
+      // exportInventory: a member without the export permission gets the
+      // sentence to pass on and no link.
+      "error: 'forbidden'",
+    ]);
+  });
+});
+
+// ── What the model can read from a service's refusal (S30 review) ────────
+//
+// The censuses above read every module for an error's own TEXT. This part asks
+// another question about a refusal's words: which of them can the AI chat's
+// model read? classifyToolErrorMessage (lib/ai/chat.ts) answers a failed tool
+// by the error's type and code, and hands the model a service's own words for
+// one code only, validation_error: words about what the caller asked for. For
+// every other code, and for every ForbiddenError, the model reads a fixed
+// sentence. So the words that matter are those of every validation_error an AI
+// tool can reach. Each one that is not a fixed sentence is listed below with
+// what is put into it and why the model may read that; a new one fails here
+// until someone reasons about it.
+//
+// "Can reach" is TypeScript's own answer. From every function in
+// lib/ai/tools.ts and from executeToolCall (lib/ai/chat.ts), each call, each
+// `new`, each JSX tag and each function used as a value is followed to its
+// declaration through the app's and core's source, with the compiler's type
+// checker. Where the checker cannot say which function runs, the walk takes
+// every candidate: all the functions written in a table that is used as a
+// value, and all the functions inside the value a name was given
+// (`cache(async () => ...)`). A closure belongs to the function it is written
+// in. It reads more than can run, never less on purpose.
+
+/** A name's value at the top of a module: a const's, or a property's in a const's table. */
+type ValueHolder = ts.VariableDeclaration | ts.PropertyAssignment;
+
+/**
+ * What the walk reads as one piece: a function with the closures written
+ * inside it, a class's field initializers, or the value a module gives a name
+ * (a table of handlers, a wrapped function). The functions written in a
+ * class's fields or in a named value are pieces of their own.
+ */
+type Unit = ts.FunctionLikeDeclaration | ts.ClassDeclaration | ValueHolder;
+
+function isValueHolder(node: ts.Node): node is ValueHolder {
+  return ts.isVariableDeclaration(node) || ts.isPropertyAssignment(node);
+}
+
+/** Whether a value can run or name anything: a function, a call, a `new`, or another name. */
+function namesSomething(value: ts.Node): boolean {
+  let found = false;
+  const visit = (node: ts.Node) => {
+    if (found || ts.isTypeNode(node)) return;
+    found =
+      isFunction(node) ||
+      ts.isCallExpression(node) ||
+      ts.isNewExpression(node) ||
+      ts.isTaggedTemplateExpression(node) ||
+      (ts.isIdentifier(node) && (node.parent as { name?: ts.Node }).name !== node);
+    if (!found) ts.forEachChild(node, visit);
+  };
+  visit(value);
+  return found;
+}
+
+interface ReachedSite {
+  /** `file#function`: the outermost function that holds the construction. */
+  where: string;
+  line: number;
+  /** 'ForbiddenError', a ServiceError's literal code, or null when the code is not a literal. */
+  code: string | null;
+  /** The code as it is written. */
+  codeText: string;
+  /** What in the message is not fixed words; empty for a fixed sentence. */
+  built: string[];
+}
+
+interface Reach {
+  /** Every reached function, as `file#function`. */
+  units: string[];
+  sites: ReachedSite[];
+}
+
+/** The outermost function that holds `node`. */
+function outermostFunction(node: ts.Node): ts.FunctionLikeDeclaration | null {
+  let found: ts.FunctionLikeDeclaration | null = null;
+  for (let n: ts.Node | undefined = node; n; n = n.parent) if (isFunction(n)) found = n;
+  return found;
+}
+
+/** Every outermost function written in `node` (`node` itself when it is one). */
+function functionsIn(node: ts.Node): ts.FunctionLikeDeclaration[] {
+  const out: ts.FunctionLikeDeclaration[] = [];
+  const visit = (n: ts.Node) => {
+    if (isFunction(n)) out.push(n);
+    else ts.forEachChild(n, visit);
+  };
+  visit(node);
+  return out;
+}
+
+/** `InventoryService.adjustStock`, `saveDraftRpcError`, `adjustStockTool.execute`, `HANDLERS (value)`. */
+function unitName(unit: Unit): string {
+  const sf = unit.getSourceFile();
+  const names: string[] = [];
+  if (ts.isClassDeclaration(unit)) names.push('fields');
+  else if (ts.isConstructorDeclaration(unit)) names.push('constructor');
+  else if (!isValueHolder(unit) && unit.name) names.push(unit.name.getText(sf));
+  for (
+    let p: ts.Node | undefined =
+      ts.isClassDeclaration(unit) || isValueHolder(unit) ? unit : unit.parent;
+    p;
+    p = p.parent
+  ) {
+    if (ts.isClassLike(p)) {
+      names.push(p.name?.text ?? 'class');
+      break;
+    }
+    if (ts.isPropertyAssignment(p) || ts.isPropertyDeclaration(p)) names.push(p.name.getText(sf));
+    if (ts.isVariableDeclaration(p)) {
+      names.push(p.name.getText(sf));
+      break;
+    }
+  }
+  if (names.length === 0) {
+    names.push(`line ${sf.getLineAndCharacterOfPosition(unit.getStart(sf)).line + 1}`);
+  }
+  return `${names.reverse().join('.')}${isValueHolder(unit) ? ' (value)' : ''}`;
+}
+
+/** `a ?? b`, `a || b`, `a + b`: the words can be either side's, or both. */
+const WORD_OPERATORS = new Set([
+  ts.SyntaxKind.QuestionQuestionToken,
+  ts.SyntaxKind.BarBarToken,
+  ts.SyntaxKind.PlusToken,
+]);
+
+/**
+ * Everything the functions in `seeds` can reach in `program`, and every
+ * ServiceError and ForbiddenError built there. `base` is the folder the file
+ * names are given from.
+ */
+function reachFrom(program: ts.Program, seeds: ts.Node[], base: string): Reach {
+  const checker = program.getTypeChecker();
+  const reached = new Set<Unit>();
+  const pending: Unit[] = [];
+  const sites: ReachedSite[] = [];
+  /** A construction is listed once, however many pieces it is read in. */
+  const listed = new Set<ts.Node>();
+
+  const reach = (node: ts.Node) => {
+    // A function inside another belongs to the outer one, and so does a value
+    // named inside a function: both are read when that function is.
+    const outer = outermostFunction(node);
+    const unit: Unit | null = ts.isClassDeclaration(node)
+      ? node
+      : isFunction(node)
+        ? node.body
+          ? outer
+          : null
+        : isValueHolder(node)
+          ? (outer ?? node)
+          : null;
+    if (!unit || reached.has(unit)) return;
+    const sf = unit.getSourceFile();
+    if (sf.isDeclarationFile || sf.fileName.includes('/node_modules/')) return;
+    reached.add(unit);
+    pending.push(unit);
+  };
+  /** The symbol `node` names, through an import's alias. */
+  const symbolOf = (node: ts.Node): ts.Symbol | undefined => {
+    try {
+      const symbol = checker.getSymbolAtLocation(node);
+      return symbol && symbol.flags & ts.SymbolFlags.Alias
+        ? checker.getAliasedSymbol(symbol)
+        : symbol;
+    } catch {
+      return undefined;
+    }
+  };
+  /**
+   * What a declaration can run: itself, the value it names (when that can run
+   * or name anything), or a class's fields and constructors.
+   */
+  const runs = (declaration: ts.Node): ts.Node[] => {
+    if (isFunction(declaration)) return [declaration];
+    if (isValueHolder(declaration) && declaration.initializer) {
+      if (isFunction(declaration.initializer)) return [declaration.initializer];
+      return namesSomething(declaration.initializer) ? [declaration] : [];
+    }
+    // A class field is read with its class.
+    if (ts.isPropertyDeclaration(declaration) && ts.isClassDeclaration(declaration.parent)) {
+      return [declaration.parent];
+    }
+    if (ts.isClassDeclaration(declaration)) {
+      return [declaration, ...declaration.members.filter(ts.isConstructorDeclaration)];
+    }
+    return [];
+  };
+  const follow = (symbol: ts.Symbol | undefined) => {
+    for (const declaration of symbol?.declarations ?? []) runs(declaration).forEach(reach);
+  };
+
+  /** Whether `node` is fixed words: a literal, or made only of literals and consts that are. */
+  const fixedWords = (node: ts.Expression, depth = 0): boolean => {
+    const x = unwrap(node);
+    if (ts.isStringLiteral(x) || ts.isNoSubstitutionTemplateLiteral(x) || ts.isNumericLiteral(x)) {
+      return true;
+    }
+    if (ts.isTemplateExpression(x)) {
+      return x.templateSpans.every((span) => fixedWords(span.expression, depth));
+    }
+    if (ts.isConditionalExpression(x)) {
+      return fixedWords(x.whenTrue, depth) && fixedWords(x.whenFalse, depth);
+    }
+    if (ts.isBinaryExpression(x) && WORD_OPERATORS.has(x.operatorToken.kind)) {
+      return fixedWords(x.left, depth) && fixedWords(x.right, depth);
+    }
+    if ((ts.isIdentifier(x) || ts.isPropertyAccessExpression(x)) && depth < 4) {
+      const declarations =
+        symbolOf(ts.isPropertyAccessExpression(x) ? x.name : x)?.declarations ?? [];
+      const [declaration] = declarations;
+      if (declarations.length !== 1 || !declaration) return false;
+      // A const, or a property of a const's object literal.
+      let holder: ts.Node | undefined = declaration;
+      if (ts.isPropertyAssignment(declaration)) {
+        holder = declaration.parent;
+        while (holder && !ts.isVariableDeclaration(holder) && !isFunction(holder))
+          holder = holder.parent;
+      }
+      if (
+        !holder ||
+        !ts.isVariableDeclaration(holder) ||
+        (ts.getCombinedNodeFlags(holder) & ts.NodeFlags.Const) === 0 ||
+        !(ts.isVariableDeclaration(declaration) || ts.isPropertyAssignment(declaration)) ||
+        !declaration.initializer
+      ) {
+        return false;
+      }
+      return fixedWords(declaration.initializer, depth + 1);
+    }
+    return false;
+  };
+  /** What in a message is not fixed words, as written. */
+  const builtParts = (node: ts.Expression): string[] => {
+    const x = unwrap(node);
+    if (fixedWords(x)) return [];
+    if (ts.isTemplateExpression(x))
+      return x.templateSpans.flatMap((span) => builtParts(span.expression));
+    if (ts.isConditionalExpression(x))
+      return [...builtParts(x.whenTrue), ...builtParts(x.whenFalse)];
+    if (ts.isBinaryExpression(x) && WORD_OPERATORS.has(x.operatorToken.kind)) {
+      return [...builtParts(x.left), ...builtParts(x.right)];
+    }
+    return [x.getText(x.getSourceFile()).replace(/\s+/g, ' ')];
+  };
+
+  const visitUnit = (unit: Unit) => {
+    const sf = unit.getSourceFile();
+    const where = `${path.relative(base, sf.fileName)}#${unitName(unit)}`;
+    // In a function its closures are read with it. In a class's fields and in
+    // a named value, each function is a piece of its own.
+    const closuresWithIt = isFunction(unit);
+    const visit = (node: ts.Node) => {
+      // A type names no value and runs nothing (`fn<string>` used as a value
+      // is an expression that TypeScript files under types).
+      if (ts.isTypeNode(node) && !ts.isExpressionWithTypeArguments(node)) return;
+      if (!closuresWithIt && isFunction(node)) {
+        reach(node);
+        return;
+      }
+      if (ts.isNewExpression(node) && !listed.has(node)) {
+        const name = symbolOf(node.expression)?.name;
+        if (name === 'ServiceError' || name === 'ForbiddenError') {
+          listed.add(node);
+          const args = node.arguments ?? [];
+          const code = name === 'ServiceError' ? args[0] : undefined;
+          const message = name === 'ServiceError' ? args[1] : args[0];
+          sites.push({
+            where,
+            line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
+            code:
+              name === 'ForbiddenError'
+                ? name
+                : code && ts.isStringLiteralLike(code)
+                  ? code.text
+                  : null,
+            codeText: code ? code.getText(sf) : name,
+            built: message ? builtParts(message) : [],
+          });
+        }
+      }
+      if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+        let declaration: ts.Node | undefined;
+        try {
+          declaration = checker.getResolvedSignature(node)?.declaration;
+        } catch {
+          declaration = undefined;
+        }
+        if (declaration) runs(declaration).forEach(reach);
+        // Also by the callee's name: an overload's implementation, a class
+        // with no constructor of its own.
+        const callee = node.expression;
+        follow(symbolOf(ts.isPropertyAccessExpression(callee) ? callee.name : callee));
+      } else if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+        follow(symbolOf(node.tagName));
+      } else if (ts.isShorthandPropertyAssignment(node)) {
+        follow(checker.getShorthandAssignmentValueSymbol(node));
+      } else if (
+        ts.isPropertyAccessExpression(node) &&
+        !(ts.isCallExpression(node.parent) && node.parent.expression === node)
+      ) {
+        // A getter, or a method or a table's function used as a value.
+        follow(symbolOf(node.name));
+      } else if (
+        ts.isIdentifier(node) &&
+        !ts.isPropertyAccessExpression(node.parent) &&
+        !(ts.isCallExpression(node.parent) && node.parent.expression === node) &&
+        // Not the name a declaration gives (a variable, a parameter, a key).
+        (node.parent as { name?: ts.Node }).name !== node
+      ) {
+        // A function, or a table of functions, used as a value.
+        follow(symbolOf(node));
+      }
+      ts.forEachChild(node, visit);
+    };
+    if (ts.isClassDeclaration(unit)) {
+      for (const member of unit.members) {
+        if (ts.isPropertyDeclaration(member) && member.initializer) visit(member.initializer);
+        if (ts.isClassStaticBlockDeclaration(member)) visit(member.body);
+      }
+    } else if (isValueHolder(unit)) {
+      if (unit.initializer) visit(unit.initializer);
+    } else {
+      visit(unit);
+    }
+  };
+
+  seeds.forEach(reach);
+  for (let unit = pending.pop(); unit !== undefined; unit = pending.pop()) visitUnit(unit);
+  return {
+    units: [...reached].map(
+      (unit) => `${path.relative(base, unit.getSourceFile().fileName)}#${unitName(unit)}`,
+    ),
+    sites,
+  };
+}
+
+const WEB = path.resolve(SRC, '..');
+
+/** Everything the AI chat's tools can reach, read once. */
+let toolReachMemo: Reach | undefined;
+function toolReach(): Reach {
+  if (toolReachMemo) return toolReachMemo;
+  const config = ts.readConfigFile(path.join(WEB, 'tsconfig.json'), (file) =>
+    ts.sys.readFile(file),
+  );
+  // The compiler options only: the program is the two modules below and what
+  // they import.
+  const { options } = ts.parseJsonConfigFileContent(
+    config.config,
+    { ...ts.sys, readDirectory: () => [] },
+    WEB,
+  );
+  const tools = path.join(AI, 'tools.ts');
+  const chat = path.join(AI, 'chat.ts');
+  const program = ts.createProgram([tools, chat], {
+    ...options,
+    noEmit: true,
+    incremental: false,
+    composite: false,
+    tsBuildInfoFile: undefined,
+    skipLibCheck: true,
+  });
+  const toolsFile = program.getSourceFile(tools);
+  const chatFile = program.getSourceFile(chat);
+  if (!toolsFile || !chatFile)
+    throw new Error('lib/ai/tools.ts or lib/ai/chat.ts is not in the program');
+  // Every function of the tools module, and the boundary both chat loops call
+  // each tool through.
+  const seeds: ts.Node[] = functionsIn(toolsFile);
+  const boundary = chatFile.statements.find(
+    (st): st is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(st) && st.name?.text === 'executeToolCall',
+  );
+  if (!boundary) throw new Error('executeToolCall is not declared in lib/ai/chat.ts');
+  seeds.push(boundary);
+  toolReachMemo = reachFrom(program, seeds, SRC);
+  return toolReachMemo;
+}
+
+/** A program over files that exist only here, for the walk's controls. */
+function controlProgram(sources: Record<string, string>): { program: ts.Program; dir: string } {
+  const dir = path.join(SRC, '__reach_control__');
+  const virtual = new Map(
+    Object.entries(sources).map(([name, text]) => [path.join(dir, name), text] as const),
+  );
+  const options: ts.CompilerOptions = {
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    strict: true,
+    noEmit: true,
+    skipLibCheck: true,
+    types: [],
+  };
+  const host = ts.createCompilerHost(options, true);
+  const real = {
+    fileExists: host.fileExists.bind(host),
+    readFile: host.readFile.bind(host),
+    getSourceFile: host.getSourceFile.bind(host),
+    directoryExists: host.directoryExists?.bind(host),
+  };
+  host.fileExists = (file) => virtual.has(file) || real.fileExists(file);
+  host.readFile = (file) => virtual.get(file) ?? real.readFile(file);
+  host.directoryExists = (directory) =>
+    directory === dir || (real.directoryExists?.(directory) ?? true);
+  host.getSourceFile = (file, languageVersion, ...rest) => {
+    const text = virtual.get(file);
+    return text === undefined
+      ? real.getSourceFile(file, languageVersion, ...rest)
+      : ts.createSourceFile(file, text, languageVersion, true);
+  };
+  return { program: ts.createProgram([...virtual.keys()], options, host), dir };
+}
+
+/** The ServiceError codes, read from the class's constructor (server/services/context.ts). */
+function serviceErrorCodes(): string[] {
+  const file = path.join(SERVICES, 'context.ts');
+  const sf = parse(file, readFileSync(file, 'utf8'));
+  const cls = sf.statements.find(
+    (st): st is ts.ClassDeclaration =>
+      ts.isClassDeclaration(st) && st.name?.text === 'ServiceError',
+  );
+  const code = cls?.members
+    .find(ts.isConstructorDeclaration)
+    ?.parameters.find((p) => ts.isIdentifier(p.name) && p.name.text === 'code');
+  const members = code?.type && ts.isUnionTypeNode(code.type) ? code.type.types : [];
+  return members.flatMap((member) =>
+    ts.isLiteralTypeNode(member) && ts.isStringLiteral(member.literal) ? [member.literal.text] : [],
+  );
+}
+
+/**
+ * The ServiceError codes, and what the model reads for each: the service's
+ * own words (fenced as data), or a fixed sentence. A new code fails here, and
+ * in the classifier's own tests (lib/ai/chat.write-guard.test.ts), until
+ * someone decides which it is.
+ */
+const MODEL_READS: Record<string, 'words' | 'sentence'> = {
+  unauthenticated: 'sentence',
+  forbidden: 'sentence',
+  not_found: 'sentence',
+  validation_error: 'words',
+  plan_limit_exceeded: 'sentence',
+  module_disabled: 'sentence',
+  conflict: 'sentence',
+  internal_error: 'sentence',
+};
+
+/** The ServiceError codes a tool can reach today. `unauthenticated` is not one. */
+const TOOL_REACHABLE_CODES = [
+  'conflict',
+  'forbidden',
+  'internal_error',
+  'module_disabled',
+  'not_found',
+  'plan_limit_exceeded',
+  'validation_error',
+];
+
+/**
+ * Reachable constructions whose code is not a literal, with why none of them
+ * can be a code whose words the model reads.
+ */
+const TOOL_REACHABLE_COMPUTED_CODES: Record<string, { code: string; why: string }> = {
+  'server/services/order-replacement.ts#replacementRefusal': {
+    code: 'mapped.code',
+    why: "core's mapReturnError entry for one of the six replacement hints (REPLACEMENT_HINTS), each a conflict or a forbidden entry with fixed words (pinned below)",
+  },
+};
+
+/**
+ * Every message a tool can reach that the model reads in the service's own
+ * words (a validation_error, or a code that is not a literal) and that is not
+ * a fixed sentence: the function that builds it, what is put into it, and why
+ * the model may read that. Each was read at its source. None holds an error's
+ * own text except the purchase order save's, whose text is the sentences the
+ * app wrote into its own database function.
+ */
+const TOOL_REACHABLE_WORDS: Record<string, { built: string[]; why: string }> = {
+  'server/services/inventory.ts#InventoryService.assertCustomFieldsValid': {
+    built: ['result.error'],
+    why: "validateCustomFields' own sentence about a custom field the caller filled in (packages/core customization/custom-fields.ts); it names the field by the label the organization gave it",
+  },
+  'server/services/inventory.ts#InventoryService.assertTrackingTypeChangeAllowed': {
+    built: ['next'],
+    why: "the tracking type the caller asked for, one of core's TRACKING_TYPE_VALUES words",
+  },
+  'server/services/inventory.ts#InventoryService.assertWarehouseServesCharter': {
+    built: ['refusal'],
+    why: "the caller's sentence for a charter the chosen warehouse does not service: each of its four callers in the file passes a fixed sentence",
+  },
+  'server/services/inventory.ts#InventoryService.create': {
+    built: ['rawVariantSize', 'rawVariantSize'],
+    why: 'the size the caller typed, quoted back in the two size refusals',
+  },
+  'server/services/inventory.ts#InventoryService.update': {
+    built: ['rawSize', 'rawSize'],
+    why: 'the size the caller typed, quoted back in the two size refusals',
+  },
+  'server/services/locations.ts#crateAwareLocationName': {
+    built: ['position'],
+    why: 'the rack number and row the caller gave for the crate, as formatRackPosition writes them',
+  },
+  'server/services/order-replacement.ts#replacementRefusal': {
+    built: ['mapped.message'],
+    why: "core's fixed words for the hint (RETURN_ERROR_WORDS); the code is a conflict or a forbidden one, so the model reads a fixed sentence (see TOOL_REACHABLE_COMPUTED_CODES)",
+  },
+  'server/services/purchase-orders.ts#deletedDestinationError': {
+    built: ['locationName'],
+    why: "the name of the organization's own destination location that was deleted; the two tools that draft purchase orders catch a failed save per supplier and return it as a counted failure",
+  },
+  'server/services/purchase-orders.ts#saveDraftRpcError': {
+    built: ['message', 'message', 'message'],
+    why: "save_purchase_order_draft's own sentences (migration 0366), chosen by the function's hint, never by the text: a line that is not valid, a kit's pre-assembled stock or a deleted item, named when the caller can see it. The two tools that draft purchase orders catch a failed save per supplier and return it as a counted failure",
+  },
+  'server/services/sports-profiles.ts#assertVariantAttributesValid': {
+    built: ['problem.message'],
+    why: "core's sentence for a size, size system or jersey number the caller left out (packages/core sports/required-attributes.ts); it names the category's subcategory by its label",
+  },
+  'server/services/sports-profiles.ts#resolveModeOverride': {
+    built: ['requested'],
+    why: "the tracking mode the caller asked for, one of core's TRACKING_MODES words",
+  },
+  'server/services/sports-profiles.ts#resolveTrackingProfile': {
+    built: ['subcategoryKey'],
+    why: "the category's own subcategory key, as the organization stored it, when no profile matches it",
+  },
+};
+
+/**
+ * The walk builds a TypeScript program over the tools and everything they
+ * import (about a thousand files with the libraries' types). Alone it takes
+ * two to three seconds; beside the other test files on a busy runner the
+ * censuses above have taken ten times their time, so it gets three minutes.
+ */
+const REACH_TIMEOUT_MS = 180_000;
+
+describe("what the model can read from a service's refusal is listed (S30 review)", () => {
+  it('ServiceError has the codes the classifier was written for, each with what the model reads', () => {
+    expect(serviceErrorCodes()).toEqual(Object.keys(MODEL_READS));
+  });
+
+  it("the classifier hands the model a service's own words for the listed codes only", () => {
+    // Read from the source: the cases of the switch on the error's code that
+    // read its message. The classifier's own tests hold what each case answers.
+    const file = path.join(AI, 'chat.ts');
+    const sf = parse(file, readFileSync(file, 'utf8'));
+    const classifier = sf.statements.find(
+      (st): st is ts.FunctionDeclaration =>
+        ts.isFunctionDeclaration(st) && st.name?.text === 'classifyToolErrorMessage',
+    );
+    expect(classifier).toBeDefined();
+    const switches: ts.SwitchStatement[] = [];
+    const collect = (node: ts.Node) => {
+      if (ts.isSwitchStatement(node) && node.expression.getText(sf) === 'err.code')
+        switches.push(node);
+      ts.forEachChild(node, collect);
+    };
+    collect(classifier!);
+    expect(switches.length).toBe(1);
+    const readsWords = (clause: ts.CaseOrDefaultClause): boolean => {
+      let reads = false;
+      const look = (node: ts.Node) => {
+        if (ts.isPropertyAccessExpression(node) && node.name.text === 'message') reads = true;
+        ts.forEachChild(node, look);
+      };
+      clause.statements.forEach(look);
+      return reads;
+    };
+    // Source text is compared with its white space folded, so wrapping a line
+    // of the classifier differently is not a failure.
+    const written = (node: ts.Node) => node.getText(sf).replace(/\s+/g, ' ');
+    const wordCases = switches[0]!.caseBlock.clauses.flatMap((clause) =>
+      readsWords(clause) ? [ts.isCaseClause(clause) ? written(clause.expression) : 'default'] : [],
+    );
+    expect(wordCases).toEqual(
+      Object.entries(MODEL_READS)
+        .filter(([, reads]) => reads === 'words')
+        .map(([code]) => `'${code}'`),
+    );
+    // Outside that switch the function reads a message in two places only: a
+    // ToolRefusal's own words, and the text it tests for the fixed sentences.
+    const messageReads: string[] = [];
+    const reads = (node: ts.Node) => {
+      if (node === switches[0]) return;
+      if (ts.isPropertyAccessExpression(node) && node.name.text === 'message') {
+        messageReads.push(written(node.parent));
+      }
+      ts.forEachChild(node, reads);
+    };
+    reads(classifier!);
+    expect(messageReads).toEqual([
+      'capped(err.message)',
+      "err instanceof Error ? err.message : String(err ?? '')",
+    ]);
+  });
+
+  it("the classifier reads one field of a refusal's details, the multi-factor gate's reason, and only to choose a fixed sentence", () => {
+    // A ServiceError's details can hold a record's id or a stored name. The
+    // classifier's own tests hold that none of it reaches the model; this
+    // holds the source to the one read those tests were written for. Every
+    // `details` in the function (a property, a key, a destructured name) is
+    // that read, and the name it is kept in is only compared with the gate's
+    // two reasons or used to pick one of the gate's two fixed sentences.
+    const file = path.join(AI, 'chat.ts');
+    const sf = parse(file, readFileSync(file, 'utf8'));
+    const classifier = sf.statements.find(
+      (st): st is ts.FunctionDeclaration =>
+        ts.isFunctionDeclaration(st) && st.name?.text === 'classifyToolErrorMessage',
+    );
+    expect(classifier).toBeDefined();
+    const written = (node: ts.Node) => node.getText(sf).replace(/\s+/g, ' ');
+    const detailsReads: string[] = [];
+    const look = (node: ts.Node) => {
+      if ((ts.isIdentifier(node) || ts.isStringLiteralLike(node)) && node.text === 'details') {
+        detailsReads.push(written(node.parent.parent));
+      }
+      ts.forEachChild(node, look);
+    };
+    look(classifier!);
+    expect(detailsReads).toEqual(['err.details?.reason']);
+
+    const holder: ts.VariableDeclaration[] = [];
+    const findHolder = (node: ts.Node) => {
+      if (
+        ts.isVariableDeclaration(node) &&
+        node.initializer &&
+        written(node.initializer) === 'err.details?.reason'
+      ) {
+        holder.push(node);
+      }
+      ts.forEachChild(node, findHolder);
+    };
+    findHolder(classifier!);
+    expect(holder.length).toBe(1);
+    expect(ts.isIdentifier(holder[0]!.name)).toBe(true);
+    const name = (holder[0]!.name as ts.Identifier).text;
+    const uses: string[] = [];
+    const used = (node: ts.Node) => {
+      const isPropertyName =
+        ts.isPropertyAccessExpression(node.parent) && node.parent.name === node;
+      if (
+        ts.isIdentifier(node) &&
+        node.text === name &&
+        node.parent !== holder[0] &&
+        !isPropertyName
+      ) {
+        uses.push(written(node.parent));
+      }
+      ts.forEachChild(node, used);
+    };
+    used(classifier!);
+    expect(uses).toEqual([
+      `${name} === 'aal2_required'`,
+      `${name} === 'mfa_required'`,
+      `TOOL_MFA_MESSAGES[${name}]`,
+    ]);
+  });
+
+  it('no class extends ServiceError or ForbiddenError, so every construction is one the walk reads', () => {
+    const subclasses = files(SRC).filter((file) => {
+      const source = readFileSync(file, 'utf8');
+      if (!/extends\s+(?:ServiceError|ForbiddenError)\b/.test(source)) return false;
+      let found = false;
+      const visit = (node: ts.Node) => {
+        if (
+          ts.isClassLike(node) &&
+          node.heritageClauses?.some((clause) =>
+            clause.types.some((type) =>
+              /^(?:ServiceError|ForbiddenError)$/.test(type.expression.getText()),
+            ),
+          )
+        ) {
+          found = true;
+        }
+        if (!found) ts.forEachChild(node, visit);
+      };
+      visit(parse(file, source));
+      return found;
+    });
+    expect(subclasses.map((file) => path.relative(SRC, file))).toEqual([]);
+  });
+
+  it(
+    'the tools reach the listed ServiceError codes, and every reachable message the model reads that is not a fixed sentence is listed with its reason',
+    () => {
+      const { units, sites } = toolReach();
+      // The walk went through the services: a broken one would reach little.
+      expect(units.length).toBeGreaterThan(500);
+      expect(units).toContain('server/services/inventory.ts#InventoryService.adjustStock');
+      expect(units).toContain('lib/auth/warehouse.ts#assertWarehouseAccess');
+      expect(units).toContain('server/services/context.ts#assertPermission');
+
+      const codes = new Set(sites.flatMap((site) => (site.code === null ? [] : [site.code])));
+      codes.delete('ForbiddenError');
+      expect([...codes].sort()).toEqual(TOOL_REACHABLE_CODES);
+      for (const code of TOOL_REACHABLE_CODES) expect(MODEL_READS[code], code).toBeDefined();
+
+      const computed = Object.fromEntries(
+        sites.filter((site) => site.code === null).map((site) => [site.where, site.codeText]),
+      );
+      expect(computed).toEqual(
+        Object.fromEntries(
+          Object.entries(TOOL_REACHABLE_COMPUTED_CODES).map(([where, { code }]) => [where, code]),
+        ),
+      );
+
+      // The words the model reads: a code whose words pass, or a code that is
+      // not a literal and so could be one.
+      const found: Record<string, string[]> = {};
+      for (const site of sites) {
+        const read = site.code === null || MODEL_READS[site.code] === 'words';
+        if (!read || site.built.length === 0) continue;
+        (found[site.where] ??= []).push(...site.built);
+      }
+      for (const built of Object.values(found)) built.sort();
+      expect(found).toEqual(
+        Object.fromEntries(
+          Object.entries(TOOL_REACHABLE_WORDS).map(([where, { built }]) => [
+            where,
+            [...built].sort(),
+          ]),
+        ),
+      );
+    },
+    REACH_TIMEOUT_MS,
+  );
+
+  it('every listed message and every listed code gives its reason', () => {
+    for (const [where, { why }] of [
+      ...Object.entries(TOOL_REACHABLE_WORDS),
+      ...Object.entries(TOOL_REACHABLE_COMPUTED_CODES),
+    ]) {
+      expect(why.length, where).toBeGreaterThan(20);
+    }
+  });
+
+  it('the replacement refusal maps hints whose entries are a conflict or a forbidden one (why its code is listed)', () => {
+    const service = path.join(SERVICES, 'order-replacement.ts');
+    const hintsFile = parse(service, readFileSync(service, 'utf8'));
+    const hints: string[] = [];
+    const table = new Map<string, string>();
+    const strings = (node: ts.Node | undefined): string[] =>
+      node && ts.isArrayLiteralExpression(node)
+        ? node.elements.flatMap((el) => (ts.isStringLiteralLike(el) ? [el.text] : []))
+        : [];
+    for (const st of hintsFile.statements) {
+      if (!ts.isVariableStatement(st)) continue;
+      for (const decl of st.declarationList.declarations) {
+        if (ts.isIdentifier(decl.name) && decl.name.text === 'REPLACEMENT_HINTS') {
+          hints.push(...strings(decl.initializer));
+        }
+      }
+    }
+    const core = path.resolve(SRC, '../../../packages/core/src/returns/return-error-map.ts');
+    const coreFile = parse(core, readFileSync(core, 'utf8'));
+    const visit = (node: ts.Node) => {
+      if (
+        ts.isVariableDeclaration(node) &&
+        ts.isIdentifier(node.name) &&
+        node.name.text === 'RETURN_ERROR_TABLE' &&
+        node.initializer &&
+        ts.isObjectLiteralExpression(unwrap(node.initializer))
+      ) {
+        for (const entry of (unwrap(node.initializer) as ts.ObjectLiteralExpression).properties) {
+          if (!ts.isPropertyAssignment(entry) || !ts.isObjectLiteralExpression(entry.initializer))
+            continue;
+          const code = entry.initializer.properties.find(
+            (p): p is ts.PropertyAssignment =>
+              ts.isPropertyAssignment(p) && p.name.getText(coreFile) === 'code',
+          );
+          if (code && ts.isStringLiteralLike(code.initializer)) {
+            table.set(entry.name.getText(coreFile).replace(/['"]/g, ''), code.initializer.text);
+          }
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(coreFile);
+    expect(hints.length).toBe(6);
+    expect(table.size).toBeGreaterThan(40);
+    for (const hint of hints) {
+      expect(['conflict', 'forbidden'], hint).toContain(table.get(hint));
+      expect(MODEL_READS[table.get(hint)!], hint).toBe('sentence');
+    }
+  });
+
+  it('the walk follows a method, a function used as a value, a wrapped function and a table of functions, tells fixed words from built ones, and leaves out what nothing calls (control)', () => {
+    const { program, dir } = controlProgram({
+      'errors.ts': [
+        'export class ServiceError extends Error {',
+        '  constructor(public code: string, message: string) { super(message); }',
+        '}',
+        'export class ForbiddenError extends Error {}',
+      ].join('\n'),
+      'service.ts': [
+        "import { ForbiddenError, ServiceError as Refusal } from './errors';",
+        "export const TOO_MANY = 'Pick fewer items.';",
+        'const MAX = 50;',
+        "const WORDS = { busy: 'Busy. Try again.', late: 'Too late.' } as const;",
+        'declare function cache<T>(fn: T): T;',
+        'export function helper(size: string): void {',
+        '  if (size.length > 24) throw new Refusal(\'validation_error\', `"${size}" is not a size.`);',
+        '}',
+        'export class Service {',
+        '  private limit = makeLimit();',
+        '  async run(size: string, late: boolean): Promise<void> {',
+        '    this.check(size);',
+        "    throw new Refusal('validation_error', late ? WORDS.late : TOO_MANY);",
+        '  }',
+        '  private check(size: string): void {',
+        "    if (!size) throw new Refusal('validation_error', `At most ${MAX} sizes.`);",
+        "    if (size === 'x') throw new ForbiddenError(`No access to ${size}.`);",
+        '  }',
+        '}',
+        'function makeLimit(): number {',
+        "  if (MAX < 0) throw new Refusal('conflict', WORDS.busy);",
+        '  return MAX;',
+        '}',
+        'export const cached = cache(async (name: string) => {',
+        "  throw new Refusal('not_found', `${name} was not found.`);",
+        '});',
+        'export const HANDLERS: Record<string, (words: string[]) => void> = {',
+        "  join: (words) => { throw new Refusal('validation_error', words.join(' ')); },",
+        '};',
+        'export function mapped(entry: { code: string; message: string }): never {',
+        '  throw new Refusal(entry.code, entry.message);',
+        '}',
+        'function byName(words: string): never {',
+        "  throw new Refusal('validation_error', `by name: ${words}`);",
+        '}',
+        'export const REGISTRY = { named: byName };',
+        'export function neverCalled(detail: string): never {',
+        "  throw new Refusal('validation_error', `not reached: ${detail}`);",
+        '}',
+      ].join('\n'),
+      'tools.ts': [
+        "import { cached, helper, HANDLERS, mapped, REGISTRY, Service } from './service';",
+        'export const tool = {',
+        '  async execute(args: { kind: string; size: string }): Promise<void> {',
+        '    helper(args.size);',
+        '    await new Service().run(args.size, false);',
+        '    await cached(args.size);',
+        "    HANDLERS[args.kind]?.(['a']);",
+        "    [{ code: 'conflict', message: 'x' }].forEach(mapped);",
+        "    Object.values(REGISTRY).forEach((run) => run('x'));",
+        '  },',
+        '};',
+      ].join('\n'),
+    });
+    const tools = program.getSourceFile(path.join(dir, 'tools.ts'));
+    expect(tools).toBeDefined();
+    const { units, sites } = reachFrom(program, functionsIn(tools!), dir);
+    expect(units.sort()).toEqual([
+      // Building an error runs its class: the constructor and the fields.
+      'errors.ts#ForbiddenError.fields',
+      'errors.ts#ServiceError.constructor',
+      'errors.ts#ServiceError.fields',
+      // A table used as a value, and a wrapped function, are read for what
+      // they name; each function in them is a piece of its own.
+      'service.ts#HANDLERS (value)',
+      'service.ts#HANDLERS.join',
+      'service.ts#REGISTRY (value)',
+      'service.ts#Service.check',
+      'service.ts#Service.fields',
+      'service.ts#Service.run',
+      'service.ts#byName',
+      'service.ts#cached',
+      'service.ts#cached (value)',
+      'service.ts#helper',
+      'service.ts#makeLimit',
+      'service.ts#mapped',
+      'tools.ts#tool.execute',
+    ]);
+    const seen = sites
+      .map(
+        (site) => `${site.where} ${site.code ?? `(${site.codeText})`} [${site.built.join(', ')}]`,
+      )
+      .sort();
+    expect(seen).toEqual([
+      "service.ts#HANDLERS.join validation_error [words.join(' ')]",
+      'service.ts#Service.check ForbiddenError [size]',
+      'service.ts#Service.check validation_error []',
+      'service.ts#Service.run validation_error []',
+      'service.ts#byName validation_error [words]',
+      'service.ts#cached not_found [name]',
+      'service.ts#helper validation_error [size]',
+      'service.ts#makeLimit conflict []',
+      'service.ts#mapped (entry.code) [entry.message]',
+    ]);
   });
 });

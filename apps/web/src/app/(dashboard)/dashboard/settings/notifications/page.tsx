@@ -17,6 +17,10 @@ import { loadNotificationPreferences } from '@/server/actions/notification-prefe
 import '@/styles/liquid-glass/pages/admin.css';
 
 export default async function NotificationsSettingsPage() {
+  // The member's context first, as on every dashboard page: an authenticator
+  // code still owed is answered here, by the page itself, before the profile
+  // and the preferences are read.
+  const ctx = await requireOrgContext();
   const session = await requireSession();
   const supabase = await createClient();
   const { data: profile } = await supabase
@@ -54,7 +58,6 @@ export default async function NotificationsSettingsPage() {
   // zone is the request-cached org row the dashboard layout has already read;
   // an unreadable row reads as the documented default zone, as the email's
   // does, and is reported.
-  const ctx = await requireOrgContext();
   const digestSchedule = await getOrgRowForRequest(ctx.organizationId)
     .then((org) => digestScheduleLabel(org?.timezone, digestSendAt(new Date(), 'next')))
     .catch((e: unknown) => {
