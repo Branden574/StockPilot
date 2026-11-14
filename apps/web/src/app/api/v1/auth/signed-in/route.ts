@@ -7,6 +7,7 @@ import {
   ACCOUNT_NOTE_LIMIT,
   ACCOUNT_NOTE_WINDOW_MS,
   accountNoteKey,
+  admitUncountedNote,
   reportUncountedNote,
   requestIp,
   SESSION_NOTE_WINDOW_MS,
@@ -52,9 +53,11 @@ export const dynamic = 'force-dynamic';
  * the device is not noted, so no new-device email or organization event goes
  * out without a count and the device is still new at its next sign-in, and
  * the hold is reported (at most once in five minutes on an instance,
- * lib/auth/session-note.ts). The phone's sign-in itself has already happened at the Auth server, so the
- * row is kept. The note counts new-device alerts per account and per
- * organization (lib/auth/login-device.ts).
+ * lib/auth/session-note.ts). The phone's sign-in itself has already happened
+ * at the Auth server, so the row is kept. Meanwhile the instance counts in
+ * memory (admitUncountedNote): a session's row once, and 30 an hour per
+ * account, past which the answer is the same 429 with no row. The note counts
+ * new-device alerts per account and per organization (lib/auth/login-device.ts).
  *
  * Body: { installId?, device?: { model?, osName?, osVersion?, appVersion? } },
  * each field checked against an allowlist and a length cap. A field that
@@ -183,6 +186,22 @@ export async function POST(req: Request) {
           : firstNote.failed
             ? 'session'
             : null;
+
+    if (uncounted) {
+      // No count from the limiter: this instance's own bound decides.
+      const admitted = admitUncountedNote(ctx.userId, sessionId);
+      if (admitted !== 'write') {
+        reportUncountedNote(uncounted);
+        if (admitted === 'repeat') return NextResponse.json({ ok: true });
+        return NextResponse.json(
+          {
+            error: 'rate_limited',
+            message: 'Too many sign-ins from this account. Try again later.',
+          },
+          { status: 429 },
+        );
+      }
+    }
 
     const device = readDevice(parsed.data.device);
     const label = deviceLabel(device);

@@ -40,6 +40,15 @@ export function clientIpFromHeaders(headers: { get(name: string): string | null 
  * ("fe80::1%eth0") passes isIP but not inet, so a '%' is refused too.
  */
 export function clientIpForRecord(headers: { get(name: string): string | null }): string | null {
-  const ip = pickClientIp(headers);
+  return ipForRecord(pickClientIp(headers));
+}
+
+/**
+ * An address already in hand, in the form a stored record takes: the value
+ * when it is an IP literal inet accepts, else null. The audit writer applies
+ * it to every row as the last step before the insert, whoever shaped the row.
+ */
+export function ipForRecord(ip: string | null | undefined): string | null {
+  if (typeof ip !== 'string') return null;
   return isIP(ip) && !ip.includes('%') ? ip : null;
 }

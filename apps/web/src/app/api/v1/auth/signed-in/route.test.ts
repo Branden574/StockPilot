@@ -315,6 +315,45 @@ describe('POST /api/v1/auth/signed-in — the row', () => {
     expect(h.reportError).toHaveBeenCalledTimes(1);
   });
 
+  // While the limiter cannot answer, this instance bounds the rows itself
+  // (lib/auth/session-note.ts admitUncountedNote): once per session, and the
+  // account's hourly limit.
+  it.each([
+    ['both buckets', () => (h.storeDown = true)],
+    ['the session bucket', () => (h.downPrefix = 'auth-note:in:')],
+  ])(
+    'while the limiter cannot answer for %s, a second note of the same session writes no row',
+    async (_name, arrange) => {
+      arrange();
+      expect((await POST(req())).status).toBe(200);
+      const res = await POST(req());
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      expect(h.emitAuthAudit).toHaveBeenCalledTimes(1);
+      expect(h.noteLoginDevice).not.toHaveBeenCalled();
+    },
+  );
+
+  it('while the limiter cannot answer, an account gets 30 rows an hour on this instance, then 429 and no row', async () => {
+    h.storeDown = true;
+    for (let i = 0; i < 30; i += 1) {
+      h.readVerifiedTokenClaims.mockResolvedValueOnce(claims({ sessionId: `uncounted-${i}` }));
+      expect((await POST(req())).status).toBe(200);
+    }
+    h.readVerifiedTokenClaims.mockResolvedValueOnce(claims({ sessionId: 'uncounted-31' }));
+    const res = await POST(req());
+    expect(res.status).toBe(429);
+    expect((await res.json()).error).toBe('rate_limited');
+    expect(h.emitAuthAudit).toHaveBeenCalledTimes(30);
+    // Another account is counted on its own.
+    h.withApiContext.mockResolvedValueOnce(ctx({ userId: '33333333-3333-4333-8333-333333333333' }));
+    h.readVerifiedTokenClaims.mockResolvedValueOnce(
+      claims({ userId: '33333333-3333-4333-8333-333333333333', sessionId: 'other-account' }),
+    );
+    expect((await POST(req())).status).toBe(200);
+    expect(h.emitAuthAudit).toHaveBeenCalledTimes(31);
+  });
+
   it('a row written with a count carries no limiter_unavailable', async () => {
     await POST(req());
     expect(h.emitAuthAudit.mock.calls[0]![0].extra).not.toHaveProperty('limiter_unavailable');

@@ -28,6 +28,8 @@ const h = vi.hoisted(() => ({
   /** "event entity_id" per INSERT that answered, in order. */
   answered: [] as string[],
   status: 201,
+  /** What a later try is answered. */
+  upsertStatus: 201,
   /** Every INSERT and report still running, so no test leaks into the next. */
   inFlight: [] as Promise<unknown>[],
   reportError: vi.fn(),
@@ -35,25 +37,32 @@ const h = vi.hoisted(() => ({
 
 const INSERT_MS = 50;
 
+type SentRow = { event: string; metadata: { entity_id: string | null } };
+/** A builder that answers `status()` INSERT_MS after it is sent, and records the answer. */
+function answering(row: SentRow, label: string, status: () => number) {
+  const builder = {
+    abortSignal: () => builder,
+    then(onOk: (v: unknown) => unknown, onErr?: (e: unknown) => unknown) {
+      const answer = new Promise((resolve) => setTimeout(resolve, INSERT_MS)).then(() => {
+        const s = status();
+        h.answered.push(`${label}${row.event} ${row.metadata.entity_id}`);
+        return s < 300
+          ? { error: null, status: s, statusText: 'Created' }
+          : { error: { message: '', code: '' }, status: s, statusText: 'Bad Gateway' };
+      });
+      h.inFlight.push(answer);
+      return answer.then(onOk, onErr);
+    },
+  };
+  return builder;
+}
+
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => ({
     from: () => ({
-      insert: (row: { event: string; metadata: { entity_id: string | null } }) => {
-        const builder = {
-          abortSignal: () => builder,
-          then(onOk: (v: unknown) => unknown, onErr?: (e: unknown) => unknown) {
-            const answer = new Promise((resolve) => setTimeout(resolve, INSERT_MS)).then(() => {
-              h.answered.push(`${row.event} ${row.metadata.entity_id}`);
-              return h.status < 300
-                ? { error: null, status: h.status, statusText: 'Created' }
-                : { error: { message: '', code: '' }, status: h.status, statusText: 'Bad Gateway' };
-            });
-            h.inFlight.push(answer);
-            return answer.then(onOk, onErr);
-          },
-        };
-        return builder;
-      },
+      insert: (row: SentRow) => answering(row, '', () => h.status),
+      // A later try (insert, skipping a row already there).
+      upsert: (row: SentRow) => answering(row, 'again: ', () => h.upsertStatus),
     }),
   }),
 }));
@@ -87,6 +96,7 @@ const auditsAndReturns = {
 beforeEach(() => {
   h.answered = [];
   h.status = 201;
+  h.upsertStatus = 201;
   h.inFlight = [];
   h.reportError.mockReset();
   h.reportError.mockImplementation(async () => undefined);
@@ -111,11 +121,11 @@ describe('a `void audit()` in a Route Handler', () => {
 
   it('a refused INSERT: the loss report it sends is held too', async () => {
     h.status = 502;
-    let reportSent = false;
+    let reportsSent = 0;
     h.reportError.mockImplementation(() => {
       const post = new Promise<void>((resolve) =>
         setTimeout(() => {
-          reportSent = true;
+          reportsSent += 1;
           resolve();
         }, INSERT_MS),
       );
@@ -125,14 +135,51 @@ describe('a `void audit()` in a Route Handler', () => {
 
     await runRouteThroughNext(auditsAndReturns, get());
 
-    expect(h.reportError).toHaveBeenCalledTimes(1);
+    // A 502 is sent again (audit.retry.test.ts): the alert at the first try,
+    // then the organization's window report with the outcome.
+    expect(h.reportError).toHaveBeenCalledTimes(2);
     expect(h.reportError.mock.calls[0]![1]).toMatchObject({
       tag: 'audit.write_failed',
       organizationId: 'org-1',
       extra: { event: 'inventory.item.created', lost: 1, status: 502 },
     });
-    // The report's own webhook POST finished inside the invocation as well.
-    expect(reportSent).toBe(true);
+    // The reports' own webhook POSTs finished inside the invocation as well.
+    expect(reportsSent).toBe(2);
+  });
+
+  it('a first try that was not written: its later try and both alerts are held too', async () => {
+    // The shortest delay (Math.random 0 = half of 1 s), so the run stays short.
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    h.status = 502;
+    const sent: string[] = [];
+    h.reportError.mockImplementation((err: Error) => {
+      const post = new Promise<void>((resolve) =>
+        setTimeout(() => {
+          sent.push(err.message);
+          resolve();
+        }, INSERT_MS),
+      );
+      h.inFlight.push(post);
+      return post;
+    });
+    try {
+      const { status, body } = await runRouteThroughNext(auditsAndReturns, get());
+
+      expect(status).toBe(200);
+      expect(JSON.parse(body)).toEqual({ answeredWhenReturned: 0 });
+      // The first try, then the later one, both inside the invocation.
+      expect(h.answered).toEqual([
+        'inventory.item.created item-1',
+        'again: inventory.item.created item-1',
+      ]);
+      // The alert at the first try, and the window's report with the outcome,
+      // both sent before the invocation could end.
+      expect(sent).toHaveLength(2);
+      expect(sent[0]).toMatch(/sending it again/);
+      expect(sent[1]).toMatch(/written on a later try/);
+    } finally {
+      random.mockRestore();
+    }
   });
 
   it('started inside an after() callback (a deferred tail), it is held too', async () => {
