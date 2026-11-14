@@ -100,6 +100,8 @@ const NIGHT_IDS = [
   // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: without it): the emailed links release is published later, at the top, and reaches every member (it has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
   // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: without them): the phone authenticator code and access check releases are published later, at the top; the authenticator code release reaches every member and the access check release reaches whoever can adjust stock, check out rentals or escalate exceptions, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
   // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: without it): the order request alerts release is published later, at the top, and reaches owners, admins and managers where Orders is on and, where the AI module is on too, whoever can open Today's briefing, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+  // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: without it): the phone screens by access release is published later, at the top, and reaches every member (two of its three entries have no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+  'phone-screens-by-access-2026-11',
   'order-request-alerts-follow-approve-2026-11',
   'phone-authenticator-code-2026-11',
   'phone-access-check-retry-2026-11',
@@ -158,17 +160,19 @@ describe('the lists, delivery sites and fixes release (2026-11-02)', () => {
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: every pinned position one place higher): the order request alerts release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[19]?.id).toBe(AUTH_CODE_ID);
-    expect(RELEASES[19]?.status).toBe('published');
-    expect(RELEASES[20]?.id).toBe(RETRIES_ID);
+    // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: every pinned position one place higher): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[20]?.id).toBe(AUTH_CODE_ID);
     expect(RELEASES[20]?.status).toBe('published');
+    expect(RELEASES[21]?.id).toBe(RETRIES_ID);
+    expect(RELEASES[21]?.status).toBe('published');
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: every pinned position one place higher): the order request alerts release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[21]?.id).toBe(ID);
-    expect(RELEASES[21]?.status).toBe('published');
-    expect(RELEASES[22]?.id).toBe('update-ready-and-fixes-2026-11');
-    expect(RELEASES[23]?.id).toBe('export-fixes-2026-10');
+    // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: every pinned position one place higher): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[22]?.id).toBe(ID);
+    expect(RELEASES[22]?.status).toBe('published');
+    expect(RELEASES[23]?.id).toBe('update-ready-and-fixes-2026-11');
+    expect(RELEASES[24]?.id).toBe('export-fixes-2026-10');
     expect(
       // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: slice(0, 3)): the web fixes and archived charters releases are published later, at the top.
       // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: slice(2, 5)): the Export items, phone update, clearer web messages and QW1 releases are published later, at the top.
@@ -182,7 +186,8 @@ describe('the lists, delivery sites and fixes release (2026-11-02)', () => {
         // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: .slice(14, 17)): the emailed links release is published later, at the top, so these move down by one.
         // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: .slice(15, 18)): the phone authenticator code and access check releases are published later, at the top, so these move down by two.
         // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: .slice(17, 20)): the order request alerts release is published later, at the top, so these move down by one.
-        .slice(18, 21)
+        // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: .slice(18, 21)): the phone screens by access release is published later, at the top, so these move down by one.
+        .slice(19, 22)
         .map((r) => r.id),
     ).toEqual([AUTH_CODE_ID, RETRIES_ID, ID]);
   });

@@ -33,11 +33,17 @@ import { RELEASES } from './registry';
  * (order-request-alert-approvers) is not published, so the summary does not
  * name staff members either. Its own file, so the release tests other open
  * branches edit stay as they are.
+ *
+ * Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14): the phone screens by
+ * access release is published later, directly above this release and below
+ * the Liquid Glass draft. Each changed line has its own note.
  */
 const ID = 'order-request-alerts-follow-approve-2026-11';
 const REMOVED_ID = 'order-request-alert-removed-approvers';
 const BRIEFING_ID = 'briefing-follows-permissions';
 const PHONE_CODE_ID = 'phone-authenticator-code-2026-11';
+// Added by docs/whats-new-phone-screens-by-access (2026-11-14): the phone screens by access release, published later, directly above this one. It reaches every member.
+const PHONE_SCREENS_ID = 'phone-screens-by-access-2026-11';
 
 const release = () => RELEASES.find((r) => r.id === ID)!;
 const entry = (entryId: string) => release().entries.find((e) => e.id === entryId)!;
@@ -77,28 +83,35 @@ function readerText(r: Release): string[] {
 }
 
 describe('the order request alerts release: order, status and date', () => {
-  it('is published once, as revision 1, directly below the Liquid Glass draft, the newest published release', () => {
+  it('is published once, as revision 1, directly below the phone screens by access release (published later, below the Liquid Glass draft at the top) and above the phone authenticator code release', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
-    expect(RELEASES.slice(0, 3).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: RELEASES.slice(0, 3), without it): the phone screens by access release is published later, at the top, directly below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES.slice(0, 4).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      [PHONE_SCREENS_ID, 'published'],
       [ID, 'published'],
       [PHONE_CODE_ID, 'published'],
     ]);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
+      // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: ID): the phone screens by access release is published after it, at the top, the newest published release.
+      PHONE_SCREENS_ID,
+    );
   });
 
-  it('is dated the whole minute after the web deploy and migration 0422 were both live, with the draft placeholder at that minute and no later release below', () => {
+  it('is dated the whole minute after the web deploy and migration 0422 were both live, with the draft placeholder at or after that minute and no later release below', () => {
     // #440 was deployed at 17:24:39Z; migration 0422 went live at 17:57:33Z.
     expect(release().publishedAt).toBe('2026-11-14T17:58:00Z');
     const at = Date.parse(release().publishedAt);
     expect(at).toBeGreaterThan(Date.parse('2026-11-14T17:24:39Z'));
     expect(at).toBeGreaterThan(Date.parse('2026-11-14T17:57:33Z'));
     expect(at).toBeLessThanOrEqual(Date.now());
-    expect(RELEASES[0]!.publishedAt).toBe(release().publishedAt);
-    for (const r of RELEASES.slice(2)) {
+    // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: the draft placeholder at this minute): the placeholder moved to the minute of the phone screens by access release, published later, so it is at or after this one.
+    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
+    // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: RELEASES.slice(2)): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(3)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -224,13 +237,29 @@ describe('the order request alerts release: who is told', () => {
     expect(entriesFor(member)).toEqual([]);
   });
 
-  it('is the newest notice for a reader it reaches, and changes nothing for a reader it does not', () => {
-    expect(buildReleaseList(RELEASES, owner, [], null).latestUnread?.id).toBe(ID);
+  it('is the newest notice for a reader it reaches once the later phone screens by access release is read, and changes nothing for a reader it does not', () => {
+    // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: nothing read): the phone screens by access release is published later, at the top, and reaches every member (two of its three entries have no audience), so each reader reads it first, and the notice this test checks is the one it checked before.
+    const newerRead = [
+      {
+        release_id: PHONE_SCREENS_ID,
+        revision: 1,
+        dismissed_at: null,
+        opened_at: '2026-11-14T19:00:00Z',
+        read_at: '2026-11-14T19:00:00Z',
+      },
+    ];
+    expect(buildReleaseList(RELEASES, owner, newerRead, null).latestUnread?.id).toBe(ID);
     expect(
-      buildReleaseList(RELEASES, viewer('manager', ROLE_PERMISSIONS.manager, ['orders']), [], null)
-        .latestUnread?.id,
+      buildReleaseList(
+        RELEASES,
+        viewer('manager', ROLE_PERMISSIONS.manager, ['orders']),
+        newerRead,
+        null,
+      ).latestUnread?.id,
     ).toBe(ID);
-    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(PHONE_CODE_ID);
+    expect(buildReleaseList(RELEASES, member, newerRead, null).latestUnread?.id).toBe(
+      PHONE_CODE_ID,
+    );
   });
 });
 
