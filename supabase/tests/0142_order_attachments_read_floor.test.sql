@@ -37,6 +37,12 @@ insert into public.order_requests
   (id, organization_id, warehouse_id, status, source, requester_user_id, fulfillment_type)
 values
   (:ord, :orgA, :wh, 'completed', 'internal', :mgr, 'pickup');
+-- Since 0451 (docket S3c) a row names a stored file that is already in the
+-- bucket and that the caller reads; the manager uploads it first, as the app
+-- does.
+insert into storage.objects (bucket_id, name, owner, owner_id) values
+  ('order-attachments', 'da000000-0000-0000-0000-0000000000da/d0000000-0000-0000-0000-0000000000d9/proof.jpg',
+   :mgr, 'd0000000-0000-0000-0000-0000000000d1');
 
 -- ── Manager can attach (org + attachable-status + path-prefix binds pass) ───
 set local "request.jwt.claim.sub" to 'd0000000-0000-0000-0000-0000000000d1'; -- mgr

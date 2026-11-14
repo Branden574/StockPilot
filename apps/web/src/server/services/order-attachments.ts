@@ -4,7 +4,12 @@ import { unstable_cache } from 'next/cache';
 
 import { isManagerOrAbove } from '@stockpilot/core';
 
-import { isValidStoragePath, orderAttachmentPathShape } from '@/lib/storage-path';
+import { reportError } from '@/lib/error-reporter';
+import {
+  hasUnsafeStorageSegment,
+  isValidStoragePath,
+  orderAttachmentPathShape,
+} from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { ServiceError, withContext, type ServiceContext } from './context';
@@ -99,6 +104,43 @@ export function attachmentWantsThumb(contentType: string | null): boolean {
 
 const GRID_THUMB_WIDTH = 400;
 
+/**
+ * Whether list() signs a stored row's path. The path is signed only when it
+ * is under this organization's folder, contains no `?`, `#` or whitespace,
+ * and passes the shared segment check (no empty, `.` or `..` segment, no
+ * leading slash, `%`, `\` or control character). This is deliberately NOT
+ * the full `{org}/{order}/{file}` shape add() asks: rows filed before that
+ * shape still list, they only lose their link when the path itself is not
+ * safe to put in a signing URL. Every path the web panel and the phone have
+ * minted (`{org}/{order}/{uuid}.{ext}`, `{org}/{order}/{base36}.{ext}`)
+ * passes.
+ */
+export function isSignableAttachmentPath(storagePath: unknown, organizationId: string): boolean {
+  if (typeof storagePath !== 'string') return false;
+  if (!storagePath.startsWith(`${organizationId}/`)) return false;
+  if (/[?#\s]/.test(storagePath)) return false;
+  return !hasUnsafeStorageSegment(storagePath);
+}
+
+/** Row ids already reported as unsignable by this server instance, so each is
+ *  reported once rather than on every render. */
+const reportedUnsignableRows = new Set<string>();
+
+function reportUnsignableRow(rowId: string, organizationId: string): void {
+  if (reportedUnsignableRows.has(rowId)) return;
+  reportedUnsignableRows.add(rowId);
+  // The id and organization only: never the stored path itself.
+  void reportError(
+    new Error('Order attachment listed without a link: its stored path is not signable'),
+    {
+      tag: 'order-attachments.unsignable-path',
+      level: 'warning',
+      organizationId,
+      extra: { attachmentId: rowId },
+    },
+  );
+}
+
 /** Statuses where proof-of-delivery attachments are allowed: from the
  *  moment an order is staged / out for delivery through completed. */
 export const ATTACHABLE_ORDER_STATUSES = [
@@ -153,12 +195,18 @@ export class OrderAttachmentsService {
       rows.map(async (r) => {
         const storagePath = r.storage_path as string;
         const contentType = (r.content_type as string | null) ?? null;
-        const [url, thumb] = await Promise.all([
-          cachedFullUrl(storagePath),
-          attachmentWantsThumb(contentType)
-            ? cachedThumbUrl(storagePath, GRID_THUMB_WIDTH)
-            : Promise.resolve(null),
-        ]);
+        // A path that is not signable is listed without a link (and reported
+        // once) instead of being handed to the service-role signer.
+        const signable = isSignableAttachmentPath(storagePath, this.ctx.organizationId);
+        if (!signable) reportUnsignableRow(r.id as string, this.ctx.organizationId);
+        const [url, thumb] = signable
+          ? await Promise.all([
+              cachedFullUrl(storagePath),
+              attachmentWantsThumb(contentType)
+                ? cachedThumbUrl(storagePath, GRID_THUMB_WIDTH)
+                : Promise.resolve(null),
+            ])
+          : [null, null];
         return {
           id: r.id as string,
           orderRequestId: r.order_request_id as string,

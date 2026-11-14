@@ -8,12 +8,13 @@
 # supautils.policy_grants lists for the role on any policy statement; the
 # unique index takes SHARE on order_request_attachments; creating the SQL
 # helpers and the attachments insert check reads order_requests and bundles
-# (ACCESS SHARE). The file takes every one of these in one NOWAIT prelude
-# (`do $lock451$ ... end $lock451$;`, the 0404/0415 pattern) and never waits
-# holding one. This proves:
+# (ACCESS SHARE) and storage.objects (already held ACCESS EXCLUSIVE). The
+# file takes every one of these in one NOWAIT prelude (`do $lock451$ ...
+# end $lock451$;`, the 0404/0415 pattern) and never waits holding one. This proves:
 #
 #   1a. Before the prelude the file holds no lock on any table outside the
-#       catalogs (the preflight reads the catalogs only).
+#       catalogs (the preflight reads the catalogs only, in a block it
+#       always undoes).
 #   1b. The prelude takes ACCESS SHARE on order_requests and bundles, ACCESS
 #       EXCLUSIVE on order_request_attachments, schedule_events and
 #       storage.objects, and ACCESS EXCLUSIVE on every existing table in

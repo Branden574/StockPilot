@@ -5,10 +5,14 @@
 --    removed by people who may approve orders (orders:approve, any role, any
 --    warehouse), the order's driver (read) and the person who added it. Each
 --    stored file is named by at most one row, a row's path is exactly
---    {organization}/{its order}/{file}, and a row names the caller or nobody
---    as the person who added it. A stored file no row names is read by the
---    member who uploaded it and by approvers of its organization. The bucket's
---    update and delete rules ask the same as its read rule.
+--    {organization}/{its order}/{file} with the web's file-name rule
+--    (OBJECT_FILENAME_SEGMENT), the stored file is already in the bucket and
+--    readable to the caller, and a row names the caller or nobody as the
+--    person who added it. A stored file no row names is read by the member
+--    who uploaded it and by approvers of its organization. The bucket's
+--    update and delete rules ask the same as its read rule. The web's and the
+--    phone's file names and the app's INSERT ... RETURNING pass; the service
+--    role's writes are not bound by row rules.
 -- G. Table privileges: anon holds nothing on order_request_attachments,
 --    shipments or shipment_lines; authenticated holds SELECT, INSERT and
 --    DELETE on attachments, no SELECT, INSERT, UPDATE or DELETE on shipments
@@ -30,7 +34,7 @@
 -- and the service role. Made-up data only.
 
 begin;
-select plan(53);
+select plan(57);
 
 \set orgA   '\'e5451000-0000-4000-8000-00000000000a\''
 \set orgB   '\'e5451000-0000-4000-8000-00000000000b\''
@@ -179,6 +183,27 @@ create function pg_temp.ins(p_order uuid, p_path text, p_kind text, p_uploader t
                                values (%L, %L, %L, %L, %s) returning id) select count(*)::text from i$q$,
                 'e5451000-0000-4000-8000-00000000000a', p_order, p_path, p_kind, p_uploader)
 $$;
+-- Puts a stored file at p_path (owner and owner_id p_owner) when p_obj, files
+-- a row for it as p_sub through the app's INSERT ... RETURNING, and undoes
+-- both: returns the insert's value, or ERR:<sqlstate>.
+create function pg_temp.tryf(p_sub uuid, p_order uuid, p_path text, p_owner uuid, p_obj boolean default true,
+                             p_kind text default 'dropoff_photo', p_uploader text default '(select auth.uid())',
+                             p_as text default 'authenticated') returns text language plpgsql as $$
+declare v text; v_state text; v_msg text;
+begin
+  begin
+    if p_obj then
+      insert into storage.objects (bucket_id, name, owner, owner_id)
+      values ('order-attachments', p_path, p_owner, p_owner::text);
+    end if;
+    v := pg_temp.run(p_as, p_sub, pg_temp.ins(p_order, p_path, p_kind, p_uploader));
+    raise exception using errcode = 'XS3C0', message = v;
+  exception when others then
+    get stacked diagnostics v_state = returned_sqlstate, v_msg = message_text;
+    if v_state = 'XS3C0' then return v_msg; end if;
+    return 'ERR:' || v_state;
+  end;
+end $$;
 -- Signature rows / other rows the caller reads in org A.
 create function pg_temp.sig() returns text language sql as $$
   select $q$select count(*) filter (where kind = 'signature')::text || '/' || count(*) filter (where kind <> 'signature')::text
@@ -207,11 +232,11 @@ create function pg_temp.ev_phone() returns text language sql as $$
 $$;
 
 -- ══ A. Wet signature photos ════════════════════════════════════════════════
+insert into storage.objects (bucket_id, name, owner, owner_id) values ('order-attachments', :P4, :mgrN, :mgrN);
 select is(
   pg_temp.run('authenticated', :mgrN, pg_temp.ins(:oDone, :P4, 'signature', '(select auth.uid())')),
   '1',
-  'A1: a manager whose orders:approve is off adds a Wet signature photo through INSERT ... RETURNING');
-insert into storage.objects (bucket_id, name, owner, owner_id) values ('order-attachments', :P4, :mgrN, :mgrN);
+  'A1: a manager whose orders:approve is off uploads a Wet signature photo and adds its row through INSERT ... RETURNING');
 
 select is(
   pg_temp.run('authenticated', :mgrN, pg_temp.sig()) || ' ' || pg_temp.run('authenticated', :mgrN2, pg_temp.sig()),
@@ -254,28 +279,69 @@ select is(
 
 -- The insert rule.
 select is(
-  pg_temp.run('authenticated', :mgrN, pg_temp.ins(:oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/66666666-6666-4666-8666-666666666666.jpg', 'signature', quote_literal('e5451000-0000-4000-8000-0000000000a1'))),
+  pg_temp.tryf(:mgrN, :oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/66666666-6666-4666-8666-666666666666.jpg', :mgrN,
+               true, 'signature', quote_literal('e5451000-0000-4000-8000-0000000000a1')),
   'ERR:42501',
   'A9: a row names the caller or nobody as the person who added it');
+insert into storage.objects (bucket_id, name, owner, owner_id) values
+  ('order-attachments', 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/77777777-7777-4777-8777-777777777777.jpg', :mgrY, :mgrY);
 select is(
   pg_temp.run('authenticated', :mgrY, pg_temp.ins(:oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/77777777-7777-4777-8777-777777777777.jpg', 'dropoff_photo', 'null'))
   || ' ' || pg_temp.run('authenticated', :vwr, pg_temp.ins(:oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/88888888-8888-4888-8888-888888888888.jpg', 'dropoff_photo', '(select auth.uid())')),
   '1 ERR:42501',
   'A10: a manager adds a row with no uploader named; a viewer adds none');
+-- The rest of the file reads the bucket as it was: the A10 row stays, its file goes.
+do $$ begin
+  perform set_config('storage.allow_delete_query', 'true', true);
+  delete from storage.objects where bucket_id = 'order-attachments'
+     and name = 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/77777777-7777-4777-8777-777777777777.jpg';
+  perform set_config('storage.allow_delete_query', 'false', true);
+end $$;
 select is(
-  pg_temp.run('authenticated', :mgrY, pg_temp.ins(:oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000202/99999999-9999-4999-8999-999999999999.jpg', 'other', '(select auth.uid())'))
-  || ' ' || pg_temp.run('authenticated', :mgrY, pg_temp.ins(:oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/', 'other', '(select auth.uid())'))
-  || ' ' || pg_temp.run('authenticated', :mgrY, pg_temp.ins(:oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/sub/a1.jpg', 'other', '(select auth.uid())'))
-  || ' ' || pg_temp.run('authenticated', :mgrY, pg_temp.ins(:oDone, 'e5451000-0000-4000-8000-00000000000a/a2.jpg', 'other', '(select auth.uid())')),
+  pg_temp.tryf(:mgrY, :oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000202/99999999-9999-4999-8999-999999999999.jpg', :mgrY)
+  || ' ' || pg_temp.tryf(:mgrY, :oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/', :mgrY)
+  || ' ' || pg_temp.tryf(:mgrY, :oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/sub/a1.jpg', :mgrY)
+  || ' ' || pg_temp.tryf(:mgrY, :oDone, 'e5451000-0000-4000-8000-00000000000a/a2.jpg', :mgrY),
   'ERR:42501 ERR:42501 ERR:42501 ERR:42501',
   'A11: a row''s path is exactly {organization}/{its order}/{file}: another order''s folder, an empty file part, a fourth part and a two-part path are refused');
 select is(
-  pg_temp.run('authenticated', :mgrN2, pg_temp.ins(:oDone, :P2, 'dropoff_photo', '(select auth.uid())'))
+  pg_temp.run('authenticated', :mgrN2, pg_temp.ins(:oDone, :P1, 'dropoff_photo', '(select auth.uid())'))
   || ' ' || pg_temp.run('authenticated', :mgrY, pg_temp.ins(:oDone, :P2, 'other', '(select auth.uid())'))
   || ' ' || pg_temp.run('authenticated', :mgrN2, pg_temp.ins(:oDone, :P3, 'dropoff_photo', '(select auth.uid())'))
   || ' ' || pg_temp.run('service_role', null, pg_temp.ins(:oDone, :P2, 'other', 'null')),
   'ERR:23505 ERR:23505 ERR:42501 ERR:23505',
   'A12: a second row naming a stored file another row names is refused (the unique path; another order''s file by the path rule too), for the service role as well');
+select is(
+  pg_temp.tryf(:mgrY, :oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/a1b2c3d4e5f6.jpg?x', :mgrY)
+  || ' ' || pg_temp.tryf(:mgrY, :oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/a1b2c3d4e5f6.jpg#x', :mgrY)
+  || ' ' || pg_temp.tryf(:mgrY, :oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/a1b2c3d4e5f6.jpg/', :mgrY)
+  || ' ' || pg_temp.tryf(:mgrY, :oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/a1b2c3d4e5f6.jpg ', :mgrY)
+  || ' ' || pg_temp.tryf(:mgrY, :oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/a1b2c3d4e5f6.jpg;x', :mgrY)
+  || ' ' || pg_temp.tryf(:mgrY, :oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/a1b2c3d4e5f6.jpg&x', :mgrY)
+  || ' ' || pg_temp.tryf(:mgrY, :oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/a1b2c3d4e5f6', :mgrY)
+  || ' ' || pg_temp.tryf(:mgrY, :oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/' || repeat('a', 121) || '.jpg', :mgrY),
+  'ERR:42501 ERR:42501 ERR:42501 ERR:42501 ERR:42501 ERR:42501 ERR:42501 ERR:42501',
+  'A23: the file part follows the web''s file-name rule: a name with ?, #, a trailing slash, a trailing space, ; or &, with no extension, or longer than 120 before its extension is refused');
+select is(
+  pg_temp.tryf(:mgrN, :oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/0b7f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c4.webp', :mgrN)
+  || ' ' || pg_temp.tryf(:mgrN, :oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/k3j9x0q2m7ab.jpg', :mgrN, true, 'signature')
+  || ' ' || pg_temp.tryf(:mgrY, :oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/0b7f1c2e-3d4a-4b5c-8d6e-7f8091a2b3c5.pdf', :mgrY)
+  || ' ' || pg_temp.tryf(:mgrN, :oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/' || repeat('a', 120) || '.jpg', :mgrN),
+  '1 1 1 1',
+  'A24: the web''s {uuid}.{ext} and the phone''s {12 base-36}.{ext} names pass through INSERT ... RETURNING, for the uploader whose orders:approve is off and for an approver; 120 before the extension passes');
+select is(
+  pg_temp.tryf(:mgrN, :oDone, :R1, null, false)
+  || ' ' || pg_temp.tryf(:mgrN2, :oDone, :R1, null, false)
+  || ' ' || pg_temp.tryf(:mgrN2, :oDone, :R2, null, false)
+  || ' ' || pg_temp.tryf(:mgrY, :oDone, :R1, null, false)
+  || ' ' || pg_temp.tryf(:mgrY, :oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/c0ffee000001.jpg', null, false),
+  'ERR:42501 1 1 1 ERR:42501',
+  'A25: a row names a stored file the caller reads: another manager without orders:approve cannot file a row for a file someone else uploaded; its uploader (owner_id, or owner) and an approver can; a path with no stored file is refused');
+select is(
+  pg_temp.tryf(null, :oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/c0ffee000002.jpg', null, false, 'other', 'null', 'service_role')
+  || ' ' || pg_temp.tryf(null, :oDone, 'e5451000-0000-4000-8000-00000000000a/e5451000-0000-4000-8000-000000000201/c0ffee000003.jpg?x', null, true, 'other', 'null', 'service_role'),
+  '1 1',
+  'A26: the service role''s writes are not bound by the row rules');
 
 -- Stored files.
 select is(
@@ -501,14 +567,13 @@ select ok(
 select ok(
   (select with_check like '%has_org_role(organization_id, ''manager''::text)%'
       and with_check like '%staged_for_pickup%signature_requested%completed%'
-      and with_check like '%split_part(storage_path, ''/''::text, 1) = (organization_id)::text%'
-      and with_check like '%split_part(storage_path, ''/''::text, 2) = (order_request_id)::text%'
-      and with_check like '%split_part(storage_path, ''/''::text, 3) <> ''''::text%'
-      and with_check like '%split_part(storage_path, ''/''::text, 4) = ''''::text%'
+      and with_check like '%storage_path = %(organization_id)::text%(order_request_id)::text%split_part(storage_path, ''/''::text, 3)%'
+      and strpos(with_check, 'split_part(storage_path, ''/''::text, 3) ~ ''^[A-Za-z0-9_-]{1,120}(\.[A-Za-z0-9]{1,10}){1,3}$''::text') > 0
+      and with_check like '%storage.objects so%so.bucket_id = ''order-attachments''::text%so.name = order_request_attachments.storage_path%order_attachment_object_readable(so.name, COALESCE(so.owner_id, (so.owner)::text))%'
       and with_check like '%uploaded_by IS NULL%uploaded_by = ( SELECT auth.uid()%'
      from pg_policies
     where schemaname = 'public' and tablename = 'order_request_attachments' and policyname = 'order_request_attachments manager insert'),
-  'P3: the attachments insert policy: 0143''s manager, order, status and folder terms, the exact path, and the uploader term');
+  'P3: the attachments insert policy: 0143''s manager, order, status and folder terms, the exact path with the web''s file-name rule, the stored file the caller reads, and the uploader term');
 select ok(
   (select qual like '%has_org_role(organization_id, ''manager''::text)%'
       and qual like '%kind <> ''signature''::text%uploaded_by = ( SELECT auth.uid()%order_signature_photo_reader(order_request_id)%'

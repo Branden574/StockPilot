@@ -28,8 +28,12 @@
 --              'signature') only for the person who added it (uploaded_by),
 --              or when order_signature_photo_reader says yes.
 --      insert  0143's check, plus: the path is exactly
---              {organization}/{this order}/{file} (three non-empty parts),
---              and uploaded_by is the caller or empty.
+--              {organization}/{this order}/{file}, the file part follows the
+--              web's file-name rule (OBJECT_FILENAME_SEGMENT: 1 to 120 of
+--              A-Z a-z 0-9 _ -, then one to three .ext of 1 to 10 letters or
+--              digits); the stored file is already in the bucket and its rule
+--              (item 4) lets the caller read it; uploaded_by is the caller or
+--              empty.
 --      delete  a manager (0142), and for a Wet signature photo the same
 --              audience as read.
 --    The app writes with RETURNING (OrderAttachmentsService.add, used by the
@@ -76,7 +80,11 @@
 --    write through the admin client; revise_order_needed_by is SECURITY
 --    DEFINER.
 -- 9. The web's OrderAttachmentsService.add asks the same path shape (HI-8,
---    orderAttachmentPathShape: {organization}/{this order}/{file}).
+--    orderAttachmentPathShape: {organization}/{this order}/{file}, with
+--    OBJECT_FILENAME_SEGMENT as the file part; a guard test ties the two).
+--    OrderAttachmentsService.list signs a stored row's path only when it is
+--    under the organization's folder with no ?, # or whitespace and no
+--    empty, . or .. segment; any other row is listed without a link.
 --
 -- ── ORDER ─────────────────────────────────────────────────────────────────
 -- Applied after the queued kits listed in the pull request (0421 S49, S36a,
@@ -88,7 +96,8 @@
 --
 -- ── LOCKS ─────────────────────────────────────────────────────────────────
 -- The CLI applies the file as one implicit transaction, so each lock is held
--- to the commit. The preflight reads the catalogs only. The prelude then takes
+-- to the commit. The preflight reads the catalogs only, in a block it always
+-- undoes, so it holds no table lock afterwards. The prelude then takes
 -- every table lock the file needs, at once and without waiting (0404's and
 -- 0415's pattern):
 --   * order_request_attachments, schedule_events, storage.objects: ACCESS
@@ -107,32 +116,62 @@
 set lock_timeout = '5s';
 
 -- ═══ 0. Preflight (catalogs only) ══════════════════════════════════════════
--- The policies this file restates are the ones it was written against, and
--- the objects it adds are not there yet. Any difference stops the file before
--- it changes anything (55000, hint s3c_preflight).
+-- Each policy this file restates or drops has the text (command, permissive,
+-- roles, USING and WITH CHECK, md5 as 0420 pins them) measured on a stack at
+-- 0420, no other policy is on those tables or under the order-attachments
+-- name, and the objects this file adds are not there yet. Any difference
+-- stops the file before it changes anything (55000, hint s3c_preflight).
+-- Deparsing a policy whose expression reads another table takes ACCESS SHARE
+-- on it until the transaction ends, so the reading runs in a block that is
+-- always undone: the file holds no table lock before the prelude.
+-- search_path is pinned inside the block (undone with it) so the deparsed
+-- text does not depend on the session's. Variables keep their values when the
+-- block is undone.
 do $pre451$
 declare
   v_bad text := '';
-  v_set text;
+  r     record;
 begin
-  select string_agg(n.nspname || '.' || c.relname || '.' || pol.polname || ':' || pol.polcmd::text, ','
-                    order by n.nspname collate "C", c.relname collate "C", pol.polname collate "C")
-    into v_set
-    from pg_policy pol
-    join pg_class c on c.oid = pol.polrelid
-    join pg_namespace n on n.oid = c.relnamespace
-   where pol.polrelid in ('public.order_request_attachments'::regclass, 'public.schedule_events'::regclass)
-      or (pol.polrelid = 'storage.objects'::regclass and pol.polname like 'order-attachments %');
-  if v_set is distinct from
-     'public.order_request_attachments.order_request_attachments manager delete:d,'
-     || 'public.order_request_attachments.order_request_attachments manager insert:a,'
-     || 'public.order_request_attachments.order_request_attachments read:r,'
-     || 'public.schedule_events.schedule_events_delete:d,public.schedule_events.schedule_events_insert:a,'
-     || 'public.schedule_events.schedule_events_select:r,public.schedule_events.schedule_events_update:w,'
-     || 'storage.objects.order-attachments manager delete:d,storage.objects.order-attachments manager update:w,'
-     || 'storage.objects.order-attachments manager write:a,storage.objects.order-attachments read:r' then
-    v_bad := v_bad || format(' attachment, schedule or bucket policies differ (%s);', coalesce(v_set, 'none'));
-  end if;
+  begin
+    perform set_config('search_path', 'public, extensions', true);
+    for r in
+      select coalesce(v.tbl, g.tbl) as tbl, coalesce(v.pol, g.pol) as pol, v.want, g.got
+        from (values
+          ('public.order_request_attachments', 'order_request_attachments manager delete', '8d1c75406f54a184e3fce3a43e4e1229'),
+          ('public.order_request_attachments', 'order_request_attachments manager insert', '72eca4c51e0712f78f3b712b5ac7ef37'),
+          ('public.order_request_attachments', 'order_request_attachments read',           'bb3ac0c41dec908f7a4386e7ae99cab9'),
+          ('public.schedule_events', 'schedule_events_delete', 'a51a628c9dc54deae0e9d3f561f0934d'),
+          ('public.schedule_events', 'schedule_events_insert', '5f59edceac81ccd576d3ca8f77bce9ac'),
+          ('public.schedule_events', 'schedule_events_select', 'bcae5d917a0c612de0e8b0951e00e376'),
+          ('public.schedule_events', 'schedule_events_update', 'c3be89e76538b3e7db86f170530c68d6'),
+          ('storage.objects', 'order-attachments manager delete', '0fa41c18b3b7cbb4549894d0b0f88c97'),
+          ('storage.objects', 'order-attachments manager update', '64cb9e4392e29ad09cbf8625f9faebd9'),
+          ('storage.objects', 'order-attachments manager write',  '40ec634fc037fe7b46e6c15cc3d70226'),
+          ('storage.objects', 'order-attachments read',           'd3b2c4ced0d653826eb686b07dff2d9d')
+        ) v(tbl, pol, want)
+        full join (
+          select n.nspname || '.' || c.relname as tbl, pol.polname as pol,
+                 md5(pol.polcmd::text || '|' || pol.polpermissive::text || '|'
+                     || (select string_agg(case x when 0 then 'public' else x::regrole::text end, ',' order by 1)
+                           from unnest(pol.polroles) x)
+                     || '|' || coalesce(pg_get_expr(pol.polqual, pol.polrelid), '')
+                     || '|' || coalesce(pg_get_expr(pol.polwithcheck, pol.polrelid), '')) as got
+            from pg_policy pol join pg_class c on c.oid = pol.polrelid
+            join pg_namespace n on n.oid = c.relnamespace
+           where c.oid in ('public.order_request_attachments'::regclass, 'public.schedule_events'::regclass)
+              or (c.oid = 'storage.objects'::regclass and pol.polname like 'order-attachments %')
+        ) g on g.tbl = v.tbl and g.pol = v.pol
+    loop
+      if r.want is null then
+        v_bad := v_bad || format(' unexpected policy %s on %s;', r.pol, r.tbl);
+      elsif r.got is distinct from r.want then
+        v_bad := v_bad || format(' policy %s on %s drifted (%s);', r.pol, r.tbl, coalesce(r.got, 'missing'));
+      end if;
+    end loop;
+    raise exception using errcode = 'XX420', message = 'undo';
+  exception when sqlstate 'XX420' then
+    null;
+  end;
   if to_regprocedure('public.order_signature_photo_reader(uuid)') is not null
      or to_regprocedure('public.order_attachment_object_readable(text,text)') is not null
      or to_regprocedure('public.bundle_in_org(uuid,uuid)') is not null
@@ -241,42 +280,8 @@ comment on policy "order_request_attachments read" on public.order_request_attac
   'S3c (0451): a member reads the attachments of their organization; a Wet signature photo (kind signature) '
   'when they added it, hold orders:approve, or are the order''s driver (order_signature_photo_reader).';
 
--- 0143's check, restated verbatim, with the path and uploader terms added last.
-alter policy "order_request_attachments manager insert" on public.order_request_attachments
-  with check (
-    public.has_org_role(organization_id, 'manager')
-    and exists (
-      select 1 from public.order_requests o
-      where o.id = order_request_attachments.order_request_id
-        and o.organization_id = order_request_attachments.organization_id
-        and o.status in (
-          'staged_for_pickup', 'staged_for_delivery',
-          'in_transit', 'signature_requested', 'completed'
-        )
-    )
-    and split_part(storage_path, '/', 1) = organization_id::text
-    and split_part(storage_path, '/', 2) = order_request_id::text
-    and split_part(storage_path, '/', 3) <> ''
-    and split_part(storage_path, '/', 4) = ''
-    and (uploaded_by is null or uploaded_by = (select auth.uid()))
-  );
-comment on policy "order_request_attachments manager insert" on public.order_request_attachments is
-  'A manager adds an attachment to an order of the same organization in a delivery or completed status (0143); '
-  'since S3c (0451) its path is exactly {organization}/{order}/{file} and uploaded_by is the caller or empty.';
-
--- 0142's USING, with the read rule's Wet signature term added.
-alter policy "order_request_attachments manager delete" on public.order_request_attachments
-  using (
-    public.has_org_role(organization_id, 'manager')
-    and (   kind <> 'signature'
-         or uploaded_by = (select auth.uid())
-         or public.order_signature_photo_reader(order_request_id))
-  );
-comment on policy "order_request_attachments manager delete" on public.order_request_attachments is
-  'A manager removes an attachment of their organization (0142); since S3c (0451) a Wet signature photo only '
-  'when they added it or order_signature_photo_reader says yes.';
-
--- The stored file's rule (the bucket policies themselves come last).
+-- The stored file's rule, used by the insert check below and by the bucket
+-- policies (which come last).
 create function public.order_attachment_object_readable(p_name text, p_owner text)
 returns boolean
 language sql
@@ -307,7 +312,57 @@ comment on function public.order_attachment_object_readable(text, text) is
   'S3c (0451): the rule for a stored file in the order-attachments bucket. When an attachment row names the '
   'file, the row''s rule (a Wet signature file for its uploader or order_signature_photo_reader); when none does, '
   'the member who uploaded it (p_owner: the object''s owner_id, else owner) or a member holding orders:approve in '
-  'the organization of its first folder. Read-only boolean used by the bucket''s read, update and delete policies.';
+  'the organization of its first folder. Read-only boolean used by the attachments insert check and the bucket''s read, update and delete policies.';
+
+-- 0143's check, restated verbatim, with the path, file and uploader terms
+-- added last. The file-name pattern is the same rule as the web's
+-- OBJECT_FILENAME_SEGMENT (apps/web/src/lib/storage-path.ts), which
+-- OrderAttachmentsService.add asks through orderAttachmentPathShape;
+-- storage-path.order-attachments-db-rule.guard.test.ts fails when one changes
+-- without the other. The file term asks that the stored file is already in
+-- the order-attachments bucket and that its rule lets the caller read it
+-- (order_attachment_object_readable): every flow uploads the file before it
+-- files the row.
+alter policy "order_request_attachments manager insert" on public.order_request_attachments
+  with check (
+    public.has_org_role(organization_id, 'manager')
+    and exists (
+      select 1 from public.order_requests o
+      where o.id = order_request_attachments.order_request_id
+        and o.organization_id = order_request_attachments.organization_id
+        and o.status in (
+          'staged_for_pickup', 'staged_for_delivery',
+          'in_transit', 'signature_requested', 'completed'
+        )
+    )
+    and storage_path = organization_id::text || '/' || order_request_id::text || '/'
+                       || split_part(storage_path, '/', 3)
+    and split_part(storage_path, '/', 3) ~ '^[A-Za-z0-9_-]{1,120}(\.[A-Za-z0-9]{1,10}){1,3}$'
+    and exists (
+      select 1 from storage.objects so
+       where so.bucket_id = 'order-attachments'
+         and so.name = order_request_attachments.storage_path
+         and public.order_attachment_object_readable(so.name, coalesce(so.owner_id, so.owner::text))
+    )
+    and (uploaded_by is null or uploaded_by = (select auth.uid()))
+  );
+comment on policy "order_request_attachments manager insert" on public.order_request_attachments is
+  'A manager adds an attachment to an order of the same organization in a delivery or completed status (0143); '
+  'since S3c (0451) its path is exactly {organization}/{order}/{file} with the web''s file-name rule, the stored '
+  'file is in the bucket and readable to the caller under order_attachment_object_readable, and uploaded_by is the '
+  'caller or empty.';
+
+-- 0142's USING, with the read rule's Wet signature term added.
+alter policy "order_request_attachments manager delete" on public.order_request_attachments
+  using (
+    public.has_org_role(organization_id, 'manager')
+    and (   kind <> 'signature'
+         or uploaded_by = (select auth.uid())
+         or public.order_signature_photo_reader(order_request_id))
+  );
+comment on policy "order_request_attachments manager delete" on public.order_request_attachments is
+  'A manager removes an attachment of their organization (0142); since S3c (0451) a Wet signature photo only '
+  'when they added it or order_signature_photo_reader says yes.';
 
 -- ═══ 4. Table privileges ═══════════════════════════════════════════════════
 revoke all on table public.order_request_attachments from anon;
