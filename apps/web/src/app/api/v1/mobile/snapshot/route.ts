@@ -3,6 +3,7 @@ import { can, isManagerOrAbove } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
+import { countReadFilter, countReadScope } from '@/lib/auth/count-read-scope';
 import { getWarehouseAccess, type WarehouseAccess } from '@/lib/auth/warehouse';
 import { buildWarehouseScope } from '@/lib/warehouse-scope';
 import { reportError } from '@/lib/error-reporter';
@@ -355,7 +356,14 @@ async function snapshotGET(req: NextRequest) {
   // caller who may not read one gets an empty list in the same shape, and
   // its read is never sent.
   const skipPos = seesNoWarehouse || !mayReadPurchaseOrders(ctx);
-  const skipCounts = seesNoWarehouse || !mayReadCycleCounts(ctx);
+  // Which open counts the caller reads: the one count read rule
+  // (lib/auth/count-read-scope.ts), the rule the web count list and count
+  // page apply. Every count for an all-access caller; for anyone else the
+  // counts of their readable warehouses, and a count with no warehouse only
+  // when it is assigned to them; none for a member with no readable
+  // warehouse, whose read is not sent.
+  const countScope = countReadScope(access, ctx.userId);
+  const skipCounts = countScope.kind === 'none' || !mayReadCycleCounts(ctx);
   const sendsKits = mayReadKits(ctx);
   // Taken before any read below is sent, so the next delta's cursor can only
   // overlap this pull, never leave a gap after it.
@@ -494,26 +502,33 @@ async function snapshotGET(req: NextRequest) {
       .eq('status', 'in_progress')
       .order('started_at', { ascending: false })
       .limit(50);
-    if (scopeIds) {
-      // in-list-bound: the caller's readable warehouses (an org's handful of sites)
-      ccQ = ccQ.or(`warehouse_id.is.null,warehouse_id.in.(${scopeIds.join(',')})`);
-    }
+    // A count's lines carry item ids and quantities whatever warehouse the
+    // items sit in, so a count with no header warehouse goes only to the
+    // member it is assigned to (countScope). Built only for a caller whose
+    // read is sent (readCounts below), never for scope `none`.
+    const countFilter = countReadFilter(countScope);
+    if (countFilter) ccQ = ccQ.or(countFilter);
     return ccQ;
   };
-  // Narrowed to nothing answers no counts at all, the null-warehouse ones
-  // included: the web's CycleCountsService.list() returns [] for a scoped
-  // caller with no warehouse, and the phone should not list more than it.
-  // A caller outside mayReadCycleCounts gets no counts either.
-  //
+  // A member with no readable warehouse gets no counts at all, the
+  // null-warehouse ones included: the web's CycleCountsService.listPage()
+  // lists none for them, and the phone should not list more than it. A caller
+  // outside mayReadCycleCounts gets no counts either. For both the query is
+  // not even built.
+  const readCounts = (withNumber: boolean) =>
+    skipCounts
+      ? scopedRead(true, Promise.resolve(NO_ROWS))
+      : scopedRead(false, countsQuery(withNumber));
+
   // DEPLOY-ORDER SAFETY: count_number arrives with migration 0358. Against a
   // database that has not run it, the column read fails with 42703
   // (undefined_column), and failing this read fails the WHOLE snapshot, i.e.
   // every phone's offline sync. So that one error, and only that one, reads
   // the counts again without the column: they sync without their references
   // ("Reference unavailable" on the phone) until the migration lands.
-  const countsP = scopedRead(skipCounts, countsQuery(true)).then((settled) =>
+  const countsP = readCounts(true).then((settled) =>
     settled.ok && (settled.value as { error?: { code?: string } | null }).error?.code === '42703'
-      ? scopedRead(skipCounts, countsQuery(false))
+      ? readCounts(false)
       : settled,
   );
 
