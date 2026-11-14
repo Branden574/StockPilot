@@ -82,7 +82,8 @@ function tabLoad(online: boolean) {
       needsAccessRef,
       CYCLE_COUNTS_NOT_AVAILABLE: 'Cycle counts are not available to you in this workspace.',
       NOT_SYNCED_YET,
-      SAVED_ACCESS_UNREADABLE: 'What this phone saved about your access could not be read. Try again.',
+      SAVED_ACCESS_UNREADABLE:
+        'What this phone saved about your access could not be read. Try again.',
       readDownloadedForAccount,
       readDownloaded,
       retryWorkspace,
@@ -108,7 +109,15 @@ function tabLoad(online: boolean) {
       isCurrentListAnswer: () => true,
     },
   );
-  return { load, state, listCycleCounts, readDownloaded, readDownloadedForAccount, retryWorkspace, needsAccessRef };
+  return {
+    load,
+    state,
+    listCycleCounts,
+    readDownloaded,
+    readDownloadedForAccount,
+    retryWorkspace,
+    needsAccessRef,
+  };
 }
 
 /** The tab's spinner: nothing read and nothing said (its render, pinned below). */
@@ -202,7 +211,11 @@ describe('the Cycle counts tab with no workspace known', () => {
 
 describe('the count screen online with no workspace and no stored copy', () => {
   it('says the phone has not finished syncing, with its Retry, and asks for the workspace again', async () => {
-    const state = { loading: true as unknown, readError: undefined as unknown, emptyState: undefined as unknown };
+    const state = {
+      loading: true as unknown,
+      readError: undefined as unknown,
+      emptyState: undefined as unknown,
+    };
     const from = vi.fn(() => {
       throw new Error('not stood in for');
     });
@@ -226,7 +239,9 @@ describe('the count screen online with no workspace and no stored copy', () => {
       setEmptyState: (v: unknown) => {
         state.emptyState = v;
       },
-      Network: { getNetworkStateAsync: async () => ({ isConnected: true, isInternetReachable: true }) },
+      Network: {
+        getNetworkStateAsync: async () => ({ isConnected: true, isInternetReachable: true }),
+      },
       COUNT_UNREADABLE_ON_PHONE: 'z',
       cacheWriteScope: async () => ({}),
       retryWorkspace,
@@ -243,7 +258,12 @@ describe('the count screen online with no workspace and no stored copy', () => {
 });
 
 describe.each([
-  ['Team', TEAM, 'const { orgId, loading: workspaceLoading } = useOrg();', 'const noWorkspace = !orgId && !workspaceLoading;'],
+  [
+    'Team',
+    TEAM,
+    'const { orgId, loading: workspaceLoading } = useOrg();',
+    'const noWorkspace = !orgId && !workspaceLoading;',
+  ],
   [
     'Accounts',
     CUSTOMERS,
@@ -255,26 +275,42 @@ describe.each([
     const code = flat(file);
     expect(code).toContain(hook);
     expect(code).toContain(rule);
-    expect(code).toContain("import { retryWorkspace");
+    expect(code).toContain('import { retryWorkspace');
     expect(code).toContain(
       'async function refresh() { setRefreshing(true); try { await (noWorkspace ? retryWorkspace() : load()); } finally { setRefreshing(false); } }',
     );
-    expect(code).toContain("title: 'Could not load your workspace.', body: 'Check your connection and pull down to try again.',");
+    expect(code).toContain(
+      "title: 'Could not load your workspace.', body: 'Check your connection and pull down to try again.',",
+    );
     expect(code).toContain('loading={!noWorkspace && loading}');
   });
 });
 
 describe.each([
-  ['Items', ITEMS, 'const { activeOrgId, activeWarehouseId, loading: workspaceLoading } = useWorkspace();', 'ItemListSkeleton'],
-  ['Books', BOOKS, 'const { activeOrgId: orgId, activeWarehouseId, loading: workspaceLoading } = useWorkspace();', 'BookListSkeleton'],
+  [
+    'Items',
+    ITEMS,
+    'const { activeOrgId, activeWarehouseId, loading: workspaceLoading } = useWorkspace();',
+    'ItemListSkeleton',
+  ],
+  [
+    'Books',
+    BOOKS,
+    'const { activeOrgId: orgId, activeWarehouseId, loading: workspaceLoading } = useWorkspace();',
+    'BookListSkeleton',
+  ],
 ] as const)('%s with no workspace known', (_label, file, hook, skeleton) => {
   it('says so over the list instead of a skeleton that does not end, and a pull loads the workspace again', () => {
     const code = flat(file);
     expect(code).toContain(hook);
     expect(code).toContain('const noWorkspace = !orgId && !workspaceLoading;');
     expect(code).toContain(`{loading && !noWorkspace ? ( <${skeleton}`);
-    expect(code).toContain('{noWorkspace ? ( <Body size={11.5} color={c.warnText} style={{ marginTop: 8 }}> {NO_WORKSPACE_LINE} </Body>');
-    expect(code).toContain('if (noWorkspace) { setRefreshing(true); try { await retryWorkspace(); } finally { setRefreshing(false); } return; }');
+    expect(code).toContain(
+      '{noWorkspace ? ( <Body size={11.5} color={c.warnText} style={{ marginTop: 8 }}> {NO_WORKSPACE_LINE} </Body>',
+    );
+    expect(code).toContain(
+      'if (noWorkspace) { setRefreshing(true); try { await retryWorkspace(); } finally { setRefreshing(false); } return; }',
+    );
     // No count is quoted, and the empty list is a list that did not load,
     // never "none": every place that asked whether the read failed asks this.
     expect(code).toContain('const listFailed = noWorkspace || loadError !== null;');

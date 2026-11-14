@@ -40,8 +40,11 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // Re-pinned again for B124 round 2 (Classic is meant to change: New item follows
   // createControlOffer, and the tour mounts only once that answer is settled and keeps its
   // definition while open). Before this the pin was fc38bb35...52b1.
+  // Re-pinned again for S75 final round (Classic is meant to change: with no workspace known the
+  // list says so over it instead of a skeleton that does not end, quotes no count, and a pull
+  // asks for the workspace again). Before this the pin was 3d61fa51...8fa2.
   'app/(drawer)/(tabs)/inventory.tsx':
-    '3d61fa5137a2d5cbefb00f3f72cd2ea6f5125a80251d6459f532a9cbe4228fa2',
+    'b73828250a2946276b983032f4e7230cb700ed7b4445c9b430d9e77077a36340',
   'app/(drawer)/(tabs)/receive.tsx':
     '6d32450d4607d50dfe274dc2c06b9fc3d655c40dbe673efa8f546910de3b43f6',
   // Re-pinned for B124 (Classic is meant to change: a code or photo that matches nothing opens
@@ -54,8 +57,11 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // Re-pinned again for B124 round 3 (Classic is meant to change: a photo whose lookup in the
   // workspace failed has its own sentence, and both photo alerts go back to scanning on OK, as a
   // code's do). Before this the pin was 80ab8f33...9461.
+  // Re-pinned again for S75 final round (Classic is meant to change: a lookup with no workspace
+  // known is a failed lookup, said as one, never not found). Before this the pin was
+  // ca635064...f401.
   'app/(drawer)/(tabs)/scan.tsx':
-    'ca635064f58d9f1c658137671d419b96944e05be21b2e62e48c653dbaa49f401',
+    'b0becc49639fdad70da3a2c15d8017f97a4952e6f49552e6c18d4bf8e607abb8',
   // Re-pinned for S75 (Classic is meant to change: the count is read only for a member who may
   // see cycle counts, and the not-available state leaves out the catching-up sentence). Before
   // S75 the projection was 225237c6...e731e, the pin it had.
@@ -73,7 +79,11 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // Re-pinned again for S75 round 3 (Classic is meant to change: the load key names the account,
   // and a full load for another count, workspace or account clears the header and lines first).
   // Before this the pin was 3f44ec8a...d683.
-  'app/cycle-count/[id].tsx': '4e13d65fca29c81837606f4b239fceec0c43c666b8f3da10c8b36c19767f0935',
+  // Re-pinned again for S75 final round (Classic is meant to change: online with no workspace and
+  // no stored copy it says the phone has not finished syncing, with Retry; Reassign and count
+  // entry follow the create-control rule; typed counts are cleared with the screen, their waiting
+  // saves dropped for another account or workspace). Before this the pin was 4e13d65f...0935.
+  'app/cycle-count/[id].tsx': '620a81037a9ae8f837dea8cdbe5d84cb76d674b14d949230c0f63645dc342981',
   // Re-pinned for B124 (Classic is meant to change: its web link is built by webLink from the
   // configured host; a production build opens the same address). Before B124 the projection was
   // 0e3f35aa...a3fa, the pin it had.
@@ -143,8 +153,11 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // Re-pinned again for B124 round 2 (Classic is meant to change: New book follows the one rule
   // for create controls, createControlOffer, so a phone not synced yet offers it by the role's
   // defaults once the role is known). Before this the pin was 0355c3b0...e67d.
+  // Re-pinned again for S75 final round (Classic is meant to change: with no workspace known the
+  // list says so over it instead of a skeleton that does not end, quotes no count, and a pull
+  // asks for the workspace again). Before this the pin was 00460d67...d9cb.
   'app/(drawer)/(tabs)/books.tsx':
-    '00460d67235ee833c8199e990395561836ec13020609f32090d1849fa7c5d9cb',
+    '5bf35ff9434c13d53982693b721cdd88e38791470f3587ce5b4959bb0a43e014',
   // Re-pinned for S75 (Classic is meant to change: the counts downloaded to this phone are shown
   // only to a member who may see cycle counts, never in place of the server's refusal). Before
   // S75 the projection was 1c00180e...c412, the pin it had.
@@ -152,8 +165,12 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // only the counts this account fetched here, or says the phone has not finished syncing; only a
   // 403 forbidden or module_disabled hides the downloaded counts; Refresh reads unreadable saved
   // access again). Before this the pin was b7905f8a...152b.
+  // Re-pinned again for S75 final round (Classic is meant to change: with no workspace known the
+  // tab says the phone has not finished syncing, with Try again offline too, and asks for the
+  // workspace again; it loads in place when the workspace arrives or a sync lands). Before this
+  // the pin was f5439c1c...3475.
   'app/(drawer)/(tabs)/cycle-counts.tsx':
-    'f5439c1c0920d493a557183f0bff9a8e1eee287e7788484248fde4680e0c3475',
+    'b73e78375113f2e86f431603fb7a5f58c5bdac6dfd8709cdf9f9a82c167191ef',
   // The order storefront (native-core). checkout.tsx and catalog-screen.tsx
   // are pinned to main's own files at 778b42231 (Add all, #494, merged in
   // 2026-11-10): Classic changed on main, and the pin follows main's code.
@@ -170,8 +187,12 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // Re-pinned again for S75 (Classic is meant to change: not synced yet for this member reads
   // only a count this account fetched here, and saved access that could not be read is said;
   // either way the member is taken back). Before this the pin was 3a8e4756...5fe0.
+  // Re-pinned again for S75 final round (Classic is meant to change: one alert at a time for why
+  // a count cannot be opened; its OK and Cancel leave to the Cycle counts tab when nothing is
+  // under the screen; the lines and a review are cleared for another count, workspace or
+  // account). Before this the pin was 0b652888...ef5f.
   'app/cycle-count/ai-scan/[id].tsx':
-    '0b652888c7a9948d9ebce1d20b1a50ed87c1e1ca0a13254fbf9aa6c40d3fef5f',
+    '07e96ffb082fe23a672eb46b53daceb0c7401ee347fe10d1163bf183bee7c803',
   'app/cycle-count/new.tsx': 'e0f0dcbd01c04afce172de9e1888ab6a482eb3ff1b9b7d332ad8c35000600072',
   // Re-pinned for S75 (Classic is meant to change: the lines saved on this phone are read only for
   // a member who may see cycle counts, who is otherwise told so and taken back; a scanned count the
@@ -186,8 +207,12 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // Re-pinned again for S75 round 3 (Classic is meant to change: another count, workspace or
   // account clears the lines and the tally before the read). Before this the pin was
   // d5c5ef72...9199.
+  // Re-pinned again for S75 final round (Classic is meant to change: one alert at a time for why
+  // a count cannot be opened; its OK and Done leave to the Cycle counts tab when nothing is under
+  // the screen; a confirm sheet typed for another account or workspace closes). Before this the
+  // pin was fff043b1...b9ee.
   'app/cycle-count/scan/[id].tsx':
-    'fff043b1323b964406efbb707a4be83a5699f594bedadc244a72c059d847b9ee',
+    '49cdddb3d159de1ef24b668924fe538b79bcd7ecee1457c3fc48c506ff240ee8',
   // Re-pinned for B124 (Classic is meant to change: a member without items:create is told so
   // beside Create and refused before anything is sent). Before B124 the projection was
   // 1869d65f...7806, the pin it had.
@@ -346,7 +371,10 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // Re-pinned for B124 (Classic is meant to change: only members read for the workspace on screen
   // are drawn, and an older read that lands last is dropped). Before B124 the projection was
   // 5c1cba9c...217d, the pin it had.
-  'app/(drawer)/team.tsx': '8011abcdbec001ca295f3bc0d4191025b31017a9df99396c1f76bbd47a2136cd',
+  // Re-pinned again for S75 final round (Classic is meant to change: with no workspace known the
+  // list says so instead of a spinner that does not end, and a pull asks for the workspace
+  // again). Before this the pin was 8011abcd...36cd.
+  'app/(drawer)/team.tsx': '5914a8f7ba1e523e117619963c05d4f41d2fe356387d78bda775b0360c7b3063',
   'app/(drawer)/zendesk.tsx': '53a784e1a2119769e0669f9da86b2c22a782f4455b20aa04a347950dbb6464be',
   'app/ai/chat.tsx': '112e04c250f2cf054204891311dc633b9c2f889a7f41152824a0f8585ddce1be',
   'app/zendesk/web.tsx': '1d00e40d375eabdb833a1c39f915c14ce8e9eca03e5751f47c4ae608fb06a4e4',

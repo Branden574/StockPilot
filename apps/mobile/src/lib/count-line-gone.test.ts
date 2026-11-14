@@ -291,7 +291,9 @@ describe('the count scanner', () => {
       id: 'cc1',
       access,
       getCycleCount,
-      router: { back },
+      // The scanner leaves by its own leave (back, or to the Cycle counts
+      // tab when nothing is under it: count-scanner-leave.test.ts).
+      leave: back,
       setLines,
       setScannedMap,
     });

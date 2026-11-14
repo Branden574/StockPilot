@@ -92,7 +92,10 @@ export function createOneAlert(show: ShowAlert): OneAlert {
         open = false;
         if (!closed) onAnswered();
       };
-      show(title, message, [{ text: 'OK', onPress: answer }], { cancelable: true, onDismiss: answer });
+      show(title, message, [{ text: 'OK', onPress: answer }], {
+        cancelable: true,
+        onDismiss: answer,
+      });
       return true;
     },
     close() {
@@ -118,7 +121,8 @@ export interface LineGoneNotice {
 export function createLineGoneNotice(show: ShowAlert): LineGoneNotice {
   const one = createOneAlert(show);
   return {
-    say: (onAnswered) => one.say(COUNT_LINE_NOT_SAVED.title, COUNT_LINE_NOT_SAVED.message, onAnswered),
+    say: (onAnswered) =>
+      one.say(COUNT_LINE_NOT_SAVED.title, COUNT_LINE_NOT_SAVED.message, onAnswered),
     close: () => one.close(),
   };
 }

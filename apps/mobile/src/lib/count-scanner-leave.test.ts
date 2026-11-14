@@ -41,8 +41,7 @@ const flat = (file: string) =>
 async function oneAlert(alert: unknown) {
   const mod = (await import('./count-save-refusal')) as Record<string, unknown>;
   const make = mod.createOneAlert as
-    | ((show: unknown) => { say: unknown; close: () => void })
-    | undefined;
+    ((show: unknown) => { say: unknown; close: () => void }) | undefined;
   return make ? make(alert) : undefined;
 }
 
@@ -60,14 +59,17 @@ async function loader(
   const back = vi.fn();
   const leave = vi.fn();
   const shown: unknown[] = [];
-  const getCycleCount = vi.fn(async () => (opts.stored === undefined ? { lines: LINES } : opts.stored));
+  const getCycleCount = vi.fn(async () =>
+    opts.stored === undefined ? { lines: LINES } : opts.stored,
+  );
   const run = screenFunction<() => Promise<void>>(file, name, {
     id: COUNT_ID,
     cycleCountId: COUNT_ID,
     access: opts.access,
     CYCLE_COUNTS_NOT_AVAILABLE: 'Cycle counts are not available to you in this workspace.',
     NOT_SYNCED_YET,
-    SAVED_ACCESS_UNREADABLE: 'What this phone saved about your access could not be read. Try again.',
+    SAVED_ACCESS_UNREADABLE:
+      'What this phone saved about your access could not be read. Try again.',
     countStoredForLiveAccount: async () => opts.fetchedHere ?? false,
     getCycleCount,
     Alert: { alert },
@@ -134,7 +136,9 @@ describe.each([
 
   it('Done (Cancel on the AI scan) leaves the same way, and nothing goes back to nothing', () => {
     const code = flat(file);
-    expect(code).toMatch(/onPress=\{leave\} accessibilityRole="button" accessibilityLabel="(Done|Cancel)"/);
+    expect(code).toMatch(
+      /onPress=\{leave\} accessibilityRole="button" accessibilityLabel="(Done|Cancel)"/,
+    );
     // Back only inside leave, which falls back to the tab.
     expect(code.match(/router\.back\(\)/g)).toHaveLength(1);
   });
@@ -156,7 +160,7 @@ describe.each([
  */
 describe('the barcode scanner: lines only from a read for the account signed in', () => {
   it('replays the walk: A reads, A signs out (the lines go), A signs in not synced (nothing drawn)', async () => {
-    const { countLoadClearsScreen } = await import('./count-access-refresh');
+    const { countLoadClearsScreen, mergeScannedCounts } = await import('./count-access-refresh');
     const drawn = { lines: [] as unknown[], tally: new Map() as Map<string, number> };
     const lastLinesKey = { current: null };
     const step = async (user: { id: string } | null, access: ScreenAccess) => {
@@ -169,6 +173,7 @@ describe('the barcode scanner: lines only from a read for the account signed in'
         SAVED_ACCESS_UNREADABLE: 'y',
         countStoredForLiveAccount: async () => false,
         getCycleCount: async () => ({ lines: LINES }),
+        mergeScannedCounts,
         Alert: { alert: h.alert },
         openNotice: await oneAlert(h.alert),
         router: { back: h.back },
@@ -178,7 +183,9 @@ describe('the barcode scanner: lines only from a read for the account signed in'
         },
         setScannedMap: (v: unknown) => {
           drawn.tally =
-            typeof v === 'function' ? (v as (p: Map<string, number>) => Map<string, number>)(drawn.tally) : (v as Map<string, number>);
+            typeof v === 'function'
+              ? (v as (p: Map<string, number>) => Map<string, number>)(drawn.tally)
+              : (v as Map<string, number>);
         },
       });
       const effect = effectCallback<() => void>(SCAN, 'void loadLines()', {

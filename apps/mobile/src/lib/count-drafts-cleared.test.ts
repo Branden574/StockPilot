@@ -91,7 +91,9 @@ function countScreen() {
       lineSaver,
       setDraft: (v: unknown) => {
         screen.draft =
-          typeof v === 'function' ? (v as (d: Record<string, string>) => Record<string, string>)(screen.draft) : (v as Record<string, string>);
+          typeof v === 'function'
+            ? (v as (d: Record<string, string>) => Record<string, string>)(screen.draft)
+            : (v as Record<string, string>);
       },
       setHeader: () => undefined,
       setLines: (v: unknown[]) => {
@@ -149,7 +151,10 @@ describe('the count screen cleared for another account', () => {
 
 describe('the scanner cleared for another account', () => {
   it('closes a confirm sheet typed under account A when the screen loads for account B', async () => {
-    const { countLoadDraftAction } = (await import('./count-access-refresh')) as Record<string, unknown>;
+    const { countLoadDraftAction } = (await import('./count-access-refresh')) as Record<
+      string,
+      unknown
+    >;
     const sheets: unknown[] = [];
     const lastLinesKey = { current: null as Key | null };
     const run = (user: { id: string } | null, orgId: string) =>

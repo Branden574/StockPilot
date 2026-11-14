@@ -70,7 +70,10 @@ export function countLoadClearsScreen(before: CountLoadKey | null, now: CountLoa
  */
 export type CountDraftAction = 'keep' | 'drop' | 'save';
 
-export function countLoadDraftAction(before: CountLoadKey | null, now: CountLoadKey): CountDraftAction {
+export function countLoadDraftAction(
+  before: CountLoadKey | null,
+  now: CountLoadKey,
+): CountDraftAction {
   if (before === null || !countLoadClearsScreen(before, now)) return 'keep';
   if (before.userId !== now.userId) return 'drop';
   if (before.orgId !== null && now.orgId !== null && before.orgId !== now.orgId) return 'drop';

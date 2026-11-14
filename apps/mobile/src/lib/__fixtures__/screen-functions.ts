@@ -168,7 +168,9 @@ export function effectCallback<T>(file: string, marker: string, deps: Record<str
   };
   visit(sf);
   if (found.length !== 1) {
-    throw new Error(`${file}: expected one React.useEffect containing ${marker}, found ${found.length}`);
+    throw new Error(
+      `${file}: expected one React.useEffect containing ${marker}, found ${found.length}`,
+    );
   }
   return build<T>(
     `return ${compile(`(${found[0]!.getText(sf)});`)

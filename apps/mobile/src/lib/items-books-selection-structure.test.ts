@@ -624,8 +624,9 @@ describe('the look on both tabs, measured in both modes', () => {
       expect(code, file).not.toMatch(/c\.ink4|c\.ink5|c\.paper2/);
       // The decorative pips by row position are gone.
       expect(code, file).not.toMatch(/\bpip=/);
-      // Error and notice lines: the warning words of the palette.
-      expect(code.match(/color=\{c\.warnText\}/g)?.length, file).toBe(file === ITEMS ? 1 : 2);
+      // Error and notice lines: the warning words of the palette (one more
+      // each for the no-workspace line).
+      expect(code.match(/color=\{c\.warnText\}/g)?.length, file).toBe(file === ITEMS ? 2 : 3);
     }
   });
 
@@ -778,7 +779,9 @@ describe.each(REVIEWS)('$name review', (r) => {
       flatNorm('style={[styles.footer, { backgroundColor: c.paper, borderTopColor: c.hair }]}'),
     );
     // Liquid Glass: the floating bar, its material first, the scroll clear of its lift.
-    expect(code).toMatch(/lg && GLASS_FOOT_BAR,\s*\]\}\s*>\s*\{lg \? <GlassFootBackdrop \/> : null\}/);
+    expect(code).toMatch(
+      /lg && GLASS_FOOT_BAR,\s*\]\}\s*>\s*\{lg \? <GlassFootBackdrop \/> : null\}/,
+    );
     expect(code).toMatch(/\? footerReservation\(footerHeight, 170\) \+ 8\s*:/);
     expect(styleBlock(sourceOf(r.file), 'footer')).toMatch(/borderTopWidth: 1,/);
   });

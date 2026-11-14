@@ -505,6 +505,9 @@ describe('the AI shelf scan (app/cycle-count/ai-scan/[id].tsx): a count the serv
       mirrorRecordedCount: mirror,
       cycleCountSync: syncStub(),
       router: { back },
+      // The screen leaves by its own leave (back, or to the Cycle counts tab
+      // when nothing is under it: count-scanner-leave.test.ts).
+      leave: back,
       console: { warn: vi.fn() },
     });
     const confirmed = () => fetch.mock.calls.some(([url]) => String(url).endsWith('/confirm'));

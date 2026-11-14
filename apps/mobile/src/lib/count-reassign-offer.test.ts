@@ -39,7 +39,9 @@ describe('the count screen before the first sync', () => {
   it('offers Reassign only to a role whose defaults hold cycle_counts:assign, and counting only to one that holds stock:adjust', async () => {
     const { createControlOffer } = await import('./screen-access');
     expect(createControlOffer('not-synced', 'cycle_counts:assign', 'staff', false)).toBe('hidden');
-    expect(createControlOffer('not-synced', 'cycle_counts:assign', 'manager', false)).toBe('offered');
+    expect(createControlOffer('not-synced', 'cycle_counts:assign', 'manager', false)).toBe(
+      'offered',
+    );
     expect(createControlOffer('not-synced', 'stock:adjust', 'staff', false)).toBe('offered');
     expect(createControlOffer('not-synced', 'stock:adjust', 'viewer', false)).toBe('hidden');
 

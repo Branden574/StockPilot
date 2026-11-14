@@ -330,9 +330,7 @@ describe('count screen: every word, name and role survives the restyle', () => {
   it('says "Could not load this count" through countReadFailedView', () => {
     expect(sourceOf(COUNT)).toContain('{failedView.title}');
     expect(
-      sourceOf('src/lib/count-read-failed.ts').match(
-        /title: 'Could not load this count'/g,
-      ),
+      sourceOf('src/lib/count-read-failed.ts').match(/title: 'Could not load this count'/g),
     ).toHaveLength(2);
   });
 
@@ -1358,9 +1356,9 @@ describe('Counts tab: words, the filters and the offline view', () => {
     }
     const retry = els.filter((el) => attrText(el, 'style', sf) === 'TAP');
     expect(retry).toHaveLength(1);
-    expect(attrText(retry[0]!, 'onPress', sf)).toBe(
-      '() => void load(view, { withSummary: !summary })',
-    );
+    // Try again asks for the workspace first when none is known
+    // (no-workspace-screens.test.ts runs it).
+    expect(attrText(retry[0]!, 'onPress', sf)).toBe('() => void tryAgain()');
     expect(code).toContain('const TAP = { minHeight: MIN_TAP };');
     // The 44pt target is the shared small Button's own frame (P2.5c; drawn
     // and measured in components/ui/touch-target.test.ts).
@@ -1478,7 +1476,7 @@ describe('AI shelf scan: every word, name and step survives the restyle', () => 
   // "0 books in this count" over a camera with nothing to match.
   it('lines on the phone that cannot be read are said, and the screen goes back', () => {
     expect(code).toMatch(
-      /try \{\s*snap = await getCycleCount\(cycleCountId\);\s*\} catch \{\s*Alert\.alert\('Could not load this count', 'This count could not be read on this phone\.', \[\s*\{ text: 'OK', onPress: \(\) => router\.back\(\) \},\s*\]\);\s*return;\s*\}\s*if \(!snap\) \{\s*Alert\.alert\(\s*'No cached lines',/,
+      /try \{\s*snap = await getCycleCount\(cycleCountId\);\s*\} catch \{\s*openNotice\.say\(\s*'Could not load this count',\s*'This count could not be read on this phone\.',\s*leave,\s*\);\s*return;\s*\}\s*if \(!snap\) \{\s*openNotice\.say\(\s*'No cached lines',/,
     );
   });
 

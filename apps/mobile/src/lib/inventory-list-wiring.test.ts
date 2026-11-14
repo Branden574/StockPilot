@@ -40,18 +40,20 @@ const loadBody = (src: string): string => {
 
 /** The body of the effect that resets view state on a new result set. */
 const resetEffect = (src: string): string => {
-  const m = /React\.useEffect\(\(\) => \{\s*setPage\(1\);([\s\S]*?)\}, \[q, filter, activeWarehouseId\]\);/.exec(
-    src,
-  );
+  const m =
+    /React\.useEffect\(\(\) => \{\s*setPage\(1\);([\s\S]*?)\}, \[q, filter, activeWarehouseId\]\);/.exec(
+      src,
+    );
   expect(m).not.toBeNull();
   return m![1]!;
 };
 
 /** The body of the page-flip handler. */
 const pageFlipBody = (src: string): string => {
-  const m = /const onPageChange = React\.useCallback\(\(p: number\) => \{([\s\S]*?)\n  \}, \[\]\);/.exec(
-    src,
-  );
+  const m =
+    /const onPageChange = React\.useCallback\(\(p: number\) => \{([\s\S]*?)\n  \}, \[\]\);/.exec(
+      src,
+    );
   expect(m).not.toBeNull();
   return m![1]!;
 };
@@ -199,7 +201,9 @@ describe('both lists — fetch the WHOLE filtered set, then page over GROUPS', (
       // every id on the page until the next full load.
       const m = /if \(!round\.ok\) \{\s*console\.warn\([^)]*\);\s*return;\s*\}/.exec(src);
       expect(m).not.toBeNull();
-      expect(src).not.toMatch(/next\.set\(id, \(p \? urlByPath\.get\(p\.storage_path\) : null\) \?\? null\)/);
+      expect(src).not.toMatch(
+        /next\.set\(id, \(p \? urlByPath\.get\(p\.storage_path\) : null\) \?\? null\)/,
+      );
     });
   }
 });
@@ -271,7 +275,10 @@ describe('items list — identical behaviour to books, because the owner compare
     // One read, so its error takes the visible banner path, with a message
     // that is never empty (an empty one would hide the banner).
     expect(body).toContain('setLoadError(readErrorMessage(error, listStatus))');
-    expect(inventory).toMatch(/\{loadError !== null \? \(\s*<Body[^>]*>\s*\{`Could not load items: /);
+    // With no workspace known, its own line comes first (no-workspace-screens.test.ts).
+    expect(inventory).toMatch(
+      /\) : loadError !== null \? \(\s*<Body[^>]*>\s*\{`Could not load items: /,
+    );
   });
 
   it('renders the partial marker on a collapsed header (overflow case only)', () => {
@@ -289,7 +296,9 @@ describe('items list — identical behaviour to books, because the owner compare
   it('runs the SAME pill ladder on the header as on the rows (and as Books)', () => {
     // A local Items-only ladder is a drift path between the two platforms.
     expect(inventory).not.toContain('function skuHeaderStatus');
-    expect(inventory).toContain('stockPill({ expected, lifecycle, quantity: total, reorderPoint })');
+    expect(inventory).toContain(
+      'stockPill({ expected, lifecycle, quantity: total, reorderPoint })',
+    );
     expect(inventory).toContain('stockPillFor(item)');
   });
 });
@@ -345,7 +354,9 @@ describe('books list — a failed read says so, never passes for an empty or cur
       /if \(error\) \{\s*console\.warn\('books list', error\);\s*setLoadError\(readErrorMessage\(error, listStatus\)\);/,
     );
     expect(books).toContain('`Could not load books: ${loadError}. Pull to retry.`');
-    expect(books).toMatch(/\{loadError !== null \? \(/);
+    expect(books).toMatch(
+      /\) : loadError !== null \? \(\s*<Body[^>]*>\s*\{`Could not load books: /,
+    );
   });
 
   it('every load starts with its error flags cleared, and only the newest load writes', () => {
@@ -359,7 +370,9 @@ describe('books list — a failed read says so, never passes for an empty or cur
     // memberships are read beside the rows and awaited after the list, with
     // their own check; it was two awaits before.
     expect(body.match(/if \(!isCurrent\(\)\) return;/g)?.length).toBe(3);
-    expect(body).toMatch(/const nextDisplayGroups = await groupsRead;\s*if \(!isCurrent\(\)\) return;/);
+    expect(body).toMatch(
+      /const nextDisplayGroups = await groupsRead;\s*if \(!isCurrent\(\)\) return;/,
+    );
   });
 });
 
@@ -395,14 +408,16 @@ describe('both lists — a failed read is never "no results" or a zero count', (
       src: books,
       failed: 'Books did not load.',
       noResults: 'No books match.',
-      eyebrow: /\{loadError !== null\s*\? 'INVENTORY · PLACEMENTS'\s*: `INVENTORY · \$\{datasetRowCount\.toLocaleString\(\)\} PLACEMENTS`\}/,
+      eyebrow:
+        /\{listFailed\s*\? 'INVENTORY · PLACEMENTS'\s*: `INVENTORY · \$\{datasetRowCount\.toLocaleString\(\)\} PLACEMENTS`\}/,
     },
     {
       name: 'inventory',
       src: inventory,
       failed: 'Items did not load.',
       noResults: 'No items match.',
-      eyebrow: /\{loadError !== null\s*\? 'INVENTORY · ITEMS'\s*: `INVENTORY · \$\{datasetRowCount\.toLocaleString\(\)\} ITEMS`\}/,
+      eyebrow:
+        /\{listFailed\s*\? 'INVENTORY · ITEMS'\s*: `INVENTORY · \$\{datasetRowCount\.toLocaleString\(\)\} ITEMS`\}/,
     },
   ];
 
@@ -410,8 +425,10 @@ describe('both lists — a failed read is never "no results" or a zero count', (
     it(`${name}: the empty state says the read failed, not "${noResults}"`, () => {
       // A failed read leaves no rows, so the list's empty state rendered
       // "${noResults}" right under the failure notice, contradicting it.
+      // listFailed: the read failed, or no workspace is known to read in.
+      expect(src).toContain('const listFailed = noWorkspace || loadError !== null;');
       const empty = emptyComponent(src);
-      const check = empty.indexOf('loadError !== null ?');
+      const check = empty.indexOf('listFailed ?');
       expect(check, 'the empty state must switch on the failed read').toBeGreaterThan(-1);
       expect(empty.indexOf(failed)).toBeGreaterThan(check);
       expect(empty.indexOf(noResults)).toBeGreaterThan(empty.indexOf(failed));
@@ -427,8 +444,8 @@ describe('both lists — a failed read is never "no results" or a zero count', (
   it('inventory: a failed read never shows the tour ghost row either', () => {
     // The ghost stands in for a genuinely empty org; a failed read is not one.
     const empty = emptyComponent(inventory);
-    expect(empty.indexOf('loadError !== null ?')).toBeGreaterThan(-1);
-    expect(empty.indexOf('loadError !== null ?')).toBeLessThan(empty.indexOf('tourActive &&'));
+    expect(empty.indexOf('listFailed ?')).toBeGreaterThan(-1);
+    expect(empty.indexOf('listFailed ?')).toBeLessThan(empty.indexOf('tourActive &&'));
   });
 });
 
