@@ -551,9 +551,10 @@ describe('consumeMfaRecoveryCodeAction — limits by address and by account', ()
    * minutes, above the code bucket's 5): past that the database answers an
    * error whose hint is rate_limited. The person meets the same pause the
    * limits above answer with, and, as when one of them pauses, nothing is
-   * removed and no row is written.
+   * removed and no row is written. The pause is reported as a warning, as the
+   * account's password bucket's pause is: the account only, nothing typed.
    */
-  it('when the code check answers that the account has made too many attempts, the answer is the same pause and nothing is removed or recorded', async () => {
+  it('when the code check answers that the account has made too many attempts, the answer is the same pause, nothing is removed or recorded, and a warning names the account only', async () => {
     stubHolder.stub = makeSupabaseStub({
       'rpc:increment_rate_limit': limiter(),
       'rpc:consume_mfa_recovery_code': {
@@ -572,7 +573,16 @@ describe('consumeMfaRecoveryCodeAction — limits by address and by account', ()
     expect(listFactors).not.toHaveBeenCalled();
     expect(deleteFactor).not.toHaveBeenCalled();
     expect(emitAuthAudit).not.toHaveBeenCalled();
-    expect(reportError).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(reportError).mock.calls[0]![1]).toEqual({
+      tag: 'actions.mfa_recovery.code_checks_paused',
+      level: 'warning',
+      extra: { userId: 'user-1' },
+    });
+    const report = JSON.stringify(vi.mocked(reportError).mock.calls);
+    expect(report).not.toContain(PW);
+    expect(report).not.toContain('good-code');
+    expect(report).not.toContain(HERE);
   });
 
   it('any other error of the code check is still an internal error', async () => {

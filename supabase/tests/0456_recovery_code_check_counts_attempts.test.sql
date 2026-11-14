@@ -17,31 +17,40 @@
 --     whose key is the account id and nothing of the code; calls three to ten
 --     answer as before; the eleventh call within the window raises (P0001,
 --     hint rate_limited) even for a right code, marks nothing and adds
---     nothing to the count; another account's count is its own; an empty
---     code still answers false and is not counted.
+--     nothing to the count, and so do the twelfth and thirteenth (the count
+--     never passes ten); another account's count is its own; an empty code
+--     still answers false and is not counted.
 -- R.  Roles: anon cannot execute; service_role without an account id still
 --     gets not_authenticated and nothing is counted.
 -- H.  The header (definer, search_path, owner, volatility), the exact ACL,
---     the counter's grants (its owner may execute it, authenticated and anon
---     may not), and one change: taking out the lines tagged "-- attempts"
---     gives 0103's body exactly, and the count comes before the hashing and
---     the update.
--- M.  Order and mutation: with an account's bucket already at the limit, a
---     right code's row stays unused; with the tagged lines taken out of the
+--     the counter's grants and body (its owner may execute it, authenticated
+--     and anon may not; 0048's body), and one change: taking out the lines
+--     tagged "-- attempts" gives 0103's body exactly, and the count comes
+--     before the comparison (before the hashing and the update).
+-- W.  The window: the counter allows calls 1 to 10 and refuses the 11th and
+--     12th without counting; a call in a read-only transaction fails without
+--     answering, counting or marking; a refused call one second before the
+--     window ends is still refused and does not move the window; at the
+--     window's end the next call is answered and starts a new window at one.
+-- M.  Mutation: with an account's bucket already at the limit, a right
+--     code's row stays unused; with the tagged lines taken out of the
 --     live body (undone), the eleventh call with a right code answers true,
 --     so the refusal comes from those lines; a counter that errors fails the
 --     call and one that answers nothing refuses it (each undone): closed.
 -- A.  The migration's own preflight, replayed from the recorded statements:
 --     recorded once; run again it stops (55000) naming the function; on the
 --     state before the migration it passes; there, a changed body, a changed
---     ACL, a missing counter, a counter of another shape and a second
---     function of the name each stop it, named.
+--     ACL, a missing counter, a counter of another shape, a counter with
+--     another body and a second function of the name each stop it, named.
+-- T.  The count and the check are one transaction, so that transaction must
+--     end by committing: no role and no database sets pgrst.db_tx_end.
 -- Z.  Every undone attempt changed nothing.
 --
--- Run against the schema without the migration (origin/main b850db6ed, head
--- 0420, scratch stack, 2026-11-14) it fails 20 of its 27: B3-B9, R2, H1, H4,
--- H5, M1-M4 and A1-A5. What passes there too is meant to: B1 and B2 (the
--- normal path), R1, H2 and H3 (what the migration keeps), and Z1 and Z2.
+-- Run against the schema without the migration (origin/main 207d0d27f, head
+-- 0421, scratch stack, 2026-11-14) it fails 24 of its 34: B3-B7, B7b, B8,
+-- B9, R2, H1, H4, H5, W3, W4, M1-M4 and A1-A6. What passes there too is meant
+-- to: B1 and B2 (the normal path), R1, H2, H3, W1, W2 and T1 (what the
+-- migration keeps), and Z1 and Z2.
 --
 -- Roles: fixtures as the test superuser. Every call runs through pg_temp.run,
 -- which sets the role and the claims with set_config inside a
@@ -50,16 +59,18 @@
 -- begin/rollback: nothing leaks.
 
 begin;
-select plan(27);
+select plan(34);
 
 \set member '\'0456a000-0000-4000-8000-0000000000a1\''
 \set other  '\'0456a000-0000-4000-8000-0000000000a2\''
 \set third  '\'0456a000-0000-4000-8000-0000000000a3\''
+\set fourth '\'0456a000-0000-4000-8000-0000000000a4\''
 
 insert into auth.users (id, email, raw_user_meta_data) values
   (:member, 'attempts-member@example.test', '{}'::jsonb),
   (:other,  'attempts-other@example.test',  '{}'::jsonb),
-  (:third,  'attempts-third@example.test',  '{}'::jsonb)
+  (:third,  'attempts-third@example.test',  '{}'::jsonb),
+  (:fourth, 'attempts-fourth@example.test', '{}'::jsonb)
 on conflict (id) do nothing;
 
 -- One call as p_as, signed in as p_sub (null: no account) with an aal claim:
@@ -93,6 +104,30 @@ begin
     return 'ERR:' || v_state || ':' || coalesce(v_hint, '') || ':' || coalesce(v_msg, '');
   end;
   return coalesce(v, 'null');
+end $$;
+
+-- One code check as p_sub at aal1 in a read-only transaction (as a GET
+-- request runs), ALWAYS undone: its answer, or ERR:<sqlstate>.
+create function pg_temp.check_code_ro(p_sub uuid, p_code text) returns text language plpgsql as $$
+declare v_state text; v text;
+begin
+  begin
+    perform set_config('transaction_read_only', 'on', true);
+    perform set_config('request.jwt.claim.sub', p_sub::text, true);
+    perform set_config('request.jwt.claims', jsonb_build_object('role', 'authenticated', 'sub', p_sub, 'aal', 'aal1')::text, true);
+    perform set_config('role', 'authenticated', true);
+    execute format('select public.consume_mfa_recovery_code(%L)::text', p_code) into v;
+    raise exception using errcode = 'XX456', message = 'undo';
+  exception when others then
+    get stacked diagnostics v_state = returned_sqlstate;
+    perform set_config('role', 'none', true);
+    perform set_config('request.jwt.claim.sub', '', true);
+    perform set_config('request.jwt.claims', '', true);
+    if v_state = 'XX456' then
+      return coalesce(v, 'null');
+    end if;
+    return 'ERR:' || v_state;
+  end;
 end $$;
 
 -- A code check as p_sub at aal1: its answer.
@@ -217,7 +252,8 @@ $$;
 \set wrong '\'Z0Z0-Z0Z0-Z0Z0-Z0Z1\''
 
 create temp table _sets (k text primary key, codes text) on commit drop;
-insert into _sets values ('m', pg_temp.new_codes(:member)), ('o', pg_temp.new_codes(:other)), ('t', pg_temp.new_codes(:third));
+insert into _sets values ('m', pg_temp.new_codes(:member)), ('o', pg_temp.new_codes(:other)), ('t', pg_temp.new_codes(:third)),
+                         ('f', pg_temp.new_codes(:fourth));
 create function pg_temp.code(p_set text, p_n int) returns text language sql stable as $$
   select split_part(codes, ',', p_n) from _sets where k = p_set
 $$;
@@ -255,6 +291,10 @@ select is(pg_temp.mark_of(:member, pg_temp.code('m', 2)) || ' / ' || (pg_temp.ro
           || ' / ' || pg_temp.bucket(:member),
           'unused / true / 10|900000',
   'B7: the refused right code is still unused, the person''s codes are exactly as they were, and the count stays at ten');
+select is(pg_temp.check_code(:member, :wrong) || ',' || pg_temp.check_code(:member, pg_temp.code('m', 2))
+          || ' / ' || pg_temp.mark_of(:member, pg_temp.code('m', 2)) || ' / ' || pg_temp.bucket(:member),
+          'ERR:P0001:rate_limited:too_many_attempts,ERR:P0001:rate_limited:too_many_attempts / unused / 10|900000',
+  'B7b: the twelfth and thirteenth calls are refused too and not counted: the count never passes ten');
 select is(pg_temp.check_code(:other, :wrong) || ',' || pg_temp.check_code(:other, pg_temp.code('o', 1))
           || ' / ' || pg_temp.mark_of(:other, pg_temp.code('o', 1))
           || ' / ' || pg_temp.bucket(:other) || ' / ' || pg_temp.bucket(:member),
@@ -302,10 +342,10 @@ select is(
           || has_function_privilege('postgres', p.oid, 'EXECUTE')::text || '|'
           || has_function_privilege('authenticated', p.oid, 'EXECUTE')::text || '|'
           || has_function_privilege('anon', p.oid, 'EXECUTE')::text || '|'
-          || has_function_privilege('service_role', p.oid, 'EXECUTE')::text
+          || has_function_privilege('service_role', p.oid, 'EXECUTE')::text || '|' || md5(p.prosrc)
      from pg_proc p where p.oid = 'public.increment_rate_limit(text, integer, integer)'::regprocedure),
-  'postgres|true|false|false|true',
-  'H3: the counter is owned by postgres, the function''s owner, who may execute it; authenticated and anon still may not');
+  'postgres|true|false|false|true|96d87ab16d9ff63468ac261a3f76139f',
+  'H3: the counter is owned by postgres, the function''s owner, who may execute it; authenticated and anon still may not; its body is 0048''s (md5 96d87ab1)');
 select is(
   (select md5(regexp_replace(p.prosrc, E'[^\n]*-- attempts[^\n]*\n', '', 'g')) || '|'
           || (select count(*) from regexp_matches(p.prosrc, '-- attempts', 'g'))::text || '|'
@@ -314,7 +354,7 @@ select is(
           || (position('length(trim(p_code)) = 0' in p.prosrc) between 1 and position('public.increment_rate_limit(' in p.prosrc))::text
      from pg_proc p where p.oid = 'public.consume_mfa_recovery_code(text)'::regprocedure),
   '17f255317559b1f06dfaa19e6440859b|8|true|true|true',
-  'H4: taking out the eight lines tagged "-- attempts" gives 0103''s body exactly (17f25531), and the count comes after the empty-code answer and before the hashing and the update');
+  'H4: taking out the eight lines tagged "-- attempts" gives 0103''s body exactly (17f25531), and the count comes after the empty-code answer and before the hashing and the update: the count comes before the comparison');
 select is(
   (select position('mfa-recovery-fn:'' || uid::text, 10, 900000)' in p.prosrc) > 0
           and position('p_code' in substring(p.prosrc from position('public.increment_rate_limit(' in p.prosrc) for 80)) = 0
@@ -322,7 +362,41 @@ select is(
   true,
   'H5: the counter is called with the prefix and the account id, 10, and a 15-minute window, and with nothing of the code');
 
--- ══ M. Order and mutation ═════════════════════════════════════════════════
+-- ══ W. The window ══════════════════════════════════════════════════════════
+select is(
+  (select string_agg(r.allowed::text || ':' || r.count::text, ',' order by g) || ' / ' || count(distinct r.reset_at)::text
+     from generate_series(1, 12) g, lateral public.increment_rate_limit('attempts-probe:' || (g * 0)::text, 10, 900000) r),
+  'true:1,true:2,true:3,true:4,true:5,true:6,true:7,true:8,true:9,true:10,false:10,false:10 / 1',
+  'W1: the counter allows calls 1 to 10 (the tenth takes the count to ten) and refuses the 11th and 12th without counting, in one window');
+select is(pg_temp.check_code_ro(:fourth, :wrong) || ',' || pg_temp.check_code_ro(:fourth, pg_temp.code('f', 1))
+          || ' / ' || pg_temp.bucket(:fourth) || ' / ' || pg_temp.mark_of(:fourth, pg_temp.code('f', 1)),
+          'ERR:25006,ERR:25006 / none / unused',
+  'W2: in a read-only transaction a wrong and a right code fail alike (25006): nothing is answered, counted or marked');
+
+create temp table _fill on commit drop as
+  select string_agg(pg_temp.check_code(:fourth, :wrong), ',' order by g) as v from generate_series(1, 10) g;
+update public.rate_limit_buckets
+   set window_started_at = now() - interval '14 minutes 59 seconds', expires_at = now() + interval '1 second'
+ where key = 'mfa-recovery-fn:' || :fourth::text;
+
+select is(
+  (select v from _fill) || ' / ' || pg_temp.check_code(:fourth, pg_temp.code('f', 1)) || ' / ' || pg_temp.bucket(:fourth)
+  || ' / ' || (select (b.window_started_at = now() - interval '14 minutes 59 seconds')::text
+                 from public.rate_limit_buckets b where b.key = 'mfa-recovery-fn:' || :fourth::text)
+  || ' / ' || pg_temp.mark_of(:fourth, pg_temp.code('f', 1)),
+  'false,false,false,false,false,false,false,false,false,false / ERR:P0001:rate_limited:too_many_attempts / 10|900000 / true / unused',
+  'W3: one second before the window ends the call is still refused, and the refused call does not move the window');
+
+update public.rate_limit_buckets
+   set window_started_at = now() - interval '15 minutes', expires_at = now()
+ where key = 'mfa-recovery-fn:' || :fourth::text;
+
+select is(pg_temp.check_code(:fourth, pg_temp.code('f', 1)) || ' / ' || pg_temp.bucket(:fourth)
+          || ' / ' || pg_temp.mark_of(:fourth, pg_temp.code('f', 1)),
+          'true / 1|900000 / used',
+  'W4: at the window''s end the next call is answered and starts a new window at one');
+
+-- ══ M. Mutation ═══════════════════════════════════════════════════════════
 -- The third account's bucket at the bound before its first call (as the
 -- table's own writer would leave it).
 insert into public.rate_limit_buckets (key, count, window_started_at, window_ms, expires_at)
@@ -330,7 +404,7 @@ values ('mfa-recovery-fn:' || :third::text, 10, now(), 900000, now() + interval 
 
 select is(pg_temp.check_code(:third, pg_temp.code('t', 1)) || ' / ' || pg_temp.mark_of(:third, pg_temp.code('t', 1)),
           'ERR:P0001:rate_limited:too_many_attempts / unused',
-  'M1: with the bucket already at the bound, a right code is refused and its row stays unused: the count comes before the comparison');
+  'M1: with the bucket already at the bound, a right code is refused and its row stays unused');
 
 create temp table _snap on commit drop as select pg_temp.state() as v;
 
@@ -385,6 +459,22 @@ select is(
                   || ' returns boolean language sql security definer set search_path = public as ''select true'''),
   '55000:recovery_code_attempts_preflight:public.increment_rate_limit(text, integer, integer) drifted',
   'A5: on that state, a counter that answers another shape (a boolean, not the row the call reads) stops it (55000), named');
+select is(
+  pg_temp.try_pre(pg_temp.old_body_sql() || ';'
+                  || 'create or replace function public.increment_rate_limit(p_key text, p_limit integer, p_window_ms integer)'
+                  || ' returns table (allowed boolean, count integer, reset_at timestamptz) language plpgsql security definer'
+                  || ' set search_path = public as ''begin return query select true, 1, now(); end'''),
+  '55000:recovery_code_attempts_preflight:public.increment_rate_limit(text, integer, integer) drifted',
+  'A6: on that state, a counter with another body (the same header) stops it (55000), named, and nothing is applied');
+
+-- ══ T. The transaction ends by committing ═════════════════════════════════
+-- The count and the code check are one transaction, so that transaction must
+-- end by committing for the count to stay: no role and no database carries a
+-- setting whose name starts with pgrst.db_tx_end.
+select is(
+  (select count(*) from pg_db_role_setting s, unnest(s.setconfig) c where c ilike 'pgrst.db_tx_end%'),
+  0::bigint,
+  'T1: no role and no database sets pgrst.db_tx_end');
 
 -- ══ Z. Undone ═════════════════════════════════════════════════════════════
 select is(pg_temp.state(), (select v from _snap),

@@ -124,6 +124,7 @@ const RECOVERY_PRESSES_AT_ADDRESS = 5;
  */
 const RECOVERY_PASSWORD_CHECKS = 10;
 /** Presses of one account whose password checked out, at every address, in a window. */
+// The code check's own bound (10 per 15 minutes, consume_mfa_recovery_code) must stay at least twice this.
 const RECOVERY_CODE_CHECKS = 5;
 
 /** One count in a bucket of the recovery code; closed: a limiter that cannot answer refuses. */
@@ -239,8 +240,17 @@ export async function consumeMfaRecoveryCodeAction(input: {
       // The code check counts its own attempts for the account (10 per 15
       // minutes, above RECOVERY_CODE_CHECKS) and past that answers hint
       // rate_limited: the same pause as the limits above, with nothing
-      // compared, removed or recorded, as when one of them pauses.
-      if (error.hint === 'rate_limited') return err('validation_error', RECOVERY_PAUSED);
+      // compared, removed or recorded, as when one of them pauses. Reported
+      // as the password bucket's pause is: the account only, never the code,
+      // the password or an address.
+      if (error.hint === 'rate_limited') {
+        void reportError(new Error('Recovery code checks of one account paused'), {
+          tag: 'actions.mfa_recovery.code_checks_paused',
+          level: 'warning',
+          extra: { userId: session.userId },
+        });
+        return err('validation_error', RECOVERY_PAUSED);
+      }
       throw new ServiceError('internal_error', error.message);
     }
     if (!ok_) {

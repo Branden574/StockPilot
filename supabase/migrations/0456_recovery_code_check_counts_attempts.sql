@@ -29,9 +29,12 @@
 --      postgres, not strict, not leakproof, PARALLEL UNSAFE), its ACL (the
 --      exact text 0329 left) and that it is the only function of that name in
 --      public; and it pins public.increment_rate_limit(text, integer,
---      integer) as the call below uses it: RETURNS TABLE(allowed boolean,
---      count integer, reset_at timestamp with time zone), owned by postgres
---      (the owner of the function that calls it), so the call needs no grant.
+--      integer) as the call below uses it: its body (md5(prosrc)
+--      96d87ab16d9ff63468ac261a3f76139f, 0048's text, which decides what
+--      "allowed" means: calls 1 to 10 of a fixed window allowed, the 11th
+--      refused and not counted), RETURNS TABLE(allowed boolean, count
+--      integer, reset_at timestamp with time zone), owned by postgres (the
+--      owner of the function that calls it), so the call needs no grant.
 --      On any difference it stops with 55000 (hint
 --      recovery_code_attempts_preflight), naming what differs, before
 --      anything changes. A second run is a difference: the body is this
@@ -44,9 +47,13 @@
 --      gives 0103's body exactly. md5(prosrc)
 --      17f255317559b1f06dfaa19e6440859b -> 26c41958657c3e1a8c5048c6ea5bea42.
 --      SEARCH PATH: kept as it is (public, extensions). INV-B5 asks that a
---      first-party function pins its search_path, which this one does, and
---      every name the body uses is schema-qualified already (public.*,
---      extensions.digest, auth.uid); the header stays byte for byte as it was.
+--      first-party function pins its search_path, which this one does. The
+--      body's tables and functions are schema-qualified (public.*,
+--      extensions.digest, auth.uid); the rest are pg_catalog builtins
+--      (regexp_replace, upper, trim, length, encode, now, the || operator)
+--      and the uid::text cast, which resolve in pg_catalog, searched before
+--      public when the path does not name it, so nothing in public can
+--      shadow them. The header stays byte for byte as it was.
 --   2. 0329's revoke and grant for the function are restated unchanged, so
 --      the ACL comes out byte for byte as it was: EXECUTE for authenticated,
 --      service_role and the owner, none for anon or PUBLIC.
@@ -72,11 +79,14 @@
 -- a table: it declares no %ROWTYPE or %TYPE. REVOKE and GRANT write the
 -- function's catalog row, and GRANT holds an AccessShareLock on the role
 -- authenticated to commit: only a DROP ROLE of authenticated would wait for
--- it. COMMENT writes pg_description. A call of the function takes no lock on
--- it, so a call in flight does not hold the file up. lock_timeout 900ms
--- bounds anything unforeseen: another open transaction changing the
--- function's catalog row makes the file wait, then end with 55P03 and
--- nothing applied.
+-- it. COMMENT writes pg_description and holds a ShareUpdateExclusiveLock on
+-- the function object to commit: only other DDL on the same function waits
+-- for it. A call of the function takes no lock on it, so a call in flight
+-- does not hold the file up. lock_timeout 900ms bounds anything unforeseen:
+-- another open transaction changing the function's catalog row makes the
+-- file wait, then end with 55P03 and nothing applied.
+-- scripts/db-concurrency/0456_migration_lock_footprint.sh checks each of
+-- these.
 --
 -- ── ERRORS ─────────────────────────────────────────────────────────────────
 -- The function's new refusal is P0001 with hint rate_limited. A counter
@@ -142,9 +152,10 @@ begin
   end if;
 
   -- The counter, as the call below uses it: three arguments (text, integer,
-  -- integer), one row with a boolean "allowed", owned by postgres so the
-  -- function (owned by postgres) may call it without a grant.
-  select pg_get_function_result(p.oid) as got_res, p.prokind::text as got_kind,
+  -- integer), 0048's body (what "allowed" means), one row with a boolean
+  -- "allowed", owned by postgres so the function (owned by postgres) may
+  -- call it without a grant.
+  select md5(p.prosrc) as got_src, pg_get_function_result(p.oid) as got_res, p.prokind::text as got_kind,
          pg_get_userbyid(p.proowner) as got_owner
     into r
     from pg_proc p
@@ -153,11 +164,12 @@ begin
 
   if not v_found then
     v_bad := v_bad || ' public.increment_rate_limit(text, integer, integer) missing;';
-  elsif r.got_res <> 'TABLE(allowed boolean, count integer, reset_at timestamp with time zone)'
+  elsif r.got_src <> '96d87ab16d9ff63468ac261a3f76139f'
+        or r.got_res <> 'TABLE(allowed boolean, count integer, reset_at timestamp with time zone)'
         or r.got_kind <> 'f' or r.got_owner <> 'postgres'
         or not has_function_privilege('postgres', 'public.increment_rate_limit(text, integer, integer)', 'EXECUTE') then
-    v_bad := v_bad || format(' public.increment_rate_limit(text, integer, integer) drifted (returns %s, kind %s, owner %s);',
-                             r.got_res, r.got_kind, r.got_owner);
+    v_bad := v_bad || format(' public.increment_rate_limit(text, integer, integer) drifted (md5 %s, returns %s, kind %s, owner %s);',
+                             r.got_src, r.got_res, r.got_kind, r.got_owner);
   end if;
 
   if v_bad <> '' then
@@ -172,6 +184,10 @@ $attempts_pre$;
 -- definition, with the count after the empty-code answer; each added line
 -- ends in "-- attempts". md5(prosrc) 17f255317559b1f06dfaa19e6440859b ->
 -- 26c41958657c3e1a8c5048c6ea5bea42.
+-- The bound (10 per 15 minutes) must stay at least twice the web action's
+-- RECOVERY_CODE_CHECKS (5 per 15 minutes, apps/web/src/server/actions/
+-- mfa-recovery.ts): two of the action's windows can overlap one of these, so
+-- a person using the app meets the app's own pause first.
 create or replace function public.consume_mfa_recovery_code(p_code text)
 returns boolean
 language plpgsql

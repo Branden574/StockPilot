@@ -869,11 +869,15 @@ PGTAP_TESTS=(
   # and the account id, nothing of the code; 10 per 15 minutes), and past
   # that raises P0001 with hint rate_limited even for a right code, marking
   # nothing. Another account's count is its own; a counter that errors or
-  # answers nothing fails the call (closed). The body is 0103's plus the
+  # answers nothing fails the call (closed); a read-only transaction counts
+  # nothing and answers nothing; a refused call does not move the window; no
+  # role or database sets pgrst.db_tx_end. The body is 0103's plus the
   # eight lines tagged "-- attempts" (taking them out lets the refused call
   # through), the header and the ACL are as before, anon cannot execute it,
   # service_role without an account id is refused as before, and the
-  # migration's own preflight is replayed from the recorded statements.
+  # migration's own preflight (which pins the counter's body too) is
+  # replayed from the recorded statements. The lock footprint is
+  # scripts/db-concurrency/0456_migration_lock_footprint.sh.
   supabase/tests/0456_recovery_code_check_counts_attempts.test.sql
 
   # AI read scoping.
