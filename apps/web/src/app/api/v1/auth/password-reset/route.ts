@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
+import { clientIpFromRequest } from '@/lib/client-ip';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 /**
@@ -33,10 +34,7 @@ export async function POST(req: NextRequest) {
   }
 
   const email = parsed.data.email.toLowerCase();
-  const ip =
-    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
-    req.headers.get('x-real-ip') ??
-    'unknown';
+  const ip = clientIpFromRequest(req);
 
   const ipRl = await checkRateLimit(`pwreset-ip:${ip}`, 10, 15 * 60_000, 'closed');
   if (!ipRl.allowed) return generic;

@@ -6,8 +6,12 @@ import { useAuth } from './auth-context';
 import { cycleCountSync } from './cycle-count-sync';
 import { deleteOrgData } from './db';
 import { refreshEnabledModules } from './enabled-modules';
+import { refreshCacheOwner } from './use-cache-owner';
 import { syncAfterRunning, syncNow } from './sync';
 import { supabase } from './supabase';
+import { countSelection } from './use-count-selection';
+import { refreshEffectivePermissions } from './use-effective-permissions';
+import { refreshWarehouseScope } from './warehouse-scope';
 import { chooseActiveOrg } from './workspace-choice';
 import {
   readCacheRepairOwed,
@@ -156,6 +160,41 @@ function loadWarehousesBounded(orgId: string): Promise<WarehouseOption[] | null>
   });
 }
 
+/** How long a workspace load waits for the membership and profile reads.
+ *  React Native's fetch has no timeout of its own, so a request that never
+ *  answered held `loading` for good, and every screen that spins while the
+ *  workspace loads spun with it. */
+const WORKSPACE_READ_TIMEOUT_MS = 15_000;
+
+/** A workspace load's read, answered with null (as a failed read is) when it
+ *  rejects or takes longer than WORKSPACE_READ_TIMEOUT_MS. An answer that
+ *  comes after that is handed to `late`, when given. */
+function boundedWorkspaceRead<T>(
+  what: string,
+  read: () => Promise<T | null>,
+  late?: (value: T | null) => void,
+): Promise<T | null> {
+  return new Promise((resolve) => {
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      console.warn(`[workspace] ${what} timed out`);
+      resolve(null);
+    }, WORKSPACE_READ_TIMEOUT_MS);
+    read().then(
+      (value) => {
+        clearTimeout(timer);
+        if (timedOut) late?.(value);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(null);
+      },
+    );
+  });
+}
+
 /** The profile's default organization (the server's choice when a request
  *  names none), or null when unset or unreadable. */
 async function loadProfileDefaultOrg(userId: string): Promise<string | null> {
@@ -189,9 +228,23 @@ let shownEpoch: number | null = null;
 let epochUserId: string | null | undefined;
 supabase.auth.onAuthStateChange((_event, session) => {
   const id = session?.user?.id ?? null;
-  if (epochUserId !== undefined && id !== epochUserId) endAccountEpoch();
+  if (epochUserId !== undefined && id !== epochUserId) {
+    endAccountEpoch();
+    forgetWorkspacePicks();
+  }
   epochUserId = id;
 });
+
+/**
+ * The picks made on this phone for one account in one workspace, held in
+ * memory by module-level stores, forgotten when the account changes (a
+ * sign-out included) and when another workspace's cache replaces this one's:
+ * the items picked for a cycle count (use-count-selection.ts), which Select
+ * and the review showed to the next account.
+ */
+function forgetWorkspacePicks(): void {
+  countSelection.clear();
+}
 
 /** Workspace loads running now (see retryWorkspace). */
 let loadsRunning = 0;
@@ -233,22 +286,44 @@ async function recordRepairDone(record: number): Promise<void> {
   }
 }
 
-async function hydrate(userId: string): Promise<void> {
+/** Membership answers a workspace load has taken (see loadWorkspace). */
+let membershipAnswers = 0;
+
+async function hydrate(userId: string, memberships?: OrgOption[]): Promise<void> {
   loadsRunning += 1;
   try {
-    await loadWorkspace(userId);
+    await loadWorkspace(userId, memberships);
   } finally {
     loadsRunning -= 1;
   }
 }
 
-async function loadWorkspace(userId: string) {
+/** One workspace load. `given` is a membership answer that came after its own
+ *  load had stopped waiting (below): used in place of a new read. */
+async function loadWorkspace(userId: string, given?: OrgOption[]) {
   const epochAtStart = accountEpoch();
   const switchesAtStart = switchesStarted;
+  const answersAtStart = membershipAnswers;
   const [memberships, saved, profileDefault, repairOwed] = await Promise.all([
-    loadOrgs(userId),
+    // Bounded: a read that never answers ends like a failed one (null), so the
+    // load ends and a screen says there is no workspace, never a spinner for
+    // good; the sync loop and Try again ask again (retryWorkspace). On a link
+    // where every read takes longer than that, a late answer still loads the
+    // workspace: when it is for the account still signed in and no membership
+    // answer has landed since, it runs a load of its own with that answer.
+    given !== undefined
+      ? Promise.resolve(given)
+      : boundedWorkspaceRead(
+          'membership read',
+          () => loadOrgs(userId),
+          (late) => {
+            if (late === null) return;
+            if (accountEpoch() !== epochAtStart || membershipAnswers !== answersAtStart) return;
+            void hydrate(userId, late);
+          },
+        ),
     readSavedWorkspace(AsyncStorage),
-    loadProfileDefaultOrg(userId),
+    boundedWorkspaceRead('default organization read', () => loadProfileDefaultOrg(userId)),
     // A cache repair an earlier load or switch could not finish (below).
     readCacheRepairOwed(AsyncStorage),
   ]);
@@ -271,6 +346,7 @@ async function loadWorkspace(userId: string) {
   // The account changed while these reads were out (sign-out, another user,
   // eviction): this load belongs to an account that is gone.
   if (accountEpoch() !== epochAtStart) return;
+  if (memberships !== null) membershipAnswers += 1;
   // THE MEMBERSHIP READ FAILED (offline, a dropped connection). Every screen
   // that mounts runs this load, and a failed read used to count as "a member
   // of nothing": the workspace became null for the WHOLE APP, and every screen
@@ -409,6 +485,8 @@ async function loadWorkspace(userId: string) {
       // one while only the phone's own store is failing.
       console.warn('[workspace] the cache repair failed; it stays owed for the next load', err);
     }
+    forgetWorkspacePicks();
+    await rereadSavedAccess();
     // Recorded done once this wipe has worked: it was asked for after this
     // load's save, so every pull that writes after it names the workspace
     // chosen (an answer asked for before it is discarded: db.ts
@@ -495,6 +573,31 @@ async function loadWorkspace(userId: string) {
     void syncNow(true).then(() => refreshEnabledModules());
   }
 }
+
+/**
+ * Tell every screen to read the saved permissions, modules and warehouse
+ * scope again, and wait until they have: the wipe just deleted them with the
+ * previous workspace's rows (db.ts deleteOrgData states this duty), and the
+ * screens hold the last values read in memory. Called right after the wipe,
+ * before the new workspace is shown, so no screen narrows or widens by the
+ * previous workspace's permissions, modules or banner while this one's pull
+ * is out (or for good offline). The menu keeps the module set it shows until
+ * the pull saves the new one (enabled-modules.ts); a screen gated on the
+ * saved set sees that none is saved (screen-access.ts). Never throws: each
+ * re-read keeps its last value on a failure.
+ */
+async function rereadSavedAccess(): Promise<void> {
+  await Promise.all([
+    refreshEffectivePermissions(),
+    refreshEnabledModules(),
+    refreshWarehouseScope(),
+    refreshCacheOwner(),
+  ]);
+}
+
+/** What a list screen says over its list when no workspace could be loaded (a pull calls retryWorkspace). */
+export const NO_WORKSPACE_LINE =
+  'Could not load your workspace. Check your connection and pull down to try again.';
 
 /** The retry running now (see retryWorkspace). */
 let retrying: Promise<void> | null = null;
@@ -596,6 +699,8 @@ async function switchActiveOrg(orgId: string, epoch: number): Promise<void> {
     // Still owed: the next load clears the cache before it shows a workspace.
     console.warn('[workspace] deleteOrgData on org switch failed; the next load clears again', err);
   }
+  forgetWorkspacePicks();
+  await rereadSavedAccess();
   if (epoch !== accountEpoch()) return; // signed out mid-switch: show nothing
   // Recorded done as at the load, while this switch's record is the latest.
   // Not awaited: nothing may come between the check above and the publish

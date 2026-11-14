@@ -24,14 +24,33 @@ import { SceneBackground } from '@/components/ui/glass/scene-background';
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth-context';
-import { countNotSavedAlert } from '@/lib/count-save-refusal';
 import {
+  type CountLoadKey,
+  countAnswerStillShown,
+  countLoadClearsScreen,
+  countLoadDraftAction,
+  mergeScannedCounts,
+} from '@/lib/count-access-refresh';
+import {
+  countNotSavedAlert,
+  createLineGoneNotice,
+  createOneAlert,
+} from '@/lib/count-save-refusal';
+import {
+  countStoredForLiveAccount,
   getCycleCount,
   updateLocalLine,
   type CachedCycleCountLine,
 } from '@/lib/cycle-count-cache';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
+import {
+  CYCLE_COUNTS_NOT_AVAILABLE,
+  NOT_SYNCED_YET,
+  SAVED_ACCESS_UNREADABLE,
+} from '@/lib/screen-access';
+import { useOrg } from '@/lib/use-org';
+import { useDrawerEntryAccess } from '@/lib/use-screen-access';
 import { reportPhoneSaveFailure } from '@/lib/phone-save-report';
 import { FONT, TYPE_CEILING, capTo, palette, radius, space } from '@/lib/theme';
 import { useHoldAppearanceAdoptionWhileFocused } from '@/lib/appearance/use-adoption-hold';
@@ -91,6 +110,7 @@ function CycleCountScanScreenInner() {
   useHoldAppearanceAdoptionWhileFocused('count');
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
+  const { orgId } = useOrg();
   const [permission, requestPermission] = useCameraPermissions();
   // The confirm sheet and the permission screen follow the device's mode;
   // the camera chrome is dark in both (CAMERA, below).
@@ -106,45 +126,120 @@ function CycleCountScanScreenInner() {
   const [burstMode, setBurstMode] = React.useState(false);
   const [lastScan, setLastScan] = React.useState<{ code: string; at: number } | null>(null);
   const [scannedMap, setScannedMap] = React.useState<Map<string, number>>(new Map());
+  // "Count not saved", once at a time, and nothing once the scanner has closed.
+  const [lineGoneNotice] = React.useState(() =>
+    createLineGoneNotice((title, message, buttons, options) =>
+      Alert.alert(title, message, buttons, options),
+    ),
+  );
+  React.useEffect(() => () => lineGoneNotice.close(), [lineGoneNotice]);
+  // Why this count cannot be opened here: one alert at a time, though the
+  // read runs again as the account, workspace or access changes, and nothing
+  // once the scanner has closed. Its OK leaves.
+  const [openNotice] = React.useState(() =>
+    createOneAlert((title, message, buttons, options) =>
+      Alert.alert(title, message, buttons, options),
+    ),
+  );
+  React.useEffect(() => () => openNotice.close(), [openNotice]);
+
+  // Back, or to the Cycle counts tab when the scanner is the only screen (a
+  // link opened it): going back would then do nothing and leave it open.
+  function leave() {
+    if (router.canGoBack()) router.back();
+    else router.replace('/cycle-counts');
+  }
+  // The count screen's question (screen-access.ts): the lines saved on this
+  // phone are read only for a member who may see cycle counts.
+  const access = useDrawerEntryAccess('/cycle-counts');
 
   async function loadLines() {
-    if (!id) return;
+    if (!id || access === 'unknown') return;
+    // The key this read started under (lastLinesKey, below): an answer that
+    // lands after the account, workspace, count or access changed is dropped
+    // (count-access-refresh.ts countAnswerStillShown).
+    const startedUnder = lastLinesKey.current;
+    const stillHere = () => countAnswerStillShown(startedUnder, lastLinesKey.current);
+    // Not for a member who may not see cycle counts, nor while what the
+    // phone saved about the member's access is unreadable; not synced yet,
+    // only a count this account fetched here (screen-access.ts).
+    const refused =
+      access === 'denied'
+        ? CYCLE_COUNTS_NOT_AVAILABLE
+        : access === 'unreadable'
+          ? SAVED_ACCESS_UNREADABLE
+          : access === 'not-synced' && !(await countStoredForLiveAccount(id).catch(() => false))
+            ? NOT_SYNCED_YET
+            : null;
+    if (!stillHere()) return;
+    if (refused !== null) {
+      openNotice.say(
+        access === 'denied' ? 'Not available' : 'Could not open this count',
+        refused,
+        leave,
+      );
+      return;
+    }
     const snap = await getCycleCount(id);
+    if (!stillHere()) return;
     if (!snap) {
       // Detail screen handles the offline-uncached state; if we land
       // here without a cache there's nothing to scan against.
-      Alert.alert(
+      openNotice.say(
         'No cached lines',
         'Open this cycle count from the list once while online so it can be cached for offline scanning.',
-        [{ text: 'OK', onPress: () => router.back() }],
+        leave,
       );
       return;
     }
     setLines(snap.lines);
-    // Seed the per-line counted map from cache so the header tally
-    // reflects already-counted lines.
-    const seed = new Map<string, number>();
-    for (const l of snap.lines) if (l.counted != null) seed.set(l.id, l.counted);
-    setScannedMap(seed);
+    // The per-line counted map from the cache, so the header tally reflects
+    // already-counted lines, merged into what this screen scanned: read again
+    // when the phone finishes syncing (not synced yet -> allowed), a count
+    // scanned here stays (count-access-refresh.ts mergeScannedCounts).
+    setScannedMap((prev) => mergeScannedCounts(prev, snap.lines));
   }
 
+  // What the lines on screen were read for. Another count, workspace or
+  // account clears the lines and the tally before the read
+  // (count-access-refresh.ts countLoadClearsScreen); the same count read again
+  // (an access change) merges into the tally.
+  const lastLinesKey = React.useRef<CountLoadKey | null>(null);
   React.useEffect(() => {
-    if (!user || !id) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
+    if (!id) return;
+    const key = { id, orgId, userId: user?.id ?? null, access };
+    if (countLoadClearsScreen(lastLinesKey.current, key)) {
+      // Another count, workspace or account: what was read for the previous
+      // one must not stay drawn while this one is read. A confirm sheet
+      // typed for another account or workspace closes unsaved
+      // (countLoadDraftAction).
+      if (countLoadDraftAction(lastLinesKey.current, key) === 'drop') setSheet(null);
+      setLines([]);
+      setScannedMap(new Map());
+    }
+    lastLinesKey.current = key;
+    if (!user) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set in loadLines is post-await; the clear above is the identity change's own reset
     void loadLines();
     // loadLines is a plain function, new on every render (it reads only id
     // and the router): listing it would load the lines on every render. The
-    // lines load once per signed-in user and count.
+    // lines load once per signed-in user, workspace and count, and again when
+    // whether this member may see cycle counts is known or changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, id]);
+  }, [user, id, orgId, access]);
 
 
   /** Saves one count on the phone and queues it. False when nothing was saved (said). */
   async function recordCount(line: CachedCycleCountLine, qty: number): Promise<boolean> {
     if (!Number.isFinite(qty) || qty < 0) return false;
+    // Tallied and said only while the scanner still shows the key the scan
+    // was saved under; otherwise the scanner just takes the next scan.
+    const savedUnder = lastLinesKey.current;
+    const stillHere = () => countAnswerStillShown(savedUnder, lastLinesKey.current);
     setBusy(true);
+    let queued: Awaited<ReturnType<typeof updateLocalLine>>;
     try {
-      await updateLocalLine(line.id, qty);
+      queued = await updateLocalLine(line.id, qty);
     } catch (e) {
       // Not saved and not queued: the outbox refused it (no account, or the
       // workspace still loading) or the phone's store failed. Said
@@ -154,11 +249,31 @@ function CycleCountScanScreenInner() {
       // code ran the same refused save every 600 ms in Burst, one alert each.
       // A store failure is reported to the team (phone-save-report.ts).
       reportPhoneSaveFailure(e, 'cycle-count.scan');
+      if (!stillHere()) {
+        setBusy(false);
+        return false;
+      }
       const free = () => setBusy(false);
       const { title, message } = countNotSavedAlert(e);
       Alert.alert(title, message, [{ text: 'OK', onPress: free }], {
         cancelable: true,
         onDismiss: free,
+      });
+      return false;
+    }
+    if (!stillHere()) {
+      setBusy(false);
+      return false;
+    }
+    if (queued === null) {
+      // The line is no longer in this phone's copy of the count: nothing was
+      // saved or queued, so nothing is tallied or marked saved. Said, once at
+      // a time and never after the scanner closed; the scanner stays busy
+      // until it is answered, then reads the lines on this phone again, or
+      // closes when the count is gone (afterScanLineGone).
+      lineGoneNotice.say(() => {
+        setBusy(false);
+        void afterScanLineGone();
       });
       return false;
     }
@@ -172,6 +287,33 @@ function CycleCountScanScreenInner() {
     void cycleCountSync.forceSync();
     setBusy(false);
     return true;
+  }
+
+  /** After a scan the phone could not store (COUNT_LINE_NOT_SAVED): read the
+   *  lines on this phone again, or close when the count is no longer here. */
+  async function afterScanLineGone() {
+    const startedUnder = lastLinesKey.current;
+    let snap: Awaited<ReturnType<typeof getCycleCount>> = null;
+    try {
+      // As loadLines: not synced yet, only a count this account fetched here.
+      const mayRead =
+        access === 'allowed' ||
+        (access === 'not-synced' && !!id && (await countStoredForLiveAccount(id)));
+      snap = id && mayRead ? await getCycleCount(id) : null;
+    } catch {
+      snap = null;
+    }
+    // The scanner shows another count, workspace or account by now: its own
+    // read runs for that.
+    if (!countAnswerStillShown(startedUnder, lastLinesKey.current)) return;
+    if (!snap) {
+      leave();
+      return;
+    }
+    setLines(snap.lines);
+    const seed = new Map<string, number>();
+    for (const l of snap.lines) if (l.counted != null) seed.set(l.id, l.counted);
+    setScannedMap(seed);
   }
 
   function findLineByCode(code: string): CachedCycleCountLine | null {
@@ -299,7 +441,7 @@ function CycleCountScanScreenInner() {
           <View style={styles.topBar}>
             <Pressable
               style={styles.closeFrame}
-              onPress={() => router.back()}
+              onPress={leave}
               accessibilityRole="button"
               accessibilityLabel="Done"
             >

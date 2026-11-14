@@ -36,3 +36,20 @@ describe('Home: the Bundles card', () => {
     expect(code).toContain("import { HOME_BUNDLES_SUBTITLE } from '@/lib/cta-gating';");
   });
 });
+
+// S75: the card opened the bundle list for every member, although the side
+// menu hides Bundles from a member without bundles:read or
+// bundles:distribute, or with the module off. It now shows by the menu's own
+// rule (screen-access.ts), once the saved permissions and modules are read.
+describe('Home: the Bundles card shows only for a member the side menu offers Bundles to', () => {
+  it('reads the side menu rule and draws the whole section only when allowed', () => {
+    const code = codeOnly(home);
+    expect(code).toContain("const bundlesOffered = useDrawerEntryAccess('/bundles') === 'allowed';");
+    expect(code).toContain("import { useDrawerEntryAccess } from '@/lib/use-screen-access';");
+    const card = code.indexOf('<Eyebrow>BUNDLES</Eyebrow>');
+    const gate = code.lastIndexOf('{bundlesOffered ? (', card);
+    expect(gate).toBeGreaterThan(-1);
+    // Nothing else opens between the gate and the card's section.
+    expect(code.slice(gate, card)).not.toMatch(/\)\s*:\s*null\}/);
+  });
+});
