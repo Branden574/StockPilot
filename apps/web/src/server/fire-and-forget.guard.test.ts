@@ -50,6 +50,7 @@ const KEEPS_ITSELF_ALIVE: Record<string, readonly string[]> = {
   'lib/error-reporter': ['reportError'],
   'server/services/integration-events': ['dispatchEvent'],
   'server/services/audit': ['audit', 'auditMany', 'insertAuditRowReported'],
+  'server/lib/org-logo-object': ['removePreviousOrgLogo'],
   'lib/realtime/broadcast': [
     'broadcastToChannel',
     'broadcastOrderChanged',
