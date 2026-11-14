@@ -235,6 +235,54 @@ describe('POST /api/v1/account/delete', () => {
     expect(audit).not.toHaveBeenCalled();
   });
 
+  // Migration 0458: the owner check at the auth server's commit can answer
+  // busy (55P03); the auth server answers a 500 and the account stays. The
+  // re-check then answers deletable: nothing changed, so the phone is told
+  // to try again and stays signed in (as for the check's own retry answer).
+  it('a failed delete whose re-check answers deletable: 503 try again, no revoke, no audit row', async () => {
+    const stub = happyStub();
+    deleteUser.mockResolvedValueOnce({
+      error: { name: 'AuthApiError', status: 500, message: 'Database error deleting user' },
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub) as never);
+
+    const res = await POST(buildRequest({ confirm: 'DELETE' }));
+
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({
+      error: 'check_failed',
+      message: 'Your account could not be deleted right now. Nothing was changed. Try again in a minute.',
+    });
+    expect(rpc).toHaveBeenCalledTimes(2);
+    expect(revokeAllSessionsForUser).not.toHaveBeenCalled();
+    expect(insertAuditRowReported).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'account.delete.auth_delete_transient', level: 'warning' }),
+    );
+  });
+
+  // A 502, 503, 504 or 52x is the gateway's answer: the delete may still be
+  // running, so the existing failure answer (500, sessions revoked) stays.
+  it.each([502, 503, 504, 520])('a %i from the gateway keeps the failure answer: 500, revoke, no audit row', async (status) => {
+    const stub = happyStub();
+    deleteUser.mockResolvedValueOnce({
+      error: { name: 'AuthRetryableFetchError', status, message: 'gateway' },
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub) as never);
+
+    const res = await POST(buildRequest({ confirm: 'DELETE' }));
+
+    expect(res.status).toBe(500);
+    expect(((await res.json()) as { error: string }).error).toBe('internal_error');
+    expect(revokeAllSessionsForUser).toHaveBeenCalledWith(USER_ID);
+    expect(insertAuditRowReported).not.toHaveBeenCalled();
+    expect(reportError).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'account.delete.auth_delete_transient' }),
+    );
+  });
+
   // Review R7 (2026-10-03): deleteUser can answer an error although the
   // account is gone. The phone used to get 500 "could not be deleted" and no
   // audit row was written; now the route asks GoTrue again.
@@ -615,10 +663,16 @@ describe('POST /api/v1/account/delete', () => {
     expect(avatarList).not.toHaveBeenCalled();
   });
 
-  it('desk check F-5: any other answer to the re-check keeps SP-008 (sessions revoked, 500)', async () => {
+  // Re-pinned by 0458 (the re-check answered deletable here, which after a
+  // GoTrue 500 now means "try again"): a re-check that cannot answer keeps
+  // SP-008.
+  it('desk check F-5: a re-check that cannot answer keeps SP-008 (sessions revoked, 500)', async () => {
     deleteUser.mockResolvedValueOnce({
       error: { name: 'AuthApiError', status: 500, message: 'Database error deleting user' },
     });
+    rpc
+      .mockResolvedValueOnce({ data: { deletable: true }, error: null })
+      .mockResolvedValueOnce({ data: null, error: { code: 'PGRST301' } });
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(happyStub()) as never);
 
     const res = await POST(buildRequest({ confirm: 'DELETE' }));

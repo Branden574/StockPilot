@@ -32,6 +32,7 @@ const answers: {
   org: QueryResult;
   membership: QueryResult;
   profile: QueryResult;
+  grantWrite: QueryResult;
   grantDeleteFailsFor: string[];
 } = {
   expired: { data: [], error: null },
@@ -39,6 +40,7 @@ const answers: {
   org: { data: null, error: null },
   membership: { data: null, error: null },
   profile: { data: null, error: null },
+  grantWrite: { data: null, error: null },
   grantDeleteFailsFor: [],
 };
 
@@ -78,7 +80,7 @@ function makeStub() {
     'platform_impersonation_sessions.update': { data: null, error: null },
     'organizations.select': () => answers.org,
     'organization_members.select': () => answers.membership,
-    'organization_members.insert': { data: null, error: null },
+    'organization_members.insert': () => answers.grantWrite,
     'organization_members.delete': (call: MockCall) =>
       answers.grantDeleteFailsFor.includes(eqValue(call, 'organization_id') as string)
         ? { data: null, error: READ_FAILED }
@@ -114,6 +116,7 @@ beforeEach(() => {
   answers.org = { data: { id: ORG_ID, name: 'Example Org' }, error: null };
   answers.membership = { data: null, error: null };
   answers.profile = { data: { default_organization_id: PREVIOUS_ORG_ID }, error: null };
+  answers.grantWrite = { data: null, error: null };
   answers.grantDeleteFailsFor = [];
 });
 
@@ -229,6 +232,27 @@ describe('startActingAs', () => {
     expect(stub.chainArgs.get('platform_impersonation_sessions.insert')?.[0]?.[0]).toMatchObject({
       previous_organization_id: PREVIOUS_ORG_ID,
     });
+  });
+
+  // Migration 0458: the grant's upsert can land on the admin's own real
+  // owner row (a membership that appeared after the read above). The database
+  // then refuses at commit when that row was the organization's only owner
+  // and other members remain, or answers busy. No session is recorded and the
+  // admin's organization is not switched.
+  it.each([
+    { raised: { code: 'P0001', message: 'organization_needs_owner' }, reason: 'only_owner' },
+    { raised: { code: '55P03', message: 'organization_owner_check_busy' }, reason: 'owner_check_busy' },
+  ])('the owner rule "$raised.message" on the grant: $reason, nothing after it', async ({ raised, reason }) => {
+    answers.grantWrite = { data: null, error: raised };
+    await expect(startActingAs(START)).resolves.toEqual({ ok: false, reason });
+    expect(stub.chainsAll.get('platform_impersonation_sessions.insert')).toBeUndefined();
+    expect(stub.chainsAll.get('user_profiles.update')).toBeUndefined();
+    expect(recordPlatformAudit).not.toHaveBeenCalled();
+  });
+
+  it('any other grant failure still throws', async () => {
+    answers.grantWrite = { data: null, error: READ_FAILED };
+    await expect(startActingAs(START)).rejects.toThrow(/impersonation grant/);
   });
 
   it('a non-member gets the temporary owner grant', async () => {

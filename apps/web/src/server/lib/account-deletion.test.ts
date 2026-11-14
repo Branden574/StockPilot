@@ -21,7 +21,7 @@ import {
   auditAccountDeleted,
   checkAccountDeletable,
   lastOwnerCopy,
-  lateLastOwnerRefusal,
+  lateDeleteRefusal,
   readDeletionReviewFacts,
   removeAvatarObjects,
   reportDeletionReviewFacts,
@@ -690,13 +690,13 @@ describe('reportDeletionReviewFacts (O-A3-2)', () => {
   });
 });
 
-describe('lateLastOwnerRefusal (desk check F-5)', () => {
-  it('true when the re-check answers last_owner (a member joined after the check): reported at info', async () => {
+describe('lateDeleteRefusal (desk check F-5; 0458)', () => {
+  it('last_owner when the re-check answers last_owner (a member joined after the check): reported at info', async () => {
     const { admin, rpc } = adminAnswering({
       data: { deletable: false, reason: 'blocked', sqlstate: 'P0001', constraint: 'organization_last_owner', table: 'public.organization_members' },
       error: null,
     });
-    await expect(lateLastOwnerRefusal(admin, 'u-1', 'web')).resolves.toBe(true);
+    await expect(lateDeleteRefusal(admin, 'u-1', 'web', { status: 500 })).resolves.toBe('last_owner');
     expect(rpc).toHaveBeenCalledWith('account_deletion_check', { p_user_id: 'u-1' });
     expect(reportErrorMock).toHaveBeenCalledWith(
       expect.anything(),
@@ -704,14 +704,60 @@ describe('lateLastOwnerRefusal (desk check F-5)', () => {
     );
   });
 
-  it('false for any other answer (the delete failed for another reason: SP-008 stays)', async () => {
+  // 0458: the owner check runs at the auth server's commit, outside the dry
+  // run, and can answer busy (55P03). A re-check that says the account could
+  // go now, or that a lock is busy, means the refusal has passed: try again.
+  it('transient when GoTrue answered a server error and the re-check answers deletable or a busy lock', async () => {
     for (const res of [
       { data: { deletable: true }, error: null },
       { data: { deletable: false, reason: 'blocked', sqlstate: '55P03' }, error: null },
-      { data: null, error: { code: 'PGRST301' } },
+      { data: { deletable: false, reason: 'blocked', sqlstate: '40P01' }, error: null },
     ]) {
       const { admin } = adminAnswering(res);
-      await expect(lateLastOwnerRefusal(admin, 'u-1', 'mobile')).resolves.toBe(false);
+      await expect(
+        lateDeleteRefusal(admin, 'u-1', 'mobile', { name: 'AuthApiError', status: 500, message: 'Database error deleting user' }),
+      ).resolves.toBe('transient');
+    }
+  });
+
+  it('unknown when GoTrue did not answer a server error (a lost reply, a 401), whatever the re-check says', async () => {
+    for (const deleteError of [
+      { name: 'AuthRetryableFetchError', status: 0, message: 'fetch failed' },
+      { name: 'AuthApiError', status: 401, message: 'Invalid API key' },
+      { message: 'Invalid API key' },
+      null,
+    ]) {
+      const { admin } = adminAnswering({ data: { deletable: true }, error: null });
+      await expect(lateDeleteRefusal(admin, 'u-1', 'web', deleteError)).resolves.toBe('unknown');
+    }
+  });
+
+  // Only GoTrue's own 500 means its transaction ended. A 502, 503, 504 or 52x
+  // is written by the gateway: the delete may still be running.
+  it.each([502, 503, 504, 520, 524])(
+    'unknown for a %i (a gateway answer), whether the re-check answers deletable or a busy lock',
+    async (status) => {
+      for (const res of [
+        { data: { deletable: true }, error: null },
+        { data: { deletable: false, reason: 'blocked', sqlstate: '55P03' }, error: null },
+      ]) {
+        const { admin } = adminAnswering(res);
+        await expect(
+          lateDeleteRefusal(admin, 'u-1', 'web', { name: 'AuthRetryableFetchError', status, message: 'gateway' }),
+        ).resolves.toBe('unknown');
+      }
+    },
+  );
+
+  it('unknown for any other answer (the delete failed for another reason: SP-008 stays)', async () => {
+    for (const res of [
+      { data: null, error: { code: 'PGRST301' } },
+      { data: { deletable: false, reason: 'not_found' }, error: null },
+      { data: { deletable: false, reason: 'blocked', sqlstate: '23503', constraint: 'x_fkey' }, error: null },
+      new Error('fetch failed'),
+    ]) {
+      const { admin } = adminAnswering(res);
+      await expect(lateDeleteRefusal(admin, 'u-1', 'web', { status: 500 })).resolves.toBe('unknown');
     }
   });
 });

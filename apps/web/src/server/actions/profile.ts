@@ -31,7 +31,7 @@ import {
   checkAccountDeletable,
   type CreatedStillActive,
   lastOwnerCopy,
-  lateLastOwnerRefusal,
+  lateDeleteRefusal,
   readAuthEmail,
   readDeletionReviewFacts,
   removeAvatarObjects,
@@ -720,11 +720,24 @@ export async function deleteOwnAccountAction(input: {
       // (404 user_not_found). Ask GoTrue again before telling the person it
       // failed (review R7).
       const settled = authErr ? await settleFailedDelete(admin, session.userId, authErr) : 'deleted';
-      // Desk check F-5: the account trigger refused inside GoTrue because a
-      // member joined after the check. Nothing was deleted, so the person
-      // stays signed in and is told to transfer ownership (no SP-008).
-      if (authErr && settled === 'not_deleted' && (await lateLastOwnerRefusal(admin, session.userId, 'web'))) {
+      // Desk check F-5: GoTrue refused and the account is still there. The
+      // check, asked again, tells why (lateDeleteRefusal): a member joined
+      // after the check (the last-owner sentence), or a refusal that passes,
+      // such as the owner rule's check busy at GoTrue's commit (0458: "try
+      // again"). Nothing was deleted either way, so the person stays signed
+      // in (no SP-008).
+      const late =
+        authErr && settled === 'not_deleted' ? await lateDeleteRefusal(admin, session.userId, 'web', authErr) : null;
+      if (late === 'last_owner') {
         return err('conflict', ACCOUNT_DELETE_LAST_OWNER_COPY, { reason: 'last_owner' });
+      }
+      if (authErr && late === 'transient') {
+        void reportError(new Error(authErr.message), {
+          tag: 'account.delete.auth_delete_transient',
+          level: 'warning',
+          extra: { userId: session.userId, source: 'web' },
+        });
+        return err('internal_error', ACCOUNT_DELETE_RETRY_COPY);
       }
       if (authErr && settled === 'not_deleted') {
         // ═══ SP-008 — THE TOMBSTONE DOES NOT BLOCK LOGIN ═══

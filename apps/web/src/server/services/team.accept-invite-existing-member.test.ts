@@ -17,6 +17,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { audit } from '@/server/services/audit';
 import { makeSupabaseStub, type MockCall, type SupabaseStub } from '@/test/supabase-mock';
 
+import {
+  INVITE_ORGANIZATION_HAS_NO_OWNER_COPY,
+  ORGANIZATION_OWNER_BUSY_COPY,
+} from '@/server/lib/organization-owner-rule';
+
 import { ServiceError } from './context';
 import { acceptInviteWithToken } from './team';
 
@@ -65,7 +70,11 @@ type MembershipRead =
 function stubFor(
   invite: Record<string, unknown>,
   membership: MembershipRead,
-  options: { markUsedFails?: boolean; signedInEmail?: string } = {},
+  options: {
+    markUsedFails?: boolean;
+    signedInEmail?: string;
+    memberWriteError?: { code: string; message: string };
+  } = {},
 ): SupabaseStub {
   const stub = makeSupabaseStub({
     'organization_invites.select': { data: [invite], error: null },
@@ -88,7 +97,7 @@ function stubFor(
       const asksUser = filters.some(([c, v]) => c === 'user_id' && v === USER);
       return { data: asksOrg && asksUser && membership.row ? [membership.row] : [], error: null };
     },
-    'organization_members.insert': { data: null, error: null },
+    'organization_members.insert': { data: null, error: options.memberWriteError ?? null },
     'organization_members.update': { data: null, error: null },
     'warehouses.select': { data: [{ id: WH1 }, { id: WH2 }], error: null },
     'user_warehouse_assignments.select': { data: null, error: null },
@@ -334,5 +343,53 @@ describe('acceptInviteWithToken: everyone else', () => {
     expect(writesTo(stub, 'user_profiles')).toEqual([]);
     expect(writesTo(stub, 'audit_logs')).toEqual([]);
     expect(vi.mocked(audit)).not.toHaveBeenCalled();
+  });
+});
+
+// Migration 0458: the database refuses, at commit, a member joining an
+// organization that has no owner (P0001 organization_needs_owner), and answers
+// 55P03 organization_owner_check_busy when another change to the same
+// organization's owners or members is being saved. Nothing was written: the
+// membership write is the first write of the path.
+describe('acceptInviteWithToken: the organization keeps an owner (0458)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    {
+      raised: { code: 'P0001', message: 'organization_needs_owner' },
+      sentence: INVITE_ORGANIZATION_HAS_NO_OWNER_COPY,
+    },
+    {
+      raised: { code: '55P03', message: 'organization_owner_check_busy' },
+      sentence: ORGANIZATION_OWNER_BUSY_COPY,
+    },
+  ])('$raised.message: a plain sentence, and nothing after the membership write', async ({ raised, sentence }) => {
+    const stub = stubFor(inviteRow(), { row: null }, { memberWriteError: raised });
+
+    const outcome = await acceptInviteWithToken('tok', USER).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(outcome).toBeInstanceOf(ServiceError);
+    expect((outcome as ServiceError).code).toBe('conflict');
+    expect((outcome as ServiceError).message).toBe(sentence);
+    expect(writesTo(stub, 'user_warehouse_assignments')).toEqual([]);
+    expect(writesTo(stub, 'organization_invites')).toEqual([]);
+    expect(writesTo(stub, 'user_profiles')).toEqual([]);
+    expect(writesTo(stub, 'audit_logs')).toEqual([]);
+    expect(vi.mocked(audit)).not.toHaveBeenCalled();
+  });
+
+  it('any other membership write failure stays the general error', async () => {
+    stubFor(inviteRow(), { row: null }, { memberWriteError: { code: 'P0001', message: 'last_owner' } });
+
+    const outcome = await acceptInviteWithToken('tok', USER).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(outcome).toBeInstanceOf(ServiceError);
+    expect((outcome as ServiceError).code).toBe('internal_error');
   });
 });

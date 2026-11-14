@@ -19,7 +19,7 @@ import {
   auditAccountDeleted,
   checkAccountDeletable,
   lastOwnerCopy,
-  lateLastOwnerRefusal,
+  lateDeleteRefusal,
   readAuthEmail,
   readDeletionReviewFacts,
   removeAvatarObjects,
@@ -228,13 +228,28 @@ export async function POST(req: NextRequest) {
     // committed and the reply was lost, or another request deleted it first
     // (404 user_not_found). Ask GoTrue again before answering (review R7).
     const settled = authErr ? await settleFailedDelete(admin, ctx.userId, authErr) : 'deleted';
-    // Desk check F-5: the account trigger refused inside GoTrue because a
-    // member joined after the check. Nothing was deleted, so the phone stays
-    // signed in and is told to transfer ownership on the web (no SP-008).
-    if (authErr && settled === 'not_deleted' && (await lateLastOwnerRefusal(admin, ctx.userId, 'mobile'))) {
+    // Desk check F-5: GoTrue refused and the account is still there. The
+    // check, asked again, tells why (lateDeleteRefusal): a member joined
+    // after the check (transfer ownership on the web), or a refusal that
+    // passes, such as the owner rule's check busy at GoTrue's commit (0458:
+    // "try again", the check's own retry answer). Nothing was deleted, so the
+    // phone stays signed in (no SP-008).
+    const late = authErr && settled === 'not_deleted' ? await lateDeleteRefusal(admin, ctx.userId, 'mobile', authErr) : null;
+    if (late === 'last_owner') {
       return NextResponse.json(
         { error: 'last_owner', message: ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE },
         { status: 403 },
+      );
+    }
+    if (authErr && late === 'transient') {
+      void reportError(new Error(authErr.message), {
+        tag: 'account.delete.auth_delete_transient',
+        level: 'warning',
+        extra: { userId: ctx.userId, source: 'mobile' },
+      });
+      return NextResponse.json(
+        { error: 'check_failed', message: ACCOUNT_DELETE_RETRY_COPY },
+        { status: 503 },
       );
     }
     if (authErr && settled === 'not_deleted') {

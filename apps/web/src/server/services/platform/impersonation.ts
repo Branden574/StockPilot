@@ -2,6 +2,7 @@ import 'server-only';
 
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { organizationOwnerRefusal } from '@/server/lib/organization-owner-rule';
 
 import { recordPlatformAudit } from './audit';
 
@@ -119,7 +120,18 @@ export async function getActiveImpersonation(
 
 export type StartActingAsResult =
   | { ok: true; alreadyMember: boolean }
-  | { ok: false; reason: 'org_not_found' | 'org_unreadable' };
+  | {
+      ok: false;
+      /**
+       * only_owner / owner_check_busy: the database's owner rule (0458)
+       * refused the grant at commit. The grant's upsert landed on the admin's
+       * own real owner row (a membership that appeared after the read below),
+       * which was the organization's only owner while other members remain;
+       * or another change to the organization's owners was being saved.
+       * Nothing was granted and no session was recorded.
+       */
+      reason: 'org_not_found' | 'org_unreadable' | 'only_owner' | 'owner_check_busy';
+    };
 
 export interface StartActingAsInput {
   adminUserId: string;
@@ -196,7 +208,12 @@ export async function startActingAs(input: StartActingAsInput): Promise<StartAct
       },
       { onConflict: 'organization_id,user_id' },
     );
-    if (memErr) throw new Error(`impersonation grant: ${memErr.message}`);
+    if (memErr) {
+      const ownerRule = organizationOwnerRefusal(memErr);
+      if (ownerRule === 'needs_owner') return { ok: false, reason: 'only_owner' };
+      if (ownerRule === 'busy') return { ok: false, reason: 'owner_check_busy' };
+      throw new Error(`impersonation grant: ${memErr.message}`);
+    }
   }
 
   // Record the session (restore handle + banner + audit).

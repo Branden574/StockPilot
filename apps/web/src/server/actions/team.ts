@@ -6,6 +6,11 @@ import { INVITE_ACCOUNT_EXISTS_COPY } from '@/app/invite/[token]/invite-copy';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { assertCurrentAal2, assertPermission, withContext } from '@/server/services/context';
 import { audit } from '@/server/services/audit';
+import {
+  ORGANIZATION_NEEDS_OWNER_COPY,
+  ORGANIZATION_OWNER_BUSY_COPY,
+  organizationOwnerRefusal,
+} from '@/server/lib/organization-owner-rule';
 import { TeamService, acceptInviteWithToken } from '@/server/services/team';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
 import { factorsOf, readMfaFactorList, type MfaFactor } from '@/lib/auth/mfa-factors';
@@ -327,6 +332,12 @@ const TRANSFER_ALREADY_OWNER = 'That member is already the owner.';
  * else. Never the function's text itself (S31).
  */
 function transferRefusal(error: { code?: string; message?: string }): ActionResult<never> | null {
+  // The database's owner rule (0458) at the transfer's commit: busy when
+  // another change to the organization's owners was being saved (the
+  // transfer itself always ends with an owner).
+  const ownerRule = organizationOwnerRefusal(error);
+  if (ownerRule === 'busy') return err('conflict', ORGANIZATION_OWNER_BUSY_COPY);
+  if (ownerRule === 'needs_owner') return err('conflict', ORGANIZATION_NEEDS_OWNER_COPY);
   const raised = error.message ?? '';
   if (error.code === '42501' && raised === 'caller is not the current owner') {
     return err('forbidden', TRANSFER_NOT_OWNER);

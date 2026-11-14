@@ -10,6 +10,12 @@ import {
 import { sendEmail } from '@/lib/email/resend';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import {
+  INVITE_ORGANIZATION_HAS_NO_OWNER_COPY,
+  ORGANIZATION_NEEDS_OWNER_COPY,
+  ORGANIZATION_OWNER_BUSY_COPY,
+  organizationOwnerRefusal,
+} from '@/server/lib/organization-owner-rule';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 import { fetchAllRowsByIds } from '@/server/services/lib/fetch-by-ids';
 import { LOOKUP_ROW_CEILING } from '@/server/services/lib/lookup-ceiling';
@@ -504,7 +510,7 @@ export class TeamService {
       .eq('id', memberId)
       .select('id')
       .maybeSingle();
-    if (error) throw new ServiceError('internal_error', error.message);
+    if (error) throw ownerRuleError(error, ORGANIZATION_NEEDS_OWNER_COPY) ?? new ServiceError('internal_error', error.message);
     // Fail closed: a 0-row update means the member vanished between the read
     // above and the write — don't audit/dispatch a role change that didn't land.
     if (!row) throw new ServiceError('conflict', 'Member not found or already changed.');
@@ -584,7 +590,7 @@ export class TeamService {
       .delete()
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', memberId);
-    if (error) throw new ServiceError('internal_error', error.message);
+    if (error) throw ownerRuleError(error, ORGANIZATION_NEEDS_OWNER_COPY) ?? new ServiceError('internal_error', error.message);
 
     // Belt-and-braces cleanup of per-warehouse access grants for the
     // removed user inside THIS organization. Most other org-scoped
@@ -1156,6 +1162,21 @@ export class TeamService {
 }
 
 /**
+ * The database's owner rule (migration 0458) said no at commit: a plain
+ * sentence instead of the general error. `needsOwnerCopy` says it for the
+ * surface; a busy check says the same everywhere. Null for any other error.
+ */
+function ownerRuleError(
+  error: { code?: string | null; message?: string | null },
+  needsOwnerCopy: string,
+): ServiceError | null {
+  const refusal = organizationOwnerRefusal(error);
+  if (refusal === 'needs_owner') return new ServiceError('conflict', needsOwnerCopy);
+  if (refusal === 'busy') return new ServiceError('conflict', ORGANIZATION_OWNER_BUSY_COPY);
+  return null;
+}
+
+/**
  * Marks an accepted invite used so its link cannot be pressed again. A failed
  * write is reported, not thrown: the person's outcome is the same either way,
  * and the report shows a link that stays pressable.
@@ -1275,7 +1296,13 @@ export async function acceptInviteWithToken(
       },
       { onConflict: 'organization_id,user_id' },
     );
-  if (memberErr) throw new ServiceError('internal_error', memberErr.message);
+  // The database's owner rule (0458) refuses, at commit, a member joining an
+  // organization that has no owner. Nothing was written: this is the path's
+  // first write.
+  if (memberErr) {
+    throw ownerRuleError(memberErr, INVITE_ORGANIZATION_HAS_NO_OWNER_COPY) ??
+      new ServiceError('internal_error', memberErr.message);
+  }
 
   // For warehouse-scoped roles, create the user_warehouse_assignment row.
   // For manager+ roles, the assignment is informational (they have implicit

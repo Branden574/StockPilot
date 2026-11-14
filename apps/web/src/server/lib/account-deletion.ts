@@ -283,29 +283,54 @@ export async function readAuthEmail(admin: AdminClient, userId: string): Promise
 }
 
 /**
- * Desk check F-5: GoTrue's delete failed after a passing check. The common
- * cause is the account trigger's own refusal: a member joined the person's
- * solo organization between the check and the delete, so they are now the
- * only owner of an organization with members (P0001 organization_last_owner,
- * which GoTrue answers as a 500). Nothing was deleted, and signing the person
- * out everywhere (SP-008) would punish them for a refusal. So the server asks
- * the check once more: when it answers last_owner, the caller says the
- * last-owner sentence and keeps the sessions; any other answer keeps SP-008.
+ * Desk check F-5: GoTrue's delete failed after a passing check, and GoTrue
+ * still has the account. GoTrue answers every database refusal as a 500
+ * without its code, so the server asks the check once more and reads its
+ * answer:
+ *
+ *  - last_owner: the account trigger refused inside GoTrue because a member
+ *    joined the person's solo organization between the check and the delete
+ *    (P0001 organization_last_owner), or the owner rule (0458) refused at
+ *    GoTrue's commit for the same reason (P0001 organization_needs_owner,
+ *    the same condition). Nothing was deleted; the caller says the last-owner
+ *    sentence and keeps the sessions.
+ *  - transient: GoTrue itself answered a server error (exactly 500: its
+ *    transaction ended and was undone) and the check says the account could go now (or a
+ *    lock is busy). The refusal was one that passes: the owner rule's
+ *    per-organization check, which runs at GoTrue's commit outside the dry
+ *    run, was busy (55P03 organization_owner_check_busy, another change to
+ *    the organization's owners was being saved), or another lock inside
+ *    GoTrue. Nothing was deleted and the database answers, so the caller says
+ *    "try again" and keeps the sessions, as for the check's own retry answer.
+ *  - unknown: any other answer (the check failed too, as with a dead
+ *    service-role key; an integrity refusal; no such account), or a delete
+ *    error GoTrue did not answer as a server error (a lost reply, or a 502,
+ *    503, 504 or 52x from the gateway, whose delete may still be running; a
+ *    401). The caller keeps SP-008.
  * Never throws (checkAccountDeletable never does).
  */
-export async function lateLastOwnerRefusal(
+export type LateDeleteRefusal = 'last_owner' | 'transient' | 'unknown';
+
+// 502, 503, 504 and 52x are written by the gateway: the delete may still be running.
+function isGotrueServerError(deleteError: unknown): boolean {
+  return (deleteError as { status?: unknown } | null)?.status === 500;
+}
+
+export async function lateDeleteRefusal(
   admin: AdminClient,
   userId: string,
   source: 'web' | 'mobile',
-): Promise<boolean> {
+  deleteError: unknown,
+): Promise<LateDeleteRefusal> {
   const recheck = await checkAccountDeletable(admin, userId, source);
-  if (recheck.ok || recheck.kind !== 'last_owner') return false;
+  if (recheck.ok || recheck.kind === 'retry') return isGotrueServerError(deleteError) ? 'transient' : 'unknown';
+  if (recheck.kind !== 'last_owner') return 'unknown';
   void reportError(new Error('account deletion refused after the check: last owner'), {
     tag: 'account.delete.late_last_owner',
     level: 'info',
     extra: { source },
   });
-  return true;
+  return 'last_owner';
 }
 
 /** O-A3-5: what the person created in an organization that keeps working after the deletion. */
