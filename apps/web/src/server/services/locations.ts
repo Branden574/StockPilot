@@ -22,6 +22,7 @@ import {
 import { isSiteLocation, isSystemLocation } from '@/lib/locations/groups';
 
 import { audit } from './audit';
+import { readInActiveOrg } from './lib/in-active-org';
 import { fetchAllRows } from './lib/paginate';
 import {
   assertAnyPermission,
@@ -193,6 +194,8 @@ export class LocationsService {
     // runs alongside the write instead of ahead of it).
     const name = crateAwareLocationName(input);
     const rack = normalizeRackFields({ number: input.rackNumber, row: input.rackRow });
+    // A parent location must be one of the active organization's own.
+    if (input.parentId) await this.assertParentInActiveOrg(input.parentId);
     const { data, error } = await this.ctx.supabase
       .from('locations')
       .insert({
@@ -556,13 +559,27 @@ export class LocationsService {
     );
   }
 
+  /**
+   * The parent a location is filed under, read in the ACTIVE organization
+   * before the write that names it (readInActiveOrg). A miss is not_found,
+   * the answer for a parent that does not exist, so it says nothing about
+   * an id anywhere else. Read with the caller's own client.
+   */
+  private async assertParentInActiveOrg(parentId: string): Promise<void> {
+    await readInActiveOrg(this.ctx, 'locations', parentId, 'Parent location not found.');
+  }
+
   async update(id: string, patch: UpdateLocationInput) {
     assertPermission(this.ctx, 'locations:manage');
     if (patch.name !== undefined) await this.assertRenameKeepsCratePosition(id, patch.name);
     const updates: Record<string, unknown> = {};
     if (patch.name !== undefined) updates.name = patch.name;
     if (patch.type !== undefined) updates.type = patch.type ?? null;
-    if (patch.parentId !== undefined) updates.parent_id = patch.parentId ?? null;
+    if (patch.parentId !== undefined) {
+      // A parent location must be one of the active organization's own.
+      if (patch.parentId) await this.assertParentInActiveOrg(patch.parentId);
+      updates.parent_id = patch.parentId ?? null;
+    }
     if (patch.notes !== undefined) updates.notes = patch.notes ?? null;
     const { data, error } = await this.ctx.supabase
       .from('locations')
