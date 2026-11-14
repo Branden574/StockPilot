@@ -1338,6 +1338,16 @@ WEB_TESTS=(
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts
   src/lib/locations/scope.test.ts
+  # A warehouse must belong to the active organization: assertWarehouseAccess
+  # refuses, for read and write, a warehouse id that is not one of the active
+  # organization's for every caller (owners, admins, managers and
+  # all-warehouses members included), in the words a member outside the
+  # warehouse gets; item create (route and action) and an item's warehouse
+  # move write nothing on it; a parent location is read in the active
+  # organization before a location is created or moved under it.
+  src/lib/auth/warehouse.active-organization.test.ts
+  src/app/api/v1/items/route.warehouse-organization.test.ts
+  src/server/services/locations.parent-organization.test.ts
 
   # S39: a write named by a row id reads that row in the ACTIVE organization,
   # through the caller's own client, before its function runs; a miss answers

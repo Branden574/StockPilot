@@ -72,10 +72,9 @@ import { canManageOrderItems } from '@/server/services/order-catalog-visibility'
  * id is compared in its stored, lower-case form (a phone may send capitals).
  * Only the caller's own scope read (their client, their helpers) starts
  * alongside it; every shared read waits for it.
- * assertWarehouseAccess alone is not enough (it returns early for full-access
- * roles), and the sites loader reads with the admin client by warehouse only,
- * so a foreign id would answer another organization's site names and
- * addresses.
+ * The sites loader reads with the admin client by warehouse only, so the
+ * perimeter is this list itself (non-archived, the caller's own client), read
+ * before any of it, and an id outside it never reaches that loader.
  *
  * NO PRICE. The web catalog row carries `price` (retail, falling back to unit
  * cost); the phone's item is built field by field and never spread from it.
