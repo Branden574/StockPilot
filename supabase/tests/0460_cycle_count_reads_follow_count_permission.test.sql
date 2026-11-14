@@ -24,14 +24,19 @@
 --    (progress per pair, the gate per row, kept below as
 --    s93_facts_first_form) for every persona on several exceptions sharing
 --    one count, several counts, a posted count, a count in another warehouse
---    and holding rules; a counter of one warehouse and a count of another;
+--    and holding rules (and, in a second open count, a charter-limited
+--    member, a category-restricted member, a flag viewer limited to one
+--    category, a member of two organizations with different roles, an item
+--    with no warehouse, an archived item and location, a location with no
+--    warehouse); the same exceptions as the table rule shows; a counter of
+--    one warehouse and a count of another;
 --    the lines read for 200 exceptions on one 2,000-line count; a disabled
 --    account.
 --
 -- Fixtures as the test superuser; reads as `authenticated` with
 -- request.jwt.claim.sub. begin/rollback: nothing leaks. Namespace c5930000.
 begin;
-select plan(100);
+select plan(103);
 
 \set org      c5930000-0000-4000-8000-00000000000a
 \set org2     c5930000-0000-4000-8000-00000000000b
@@ -507,6 +512,21 @@ set local "request.jwt.claim.sub" to '';
 \set occH1    c5930000-0000-4000-8000-0000000000f5
 \set occH2    c5930000-0000-4000-8000-0000000000f6
 \set occD     c5930000-0000-4000-8000-0000000000f7
+\set multi    c5930000-0000-4000-8000-0000000000ae
+\set catVw    c5930000-0000-4000-8000-0000000000af
+\set chSt     c5930000-0000-4000-8000-0000000000b2
+\set flagCat  c5930000-0000-4000-8000-0000000000b3
+\set lOrg     c5930000-0000-4000-8000-0000000000c6
+\set lArch    c5930000-0000-4000-8000-0000000000c7
+\set catA     c5930000-0000-4000-8000-0000000000ca
+\set chA      c5930000-0000-4000-8000-0000000000cb
+\set chB      c5930000-0000-4000-8000-0000000000cc
+\set iNull    c5930000-0000-4000-8000-0000000000d6
+\set iDel     c5930000-0000-4000-8000-0000000000d7
+\set iCatA    c5930000-0000-4000-8000-0000000000d8
+\set iChA     c5930000-0000-4000-8000-0000000000d9
+\set iChB     c5930000-0000-4000-8000-0000000000da
+\set cW       c5930000-0000-4000-8000-0000000000e5
 
 -- The first form of exception_recount_facts, verbatim but for its name.
 create function public.s93_facts_first_form(p_org uuid, p_exception_ids uuid[])
@@ -692,6 +712,64 @@ insert into public.exception_occurrence_events (organization_id, occurrence_id, 
   (:'org', :'occD',  'recount_linked', :'cDone'),
   (:'org', :'occD',  'recount_closed', :'cDone'),
   (:'org', :'occD',  'recount_linked', :'cN');
+-- Scope branches, in a second open North count cW (so cN's rows above
+-- keep their numbers): a charter-limited counter (charter A), a viewer
+-- limited to category A, a flag viewer limited to category A, staff here
+-- and manager in the other organization; an item with no warehouse, an
+-- archived item, a category A item, charter A and B items; holding rules at
+-- an org-level location (no warehouse) and at an archived location.
+insert into auth.users (id, email, raw_user_meta_data)
+select u::uuid, 'u' || right(u, 2) || '-s93@test.local', '{}'
+  from unnest(array[:'multi', :'catVw', :'chSt', :'flagCat']) u on conflict (id) do nothing;
+insert into public.organization_members (organization_id, user_id, role, accepted_at, all_warehouses) values
+  (:'org', :'multi', 'staff', now(), false), (:'org2', :'multi', 'manager', now(), false),
+  (:'org', :'catVw', 'viewer', now(), false), (:'org', :'chSt', 'staff', now(), false),
+  (:'org', :'flagCat', 'viewer', now(), true)
+  on conflict do nothing;
+insert into public.categories (id, organization_id, name) values (:'catA', :'org', 'S93 category A');
+insert into public.charters (id, organization_id, name, code) values
+  (:'chA', :'org', 'S93 charter A', 'S93CA'), (:'chB', :'org', 'S93 charter B', 'S93CB');
+insert into public.warehouse_charters (organization_id, warehouse_id, charter_id) values
+  (:'org', :'whN', :'chA'), (:'org', :'whN', :'chB');
+insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, charter_id) values
+  (:'org', :'multi', :'whN', null), (:'org', :'catVw', :'whN', null), (:'org', :'chSt', :'whN', :'chA'),
+  (:'org', :'flagCat', :'whN', null), (:'org', :'flagCat', :'whS', null)
+  on conflict do nothing;
+insert into public.user_category_assignments (organization_id, user_id, category_id) values
+  (:'org', :'catVw', :'catA'), (:'org', :'flagCat', :'catA');
+insert into public.locations (id, organization_id, warehouse_id, name, type) values
+  (:'lOrg', :'org', null, 'S93 org level', 'bin'), (:'lArch', :'org', :'whN', 'S93 archived bin', 'bin');
+update public.locations set deleted_at = now() where id = :'lArch';
+insert into public.inventory_items (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type, category_id, charter_id) values
+  (:'iNull', :'org', null,   'S93-NU', 'No warehouse', 5, 'active', 'none', null, null),
+  (:'iDel',  :'org', :'whN', 'S93-DL', 'Archived', 5, 'active', 'none', null, null),
+  (:'iCatA', :'org', :'whN', 'S93-CA', 'Category A North', 5, 'active', 'none', :'catA', null),
+  (:'iChA',  :'org', :'whN', 'S93-HA', 'Charter A North', 5, 'active', 'none', null, :'chA'),
+  (:'iChB',  :'org', :'whN', 'S93-HB', 'Charter B North', 5, 'active', 'none', null, :'chB');
+insert into public.cycle_counts (id, organization_id, warehouse_id, scope, status, started_by, assigned_to, started_at) values
+  (:'cW', :'org', :'whN', 'warehouse', 'in_progress', :'mgr', null, now() - interval '20 minutes');
+set local session_replication_role = replica;
+update public.inventory_items set deleted_at = now() where id = :'iDel';
+insert into public.cycle_count_lines (cycle_count_id, item_id, warehouse_id, expected_quantity, counted_quantity, counted_by, counted_at) values
+  (:'cW', :'iN1',   :'whN', 5, 6, :'mgr', now()),
+  (:'cW', :'iNull', null,   5, null, null, null),
+  (:'cW', :'iDel',  :'whN', 5, 5, :'mgr', now()),
+  (:'cW', :'iCatA', :'whN', 5, 4, :'mgr', now()),
+  (:'cW', :'iChA',  :'whN', 5, null, null, null),
+  (:'cW', :'iChB',  :'whN', 5, 3, :'mgr', now());
+set local session_replication_role = origin;
+insert into public.exception_occurrences
+  (id, organization_id, occurrence_number, rule, item_id, location_id, warehouse_id,
+   first_seen_at, last_seen_at, recount_cycle_count_id) values
+  ('c5930000-0000-4000-8000-0000000001f1', :'org', 21, 'count_variance', :'iNull', null,     null,   now(), now(), :'cW'),
+  ('c5930000-0000-4000-8000-0000000001f2', :'org', 22, 'count_variance', :'iDel',  null,     :'whN', now(), now(), :'cW'),
+  ('c5930000-0000-4000-8000-0000000001f3', :'org', 23, 'count_variance', :'iCatA', null,     :'whN', now(), now(), :'cW'),
+  ('c5930000-0000-4000-8000-0000000001f4', :'org', 24, 'count_variance', :'iChA',  null,     :'whN', now(), now(), :'cW'),
+  ('c5930000-0000-4000-8000-0000000001f5', :'org', 25, 'count_variance', :'iChB',  null,     :'whN', now(), now(), :'cW'),
+  ('c5930000-0000-4000-8000-0000000001f6', :'org', 26, 'orphaned_stock', :'iN1',   :'lOrg',  :'whN', now(), now(), :'cW'),
+  ('c5930000-0000-4000-8000-0000000001f7', :'org', 27, 'orphaned_stock', :'iN1',   :'lArch', :'whN', now(), now(), :'cW'),
+  ('c5930000-0000-4000-8000-0000000001f8', :'org', 28, 'orphaned_stock', :'iCatA', :'lOrg',  :'whN', now(), now(), :'cW'),
+  ('c5930000-0000-4000-8000-0000000001f9', :'org', 29, 'orphaned_stock', :'iChA',  :'lN',    :'whN', now(), now(), :'cW');
 analyze public.cycle_count_lines;
 analyze public.exception_occurrences;
 
@@ -715,6 +793,11 @@ declare
                       'c5930000-0000-4000-8000-0000000000f4', 'c5930000-0000-4000-8000-0000000000f5',
                       'c5930000-0000-4000-8000-0000000000f6', 'c5930000-0000-4000-8000-0000000000f7',
                       'c5930000-0000-4000-a000-000000000001', 'c5930000-0000-4000-a000-000000000002',
+                      'c5930000-0000-4000-8000-0000000001f1', 'c5930000-0000-4000-8000-0000000001f2',
+                      'c5930000-0000-4000-8000-0000000001f3', 'c5930000-0000-4000-8000-0000000001f4',
+                      'c5930000-0000-4000-8000-0000000001f5', 'c5930000-0000-4000-8000-0000000001f6',
+                      'c5930000-0000-4000-8000-0000000001f7', 'c5930000-0000-4000-8000-0000000001f8',
+                      'c5930000-0000-4000-8000-0000000001f9',
                       gen_random_uuid()]::uuid[];
   who uuid; o uuid; r text; bad text := ''; rows int := 0;
 begin
@@ -725,7 +808,9 @@ begin
       'c5930000-0000-4000-8000-0000000000a8', 'c5930000-0000-4000-8000-0000000000a9',
       'c5930000-0000-4000-8000-0000000000aa', 'c5930000-0000-4000-8000-0000000000ab',
       'c5930000-0000-4000-8000-0000000000ac', 'c5930000-0000-4000-8000-0000000000ad',
-      'c5930000-0000-4000-8000-0000000000b1']::uuid[] loop
+      'c5930000-0000-4000-8000-0000000000b1', 'c5930000-0000-4000-8000-0000000000ae',
+      'c5930000-0000-4000-8000-0000000000af', 'c5930000-0000-4000-8000-0000000000b2',
+      'c5930000-0000-4000-8000-0000000000b3']::uuid[] loop
     foreach o in array array['c5930000-0000-4000-8000-00000000000a', 'c5930000-0000-4000-8000-00000000000b']::uuid[] loop
       r := pg_temp.parity(who, o, ids);
       if r = 'differ' then bad := bad || right(who::text, 2) || '@' || right(o::text, 1) || ' ';
@@ -733,6 +818,42 @@ begin
     end loop;
   end loop;
   return case when bad = '' then 'same rows=' || rows else 'differ: ' || bad end;
+end $$;
+-- Per persona and organization, the exceptions of the G1 set the table rule
+-- shows the caller, against the exceptions exception_recount_facts answers
+-- (every exception of the set names a count): the personas where they differ.
+create function pg_temp.rule_vs_function() returns text language plpgsql as $$
+declare
+  ids uuid[];
+  who uuid; o uuid; a text; c text; bad text := ''; n int := 0;
+begin
+  select array_agg(x.id) into ids from public.exception_occurrences x
+   where x.id::text like 'c5930000-0000-4000-8000-%';
+  foreach who in array array['c5930000-0000-4000-8000-0000000000a0', 'c5930000-0000-4000-8000-0000000000a1',
+      'c5930000-0000-4000-8000-0000000000a2', 'c5930000-0000-4000-8000-0000000000a3',
+      'c5930000-0000-4000-8000-0000000000a4', 'c5930000-0000-4000-8000-0000000000a5',
+      'c5930000-0000-4000-8000-0000000000a6', 'c5930000-0000-4000-8000-0000000000a7',
+      'c5930000-0000-4000-8000-0000000000a8', 'c5930000-0000-4000-8000-0000000000a9',
+      'c5930000-0000-4000-8000-0000000000aa', 'c5930000-0000-4000-8000-0000000000ab',
+      'c5930000-0000-4000-8000-0000000000ac', 'c5930000-0000-4000-8000-0000000000ad',
+      'c5930000-0000-4000-8000-0000000000b1', 'c5930000-0000-4000-8000-0000000000ae',
+      'c5930000-0000-4000-8000-0000000000af', 'c5930000-0000-4000-8000-0000000000b2',
+      'c5930000-0000-4000-8000-0000000000b3']::uuid[] loop
+    foreach o in array array['c5930000-0000-4000-8000-00000000000a', 'c5930000-0000-4000-8000-00000000000b']::uuid[] loop
+      perform set_config('request.jwt.claim.sub', who::text, true);
+      perform set_config('request.jwt.claim.role', 'authenticated', true);
+      set local role authenticated;
+      select coalesce(string_agg(x.id::text, ' ' order by x.id), '') into a
+        from public.exception_occurrences x where x.id = any (ids) and x.organization_id = o;
+      select coalesce(string_agg(distinct f.exception_id::text, ' ' order by f.exception_id::text), '') into c
+        from public.exception_recount_facts(o, ids) f;
+      reset role;
+      if a <> c then bad := bad || right(who::text, 2) || '@' || right(o::text, 1) || ' ';
+      else n := n + coalesce(array_length(string_to_array(nullif(a, ''), ' '), 1), 0); end if;
+    end loop;
+  end loop;
+  perform set_config('request.jwt.claim.role', '', true);
+  return case when bad = '' then 'same exceptions=' || n else 'differ: ' || bad end;
 end $$;
 -- Lines of cycle_count_lines this transaction has read so far.
 create function pg_temp.lines_read_so_far() returns bigint language sql as $$
@@ -752,8 +873,31 @@ begin
   return 'rows=' || n || ' lines_read_under_6000=' || ((pg_temp.lines_read_so_far() - b0) < 6000)::text;
 end $$;
 
-select is(pg_temp.parity_all(), 'same rows=119',
+select is(pg_temp.parity_all(), 'same rows=253',
   'G1 every persona, under both organizations: exception_recount_facts answers row for row what its first form answers');
+select is(pg_temp.rule_vs_function(), 'same exceptions=197',
+  'G1b every persona, under both organizations: exception_recount_facts answers exactly the exceptions the table rule shows');
+-- Which of cW's nine exceptions (f1 no warehouse, f2 archived item, f3
+-- category A, f4 charter A, f5 charter B, f6 org-level location, f7 archived
+-- location, f8 category A at the org-level location, f9 charter A at North)
+-- the function answers to four scoped members.
+create function pg_temp.cw_seen(p_uid uuid, p_org uuid) returns text language plpgsql as $$
+declare r text;
+begin
+  perform set_config('request.jwt.claim.sub', p_uid::text, true);
+  perform set_config('request.jwt.claim.role', 'authenticated', true);
+  set local role authenticated;
+  select coalesce(string_agg(distinct right(f.exception_id::text, 2), ' ' order by right(f.exception_id::text, 2)), '(none)') into r
+    from public.exception_recount_facts(p_org, (select array_agg(('c5930000-0000-4000-8000-0000000001f' || g)::uuid) from generate_series(1, 9) g)) f;
+  reset role;
+  perform set_config('request.jwt.claim.role', '', true);
+  return r;
+end $$;
+select is(pg_temp.cw_seen(:'chSt', :'org') || ' | ' || pg_temp.cw_seen(:'catVw', :'org') || ' | '
+       || pg_temp.cw_seen(:'flagCat', :'org') || ' | ' || pg_temp.cw_seen(:'multi', :'org') || ' | '
+       || pg_temp.cw_seen(:'multi', :'org2'),
+  'f2 f3 f4 f6 f7 f8 f9 | f3 f8 | f3 f8 | f2 f3 f4 f5 f6 f7 f8 f9 | (none)',
+  'G1c charter A staff: not charter B''s item; category A viewer and flag viewer: category A only; staff here, manager there: as staff here, nothing of this organization under the other; no one reads the item with no warehouse');
 set local role authenticated;
 set local "request.jwt.claim.role" to 'authenticated';
 set local "request.jwt.claim.sub" to :'vwN';
@@ -778,6 +922,11 @@ select is(pg_temp.big_call(:'mgr'), 'rows=200 lines_read_under_6000=true',
 select is(pg_temp.q($$select pg_get_function_result('public.exception_recount_facts(uuid, uuid[])'::regprocedure)$$),
   'TABLE(exception_id uuid, cycle_count_id uuid, is_active_recount boolean, is_closed_recount boolean, count_number bigint, status text, completed_at timestamp with time zone, line_total bigint, line_counted bigint, line_found boolean, counted_quantity numeric, expected_quantity numeric, rechecks boolean)',
   'S10 exception_recount_facts returns these thirteen columns');
+select is(pg_temp.q($$select string_agg(p.oid::regprocedure::text || '=' || md5(p.prosrc), ' ' order by p.oid::regprocedure::text)
+     from pg_proc p where p.oid in ('public._exc_occurrence_visible(uuid,uuid,uuid)'::regprocedure,
+                                    'public.caller_can_read_item(uuid)'::regprocedure)$$),
+  '_exc_occurrence_visible(uuid,uuid,uuid)=62662f8300373203ad06b7a64d147c0c caller_can_read_item(uuid)=80523d2cc0fafe7fc6b3599903d7f014',
+  'S11 exception_recount_facts states the bodies of _exc_occurrence_visible and caller_can_read_item inline: a change to either restates exception_recount_facts in the same migration');
 set local role authenticated;
 set local "request.jwt.claim.role" to 'authenticated';
 set local "request.jwt.claim.sub" to :'vwDis';
