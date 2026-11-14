@@ -39,7 +39,14 @@ function stubWith(poLines: unknown) {
     // The PO, read in the organization before the function (S39).
     'purchase_orders.select.maybeSingle': { data: { id: 'po-1' }, error: null },
     'rpc:post_receipt_v2': {
-      data: { id: 'r-1', warehouse_id: 'wh-1', purchase_order_id: 'po-1' },
+      data: {
+        id: 'r-1',
+        organization_id: 'org-test',
+        warehouse_id: 'wh-1',
+        purchase_order_id: 'po-1',
+        idempotency_key: 'idem-1',
+        received_by: 'user-test',
+      },
       error: null,
     },
     'inventory_items.select': { data: [], error: null },

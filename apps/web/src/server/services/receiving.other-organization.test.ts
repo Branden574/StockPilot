@@ -52,11 +52,16 @@ function stubFor() {
     'purchase_order_items.select': { data: [], error: null },
     'inventory_items.select': { data: [], error: null },
     'rpc:post_receipt_v2': {
+      // The receipt a first post records: of this PO, warehouse and
+      // organization, with this key, by this person.
       data: {
         id: 'rcpt-new',
+        organization_id: 'org-B',
         warehouse_id: 'wh-b',
         purchase_order_id: PO_ID,
         receipt_number: 'RCV-000001',
+        idempotency_key: 'idem-1',
+        received_by: 'user-test',
       },
       error: null,
     },
