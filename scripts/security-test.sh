@@ -863,13 +863,15 @@ PGTAP_TESTS=(
   # another person recorded from an AI scan; an AI scan row is filed by a
   # manager, or by staff holding stock:adjust on a count assigned to them or
   # to no one; the item page's last count and open count come only from a
-  # count line the caller may read (cc_caller_reads_count_line, held equal to
-  # the line rule per persona). The lock footprint is
+  # count line the caller may read (held equal to a direct read under the
+  # line rule for every persona), and its movement counts are read past the
+  # caller's movement rule. The lock footprint is
   # scripts/db-concurrency/0452_migration_lock_footprint.sh.
   supabase/tests/0452_cycle_count_warehouse_scope.test.sql
   supabase/tests/0452_cycle_count_item_scope.test.sql
   supabase/tests/0452_cycle_count_ai_scan_recount.test.sql
   supabase/tests/0452_cycle_count_edges.test.sql
+  supabase/tests/0452_cycle_count_item_page_parity.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

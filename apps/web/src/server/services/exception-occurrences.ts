@@ -1568,7 +1568,9 @@ export class ExceptionOccurrencesService {
    * the Physical count card makes: the latest count as of now, its counter
    * and poster, whether the item can be counted, the stock on record now),
    * with the two people named; and the item's lines in counts that are in
-   * progress (every member reads every count). The act gate is judged
+   * progress, as far as the reader may read them (cycle_count_lines_select:
+   * the lines of the reader's warehouses, every line for a manager). The
+   * summary's count facts follow the same line rule. The act gate is judged
    * against the item's live warehouse. NEVER THROWS: a failed read is
    * reported and answers null, which the state reads as `unavailable`.
    */

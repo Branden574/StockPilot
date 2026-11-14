@@ -25,7 +25,8 @@
 --          file (insert): staff or above, in my own name, unconfirmed, its
 --            count readable and in progress in the scan's organization, I
 --            hold stock:adjust there, AND the count is assigned to me or to
---            no one, or I am a manager (the AI scan route's own gate)
+--            no one, or I am a manager (what the line UPDATE rule asks:
+--            the assignee check and stock:adjust)
 --   photo  read: the count named by the path's second folder exists in the
 --            path's organization AND I am a manager there; insert, update
 --            and delete: no rule for an API role (the service role only).
@@ -40,8 +41,11 @@
 -- page's Physical count card. It gives an item's last count only when that
 -- count's line is one the caller may read, and the open count holding the
 -- item only from lines the caller may read; otherwise those fields are null.
--- cc_caller_reads_count_line is the line rule in one helper for it. The
--- item's own fields, the gates and the 500-item cap are 0374's.
+-- The line rule's count and warehouse terms are written inline in its two
+-- joins, as cycle_count_line_progress writes them, so the caller's sets are
+-- computed once per statement; its item term holds already (every row has
+-- passed caller_can_read_item). The item's own fields, the gates and the
+-- 500-item cap are 0374's.
 --
 -- cycle_count_line_progress (SECURITY DEFINER, kept) restates the line rule
 -- and the count rule's non-manager arms in its body (parity tested for every
@@ -61,15 +65,14 @@
 --   0. Preflight: the bodies, owners and security modes this file builds on,
 --      every policy on the three tables and the bucket, and
 --      inventory_items_select (restated inside progress) are the ones it was
---      proven against; the four new names are free. my_warehouse_ids may be
+--      proven against; the three new names are free. my_warehouse_ids may be
 --      either the 0310 body or docket S47's (one added expiry term): the rule
 --      is the same for every live membership, and the membership arm refuses
 --      an expired seat either way.
 --   1. One lock prelude.
---   2. Four new STABLE SECURITY DEFINER helpers, search_path public, EXECUTE
+--   2. Three new STABLE SECURITY DEFINER helpers, search_path public, EXECUTE
 --      for authenticated and service_role only: rls_all_warehouses_org_ids(),
---      rls_cc_unheaded_count_ids(), cc_ai_scan_in_count(uuid, uuid),
---      cc_caller_reads_count_line(uuid, uuid).
+--      rls_cc_unheaded_count_ids(), cc_ai_scan_in_count(uuid, uuid).
 --   3. cycle_count_line_progress and item_verification_summaries restated
 --      (same signature, result, STABLE, SECURITY DEFINER, search_path, owner
 --      and grants), their comments and cycle_counts_page's comment updated.
@@ -111,7 +114,7 @@
 -- 0358_cycle_count_numbers.sql, item_verification_summaries from
 -- 0374_verification_summaries.sql, and the line update WITH CHECK and
 -- cc_ai_scans_insert from 0368_count_line_column_grants.sql, and drop the
--- four helpers.
+-- three helpers.
 
 set lock_timeout = '900ms';
 
@@ -201,8 +204,7 @@ begin
   end;
 
   if exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace
-               and p.proname in ('rls_all_warehouses_org_ids', 'rls_cc_unheaded_count_ids', 'cc_ai_scan_in_count',
-                                 'cc_caller_reads_count_line')) then
+               and p.proname in ('rls_all_warehouses_org_ids', 'rls_cc_unheaded_count_ids', 'cc_ai_scan_in_count')) then
     v_bad := v_bad || ' a helper this file creates already exists;';
   end if;
 
@@ -324,46 +326,6 @@ comment on function public.cc_ai_scan_in_count(uuid, uuid) is
   'may not read. Answers only inside the caller''s own organizations (no cross-organization oracle, '
   'docs/security/data-classification.md), about two ids the caller already holds.';
 
-create function public.cc_caller_reads_count_line(p_cycle_count_id uuid, p_item_id uuid)
-returns boolean
-language sql
-stable
-security definer
-set search_path = public
-as $$
-  select (select auth.uid()) is not null and exists (
-    select 1
-      from public.cycle_count_lines l
-      join public.cycle_counts c on c.id = l.cycle_count_id
-     where l.cycle_count_id = p_cycle_count_id
-       and l.item_id = p_item_id
-       and c.organization_id in (select public.rls_member_org_ids())
-       and (
-         c.organization_id in (select public.rls_manager_org_ids())
-         or (
-           l.warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw)
-           and (
-             c.organization_id in (select public.rls_all_warehouses_org_ids())
-             or c.warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw)
-             or (c.warehouse_id is null
-                 and (c.assigned_to = (select auth.uid())
-                      or c.id in (select public.rls_cc_unheaded_count_ids())))
-           )
-           and public.caller_can_read_item(l.item_id)
-         )
-       )
-  );
-$$;
-
-revoke all on function public.cc_caller_reads_count_line(uuid, uuid) from public, anon;
-grant execute on function public.cc_caller_reads_count_line(uuid, uuid) to authenticated, service_role;
-
-comment on function public.cc_caller_reads_count_line(uuid, uuid) is
-  'S48. True when cycle_count_lines_select would show the caller the line of this item in this cycle count: its count '
-  'readable (cycle_counts_select) and the caller a manager there, or the line in one of the caller''s warehouses and '
-  'its item readable (caller_can_read_item). For SECURITY DEFINER readers that must answer within the caller''s view '
-  '(item_verification_summaries). The parity with the policy is tested; change them together.';
-
 -- ═══ 3. Line progress (0358) counts the lines the caller may read ═════════
 create or replace function public.cycle_count_line_progress(
   p_organization_id uuid,
@@ -437,9 +399,11 @@ comment on function public.cycle_counts_page(uuid, bigint, text, text, uuid, uui
   'execute; anon/public revoked.';
 
 -- ═══ 3b. item_verification_summaries (0374) counts only lines the caller may read ═
--- The body is 0374's with two terms added: the last count joins only when
--- cc_caller_reads_count_line holds for its line, and the open count is chosen
--- among such lines. Everything else (the gates, the item's own fields, the
+-- The body is 0374's with two terms added: the last count joins only when its
+-- line is one the caller may read, and the open count is chosen among such
+-- lines. Both terms are cycle_count_lines_select's count and warehouse arms,
+-- written inline as in cycle_count_line_progress above (the item arm holds:
+-- every row has passed caller_can_read_item). Everything else (the gates, the item's own fields, the
 -- movement counts, the cap) is unchanged; the result columns are the same.
 create or replace function public.item_verification_summaries(
   p_org      uuid,
@@ -548,7 +512,21 @@ begin
     -- S48: the last count only when its line is one the caller may read.
     left join latest lc
       on lc.item_id = r.id
-     and public.cc_caller_reads_count_line(lc.cycle_count_id, lc.item_id)
+     and exists (
+       select 1
+         from public.cycle_count_lines cl
+         join public.cycle_counts cc on cc.id = cl.cycle_count_id
+        where cl.cycle_count_id = lc.cycle_count_id
+          and cl.item_id = lc.item_id
+          and cc.organization_id in (select public.rls_member_org_ids())
+          and (cc.organization_id in (select public.rls_manager_org_ids())
+               or (cl.warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw)
+                   and (cc.organization_id in (select public.rls_all_warehouses_org_ids())
+                        or cc.warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw)
+                        or (cc.warehouse_id is null
+                            and (cc.assigned_to = (select auth.uid())
+                                 or cc.id in (select public.rls_cc_unheaded_count_ids()))))))
+     )
     left join public.locations loc
       on loc.id = lc.counted_location_id
      and loc.organization_id = p_org
@@ -580,7 +558,14 @@ begin
        where l.item_id = r.id
          and c.organization_id = p_org
          and c.status = 'in_progress'
-         and public.cc_caller_reads_count_line(c.id, l.item_id)
+         and c.organization_id in (select public.rls_member_org_ids())
+         and (c.organization_id in (select public.rls_manager_org_ids())
+              or (l.warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw)
+                  and (c.organization_id in (select public.rls_all_warehouses_org_ids())
+                       or c.warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw)
+                       or (c.warehouse_id is null
+                           and (c.assigned_to = (select auth.uid())
+                                or c.id in (select public.rls_cc_unheaded_count_ids()))))))
        order by c.started_at desc, c.id desc
        limit 1
     ) oc on true
@@ -592,7 +577,7 @@ comment on function public.item_verification_summaries(uuid, uuid[]) is
   'F1-3 (0374), S48: per requested item the caller can read in p_org (is_org_member, caller_can_read_item, same '
   'org), the item''s countability facts and on-hand, its latest physical count (_latest_count_lines: count, people, '
   'moments, on-record and counted quantity, counted location with kind, type and archived state, AI assisted) when '
-  'that count''s line is one the caller may read (cc_caller_reads_count_line), movements_since (via_ledger rows after '
+  'that count''s line is one the caller may read (cycle_count_lines_select''s count and warehouse arms), movements_since (via_ledger rows after '
   'coalesce(baseline_at, counted_at), excluding the count''s own cycle_count movement), outside_ledger_since '
   '(via_ledger = false rows in the same window) and the newest in-progress count holding the item among the lines '
   'the caller may read. Never-counted items, and items whose count lines the caller may not read, get a row with '

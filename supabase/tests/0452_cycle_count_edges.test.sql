@@ -3,10 +3,12 @@
 -- the item page's count facts, and who files an AI scan row.
 --
 -- V. item_verification_summaries gives an item's last count and its open
---    count only from a count line the caller may read
---    (cc_caller_reads_count_line, the line read rule); the item's own fields
---    are the same for every caller who may read the item. A manager gets
---    every count.
+--    count only from a count line the caller may read (the line read
+--    rule); the item's own fields are the same for every caller who may read
+--    the item. A manager gets every count.
+-- D. It counts the movements since a count past the caller's movement rule
+--    (SECURITY DEFINER): a member who reads the item and its count line but
+--    none of its movements gets the true number.
 -- E. A line with no warehouse (managers only); a line whose warehouse is not
 --    its header's, both ways; a disabled account; a member who is staff in
 --    one organization and manager in another; a scan photo path whose
@@ -14,14 +16,15 @@
 --    member with the all-warehouses flag and no assignment rows.
 -- I. An AI scan row is filed by a manager, or by staff holding stock:adjust
 --    on a count assigned to them or to no one.
--- H. cc_caller_reads_count_line equals what the line read rule returns, for
---    every persona.
--- S. Posture of the new helper and the restated function.
+-- P. For every persona, the item page's last count and open count equal
+--    what the caller reads directly from cycle_count_lines under the line
+--    rule.
+-- S. Posture of the restated function.
 --
 -- Fixtures as the test superuser; reads and writes as `authenticated` with
 -- request.jwt.claim.sub. begin/rollback: nothing leaks. Namespace c548e000.
 begin;
-select plan(67);
+select plan(70);
 
 \set org    c548e000-0000-4000-8000-00000000000a
 \set org2   c548e000-0000-4000-8000-00000000000b
@@ -34,6 +37,7 @@ select plan(67);
 \set multi  c548e000-0000-4000-8000-0000000000a7
 \set stN2   c548e000-0000-4000-8000-0000000000a8
 \set stNoAdj c548e000-0000-4000-8000-0000000000a9
+\set stX    c548e000-0000-4000-8000-0000000000aa
 \set mgr2   c548e000-0000-4000-8000-0000000000b1
 \set whN    c548e000-0000-4000-8000-0000000000c1
 \set whS    c548e000-0000-4000-8000-0000000000c2
@@ -128,7 +132,7 @@ create function pg_temp.scan_insert(p_count uuid, p_org uuid) returns text langu
 -- ══ Fixture (as the test superuser) ═════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data)
 select u::uuid, 'edge-' || right(u, 2) || '-s48@test.local', '{}'
-  from unnest(array[:'mgr', :'stN', :'stS', :'vwF', :'flag0', :'dis', :'multi', :'stN2', :'stNoAdj', :'mgr2']) u
+  from unnest(array[:'mgr', :'stN', :'stS', :'vwF', :'flag0', :'dis', :'multi', :'stN2', :'stNoAdj', :'stX', :'mgr2']) u
   on conflict (id) do nothing;
 insert into public.organizations (id, name, slug) values
   (:'org', 'S48 Edge Org', 's48-edge-org'), (:'org2', 'S48 Edge Other', 's48-edge-other') on conflict (id) do nothing;
@@ -143,6 +147,7 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:'org2', :'multi', 'manager', now(), false, null),
   (:'org', :'stN2', 'staff', now(), false, null),
   (:'org', :'stNoAdj', 'staff', now(), false, null),
+  (:'org', :'stX', 'staff', now(), false, null),
   (:'org2', :'mgr2', 'manager', now(), false, null)
   on conflict do nothing;
 update public.user_profiles set disabled_at = now() where id = :'dis';
@@ -155,6 +160,14 @@ insert into public.user_warehouse_assignments (organization_id, user_id, warehou
   (:'org', :'stN', :'whN'), (:'org', :'stS', :'whS'), (:'org', :'dis', :'whN'), (:'org', :'multi', :'whN'),
   (:'org', :'stN2', :'whN'), (:'org', :'stNoAdj', :'whN'),
   (:'org', :'vwF', :'whN'), (:'org', :'vwF', :'whS')
+  on conflict do nothing;
+-- stX: South by her own row, and a row for North filed under the other
+-- organization. The item read scope joins through the warehouse's
+-- organization and lets her read North's items; my_warehouse_ids asks the
+-- row's own organization and gives her South only, so the movement rule
+-- (0321) shows her none of a North item's movements.
+insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id) values
+  (:'org', :'stX', :'whS'), (:'org2', :'stX', :'whN')
   on conflict do nothing;
 -- The flagged staff member with no assignment rows (the flag's trigger, 0280,
 -- gives rows on warehouse insert; this member has none).
@@ -194,36 +207,55 @@ update public.cycle_counts set status = 'completed', completed_at = now() - inte
 update public.inventory_items set warehouse_id = :'whN' where id = :'iMove';
 update public.inventory_items set warehouse_id = :'whS' where id = :'iMoveOpen';
 set local session_replication_role = origin;
+-- Two movements of the moved item after its South count (the trigger stamps
+-- a superuser's write as through the ledger).
+insert into public.stock_movements
+  (organization_id, item_id, movement_type, quantity_change, previous_quantity, new_quantity, created_at) values
+  (:'org', :'iMove', 'adjust', 1, 5, 6, now() - interval '1 hour'),
+  (:'org', :'iMove', 'adjust', -1, 6, 5, now() - interval '30 minutes');
 insert into storage.objects (bucket_id, name) values
   ('cycle-count-scans', :'org' || '/' || :'cS' || '/p_cs.webp'),
   ('cycle-count-scans', :'org2' || '/' || :'cS' || '/p_wrongorg.webp'),
   ('cycle-count-scans', :'org' || '/' || upper(:'cS') || '/p_upper.webp'),
   ('cycle-count-scans', :'org2' || '/' || :'cX' || '/p_cx.webp');
--- Every line of the fixture, for the helper's parity below.
-create temporary table s48e_lines on commit drop as
-  select cycle_count_id, item_id from public.cycle_count_lines where cycle_count_id::text like 'c548e000-%';
-grant select on s48e_lines to authenticated;
+-- Every item of the fixture, and the latest counted line per item (the one
+-- source of "last physical count", read here as the superuser).
+create temporary table s48e_items on commit drop as
+  select id from public.inventory_items where id::text like 'c548e000-%' and organization_id = :'org';
+create temporary table s48e_latest on commit drop as
+  select l.item_id, l.cycle_count_id from public._latest_count_lines(:'org', null) l;
+grant select on s48e_items, s48e_latest to authenticated;
 
--- The helper's answer next to the line read rule's, for the caller.
-create function pg_temp.parity() returns text language plpgsql as $$
+-- What the item page answers: item, last count, open count.
+create function pg_temp.page_facts() returns text language plpgsql as $$
 begin
-  return (select coalesce((select string_agg(pg_temp.lbl(cycle_count_id) || ':' || pg_temp.lbl(item_id), ' '
-                                     order by pg_temp.lbl(cycle_count_id) collate "C", pg_temp.lbl(item_id) collate "C")
-                     from s48e_lines t
-                    where public.cc_caller_reads_count_line(t.cycle_count_id, t.item_id)), '(none)')
-      || ' = '
-      || coalesce((select string_agg(pg_temp.lbl(cycle_count_id) || ':' || pg_temp.lbl(item_id), ' '
-                                     order by pg_temp.lbl(cycle_count_id) collate "C", pg_temp.lbl(item_id) collate "C")
-                     from public.cycle_count_lines l
-                    where (l.cycle_count_id, l.item_id) in (select cycle_count_id, item_id from s48e_lines)), '(none)'));
+  return (select coalesce(string_agg(pg_temp.lbl(v.item_id) || ':' || coalesce(pg_temp.lbl(v.cycle_count_id), '-')
+                                     || ':' || coalesce(pg_temp.lbl(v.open_count_id), '-'),
+                                     ' ' order by pg_temp.lbl(v.item_id) collate "C"), '(none)')
+            from public.item_verification_summaries('c548e000-0000-4000-8000-00000000000a',
+                   (select array_agg(id) from s48e_items)) v);
 end $$;
-create function pg_temp.parity_holds() returns boolean language plpgsql as $$
-declare v text;
+-- What the caller reads directly under the line rule: the item's latest
+-- counted line when it is readable, and the newest in-progress count among
+-- the item's readable lines; for every item the caller reads.
+create function pg_temp.direct_facts() returns text language plpgsql as $$
 begin
-  v := pg_temp.parity();
-  return split_part(v, ' = ', 1) = split_part(v, ' = ', 2);
-exception when others then
-  return false;
+  return (select coalesce(string_agg(pg_temp.lbl(i.id) || ':'
+             || coalesce(pg_temp.lbl((select t.cycle_count_id from s48e_latest t
+                                       where t.item_id = i.id
+                                         and exists (select 1 from public.cycle_count_lines l
+                                                      where l.cycle_count_id = t.cycle_count_id and l.item_id = i.id))), '-')
+             || ':'
+             || coalesce(pg_temp.lbl((select l.cycle_count_id from public.cycle_count_lines l
+                                       join public.cycle_counts c on c.id = l.cycle_count_id
+                                      where l.item_id = i.id
+                                        and c.organization_id = 'c548e000-0000-4000-8000-00000000000a'
+                                        and c.status = 'in_progress'
+                                      order by c.started_at desc, c.id desc
+                                      limit 1)), '-'),
+             ' ' order by pg_temp.lbl(i.id) collate "C"), '(none)')
+            from public.inventory_items i
+           where i.id in (select id from s48e_items));
 end $$;
 
 set local "request.jwt.claim.sub" to :'stNoAdj';
@@ -243,8 +275,8 @@ select is(pg_temp.as_(:'stN', $$select pg_temp.item_fields('c548e000-0000-4000-8
           pg_temp.as_(:'mgr', $$select pg_temp.item_fields('c548e000-0000-4000-8000-0000000000d4')$$),
   'V2 the same item''s own fields are the same for her and a manager');
 set local "request.jwt.claim.sub" to :'mgr';
-select ok(pg_temp.facts(:'iMove') like 'cDone|7|stS|0|%|open:-|-',
-  'V3 manager: the same item''s last count is the South count, 7 counted by South staff');
+select ok(pg_temp.facts(:'iMove') like 'cDone|7|stS|2|%|open:-|-',
+  'V3 manager: the same item''s last count is the South count, 7 counted by South staff, 2 movements since');
 select ok(pg_temp.facts(:'iMoveOpen') like '-|-|-|-|-|-|open:cN|%',
   'V4 manager: the item moved to South is being counted in the North count');
 select ok(pg_temp.facts(:'iN1') like '%|open:cS|%',
@@ -264,7 +296,7 @@ select is(pg_temp.q($$select count(*)::text from public.item_verification_summar
      array['c548e000-0000-4000-8000-0000000000d2']::uuid[])$$),
   '0', 'V10 staff North: an item she cannot read gets no row');
 set local "request.jwt.claim.sub" to :'vwF';
-select ok(pg_temp.facts(:'iMove') like 'cDone|7|stS|0|%',
+select ok(pg_temp.facts(:'iMove') like 'cDone|7|stS|2|%',
   'V11 viewer with the flag and both warehouses: the South count of an item now in North');
 set local "request.jwt.claim.sub" to :'flag0';
 select is(pg_temp.facts(:'iCnt'), '(no row)',
@@ -356,51 +388,56 @@ select is(pg_temp.scan_insert(:'cX', :'org2'), '1', 'I10 the same member, manage
 set local "request.jwt.claim.sub" to :'mgr2';
 select is(pg_temp.scan_insert(:'cN', :'org'), 'ERROR 42501', 'I11 another organization''s manager: none here');
 
--- H. The helper's answer equals the line read rule, for every persona.
+-- D. Movements since the count, counted past the caller's movement rule.
+set local "request.jwt.claim.sub" to :'stX';
+select is(pg_temp.q($$select count(*)::text from public.inventory_items where id = 'c548e000-0000-4000-8000-0000000000d4'$$),
+  '1', 'D1 (control) stX reads the item now in North');
+select is(pg_temp.q($$select count(*)::text from public.cycle_count_lines where cycle_count_id = 'c548e000-0000-4000-8000-0000000000e3'$$),
+  '1', 'D2 (control) stX reads its line in the South count');
+select is(pg_temp.q($$select count(*)::text from public.stock_movements where item_id = 'c548e000-0000-4000-8000-0000000000d4'$$),
+  '0', 'D3 (control) stX reads none of its movements under the movement rule');
+select ok(pg_temp.facts(:'iMove') like 'cDone|7|stS|2|%',
+  'D4 stX: the item page counts its 2 movements since the count (SECURITY DEFINER)');
+
+-- P. The item page equals the direct read under the line rule, for every persona.
 set local "request.jwt.claim.sub" to :'mgr';
-select ok(pg_temp.parity_holds(), 'H1 manager: helper = rule');
+select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P1 manager: the item page equals the direct read');
 set local "request.jwt.claim.sub" to :'stN';
-select ok(pg_temp.parity_holds(), 'H2 staff North: helper = rule');
+select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P2 staff North: the item page equals the direct read');
+select ok(pg_temp.page_facts() like '%iCnt:cDoneN:cNa%' and pg_temp.page_facts() like '%iMove:-:-%',
+  'P2b staff North: a North count shows, a South one does not (the parity is not vacuous)');
 set local "request.jwt.claim.sub" to :'stS';
-select ok(pg_temp.parity_holds(), 'H3 staff South: helper = rule');
+select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P3 staff South: the item page equals the direct read');
 set local "request.jwt.claim.sub" to :'vwF';
-select ok(pg_temp.parity_holds(), 'H4 viewer with the flag: helper = rule');
+select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P4 viewer with the flag: the item page equals the direct read');
 set local "request.jwt.claim.sub" to :'flag0';
-select ok(pg_temp.parity_holds(), 'H5 flagged staff with no rows: helper = rule');
+select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P5 flagged staff with no rows: the item page equals the direct read');
 set local "request.jwt.claim.sub" to :'dis';
-select ok(pg_temp.parity_holds(), 'H6 disabled account: helper = rule');
+select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P6 disabled account: the item page equals the direct read');
 set local "request.jwt.claim.sub" to :'multi';
-select ok(pg_temp.parity_holds(), 'H7 staff here, manager elsewhere: helper = rule');
+select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P7 staff here, manager elsewhere: the item page equals the direct read');
 set local "request.jwt.claim.sub" to :'stN2';
-select ok(pg_temp.parity_holds(), 'H8 assignee staff: helper = rule');
+select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P8 assignee staff: the item page equals the direct read');
+set local "request.jwt.claim.sub" to :'stNoAdj';
+select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P9 staff without stock:adjust: the item page equals the direct read');
+set local "request.jwt.claim.sub" to :'stX';
+select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P10 stX: the item page equals the direct read');
 set local "request.jwt.claim.sub" to :'mgr2';
-select ok(pg_temp.parity_holds(), 'H9 the other organization''s manager: helper = rule');
-set local "request.jwt.claim.sub" to :'stN';
-select isnt(split_part(pg_temp.q('select pg_temp.parity()'), ' = ', 1), '(none)', 'H10 the parity is not vacuous (staff North reads a line)');
+select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P11 the other organization''s manager: the item page equals the direct read');
 
 reset role;
 
 -- S. Posture.
 select is((select p.prosecdef and p.provolatile = 's' and p.proconfig = array['search_path=public']
              and pg_get_userbyid(p.proowner) = 'postgres'
-             from pg_proc p where p.oid = to_regprocedure('public.cc_caller_reads_count_line(uuid,uuid)')),
-  true, 'S1 cc_caller_reads_count_line: STABLE SECURITY DEFINER, search_path public, owned by postgres');
-select is((select has_function_privilege('anon', p.oid, 'execute') from pg_proc p
-             where p.oid = to_regprocedure('public.cc_caller_reads_count_line(uuid,uuid)')),
-  false, 'S2 anon may not execute cc_caller_reads_count_line');
-select is((select has_function_privilege('authenticated', p.oid, 'execute') from pg_proc p
-             where p.oid = to_regprocedure('public.cc_caller_reads_count_line(uuid,uuid)')),
-  true, 'S3 authenticated may execute cc_caller_reads_count_line');
-select is((select p.prosecdef and p.provolatile = 's' and p.proconfig = array['search_path=public']
-             and pg_get_userbyid(p.proowner) = 'postgres'
              from pg_proc p where p.oid = 'public.item_verification_summaries(uuid,uuid[])'::regprocedure),
-  true, 'S4 item_verification_summaries keeps STABLE SECURITY DEFINER, search_path public, owner postgres');
+  true, 'S1 item_verification_summaries keeps STABLE SECURITY DEFINER, search_path public, owner postgres');
 select is((select proacl::text from pg_proc where oid = 'public.item_verification_summaries(uuid,uuid[])'::regprocedure),
   '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}',
-  'S5 item_verification_summaries keeps its grants');
+  'S2 item_verification_summaries keeps its grants');
 select is(pg_get_function_result('public.item_verification_summaries(uuid,uuid[])'::regprocedure),
   'TABLE(item_id uuid, item_status text, item_is_rental boolean, item_is_bundle boolean, item_deleted boolean, item_countable boolean, quantity_on_hand numeric, cycle_count_id uuid, count_number bigint, scope text, completed_at timestamp with time zone, completed_by uuid, counted_by uuid, counted_at timestamp with time zone, captured_at timestamp with time zone, baseline_at timestamp with time zone, expected_quantity numeric, expected_at_start numeric, counted_quantity numeric, counted_location_id uuid, counted_location_name text, counted_location_kind text, counted_location_type text, counted_location_archived boolean, ai_assisted boolean, movements_since integer, outside_ledger_since integer, open_count_id uuid, open_count_number bigint)',
-  'S6 item_verification_summaries returns the same columns (0374''s)');
+  'S3 item_verification_summaries returns the same columns (0374''s)');
 
 select * from finish();
 rollback;

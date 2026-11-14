@@ -526,7 +526,7 @@ insert into s
 select 'stfX', to_jsonb(v) from public.item_verification_summaries(:orgA, array[:iMatch]::uuid[]) v;
 reset role;
 -- The count's facts come only from a count line the caller may read
--- (cc_caller_reads_count_line, 0452, S48). stfX has no warehouse of her own
+-- (the line read rule, 0452, S48). stfX has no warehouse of her own
 -- (my_warehouse_ids is empty), so she reads neither the count nor its line:
 -- her row carries the item's own facts and no count.
 select is(

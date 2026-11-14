@@ -96,8 +96,8 @@ STATE_SQL="select md5(coalesce((select string_agg(pol.polname || ':' || coalesce
                                  where pol.polrelid in ('public.cycle_counts'::regclass, 'public.cycle_count_lines'::regclass,
                                                         'public.cycle_count_ai_scans'::regclass)
                                     or (pol.polrelid = 'storage.objects'::regclass and pol.polname like 'cycle-count-scans%')), '-'))"
-NEW_HELPERS="$(q "select count(*) from pg_proc where pronamespace = 'public'::regnamespace and proname in ('rls_all_warehouses_org_ids', 'rls_cc_unheaded_count_ids', 'cc_ai_scan_in_count', 'cc_caller_reads_count_line')")"
-echo "local head $HEAD_NOW; the four helpers 0452 creates already present: $NEW_HELPERS of 4; file $(basename "$MIG")"
+NEW_HELPERS="$(q "select count(*) from pg_proc where pronamespace = 'public'::regnamespace and proname in ('rls_all_warehouses_org_ids', 'rls_cc_unheaded_count_ids', 'cc_ai_scan_in_count')")"
+echo "local head $HEAD_NOW; the three helpers 0452 creates already present: $NEW_HELPERS of 3; file $(basename "$MIG")"
 if [ "$NEW_HELPERS" != "0" ]; then
   echo "needs the pre-0452 head (supabase db reset --local --version <the migration before it>, then the QA reseed)"
   exit 1
