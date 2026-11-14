@@ -67,15 +67,18 @@ describe('the emailed links release', () => {
     expect(RELEASES[0]?.id).toBe('liquid-glass-2026-11');
     expect(RELEASES[0]?.status).toBe('draft');
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    expect(RELEASES[3]?.id).toBe(ID);
-    expect(RELEASES[4]?.id).toBe('cycle-count-already-released-2026-11');
+    // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: every pinned position one place higher): the order request alerts release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[4]?.id).toBe(ID);
+    expect(RELEASES[5]?.id).toBe('cycle-count-already-released-2026-11');
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: this release, the newest published): the phone authenticator code and access check releases are published later, directly above it.
-    expect(RELEASES.slice(1, 3).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: RELEASES.slice(1, 3), without it, and the phone authenticator code release the newest published): the order request alerts release is published later, directly above the phone authenticator code release.
+    expect(RELEASES.slice(1, 4).map((r) => [r.id, r.status])).toEqual([
+      ['order-request-alerts-follow-approve-2026-11', 'published'],
       ['phone-authenticator-code-2026-11', 'published'],
       ['phone-access-check-retry-2026-11', 'published'],
     ]);
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
-      'phone-authenticator-code-2026-11',
+      'order-request-alerts-follow-approve-2026-11',
     );
     // #429's build went live on production at 2026-11-13T17:38:06Z.
     expect(release().publishedAt).toBe('2026-11-13T17:39:00Z');
@@ -85,7 +88,8 @@ describe('the emailed links release', () => {
       Date.parse(release().publishedAt),
     );
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    for (const r of RELEASES.slice(4)) {
+    // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: every pinned position one place higher): the order request alerts release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(5)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThanOrEqual(
         Date.parse(r.publishedAt),
       );
@@ -126,7 +130,12 @@ describe('the emailed links release', () => {
     expect(entry().audience).toBeUndefined();
     expect(entry().link).toBeUndefined();
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: nothing read or seen): the phone authenticator code release (every member) and the access check release (the owner here) are published later, at the top, so each reader reads and sees them first, and the notice this test checks is the one it checked before.
-    const newerIds = ['phone-authenticator-code-2026-11', 'phone-access-check-retry-2026-11'];
+    // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: without it): the order request alerts release (the owner here) is published later, at the top, so the owner reads and sees it first too, and the notice this test checks is the one it checked before. A read of it by a reader it does not reach changes nothing.
+    const newerIds = [
+      'order-request-alerts-follow-approve-2026-11',
+      'phone-authenticator-code-2026-11',
+      'phone-access-check-retry-2026-11',
+    ];
     const newerReads = newerIds.map((id) => ({
       release_id: id,
       revision: 1,
@@ -154,7 +163,8 @@ describe('the emailed links release', () => {
     const block = source.slice(
       source.indexOf(`id: '${ID}'`),
       // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-      source.indexOf(`id: '${RELEASES[4]!.id}'`),
+      // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: every pinned position one place higher): the order request alerts release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+      source.indexOf(`id: '${RELEASES[5]!.id}'`),
     );
     expect(block).toContain(`It supersedes the howItAffectsYou sentence of the published entry`);
     expect(block).toContain(OLDER_ENTRY);
