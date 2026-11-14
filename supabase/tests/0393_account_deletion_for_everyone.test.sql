@@ -25,7 +25,12 @@
 --        (column grants) authenticated may read it and may not write it;
 --    K9-K12, K16 posture and md5(prosrc) of the five functions;
 --    K10b the trigger on auth.users; the body raises only P0001;
---    K13 nothing in public or auth is DEFERRABLE;
+--    K13 nothing in public or auth is DEFERRABLE but, by name, 0458's four
+--        owner-present constraint triggers on organization_members (narrowed
+--        by 0458: their refusal condition equals this file's last-owner rule,
+--        which fires inside the dry run; the 0458 suite proves the dry run
+--        and the real delete agree and that the dry run leaves no lock and no
+--        queued check);
 --    K14 the only function body naming deleted_users is tg_mark_deleted_users;
 --    K15 0388 C1 still holds: only account_deletion_check deletes accounts;
 --    K18 F12: no NOT VALID constraint is left in public or auth, and
@@ -464,13 +469,19 @@ select is(
   '46bfd5262da44f0586892f0bf4178f6b|false|{search_path=public}|postgres|postgres=X/postgres,service_role=X/postgres',
   'K12: _enforce_schedule_events_writer is 0393''s body (a null created_by stands only when a non-API role nulls it and the account is gone), SECURITY INVOKER, search_path=public (0329 pins that value), grants unchanged');
 select is(
-  (select count(*) from pg_constraint c join pg_namespace n on n.oid = c.connamespace
-    where n.nspname in ('public', 'auth') and c.condeferrable)::text
+  (select coalesce(string_agg(c.conrelid::regclass::text || '.' || c.conname, ',' order by c.conname collate "C"), '')
+     from pg_constraint c join pg_namespace n on n.oid = c.connamespace
+    where n.nspname in ('public', 'auth') and c.condeferrable)
   || '/' ||
-  (select count(*) from pg_trigger t join pg_class r on r.oid = t.tgrelid join pg_namespace n on n.oid = r.relnamespace
-    where n.nspname in ('public', 'auth') and t.tgconstraint <> 0 and t.tgdeferrable)::text,
-  '0/0',
-  'K13: nothing in public or auth is DEFERRABLE: every check of a deletion fires inside account_deletion_check''s subtransaction (0388 P8)');
+  (select coalesce(string_agg(r.relname || '.' || t.tgname, ',' order by t.tgname collate "C"), '')
+     from pg_trigger t join pg_class r on r.oid = t.tgrelid join pg_namespace n on n.oid = r.relnamespace
+    where n.nspname in ('public', 'auth') and t.tgconstraint <> 0 and t.tgdeferrable),
+  -- Re-pinned by 0458 (was '0/0'): the owner-present constraint triggers, by name.
+  'organization_members.organization_members_owner_present_del,organization_members.organization_members_owner_present_join_ins,'
+  'organization_members.organization_members_owner_present_join_upd,organization_members.organization_members_owner_present_upd'
+  '/organization_members.organization_members_owner_present_del,organization_members.organization_members_owner_present_join_ins,'
+  'organization_members.organization_members_owner_present_join_upd,organization_members.organization_members_owner_present_upd',
+  'K13: nothing in public or auth is DEFERRABLE but 0458''s four owner-present constraint triggers on organization_members: every other check of a deletion fires inside account_deletion_check''s subtransaction (0388 P8), and the owner-present check''s condition equals this file''s last-owner rule, which fires there');
 select is(
   (select coalesce(string_agg(f.fn, ',' order by f.fn collate "C"), '') from fn_scope f where f.prosrc ~ '\mdeleted_users\M'),
   'public.tg_mark_deleted_users',

@@ -21,6 +21,8 @@ vi.mock('@/lib/auth/platform-admin', () => ({
 vi.mock('@/lib/auth/session', () => ({ requireSession: vi.fn() }));
 vi.mock('@/server/services/platform/impersonation', () => ({ startActingAs, stopActingAs: vi.fn() }));
 
+import { ACT_AS_ONLY_OWNER_COPY, ORGANIZATION_OWNER_BUSY_COPY } from '@/server/lib/organization-owner-rule';
+
 import { startActingAsAction } from './impersonation';
 
 const INPUT = { organizationId: '0a000000-0000-4000-8000-000000000002' };
@@ -46,6 +48,23 @@ describe('startActingAsAction', () => {
     await expect(startActingAsAction(INPUT)).resolves.toEqual({
       ok: false,
       error: { code: 'not_found', message: 'Organization not found.' },
+    });
+  });
+
+  // Migration 0458: the database's owner rule, read by the service.
+  it('the admin is the only owner of the organization: Act as did not start', async () => {
+    startActingAs.mockResolvedValueOnce({ ok: false, reason: 'only_owner' });
+    await expect(startActingAsAction(INPUT)).resolves.toEqual({
+      ok: false,
+      error: { code: 'conflict', message: ACT_AS_ONLY_OWNER_COPY },
+    });
+  });
+
+  it('the owner check is busy: try again in a minute', async () => {
+    startActingAs.mockResolvedValueOnce({ ok: false, reason: 'owner_check_busy' });
+    await expect(startActingAsAction(INPUT)).resolves.toEqual({
+      ok: false,
+      error: { code: 'conflict', message: ORGANIZATION_OWNER_BUSY_COPY },
     });
   });
 });

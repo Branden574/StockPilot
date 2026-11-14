@@ -530,9 +530,13 @@ PGTAP_TESTS=(
   # service_role only, refuses an authenticated or anon JWT, lock_timeout
   # 900ms) dry-runs the delete and always undoes it; it is the only function
   # in any schema that deletes from auth.users or user_profiles. Nothing in
-  # public or auth is DEFERRABLE (the dry run would miss a deferred check),
-  # and the only NOT VALID constraint is delivery_target_chk, whose legacy
-  # rows refuse a deletion (pinned, and the refusal proven).
+  # public or auth is DEFERRABLE (the dry run would miss a deferred check)
+  # except, by name, 0458's four owner-present triggers on
+  # organization_members, whose refusal condition equals 0393's last-owner
+  # rule (which the dry run does see); the 0458 suite proves the dry run and
+  # the real delete agree. The only NOT VALID constraint is
+  # delivery_target_chk, whose legacy rows refuse a deletion (pinned, and the
+  # refusal proven).
   # The two-session proofs (delete against approve, the dry run against a
   # row lock, numbering) are scripts/db-concurrency/0388_requester_delete_race.sh;
   # the lock footprint is scripts/db-concurrency/0388_migration_lock_footprint.sh.
@@ -860,6 +864,18 @@ PGTAP_TESTS=(
   # user_can_see_item_category answers service_role only. The lock footprint
   # is scripts/db-concurrency/0421_migration_lock_footprint.sh.
   supabase/tests/0421_categories_select_category_sets.test.sql
+  # An organization that has members keeps an owner (0458): at commit, no
+  # write by any role leaves an organization with real members (accepted,
+  # not an "Act as" seat) and no real owner; a member joining through an
+  # API role is checked the same way. Deferred constraint triggers with a
+  # per-organization advisory lock (try-lock loop, 55P03 when busy, READ
+  # COMMITTED only, never 40001 or 40P01). Organization deletion, the
+  # ownership transfer, an account deletion 0393 allows, seats and sign-up
+  # order keep working; the account-deletion dry run and the real delete
+  # agree. The two-session proofs are
+  # scripts/db-concurrency/0458_owner_present_races.sh; the lock footprint is
+  # scripts/db-concurrency/0458_migration_lock_footprint.sh.
+  supabase/tests/0458_organization_keeps_an_owner.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

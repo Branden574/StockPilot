@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Seed a STAGING Supabase project with a throwaway org + admin user + inventory
+ * Seed a STAGING Supabase project with a throwaway org + its owner user + inventory
  * items + an open purchase order, for the authenticated k6 load test
  * (see load-tests/README.md). Prints a ready-to-source `.env.local.loadtest`
  * block with TEST_EMAIL/TEST_PASSWORD, ITEM_IDS, PO_ID, PO_LINE_ITEM_ID, etc.
@@ -113,12 +113,15 @@ const { error: profErr } = await admin
   .upsert({ id: userId, email, full_name: 'Load Test Admin' }, { onConflict: 'id' });
 if (profErr) die('upsert user_profile', profErr);
 
-// 3) Org membership as admin (admins get implicit full-warehouse access — no
-//    charter/warehouse assignment rows needed).
+// 3) Org membership as the organization's owner (an owner, like an admin, gets
+//    implicit full-warehouse access — no charter/warehouse assignment rows
+//    needed). The database keeps an owner in every organization that has
+//    members (migration 0458), so the first member of a new organization is
+//    its owner, as workspace creation does.
 const { error: memErr } = await admin.from('organization_members').insert({
   organization_id: orgId,
   user_id: userId,
-  role: 'admin',
+  role: 'owner',
   accepted_at: nowIso,
 });
 if (memErr) die('create organization_member', memErr);

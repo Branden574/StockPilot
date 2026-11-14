@@ -70,6 +70,10 @@ vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
 import { reportError } from '@/lib/error-reporter';
+import {
+  ORGANIZATION_NEEDS_OWNER_COPY,
+  ORGANIZATION_OWNER_BUSY_COPY,
+} from '@/server/lib/organization-owner-rule';
 import { makeSupabaseStub, type QueryResult } from '@/test/supabase-mock';
 
 import {
@@ -188,6 +192,25 @@ describe('transferOwnershipAction: the transfer function says our own words (S31
     const r = reported();
     expect(r.text).toContain('one_owner_per_org');
     expect(r.context).toEqual({ tag: 'actions.team.transfer_ownership', organizationId: 'org-1' });
+  });
+
+  // Migration 0458: the owner rule answers at the transfer's commit. The
+  // transfer always ends with an owner, so only the busy answer is expected;
+  // both are said in plain words and are not reported.
+  it.each([
+    {
+      raised: { code: '55P03', message: 'organization_owner_check_busy' },
+      answer: { code: 'conflict', message: ORGANIZATION_OWNER_BUSY_COPY },
+    },
+    {
+      raised: { code: 'P0001', message: 'organization_needs_owner' },
+      answer: { code: 'conflict', message: ORGANIZATION_NEEDS_OWNER_COPY },
+    },
+  ])('the owner rule "$raised.message" at commit answers a plain sentence, unreported', async ({ raised, answer }) => {
+    withTransfer(raised);
+    const res = await transferOwnershipAction(INPUT);
+    expect(res).toEqual({ ok: false, error: answer });
+    expect(reportError).not.toHaveBeenCalled();
   });
 
   it('our sentence with another code is not ours: the fixed sentence', async () => {

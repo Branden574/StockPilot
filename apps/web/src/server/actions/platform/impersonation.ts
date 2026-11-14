@@ -7,6 +7,7 @@ import { checkPlatformAdmin, currentUserIsPlatformAdmin } from '@/lib/auth/platf
 import { requireSession } from '@/lib/auth/session';
 import { startActingAs, stopActingAs } from '@/server/services/platform/impersonation';
 import { actionErrorResult } from '@/server/lib/action-error-result';
+import { ACT_AS_ONLY_OWNER_COPY, ORGANIZATION_OWNER_BUSY_COPY } from '@/server/lib/organization-owner-rule';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -39,9 +40,16 @@ export async function startActingAsAction(
       organizationId: parsed.data.organizationId,
     });
     if (!res.ok) {
-      return res.reason === 'org_unreadable'
-        ? err('internal_error', 'Could not read the organization, so nothing was changed. Try again.')
-        : err('not_found', 'Organization not found.');
+      switch (res.reason) {
+        case 'org_unreadable':
+          return err('internal_error', 'Could not read the organization, so nothing was changed. Try again.');
+        case 'only_owner':
+          return err('conflict', ACT_AS_ONLY_OWNER_COPY);
+        case 'owner_check_busy':
+          return err('conflict', ORGANIZATION_OWNER_BUSY_COPY);
+        default:
+          return err('not_found', 'Organization not found.');
+      }
     }
   } catch (e) {
     return actionErrorResult(e, 'actions.platform.impersonation.start_acting_as');

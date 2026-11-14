@@ -37,7 +37,16 @@
 --        column lost NOT NULL behind an exactly-one CHECK);
 --    P8  no constraint in public or auth is DEFERRABLE and no constraint
 --        trigger is deferrable (a deferred check would run at commit, outside
---        the check's subtransaction).
+--        the check's subtransaction), except, by name, the four deferred
+--        owner-present triggers 0458 puts on organization_members (each also
+--        a pg_constraint row of type t). Narrowed by 0458: every check of a
+--        deletion fires inside the dry run EXCEPT the owner-present check,
+--        whose refusal condition equals 0393's last-owner rule (which does
+--        fire inside it), so the two can differ only when another
+--        transaction commits between the dry run and the auth server's
+--        commit. The 0458 suite proves they agree (D1) and that the dry run
+--        leaves no lock and no queued check (D2, D4). No key that references
+--        a user is deferrable.
 --    P8b (re-pinned by 0393: no NOT VALID constraint is left; 0393
 --        validates order_requests_delivery_target_chk with the five legacy
 --        rows exempt by primary key) the only NOT VALID constraint in public
@@ -494,16 +503,24 @@ select is(
   '{"deletable": true}',
   'P7: a user named by platform_admin_audit as the acting admin is deletable since 0393 (the row is kept, actor stamped, actor_email kept)');
 select is(
-  (select count(*) from pg_constraint c join pg_namespace n on n.oid = c.connamespace
-    where n.nspname in ('public', 'auth') and c.condeferrable)::text
+  (select coalesce(string_agg(c.conrelid::regclass::text || '.' || c.conname || ':' || c.contype::text, ',' order by c.conname collate "C"), '')
+     from pg_constraint c join pg_namespace n on n.oid = c.connamespace
+    where n.nspname in ('public', 'auth') and c.condeferrable)
   || '/' ||
-  (select count(*) from pg_trigger t join pg_class r on r.oid = t.tgrelid join pg_namespace n on n.oid = r.relnamespace
-    where n.nspname in ('public', 'auth') and t.tgconstraint <> 0 and t.tgdeferrable)::text
+  (select coalesce(string_agg(r.relname || '.' || t.tgname, ',' order by t.tgname collate "C"), '')
+     from pg_trigger t join pg_class r on r.oid = t.tgrelid join pg_namespace n on n.oid = r.relnamespace
+    where n.nspname in ('public', 'auth') and t.tgconstraint <> 0 and t.tgdeferrable)
   || '/' ||
   (select count(*) from pg_constraint c
     where c.contype = 'f' and c.confrelid in ('auth.users'::regclass, 'public.user_profiles'::regclass) and c.condeferrable)::text,
-  '0/0/0',
-  'P8: no constraint in public or auth is DEFERRABLE, no constraint trigger there is deferrable, and no key in any schema that references a user is: every check of a deletion fires inside account_deletion_check''s subtransaction');
+  -- Re-pinned by 0458 (was '0/0/0'): the owner-present constraint triggers,
+  -- by name, and nothing else.
+  'organization_members.organization_members_owner_present_del:t,organization_members.organization_members_owner_present_join_ins:t,'
+  'organization_members.organization_members_owner_present_join_upd:t,organization_members.organization_members_owner_present_upd:t'
+  '/organization_members.organization_members_owner_present_del,organization_members.organization_members_owner_present_join_ins,'
+  'organization_members.organization_members_owner_present_join_upd,organization_members.organization_members_owner_present_upd'
+  '/0',
+  'P8: the only deferrable objects in public or auth are 0458''s four owner-present constraint triggers on organization_members, and no key in any schema that references a user is deferrable: every other check of a deletion fires inside account_deletion_check''s subtransaction, and the owner-present check''s condition equals 0393''s last-owner rule, which fires there');
 select is(
   (select coalesce(string_agg(c.conrelid::regclass::text || '.' || c.conname, ',' order by c.conname collate "C"), '')
      from pg_constraint c join pg_namespace n on n.oid = c.connamespace

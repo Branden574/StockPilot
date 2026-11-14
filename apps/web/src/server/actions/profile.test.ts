@@ -1877,14 +1877,52 @@ describe('deleteOwnAccountAction', () => {
       expect(avatarStorage.list).not.toHaveBeenCalled();
     });
 
-    it('any other answer to the re-check keeps SP-008 (sessions revoked, the signed-out sentence)', async () => {
+    // Re-pinned by 0458 (the re-check answered deletable here, which now
+    // means "try again"): a re-check that cannot answer keeps SP-008.
+    it('a re-check that cannot answer keeps SP-008 (sessions revoked, the signed-out sentence)', async () => {
       adminAuth.deleteUser.mockImplementationOnce(async () => ({
         error: { name: 'AuthApiError', status: 500, message: 'Database error deleting user' },
       }));
+      adminRpc
+        .mockImplementationOnce(async () => ({ data: { deletable: true }, error: null }))
+        .mockImplementationOnce(async () => ({ data: null, error: { code: 'PGRST301' } }));
       const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.message).toBe(ACCOUNT_DELETE_SIGNED_OUT_COPY);
       expect(revokeAllSessionsForUserMock).toHaveBeenCalledWith('user-1');
+    });
+
+    // Migration 0458: the owner check runs at the auth server's commit and
+    // can answer busy (55P03, another change to the organization's owners
+    // was being saved); the auth server answers a 500 and the account stays.
+    // The re-check then answers deletable (or a lock to retry): nothing
+    // changed, the database is reachable, so the person is told to try again
+    // and stays signed in, as for the check's own retry answer.
+    it.each([
+      { recheck: { data: { deletable: true }, error: null }, name: 'deletable' },
+      { recheck: { data: { deletable: false, reason: 'blocked', sqlstate: '55P03' }, error: null }, name: 'a busy lock' },
+    ])('a re-check that answers $name: try again, the sessions are kept, nothing is written', async ({ recheck }) => {
+      adminAuth.deleteUser.mockImplementationOnce(async () => ({
+        error: { name: 'AuthApiError', status: 500, message: 'Database error deleting user' },
+      }));
+      adminRpc
+        .mockImplementationOnce(async () => ({ data: { deletable: true }, error: null }))
+        .mockImplementationOnce(async () => recheck);
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result).toEqual(err('internal_error', ACCOUNT_DELETE_RETRY_COPY));
+      expect(adminRpc).toHaveBeenCalledTimes(2);
+      expect(revokeAllSessionsForUserMock).not.toHaveBeenCalled();
+      expect(cookieSignOut).not.toHaveBeenCalled();
+      expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
+      expect(avatarStorage.list).not.toHaveBeenCalled();
+      expect(reportErrorMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ tag: 'account.delete.auth_delete_transient', level: 'warning' }),
+      );
+      expect(reportErrorMock).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ tag: 'account.delete.auth_delete_failed' }),
+      );
     });
   });
 });
