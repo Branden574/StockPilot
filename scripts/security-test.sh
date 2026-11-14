@@ -860,6 +860,11 @@ PGTAP_TESTS=(
   # user_can_see_item_category answers service_role only. The lock footprint
   # is scripts/db-concurrency/0421_migration_lock_footprint.sh.
   supabase/tests/0421_categories_select_category_sets.test.sql
+  # References in their own organization (0423): an item's warehouse and
+  # category, a location's parent and an event's warehouse belong to the
+  # row's organization, for every rank (the rules' *_in_org terms; the item
+  # guard asks a member's insert for the warehouse). NULL passes.
+  supabase/tests/0423_item_location_and_event_references_in_own_organization.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
