@@ -26,13 +26,21 @@ import {
 } from '@/components/ui/glass/screens/ops';
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { Body, Display, Mono } from '@/components/ui/text';
+import { useAuth } from '@/lib/auth-context';
 import { listBundles, type CachedBundle } from '@/lib/db-reads';
+import { bundlesGateView } from '@/lib/bundles-gate-view';
 import { syncNow } from '@/lib/sync';
 import { FONT, space } from '@/lib/theme';
+import { useNotSyncedPull } from '@/lib/use-not-synced-pull';
+import { useOrg } from '@/lib/use-org';
+import { retrySavedAccess, useDrawerEntryAccess } from '@/lib/use-screen-access';
 import { useTheme } from '@/lib/use-theme';
 
 /** Where the read of the offline cache is: not answered yet, read, or failed. */
 type CacheRead = 'pending' | 'ok' | 'failed';
+
+/** No kits: the rows drawn for an account or workspace the kits were not read for. */
+const NO_BUNDLES: CachedBundle[] = [];
 
 /**
  * What the list's body shows besides its rows. A cache read that failed is
@@ -76,42 +84,84 @@ export default function BundlesList() {
   // grouped glass cards. Every control, state and word stays.
   const lg = useGlass();
   const router = useRouter();
-  const [rows, setRows] = React.useState<CachedBundle[]>([]);
-  const [read, setRead] = React.useState<CacheRead>('pending');
+  // The kits saved on this phone are read and shown only for a member the
+  // side menu offers Bundles to (screen-access.ts): a deep link or the Home
+  // card opens nothing else. Nothing is read before it is known.
+  const access = useDrawerEntryAccess('/bundles');
+  const allowed = access === 'allowed';
+  // The kits read, with whose they are: the account and the workspace they
+  // were read for. A read that lands after either changed is dropped, and
+  // kits read for another account or workspace are never drawn (a screen
+  // left open under the sign-in screen sees another account sign in to the
+  // same workspace); for those, nothing is read yet.
+  const { user } = useAuth();
+  const { orgId } = useOrg();
+  const readFor = `${user?.id ?? ''}:${orgId ?? ''}`;
+  const readForRef = React.useRef(readFor);
+  React.useLayoutEffect(() => {
+    readForRef.current = readFor;
+  });
+  const [held, setHeld] = React.useState<{
+    key: string;
+    rows: CachedBundle[];
+    read: CacheRead;
+  } | null>(null);
+  const shownRows = held !== null && held.key === readFor ? held.rows : NO_BUNDLES;
+  const shownRead: CacheRead = held !== null && held.key === readFor ? held.read : 'pending';
   const [refreshing, setRefreshing] = React.useState(false);
   // A pull's own spinner: the list's pull-to-refresh shows it, so the body's
   // spinner stays away and one refresh never shows two.
   const [pulling, setPulling] = React.useState(false);
+  // Not synced yet for this member: a sync is asked for, with the spinner
+  // while it is out (use-not-synced-pull.ts).
+  const waitingForPull = useNotSyncedPull(access);
+  const gate = bundlesGateView(access, waitingForPull || refreshing);
 
   // A cache read that throws is caught here and said on screen
   // (bundlesListBody): it used to escape as an unhandled rejection from the
   // first load, Refresh and a pull, and leave "No bundles synced yet." over a
   // read that had failed. The rows already shown stay.
   const load = React.useCallback(async () => {
+    const forWhom = readFor;
     try {
       const list = await listBundles();
-      setRows(list);
-      setRead('ok');
+      if (readForRef.current !== forWhom) return;
+      setHeld({ key: forWhom, rows: list, read: 'ok' });
     } catch (e) {
+      if (readForRef.current !== forWhom) return;
       console.warn('[bundles] cache read failed:', e instanceof Error ? e.message : e);
-      setRead('failed');
+      // This account's rows from an earlier read stay, under the note.
+      setHeld((prev) => ({
+        key: forWhom,
+        rows: prev !== null && prev.key === forWhom ? prev.rows : NO_BUNDLES,
+        read: 'failed',
+      }));
     }
-  }, []);
+  }, [readFor]);
 
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
-    void load();
-  }, [load]);
+    if (allowed) void load();
+  }, [load, allowed]);
 
   // The refreshing state ends when this refresh ends, whatever happened: a
   // cache read that threw used to leave Refresh busy for good. Neither step
   // rejects (syncNow and load catch their own failures), so neither does
   // this, from the button or from a pull.
+  //
+  // By the access (bundles-gate-view.ts): allowed, a sync and the kits read
+  // again; not synced yet, a sync (the kits are read once it makes them this
+  // member's); unreadable, the saved access read again; otherwise nothing.
   async function refresh() {
+    if (gate.refresh === null) return;
     setRefreshing(true);
     try {
-      await syncNow();
-      await load();
+      if (gate.refresh === 'reread') {
+        await retrySavedAccess();
+      } else {
+        await syncNow();
+        if (allowed) await load();
+      }
     } finally {
       setRefreshing(false);
     }
@@ -128,7 +178,9 @@ export default function BundlesList() {
     }
   }
 
-  const body = bundlesListBody(read, rows.length, refreshing, pulling);
+  const body = allowed
+    ? bundlesListBody(shownRead, shownRows.length, refreshing, pulling)
+    : { spinner: gate.spinner && !pulling, words: null, staleNote: false };
 
   return (
     <SafeAreaView
@@ -157,31 +209,33 @@ export default function BundlesList() {
         >
           Bundles
         </Display>
-        <Pressable
-          onPress={refresh}
-          style={[styles.refreshBtn, lg && GLASS_NAV_CAPSULE]}
-          accessibilityRole="button"
-          accessibilityLabel="Refresh"
-          accessibilityState={{ busy: refreshing }}
-        >
-          {lg ? <GlassCapsuleBackdrop /> : null}
-          {/* While it syncs, a spinner stands in for the arrow; the word
-              stays, so the button keeps its name on screen. */}
-          {refreshing ? (
-            <ActivityIndicator size="small" color={c.ink} />
-          ) : (
-            <RefreshCw size={14} color={c.ink} strokeWidth={1.75} />
-          )}
-          <Text
-            style={[
-              styles.refreshLabel,
-              { color: c.ink },
-              lg && [lg.font.displaySemi, GLASS_NAV_CAPSULE_LABEL],
-            ]}
+        {gate.refresh !== null ? (
+          <Pressable
+            onPress={refresh}
+            style={[styles.refreshBtn, lg && GLASS_NAV_CAPSULE]}
+            accessibilityRole="button"
+            accessibilityLabel="Refresh"
+            accessibilityState={{ busy: refreshing }}
           >
-            Refresh
-          </Text>
-        </Pressable>
+            {lg ? <GlassCapsuleBackdrop /> : null}
+            {/* While it syncs, a spinner stands in for the arrow; the word
+              stays, so the button keeps its name on screen. */}
+            {refreshing ? (
+              <ActivityIndicator size="small" color={c.ink} />
+            ) : (
+              <RefreshCw size={14} color={c.ink} strokeWidth={1.75} />
+            )}
+            <Text
+              style={[
+                styles.refreshLabel,
+                { color: c.ink },
+                lg && [lg.font.displaySemi, GLASS_NAV_CAPSULE_LABEL],
+              ]}
+            >
+              Refresh
+            </Text>
+          </Pressable>
+        ) : null}
       </View>
 
       <ScrollView
@@ -191,6 +245,11 @@ export default function BundlesList() {
         }
       >
         {body.spinner ? <ActivityIndicator color={c.ink} style={{ marginTop: space.xl }} /> : null}
+        {gate.words ? (
+          <Body muted style={styles.empty}>
+            {gate.words}
+          </Body>
+        ) : null}
         {body.words === 'failed' ? (
           <Body color={c.warnText} accessibilityRole="alert" style={styles.empty}>
             Could not read the bundles saved on this phone. Tap Refresh to try again.
@@ -205,7 +264,7 @@ export default function BundlesList() {
             Could not refresh the bundles. Tap Refresh to try again.
           </Body>
         ) : null}
-        {rows.map((b) => (
+        {(allowed ? shownRows : []).map((b) => (
           <Pressable
             key={b.id}
             onPress={() => router.push(`/bundles/${b.id}`)}

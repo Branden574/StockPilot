@@ -63,14 +63,16 @@ describe('the AI Assistant release', () => {
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[2]?.id).toBe('cycle-count-already-released-2026-11');
-    expect(RELEASES[3]?.id).toBe(ID);
-    expect(RELEASES[4]?.id).toBe('changes-that-did-not-happen-2026-11');
+    // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    expect(RELEASES[4]?.id).toBe('cycle-count-already-released-2026-11');
+    expect(RELEASES[5]?.id).toBe(ID);
+    expect(RELEASES[6]?.id).toBe('changes-that-did-not-happen-2026-11');
     // #509 went live at 07:07:42Z.
     expect(release().publishedAt).toBe('2026-11-13T07:08:00Z');
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(Date.parse(release().publishedAt)).toBeLessThan(Date.parse(RELEASES[2]!.publishedAt));
-    expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse(RELEASES[4]!.publishedAt));
+    // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    expect(Date.parse(release().publishedAt)).toBeLessThan(Date.parse(RELEASES[4]!.publishedAt));
+    expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse(RELEASES[6]!.publishedAt));
   });
 
   it('parses under the shared schema, with two AI Assistant entries in plain text only', () => {

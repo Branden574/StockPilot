@@ -51,6 +51,7 @@ import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useTheme } from '@/lib/use-theme';
 import { retryWorkspace } from '@/lib/use-workspace';
+import { webLink } from '@/lib/web-links';
 
 const TONE_ICON: Record<RentalEmailTone, typeof Mail> = {
   recorded: CheckCircle2,
@@ -343,7 +344,7 @@ export default function RentalDetailScreen() {
               block
               variant="outline"
               onPress={() => {
-                Linking.openURL(`https://stockpilotusa.com/dashboard/rentals/${rental.id}`).catch(() => undefined);
+                Linking.openURL(webLink(`/dashboard/rentals/${rental.id}`)).catch(() => undefined);
               }}
             >
               {webAction}

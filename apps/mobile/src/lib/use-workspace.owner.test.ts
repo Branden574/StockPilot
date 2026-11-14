@@ -69,6 +69,10 @@ const storage = vi.hoisted(() => ({
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: storage }));
 vi.mock('./db', () => ({ deleteOrgData: vi.fn(async () => {}) }));
 vi.mock('./enabled-modules', () => ({ refreshEnabledModules: vi.fn() }));
+// The saved permissions and warehouse scope a switch tells the screens to
+// read again (B124); their own tests are use-workspace.saved-access.test.ts.
+vi.mock('./use-effective-permissions', () => ({ refreshEffectivePermissions: async () => {} }));
+vi.mock('./warehouse-scope', () => ({ refreshWarehouseScope: async () => {} }));
 const drains = vi.hoisted(() => ({
   syncNow: vi.fn(async () => {}),
   syncAfterRunning: vi.fn(async () => {}),

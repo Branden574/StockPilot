@@ -21,6 +21,7 @@ import {
   NOT_SET_UP_MESSAGE,
   unexpectedActionError,
 } from '@/server/lib/action-error-result';
+import { SESSION_CHANGED } from '@/server/services/step-up-held';
 
 import {
   acceptInviteSchema,
@@ -55,18 +56,26 @@ export async function inviteMemberAction(
   // of truth — owner is only reassigned via the ownership-transfer flow.
 
   try {
+    // The invitation is created in the organization the context resolves from
+    // the inviter's accepted memberships, and the email names that same
+    // organization (never the profile's default read on its own).
+    const ctx = await withContext();
+    const svc = new TeamService(ctx);
     const session = await requireSession();
-    const supabase = await createClient();
+    // The inviter's name and email come from this second load: it must be the
+    // account the context resolved, or the action is refused.
+    if (session.userId !== ctx.userId) {
+      return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
+    }
 
-    const { data: orgRow } = await supabase
+    const { data: orgRow } = await ctx.supabase
       .from('organizations')
       .select('name')
-      .eq('id', session.defaultOrganizationId ?? '')
+      .eq('id', ctx.organizationId)
       .maybeSingle();
     const orgName = (orgRow?.name as string | undefined) ?? 'StockPilot';
     const inviter = session.fullName ?? session.email;
 
-    const svc = await TeamService.forCurrentUser();
     const result = await svc.invite({
       email: parsed.data.email,
       role: parsed.data.role as Exclude<Role, 'owner'>,
@@ -372,6 +381,11 @@ export async function transferOwnershipAction(input: {
     }
 
     const session = await requireSession();
+    // The password below is checked for this second load's email: it must be
+    // the account the context resolved, or the action is refused.
+    if (session.userId !== ctx.userId) {
+      return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
+    }
 
     // Rate-limit BEFORE the password verify so a leaked cookie can't
     // brute-force the password.

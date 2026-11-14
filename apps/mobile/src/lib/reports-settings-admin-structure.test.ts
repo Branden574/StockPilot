@@ -446,7 +446,9 @@ describe('Book Order Totals screens: the per-mode palette', () => {
       ),
     );
     // Liquid Glass: the iOS search field.
-    expect(list).toContain('lg && glassSearchBox(lg), ]} > <Search size={16} color={c.ink3} strokeWidth={1.4} />');
+    expect(list).toContain(
+      'lg && glassSearchBox(lg), ]} > <Search size={16} color={c.ink3} strokeWidth={1.4} />',
+    );
     expect(list).toContain('placeholder="Title, SKU or ISBN" placeholderTextColor={c.ink3}');
   });
 
@@ -577,7 +579,7 @@ describe('Reports hub: the look', () => {
     expect(attr(label.el, 'numberOfLines', sf)).toBeUndefined();
     expect(attr(label.el, 'maxFontSizeMultiplier', sf)).toBeUndefined();
     expect(hub).toContain(
-      "<WebReportLink onPress={() => Linking.openURL('https://stockpilotusa.com/dashboard/reports').catch(() => undefined) } />",
+      "<WebReportLink onPress={() => Linking.openURL(webLink('/dashboard/reports')).catch(() => undefined) } />",
     );
   });
 
@@ -809,13 +811,13 @@ describe('Settings: the account screen', () => {
       'Account<Em>.</Em>',
       'title="Workspaces" detail="View sites"',
       "router.push('/locations?return=/settings')",
-      "Linking.openURL('https://stockpilotusa.com/dashboard/settings/profile')",
+      "Linking.openURL(webLink('/dashboard/settings/profile'))",
       "router.push('/settings/change-email' as never)",
       "router.push('/notifications?return=/settings')",
       'title="Send test push" detail="To this device"',
       "'/api/v1/push/test'",
       "router.push('/settings/integrations' as never)",
-      "Linking.openURL('https://stockpilotusa.com/dashboard/settings/security')",
+      "Linking.openURL(webLink('/dashboard/settings/security'))",
       'title="Customize tab bar" detail="Home + up to 5"',
       "router.push('/settings/customize-tabs' as never)",
       // The Theme row ("Auto", an alert) is Appearance while Liquid Glass is
@@ -830,8 +832,8 @@ describe('Settings: the account screen', () => {
       'title="Delete my account" detail="Permanent"',
       'onPress={() => confirmDeleteAccount(signOut)}',
       "Linking.openURL('mailto:hello@stockpilot.app?subject=StockPilot%20mobile%20support')",
-      "Linking.openURL('https://stockpilotusa.com/privacy')",
-      "Linking.openURL('https://stockpilotusa.com/terms')",
+      "Linking.openURL(webLink('/privacy'))",
+      "Linking.openURL(webLink('/terms'))",
       'title="What\'s new" detail={`v${APP_VERSION}`}',
       "'Type DELETE to confirm'",
       "if ((input ?? '').trim() !== 'DELETE') {",
@@ -1308,7 +1310,10 @@ describe('Admin lists: a failed read is said, never "No X yet." (D25)', () => {
         ...load.matchAll(
           /if \((?:!read \|\| read\.error|whResp\.error)\) \{([\s\S]*?)return;\s*\}/g,
         ),
-        ...load.matchAll(/\} catch \{\s*(setList[\s\S]*?)return;\s*\}/g),
+        // B124: a catch may first drop an answer a newer read replaced.
+        ...load.matchAll(
+          /\} catch \{\s*(?:if \(!guard\.current\.isCurrent\(token\)\) return;\s*)?(setList[\s\S]*?)return;\s*\}/g,
+        ),
       ].map((m) => m[1]!);
       expect(failurePaths.length, list.file).toBeGreaterThanOrEqual(1);
       for (const path of failurePaths) {
@@ -1317,7 +1322,9 @@ describe('Admin lists: a failed read is said, never "No X yet." (D25)', () => {
         expect(path).not.toContain('setList({');
       }
       // A thrown read is a failure too, never a spinner that turns forever.
-      expect(load).toMatch(/\} catch \{\s*(read = null;|setList\()/);
+      expect(load).toMatch(
+        /\} catch \{\s*(read = null;|setList\(|if \(!guard\.current\.isCurrent\(token\)\) return;\s*setList\()/,
+      );
       // Run the screen's own updater: this workspace's rows stay, another's go.
       const updater = new Function(
         'prev',
@@ -1334,7 +1341,11 @@ describe('Admin lists: a failed read is said, never "No X yet." (D25)', () => {
       expect(load).toMatch(
         /setFailed\((false|chartersFailed && whRows\.length > 0 \? 'charters' : null)\);/,
       );
-      expect(body).toContain('const rows = list?.rows ?? NO_ROWS;');
+      // B124: only rows read for the workspace on screen are drawn
+      // (admin-lists-workspace.test.ts runs each screen's load).
+      expect(body).toContain(
+        'const rows = list !== null && list.orgId === orgId ? list.rows : NO_ROWS;',
+      );
     },
   );
 

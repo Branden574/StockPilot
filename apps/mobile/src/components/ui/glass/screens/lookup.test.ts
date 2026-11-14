@@ -33,9 +33,11 @@ describe('the Items and Books tabs use it for their glass count line', () => {
     readFileSync(path.join(MOBILE_ROOT, file), 'utf8').replace(/\s+/g, ' ');
 
   it('Items: "N items", one item in the singular; the load-error word is unchanged', () => {
+    // listFailed: the read failed, or no workspace is known to read in
+    // (no-workspace-screens.test.ts); the words are the same.
     const src = flat('app/(drawer)/(tabs)/inventory.tsx');
     expect(src).toContain(
-      "<GlassSubline style={GLASS_LOOKUP.count}> {loadError !== null ? 'Items' : glassCountLine(datasetRowCount, 'item', 'items')} </GlassSubline>",
+      "<GlassSubline style={GLASS_LOOKUP.count}> {listFailed ? 'Items' : glassCountLine(datasetRowCount, 'item', 'items')} </GlassSubline>",
     );
     expect(src).not.toContain('${datasetRowCount.toLocaleString()} items`');
   });
@@ -43,7 +45,7 @@ describe('the Items and Books tabs use it for their glass count line', () => {
   it('Books: "N placements", one placement in the singular', () => {
     const src = flat('app/(drawer)/(tabs)/books.tsx');
     expect(src).toContain(
-      "<GlassSubline style={GLASS_LOOKUP.count}> {loadError !== null ? 'Placements' : glassCountLine(datasetRowCount, 'placement', 'placements')} </GlassSubline>",
+      "<GlassSubline style={GLASS_LOOKUP.count}> {listFailed ? 'Placements' : glassCountLine(datasetRowCount, 'placement', 'placements')} </GlassSubline>",
     );
     expect(src).not.toContain('${datasetRowCount.toLocaleString()} placements`');
   });

@@ -40,8 +40,13 @@ import {
   defaultDistributeWarehouseId,
   type DistributionPreview,
 } from '@/lib/bundle-distribute-preview';
+import { useAuth } from '@/lib/auth-context';
 import { showDistributeCta } from '@/lib/cta-gating';
+import { bundlesGateView } from '@/lib/bundles-gate-view';
+import { useNotSyncedPull } from '@/lib/use-not-synced-pull';
+import { retrySavedAccess, useDrawerEntryAccess } from '@/lib/use-screen-access';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
+import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
 import {
   getBundleComponents,
@@ -110,6 +115,26 @@ export default function BundleDetail() {
   const { role } = useRole();
   const canDistribute = showDistributeCta(role, perms);
   const { id } = useLocalSearchParams<{ id: string }>();
+  // Read and shown only for a member the side menu offers Bundles to
+  // (screen-access.ts): a deep link opens nothing else, and nothing is read
+  // before it is known.
+  const access = useDrawerEntryAccess('/bundles');
+  // Whose read it is: a read the account, the workspace, the bundle or the
+  // access changed under is dropped (the effect below reads again).
+  const { user } = useAuth();
+  const userId = user?.id ?? null;
+  const { orgId } = useOrg();
+  // The same, for Distribute: one confirmed, sent or answered after the
+  // account or the workspace changed is not sent, queued or said for the
+  // next one.
+  const shownFor = `${userId ?? ''}:${orgId ?? ''}`;
+  const shownForRef = React.useRef(shownFor);
+  React.useLayoutEffect(() => {
+    shownForRef.current = shownFor;
+  });
+  // Not synced yet for this member: a sync is asked for, with the spinner
+  // while it is out (use-not-synced-pull.ts).
+  const waitingForPull = useNotSyncedPull(access);
   const [bundle, setBundle] = React.useState<CachedBundle | null>(null);
   // The cache has been read for this bundle (found or not).
   const [looked, setLooked] = React.useState(false);
@@ -131,12 +156,14 @@ export default function BundleDetail() {
   const keptKey = React.useRef<DistributeKey | null>(null);
 
   React.useEffect(() => {
+    let cancelled = false;
     void (async () => {
-      if (!id) return;
+      if (!id || access !== 'allowed') return;
       // The read under way, so a throw says which one failed.
       let reading: FailedRead = 'bundle';
       try {
         const all = await listBundles();
+        if (cancelled) return;
         const b = all.find((x) => x.id === id) ?? null;
         setBundle(b);
         if (!b) return;
@@ -147,6 +174,7 @@ export default function BundleDetail() {
           const item = await getItemById(c.itemId);
           if (item) itemMap.set(c.itemId, item);
         }
+        if (cancelled) return;
         // The components show with their items, once every item is read: a
         // read that threw part way showed the components whose items it had
         // not read as "(deleted)".
@@ -154,6 +182,7 @@ export default function BundleDetail() {
         setItems(itemMap);
         reading = 'warehouses';
         const whs = await listWarehouses();
+        if (cancelled) return;
         setWarehouses(whs);
         // Start on the warehouse the kit can actually be handed out from: the
         // pre-assembled kits' warehouse, else the one warehouse every component
@@ -166,13 +195,19 @@ export default function BundleDetail() {
           }),
         );
       } catch (e) {
+        if (cancelled) return;
         console.warn('[bundle] cache read failed:', e instanceof Error ? e.message : e);
         setFailedRead(reading);
       } finally {
-        setLooked(true);
+        if (!cancelled) setLooked(true);
       }
     })();
-  }, [id]);
+    return () => {
+      cancelled = true;
+    };
+    // The account and the workspace too: a read for one is never drawn for
+    // the next (the effect runs again, and this one's answer is dropped).
+  }, [id, access, userId, orgId]);
 
   // Local preview: the same rule as distribute_bundle() since 0365 (see
   // bundle-distribute-preview.ts). Only stock in the CHOSEN warehouse counts,
@@ -213,6 +248,8 @@ export default function BundleDetail() {
       Alert.alert('Invalid quantity', 'Enter a positive number.');
       return;
     }
+    const startedFor = shownForRef.current;
+    const stillHere = () => shownForRef.current === startedFor;
     const allowShortage = preview.hasShortage;
     if (allowShortage) {
       const proceed = await new Promise<boolean>((resolve) => {
@@ -225,7 +262,7 @@ export default function BundleDetail() {
           ],
         );
       });
-      if (!proceed) return;
+      if (!proceed || !stillHere()) return;
     }
 
     // ═══ ONE KEY FOR EVERY ATTEMPT OF THIS DISTRIBUTION (0347) ═══
@@ -258,10 +295,14 @@ export default function BundleDetail() {
           idempotencyKey,
         },
       });
+      if (!stillHere()) return;
       Alert.alert('Distributed', `Shipped ${n} kit${n === 1 ? '' : 's'}.`, [
         { text: 'OK', onPress: () => router.back() },
       ]);
     } catch (e) {
+      // Another account or workspace by now: nothing is said, and nothing is
+      // queued, since the queue would hold it as the account signed in now.
+      if (!stillHere()) return;
       // A 4xx is the server REFUSING this request (shortage, permission,
       // archived bundle, conflict). Queueing it would replay a refusal every
       // minute forever while the operator was told it was saved — and a
@@ -291,12 +332,14 @@ export default function BundleDetail() {
         // the key is kept, so trying again sends this same request. A store
         // failure is reported to the team (phone-save-report.ts).
         reportPhoneSaveFailure(queueError, 'bundle.distribute.queue');
+        if (!stillHere()) return;
         outcomeUnknown = true;
         const { title, message } = distributeNotSavedAlert(e, queueError);
         Alert.alert(title, message);
         return;
       }
       void syncNow();
+      if (!stillHere()) return;
       Alert.alert(
         'Queued',
         `Couldn't reach the server (${e instanceof Error ? e.message : 'network error'}). The distribution is saved locally and will sync when you're back online.`,
@@ -309,9 +352,17 @@ export default function BundleDetail() {
     }
   }
 
-  if (!bundle) {
-    // No id at all is a bundle this phone cannot hold either.
-    const state = bundleScreenState(bundle, looked || !id, failedRead === 'bundle');
+  if (!bundle || access !== 'allowed') {
+    // No id at all is a bundle this phone cannot hold either. Not allowed:
+    // the gate's words in place of the bundle (bundles-gate-view.ts), or its
+    // spinner.
+    const gate = bundlesGateView(access, waitingForPull);
+    const state =
+      access === 'allowed'
+        ? bundleScreenState(bundle, looked || !id, failedRead === 'bundle')
+        : gate.words !== null
+          ? 'gate'
+          : 'loading';
     return (
       <SafeAreaView
         style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}
@@ -322,7 +373,24 @@ export default function BundleDetail() {
         <View style={[styles.header, { borderBottomColor: c.hair }, lg && GLASS_RECORD_HEADER]}>
           <BackLink onPress={() => router.back()} />
         </View>
-        {state === 'failed' ? (
+        {state === 'gate' ? (
+          <View style={[styles.body, lg && GLASS_OPS.scroll]}>
+            <Card padding={16}>
+              <Body size={14.5} accessibilityRole="alert">
+                {gate.words}
+              </Body>
+              {gate.refresh === 'reread' ? (
+                <Button
+                  variant="outline"
+                  onPress={() => void retrySavedAccess()}
+                  style={{ marginTop: space.md }}
+                >
+                  Try again
+                </Button>
+              ) : null}
+            </Card>
+          </View>
+        ) : state === 'failed' ? (
           <View style={[styles.body, lg && GLASS_OPS.scroll]}>
             <Card padding={16}>
               <Body size={14.5} color={c.warnText} accessibilityRole="alert">

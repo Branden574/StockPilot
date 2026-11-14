@@ -40,8 +40,11 @@ describe('cycle-count detail leaves safely after a cold-start link', () => {
     const classic = printClassic(detail, 'app/cycle-count/[id].tsx');
     expect(detail.match(/router\.back\(\)/g) ?? []).toHaveLength(1);
     expect(classic.match(/onPress=\{leave\}/g) ?? []).toHaveLength(3);
-    expect(classic.match(/\bleave\(\);/g) ?? []).toHaveLength(3);
-    expect(detail.match(/\bleave\(\);/g) ?? []).toHaveLength(3);
+    // S75 added a fourth: leaving a count no longer on this phone after a
+    // count could not be stored (reloadAfterLineGone); and a fifth: Back on
+    // the read-failed state of a member who may not see cycle counts.
+    expect(classic.match(/\bleave\(\);/g) ?? []).toHaveLength(5);
+    expect(detail.match(/\bleave\(\);/g) ?? []).toHaveLength(5);
     expect(detail.match(/onPress=\{(?!leave\})[^}]*router\.back/g) ?? []).toHaveLength(0);
   });
 });

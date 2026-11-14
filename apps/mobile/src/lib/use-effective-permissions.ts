@@ -21,8 +21,10 @@ import { getMeta, setMeta } from './db';
  * Default-while-loading is `undefined` → drawerSectionsFor passes it through to
  * resolveSurface, which falls back to the STATIC role permissions. So the
  * drawer renders today's role-based nav until the effective set loads, then
- * narrows/widens per overrides — never an empty flash. (An empty persisted set
- * is also treated as "not loaded" since no real member has zero permissions.)
+ * narrows/widens per overrides — never an empty flash. An empty saved set is
+ * a saved set: a member who holds no permission (S75). Both writers save a
+ * list only when the server sent one, and the server refuses a request whose
+ * permissions it cannot read rather than send none.
  *
  * Like enabled-modules, this is COSMETIC nav gating only — the API independently
  * enforces permissions server-side (assertPermission + RLS), so a briefly
@@ -50,11 +52,30 @@ export async function readPersistedPermissions(): Promise<Set<Permission> | null
   }
 }
 
-const listeners = new Set<() => void>();
+const listeners = new Set<() => Promise<void>>();
 
-/** Notify active useEffectivePermissions() hooks to re-read the persisted set. */
-export function refreshEffectivePermissions(): void {
-  for (const fn of listeners) fn();
+/**
+ * Notify active useEffectivePermissions() hooks to re-read the persisted set.
+ * Resolves once every one has read it (a workspace switch waits for that
+ * before it shows the new workspace); never rejects.
+ */
+export function refreshEffectivePermissions(): Promise<void> {
+  return Promise.all([...listeners].map((fn) => fn().catch(() => undefined))).then(() => undefined);
+}
+
+/** The hooks whose latest read threw ('failed'), until a read comes back. */
+const failedReads = new Set<() => Promise<void>>();
+
+/**
+ * Read again in every hook whose latest read threw, and only those: called at
+ * the end of every pull (sync.ts), so a screen whose read failed does not
+ * stay 'unreadable' until Try again or a remount when the saved set did not
+ * change. Never rejects.
+ */
+export function rereadFailedEffectivePermissions(): Promise<void> {
+  return Promise.all([...failedReads].map((fn) => fn().catch(() => undefined))).then(
+    () => undefined,
+  );
 }
 
 /**
@@ -65,7 +86,10 @@ export function refreshEffectivePermissions(): void {
 export async function fetchEffectivePermissions(): Promise<void> {
   try {
     const res = await api<{ role: Role; permissions: string[] }>('/api/v1/me/permissions');
-    const next = JSON.stringify(Array.isArray(res.permissions) ? res.permissions : []);
+    // Only a list the server sent is saved: an empty saved set is a member
+    // who holds no permission, never "not known".
+    if (!Array.isArray(res.permissions)) return;
+    const next = JSON.stringify(res.permissions);
     const prev = await getMeta(EFFECTIVE_PERMISSIONS_META_KEY);
     await setMeta(EFFECTIVE_PERMISSIONS_META_KEY, next);
     if (prev !== next) refreshEffectivePermissions();
@@ -84,9 +108,22 @@ export interface EffectivePermissionsState {
    *  `permissions` means "not read yet", not "nothing saved". Never goes
    *  back to false. */
   read: boolean;
+  /** The device store has answered a read: true when it came back (found,
+   *  absent or unparseable), 'failed' when the latest read threw (a first
+   *  read or a re-read: a re-read asked for after a workspace switch that
+   *  throws must not let the previous answer stand). Never set by the wait:
+   *  false until a read answers, however long it takes. A screen deciding
+   *  what it reads or shows by the saved set uses this alone
+   *  (screen-access.ts), so it never decides from the static defaults the
+   *  wait falls back to. */
+  answered: boolean | 'failed';
 }
 
-const UNREAD: EffectivePermissionsState = { permissions: undefined, read: false };
+const UNREAD: EffectivePermissionsState = {
+  permissions: undefined,
+  read: false,
+  answered: false,
+};
 
 /**
  * How long a screen waits for the first read of the saved set. Reading the
@@ -98,8 +135,13 @@ const UNREAD: EffectivePermissionsState = { permissions: undefined, read: false 
  */
 export const SAVED_PERMISSIONS_READ_WAIT_MS = 2000;
 
-/** Read with nothing saved: the static defaults decide. */
-const READ_NOTHING_SAVED: EffectivePermissionsState = { permissions: undefined, read: true };
+/** Read, by the wait or a read that threw, with nothing saved and nothing
+ *  answered: the static defaults decide where `read` is enough. */
+const READ_NOTHING_SAVED: EffectivePermissionsState = {
+  permissions: undefined,
+  read: true,
+  answered: false,
+};
 
 export function useEffectivePermissionsState(): EffectivePermissionsState {
   const [state, setState] = React.useState<EffectivePermissionsState>(UNREAD);
@@ -122,18 +164,27 @@ export function useEffectivePermissionsState(): EffectivePermissionsState {
       try {
         persisted = await readPersistedPermissions();
       } catch {
-        // The device store could not be read. The last set read stays; a
-        // first read still counts as read, with nothing saved, so a screen
-        // that waits for it is never held and decides as before.
+        // The device store could not be read. The last set read stays for
+        // the menu; a first read still counts as read, with nothing saved, so
+        // the order screen is never held. For a screen gated on the saved set
+        // the read failed (it offers Try again), whatever was answered before.
         stopWaiting();
-        if (!cancelled) setState((prev) => (prev.read ? prev : READ_NOTHING_SAVED));
+        if (!cancelled) {
+          failedReads.add(reread);
+          setState((prev) => ({ ...(prev.read ? prev : READ_NOTHING_SAVED), answered: 'failed' }));
+        }
         return;
       }
       stopWaiting();
+      failedReads.delete(reread);
       if (cancelled) return;
+      // A saved set, empty included, is the member's answer: only a pull and
+      // fetchEffectivePermissions write the key, each only with a list the
+      // server sent (sync.ts, above).
       setState({
-        permissions: persisted && persisted.size > 0 ? persisted : undefined,
+        permissions: persisted ?? undefined,
         read: true,
+        answered: true,
       });
     };
     listeners.add(reread);
@@ -142,6 +193,7 @@ export function useEffectivePermissionsState(): EffectivePermissionsState {
       cancelled = true;
       stopWaiting();
       listeners.delete(reread);
+      failedReads.delete(reread);
     };
   }, []);
 
@@ -165,7 +217,7 @@ export const NO_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>();
  * SAVED_PERMISSIONS_READ_WAIT_MS), so nothing waits on it for long.
  */
 export function permissionsOnceRead(
-  state: EffectivePermissionsState,
+  state: Pick<EffectivePermissionsState, 'permissions' | 'read'>,
 ): ReadonlySet<Permission> | undefined {
   return state.read ? state.permissions : NO_PERMISSIONS;
 }

@@ -326,7 +326,7 @@ The third layer — the database — is the only one that actually enforces. The
 
 ### Category-restricted viewers
 
-A new feature shipped yesterday lets you restrict individual viewers to specific categories (e.g., a parent volunteer who should only see Books, not Wellness Items). The data lives in `user_category_assignments`. The enforcement is in a Postgres function called `user_can_see_item_category()` which is called by RLS policies on `inventory_items` and `categories`.
+A new feature shipped yesterday lets you restrict individual viewers to specific categories (e.g., a parent volunteer who should only see Books, not Wellness Items). The data lives in `user_category_assignments`. The enforcement is in the RLS policies on `inventory_items` and `categories`, which both read two Postgres functions, `rls_cat_unrestricted_org_ids()` (the organizations where you see every category) and `rls_cat_allowed_category_ids()` (the categories a limited viewer was given). Both work out who you are from your sign-in, so nobody can ask them about someone else.
 
 If a viewer has zero rows in `user_category_assignments`, they see everything (back-compat). If they have one or more rows, they see only those categories AND no uncategorized items.
 

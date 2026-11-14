@@ -39,8 +39,10 @@ import {
   settleFailedDelete,
   soleOwnedOrganizationsWithMembers,
 } from '@/server/lib/account-deletion';
+import { orgLogoBucketUrlPrefix, removePreviousOrgLogo } from '@/server/lib/org-logo-object';
 import { audit } from '@/server/services/audit';
 import { ServiceError, mfaGateError, withContext } from '@/server/services/context';
+import { PUBLIC_TOKEN_RESOLVE_TAG } from '@/server/services/public-links';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 import { assertStepUpHeld, sessionChangedError } from '@/server/services/step-up-held';
 import { actionErrorResult } from '@/server/lib/action-error-result';
@@ -392,19 +394,11 @@ function expectedLogoPrefix(orgId: string): string {
   return `${orgLogoBucketUrlPrefix()}${orgId}/`;
 }
 
-/** Everything in a logo's public URL up to (and including) the bucket name —
- *  i.e. the point where the BUCKET-RELATIVE object path begins. Slicing here
- *  rather than at `expectedLogoPrefix` keeps the org id inside the derived
- *  path, so the storage-path shape check validates that segment too instead of
- *  taking the string prefix check's word for it. */
-function orgLogoBucketUrlPrefix(): string {
-  const base = (env.NEXT_PUBLIC_SUPABASE_URL ?? '').replace(/\/$/, '');
-  return `${base}/storage/v1/object/public/org-logos/`;
-}
-
 /**
  * Persists a new logo_url on the organization. Owner/admin only. Same
- * upload-then-record split as setAvatarUrlAction.
+ * upload-then-record split as setAvatarUrlAction. Once the save succeeded,
+ * the object the column held before (Replace or Remove) is removed when it is
+ * this organization's logo object (removePreviousOrgLogo, S76).
  */
 export async function setOrgLogoUrlAction(input: {
   url: string | null;
@@ -523,6 +517,16 @@ export async function setOrgLogoUrlAction(input: {
     // Fail closed: a 0-row update means the org row didn't match — never report
     // a silent success.
     if (!updated) throw new ServiceError('not_found', 'Organization not found.');
+    // S76: the save stands; now remove the object the column held before, if
+    // it is this organization's logo object and not the one just saved. Never
+    // rejects: a failed removal is reported and the save stays. Not awaited:
+    // the helper keeps the removal alive past the response (keepAlive), so the
+    // answer and the audit row do not wait for storage.
+    void removePreviousOrgLogo({
+      organizationId: ctx.organizationId,
+      previousUrl: prev?.logo_url ?? null,
+      savedUrl: persistUrl,
+    });
     await audit({
       // S3.2: org logo updates are an *organization* event, not a
       // warehouse one. The pre-staged event type makes this audit
@@ -537,6 +541,12 @@ export async function setOrgLogoUrlAction(input: {
     // the new logo appears in the dashboard shell on next nav instead
     // of being stale for up to 60s. Static cross-org tag.
     revalidateTag('dashboard-org', 'max');
+    // The public catalog page caches organization data (with the logo link)
+    // under this tag for 60 s. Expire it at once ({ expire: 0 }), not 'max':
+    // 'max' serves the cached copy once more while it refreshes, and that copy
+    // names the previous object, which removePreviousOrgLogo removes. With
+    // { expire: 0 } the next load reads fresh and shows the new logo, or none.
+    revalidateTag(PUBLIC_TOKEN_RESOLVE_TAG, { expire: 0 });
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {

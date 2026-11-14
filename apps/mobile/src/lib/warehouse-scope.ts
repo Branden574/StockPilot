@@ -62,11 +62,16 @@ export async function readPersistedWarehouseScope(): Promise<WarehouseScope | nu
   return parseWarehouseScope(await getMeta(WAREHOUSE_SCOPE_META_KEY));
 }
 
-const listeners = new Set<() => void>();
+const listeners = new Set<() => Promise<void>>();
 
-/** Notify active useWarehouseScope() hooks to re-read the persisted scope. */
-export function refreshWarehouseScope(): void {
-  for (const fn of listeners) fn();
+/**
+ * Notify active useWarehouseScope() hooks to re-read the persisted scope.
+ * Resolves once every one has read it (a workspace switch waits for that
+ * before it shows the new workspace); never rejects: a read that fails keeps
+ * the scope shown.
+ */
+export function refreshWarehouseScope(): Promise<void> {
+  return Promise.all([...listeners].map((fn) => fn().catch(() => undefined))).then(() => undefined);
 }
 
 /** Current warehouse scope; `undefined` until a snapshot has persisted one. */

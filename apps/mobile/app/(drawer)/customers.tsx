@@ -8,8 +8,9 @@ import { Pill } from '@/components/ui/pill';
 import { Toggle } from '@/components/ui/toggle';
 import { Body, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
+import { createSequenceGuard } from '@/lib/debounced-list-load';
 import { supabase } from '@/lib/supabase';
-import { useWorkspace } from '@/lib/use-workspace';
+import { retryWorkspace, useWorkspace } from '@/lib/use-workspace';
 import { useTheme } from '@/lib/use-theme';
 
 interface CustomerRow {
@@ -26,6 +27,8 @@ interface CustomerRow {
  * failed read used to say "No accounts yet."). Accounts an earlier read left
  * on screen stay, with the reload note above them.
  */
+const NO_ROWS: CustomerRow[] = [];
+
 const ACCOUNTS_LOAD_FAILED = {
   title: 'Could not load accounts.',
   body: 'Check your connection and pull down to try again.',
@@ -40,8 +43,22 @@ const ACCOUNTS_LOAD_FAILED = {
  */
 export default function CustomersScreen() {
   const { user } = useAuth();
-  const { activeOrgId } = useWorkspace();
-  const [rows, setRows] = React.useState<CustomerRow[]>([]);
+  const userId = user?.id ?? null;
+  const { activeOrgId, loading: workspaceLoading } = useWorkspace();
+  // The accounts with the workspace and the account they were read for, drawn
+  // only for both: after a switch, never the previous workspace's accounts
+  // while this one's read is out, or after it failed; and never one
+  // account's read for the next (a sign-in with the screen still open).
+  const [list, setList] = React.useState<{
+    orgId: string;
+    userId: string | null;
+    rows: CustomerRow[];
+  } | null>(null);
+  const rows =
+    list !== null && list.orgId === activeOrgId && list.userId === userId ? list.rows : NO_ROWS;
+  // Only the newest read changes the list: an older one that lands last
+  // (the previous workspace's, or a slow refresh) is dropped.
+  const guard = React.useRef(createSequenceGuard());
   // The last read failed (set by every read that answers).
   const [loadFailed, setLoadFailed] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
@@ -49,7 +66,10 @@ export default function CustomersScreen() {
   const [busyId, setBusyId] = React.useState<string | null>(null);
 
   const load = React.useCallback(async () => {
+    const token = guard.current.next();
     if (!user || !activeOrgId) return;
+    const forOrg = activeOrgId;
+    const forUser = userId;
     const { data, error } = await supabase
       .from('customers')
       .select(
@@ -58,25 +78,34 @@ export default function CustomersScreen() {
       .eq('organization_id', activeOrgId)
       .order('created_at', { ascending: false })
       .limit(200);
+    if (!guard.current.isCurrent(token)) return;
     if (error) {
-      // Said, never "No accounts yet."; earlier rows stay.
+      // Said, never "No accounts yet."; this workspace's earlier rows stay
+      // (another workspace's are never drawn).
       setLoadFailed(true);
     } else {
       setLoadFailed(false);
-      setRows((data ?? []) as CustomerRow[]);
+      setList({ orgId: forOrg, userId: forUser, rows: (data ?? []) as CustomerRow[] });
     }
     setLoading(false);
-  }, [user, activeOrgId]);
+  }, [user, userId, activeOrgId]);
 
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
     void load();
   }, [load]);
 
+  // No workspace could be loaded: the read never starts, so say so (a pull
+  // loads the workspace again), never a spinner that does not end.
+  const noWorkspace = !activeOrgId && !workspaceLoading;
+
   async function refresh() {
     setRefreshing(true);
-    await load();
-    setRefreshing(false);
+    try {
+      await (noWorkspace ? retryWorkspace() : load());
+    } finally {
+      setRefreshing(false);
+    }
   }
 
   async function setStatus(row: CustomerRow, active: boolean) {
@@ -97,8 +126,17 @@ export default function CustomersScreen() {
       );
       return;
     }
-    setRows((prev) =>
-      prev.map((r) => (r.id === row.id ? { ...r, status: active ? 'active' : 'archived' } : r)),
+    // Only into the list of the workspace the change was made in.
+    const changedIn = activeOrgId;
+    setList((prev) =>
+      prev !== null && prev.orgId === changedIn && prev.userId === userId
+        ? {
+            ...prev,
+            rows: prev.rows.map((r) =>
+              r.id === row.id ? { ...r, status: active ? 'active' : 'archived' } : r,
+            ),
+          }
+        : prev,
     );
   }
 
@@ -106,7 +144,7 @@ export default function CustomersScreen() {
     <DataListScreen
       // A read that failed with nothing on screen quotes no count.
       eyebrow={
-        loadFailed && rows.length === 0
+        (noWorkspace || loadFailed) && rows.length === 0
           ? 'B2B'
           : `B2B · ${rows.filter((r) => r.status === 'active').length} ACTIVE`
       }
@@ -115,9 +153,18 @@ export default function CustomersScreen() {
       emptyTitle="No accounts yet."
       emptyBody="Create B2B accounts on the web dashboard (Accounts) — assign a price list and catalog, invite portal users, and their orders flow into your normal approval queue."
       emptyIcon={Handshake}
-      failed={loadFailed ? ACCOUNTS_LOAD_FAILED : null}
+      failed={
+        noWorkspace
+          ? {
+              title: 'Could not load your workspace.',
+              body: 'Check your connection and pull down to try again.',
+            }
+          : loadFailed
+            ? ACCOUNTS_LOAD_FAILED
+            : null
+      }
       data={rows}
-      loading={loading}
+      loading={!noWorkspace && loading}
       refreshing={refreshing}
       onRefresh={refresh}
       keyExtractor={(c) => c.id}
