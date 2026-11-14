@@ -1038,6 +1038,14 @@ WEB_TESTS=(
   # token, timed to refresh after getUser(), reads as not aal2. The real server
   # client and auth-js against the fixture's Auth server.
   src/lib/auth/api-context.refresh-swap.test.ts
+  # The organization an API request is served in (docket S90): only an answer
+  # moves the membership choice along. A membership or profile read that does
+  # not answer refuses with a retryable 5xx (the gate's 503 marker on the
+  # writes the phone cannot send twice), never the 401 and never another of
+  # the person's organizations; "no row" answers exactly as before. Both paths,
+  # and the routes behind them.
+  src/lib/auth/api-context.membership-unreadable.test.ts
+  src/app/api/v1/membership-unreadable.routes.test.ts
   src/app/api/v1/mobile/snapshot/route.step-up.test.ts
   src/app/api/client-error/route.test.ts
   # A session that still owes its authenticator code gets no organization

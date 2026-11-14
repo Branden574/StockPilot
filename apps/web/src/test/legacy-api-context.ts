@@ -42,6 +42,31 @@ export interface LegacyContextWorld {
   organizationHidden: boolean;
   /** The organizations row reads back without a boolean comp flag. */
   organizationNoComp: boolean;
+  /**
+   * The person's accepted memberships, oldest first. Unset: one membership,
+   * in LEGACY_ORG_ID, with `role`. A read of organization_members that names
+   * an organization answers the row for it, or no row; a read that names none
+   * (the oldest membership) answers the first, or no row.
+   */
+  memberships: Array<{ organization_id: string; role: string }> | null;
+  /** user_profiles.default_organization_id. */
+  defaultOrganizationId: string | null;
+  /** user_profiles.disabled_at. */
+  disabledAt: string | null;
+  /** The profile row reads back as absent with no error (no profile row). */
+  profileMissing: boolean;
+  /**
+   * One membership choice read that does not answer (lib/auth/api-context.ts
+   * pickActiveMembership): the membership read that names this organization
+   * (the header's, or the default's), the oldest-membership read, or the
+   * profile's default-organization read. The account-status read of the same
+   * profile row still answers.
+   */
+  membershipReadFails: {
+    read: 'named' | 'oldest' | 'profile';
+    orgId?: string;
+    how: ReadFailure;
+  } | null;
   /** Single-row answers for other tables, by table name. */
   singles: Record<string, unknown>;
   /** List answers for other tables, by table name. */
@@ -61,6 +86,11 @@ export function legacyContextWorld(over: Partial<LegacyContextWorld> = {}): Lega
     organizationFail: false,
     organizationHidden: false,
     organizationNoComp: false,
+    memberships: null,
+    defaultOrganizationId: LEGACY_ORG_ID,
+    disabledAt: null,
+    profileMissing: false,
+    membershipReadFails: null,
     singles: {},
     lists: {},
     calls: [],
@@ -68,32 +98,64 @@ export function legacyContextWorld(over: Partial<LegacyContextWorld> = {}): Lega
   };
 }
 
+/**
+ * How a read does not answer: `error`, a failed PostgREST read as supabase-js
+ * resolves it (it does not throw); `throws`, the call itself rejects;
+ * `malformed`, a row that carries none of the columns asked for.
+ */
+export type ReadFailure = 'error' | 'throws' | 'malformed';
+
 /** A failed PostgREST read, as supabase-js resolves it (it does not throw). */
 const READ_FAILED = { code: '57014', message: 'canceling statement due to statement timeout' };
 
 type Answer = { data: unknown; error: unknown };
 
+/** Text Postgres reads as a uuid (the canonical spelling; the double needs no other). */
+const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The filters a query was built with: `eq` column values and the selected columns. */
+interface Chain {
+  select: string;
+  eq: Record<string, unknown>;
+  ordered: boolean;
+}
+
 /** A chainable builder: every filter returns it, awaiting it answers `list`. */
-function builder(list: () => Answer, single: () => Answer): unknown {
+function builder(list: (c: Chain) => Answer, single: (c: Chain) => Answer): unknown {
+  const chain: Chain = { select: '', eq: {}, ordered: false };
   const target = {};
   const proxy: unknown = new Proxy(target, {
     get(_t, prop) {
       if (prop === 'then') {
         return (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) =>
-          Promise.resolve(list()).then(resolve, reject);
+          Promise.resolve(list(chain)).then(resolve, reject);
       }
       if (prop === 'maybeSingle' || prop === 'single') {
-        return async () => single();
+        return async () => single(chain);
       }
       if (typeof prop === 'symbol') return undefined;
-      return () => proxy;
+      return (...args: unknown[]) => {
+        if (prop === 'select') chain.select = String(args[0] ?? '');
+        if (prop === 'eq') chain.eq[String(args[0])] = args[1];
+        if (prop === 'order') chain.ordered = true;
+        return proxy;
+      };
     },
   });
   return proxy;
 }
 
+/** The answer of a read that does not answer, by how (see ReadFailure). */
+function failedRead(how: ReadFailure): Answer {
+  if (how === 'throws') throw new Error('fetch failed');
+  if (how === 'malformed') return { data: { unexpected: true }, error: null };
+  return { data: null, error: READ_FAILED };
+}
+
 export function legacyContextClient(world: LegacyContextWorld) {
-  const answerFor = (table: string): { list: () => Answer; single: () => Answer } => {
+  const answerFor = (
+    table: string,
+  ): { list: (c: Chain) => Answer; single: (c: Chain) => Answer } => {
     switch (table) {
       case 'organization_modules':
         return {
@@ -129,18 +191,48 @@ export function legacyContextClient(world: LegacyContextWorld) {
       case 'organization_members':
         return {
           list: () => ({ data: [], error: null }),
-          single: () => ({
-            data: { organization_id: LEGACY_ORG_ID, role: world.role },
-            error: null,
-          }),
+          single: (c) => {
+            const rows = world.memberships ?? [
+              { organization_id: LEGACY_ORG_ID, role: world.role },
+            ];
+            const named = c.eq.organization_id;
+            const fail = world.membershipReadFails;
+            if (fail && named !== undefined && fail.read === 'named' && fail.orgId === named) {
+              return failedRead(fail.how);
+            }
+            if (fail && named === undefined && fail.read === 'oldest') return failedRead(fail.how);
+            // Postgres compares the column as a uuid: any other text is an error.
+            if (named !== undefined && !UUID_TEXT.test(String(named))) {
+              return {
+                data: null,
+                error: { code: '22P02', message: 'invalid input syntax for type uuid' },
+              };
+            }
+            const row =
+              named === undefined
+                ? rows[0]
+                : rows.find((r) => r.organization_id.toLowerCase() === String(named).toLowerCase());
+            return { data: row ?? null, error: null };
+          },
         };
       case 'user_profiles':
         return {
           list: () => ({ data: [], error: null }),
-          single: () => ({
-            data: { id: LEGACY_USER_ID, default_organization_id: LEGACY_ORG_ID, disabled_at: null },
-            error: null,
-          }),
+          single: (c) => {
+            const fail = world.membershipReadFails;
+            if (fail?.read === 'profile' && c.select.includes('default_organization_id')) {
+              return failedRead(fail.how);
+            }
+            if (world.profileMissing) return { data: null, error: null };
+            return {
+              data: {
+                id: LEGACY_USER_ID,
+                default_organization_id: world.defaultOrganizationId,
+                disabled_at: world.disabledAt,
+              },
+              error: null,
+            };
+          },
         };
       default:
         return {

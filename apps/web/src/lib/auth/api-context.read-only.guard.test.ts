@@ -78,12 +78,16 @@ const ENTRY = 'lib/auth/api-context.ts';
  *   lib/modules/module-state.ts  the module set held when a module read failed
  *     (docket S81): a Set subclass and an error class, in memory only. It
  *     loads @stockpilot/core (the module registry) and nothing in this app.
+ *   lib/auth/membership-unavailable.ts  the refusal of a membership read that
+ *     did not answer (docket S90): an error class, in memory only. It imports
+ *     nothing.
  */
 const REVIEWED_CLOSURE = [
   'lib/auth/account-status.ts',
   'lib/auth/api-context.ts',
   'lib/auth/cross-site-request.ts',
   'lib/auth/effective-permissions.ts',
+  'lib/auth/membership-unavailable.ts',
   'lib/auth/mfa-policy.ts',
   'lib/auth/request-context-bundle.ts',
   'lib/auth/verified-claims.ts',
