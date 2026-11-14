@@ -1,11 +1,13 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { isManagerOrAbove } from '@stockpilot/core';
+import { can, isManagerOrAbove } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { getWarehouseAccess, type WarehouseAccess } from '@/lib/auth/warehouse';
 import { buildWarehouseScope } from '@/lib/warehouse-scope';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { isModuleEnabled } from '@/server/services/context';
 import { fetchAllRowsByIds, settleAsDataError } from '@/server/services/lib/fetch-by-ids';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 
@@ -89,6 +91,48 @@ const ROLE_GRANTS_ALL: Pick<WarehouseAccess, 'hasAllAccess' | 'readableIds'> = {
   readableIds: [],
 };
 
+type ReadGateContext = Parameters<typeof can>[0] & Parameters<typeof isModuleEnabled>[0];
+
+/**
+ * Whether the caller may read open cycle counts: the read gate of
+ * CycleCountsService.listPage (cycle-counts.ts), the same one the web count
+ * list and count pages apply. The module is on, and the caller holds
+ * cycle_counts:read or stock:adjust (someone who can count can see the
+ * counts). There is no assignee exception in that gate: being assigned a
+ * count decides which warehouses' counts a member sees, not whether they see
+ * counts at all.
+ */
+function mayReadCycleCounts(ctx: ReadGateContext): boolean {
+  return (
+    isModuleEnabled(ctx, 'cycle_counts') &&
+    (can(ctx, 'cycle_counts:read') || can(ctx, 'stock:adjust'))
+  );
+}
+
+/**
+ * Whether the caller may read kits: the module is on (BundlesService reads
+ * assert it), and the caller holds a permission the web bundle pages open for
+ * (dashboard/bundles/page.tsx: bundles:read or bundles:distribute;
+ * dashboard/bundles/[id]/page.tsx also bundles:manage). The phone's Bundles
+ * drawer entry asks for bundles:read or bundles:distribute (module registry).
+ */
+function mayReadKits(ctx: ReadGateContext): boolean {
+  return (
+    isModuleEnabled(ctx, 'bundles') &&
+    (can(ctx, 'bundles:read') || can(ctx, 'bundles:distribute') || can(ctx, 'bundles:manage'))
+  );
+}
+
+/**
+ * Whether the caller may read purchase orders: the gate of
+ * PurchaseOrdersService.get (purchase-orders.ts), which the web purchase
+ * order pages also apply. The module is on, and the caller holds
+ * purchase_orders:read. Costs on the lines go with the orders, as on the web.
+ */
+function mayReadPurchaseOrders(ctx: ReadGateContext): boolean {
+  return isModuleEnabled(ctx, 'purchase_orders') && can(ctx, 'purchase_orders:read');
+}
+
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
@@ -130,11 +174,23 @@ export const GET = handler;
  *
  * Scope:
  *   • Warehouses + items + POs are filtered to the user's warehouse access.
- *   • Cycle counts include all in_progress counts in scope.
+ *   • POs (with their lines and costs) go to a caller the web would show
+ *     purchase orders to (mayReadPurchaseOrders); anyone else gets []. The
+ *     phone never removes cached POs on a pull, and no phone screen reads
+ *     them (its purchase order screens read live), so [] only stops
+ *     refreshing what it held.
+ *   • Cycle counts include all in_progress counts in scope, for a caller
+ *     the web would show counts to (mayReadCycleCounts); anyone else gets [].
  *   • A scoped (staff/viewer) user with NO readable warehouse gets none of
  *     the four above: narrowed to nothing, never unfiltered.
- *   • Bundles: org-wide active bundles. Mobile only reads them for
- *     distribution; cross-warehouse phantom math happens server-side.
+ *   • Bundles: org-wide active bundles, for a caller the web would show kits
+ *     to (mayReadKits); anyone else gets [] and activeBundleIds []. Mobile
+ *     only reads them for distribution; cross-warehouse phantom math happens
+ *     server-side.
+ *   • An empty list keeps the response's shape. The phone reads an empty
+ *     openCycleCounts as "no open counts" and clears its clean cached counts
+ *     on any pull, and an empty activeBundleIds as "no active kits" and
+ *     clears its cached kits on any pull (apps/mobile/src/lib/sync.ts).
  *
  * Response shape:
  *   {
@@ -166,6 +222,15 @@ async function snapshotGET(req: NextRequest) {
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
+  // A context without an effective permission set is refused before anything
+  // else, as /api/v1/me/permissions refuses it and as withApiContext refuses
+  // a set it could not read: the handler above answers 500 and reports it.
+  // The phone saves this route's `permissions` list as the member's own set
+  // and gates its screens on it, so an empty list here would close screens
+  // the member may use; on a non-2xx it keeps its saved set and pulls again
+  // later. The read gates below would otherwise fall back to the role's
+  // defaults (can()). A known empty set is still answered, with [].
+  if (!ctx.permissions) throw new PermissionsUnavailableError();
 
   // Manager-and-above see every warehouse because of their ROLE, and the
   // lookup is not made for them. getWarehouseAccess answers hasAllAccess =
@@ -268,10 +333,17 @@ async function snapshotGET(req: NextRequest) {
   // Narrowed to nothing: the four warehouse-scoped reads answer NO_ROWS and
   // are never sent (scopedRead). Not sent as `.in(col, [])` either: nothing
   // about the answer should rest on how PostgREST reads an empty list, and it
-  // saves four round trips. The org-wide reads (bundles, and the two removal
-  // reads) run as usual, so a delta pull still reports every item that
-  // changed since its cursor as removed.
+  // saves four round trips. The org-wide reads (bundles for a caller who may
+  // read kits, and the two removal reads) run as usual, so a delta pull still
+  // reports every item that changed since its cursor as removed.
   const seesNoWarehouse = scopeIds !== null && scopeIds.length === 0;
+  // The three reads the web gates on a module and a permission, decided from
+  // the caller's own effective permissions and enabled modules (ctx). A
+  // caller who may not read one gets an empty list in the same shape, and
+  // its read is never sent.
+  const skipPos = seesNoWarehouse || !mayReadPurchaseOrders(ctx);
+  const skipCounts = seesNoWarehouse || !mayReadCycleCounts(ctx);
+  const sendsKits = mayReadKits(ctx);
   // Taken before any read below is sent, so the next delta's cursor can only
   // overlap this pull, never leave a gap after it.
   const serverTime = new Date().toISOString();
@@ -383,7 +455,7 @@ async function snapshotGET(req: NextRequest) {
   // in-list-bound: the caller's readable warehouses (an org's handful of sites)
   if (scopeIds) poQ = poQ.in('destination.warehouse_id', scopeIds);
   if (since) poQ = poQ.gte('updated_at', since);
-  const posP = scopedRead(seesNoWarehouse, poQ);
+  const posP = scopedRead(skipPos, poQ);
 
   // ── Open cycle counts (and their lines) ─────────────────────────
   const selectCounts = () =>
@@ -418,6 +490,7 @@ async function snapshotGET(req: NextRequest) {
   // Narrowed to nothing answers no counts at all, the null-warehouse ones
   // included: the web's CycleCountsService.list() returns [] for a scoped
   // caller with no warehouse, and the phone should not list more than it.
+  // A caller outside mayReadCycleCounts gets no counts either.
   //
   // DEPLOY-ORDER SAFETY: count_number arrives with migration 0358. Against a
   // database that has not run it, the column read fails with 42703
@@ -425,9 +498,9 @@ async function snapshotGET(req: NextRequest) {
   // every phone's offline sync. So that one error, and only that one, reads
   // the counts again without the column: they sync without their references
   // ("Reference unavailable" on the phone) until the migration lands.
-  const countsP = scopedRead(seesNoWarehouse, countsQuery(true)).then((settled) =>
+  const countsP = scopedRead(skipCounts, countsQuery(true)).then((settled) =>
     settled.ok && (settled.value as { error?: { code?: string } | null }).error?.code === '42703'
-      ? scopedRead(seesNoWarehouse, countsQuery(false))
+      ? scopedRead(skipCounts, countsQuery(false))
       : settled,
   );
 
@@ -449,7 +522,9 @@ async function snapshotGET(req: NextRequest) {
   if (since) bQ = bQ.gte('updated_at', since);
   const bundlesP = settle(
     (async () => {
-      const bundlesRes = await bQ;
+      // A caller outside mayReadKits: no kits, and with no bundle ids the two
+      // follow-ups below send nothing either (fetchAllRowsByIds of []).
+      const bundlesRes = sendsKits ? await bQ : NO_ROWS;
       // A failed bundles read never sends the two follow-ups, as before.
       if (bundlesRes.error) return { ok: false as const, error: bundlesRes.error };
 
@@ -535,17 +610,22 @@ async function snapshotGET(req: NextRequest) {
   // Paged through fetchAllRows because a single .select() is silently
   // clamped to PostgREST's max_rows (1000) and a truncated list would wipe
   // live bundles.
+  // A caller outside mayReadKits gets the complete set it may read: none. Sent
+  // as [] rather than left out, so a delta pull also clears kits the phone
+  // cached before (an absent list changes nothing on the phone).
   const activeBundleRowsP = settle(
-    fetchAllRows<{ id: string }>((from, to) =>
-      ctx.supabase
-        .from('bundles')
-        .select('id')
-        .eq('organization_id', ctx.organizationId)
-        .eq('is_active', true)
-        .is('archived_at', null)
-        .order('id', { ascending: true })
-        .range(from, to),
-    ),
+    !sendsKits
+      ? Promise.resolve([] as Array<{ id: string }>)
+      : fetchAllRows<{ id: string }>((from, to) =>
+          ctx.supabase
+            .from('bundles')
+            .select('id')
+            .eq('organization_id', ctx.organizationId)
+            .eq('is_active', true)
+            .is('archived_at', null)
+            .order('id', { ascending: true })
+            .range(from, to),
+        ),
   );
 
   // ── Results, in the serial route's order ────────────────────────
@@ -657,8 +737,9 @@ async function snapshotGET(req: NextRequest) {
     // The caller's EFFECTIVE permissions (role defaults + org overrides, mig
     // 0207). Mobile gates its drawer nav on this so a revoked permission hides
     // its link — mirrors the web sidebar's ctx.permissions gating. string[]
-    // over the wire; mobile re-hydrates into a Set<Permission>.
-    permissions: Array.from(ctx.permissions ?? []),
+    // over the wire; mobile re-hydrates into a Set<Permission>. Always the
+    // set that was read: a context without one was refused above.
+    permissions: Array.from(ctx.permissions),
     // Warehouse scoping for the caller — drives the mobile Items screen's
     // scoped-view banner (web parity with ScopedWarehouseNotice). Reuses the
     // access decision computed above; the pure builder also narrows the

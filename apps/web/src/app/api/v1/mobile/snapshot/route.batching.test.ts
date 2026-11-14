@@ -111,7 +111,7 @@ function stubWith(opts: { failComponentBatch?: number; deletedPhantoms?: Set<str
     role: 'manager',
     supabase: stub.client,
     enabledModules: new Set(['bundles']),
-    permissions: new Set<string>(),
+    permissions: new Set<string>(['bundles:read']),
   } as never);
   return { componentLists, phantomLists };
 }
