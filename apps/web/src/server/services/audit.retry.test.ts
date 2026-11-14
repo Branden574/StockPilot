@@ -458,6 +458,37 @@ describe('a later try starts only when it can end within AUDIT_WRITE_BUDGET_MS o
     expect(h.upsert).toHaveBeenCalledTimes(6);
   });
 
+  it('a 7-chunk batch nothing answers: not sent again, one report that says so', async () => {
+    h.insert.mockImplementation(never);
+    h.upsert.mockImplementation(never);
+    void auditMany(
+      Array.from({ length: 700 }, (_, i) => payload(i)),
+      ctx,
+    );
+    const all = watch(held());
+    // First try: 7 chunks, two at a time, 5 s each: 20 s. Try 2 would end at
+    // 20 + 1 + 20 = 41 s: past the budget, so none is sent.
+    await vi.advanceTimersByTimeAsync(20_000);
+    await vi.advanceTimersByTimeAsync(0);
+    const settledAtFirstTryEnd = all.settled;
+    await vi.runAllTimersAsync();
+    expect(h.insert).toHaveBeenCalledTimes(7);
+    expect(h.upsert).not.toHaveBeenCalled();
+    expect(h.reportError).toHaveBeenCalledTimes(1);
+    expect(reportExtra(0)).toMatchObject({
+      outcome: 'not_written',
+      tries: 1,
+      lost: 700,
+      total: 700,
+    });
+    expect(reportText(0)).toMatch(
+      /^Audit rows: 700 of 700 not written on try 1 \(not answered in 5000 ms\), not sent again: a later try would end more than 40 s after the event\./,
+    );
+    expect(reportText(0)).not.toMatch(/sending/);
+    // Held only for its first try and that one report: no window to wait for.
+    expect(settledAtFirstTryEnd).toBe(true);
+  });
+
   it('one or two chunks keep both later tries (they end about 21 s after the event)', async () => {
     h.insert.mockImplementation(never);
     h.upsert.mockImplementation(never);

@@ -548,7 +548,7 @@ describe('an INSERT that never answers', () => {
  * whose INSERT was still in flight when the route returned. Nothing held the
  * invocation, so Vercel suspended the instance, and the next request resumed
  * it with the 5 s deadline long past: 33 rows had committed (the reply was
- * never read) and 2 Learn4Life item-create rows were never sent. Each writer
+ * never read) and 2 item-create rows were never sent. Each writer
  * now hands its write to after() (lib/defer.ts keepAlive), so the platform
  * keeps the invocation up until the INSERT answers. audit.keepalive.test.ts
  * shows the same through Next's real App Route module.

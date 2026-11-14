@@ -606,13 +606,21 @@ export const AUDIT_RETRY_DELAYS_MS = [1_000, 3_000] as const;
 /**
  * A later try is sent only when its wait and its own worst case (ceil(pending
  * chunks / 2) x 5 s) end within this long of the event; otherwise the rows it
- * would have sent are reported as never written, at once. So the tries of any
- * write whose first try ended within the budget are over by 40 s after the
- * event, and its last report (plus at most one window of
- * AUDIT_LOSS_REPORT_WINDOW_MS and the webhook's 2 s) is sent inside a 60 s
- * function. The first try itself is not shortened: a batch of N chunks still
- * waits up to ceil(N / 2) x 5 s for it, as before. One or two chunks never meet
- * the budget (their last try ends by about 21 s).
+ * would have sent are reported as never written, at once. When even the first
+ * later try cannot fit, the write takes no retry slot and its one report says
+ * the rows are not sent again. So the tries of any write are over by 40 s
+ * after the event, unless its first try alone runs past that. Its last report
+ * (plus at most one window of AUDIT_LOSS_REPORT_WINDOW_MS and the webhook's
+ * 2 s) is then sent inside a 60 s function when the write starts within the
+ * function's first 13 s or so; a write that starts later in a 60 s function
+ * can still be cut with it.
+ *
+ * In a full stall (every INSERT unanswered) a batch of up to 4 chunks (400
+ * rows) keeps both later tries, 5 or 6 chunks (401-600 rows) get one, and 7
+ * chunks or more (601+ rows) get none: their rows are reported as never
+ * written when the first try ends. The first try itself is not shortened:
+ * from 17 chunks (1,601+ rows) it alone takes longer than 40 s. A batch in
+ * which only some INSERTs are unanswered sends those again while they fit.
  */
 export const AUDIT_WRITE_BUDGET_MS = 40_000;
 
@@ -955,6 +963,15 @@ async function runAuditWrite(
     await Promise.all(reports);
     return;
   }
+  // Checked before a slot is taken and before any "sending again" alert: a
+  // write whose first later try cannot end within the budget is not sent
+  // again, and its one report says so.
+  const firstWait = jittered(AUDIT_RETRY_DELAYS_MS[0]);
+  if (!laterTryFits(startedAt, firstWait, unanswered.length)) {
+    reports.push(reportAuditWrite(notWrittenReport(subject, unanswered, total, 1, 'budget')));
+    await Promise.all(reports);
+    return;
+  }
   const slot = takeRetrySlot();
   if (slot === null) {
     reports.push(reportAuditWrite(notWrittenReport(subject, unanswered, total, 1, 'busy')));
@@ -976,7 +993,7 @@ async function runAuditWrite(
         failure: unanswered[0]!.failure,
       }),
     );
-    const outcome = await laterTries(admin, unanswered, startedAt);
+    const outcome = await laterTries(admin, unanswered, startedAt, firstWait);
     if (outcome) reports.push(reportAuditWrite(outcomeReport(subject, outcome, total)));
   } finally {
     releaseRetrySlot(slot);
@@ -996,14 +1013,26 @@ type LaterOutcome = {
 };
 
 /**
+ * Whether a later try that waits `wait` ms and then sends `pendingChunks`
+ * chunks, two at a time, each with its own deadline, ends within
+ * AUDIT_WRITE_BUDGET_MS of the event.
+ */
+function laterTryFits(startedAt: number, wait: number, pendingChunks: number): boolean {
+  const worstTry = Math.ceil(pendingChunks / AUDIT_INSERT_CONCURRENCY) * AUDIT_INSERT_TIMEOUT_MS;
+  return Date.now() + wait + worstTry - startedAt <= AUDIT_WRITE_BUDGET_MS;
+}
+
+/**
  * The later tries of a write's unwritten chunks, each sent only when it can
- * end within AUDIT_WRITE_BUDGET_MS of the event. Null when the test reset
- * ended them.
+ * end within AUDIT_WRITE_BUDGET_MS of the event. The caller has already found
+ * that the first one fits, with `firstWait` as its wait. Null when the test
+ * reset ended them.
  */
 async function laterTries(
   admin: ReturnType<typeof createAdminClient>,
   unanswered: Failed[],
   startedAt: number,
+  firstWait: number,
 ): Promise<LaterOutcome | null> {
   const occurredAt = new Date(startedAt).toISOString();
   let pending = unanswered;
@@ -1011,11 +1040,10 @@ async function laterTries(
   const lost: string[] = [];
   let failure: InsertFailure | null = null;
   let tries = 1;
-  for (const delay of AUDIT_RETRY_DELAYS_MS) {
+  for (const [i, delay] of AUDIT_RETRY_DELAYS_MS.entries()) {
     if (pending.length === 0) break;
-    const wait = jittered(delay);
-    const worstTry = Math.ceil(pending.length / AUDIT_INSERT_CONCURRENCY) * AUDIT_INSERT_TIMEOUT_MS;
-    if (Date.now() + wait + worstTry - startedAt > AUDIT_WRITE_BUDGET_MS) break;
+    const wait = i === 0 ? firstWait : jittered(delay);
+    if (i > 0 && !laterTryFits(startedAt, wait, pending.length)) break;
     if (!(await waitBeforeATry(wait))) return null;
     tries += 1;
     const next: Failed[] = [];
@@ -1047,8 +1075,10 @@ async function laterTries(
  *   an alert with the row ids, and no outcome);
  * - written_late: every row was written on a later try;
  * - not_written: rows no try wrote, or that were not sent again (refused by
- *   the database, or the instance already had AUDIT_RETRY_SLOTS writes being
- *   sent again), or a write that failed before any row was shaped.
+ *   the database, a later try that could not end within
+ *   AUDIT_WRITE_BUDGET_MS of the event, or the instance already had
+ *   AUDIT_RETRY_SLOTS writes being sent again), or a write that failed
+ *   before any row was shaped.
  */
 type Outcome = 'sending_again' | 'written_late' | 'not_written';
 
@@ -1069,7 +1099,7 @@ type WriteReport = {
   rowIds: string[];
   failure: InsertFailure | null;
   /** Why rows were not sent again. */
-  why?: 'refused' | 'busy';
+  why?: 'refused' | 'budget' | 'busy';
   /** What was thrown, when something was; its report carries it. */
   cause?: unknown;
 };
@@ -1079,7 +1109,7 @@ function notWrittenReport(
   failed: Failed[],
   total: number,
   tries: number,
-  why: 'refused' | 'busy',
+  why: 'refused' | 'budget' | 'busy',
 ): WriteReport {
   const rowIds = failed.flatMap((f) => f.chunk.ids);
   return {
@@ -1159,6 +1189,9 @@ function reportText(r: WriteReport): string {
     case 'not_written':
       if (r.tries === 0) return `${of} not written: no row was shaped. ${who}`;
       if (r.why === 'refused') return `${of} refused (${why}), not sent again. ${who}`;
+      if (r.why === 'budget') {
+        return `${of} not written on try 1 (${why}), not sent again: a later try would end more than ${AUDIT_WRITE_BUDGET_MS / 1000} s after the event. ${who}`;
+      }
       if (r.why === 'busy') {
         return `${of} not written on try 1 (${why}), not sent again: ${AUDIT_RETRY_SLOTS} writes are already being sent again on this instance. ${who}`;
       }

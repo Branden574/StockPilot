@@ -107,9 +107,12 @@ function remember<V>(map: Map<string, V>, key: string, value: V): void {
  * While the limiter cannot answer, this instance bounds the phone notes' rows
  * itself, in memory, as the buckets do when it can: a session's sign-in row
  * and its sign-out row once a day each (SESSION_NOTE_WINDOW_MS), and an
- * account's ACCOUNT_NOTE_LIMIT rows an hour (sign-in notes, and sign-out notes
- * of a token with no session id, which the bucket counts the same way). The
- * memory is this instance's own and goes with it.
+ * account's ACCOUNT_NOTE_LIMIT rows an hour. In memory every written note of
+ * the account, sign-in or sign-out, with a session id or without one, counts
+ * toward its 30 an hour, so this is stricter than the buckets (which count a
+ * sign-out note with a session id against its session only): past 30 written
+ * notes in the hour, a sign-in note and a sign-out note both answer
+ * 'account_limit'. The memory is this instance's own and goes with it.
  *   'write'          the row is written (and counted here);
  *   'repeat'         this session's note was already written here: no row;
  *   'account_limit'  the account's hour is used up here: no row, answered as

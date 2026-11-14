@@ -20,7 +20,7 @@ import type { ServiceContext } from './context';
  * `void audit(...)` whose INSERT was still in flight when the route returned.
  * Nothing held the invocation, Vercel suspended the instance, and the next
  * request resumed it with the 5 s deadline long past. 33 rows had committed
- * (the reply was never read) and 2 Learn4Life item-create rows were never
+ * (the reply was never read) and 2 item-create rows were never
  * sent. Here every INSERT answers 50 ms after it is sent.
  */
 

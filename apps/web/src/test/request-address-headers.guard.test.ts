@@ -101,8 +101,10 @@ const VERCEL_IP_HELPERS = /\b(?:ipAddress|geolocation)\b/g;
  * and the character after it are read as one (an escape in a regex literal),
  * and a slash right after such an escape closes the regex, so neither opens a
  * comment: `/Chrome\//i`, `/\/*$/` and `/\//* 2` keep the rest of their
- * line. Not read: a comment opener inside a regex character class (`/[/]/`),
- * and `//` in JSX text, which hides the rest of that line.
+ * line. This is a simple scanner, not a parser: it does not track regex
+ * literals or JSX text as such, so some regex and JSX shapes (a quote, a
+ * backtick or a comment opener inside a regex, or a comment opener in JSX
+ * text) can hide the lines that follow from this guard.
  */
 function code(src: string): string {
   let out = '';
