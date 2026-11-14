@@ -10,6 +10,7 @@ import { contextUnavailableBody } from '@stockpilot/core';
 import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { withApiContext } from '@/lib/auth/api-context';
 import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
+import { MembershipUnavailableError } from '@/lib/auth/membership-unavailable';
 import { ServiceError } from '@/server/services/context';
 import { resolveModule } from '@/test/route-write-handlers';
 
@@ -49,6 +50,7 @@ describe('apiContextGate', () => {
   it.each([
     ['PermissionsUnavailableError', () => new PermissionsUnavailableError()],
     ['AccountStatusUnavailableError', () => new AccountStatusUnavailableError()],
+    ['MembershipUnavailableError', () => new MembershipUnavailableError()],
   ])(
     'answers %s with the marker: 503, the core body, Retry-After 5, no-store',
     async (_name, make) => {
@@ -128,14 +130,20 @@ describe('apiContextGate', () => {
   });
 
   // The class, not the shape: an error that only LOOKS like the refusal (its
-  // name or code copied) is not one of the two refusals withApiContext makes.
-  it('matches the two classes, never a lookalike name or code', async () => {
+  // name or code copied) is not one of the refusals withApiContext makes.
+  it('matches the classes, never a lookalike name or code', async () => {
     const lookalike = Object.assign(new Error('Your permissions could not be checked.'), {
       name: 'PermissionsUnavailableError',
       code: 'PERMISSIONS_UNAVAILABLE',
     });
     vi.mocked(withApiContext).mockRejectedValueOnce(lookalike);
     await expect(apiContextGate(req())).rejects.toBe(lookalike);
+    const membershipLookalike = Object.assign(new Error('Your access could not be checked.'), {
+      name: 'MembershipUnavailableError',
+      code: 'MEMBERSHIP_UNAVAILABLE',
+    });
+    vi.mocked(withApiContext).mockRejectedValueOnce(membershipLookalike);
+    await expect(apiContextGate(req())).rejects.toBe(membershipLookalike);
   });
 });
 
