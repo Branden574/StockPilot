@@ -54,7 +54,11 @@ function existingInviteStub() {
       },
       error: null,
     },
-    'organization_invites.update': { data: null, error: null },
+    // The renewed row the update asks back (resendInvite refuses without it).
+    'organization_invites.update': {
+      data: { id: 'invite-1', expires_at: '2026-06-03T18:00:00.000Z' },
+      error: null,
+    },
     'user_profiles.select': {
       data: { full_name: 'Carsten Hartley Fowler', email: 'carsten@north.example' },
       error: null,
