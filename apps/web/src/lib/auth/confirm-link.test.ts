@@ -310,6 +310,11 @@ describe('lookUpConfirmRecipient', () => {
       '2026-10-31T11:58:30.25Z',
       '2026-10-31T11:58:30.25+00:00',
       '2026-10-31T11:58:30.123456Z',
+      // Go drops a zero fraction, writes up to nine digits, and writes the
+      // server's own offset when it is not UTC.
+      '2026-10-31T11:58:30Z',
+      '2026-10-31T11:58:30.123456789Z',
+      '2026-10-31T04:58:30.123456-07:00',
     ]) {
       getUserById.mockResolvedValueOnce(
         user({ new_email: 'new@example.com', email_change_sent_at: sentAt }),

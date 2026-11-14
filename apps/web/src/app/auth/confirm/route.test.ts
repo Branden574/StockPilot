@@ -480,16 +480,15 @@ describe('GET /auth/confirm names the account the link is for (S25)', () => {
     expect(verifyOtp).not.toHaveBeenCalled();
   });
 
-  it('an email change waiting without a recorded request time: the expired page with neither address, nothing spent, and one report that carries no link value or address', async () => {
-    const variants: Array<[string, Record<string, unknown>]> = [
-      ['absent', {}],
-      ['null', { email_change_sent_at: null }],
-      ['empty', { email_change_sent_at: '' }],
-      ['not a time', { email_change_sent_at: 'not a time' }],
-      ['a number', { email_change_sent_at: 0 }],
-    ];
-    for (const [label, fields] of variants) {
-      reportError.mockClear();
+  /**
+   * One GET of an email-change link whose account GoTrue returns with these
+   * fields: the expired page with neither address and no form, nothing spent,
+   * no report, and exactly one info line carrying the link type only.
+   */
+  async function expectExpiredWithoutRequestTime(label: string, fields: Record<string, unknown>) {
+    reportError.mockClear();
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    try {
       const r = signedRef({ type: 'email_change', tokenHash: HASH_A, userId: USER_A });
       getUserById.mockResolvedValueOnce(
         account('old@example.com', { new_email: 'new@example.com', ...fields }),
@@ -503,21 +502,36 @@ describe('GET /auth/confirm names the account the link is for (S25)', () => {
       expect(html, label).not.toContain('<form');
       expect(html, label).not.toContain(HASH_A);
       expect(verifyOtp, label).not.toHaveBeenCalled();
-      expect(reportError, label).toHaveBeenCalledTimes(1);
-      expect(reportError, label).toHaveBeenCalledWith(
-        expect.any(Error),
-        expect.objectContaining({
-          tag: 'auth.email_change_request_time_missing',
-          extra: { type: 'email_change' },
-        }),
-      );
-      const reported = JSON.stringify(
-        reportError.mock.calls.map(([err, ctx]) => [(err as Error).message, ctx]),
-      );
-      for (const secret of [HASH_A, r, USER_A, 'old@example.com', 'new@example.com', 'token']) {
-        expect(reported, `${label}: ${secret}`).not.toContain(secret);
+      expect(reportError, label).not.toHaveBeenCalled();
+      expect(info, label).toHaveBeenCalledTimes(1);
+      expect(info.mock.calls[0], label).toEqual([
+        '[auth/confirm] email change pending without a request time',
+        { type: 'email_change' },
+      ]);
+      const logged = JSON.stringify(info.mock.calls);
+      for (const secret of [HASH_A, r, USER_A, 'old@example.com', 'new@example.com']) {
+        expect(logged, `${label}: ${secret}`).not.toContain(secret);
       }
+    } finally {
+      info.mockRestore();
     }
+  }
+
+  it('an email change waiting without a readable request time: the expired page with neither address, nothing spent, no report, and one info line with the type only', async () => {
+    const variants: Array<[string, Record<string, unknown>]> = [
+      ['absent', {}],
+      ['null', { email_change_sent_at: null }],
+      ['empty', { email_change_sent_at: '' }],
+      ['not a time', { email_change_sent_at: 'not a time' }],
+      ['a number', { email_change_sent_at: 0 }],
+    ];
+    for (const [label, fields] of variants) await expectExpiredWithoutRequestTime(label, fields);
+  });
+
+  it('an email change waiting after a password change (GoTrue keeps the pending address and clears the request time): the expired page, no address, no form, no report, one info line', async () => {
+    // What GoTrue's admin read returns then: new_email present, no
+    // email_change_sent_at key.
+    await expectExpiredWithoutRequestTime('after a password change', {});
   });
 
   it('an email change whose request time is far later than the link is a newer request: the expired page, and no report', async () => {

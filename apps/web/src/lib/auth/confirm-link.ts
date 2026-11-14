@@ -126,10 +126,10 @@ export const EMAIL_CHANGE_REQUEST_SKEW_S = 5;
  *   - GoTrue gives no request time for the pending change, or one that cannot
  *     be read (emailChangeRequestTimeMissing): without it no link can be told
  *     apart from a later request's, so none is taken as the live one.
- * GoTrue stores the request time with the pending address (and the cancel
- * clears both), so the last case is not expected; the route reports it
- * (auth.email_change_request_time_missing), so a change in what GoTrue
- * returns shows up as a report.
+ * GoTrue clears the request time and both link tokens when the password is
+ * changed and keeps the pending address, so this follows any password change
+ * made while a change is waiting: that change has no live link, and a resend
+ * or a new request stamps a time again. The route logs it with the type only.
  */
 export function pendingEmailChangeFor(
   account: { newEmail: string | null; emailChangeSentAt: number | null },

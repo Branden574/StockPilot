@@ -67,8 +67,8 @@ import type { EmailOtpType } from '@supabase/supabase-js';
  *     hour the expired answer, with no lookup. An email-change link whose
  *     change GoTrue no longer holds (done, cancelled, or replaced by a newer
  *     request), or whose pending change comes back without a readable request
- *     time (reported), gets the expired answer and no address. POST checks
- *     `r` again before verifyOtp, so the token is not spent;
+ *     time, gets the expired answer and no address. POST checks `r` again
+ *     before verifyOtp, so the token is not spent;
  *   - a browser already signed in as another account is told both addresses
  *     (and the one already signed in as the link's account is told nothing);
  *     another site can no longer sign the browser out first
@@ -485,14 +485,12 @@ export async function GET(request: NextRequest) {
     const pending = pendingEmailChangeFor(account, verdict.issued);
     if (pending === null) {
       if (emailChangeRequestTimeMissing(account)) {
-        // GoTrue stores a request time with every pending change; without a
-        // readable one no link can be told from a later request's, so this one
-        // gets the expired answer too, and the change in GoTrue is reported.
-        // The type only (never the id, an address, the token or r).
-        void reportError(
-          new Error('a pending email change came back without a readable request time'),
-          { tag: 'auth.email_change_request_time_missing', level: 'warning', extra: { type } },
-        );
+        // A password change clears GoTrue's request time and both link tokens
+        // and keeps the pending address, so the links of that change no longer
+        // verify. Logged with the type only (never the id, an address, the
+        // token or r); not a report, since the link can be opened any number
+        // of times within its hour.
+        console.info('[auth/confirm] email change pending without a request time', { type });
       }
       return expiredAnswer(origin, type);
     }
