@@ -66,6 +66,26 @@ describe('the dashboard error card', () => {
     screen.getByRole('button', { name: /Try again/ }).click();
     expect(reset).toHaveBeenCalledTimes(1);
   });
+
+  // The boundary hands the card two functions (Next's error file convention):
+  // `retry` asks the server for the page again and renders what comes back;
+  // `reset` only clears the error and renders the same failed answer again.
+  // A page that could not be read needs the first.
+  it('Try again asks the server for the page again (retry), not only a re-render (reset)', () => {
+    const retry = vi.fn();
+    const reset = vi.fn();
+    render(<DashboardError error={error} retry={retry} reset={reset} />);
+    fireEvent.click(screen.getByRole('button', { name: /Try again/ }));
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(reset).not.toHaveBeenCalled();
+  });
+
+  it('Try again falls back to reset when the boundary gives no retry', () => {
+    const reset = vi.fn();
+    render(<DashboardError error={error} reset={reset} />);
+    fireEvent.click(screen.getByRole('button', { name: /Try again/ }));
+    expect(reset).toHaveBeenCalledTimes(1);
+  });
 });
 
 /**

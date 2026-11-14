@@ -6,12 +6,25 @@ import { AppearanceRecovery } from '@/components/theme/appearance-recovery';
 import { Button } from '@/components/ui/button';
 import { isSharePath } from '@/lib/share-paths';
 
+/**
+ * The error card for everything outside a shell with its own (the public
+ * link pages, the customer portal, the sign-in pages).
+ *
+ * "Try again" asks the server for the page again: it calls the boundary's
+ * `retry`, which re-fetches and re-renders the page (a failed server read can
+ * then succeed), and falls back to `reset`, which only renders the same
+ * answer again, when no `retry` is given.
+ */
 export default function GlobalError({
   error,
+  retry,
   reset,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  /** Asks the server for the page again and renders what comes back. */
+  retry?: () => void;
+  /** Clears the error and renders the same answer again, with no new read. */
+  reset?: () => void;
 }) {
   useEffect(() => {
     console.error(error);
@@ -56,7 +69,7 @@ export default function GlobalError({
         We hit an unexpected error. Try again, or refresh the page. If it keeps happening, contact
         support.
       </p>
-      <Button onClick={reset} className="mt-2">
+      <Button onClick={() => (retry ?? reset)?.()} className="mt-2">
         Try again
       </Button>
       {/* "Use classic design", only while Liquid Glass is shown; nothing in classic. */}

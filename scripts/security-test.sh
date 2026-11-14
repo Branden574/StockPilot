@@ -1075,12 +1075,15 @@ WEB_TESTS=(
   # the single-module check behind the public API key, the webhook
   # subscriptions and the accounting connect callbacks throws for it (a 503
   # with Retry-After, or the connect page's transient code); the public
-  # catalog's photo map and token resolution never cache an answer built on a
-  # failed read; the public tracker says when the return link could not be
-  # checked; the customer portal does not take a failed read for "not a portal
-  # user". The guard lists every reader of the module table with what an
-  # unread answer becomes, so a new reader has to be listed. Nothing is
-  # granted on a read that failed.
+  # catalog's photo map never caches an answer built on a failed read; the
+  # public link resolver keeps a failed read only as "unread", reads again
+  # directly, and never serves an entry past its window or from before a link
+  # change (driven through the real unstable_cache); the public tracker says
+  # when the return link could not be checked; the customer portal does not
+  # take a failed read for "not a portal user", and its actions answer that
+  # as a result the page can show. The guard lists every file that reads the
+  # module table with what an unread answer becomes, so a new reader has to
+  # be listed. Nothing is granted on a read that failed.
   src/lib/modules/module-state-readers.guard.test.ts
   src/lib/modules/module-state.test.ts
   src/lib/modules/org-may-use-module.test.ts
@@ -1090,8 +1093,9 @@ WEB_TESTS=(
   src/lib/auth/api-key.module-gate.test.ts
   src/lib/auth/public-api.module-state.test.ts
   src/app/api/public/v1/hooks/route.test.ts
-  src/server/services/public-catalog.module-state.test.ts
+  src/server/services/public-catalog.token-resolution.test.ts
   src/server/services/portal.module-state.test.ts
+  src/server/actions/portal.module-state.test.ts
   'src/app/(dashboard)/layout.module-state.test.tsx'
   src/app/api/v1/mobile/snapshot/route.step-up.test.ts
   src/app/api/client-error/route.test.ts

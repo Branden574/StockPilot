@@ -185,8 +185,10 @@ export async function resolvePortalContext(): Promise<PortalContext | null> {
   // session at aal2. The factors are those of the getUser() answer above and
   // the level is this account's own verified claims; an account with no
   // authenticator is not asked and costs no extra Auth call. Every caller
-  // awaits this outside any try, so the redirect gets out (the action-step-up
-  // and page-step-up guards hold that they ask this first).
+  // lets the redirect out: the page awaits this outside any try, and the
+  // portal actions' catch throws control flow again before it answers
+  // anything (the action-step-up, page-step-up and action-catch guards hold
+  // that they ask this first and never keep the redirect).
   if (await stepUpIsOwedByUser(supabase, user)) redirect(PORTAL_CODE_PAGE);
 
   const admin = createAdminClient();
@@ -242,8 +244,10 @@ export async function resolvePortalContext(): Promise<PortalContext | null> {
   // a failed read as `{ data: null, error }`, the shape of "no enabled row",
   // and "not a portal user" is not what happened: the same reasoning as the
   // unreadable account status above, so this throws too
-  // (ModulesUnavailableError; the page reaches its error state with Try
-  // again). It opens nothing: no context is built on a read that failed.
+  // (ModulesUnavailableError). The portal page reaches its error state with
+  // Try again; a portal action answers the try-again sentence as its result
+  // (server/actions/portal.ts portalContextFor). It opens nothing: no context
+  // is built on a read that failed.
   const [{ data: moduleRow, error: moduleError }, { data: org }] = await Promise.all([
     admin
       .from('organization_modules')

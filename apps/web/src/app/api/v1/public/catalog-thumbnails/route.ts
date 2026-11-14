@@ -41,6 +41,8 @@ export const dynamic = 'force-dynamic';
 const PER_IP_PER_HOUR = 120;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** A read did not answer: never the empty map, and never kept by the CDN. */
 function unavailable(): NextResponse {
   return NextResponse.json(
@@ -56,6 +58,14 @@ export async function GET(req: NextRequest) {
 
   if (!token || !warehouseId) {
     return NextResponse.json({ error: 'token + warehouseId required' }, { status: 400 });
+  }
+  // The warehouse id is compared with a uuid column. A value that is not a
+  // uuid names no warehouse, and the database refuses the comparison with an
+  // error, which below would read as "the warehouse read did not answer" (a
+  // 503 with a retry) for a request no retry can ever fix. Refused here, as
+  // a bad request, before the bucket and before any read.
+  if (!UUID_RE.test(warehouseId)) {
+    return NextResponse.json({ error: 'invalid warehouseId' }, { status: 400 });
   }
 
   const rl = await checkRateLimit(

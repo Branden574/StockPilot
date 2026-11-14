@@ -11,6 +11,7 @@ import { StatePanel } from '@/components/patterns/state-panel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { isControlFlow } from '@/lib/control-flow';
 import { useHydrated } from '@/lib/use-hydrated';
 import { submitPortalOrderAction } from '@/server/actions/portal';
 import type { PortalCatalogItem, PortalOrder } from '@/server/services/portal';
@@ -26,6 +27,10 @@ import {
 
 /** Orders in a terminal fulfilled state are the only ones with a return budget. */
 const RETURNABLE_ORDER_STATUSES = new Set(['completed', 'delivered']);
+
+/** Place order did not come back: the page cannot say whether it was placed. */
+const ORDER_UNCONFIRMED_MESSAGE =
+  "We couldn't confirm your order went through. Check your orders below before placing it again.";
 
 /** A section title (the storefront's section heading: Inter Tight 16 / 500). */
 const SECTION_TITLE =
@@ -145,12 +150,26 @@ export function PortalShop({
   async function submit() {
     setError(null);
     setBusy(true);
-    const res = await submitPortalOrderAction({
-      lines: cartLines.map(([itemId, quantity]) => ({ itemId, quantity })),
-      notes: notes.trim() || undefined,
-    });
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof submitPortalOrderAction>>;
+    try {
+      res = await submitPortalOrderAction({
+        lines: cartLines.map(([itemId, quantity]) => ({ itemId, quantity })),
+        notes: notes.trim() || undefined,
+      });
+    } catch (e) {
+      // A redirect the action made (to the code page): Next is already
+      // navigating, so nothing is shown on the way.
+      if (isControlFlow(e)) return;
+      // The call did not come back (the connection dropped, the server could
+      // not answer). The button returns and the cart and the note stay. The
+      // page cannot know whether the order was placed, so it does not say.
+      setError(ORDER_UNCONFIRMED_MESSAGE);
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
+      // A refusal keeps the cart and the note too: the next press sends them.
       setError(res.error.message);
       return;
     }

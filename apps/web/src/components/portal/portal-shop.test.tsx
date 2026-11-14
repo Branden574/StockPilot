@@ -298,3 +298,73 @@ describe('PortalShop: Return or exchange (returns RX-3)', () => {
     expect(region.textContent).not.toMatch(/awaiting drop-off|pending approval|staging|\brack\b|disposition/i);
   });
 });
+
+/**
+ * Place order always gives the button back. The action answers a refusal as
+ * a result with its words (a check that could not be read is "Your access
+ * could not be checked. Please try again."), and a call that does not come
+ * back at all (the connection dropped) is answered with the page's own
+ * sentence, which does not claim to know whether the order was placed. Either
+ * way the cart and the note stay, and the next press sends the same order.
+ */
+describe('PortalShop: Place order after a refusal or a call that failed', () => {
+  async function shopWithOneInCart() {
+    const user = userEvent.setup();
+    renderShop({ catalog: [{ ...ITEM, unitPrice: null, quotable: false }] });
+    await user.click(screen.getByRole('button', { name: /Add one Composition Notebook/i }));
+    return user;
+  }
+
+  beforeEach(() => {
+    actions.submitPortalOrderAction.mockReset();
+    refresh.mockReset();
+  });
+
+  it('a refusal: its words are shown, the button is usable again, the cart is kept, and a second press places the order', async () => {
+    actions.submitPortalOrderAction.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'internal_error', message: 'Your access could not be checked. Please try again.' },
+    });
+    const user = await shopWithOneInCart();
+    const place = screen.getByRole('button', { name: 'Place order' });
+    await user.click(place);
+    expect(
+      await screen.findByText('Your access could not be checked. Please try again.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Place order' })).toBeEnabled();
+
+    actions.submitPortalOrderAction.mockResolvedValueOnce({ ok: true, data: { id: 'order-1' } });
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    await waitFor(() => expect(actions.submitPortalOrderAction).toHaveBeenCalledTimes(2));
+    // The same cart both times.
+    expect(actions.submitPortalOrderAction.mock.calls[1]![0]).toEqual(
+      actions.submitPortalOrderAction.mock.calls[0]![0],
+    );
+    expect(actions.submitPortalOrderAction.mock.calls[0]![0].lines).toEqual([
+      { itemId: 'i-1', quantity: 1 },
+    ]);
+    expect(await screen.findByRole('status')).toHaveTextContent('Order submitted');
+  });
+
+  it('a call that does not come back: the page says so, the button is usable again, and the cart is kept', async () => {
+    actions.submitPortalOrderAction.mockRejectedValueOnce(new Error('Failed to fetch'));
+    const user = await shopWithOneInCart();
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    expect(
+      await screen.findByText(
+        "We couldn't confirm your order went through. Check your orders below before placing it again.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Failed to fetch')).toBeNull();
+    const place = screen.getByRole('button', { name: 'Place order' });
+    expect(place).toBeEnabled();
+
+    actions.submitPortalOrderAction.mockResolvedValueOnce({ ok: true, data: { id: 'order-2' } });
+    await user.click(place);
+    await waitFor(() => expect(actions.submitPortalOrderAction).toHaveBeenCalledTimes(2));
+    expect(actions.submitPortalOrderAction.mock.calls[1]![0].lines).toEqual([
+      { itemId: 'i-1', quantity: 1 },
+    ]);
+  });
+});
+

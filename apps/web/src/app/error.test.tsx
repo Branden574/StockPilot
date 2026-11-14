@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -56,3 +56,42 @@ describe('GlobalError crash beacon', () => {
     expect(bodyOf(fetchMock.mock.calls[0]!).path).toBeNull();
   });
 });
+
+/**
+ * The card's one action. The boundary hands it two functions (Next's error
+ * file convention): `retry` asks the server for the page again and renders
+ * what comes back; `reset` only clears the error and renders the same failed
+ * answer again. A page that could not be read (a public link, the customer
+ * portal) needs the first, so Try again uses it, and falls back to `reset`
+ * only when no `retry` is given.
+ */
+describe('GlobalError: Try again', () => {
+  const error = Object.assign(new Error('boom'), { digest: 'abc' });
+
+  it('keeps its words', () => {
+    render(<GlobalError error={error} reset={() => {}} />);
+    expect(screen.getByRole('heading', { level: 1, name: 'Something went wrong' })).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'We hit an unexpected error. Try again, or refresh the page. If it keeps happening, contact support.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('asks the server for the page again (retry), not only a re-render (reset)', () => {
+    const retry = vi.fn();
+    const reset = vi.fn();
+    render(<GlobalError error={error} retry={retry} reset={reset} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(reset).not.toHaveBeenCalled();
+  });
+
+  it('falls back to reset when the boundary gives no retry', () => {
+    const reset = vi.fn();
+    render(<GlobalError error={error} reset={reset} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(reset).toHaveBeenCalledTimes(1);
+  });
+});
+

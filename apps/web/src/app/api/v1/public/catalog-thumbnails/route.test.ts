@@ -160,6 +160,21 @@ describe('GET /api/v1/public/catalog-thumbnails', () => {
     expect(signed.ids).toEqual([]);
   });
 
+  // The warehouse id is compared with a uuid column: anything else can name
+  // no warehouse, and the database would refuse the comparison itself.
+  it.each(['abc', '123', `${WH}x`, 'not a uuid'])(
+    'a warehouseId that is not a uuid (%s) is a 400, before the bucket and before any read',
+    async (bad) => {
+      const stub = openLink();
+      const res = await get(`token=${LINK_REF}&warehouseId=${encodeURIComponent(bad)}`);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid warehouseId' });
+      expect(checkRateLimit).not.toHaveBeenCalled();
+      expect(stub.fromCalls).toEqual([]);
+      expect(stub.rpcCalls).toEqual([]);
+    },
+  );
+
   it('a request without a token or a warehouse is refused before it spends the bucket', async () => {
     openLink();
     expect((await get(`warehouseId=${WH}`)).status).toBe(400);

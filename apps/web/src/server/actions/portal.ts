@@ -3,11 +3,17 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { actionErrorResult } from '@/server/lib/action-error-result';
-import { resolvePortalContext, portalSubmitOrder, type PortalSubmitInput } from '@/server/services/portal';
+import {
+  resolvePortalContext,
+  portalSubmitOrder,
+  type PortalContext,
+  type PortalSubmitInput,
+} from '@/server/services/portal';
 import { createPortalReturn } from '@/server/services/returns';
 import { exchangeOptionsForPortal, loadPortalReturnSheet } from '@/server/services/returns-requester';
 import { ServiceError } from '@/server/services/context';
@@ -22,6 +28,37 @@ import {
 } from '@stockpilot/core';
 
 /**
+ * The portal context for an action, or the answer when there is none.
+ *
+ * resolvePortalContext() is asked FIRST, before anything else is read or
+ * written, and it answers in three ways:
+ *   - a context: the signed-in customer's own;
+ *   - null: not a portal user (signed out, a disabled account, the supplier's
+ *     portal switched off). The action says so;
+ *   - a throw: a redirect to the code page (Next control flow, thrown again
+ *     first, so it still gets out), or a check
+ *     that could not be read (the account's status, the supplier's portal
+ *     module). A check that could not be read is not "no portal access": the
+ *     action answers its try-again sentence as a RESULT the page can show,
+ *     reported as a warning, instead of rejecting the call. A rejected call
+ *     gives the page nothing to show.
+ * Nothing has been done when a refusal comes back from here.
+ */
+async function portalContextFor(
+  tag: string,
+): Promise<{ ctx: PortalContext } | { refusal: ActionResult<never> }> {
+  let ctx: PortalContext | null;
+  try {
+    ctx = await resolvePortalContext();
+  } catch (e) {
+    rethrowControlFlow(e);
+    return { refusal: actionErrorResult(e, tag) };
+  }
+  if (!ctx) return { refusal: err('forbidden', 'Your account does not have portal access.') };
+  return { ctx };
+}
+
+/**
  * Portal checkout. Re-resolves the portal context server-side on every call —
  * the CLIENT is never trusted for customer identity; the signed-in auth user
  * either maps to an active customer or the action refuses.
@@ -29,8 +66,9 @@ import {
 export async function submitPortalOrderAction(
   input: PortalSubmitInput,
 ): Promise<ActionResult<{ id: string }>> {
-  const ctx = await resolvePortalContext();
-  if (!ctx) return err('forbidden', 'Your account does not have portal access.');
+  const resolved = await portalContextFor('actions.portal.submit_portal_order');
+  if ('refusal' in resolved) return resolved.refusal;
+  const { ctx } = resolved;
   try {
     const created = await portalSubmitOrder(ctx, input);
     revalidatePath('/portal');
@@ -108,8 +146,9 @@ const ONE_HOUR_MS = 60 * 60 * 1000;
 export async function requestPortalReturnAction(
   input: PortalReturnInput,
 ): Promise<ActionResult<{ id: string; status: 'requested'; returnNumber: string | null; replay: boolean }>> {
-  const ctx = await resolvePortalContext();
-  if (!ctx) return err('forbidden', 'Your account does not have portal access.');
+  const resolved = await portalContextFor('portal.return.create');
+  if ('refusal' in resolved) return resolved.refusal;
+  const { ctx } = resolved;
 
   const parsed = portalReturnSchema.safeParse(input);
   if (!parsed.success) {
@@ -164,8 +203,9 @@ export async function requestPortalReturnAction(
  * switch, and the customer's own requests' progress.
  */
 export async function portalReturnSheetAction(orderId: string): Promise<ActionResult<RequesterReturnSheet>> {
-  const ctx = await resolvePortalContext();
-  if (!ctx) return err('forbidden', 'Your account does not have portal access.');
+  const resolved = await portalContextFor('portal.return.sheet');
+  if ('refusal' in resolved) return resolved.refusal;
+  const { ctx } = resolved;
   if (!z.string().uuid().safeParse(orderId).success) return err('not_found', 'This order could not be found.');
   const limited = await portalReadLimited(ctx.userId);
   if (limited) return limited;
@@ -187,8 +227,9 @@ export async function portalReturnSheetAction(orderId: string): Promise<ActionRe
  * never a count), loaded once, on the first Exchange.
  */
 export async function portalReturnOptionsAction(orderId: string): Promise<ActionResult<RequesterExchangeOptionsAnswer>> {
-  const ctx = await resolvePortalContext();
-  if (!ctx) return err('forbidden', 'Your account does not have portal access.');
+  const resolved = await portalContextFor('portal.return.options');
+  if ('refusal' in resolved) return resolved.refusal;
+  const { ctx } = resolved;
   if (!z.string().uuid().safeParse(orderId).success) return err('not_found', 'This order could not be found.');
   const limited = await portalReadLimited(ctx.userId);
   if (limited) return limited;

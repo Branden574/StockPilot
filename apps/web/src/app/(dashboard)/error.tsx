@@ -19,6 +19,10 @@ import { purgeInterruptedRuns } from '@/lib/interrupted-run';
  * dashboard shell. Surfacing the error gives the user a clear retry +
  * sign-out path.
  *
+ * "Try again" asks the server for the page again: it calls the boundary's
+ * `retry`, which re-fetches and re-renders the page (a failed server read can
+ * then succeed), and falls back to `reset` only when no `retry` is given.
+ *
  * "Sign out and back in" really signs out: it is a full page load of the
  * cookie-clearing route (app/auth/session-ended), which ends this device's
  * session and lands on sign-in. It used to link to /signin, which the proxy
@@ -45,10 +49,14 @@ function signOutAndBackIn(): void {
 
 export default function DashboardError({
   error,
+  retry,
   reset,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  /** Asks the server for the page again and renders what comes back. */
+  retry?: () => void;
+  /** Clears the error and renders the same answer again, with no new read. */
+  reset?: () => void;
 }) {
   React.useEffect(() => {
     void reportError(error, {
@@ -99,7 +107,10 @@ export default function DashboardError({
           </div>
         </div>
         <div className="mt-5 flex flex-wrap gap-2">
-          <Button onClick={reset}>
+          {/* `retry` re-fetches the page from the server (Next's error file
+              convention); `reset` alone would render the same failed answer
+              again. `reset` is the fallback, as on the settings error card. */}
+          <Button onClick={() => (retry ?? reset)?.()}>
             <RefreshCw className="h-4 w-4" aria-hidden /> Try again
           </Button>
           <Button asChild variant="outline">

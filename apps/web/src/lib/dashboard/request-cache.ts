@@ -183,10 +183,11 @@ export const getMfaFactorsForRequest = cache(async (): Promise<MfaFactorList> =>
  * body with no error and data null, and that is not "no rows" either.
  *
  * Who reads which:
- *   - checkModuleAccess (lib/modules/module-gate) and the dashboard layout
- *     read this pair, because each has its own way to say "could not check";
- *   - everything else takes getModulesForRequest below, where a state that
- *     was not read cannot be taken for "off".
+ *   - checkModuleAccess (lib/modules/module-gate) reads this pair, because it
+ *     has its own way to say "could not check" (`checkFailed`);
+ *   - everything else, the dashboard layout included, takes
+ *     getModulesForRequest below, where a state that was not read cannot be
+ *     taken for "off" (the layout asks moduleSetUnreadable before it lists).
  */
 export interface ModulesRead {
   modules: Set<ModuleId>;

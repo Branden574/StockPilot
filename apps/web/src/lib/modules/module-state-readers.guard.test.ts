@@ -22,6 +22,20 @@ import { describe, expect, it } from 'vitest';
  * `organization_modules` table, with what it reads and what an unread answer
  * becomes. A new reader fails this guard until it is listed, which is the
  * moment to decide what it does with a read that failed.
+ *
+ * WHAT THIS IS, AND IS NOT. It is a census, one entry per FILE, that forces a
+ * decision when a new file starts reading the table. It is not a proof that
+ * every read is handled:
+ *   - it finds a read by the table's name written out in a `.from(...)` call.
+ *     A read that reaches the table some other way is for review to catch;
+ *   - an entry speaks for its whole file, so a second read added to a listed
+ *     file is covered by that file's entry and by review, not by a new entry;
+ *   - the class and the note are written by hand. For `settings` and `error`
+ *     entries the guard checks the read's text for what the class claims,
+ *     which is a sanity check on the listing, not an analysis of the code;
+ *     a `closed` entry's note is not checked against the code at all.
+ * The behaviour itself is held by the suites beside each reader (listed in
+ * scripts/security-test.sh); this file keeps the list of readers complete.
  */
 
 const SRC = path.resolve(__dirname, '../..');
@@ -107,7 +121,7 @@ const READERS: Record<string, { unread: Unread; note: string }> = {
   'app/api/v1/public/order-requests/route.ts': { unread: 'error', note: '500 before any write' },
   'server/services/public-catalog.ts': {
     unread: 'error',
-    note: 'throws, so the resolution is not cached as "not found"',
+    note: 'kept as "unread", never as an answer: read again directly, and the page\'s error state when that read does not answer either',
   },
   'server/services/portal.ts': {
     unread: 'error',
@@ -139,19 +153,21 @@ const READERS: Record<string, { unread: Unread; note: string }> = {
   // The list of organizations a job runs for is read with a helper that
   // throws on a failed page, so the run fails. The per-organization context a
   // job then builds reads that organization's rows and drops a failed read:
-  // its set is empty, the service refuses, and nothing runs for that
-  // organization until the next run reads again.
+  // its set is empty. A job whose service asks about an optional module is
+  // then refused for that organization on that run, and the next run reads
+  // again. A job that asks about no optional module runs as it would with the
+  // rows read: the empty set changes nothing for it.
   'app/api/cron/auto-archive-zero-stock/route.ts': {
     unread: 'closed',
-    note: 'list read throws; the per-organization context runs nothing on a failed read',
+    note: 'list read throws; the per-organization set is empty on a failed read, and this job, which asks about no optional module, runs as it would otherwise',
   },
   'app/api/cron/auto-delete-archived/route.ts': {
     unread: 'closed',
-    note: 'list read throws; the per-organization context runs nothing on a failed read',
+    note: 'list read throws; the per-organization set is empty on a failed read, and this job, which asks about no optional module, runs as it would otherwise',
   },
   'app/api/cron/auto-reorder/route.ts': {
     unread: 'closed',
-    note: 'list read throws; the per-organization context runs nothing on a failed read',
+    note: 'list read throws; the per-organization set is empty on a failed read, so the purchase order service refuses and nothing is drafted for that organization on that run',
   },
   'app/api/cron/daily-briefing/route.ts': {
     unread: 'closed',
@@ -159,15 +175,15 @@ const READERS: Record<string, { unread: Unread; note: string }> = {
   },
   'app/api/cron/recurring-pos/route.ts': {
     unread: 'closed',
-    note: 'list read throws; the per-organization context runs nothing on a failed read',
+    note: 'list read throws; the per-organization set is empty on a failed read, so the purchase order service refuses and no template runs for that organization on that run',
   },
   'app/api/cron/restore-points/route.ts': {
     unread: 'closed',
-    note: 'the per-organization context runs nothing on a failed read',
+    note: 'the per-organization set is empty on a failed read, and this job, which asks about no optional module, runs as it would otherwise',
   },
   'server/services/lib/system-context.ts': {
     unread: 'closed',
-    note: 'the shared per-organization context: an empty set on a failed read, so the service refuses',
+    note: 'the shared per-organization context: an empty set on a failed read; a job that asks about an optional module is refused, and one that asks about none runs as it would otherwise',
   },
   'app/api/cron/maintenance-draft-reminders/route.ts': { unread: 'error', note: '500; no run' },
   'app/api/cron/price-pull/route.ts': { unread: 'error', note: '500; no run' },
