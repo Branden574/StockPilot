@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModuleId } from '@stockpilot/core';
 
 import { makeSupabaseStub } from '@/test/supabase-mock';
+import { RECOUNT_FACTS_NOT_YET } from '@/test/recount-facts';
 
 /**
  * The /api/v1/exceptions routes (F1-1) run the REAL ExceptionOccurrencesService
@@ -83,7 +84,7 @@ function ctxWith(
   results: Parameters<typeof makeSupabaseStub>[0],
   opts: { role?: 'owner' | 'manager' | 'staff' | 'viewer'; permissions?: string[] } = {},
 ) {
-  const stub = makeSupabaseStub(results);
+  const stub = makeSupabaseStub({ ...RECOUNT_FACTS_NOT_YET, ...results });
   const ctx = {
     organizationId: 'org-1',
     userId: 'u-1',

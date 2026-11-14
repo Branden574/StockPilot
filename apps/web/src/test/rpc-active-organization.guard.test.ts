@@ -375,6 +375,10 @@ const REGISTRY: Record<string, Entry> = {
     'read_first:requireActable',
     'The occurrence is read in the organization first.',
   ],
+  'server/services/exception-occurrences.ts::exception_recount_facts': [
+    'takes_org',
+    'Passes the active organization; reads only (0460, STABLE), only that organization\'s exceptions.',
+  ],
   'server/services/exception-occurrences.ts::exceptions_sync': [
     'takes_org',
     'Passes the organization being synced.',
