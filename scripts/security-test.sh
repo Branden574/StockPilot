@@ -1879,6 +1879,12 @@ WEB_TESTS=(
   src/server/services/cycle-counts.read-scope.test.ts
   src/server/services/cycle-counts.list.test.ts
   src/app/api/v1/mobile/snapshot/route.count-scope.test.ts
+  # The email change an account holds: Settings shows it whenever the account
+  # has a pending address (a change with no request time shows as expired,
+  # with Resend and Cancel), and links are minted only once the auth server
+  # has recorded the request's time.
+  src/server/services/email-change.test.ts
+  src/components/settings/email-settings-card.test.tsx
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -84,6 +84,7 @@ const envState = vi.hoisted(() => {
 vi.mock('@/lib/env', () => ({ env: envState }));
 const INITIAL_ENV = { ...envState };
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+import * as reporter from '@/lib/error-reporter';
 // The organization an audit row is filed under is the membership rule's
 // answer (docket S74); that rule is tested over real membership rows in
 // email-change.audit-organization.test.ts. Here the person is a member of org-1.
@@ -130,7 +131,13 @@ beforeEach(() => {
     disabled_at: null,
     deleted_at: null,
   };
-  getUserById.mockResolvedValue(authUser());
+  // Before a mint the account holds no change; once both links are minted it
+  // holds the change with the time the auth server recorded for the request.
+  getUserById.mockImplementation(async () =>
+    generateLink.mock.calls.length >= 2
+      ? authUser({ new_email: NEW, email_change_sent_at: new Date().toISOString() })
+      : authUser(),
+  );
   checkRateLimit.mockResolvedValue({ allowed: true });
   verifyPasswordSideChannel.mockResolvedValue({ ok: true });
   sendEmail.mockResolvedValue({ ok: true, id: 'msg' });
@@ -215,6 +222,92 @@ describe('mintEmailChangeLinks — the GoTrue new-side hash bug', () => {
     expect(generateLink).toHaveBeenCalledTimes(2);
     expect(generateLink).toHaveBeenNthCalledWith(1, { type: 'email_change_current', email: OLD, newEmail: NEW });
     expect(generateLink).toHaveBeenNthCalledWith(2, { type: 'email_change_new', email: OLD, newEmail: NEW });
+  });
+});
+
+describe('mintEmailChangeLinks: the auth server recorded the request (its time is what tells one request\'s links from the next)', () => {
+  const reportError = vi.mocked(reporter.reportError);
+
+  it('reads the account back once after both links are minted, and returns the links when the change has a readable request time', async () => {
+    getUserById.mockResolvedValue(
+      authUser({ new_email: NEW, email_change_sent_at: '2026-11-14T09:00:00.123456Z' }),
+    );
+    const links = await mintEmailChangeLinks(OLD, NEW, USER_ID);
+    expect(links.currentUrl).toContain(CURRENT_SIDE_HASH);
+    expect(getUserById).toHaveBeenCalledTimes(1);
+    expect(getUserById).toHaveBeenCalledWith(USER_ID);
+    // After the mint, not before it.
+    expect(getUserById.mock.invocationCallOrder[0]).toBeGreaterThan(
+      generateLink.mock.invocationCallOrder[1]!,
+    );
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['none at all', {}],
+    ['null', { email_change_sent_at: null }],
+    ['empty', { email_change_sent_at: '' }],
+    ['not a time', { email_change_sent_at: 'not a time' }],
+    ['a number', { email_change_sent_at: 1794636584 }],
+  ])('a change recorded with a request time that is %s: no links, and one report that names no account', async (_label, fields) => {
+    getUserById.mockResolvedValue(authUser({ new_email: NEW, ...fields }));
+    await expect(mintEmailChangeLinks(OLD, NEW, USER_ID)).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const [error, context] = reportError.mock.calls[0]!;
+    expect(context).toMatchObject({ tag: 'email_change.request_time_missing' });
+    const reported = `${(error as Error).message} ${JSON.stringify(context)}`;
+    for (const secret of [USER_ID, OLD, NEW, CURRENT_SIDE_HASH, OTP_NEW]) {
+      expect(reported).not.toContain(secret);
+    }
+  });
+
+  it('the public words of that refusal say nothing about the auth server, an address or the account', async () => {
+    getUserById.mockResolvedValue(authUser({ new_email: NEW }));
+    // An internal error's public words are the generic ones (ServiceError).
+    await expect(mintEmailChangeLinks(OLD, NEW, USER_ID)).rejects.toMatchObject({
+      message: 'An internal error occurred. Please try again.',
+    });
+  });
+
+  it('a request refused that way sends nothing and writes no "sent" audit row', async () => {
+    getUserById.mockResolvedValue(authUser({ new_email: NEW }));
+    await expect(requestEmailChange(REQUEST)).rejects.toMatchObject({ code: 'internal_error' });
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(inserts.filter((i) => i.table === 'audit_logs')).toEqual([]);
+  });
+
+  it('a resend refused that way sends nothing either', async () => {
+    getUserById.mockResolvedValue(authUser({ new_email: NEW }));
+    await expect(
+      resendEmailChange({ userId: USER_ID, mfa: { enrolled: false, aal2: false }, source: 'web' }),
+    ).rejects.toMatchObject({ code: 'internal_error' });
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('a read-back that fails does not stop the request: the links are returned, with a warning that it could not be checked', async () => {
+    for (const answer of [
+      { data: { user: null }, error: { status: 500, message: 'boom' } },
+      { data: { user: null }, error: null },
+    ]) {
+      reportError.mockClear();
+      getUserById.mockResolvedValue(answer);
+      const links = await mintEmailChangeLinks(OLD, NEW, USER_ID);
+      expect(links.newUrl).toContain('type=email_change');
+      expect(reportError).toHaveBeenCalledTimes(1);
+      expect(reportError.mock.calls[0]![1]).toMatchObject({
+        tag: 'email_change.request_time_unchecked',
+        level: 'warning',
+      });
+      expect(JSON.stringify(reportError.mock.calls[0])).not.toContain(USER_ID);
+    }
+    reportError.mockClear();
+    getUserById.mockRejectedValue(new Error('network'));
+    await expect(mintEmailChangeLinks(OLD, NEW, USER_ID)).resolves.toMatchObject({
+      sentAt: expect.any(String),
+    });
+    expect(reportError).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -390,6 +483,41 @@ describe('getEmailChangeStatus / resend / cancel', () => {
     const sentAt = new Date(Date.now() - 61 * 60_000).toISOString();
     getUserById.mockResolvedValue(authUser({ new_email: NEW, email_change_sent_at: sentAt }));
     expect((await getEmailChangeStatus(USER_ID)).expired).toBe(true);
+  });
+
+  it.each([
+    ['none', {}],
+    ['null', { email_change_sent_at: null }],
+    ['not a time', { email_change_sent_at: 'not a time' }],
+  ])('a pending address with a request time that is %s is still reported, as waiting with its links expired', async (_label, fields) => {
+    // What the auth server holds after a password change made while a change
+    // is waiting: the pending address, and no request time.
+    getUserById.mockResolvedValue(authUser({ new_email: NEW, ...fields }));
+    await expect(getEmailChangeStatus(USER_ID)).resolves.toEqual({
+      email: OLD,
+      pendingEmail: NEW,
+      sentAt: null,
+      expiresAt: null,
+      expired: true,
+    });
+  });
+
+  it('nothing pending is never expired', async () => {
+    await expect(getEmailChangeStatus(USER_ID)).resolves.toEqual({
+      email: OLD,
+      pendingEmail: null,
+      sentAt: null,
+      expiresAt: null,
+      expired: false,
+    });
+  });
+
+  it('a pending address without a request time can be cancelled', async () => {
+    getUserById.mockResolvedValue(authUser({ new_email: NEW }));
+    await expect(cancelEmailChange({ userId: USER_ID, source: 'web' })).resolves.toEqual({
+      cancelled: true,
+    });
+    expect(rpc).toHaveBeenCalledWith('cancel_pending_email_change', { p_user_id: USER_ID });
   });
 
   it('resend re-mints for the address GoTrue holds — never one supplied by the caller', async () => {
