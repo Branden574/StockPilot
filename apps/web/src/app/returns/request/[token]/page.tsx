@@ -6,6 +6,7 @@ import {
   ExternalStatusCard,
 } from '@/components/auth/external-shell';
 import { RequesterTracking } from '@/components/returns/requester-tracking';
+import { clientIpFromHeaders } from '@/lib/client-ip';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
 import {
@@ -70,8 +71,7 @@ export default async function RequesterReturnPage({
   // Per-IP limit on the page itself (returns RX-1), fail-closed like the
   // submit: a token-guessing crawl stops here before any lookup.
   const h = await headers();
-  const xff = process.env.VERCEL === '1' ? h.get('x-forwarded-for') : null;
-  const ip = xff?.split(',')[0]?.trim() || h.get('x-real-ip') || 'unknown';
+  const ip = clientIpFromHeaders(h);
   const limit = await checkRateLimit(
     returnPageIpBucketKey(ip),
     RETURN_PAGE_VIEWS_PER_IP_PER_HOUR,

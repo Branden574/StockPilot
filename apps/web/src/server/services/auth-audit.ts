@@ -2,6 +2,7 @@ import 'server-only';
 
 import { headers } from 'next/headers';
 
+import { clientIpForRecord } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { insertAuditRowReported, type AuditEvent } from '@/server/services/audit';
@@ -41,8 +42,8 @@ export async function emitAuthAudit(params: {
 }): Promise<void> {
   try {
     const h = await headers();
-    const ip =
-      h.get('x-forwarded-for')?.split(',')[0]?.trim() ?? h.get('x-real-ip') ?? null;
+    // The one rule (lib/client-ip.ts), null unless an IP literal (inet).
+    const ip = clientIpForRecord(h);
     const userAgent = h.get('user-agent') ?? null;
 
     // Reads the INSERT's own result: supabase-js returns a refused write as
