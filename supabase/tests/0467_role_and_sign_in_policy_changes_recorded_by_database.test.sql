@@ -28,12 +28,14 @@
 -- R.  The sign-in policy. An admin's change through the Data API (claims in
 --     the JSON form the Data API sets) leaves exactly one row: the admin as
 --     the actor, before and after, source, made_as and aal, no address or
---     browser (R1 to R3). The token's aal is recorded as it is, or as null
+--     browser (R1 to R3). The row carries the token's aal as sent, or null
 --     when the token has none (R4, R5). The service role and a statement
 --     with no role set leave a row with no actor (R6, R7). The same value
 --     saved again, and another column of the organization, leave none (R8).
 --     A member below admin, and an admin of another organization, change no
---     row and leave none (R9, R10).
+--     row and leave none (R9, R10). A token subject that is not a uuid, and
+--     claims that are not JSON, count as no actor and no aal and do not
+--     stop the change (R11, R12). made_as names anon as anon (R13).
 -- M.  A member's role. An admin's change leaves exactly one row naming the
 --     membership and the member (M1, M2), in the shape the role monitor
 --     reads (M3). A member below admin changes no row and leaves none (M4).
@@ -41,9 +43,9 @@
 --     The driver flag and "all warehouses" leave none (M6). An ownership
 --     transfer leaves two rows with no actor, made_as service_role (M7). A
 --     token subject with no account: the change goes through and the row has
---     no actor (M8). An upsert that changes the role leaves one row, and a
---     new membership, an unchanged upsert and a removed membership none
---     (M9). An admin of another organization changes nothing (M10).
+--     no actor (M8). An upsert that changes the role leaves one row; the
+--     counts after the statements that follow it are as pinned (M9). An
+--     admin of another organization changes nothing (M10).
 -- F.  The app's row for a recorded change, sent as the server's role. It is
 --     accepted and not stored, and the recorded row is as it was, byte for
 --     byte and in place (F1, F2); a second and a third later try, sent as
@@ -57,19 +59,21 @@
 --     not judged: an owner-role insert is stored, a member's is refused as
 --     before (F10). The same change made twice keeps two rows whatever the
 --     app sends (F11).
--- X.  Each trigger alone: with a recorder disabled its change leaves no row,
---     and with zz_fold_app_copy disabled the app's row is stored beside the
---     recorded one; each beside the same attempt with the trigger enabled.
+-- X.  Each trigger does its own work: the same attempt with the trigger
+--     disabled and with it enabled, both undone. The counts differ by the
+--     one row that trigger writes (X1, X2) or holds back (X3).
 -- Z.  The rows this file left, by event and organization.
 --
 -- Roles: fixtures as the test's own role. pg_temp.run switches role and
 -- claims with set_config inside a subtransaction and keeps what succeeds;
--- pg_temp.undone always undoes. begin/rollback: nothing leaks.
+-- pg_temp.undone always undoes. R13 makes one SECURITY DEFINER function in
+-- public for its own use; it goes with the rollback. begin/rollback: nothing
+-- leaks.
 -- Namespace c0a70000; undo code XXUND.
 
 begin;
 
-select plan(43);
+select plan(46);
 
 \set orgA    '\'c0a70000-0000-4000-8000-00000000000a\''
 \set orgB    '\'c0a70000-0000-4000-8000-00000000000b\''
@@ -155,15 +159,16 @@ language sql immutable as $$
   select jsonb_strip_nulls(jsonb_build_object('sub', p_sub, 'role', p_role, 'aal', p_aal))
 $$;
 
--- One statement as p_as (null: no role is set) with p_claims, KEPT when it
--- succeeds: 'ok:<rows>', else '<sqlstate>:<message>'.
-create function pg_temp.run(p_as text, p_claims jsonb, p_sql text)
+-- One statement as p_as (null: no role is set) with p_claims as the text of
+-- request.jwt.claims, KEPT when it succeeds: 'ok:<rows>', else
+-- '<sqlstate>:<message>'.
+create function pg_temp.run_text(p_as text, p_claims text, p_sql text)
 returns text language plpgsql as $$
 declare v_state text; v_msg text; v_n bigint;
 begin
   begin
     perform set_config('request.jwt.claim.sub', '', true);
-    perform set_config('request.jwt.claims', coalesce(p_claims::text, ''), true);
+    perform set_config('request.jwt.claims', coalesce(p_claims, ''), true);
     if p_as is not null then
       perform set_config('role', p_as, true);
     end if;
@@ -179,6 +184,10 @@ begin
   end;
   return 'ok:' || v_n::text;
 end $$;
+-- The same, with the claims as JSON.
+create function pg_temp.run(p_as text, p_claims jsonb, p_sql text) returns text language sql as $$
+  select pg_temp.run_text(p_as, p_claims::text, p_sql)
+$$;
 
 -- p_prep (as the test's own role), then one statement as p_as with p_claims,
 -- then p_check (as the test's own role): p_check's answer, and everything
@@ -373,7 +382,7 @@ select is(
               where a.event = 'organization.mfa_policy.changed' and a.organization_id = :orgA
                 and (a.metadata -> 'after') = pg_temp.p('admins_required')),
   'ok:1 aal1',
-  'R4: a change made with an aal1 token is recorded as aal1');
+  'R4: the row carries the token''s aal as sent');
 insert into outcome (step, got) values ('R5',
   pg_temp.run('authenticated', pg_temp.claims(:adm, 'authenticated'), pg_temp.policy_sql(:orgA, 'optional')));
 select is(
@@ -430,6 +439,52 @@ select is(
   pg_temp.got('R10') || ' rows=' || pg_temp.n('organization.mfa_policy.changed', :orgB),
   'ok:0 rows=0',
   'R10: an admin of another organization changes no row and leaves no audit row');
+
+-- The token's form never stops a change (organization B, at 'optional').
+insert into outcome (step, got) values ('R11',
+  pg_temp.run_text('service_role', '{"role": "service_role", "sub": "not-a-uuid"}', pg_temp.policy_sql(:orgB, 'all_required')));
+select is(
+  pg_temp.got('R11')
+  || ' ' || (select string_agg(format('actor=%s made_as=%s aal=%s', coalesce(a.user_id::text, 'null'),
+                                      a.metadata ->> 'made_as', a.metadata -> 'aal'), ',')
+               from public.audit_logs a
+              where a.event = 'organization.mfa_policy.changed' and a.organization_id = :orgB
+                and (a.metadata -> 'after') = pg_temp.p('all_required')),
+  'ok:1 actor=null made_as=service_role aal=null',
+  'R11: a token subject that is not a uuid counts as no actor: the change goes through and is recorded');
+insert into outcome (step, got) values ('R12',
+  pg_temp.run_text(null, 'not json', pg_temp.policy_sql(:orgB, 'optional')));
+select is(
+  pg_temp.got('R12')
+  || ' ' || (select string_agg(format('actor=%s made_as=%s aal=%s', coalesce(a.user_id::text, 'null'),
+                                      a.metadata ->> 'made_as', a.metadata -> 'aal'), ',')
+               from public.audit_logs a
+              where a.event = 'organization.mfa_policy.changed' and a.organization_id = :orgB
+                and (a.metadata -> 'after') = pg_temp.p('optional')),
+  'ok:1 actor=null made_as=direct aal=null',
+  'R12: claims that are not JSON count as no actor and no aal: the change goes through and is recorded');
+
+-- made_as names the caller's role as it is. anon reaches a policy change
+-- only through a SECURITY DEFINER function, so this row makes one (undone
+-- with the file).
+create function public.zz_rec_suite_set_policy(p_org uuid, p_policy text) returns void
+language sql security definer set search_path = '' as $$
+  update public.organizations set mfa_policy = p_policy where id = p_org
+$$;
+revoke all on function public.zz_rec_suite_set_policy(uuid, text) from public, authenticated, service_role;
+grant execute on function public.zz_rec_suite_set_policy(uuid, text) to anon;
+insert into outcome (step, got) values ('R13',
+  pg_temp.run('anon', '{"role": "anon"}'::jsonb,
+              format('select public.zz_rec_suite_set_policy(%L, %L)', :orgB, 'admins_required')));
+select is(
+  pg_temp.got('R13')
+  || ' ' || (select string_agg(format('actor=%s made_as=%s', coalesce(a.user_id::text, 'null'), a.metadata ->> 'made_as'), ',')
+               from public.audit_logs a
+              where a.event = 'organization.mfa_policy.changed' and a.organization_id = :orgB
+                and (a.metadata -> 'after') = pg_temp.p('admins_required')),
+  'ok:1 actor=null made_as=anon',
+  'R13: made_as names anon as anon');
+drop function public.zz_rec_suite_set_policy(uuid, text);
 
 -- ══ M. A member's role ════════════════════════════════════════════════════
 insert into outcome (step, got) values ('M1',
@@ -536,7 +591,7 @@ insert into outcome (step, got) values ('M9',
 select is(
   pg_temp.got('M9'),
   'ok:1 rows=2 ok:1 rows=2 ok:1 ok:1 rows=0',
-  'M9: an upsert that changes the role leaves one row; the same upsert again, a new membership and a removed membership leave none');
+  'M9: an upsert that changes the role leaves one row; the row counts after the statements that follow it are as pinned');
 
 insert into outcome (step, got) values ('M10',
   pg_temp.run('authenticated', pg_temp.claims(:admB, 'authenticated', 'aal2'), pg_temp.role_sql(:m_stf1, 'viewer'))
@@ -718,7 +773,7 @@ select is(
                  'authenticated', pg_temp.claims(:adm, 'authenticated', 'aal2'), pg_temp.policy_sql(:orgA, 'all_required'),
                  format('select pg_temp.n(%L, %L)::text', 'organization.mfa_policy.changed', :orgA)),
   '6 / 7',
-  'X1: with trg_zz_record_mfa_policy_change disabled a policy change leaves no row; enabled, one more');
+  'X1: the sign-in policy row is written by trg_zz_record_mfa_policy_change (rows with it disabled / enabled)');
 select is(
   pg_temp.undone('alter table public.organization_members disable trigger trg_zz_record_member_role_change',
                  'authenticated', pg_temp.claims(:adm, 'authenticated', 'aal2'), pg_temp.role_sql(:m_vwr, 'staff'),
@@ -728,7 +783,7 @@ select is(
                  'authenticated', pg_temp.claims(:adm, 'authenticated', 'aal2'), pg_temp.role_sql(:m_vwr, 'staff'),
                  format('select pg_temp.n(%L, %L)::text', 'user.role.changed', :m_vwr)),
   '1 / 2',
-  'X2: with trg_zz_record_member_role_change disabled a role change leaves no row; enabled, one more');
+  'X2: the role row is written by trg_zz_record_member_role_change (rows with it disabled / enabled)');
 select is(
   pg_temp.undone('alter table public.audit_logs disable trigger zz_fold_app_copy',
                  'service_role', '{"role": "service_role"}'::jsonb,
@@ -740,7 +795,7 @@ select is(
                  pg_temp.copy_sql(gen_random_uuid(), :orgA, :adm, 'user.role.changed', :m_stf3, pg_temp.r('staff'), pg_temp.r('viewer')),
                  format('select pg_temp.n(%L, %L)::text', 'user.role.changed', :m_stf3)),
   '3 / 2',
-  'X3: with zz_fold_app_copy disabled the app''s row is stored beside the recorded one; enabled, it is not');
+  'X3: the app''s row for a recorded change is held back by zz_fold_app_copy (rows with it disabled / enabled)');
 select is(
   (select string_agg(t.tgname || '=' || t.tgenabled::text, ' ' order by t.tgname) from pg_trigger t
     where not t.tgisinternal
@@ -758,7 +813,7 @@ select is(
             where a.organization_id in (:orgA, :orgB)
               and a.event in ('user.role.changed', 'organization.mfa_policy.changed')
             group by 1, 2) x),
-  'organization.mfa_policy.changed A recorded=5 other=1 / user.role.changed A recorded=12 other=8 / user.role.changed B recorded=1 other=1',
+  'organization.mfa_policy.changed A recorded=5 other=1 / organization.mfa_policy.changed B recorded=3 other=0 / user.role.changed A recorded=12 other=8 / user.role.changed B recorded=1 other=1',
   'Z1: the rows left, by event and organization: every recorded row has no address and no browser, and each stored app row is one F7, F9 or F10 names');
 
 select * from finish();

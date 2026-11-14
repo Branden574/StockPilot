@@ -29,19 +29,23 @@
 --    the role monitor read it as they read the app's:
 --      organization_id    the organization
 --      user_id            the token's subject when it is an account
---                         (auth.uid(), looked up in user_profiles), else null
+--                         (auth.uid(), looked up in user_profiles), else
+--                         null. A subject that is not a uuid, or claims that
+--                         cannot be read, count as no subject: they never
+--                         stop the change
 --      ip, user_agent     null: the database is called by the Data API
 --                         server, not by the person's device
 --      entity_type / id   organization / its id;
 --                         organization_member / the membership's id
 --      before / after     {"mfa_policy": ...}; {"role": ...}
 --      source             'database'
---      made_as            the caller's role: 'authenticated', 'service_role',
---                         or 'direct' for anything else (a migration,
---                         support SQL). Read from the role setting, which
---                         names the caller inside a SECURITY DEFINER body
---                         too (0413)
---      aal                the token's aal claim, or null
+--      made_as            the caller's role: 'authenticated', 'service_role'
+--                         or 'anon' as it is, or 'direct' for anything else
+--                         (a migration, support SQL). Read from the role
+--                         setting, which names the caller inside a SECURITY
+--                         DEFINER body too (0413)
+--      aal                the token's aal claim, or null (no claim, or
+--                         claims that cannot be read)
 --      target_user_id     (roles only) the member whose role changed
 --      created_at         the table default: the time of the change's
 --                         transaction
@@ -140,8 +144,15 @@
 -- ── ERRORS ────────────────────────────────────────────────────────────────
 -- 55000 hint recorded_changes_preflight: drift, or a second run; nothing
 -- applied. 55P03: busy after 40 attempts, or the 900 ms cap; nothing applied,
--- run it again. Afterwards no caller gets a new error. Never 40001 or 40P01
--- (PostgREST retries those, 0367).
+-- run it again.
+--
+-- Afterwards a change is refused only when its audit row cannot be written
+-- (see 1). The audit row's two foreign keys ask for the organization's row
+-- and the actor's account row while the change holds the row it changed, so
+-- a role or policy change that overlaps the deletion of that organization,
+-- or of the actor's own account, can be refused: deadlock detected (40P01),
+-- or the actor's account is no longer there (23503). Nothing is recorded and
+-- nothing is changed in that case, and the caller can try again.
 --
 -- ── ORDER ─────────────────────────────────────────────────────────────────
 -- After every lower number. No queued migration creates a function or a
@@ -291,14 +302,30 @@ as $$
 declare
   -- The caller's role. The role setting names it here too, where
   -- current_user is this function's owner.
-  v_role text := coalesce(nullif(current_setting('role', true), ''), 'none');
+  v_role  text := coalesce(nullif(current_setting('role', true), ''), 'none');
+  v_actor uuid;
+  v_aal   text;
 begin
+  -- The token's subject and its aal claim. A subject that is not a uuid, or
+  -- claims that cannot be read as JSON, count as no subject and no aal: the
+  -- token's form never stops the change.
+  begin
+    v_actor := auth.uid();
+  exception when invalid_text_representation then
+    v_actor := null;
+  end;
+  begin
+    v_aal := auth.jwt() ->> 'aal';
+  exception when invalid_text_representation then
+    v_aal := null;
+  end;
+
   -- The audit row of this change, in the change's own transaction. The
   -- actor is the token's subject when it is an account, else null.
   insert into public.audit_logs (organization_id, user_id, event, metadata)
   values (
     new.id,
-    (select p.id from public.user_profiles p where p.id = auth.uid()),
+    (select p.id from public.user_profiles p where p.id = v_actor),
     'organization.mfa_policy.changed',
     jsonb_build_object(
       'entity_type',  'organization',
@@ -308,8 +335,8 @@ begin
       'after',        jsonb_build_object('mfa_policy', new.mfa_policy),
       'reason',       null,
       'source',       'database',
-      'made_as',      case when v_role in ('authenticated', 'service_role') then v_role else 'direct' end,
-      'aal',          auth.jwt() ->> 'aal'
+      'made_as',      case when v_role in ('authenticated', 'service_role', 'anon') then v_role else 'direct' end,
+      'aal',          v_aal
     )
   );
   return null;
@@ -327,15 +354,31 @@ as $$
 declare
   -- The caller's role. The role setting names it here too, where
   -- current_user is this function's owner.
-  v_role text := coalesce(nullif(current_setting('role', true), ''), 'none');
+  v_role  text := coalesce(nullif(current_setting('role', true), ''), 'none');
+  v_actor uuid;
+  v_aal   text;
 begin
+  -- The token's subject and its aal claim. A subject that is not a uuid, or
+  -- claims that cannot be read as JSON, count as no subject and no aal: the
+  -- token's form never stops the change.
+  begin
+    v_actor := auth.uid();
+  exception when invalid_text_representation then
+    v_actor := null;
+  end;
+  begin
+    v_aal := auth.jwt() ->> 'aal';
+  exception when invalid_text_representation then
+    v_aal := null;
+  end;
+
   -- The audit row of this change, in the change's own transaction. The
   -- actor is the token's subject when it is an account, else null; the
   -- member whose role changed is target_user_id.
   insert into public.audit_logs (organization_id, user_id, event, metadata)
   values (
     new.organization_id,
-    (select p.id from public.user_profiles p where p.id = auth.uid()),
+    (select p.id from public.user_profiles p where p.id = v_actor),
     'user.role.changed',
     jsonb_build_object(
       'entity_type',    'organization_member',
@@ -345,8 +388,8 @@ begin
       'after',          jsonb_build_object('role', new.role),
       'reason',         null,
       'source',         'database',
-      'made_as',        case when v_role in ('authenticated', 'service_role') then v_role else 'direct' end,
-      'aal',            auth.jwt() ->> 'aal',
+      'made_as',        case when v_role in ('authenticated', 'service_role', 'anon') then v_role else 'direct' end,
+      'aal',            v_aal,
       'target_user_id', new.user_id
     )
   );
