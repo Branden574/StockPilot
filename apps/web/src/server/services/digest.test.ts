@@ -9,6 +9,7 @@ import {
   digestReaderFor,
   getDigestData,
   loadDigestReaderData,
+  type DigestPermissionFacts,
   type DigestReaderData,
   type DigestSource,
 } from './digest';
@@ -180,6 +181,17 @@ function lowStockIds(groups: Awaited<ReturnType<typeof getDigestData>>['lowStock
   return groups.flatMap((g) => g.items.map((i) => i.id));
 }
 
+/** has_permission's inputs for a count permission as role_default_permissions
+ *  seeds it (0279): admin, manager and staff; owner short-circuits. */
+function countPermissionDefaults(over: Partial<DigestPermissionFacts> = {}): DigestPermissionFacts {
+  return {
+    user: new Map(),
+    role: new Map(),
+    defaults: new Set(['admin', 'manager', 'staff']),
+    ...over,
+  };
+}
+
 describe('getDigestData low stock', () => {
   it('reports a below-reorder item that is not among the org’s lowest-quantity rows', async () => {
     // 160 healthy slow movers (qty 1, reorder_point 0 — never low) rank ahead
@@ -329,6 +341,8 @@ describe('buildDigestPayload: what one reader is sent (the edges route.scope.tes
     userPoRead: new Map(),
     rolePoRead: new Map(),
     defaultPoReadRoles: new Set(['owner', 'admin', 'manager', 'staff', 'viewer']),
+    countRead: countPermissionDefaults(),
+    stockAdjust: countPermissionDefaults(),
   });
 
   it('keeps what the reader\'s own client returned (the preview), except an item no member can read', () => {
@@ -456,9 +470,19 @@ describe('loadDigestReaderData: an answer that is not a list is a failed read', 
     'user_category_assignments.select': listed([
       { id: 'uca-1', user_id: 'user-1', category_id: 'cat-1' },
     ]),
-    'user_permission_overrides.select': listed([{ user_id: 'user-1', granted: false }]),
-    'role_permission_overrides.select': listed([{ role: 'viewer', granted: false }]),
-    'role_default_permissions.select': listed([{ role: 'viewer' }]),
+    'user_permission_overrides.select': listed([
+      { user_id: 'user-1', permission: 'purchase_orders:read', granted: false },
+      { user_id: 'user-1', permission: 'cycle_counts:read', granted: true },
+    ]),
+    'role_permission_overrides.select': listed([
+      { role: 'viewer', permission: 'purchase_orders:read', granted: false },
+      { role: 'staff', permission: 'stock:adjust', granted: false },
+    ]),
+    'role_default_permissions.select': listed([
+      { role: 'viewer', permission: 'purchase_orders:read' },
+      { role: 'staff', permission: 'cycle_counts:read' },
+      { role: 'staff', permission: 'stock:adjust' },
+    ]),
   };
 
   it('reads every list as it came', async () => {
@@ -467,6 +491,11 @@ describe('loadDigestReaderData: an answer that is not a list is a failed read', 
     expect(data.userPoRead.get('user-1')).toBe(false);
     expect(data.rolePoRead.get('viewer')).toBe(false);
     expect(data.defaultPoReadRoles).toEqual(new Set(['viewer']));
+    // The count permissions are read in the same three queries (S93).
+    expect(data.countRead.user.get('user-1')).toBe(true);
+    expect(data.countRead.defaults).toEqual(new Set(['staff']));
+    expect(data.stockAdjust.role.get('staff')).toBe(false);
+    expect(data.stockAdjust.defaults).toEqual(new Set(['staff']));
     // An empty body from the category read gave this viewer every category.
     const err = await loadDigestReaderData(
       makeSupabaseStub({ ...READS, 'user_category_assignments.select': NOT_A_LIST[0][1] }).client,
@@ -575,6 +604,15 @@ describe('buildDigestPayload: cycle counts', () => {
     userPoRead: new Map(),
     rolePoRead: new Map(),
     defaultPoReadRoles: new Set(['owner', 'admin', 'manager', 'staff', 'viewer']),
+    // The two viewers are read-only auditors: each was granted
+    // cycle_counts:read (S93: a viewer holds no count permission by default).
+    countRead: countPermissionDefaults({
+      user: new Map([
+        ['viewer-cat-a', true],
+        ['flag-viewer', true],
+      ]),
+    }),
+    stockAdjust: countPermissionDefaults(),
   });
   const totals = (reader: Parameters<typeof buildDigestPayload>[1]) =>
     buildDigestPayload(source(), reader).openCycleCounts.map(
@@ -645,6 +683,33 @@ describe('buildDigestPayload: cycle counts', () => {
   it('reads a missing all-warehouses flag as false', () => {
     expect(digestReaderFor(facts(), 'staff-n', 'staff').allWarehouses).toBe(false);
     expect(totals(digestReaderFor(facts(), 'staff-n', 'staff'))).not.toContain('south 0/0');
+  });
+
+  it('sends no count to a member who holds neither count permission (S93)', () => {
+    const f = facts();
+    // A viewer of North with no grant.
+    f.assignments.set('viewer-plain', [{ warehouseId: 'wh-n', charterId: null }]);
+    expect(digestReaderFor(f, 'viewer-plain', 'viewer').canReadCounts).toBe(false);
+    expect(totals(digestReaderFor(f, 'viewer-plain', 'viewer'))).toEqual([]);
+    expect(totals(digestReaderFor(f, 'viewer-plain', 'viewer', true))).toEqual([]);
+    // A North staff member whose two count permissions were revoked.
+    f.countRead.user.set('staff-n', false);
+    f.stockAdjust.user.set('staff-n', false);
+    expect(totals(digestReaderFor(f, 'staff-n', 'staff'))).toEqual([]);
+    // One permission is enough: stock:adjust given back.
+    f.stockAdjust.user.set('staff-n', true);
+    expect(totals(digestReaderFor(f, 'staff-n', 'staff'))).toEqual([
+      'north 2/3',
+      'mixed 1/1',
+      'south-mine 0/0',
+    ]);
+    // A role override takes both from managers; an owner reads whatever an
+    // override says.
+    f.countRead.role.set('manager', false);
+    f.stockAdjust.role.set('manager', false);
+    expect(totals(digestReaderFor(f, 'mgr', 'manager'))).toEqual([]);
+    f.countRead.user.set('own', false);
+    expect(totals(digestReaderFor(f, 'own', 'owner'))).toHaveLength(5);
   });
 
   it('never counts a line whose item the read did not return for a non-manager', () => {

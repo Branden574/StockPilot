@@ -879,6 +879,13 @@ PGTAP_TESTS=(
   supabase/tests/0452_cycle_count_edges.test.sql
   supabase/tests/0452_cycle_count_item_page_parity.test.sql
 
+  # Cycle count rows are read by members who hold a count permission
+  # (0460, docket S93): both read rules also ask cycle_counts:read or
+  # stock:adjust, as hashed sets once per statement; progress follows; the
+  # Exception Center's recount facts come from exception_recount_facts, for
+  # an exception the caller may see and that exception's item only.
+  supabase/tests/0460_cycle_count_reads_follow_count_permission.test.sql
+
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
 )

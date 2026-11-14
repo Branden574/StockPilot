@@ -266,8 +266,10 @@ select is(pg_temp.scans_seen(), '(none)', 'A3 flag staff: only her own scans (no
 select is(pg_temp.objects_seen(), '(none)', 'O3 flag staff: no scan photo by her own token (the app signs them with the service role)');
 
 set local "request.jwt.claim.sub" to :'vwAll';
-select is(pg_temp.counts_seen(), 'mine mix mixu n s sonly', 'C4 viewer with the flag: every count');
-select is(pg_temp.lines_seen(), 'mine:1 mix:2 mixu:2 n:2 s:1 sonly:1', 'L4 flag viewer: every line');
+-- S93 (0460): a viewer holds no count permission, so she reads no count; the
+-- warehouse rule for a viewer who holds one is C12 and C13 (the auditors).
+select is(pg_temp.counts_seen(), '(none)', 'C4 viewer with the flag: no count (she holds no count permission, 0460)');
+select is(pg_temp.lines_seen(), '(none)', 'L4 flag viewer: no line (0460)');
 select is(pg_temp.scans_seen(), '(none)', 'A4 flag viewer: no one else''s scans');
 
 set local "request.jwt.claim.sub" to :'stN';
@@ -315,17 +317,17 @@ select is(pg_temp.q_rb($$select coalesce((public.release_cycle_count('c5480000-0
   'released', 'X1 staff North: the assignee releases her own count');
 
 set local "request.jwt.claim.sub" to :'vwN';
-select is(pg_temp.counts_seen(), 'mix mixu n', 'C6 viewer North: North and the no-warehouse counts with a North line');
-select is(pg_temp.lines_seen(), 'mix:1 mixu:1 n:2', 'L6 viewer North: only North lines');
+select is(pg_temp.counts_seen(), '(none)', 'C6 viewer North: no count (she holds no count permission, 0460; C12 is the same warehouse with the permission)');
+select is(pg_temp.lines_seen(), '(none)', 'L6 viewer North: no line (0460)');
 select is(pg_temp.scans_seen(), '(none)', 'A6 viewer North: no scans');
 select is(pg_temp.objects_seen(), '(none)', 'O6 viewer North: no scan photo');
 select is(pg_temp.q($$select min(total_count)::text from public.cycle_counts_page('c5480000-0000-4000-8000-00000000000a', p_page_size => 100)$$),
-  '3', 'P4 viewer North: the list with no scope totals her 3');
+  null, 'P4 viewer North: an empty list (0460)');
 select is(pg_temp.snapshot_seen(array['c5480000-0000-4000-8000-0000000000c1']::uuid[]),
-  'mix:1 mixu:1 n:2', 'N2 viewer North: the snapshot read gets North''s counts with only North lines');
+  '(none)', 'N2 viewer North: the snapshot read gets no count (0460; the route also refuses her)');
 select is(pg_temp.n_rb($$update public.cycle_count_lines set counted_quantity = 3
      where cycle_count_id = 'c5480000-0000-4000-8000-0000000000e1'$$),
-  '0', 'W1v viewer North: reads North''s lines but records none');
+  '0', 'W1v viewer North: records no line');
 
 set local "request.jwt.claim.sub" to :'audN';
 select is(pg_temp.counts_seen(), 'mix mixu n', 'C12 auditor without the flag: only the counts of her warehouse');
@@ -505,9 +507,10 @@ end $$;
 select is(pg_temp.parity(:'own'),    'equal', 'Q1 parity owner');
 select is(pg_temp.parity(:'mgr'),    'equal', 'Q2 parity manager');
 select is(pg_temp.parity(:'stAll'),  'equal', 'Q3 parity flag staff');
-select is(pg_temp.parity(:'vwAll'),  'equal', 'Q4 parity flag viewer');
+-- Q4 and Q6: both sides are empty for a viewer (no count permission).
+select is(pg_temp.parity(:'vwAll'),  'equal', 'Q4 parity flag viewer (both sides empty)');
 select is(pg_temp.parity(:'stN'),    'equal', 'Q5 parity staff North');
-select is(pg_temp.parity(:'vwN'),    'equal', 'Q6 parity viewer North');
+select is(pg_temp.parity(:'vwN'),    'equal', 'Q6 parity viewer North (both sides empty)');
 select is(pg_temp.parity(:'stS'),    'equal', 'Q7 parity staff South');
 select is(pg_temp.parity(:'stNS'),   'equal', 'Q8 parity staff North and South');
 select is(pg_temp.parity(:'stNo'),   'equal', 'Q9 parity staff with no warehouse');

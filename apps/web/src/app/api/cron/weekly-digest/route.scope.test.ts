@@ -194,14 +194,28 @@ const CATEGORY_ASSIGNMENTS = [{ id: 'uca-1', user_id: 'viewer-books', category_i
 // and one staff member has it revoked. The owner keeps it whatever the
 // overrides say (has_permission answers true for an owner first).
 const ROLE_OVERRIDES = [
-  { role: 'viewer', granted: false },
-  { role: 'owner', granted: false },
+  { role: 'viewer', permission: 'purchase_orders:read', granted: false },
+  { role: 'owner', permission: 'purchase_orders:read', granted: false },
 ];
+// viewer-books is also a read-only auditor of counts (cycle_counts:read, S93);
+// viewer-all-cats holds no count permission.
 const USER_OVERRIDES = [
-  { user_id: 'viewer-books', granted: true },
-  { user_id: 'staff-no-po', granted: false },
+  { user_id: 'viewer-books', permission: 'purchase_orders:read', granted: true },
+  { user_id: 'viewer-books', permission: 'cycle_counts:read', granted: true },
+  { user_id: 'staff-no-po', permission: 'purchase_orders:read', granted: false },
 ];
-const ROLE_DEFAULTS = ['owner', 'admin', 'manager', 'staff', 'viewer'].map((role) => ({ role }));
+// role_default_permissions as 0279 seeds the three: purchase orders for every
+// role, the two count permissions for admin, manager and staff.
+const ROLE_DEFAULTS = [
+  ...['owner', 'admin', 'manager', 'staff', 'viewer'].map((role) => ({
+    role,
+    permission: 'purchase_orders:read',
+  })),
+  ...['admin', 'manager', 'staff'].flatMap((role) => [
+    { role, permission: 'cycle_counts:read' },
+    { role, permission: 'stock:adjust' },
+  ]),
+];
 
 function inValues(call: MockCall, column: string): unknown[] {
   const i = call.methods.findIndex((m, idx) => m === 'in' && call.args[idx]?.[0] === column);
@@ -332,7 +346,7 @@ describe('GET /api/cron/weekly-digest — what each recipient is sent', () => {
     expect(got.countLines).toEqual(['cc-a 1/2', 'cc-all 1/1', 'cc-mine-b 0/0']);
   });
 
-  it('sends a viewer the counts of her warehouse with only the lines of the categories she may read', async () => {
+  it('sends a viewer granted cycle_counts:read the counts of her warehouse with only the lines of the categories she may read', async () => {
     adminHolder.client = orgStub().client;
     await GET(request());
 
@@ -342,7 +356,14 @@ describe('GET /api/cron/weekly-digest — what each recipient is sent', () => {
       'cc-mine-b: Selected items',
     ]);
     expect(sentTo('Vic Books').countLines).toEqual(['cc-b 1/1', 'cc-all 1/1', 'cc-mine-b 0/0']);
-    expect(sentTo('Val AllCats').countLines).toEqual(['cc-b 1/2', 'cc-all 1/1', 'cc-mine-b 0/1']);
+  });
+
+  it('sends no count to a viewer who holds no count permission (S93)', async () => {
+    adminHolder.client = orgStub().client;
+    await GET(request());
+
+    expect(sentTo('Val AllCats').counts).toEqual([]);
+    expect(sentTo('Val AllCats').countLines).toEqual([]);
   });
 
   it('reads the all-warehouses flag at send time: every count, lines still by assignment', async () => {

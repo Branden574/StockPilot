@@ -16,8 +16,9 @@
 -- property is "the reader's input is still the database's truth", and a hash is
 -- the cheapest exact comparison. The "any member" policies are pinned too: if
 -- suppliers or locations become scoped, the reader must learn it. Cycle counts
--- and their lines follow the member's warehouses and items since S48
--- (canReadCount, canReadCountLine).
+-- and their lines follow the member's warehouses and items since S48, and
+-- ask cycle_counts:read or stock:adjust since S93 (canReadCount,
+-- canReadCountLine, digestReaderFor's canReadCounts).
 --
 -- IF THIS FAILS: read the new definition, change the reader in digest.ts (and
 -- route.scope.test.ts, digest.test.ts) to match in the same pull request, then
@@ -50,14 +51,14 @@ select is(
 select is(
   (select md5(qual) from pg_policies
     where schemaname = 'public' and tablename = 'cycle_counts' and policyname = 'cycle_counts_select'),
-  '10215f87131fbf25047b3ae1dd946235',
-  'cycle_counts_select: every count for a manager or an all-warehouses member, else my warehouses'' counts and my no-warehouse counts (assigned to me or with a line in my warehouses); canReadCount restates it'
+  '4b9cb776a93d776620be4a6919b04ac3',
+  'cycle_counts_select: for a holder of cycle_counts:read or stock:adjust (0460), every count for a manager or an all-warehouses member, else my warehouses'' counts and my no-warehouse counts (assigned to me or with a line in my warehouses); canReadCount restates it'
 );
 select is(
   (select md5(qual) from pg_policies
     where schemaname = 'public' and tablename = 'cycle_count_lines' and policyname = 'cycle_count_lines_select'),
-  'dc2f09e85da25932a465423d87ffb2ae',
-  'cycle_count_lines_select: manager, or my warehouse and a readable item; canReadCountLine restates it'
+  '3c83884b59a90c1dc25ec74fa919be5c',
+  'cycle_count_lines_select: for a holder of cycle_counts:read or stock:adjust (0460), manager, or my warehouse and a readable item; canReadCountLine restates it'
 );
 select is(
   (select md5(qual) from pg_policies

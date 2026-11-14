@@ -240,15 +240,20 @@ export async function getDigestSource(
 //   warehouses_select: has_org_role(org, 'manager') OR
 //     user_can_access_warehouse (staff/viewer with an assignment there). The
 //     cycle-count section shows a warehouse's name only to its readers.
-//   cycle_counts_select (S48):
-//     organization_id IN rls_member_org_ids() AND (
+//   cycle_counts_select (S48, S93):
+//     organization_id IN rls_member_org_ids()
+//     AND ( organization_id IN rls_orgs_with_permission('cycle_counts:read')
+//       OR organization_id IN rls_orgs_with_permission('stock:adjust') )
+//           -- has_permission below, per permission (0279)
+//     AND (
 //         organization_id IN rls_all_warehouses_org_ids()
 //           -- owner/admin/manager, or the all_warehouses flag (0280)
 //       OR warehouse_id IN my_warehouse_ids()
 //       OR (warehouse_id IS NULL AND (assigned_to = auth.uid()
 //           OR id IN rls_cc_unheaded_count_ids())) )
 //           -- a no-warehouse count with a line in one of my warehouses
-//   cycle_count_lines_select (S48): the count is readable AND (
+//   cycle_count_lines_select (S48, S93): the count is readable, its
+//     organization is in either permission set above, AND (
 //         its organization IN rls_manager_org_ids()   -- owner/admin/manager
 //       OR (warehouse_id IN my_warehouse_ids() AND the item is readable,
 //           inventory_items_select nested) )
@@ -270,6 +275,10 @@ const ASSIGNED_WAREHOUSES_ROLES: ReadonlySet<string> = new Set(['staff', 'viewer
 const ALL_CATEGORIES_ROLES: ReadonlySet<string> = new Set(['owner', 'admin', 'manager', 'staff']);
 
 const PO_READ = 'purchase_orders:read';
+const COUNT_READ = 'cycle_counts:read';
+const STOCK_ADJUST = 'stock:adjust';
+/** The permissions the reader resolves, read in one query per table. */
+const DIGEST_PERMISSIONS = [PO_READ, COUNT_READ, STOCK_ADJUST] as const;
 
 export interface DigestReaderAssignment {
   warehouseId: string;
@@ -291,6 +300,19 @@ export interface DigestReader {
   categoryIds: ReadonlySet<string> | null;
   /** has_permission(org, 'purchase_orders:read'). */
   canReadPurchaseOrders: boolean;
+  /** has_permission(org, 'cycle_counts:read') or has_permission(org,
+   *  'stock:adjust'): the count permission term of both count rules (S93). */
+  canReadCounts: boolean;
+}
+
+/** has_permission's inputs for one permission in one org. */
+export interface DigestPermissionFacts {
+  /** user_permission_overrides.granted, by user. */
+  user: Map<string, boolean>;
+  /** role_permission_overrides.granted, by role. */
+  role: Map<string, boolean>;
+  /** Roles with a role_default_permissions row. */
+  defaults: Set<string>;
 }
 
 /** The facts behind every recipient's reader in one org, read once. */
@@ -303,6 +325,9 @@ export interface DigestReaderData {
   rolePoRead: Map<string, boolean>;
   /** Roles with a role_default_permissions row for purchase_orders:read. */
   defaultPoReadRoles: Set<string>;
+  /** The same facts for the two count permissions (S93). */
+  countRead: DigestPermissionFacts;
+  stockAdjust: DigestPermissionFacts;
 }
 
 /**
@@ -344,34 +369,59 @@ export async function loadDigestReaderData(
             .range(from, to),
         { requireList: 'user_category_assignments' },
       ),
-      // One row per (org, user, permission), so user_id is a stable order.
-      fetchAllRowsByIds<{ user_id: string; granted: boolean }>(
+      // One row per (org, user, permission), so (user_id, permission) is a
+      // stable order.
+      fetchAllRowsByIds<{ user_id: string; permission: string; granted: boolean }>(
         userIds,
         (batch) => (from, to) =>
           admin
             .from('user_permission_overrides')
-            .select('user_id, granted')
+            .select('user_id, permission, granted')
             .eq('organization_id', orgId)
-            .eq('permission', PO_READ)
+            // in-list-bound: DIGEST_PERMISSIONS is three fixed permission keys
+            .in('permission', [...DIGEST_PERMISSIONS])
             .in('user_id', batch)
             .order('user_id', { ascending: true })
+            .order('permission', { ascending: true })
             .range(from, to),
         { requireList: 'user_permission_overrides' },
       ),
       admin
         .from('role_permission_overrides')
-        .select('role, granted')
+        .select('role, permission, granted')
         .eq('organization_id', orgId)
-        .eq('permission', PO_READ),
-      admin.from('role_default_permissions').select('role').eq('permission', PO_READ),
+        // in-list-bound: DIGEST_PERMISSIONS is three fixed permission keys
+        .in('permission', [...DIGEST_PERMISSIONS]),
+      admin
+        .from('role_default_permissions')
+        .select('role, permission')
+        // in-list-bound: DIGEST_PERMISSIONS is three fixed permission keys
+        .in('permission', [...DIGEST_PERMISSIONS]),
     ]);
   if (roleOverrides.error) throw new ServiceError('internal_error', roleOverrides.error.message);
   if (roleDefaults.error) throw new ServiceError('internal_error', roleDefaults.error.message);
-  const roleOverrideRows = listRows<{ role: string; granted: boolean }>(
+  const roleOverrideRows = listRows<{ role: string; permission: string; granted: boolean }>(
     'role_permission_overrides',
     roleOverrides,
   );
-  const roleDefaultRows = listRows<{ role: string }>('role_default_permissions', roleDefaults);
+  const roleDefaultRows = listRows<{ role: string; permission: string }>(
+    'role_default_permissions',
+    roleDefaults,
+  );
+  const factsFor = (permission: string): DigestPermissionFacts => ({
+    user: new Map(
+      userOverrideRows
+        .filter((r) => r.permission === permission)
+        .map((r) => [r.user_id, r.granted === true]),
+    ),
+    role: new Map(
+      roleOverrideRows
+        .filter((r) => r.permission === permission)
+        .map((r) => [r.role, r.granted === true]),
+    ),
+    defaults: new Set(roleDefaultRows.filter((r) => r.permission === permission).map((r) => r.role)),
+  });
+  const poRead = factsFor(PO_READ);
 
   const assignments = new Map<string, DigestReaderAssignment[]>();
   for (const r of assignmentRows) {
@@ -388,9 +438,11 @@ export async function loadDigestReaderData(
   return {
     assignments,
     categories,
-    userPoRead: new Map(userOverrideRows.map((r) => [r.user_id, r.granted === true])),
-    rolePoRead: new Map(roleOverrideRows.map((r) => [r.role, r.granted === true])),
-    defaultPoReadRoles: new Set(roleDefaultRows.map((r) => r.role)),
+    userPoRead: poRead.user,
+    rolePoRead: poRead.role,
+    defaultPoReadRoles: poRead.defaults,
+    countRead: factsFor(COUNT_READ),
+    stockAdjust: factsFor(STOCK_ADJUST),
   };
 }
 
@@ -414,6 +466,12 @@ export function digestReaderFor(
   const canReadPurchaseOrders =
     role === 'owner' ||
     (data.userPoRead.get(userId) ?? data.rolePoRead.get(role) ?? data.defaultPoReadRoles.has(role));
+  // has_permission for one permission: owner always, else the member's
+  // override, else the role's, else the role default.
+  const holds = (facts: DigestPermissionFacts): boolean =>
+    role === 'owner' ||
+    (facts.user.get(userId) ?? facts.role.get(role) ?? facts.defaults.has(role));
+  const canReadCounts = holds(data.countRead) || holds(data.stockAdjust);
   return {
     userId,
     role,
@@ -421,6 +479,7 @@ export function digestReaderFor(
     assignments: data.assignments.get(userId) ?? [],
     categoryIds,
     canReadPurchaseOrders,
+    canReadCounts,
   };
 }
 
@@ -466,6 +525,7 @@ function canReadWarehouse(reader: DigestReader | null, warehouseId: string): boo
 /** cycle_counts_select for one open count. */
 function canReadCount(reader: DigestReader | null, cc: DigestSourceCount): boolean {
   if (reader === null) return true;
+  if (!reader.canReadCounts) return false;
   if (ALL_WAREHOUSES_ROLES.has(reader.role) || reader.allWarehouses) return true;
   if (cc.warehouseId !== null) return canReachAssignedWarehouse(reader, cc.warehouseId);
   if (cc.assignedTo !== null && cc.assignedTo === reader.userId) return true;
@@ -477,6 +537,7 @@ function canReadCount(reader: DigestReader | null, cc: DigestSourceCount): boole
 /** cycle_count_lines_select for one line of a count the reader may read. */
 function canReadCountLine(reader: DigestReader | null, line: DigestSourceCountLine): boolean {
   if (reader === null) return true;
+  if (!reader.canReadCounts) return false;
   if (ALL_WAREHOUSES_ROLES.has(reader.role)) return true;
   if (line.warehouseId === null || !canReachAssignedWarehouse(reader, line.warehouseId)) {
     return false;

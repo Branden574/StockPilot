@@ -425,7 +425,8 @@ export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Perm
   // cycle_counts reads are warehouse-scoped like items:read, so an auditor
   // who needs every warehouse gets the all-warehouses flag. Within the
   // member's warehouses the app-layer gate is the sole restriction, so a
-  // grant is fully effective there.
+  // grant is fully effective there. cycle_counts and cycle_count_lines also
+  // ask for cycle_counts:read or stock:adjust in the database (0460).
   'cycle_counts:read',
   'schedule:read',
   'bundles:read',

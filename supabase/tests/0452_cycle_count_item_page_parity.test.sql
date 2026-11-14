@@ -17,7 +17,7 @@
 -- Fixtures as the test superuser; reads as `authenticated` with
 -- request.jwt.claim.sub. begin/rollback: nothing leaks. Namespace c548f000.
 begin;
-select plan(15);
+select plan(16);
 
 \set org    c548f000-0000-4000-8000-00000000000a
 \set org2   c548f000-0000-4000-8000-00000000000b
@@ -181,6 +181,26 @@ begin
            where i.id in (select id from s48p_items));
 end $$;
 
+-- The direct line read is for members who hold a count permission; the
+-- Physical count card is for every item reader. So for a
+-- viewer the card is compared with what the line rule shows the same person
+-- once granted cycle_counts:read (a per-member override added and removed
+-- here): the same warehouses, items and categories.
+create function pg_temp.direct_facts_with_count_read(p_uid uuid) returns text language plpgsql as $$
+declare r text;
+begin
+  reset role;
+  insert into public.user_permission_overrides (organization_id, user_id, permission, granted)
+  values ('c548f000-0000-4000-8000-00000000000a', p_uid, 'cycle_counts:read', true);
+  set local role authenticated;
+  r := pg_temp.direct_facts();
+  reset role;
+  delete from public.user_permission_overrides
+   where organization_id = 'c548f000-0000-4000-8000-00000000000a' and user_id = p_uid and permission = 'cycle_counts:read';
+  set local role authenticated;
+  return r;
+end $$;
+
 set local role authenticated;
 set local "request.jwt.claim.role" to 'authenticated';
 
@@ -195,13 +215,14 @@ select ok(pg_temp.page_facts() like '%iMove:-:-%' and pg_temp.page_facts() like 
 set local "request.jwt.claim.sub" to :'stS';
 select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P3 staff South: the item page equals the direct read');
 set local "request.jwt.claim.sub" to :'vwN';
-select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P4 viewer North: the item page equals the direct read');
+select is(pg_temp.page_facts(), pg_temp.direct_facts_with_count_read(:'vwN'), 'P4 viewer North: the item page equals the direct read of a count-permission holder in her warehouses (the card is by design, 0460)');
+select ok(pg_temp.direct_facts() !~ ':c', 'P4b viewer North: her own direct line read shows no count (0460)');
 set local "request.jwt.claim.sub" to :'st0';
 select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P5 staff with no warehouse: the item page equals the direct read');
 set local "request.jwt.claim.sub" to :'flag0';
 select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P6 flagged staff with no assignment rows: the item page equals the direct read');
 set local "request.jwt.claim.sub" to :'flagCat';
-select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P7 flagged viewer limited to a category: the item page equals the direct read');
+select is(pg_temp.page_facts(), pg_temp.direct_facts_with_count_read(:'flagCat'), 'P7 flagged viewer limited to a category: the item page equals the direct read of a count-permission holder with her scope (by design, 0460)');
 set local "request.jwt.claim.sub" to :'seat';
 select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P8 expired Act-as seat: the item page equals the direct read');
 set local "request.jwt.claim.sub" to :'dis';
@@ -209,7 +230,7 @@ select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P9 disabled account: th
 set local "request.jwt.claim.sub" to :'multi';
 select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P10 staff here, manager elsewhere: the item page equals the direct read');
 set local "request.jwt.claim.sub" to :'catVw';
-select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P11 viewer limited to a category: the item page equals the direct read');
+select is(pg_temp.page_facts(), pg_temp.direct_facts_with_count_read(:'catVw'), 'P11 viewer limited to a category: the item page equals the direct read of a count-permission holder with her scope (by design, 0460)');
 set local "request.jwt.claim.sub" to :'chSt';
 select is(pg_temp.page_facts(), pg_temp.direct_facts(), 'P12 staff limited to a charter: the item page equals the direct read');
 set local "request.jwt.claim.sub" to :'mgr2';

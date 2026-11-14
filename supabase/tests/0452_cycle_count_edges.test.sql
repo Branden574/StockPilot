@@ -161,6 +161,10 @@ insert into public.user_warehouse_assignments (organization_id, user_id, warehou
   (:'org', :'stN2', :'whN'), (:'org', :'stNoAdj', :'whN'),
   (:'org', :'vwF', :'whN'), (:'org', :'vwF', :'whS')
   on conflict do nothing;
+-- The flag viewer is a read-only auditor (granted cycle_counts:read), the
+-- role this suite's warehouse rows are about.
+insert into public.user_permission_overrides (organization_id, user_id, permission, granted) values
+  (:'org', :'vwF', 'cycle_counts:read', true);
 -- stX: South by her own row, and a row for North filed under the other
 -- organization. The item read scope joins through the warehouse's
 -- organization and lets her read North's items; my_warehouse_ids asks the
