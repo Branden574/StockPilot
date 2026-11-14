@@ -270,11 +270,26 @@ describe('assertWarehouseAccess and forcedWarehouseId deny on an unreadable answ
     await expect(forcedWarehouseId(failedStaff())).rejects.toBeInstanceOf(ForbiddenError);
   });
 
-  it('a manager is still allowed: the role alone grants every warehouse, as before', async () => {
-    const bearer = client({ 'warehouses.select': FAILED });
+  it("a manager is allowed a warehouse the organization's own read finds, though the list failed", async () => {
+    const WH = '0000000a-0000-4000-8000-0000000000a1';
+    const bearer = client({
+      'warehouses.select': FAILED,
+      'warehouses.select.maybeSingle': { data: { id: WH }, error: null },
+    });
     await expect(
-      assertWarehouseAccess('wh-z', 'write', bearerCtx('manager', bearer.client)),
+      assertWarehouseAccess(WH, 'write', bearerCtx('manager', bearer.client)),
     ).resolves.toBeUndefined();
+  });
+
+  it('a manager is refused, as could-not-check, when that read fails too', async () => {
+    const WH = '0000000a-0000-4000-8000-0000000000a1';
+    const bearer = client({ 'warehouses.select': FAILED });
+    const e = await assertWarehouseAccess(WH, 'write', bearerCtx('manager', bearer.client)).then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect(e).toBeInstanceOf(ForbiddenError);
+    expect((e as ForbiddenError).accessUnreadable).toBe(true);
   });
 });
 

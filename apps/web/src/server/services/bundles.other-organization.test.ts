@@ -31,7 +31,7 @@ import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 const KIT_ID = '00000000-0000-4000-8000-0000000000b1';
 const ITEM_1 = '11111111-1111-4111-8111-111111111111';
 const ITEM_2 = '22222222-2222-4222-8222-222222222222';
-const WAREHOUSE_ID = 'wh-b';
+const WAREHOUSE_ID = '00000000-0000-4000-8000-0000000000c1';
 
 const B_KIT = {
   id: KIT_ID,
@@ -45,6 +45,10 @@ const B_KIT = {
 function stubFor() {
   return makeSupabaseStub({
     'bundles.select': servedLikePostgrest([B_KIT]),
+    // The warehouse is B's: a warehouse must belong to the active organization.
+    'warehouses.select': servedLikePostgrest([
+      { id: WAREHOUSE_ID, organization_id: 'org-B', name: 'B one', status: 'active' },
+    ]),
     'bundle_components.select': (call) =>
       // The save's read-back asks for item_id; get() embeds the item.
       call.args[0]?.[0] === 'item_id'
