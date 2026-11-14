@@ -928,7 +928,10 @@ select is(
   -- from production's policy text plus that term (the deparsed shape the 0395
   -- suite H1 predicts) with the local authenticated role's OID (16444, the OID
   -- that reproduces the old pin from production's text); verify on the stack.
-  'order_requests + schedule_events policies|87377ff4c4e4c700e7598e50fadb59c6|8',
+  -- Re-pinned by 0461 (was 87377ff4c4e4c700e7598e50fadb59c6|8): schedule_events_insert also
+  -- asks warehouse_in_org(warehouse_id, organization_id) (0461 E-section); every other term
+  -- and policy is unchanged, and nothing proven here reads it.
+  'order_requests + schedule_events policies|01f27f5c329869ab387a9420dbe39677|8',
   'Z2: ledger.*, the 0380 report functions, the 0381 photo functions and policies, the 0382 book functions, and the order_requests and schedule_events policies are the ones F2-4 was proven against (schedule_events as 0384 left them)');
 select ok(
   (select bool_and(has_column_privilege('authenticated', 'public.schedule_events', c, 'UPDATE'))
