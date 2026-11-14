@@ -64,14 +64,16 @@ describe('the not found release', () => {
     expect(release().revision).toBe(1);
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    expect(RELEASES[5]?.id).toBe('ai-assistant-plain-words-2026-11');
-    expect(RELEASES[6]?.id).toBe(ID);
-    expect(RELEASES[7]?.id).toBe('phone-appearance-returns-2026-11');
+    // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: every pinned position one place higher): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[6]?.id).toBe('ai-assistant-plain-words-2026-11');
+    expect(RELEASES[7]?.id).toBe(ID);
+    expect(RELEASES[8]?.id).toBe('phone-appearance-returns-2026-11');
     // #507 went live at 04:08:17Z.
     expect(release().publishedAt).toBe('2026-11-13T04:09:00Z');
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    for (const r of RELEASES.slice(7)) {
+    // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: every pinned position one place higher): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(8)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
