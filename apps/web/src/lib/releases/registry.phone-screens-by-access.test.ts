@@ -146,7 +146,7 @@ describe('the phone screens by access release: the words', () => {
       'After a workspace switch, the phone shows only the new workspace',
     );
     expect(workspace().whatChanged).toBe(
-      "After you switch workspaces, Users, Team, Accounts, Bundles, Cycle counts and the admin lists on the phone show only the new workspace's records, and the phone reads your role and permissions for the new workspace before it shows it. If a workspace has not finished loading or syncing, a screen with nothing to show says so and lets you try again.",
+      "After you switch workspaces, Users, Team, Accounts, Bundles, Cycle counts and the admin lists on the phone show only the new workspace's records, and the phone uses your role in the new workspace as soon as it shows it, and your permissions there once it has synced. If a workspace has not finished loading or syncing, a screen with nothing to show says so and lets you try again.",
     );
     expect(workspace().whyItMatters).toBe(
       'Each workspace keeps its own records and your access in it, and a screen that is still waiting tells you so.',
@@ -182,11 +182,14 @@ describe('the phone screens by access release: the words', () => {
     expect(text).not.toMatch(/Reassign/);
     // The two entries every member reads say what the phone does now, never
     // what it did before: no "Before,", "used to", "previously", "the previous
-    // workspace", "no longer", "anymore", "stops using" or "instead of".
+    // workspace", "no longer", "anymore", "any more", "stops using", "instead
+    // of", "earlier" or "until now".
+    // Entry 3 (whoever counts) may say "Before," and "no longer": it describes a
+    // save the phone did not make, not anyone's access.
     for (const e of [access(), workspace()]) {
       const said = [e.title, e.whatChanged, e.whyItMatters, e.howItAffectsYou].join(' ');
       expect(said, e.id).not.toMatch(
-        /\bbefore,|\bused to\b|\bpreviously\b|\bprevious workspace\b|\bno longer\b|\banymore\b|\bstops? using\b|\binstead of\b/i,
+        /\bbefore,|\bused to\b|\bpreviously\b|\bprevious workspace\b|\bno longer\b|\banymore\b|\bstops? using\b|\binstead of\b|\bany more\b|\bearlier\b|\buntil now\b/i,
       );
     }
   });

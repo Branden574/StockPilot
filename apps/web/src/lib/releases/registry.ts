@@ -263,7 +263,7 @@ export const RELEASES: Release[] = [
         area: 'Mobile app',
         title: 'After a workspace switch, the phone shows only the new workspace',
         whatChanged:
-          "After you switch workspaces, Users, Team, Accounts, Bundles, Cycle counts and the admin lists on the phone show only the new workspace's records, and the phone reads your role and permissions for the new workspace before it shows it. If a workspace has not finished loading or syncing, a screen with nothing to show says so and lets you try again.",
+          "After you switch workspaces, Users, Team, Accounts, Bundles, Cycle counts and the admin lists on the phone show only the new workspace's records, and the phone uses your role in the new workspace as soon as it shows it, and your permissions there once it has synced. If a workspace has not finished loading or syncing, a screen with nothing to show says so and lets you try again.",
         whyItMatters:
           'Each workspace keeps its own records and your access in it, and a screen that is still waiting tells you so.',
         howItAffectsYou:
