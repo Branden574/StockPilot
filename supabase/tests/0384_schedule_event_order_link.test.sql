@@ -549,9 +549,9 @@ select is(
   'schedule_events_update w {authenticated}\n'
   '  USING (( SELECT is_org_member(schedule_events.organization_id) AS is_org_member) AND ((created_by = auth.uid()) OR ( SELECT has_org_role(schedule_events.organization_id, ''manager''::text) AS has_org_role)))\n'
   '  CHECK (( SELECT is_org_member(schedule_events.organization_id) AS is_org_member) AND ((created_by = auth.uid()) OR ( SELECT has_org_role(schedule_events.organization_id, ''manager''::text) AS has_org_role)) AND ( SELECT warehouse_in_org(schedule_events.warehouse_id, schedule_events.organization_id) AS warehouse_in_org) AND ( SELECT warehouse_in_org(schedule_events.bundle_warehouse_id, schedule_events.organization_id) AS warehouse_in_org) AND ( SELECT order_request_in_org(schedule_events.order_request_id, schedule_events.organization_id) AS order_request_in_org))',
-  -- Re-pinned by 0461: the insert WITH CHECK also asks warehouse_in_org of the event's
-  -- warehouse (0461 E-section); every other term and policy is as 0384 left it.
-  'G8: the four schedule_events policies are 0384''s, the insert WITH CHECK with 0461''s warehouse term: insert and update WITH CHECK gain order_request_in_org and keep every earlier term; USING, select and delete unchanged');
+  -- Re-pinned by 0423: the insert WITH CHECK also asks warehouse_in_org of the event's
+  -- warehouse (0423 E-section); every other term and policy is as 0384 left it.
+  'G8: the four schedule_events policies are 0384''s, the insert WITH CHECK with 0423''s warehouse term: insert and update WITH CHECK gain order_request_in_org and keep every earlier term; USING, select and delete unchanged');
 select is(
   (select string_agg(c || ':' || coalesce(col_description('public.schedule_events'::regclass, a.attnum) ~ 'server', false)::text, ',' order by c)
      from unnest(array['assigned_user_id', 'order_request_id']) c

@@ -1,4 +1,4 @@
--- 0461_item_location_and_event_references_in_own_organization.sql
+-- 0423_item_location_and_event_references_in_own_organization.sql
 --
 -- These references belong to the row's own organization, for every rank (a
 -- NULL reference passes, as before):
@@ -67,7 +67,7 @@
 -- The schedule_events INSERT rule (0384) asks: a member of the event's
 -- organization, filing their own event, with no warehouse or one they may
 -- write (user_can_access_warehouse), a bundle source warehouse and an order
--- of the event's organization. It now asks warehouse_in_org of the warehouse
+-- of the event's organization. It asks warehouse_in_org of the warehouse
 -- too, as the UPDATE rule does; every other term is restated as it was. The
 -- event writers name the active organization's warehouse or none: the
 -- Schedule page (ScheduleService, the signed-in user's client), the phone's
@@ -200,8 +200,8 @@ begin
         into v_pol
         from pg_policy pol
        where pol.polrelid = to_regclass(r.tbl) and pol.polcmd in ('a', 'w', '*');
-      raise exception using errcode = 'XX461', message = 'undo';
-    exception when sqlstate 'XX461' then
+      raise exception using errcode = 'XX423', message = 'undo';
+    exception when sqlstate 'XX423' then
       null;
     end;
     if md5(coalesce(v_pol, '')) is distinct from r.want then

@@ -1178,8 +1178,8 @@ select is(
   -- from production's policy text plus that term (the deparsed shape the 0395
   -- suite H1 predicts) with the local authenticated role's OID (16444, the OID
   -- that reproduces the old pin from production's text); verify on the stack.
-  -- Re-pinned by 0461 (was 87377ff4c4e4c700e7598e50fadb59c6|8): schedule_events_insert also
-  -- asks warehouse_in_org(warehouse_id, organization_id) (0461 E-section); every other term
+  -- Re-pinned by 0423 (was 87377ff4c4e4c700e7598e50fadb59c6|8): schedule_events_insert also
+  -- asks warehouse_in_org(warehouse_id, organization_id) (0423 E-section); every other term
   -- and policy is unchanged, and nothing proven here reads it.
   'order_requests + schedule_events policies|01f27f5c329869ab387a9420dbe39677|8\n'
   'PO triggers|b8cf49572ed3d9556416e8d4b89a7094|4\n'

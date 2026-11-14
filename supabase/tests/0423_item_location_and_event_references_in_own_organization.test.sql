@@ -96,57 +96,57 @@
 -- when it succeeds),
 -- which switch role and claims with set_config inside a subtransaction (the
 -- 0387 helpers, as 0419 uses them). begin/rollback: nothing leaks.
--- Namespace 04610000; undo code XX461.
+-- Namespace 04230000; undo code XX423.
 
 begin;
 
 select plan(49);
 
-\set orgA    '\'04610000-0000-0000-0000-00000000000a\''
-\set orgB    '\'04610000-0000-0000-0000-00000000000b\''
-\set own     '\'04610000-0000-0000-0000-0000000000a1\''
-\set adm     '\'04610000-0000-0000-0000-0000000000a2\''
-\set mgr     '\'04610000-0000-0000-0000-0000000000a3\''
-\set allwh   '\'04610000-0000-0000-0000-0000000000a4\''
-\set stf     '\'04610000-0000-0000-0000-0000000000a5\''
-\set vwr     '\'04610000-0000-0000-0000-0000000000a6\''
-\set two     '\'04610000-0000-0000-0000-0000000000a7\''
-\set twoStf  '\'04610000-0000-0000-0000-0000000000a8\''
-\set mgrB    '\'04610000-0000-0000-0000-0000000000b1\''
-\set whA     '\'04610000-0000-0000-0000-0000000000d1\''
-\set whA2    '\'04610000-0000-0000-0000-0000000000d2\''
-\set whB     '\'04610000-0000-0000-0000-0000000000d3\''
-\set itA     '\'04610000-0000-0000-0000-000000000101\''
-\set itDup   '\'04610000-0000-0000-0000-000000000102\''
-\set itX     '\'04610000-0000-0000-0000-000000000103\''
-\set rA      '\'04610000-0000-0000-0000-000000000104\''
-\set rB      '\'04610000-0000-0000-0000-000000000105\''
-\set locA    '\'04610000-0000-0000-0000-000000000201\''
-\set locA2   '\'04610000-0000-0000-0000-000000000202\''
-\set locB    '\'04610000-0000-0000-0000-000000000203\''
-\set whNew   '\'04610000-0000-0000-0000-0000000000d9\''
-\set both    '\'04610000-0000-0000-0000-0000000000a9\''
-\set catA    '\'04610000-0000-0000-0000-000000000301\''
-\set catB    '\'04610000-0000-0000-0000-000000000302\''
-\set locA3   '\'04610000-0000-0000-0000-000000000204\''
-\set evA     '\'04610000-0000-0000-0000-000000000401\''
+\set orgA    '\'04230000-0000-0000-0000-00000000000a\''
+\set orgB    '\'04230000-0000-0000-0000-00000000000b\''
+\set own     '\'04230000-0000-0000-0000-0000000000a1\''
+\set adm     '\'04230000-0000-0000-0000-0000000000a2\''
+\set mgr     '\'04230000-0000-0000-0000-0000000000a3\''
+\set allwh   '\'04230000-0000-0000-0000-0000000000a4\''
+\set stf     '\'04230000-0000-0000-0000-0000000000a5\''
+\set vwr     '\'04230000-0000-0000-0000-0000000000a6\''
+\set two     '\'04230000-0000-0000-0000-0000000000a7\''
+\set twoStf  '\'04230000-0000-0000-0000-0000000000a8\''
+\set mgrB    '\'04230000-0000-0000-0000-0000000000b1\''
+\set whA     '\'04230000-0000-0000-0000-0000000000d1\''
+\set whA2    '\'04230000-0000-0000-0000-0000000000d2\''
+\set whB     '\'04230000-0000-0000-0000-0000000000d3\''
+\set itA     '\'04230000-0000-0000-0000-000000000101\''
+\set itDup   '\'04230000-0000-0000-0000-000000000102\''
+\set itX     '\'04230000-0000-0000-0000-000000000103\''
+\set rA      '\'04230000-0000-0000-0000-000000000104\''
+\set rB      '\'04230000-0000-0000-0000-000000000105\''
+\set locA    '\'04230000-0000-0000-0000-000000000201\''
+\set locA2   '\'04230000-0000-0000-0000-000000000202\''
+\set locB    '\'04230000-0000-0000-0000-000000000203\''
+\set whNew   '\'04230000-0000-0000-0000-0000000000d9\''
+\set both    '\'04230000-0000-0000-0000-0000000000a9\''
+\set catA    '\'04230000-0000-0000-0000-000000000301\''
+\set catB    '\'04230000-0000-0000-0000-000000000302\''
+\set locA3   '\'04230000-0000-0000-0000-000000000204\''
+\set evA     '\'04230000-0000-0000-0000-000000000401\''
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
 insert into auth.users (id, email, raw_user_meta_data) values
-  (:own,    'i461-own@i461.test',    '{}'::jsonb),
-  (:adm,    'i461-adm@i461.test',    '{}'::jsonb),
-  (:mgr,    'i461-mgr@i461.test',    '{}'::jsonb),
-  (:allwh,  'i461-allwh@i461.test',  '{}'::jsonb),
-  (:stf,    'i461-stf@i461.test',    '{}'::jsonb),
-  (:vwr,    'i461-vwr@i461.test',    '{}'::jsonb),
-  (:two,    'i461-two@i461.test',    '{}'::jsonb),
-  (:twoStf, 'i461-twostf@i461.test', '{}'::jsonb),
-  (:mgrB,   'i461-mgrb@i461.test',   '{}'::jsonb),
-  (:both,   'i461-both@i461.test',   '{}'::jsonb)
+  (:own,    'i423-own@i423.test',    '{}'::jsonb),
+  (:adm,    'i423-adm@i423.test',    '{}'::jsonb),
+  (:mgr,    'i423-mgr@i423.test',    '{}'::jsonb),
+  (:allwh,  'i423-allwh@i423.test',  '{}'::jsonb),
+  (:stf,    'i423-stf@i423.test',    '{}'::jsonb),
+  (:vwr,    'i423-vwr@i423.test',    '{}'::jsonb),
+  (:two,    'i423-two@i423.test',    '{}'::jsonb),
+  (:twoStf, 'i423-twostf@i423.test', '{}'::jsonb),
+  (:mgrB,   'i423-mgrb@i423.test',   '{}'::jsonb),
+  (:both,   'i423-both@i423.test',   '{}'::jsonb)
   on conflict (id) do nothing;
 insert into public.organizations (id, name, slug) values
-  (:orgA, 'I461 Item Org A', 'i461-item-org-a'),
-  (:orgB, 'I461 Item Org B', 'i461-item-org-b');
+  (:orgA, 'I423 Item Org A', 'i423-item-org-a'),
+  (:orgB, 'I423 Item Org B', 'i423-item-org-b');
 insert into public.organization_members (organization_id, user_id, role, accepted_at, all_warehouses) values
   (:orgA, :own,    'owner',   now(), false),
   (:orgA, :adm,    'admin',   now(), false),
@@ -166,34 +166,34 @@ insert into public.organization_modules (organization_id, module_id, enabled, ti
   (:orgB, 'rentals', true, 'optional')
   on conflict (organization_id, module_id) do update set enabled = true;
 insert into public.warehouses (id, organization_id, name, code, status) values
-  (:whA,  :orgA, 'I461 Main',   'WH-I461A',  'active'),
-  (:whA2, :orgA, 'I461 Second', 'WH-I461A2', 'active'),
-  (:whB,  :orgB, 'I461 Other',  'WH-I461B',  'active');
+  (:whA,  :orgA, 'I423 Main',   'WH-I423A',  'active'),
+  (:whA2, :orgA, 'I423 Second', 'WH-I423A2', 'active'),
+  (:whB,  :orgB, 'I423 Other',  'WH-I423B',  'active');
 insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, is_primary) values
   (:orgA, :stf,    :whA, true),
   (:orgA, :vwr,    :whA, true),
   (:orgA, :twoStf, :whA, true),
   (:orgB, :two,    :whB, true);
 insert into public.categories (id, organization_id, name) values
-  (:catA, :orgA, 'I461 Furniture'),
-  (:catB, :orgB, 'I461 Lighting');
+  (:catA, :orgA, 'I423 Furniture'),
+  (:catB, :orgB, 'I423 Lighting');
 -- Items, by the superuser (the guard holds the API roles only). itX is
 -- written past the rules (see the header).
 insert into public.inventory_items (id, organization_id, warehouse_id, sku, name, quantity_on_hand, is_rental, status, item_type) values
-  (:itA,   :orgA, :whA, 'I461-A',   'Folding table', 0, false, 'active', 'asset'),
-  (:itDup, :orgA, :whA, 'I461-DUP', 'Stack chair',   0, false, 'active', 'asset'),
-  (:itX,   :orgA, :whB, 'I461-X',   'Floor lamp',    0, false, 'active', 'asset'),
-  (:rA,    :orgA, :whA, 'I461-RA',  'Projector A',   5, true,  'active', 'asset'),
-  (:rB,    :orgB, :whB, 'I461-RB',  'Projector B',   5, true,  'active', 'asset');
+  (:itA,   :orgA, :whA, 'I423-A',   'Folding table', 0, false, 'active', 'asset'),
+  (:itDup, :orgA, :whA, 'I423-DUP', 'Stack chair',   0, false, 'active', 'asset'),
+  (:itX,   :orgA, :whB, 'I423-X',   'Floor lamp',    0, false, 'active', 'asset'),
+  (:rA,    :orgA, :whA, 'I423-RA',  'Projector A',   5, true,  'active', 'asset'),
+  (:rB,    :orgB, :whB, 'I423-RB',  'Projector B',   5, true,  'active', 'asset');
 
 insert into public.locations (id, organization_id, warehouse_id, name, type) values
-  (:locA,  :orgA, :whA, 'I461 Aisle 1', 'room'),
-  (:locA2, :orgA, :whA, 'I461 Shelf 1', 'shelf'),
-  (:locB,  :orgB, :whB, 'I461 Aisle B', 'room');
+  (:locA,  :orgA, :whA, 'I423 Aisle 1', 'room'),
+  (:locA2, :orgA, :whA, 'I423 Shelf 1', 'shelf'),
+  (:locB,  :orgB, :whB, 'I423 Aisle B', 'room');
 insert into public.locations (id, organization_id, warehouse_id, name, type, parent_id) values
-  (:locA3, :orgA, null, 'I461 Annex', 'room', :locA);
+  (:locA3, :orgA, null, 'I423 Annex', 'room', :locA);
 insert into public.schedule_events (id, organization_id, title, starts_at, ends_at, warehouse_id, created_by) values
-  (:evA, :orgA, 'I461 Delivery', now() + interval '1 day', now() + interval '1 day 1 hour', :whA, :mgr);
+  (:evA, :orgA, 'I423 Delivery', now() + interval '1 day', now() + interval '1 day 1 hour', :whA, :mgr);
 
 -- ══ Helpers (0387's, as 0419 uses them) ══════════════════════════════════
 create function pg_temp.hint(p_hint text) returns text language sql immutable as $$
@@ -222,11 +222,11 @@ begin
     if p_check is not null then
       execute p_check into v_seen;
     end if;
-    raise exception using errcode = 'XX461', message = 'undo';
+    raise exception using errcode = 'XX423', message = 'undo';
   exception when others then
     get stacked diagnostics v_state = returned_sqlstate, v_msg = message_text, v_hint = pg_exception_hint;
   end;
-  if v_state = 'XX461' then
+  if v_state = 'XX423' then
     return 'ok:' || v_n::text || coalesce(':' || v_seen, '');
   end if;
   return v_state || ':' || pg_temp.hint(v_hint) || ':' || v_msg;
@@ -275,7 +275,7 @@ begin
     perform set_config('role', 'authenticated', true);
     execute format($q$insert into public.inventory_items (organization_id, warehouse_id, sku, name, quantity_on_hand, status, item_type)
                       values (%L, %L, %L, 'Banquet table', 5, 'active', 'asset')$q$,
-                   '04610000-0000-0000-0000-00000000000a', p_wh, p_sku);
+                   '04230000-0000-0000-0000-00000000000a', p_wh, p_sku);
     perform set_config('role', 'none', true);
   exception when others then
     get stacked diagnostics v_state = returned_sqlstate, v_msg = message_text, v_hint = pg_exception_hint;
@@ -353,21 +353,21 @@ $$;
 -- and every movement of the two organizations' items.
 create function pg_temp.state() returns text language sql stable as $$
   select coalesce((select string_agg(i.sku || '/' || coalesce(i.warehouse_id::text, '-') || '/' || i.quantity_on_hand::text, ',' order by i.sku collate "C")
-                     from public.inventory_items i where i.organization_id = '04610000-0000-0000-0000-00000000000a'), '-')
+                     from public.inventory_items i where i.organization_id = '04230000-0000-0000-0000-00000000000a'), '-')
       || ' # ' || (select count(*) from public.item_stock_levels l
                     join public.inventory_items i on i.id = l.item_id
-                   where i.organization_id = '04610000-0000-0000-0000-00000000000a')::text
-      || ' # ' || (select count(*) from public.locations where organization_id = '04610000-0000-0000-0000-00000000000b')::text
+                   where i.organization_id = '04230000-0000-0000-0000-00000000000a')::text
+      || ' # ' || (select count(*) from public.locations where organization_id = '04230000-0000-0000-0000-00000000000b')::text
       || ' # ' || (select count(*) from public.stock_movements
-                   where organization_id in ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-00000000000b'))::text
+                   where organization_id in ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-00000000000b'))::text
       || ' # ' || (select count(*) from public.rentals
-                   where organization_id in ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-00000000000b'))::text
+                   where organization_id in ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-00000000000b'))::text
       || ' # ' || (select string_agg(l.name || '/' || coalesce(l.parent_id::text, '-'), ',' order by l.name collate "C")
-                     from public.locations l where l.organization_id = '04610000-0000-0000-0000-00000000000a')
+                     from public.locations l where l.organization_id = '04230000-0000-0000-0000-00000000000a')
       || ' # ' || (select string_agg(i.sku || '/' || coalesce(i.category_id::text, '-'), ',' order by i.sku collate "C")
-                     from public.inventory_items i where i.organization_id = '04610000-0000-0000-0000-00000000000a')
+                     from public.inventory_items i where i.organization_id = '04230000-0000-0000-0000-00000000000a')
       || ' # ' || (select string_agg(e.title || '/' || coalesce(e.warehouse_id::text, '-'), ',' order by e.title collate "C")
-                     from public.schedule_events e where e.organization_id in ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-00000000000b'))
+                     from public.schedule_events e where e.organization_id in ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-00000000000b'))
 $$;
 -- The schedule_events rules, deparsed the same way.
 create function pg_temp.event_rules() returns text language sql stable set search_path = public, extensions as $$
@@ -404,7 +404,7 @@ select is(
                                         from public.user_warehouse_assignments u join public.warehouses w on w.id = u.warehouse_id
                                        where u.user_id = p.id), ' ' order by p.who collate "C")
      from persona p where p.who in ('allwh', 'stf', 'vwr', 'two', 'twoStf')),
-  'allwh:WH-I461A+WH-I461A2 stf:WH-I461A two:WH-I461B twoStf:WH-I461A vwr:WH-I461A',
+  'allwh:WH-I423A+WH-I423A2 stf:WH-I423A two:WH-I423B twoStf:WH-I423A vwr:WH-I423A',
   'F2: the warehouse assignments (allwh holds both of A''s through the all-warehouses trigger)');
 select is(
   (select count(*)::int from public.locations l where l.warehouse_id = :whB and l.kind = 'unplaced' and l.organization_id = :orgB),
@@ -413,9 +413,9 @@ select is(
 
 -- ══ I. Another organization's warehouse on insert ═════════════════════════
 select is(
-  'mgr=' || pg_temp.kept('mgr', :whB, 'I461-I-MGR') || '; adm=' || pg_temp.kept('adm', :whB, 'I461-I-ADM')
-  || '; own=' || pg_temp.kept('own', :whB, 'I461-I-OWN') || '; allwh=' || pg_temp.kept('allwh', :whB, 'I461-I-ALL')
-  || '; stf=' || pg_temp.kept('stf', :whB, 'I461-I-STF') || '; vwr=' || pg_temp.kept('vwr', :whB, 'I461-I-VWR'),
+  'mgr=' || pg_temp.kept('mgr', :whB, 'I423-I-MGR') || '; adm=' || pg_temp.kept('adm', :whB, 'I423-I-ADM')
+  || '; own=' || pg_temp.kept('own', :whB, 'I423-I-OWN') || '; allwh=' || pg_temp.kept('allwh', :whB, 'I423-I-ALL')
+  || '; stf=' || pg_temp.kept('stf', :whB, 'I423-I-STF') || '; vwr=' || pg_temp.kept('vwr', :whB, 'I423-I-VWR'),
   'mgr=42501:-:That warehouse is not part of this organization. | items=0 levels=0 moves=0; '
   || 'adm=42501:-:That warehouse is not part of this organization. | items=0 levels=0 moves=0; '
   || 'own=42501:-:That warehouse is not part of this organization. | items=0 levels=0 moves=0; '
@@ -424,18 +424,18 @@ select is(
   || 'vwr=42501:-:That warehouse is not part of this organization. | items=0 levels=0 moves=0',
   'I1: an owner, admin, manager, all-warehouses member, scoped staff member and viewer of A inserting an item of A in B''s warehouse: refused 42501, and no item, holding or movement row is written');
 select is(
-  'two=' || pg_temp.kept('two', :whB, 'I461-I-TWO') || '; twoStf=' || pg_temp.kept('twoStf', :whB, 'I461-I-TWOSTF'),
+  'two=' || pg_temp.kept('two', :whB, 'I423-I-TWO') || '; twoStf=' || pg_temp.kept('twoStf', :whB, 'I423-I-TWOSTF'),
   'two=42501:-:That warehouse is not part of this organization. | items=0 levels=0 moves=0; '
   || 'twoStf=42501:-:That warehouse is not part of this organization. | items=0 levels=0 moves=0',
   'I2: a member of both organizations acting in A (an admin of A who is staff of B, a staff member of A who is a manager of B): refused 42501, nothing written');
 
 select is(
   'own=' || pg_temp.kept_sql('mgrB', $q$insert into public.inventory_items (organization_id, warehouse_id, sku, name, quantity_on_hand, status, item_type)
-       values ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-0000000000d1', 'I461-I3-A', 'Banquet table', 5, 'active', 'asset')$q$, 'I461-I3-%')
+       values ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-0000000000d1', 'I423-I3-A', 'Banquet table', 5, 'active', 'asset')$q$, 'I423-I3-%')
   || '; other=' || pg_temp.kept_sql('mgrB', $q$insert into public.inventory_items (organization_id, warehouse_id, sku, name, quantity_on_hand, status, item_type)
-       values ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-0000000000d3', 'I461-I3-B', 'Banquet table', 5, 'active', 'asset')$q$, 'I461-I3-%')
+       values ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-0000000000d3', 'I423-I3-B', 'Banquet table', 5, 'active', 'asset')$q$, 'I423-I3-%')
   || '; anon=' || pg_temp.kept_sql(null, $q$insert into public.inventory_items (organization_id, warehouse_id, sku, name, quantity_on_hand, status, item_type)
-       values ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-0000000000d1', 'I461-I3-N', 'Banquet table', 5, 'active', 'asset')$q$, 'I461-I3-%'),
+       values ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-0000000000d1', 'I423-I3-N', 'Banquet table', 5, 'active', 'asset')$q$, 'I423-I3-%'),
   'own=42501:-:new row violates row-level security policy for table "inventory_items" | items=0; '
   || 'other=42501:-:new row violates row-level security policy for table "inventory_items" | items=0; '
   || 'anon=42501:-:permission denied for table inventory_items | items=0',
@@ -443,15 +443,15 @@ select is(
 select is(
   pg_temp.kept_sql('mgr',
     $q$insert into public.inventory_items (organization_id, warehouse_id, sku, name, quantity_on_hand, status, item_type) values
-       ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-0000000000d1', 'I461-I4-1', 'Banquet table', 5, 'active', 'asset'),
-       ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-0000000000d3', 'I461-I4-2', 'Banquet table', 5, 'active', 'asset')$q$,
-    'I461-I4-%'),
+       ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-0000000000d1', 'I423-I4-1', 'Banquet table', 5, 'active', 'asset'),
+       ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-0000000000d3', 'I423-I4-2', 'Banquet table', 5, 'active', 'asset')$q$,
+    'I423-I4-%'),
   '42501:-:That warehouse is not part of this organization. | items=0',
   'I4: a two-row insert by a manager, one row in A''s warehouse and one in B''s: refused, neither row written');
 select is(
   pg_temp.attempt('authenticated', :mgr,
     format($q$insert into public.inventory_items (id, organization_id, warehouse_id, sku, name, status, item_type)
-              values (%L, %L, %L, 'I461-A', 'Folding table', 'active', 'asset')
+              values (%L, %L, %L, 'I423-A', 'Folding table', 'active', 'asset')
               on conflict (id) do update set warehouse_id = excluded.warehouse_id$q$, :itA, :orgA, :whB)),
   '42501:-:That warehouse is not part of this organization.',
   'I5: an upsert onto an item of A that proposes B''s warehouse is refused');
@@ -460,8 +460,8 @@ select is(
 select is(
   pg_temp.each(array['own', 'adm', 'mgr', 'allwh', 'stf', 'vwr', 'two', 'twoStf'],
     $q$insert into public.inventory_items (organization_id, warehouse_id, sku, name, quantity_on_hand, status, item_type)
-       values ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-0000000000d1', 'I461-S-%1$s', 'Banquet table', 5, 'active', 'asset')$q$,
-    $q$select pg_temp.rows_of('I461-S-%1$s')$q$),
+       values ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-0000000000d1', 'I423-S-%1$s', 'Banquet table', 5, 'active', 'asset')$q$,
+    $q$select pg_temp.rows_of('I423-S-%1$s')$q$),
   'own=ok:1:items=1 levels=1 moves=0, adm=ok:1:items=1 levels=1 moves=0, mgr=ok:1:items=1 levels=1 moves=0, '
   || 'allwh=ok:1:items=1 levels=1 moves=0, stf=ok:1:items=1 levels=1 moves=0, '
   || 'vwr=42501:-:new row violates row-level security policy for table "inventory_items", '
@@ -470,7 +470,7 @@ select is(
 select is(
   pg_temp.each(array['own', 'adm', 'mgr', 'allwh', 'stf', 'vwr', 'two', 'twoStf'],
     $q$insert into public.inventory_items (organization_id, warehouse_id, sku, name, quantity_on_hand, status, item_type)
-       values ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-0000000000d2', 'I461-S2-%1$s', 'Banquet table', 5, 'active', 'asset')$q$),
+       values ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-0000000000d2', 'I423-S2-%1$s', 'Banquet table', 5, 'active', 'asset')$q$),
   'own=ok:1, adm=ok:1, mgr=ok:1, allwh=ok:1, '
   || 'stf=42501:-:new row violates row-level security policy for table "inventory_items", '
   || 'vwr=42501:-:new row violates row-level security policy for table "inventory_items", two=ok:1, '
@@ -479,18 +479,18 @@ select is(
 select is(
   pg_temp.each(array['own', 'adm', 'mgr', 'allwh', 'stf', 'vwr', 'two', 'twoStf'],
     $q$insert into public.inventory_items (organization_id, warehouse_id, sku, name, quantity_on_hand, status, item_type)
-       values ('04610000-0000-0000-0000-00000000000a', null, 'I461-S3-%1$s', 'Banquet table', 0, 'active', 'asset')$q$),
+       values ('04230000-0000-0000-0000-00000000000a', null, 'I423-S3-%1$s', 'Banquet table', 0, 'active', 'asset')$q$),
   'own=ok:1, adm=ok:1, mgr=ok:1, allwh=ok:1, stf=ok:1, '
   || 'vwr=42501:-:new row violates row-level security policy for table "inventory_items", two=ok:1, twoStf=ok:1',
   'S3: an insert with no warehouse, for every persona: as before');
 select is(
   pg_temp.attempt('authenticated', :mgr,
     $q$insert into public.inventory_items (organization_id, warehouse_id, sku, name, quantity_on_hand, status, item_type)
-       values ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-0000000000d1', 'I461-S4', 'Banquet table', 5, 'active', 'asset')$q$,
+       values ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-0000000000d1', 'I423-S4', 'Banquet table', 5, 'active', 'asset')$q$,
     null,
-    $q$select pg_temp.rows_of('I461-S4') || ' at ' || (select l.kind || '/' || (l.warehouse_id = '04610000-0000-0000-0000-0000000000d1')::text
+    $q$select pg_temp.rows_of('I423-S4') || ' at ' || (select l.kind || '/' || (l.warehouse_id = '04230000-0000-0000-0000-0000000000d1')::text
                                                          from public.item_stock_levels s join public.locations l on l.id = s.location_id
-                                                         join public.inventory_items i on i.id = s.item_id where i.sku = 'I461-S4')$q$),
+                                                         join public.inventory_items i on i.id = s.item_id where i.sku = 'I423-S4')$q$),
   'ok:1:items=1 levels=1 moves=0 at unplaced/true',
   'S4: a manager''s insert in A''s own warehouse still seeds its five at that warehouse''s Unplaced location');
 
@@ -528,17 +528,17 @@ select is(
 select is(
   pg_temp.each(array['own', 'adm', 'mgr', 'stf', 'two', 'both'],
     $q$insert into public.inventory_items (organization_id, warehouse_id, category_id, sku, name, status, item_type)
-       values ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-0000000000d1', '04610000-0000-0000-0000-000000000302', 'I461-C1-%1$s', 'Desk lamp', 'active', 'asset')$q$),
+       values ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-0000000000d1', '04230000-0000-0000-0000-000000000302', 'I423-C1-%1$s', 'Desk lamp', 'active', 'asset')$q$),
   'own=42501:-:new row violates row-level security policy for table "inventory_items", adm=42501:-:new row violates row-level security policy for table "inventory_items", mgr=42501:-:new row violates row-level security policy for table "inventory_items", '
   || 'stf=42501:-:new row violates row-level security policy for table "inventory_items", two=42501:-:new row violates row-level security policy for table "inventory_items", both=42501:-:new row violates row-level security policy for table "inventory_items"',
   'C1: an item of A with B''s category, inserted by each rank and by members of both: refused 42501');
 select is(
   pg_temp.each(array['own', 'adm', 'mgr', 'stf', 'vwr', 'two'],
     $q$insert into public.inventory_items (organization_id, warehouse_id, category_id, sku, name, status, item_type)
-       values ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-0000000000d1', '04610000-0000-0000-0000-000000000301', 'I461-C2-%1$s', 'Desk lamp', 'active', 'asset')$q$)
+       values ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-0000000000d1', '04230000-0000-0000-0000-000000000301', 'I423-C2-%1$s', 'Desk lamp', 'active', 'asset')$q$)
   || ' / ' || pg_temp.each(array['own', 'adm', 'mgr', 'stf', 'vwr', 'two'],
     $q$insert into public.inventory_items (organization_id, warehouse_id, category_id, sku, name, status, item_type)
-       values ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-0000000000d1', null, 'I461-C2n-%1$s', 'Desk lamp', 'active', 'asset')$q$),
+       values ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-0000000000d1', null, 'I423-C2n-%1$s', 'Desk lamp', 'active', 'asset')$q$),
   'own=ok:1, adm=ok:1, mgr=ok:1, stf=ok:1, vwr=42501:-:new row violates row-level security policy for table "inventory_items", two=ok:1'
   || ' / own=ok:1, adm=ok:1, mgr=ok:1, stf=ok:1, vwr=42501:-:new row violates row-level security policy for table "inventory_items", two=ok:1',
   'C2: A''s own category and no category, for each rank: as before');
@@ -556,15 +556,15 @@ select is(
 -- ══ D. duplicate_inventory_item ═══════════════════════════════════════════
 select is(
   pg_temp.attempt('authenticated', :mgr,
-    format($q$select public.duplicate_inventory_item(%L, '{"sku": "I461-DUP-2", "quantity": 2}'::jsonb)$q$, :itDup), null,
-    $q$select pg_temp.rows_of('I461-DUP-2') || ' ' || (select (warehouse_id = '04610000-0000-0000-0000-0000000000d1')::text from public.inventory_items where sku = 'I461-DUP-2')$q$),
+    format($q$select public.duplicate_inventory_item(%L, '{"sku": "I423-DUP-2", "quantity": 2}'::jsonb)$q$, :itDup), null,
+    $q$select pg_temp.rows_of('I423-DUP-2') || ' ' || (select (warehouse_id = '04230000-0000-0000-0000-0000000000d1')::text from public.inventory_items where sku = 'I423-DUP-2')$q$),
   'ok:1:items=1 levels=1 moves=1 true',
   'D1: a manager copies an item of A in whA, as before (the copy is in whA, with its two on hand and their movement)');
 select is(
   pg_temp.attempt('authenticated', :mgr,
-    format($q$select public.duplicate_inventory_item(%L, '{"sku": "I461-X-2"}'::jsonb)$q$, :itX))
+    format($q$select public.duplicate_inventory_item(%L, '{"sku": "I423-X-2"}'::jsonb)$q$, :itX))
   || ' / ' || pg_temp.attempt('authenticated', :two,
-    format($q$select public.duplicate_inventory_item(%L, '{"sku": "I461-X-2"}'::jsonb)$q$, :itX)),
+    format($q$select public.duplicate_inventory_item(%L, '{"sku": "I423-X-2"}'::jsonb)$q$, :itX)),
   'P0002:-:original_not_found / 42501:-:That warehouse is not part of this organization.',
   'D2: a copy of the stored item whose warehouse is B''s: not found for a manager of A alone (as before), refused for a member of both who sees it');
 
@@ -573,7 +573,7 @@ select is(
   pg_temp.attempt('authenticated', :mgr,
     format($q$select public.create_rental(%L, null, 'Borrower One', null, now() + interval '3 days', null,
                 jsonb_build_array(jsonb_build_object('item_id', %L, 'quantity', 1)))$q$, :whB, :rB), null,
-    $q$select (select count(*) from public.rentals where organization_id in ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-00000000000b'))::text$q$),
+    $q$select (select count(*) from public.rentals where organization_id in ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-00000000000b'))::text$q$),
   'P0002:-:warehouse_not_found',
   'R1: a manager of A alone names B''s warehouse: refused, nothing written');
 select is(
@@ -581,7 +581,7 @@ select is(
     format($q$select public.create_rental(%L, null, 'Borrower One', null, now() + interval '3 days', null,
                 jsonb_build_array(jsonb_build_object('item_id', %L, 'quantity', 1)))$q$, :whB, :rB), null,
     $q$select string_agg(r.organization_id::text || '/' || r.warehouse_id::text, ',') from public.rentals r
-        where r.organization_id in ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-00000000000b')$q$),
+        where r.organization_id in ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-00000000000b')$q$),
   'ok:1:' || :orgB || '/' || :whB,
   'R2: a member of both rents B''s item from B''s warehouse: the rental is B''s, the warehouse''s own organization');
 select is(
@@ -595,7 +595,7 @@ select is(
     format($q$select public.create_rental(%L, null, 'Borrower One', null, now() + interval '3 days', null,
                 jsonb_build_array(jsonb_build_object('item_id', %L, 'quantity', 1)))$q$, :whA, :rA), null,
     $q$select string_agg(r.organization_id::text || '/' || r.warehouse_id::text, ',') from public.rentals r
-        where r.organization_id in ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-00000000000b')$q$),
+        where r.organization_id in ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-00000000000b')$q$),
   'ok:1:' || :orgA || '/' || :whA,
   'R4: a manager of A rents A''s item from A''s warehouse, as before');
 
@@ -603,14 +603,14 @@ select is(
 select is(
   pg_temp.attempt('authenticated', :mgr,
     $q$insert into public.inventory_items (organization_id, warehouse_id, sku, name, quantity_on_hand, status, item_type)
-       values ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-0000000000d3', 'I461-M1', 'Banquet table', 5, 'active', 'asset')$q$,
+       values ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-0000000000d3', 'I423-M1', 'Banquet table', 5, 'active', 'asset')$q$,
     format('select pg_temp.unpatch(%L, %L)', 'public.tg_inventory_items_guard()', pg_temp.guard_block())),
   '42501:-:new row violates row-level security policy for table "inventory_items"',
   'M1: with the guard''s new block cut, the INSERT rule alone refuses B''s warehouse');
 select is(
   pg_temp.attempt('authenticated', :mgr,
     $q$insert into public.inventory_items (organization_id, warehouse_id, sku, name, quantity_on_hand, status, item_type)
-       values ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-0000000000d3', 'I461-M2', 'Banquet table', 5, 'active', 'asset')$q$,
+       values ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-0000000000d3', 'I423-M2', 'Banquet table', 5, 'active', 'asset')$q$,
     $p$
       drop policy inventory_items_insert on public.inventory_items;
       create policy inventory_items_insert on public.inventory_items for insert to authenticated
@@ -659,8 +659,8 @@ select is(
 select is(
   pg_temp.each(array['own', 'adm', 'mgr', 'two'],
     $q$insert into public.locations (organization_id, warehouse_id, name, type, parent_id)
-       values ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-0000000000d1', 'I461 L1 %1$s', 'shelf',
-               '04610000-0000-0000-0000-000000000203')$q$),
+       values ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-0000000000d1', 'I423 L1 %1$s', 'shelf',
+               '04230000-0000-0000-0000-000000000203')$q$),
   'own=42501:-:new row violates row-level security policy for table "locations", '
   || 'adm=42501:-:new row violates row-level security policy for table "locations", '
   || 'mgr=42501:-:new row violates row-level security policy for table "locations", '
@@ -677,11 +677,11 @@ select is(
 select is(
   pg_temp.each(array['own', 'adm', 'mgr', 'stf', 'two'],
     $q$insert into public.locations (organization_id, warehouse_id, name, type, parent_id)
-       values ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-0000000000d1', 'I461 L3 %1$s', 'shelf',
-               '04610000-0000-0000-0000-000000000201')$q$)
+       values ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-0000000000d1', 'I423 L3 %1$s', 'shelf',
+               '04230000-0000-0000-0000-000000000201')$q$)
   || ' / ' || pg_temp.each(array['own', 'adm', 'mgr', 'stf', 'two'],
     $q$insert into public.locations (organization_id, warehouse_id, name, type, parent_id)
-       values ('04610000-0000-0000-0000-00000000000a', '04610000-0000-0000-0000-0000000000d1', 'I461 L3n %1$s', 'shelf', null)$q$),
+       values ('04230000-0000-0000-0000-00000000000a', '04230000-0000-0000-0000-0000000000d1', 'I423 L3n %1$s', 'shelf', null)$q$),
   'own=ok:1, adm=ok:1, mgr=ok:1, stf=42501:-:new row violates row-level security policy for table "locations", two=ok:1'
   || ' / own=ok:1, adm=ok:1, mgr=ok:1, stf=42501:-:new row violates row-level security policy for table "locations", two=ok:1',
   'L3: adding a location of A with A''s own location as its parent, and with no parent, for each rank: as before');
@@ -692,27 +692,27 @@ select is(
   'L4: setting A''s own location as the parent, and clearing the parent: as before');
 select is(
   pg_temp.attempt('authenticated', :mgr,
-    format($q$select * from public.mint_placement_location(%L, %L, 'rack', 'I461 Rack 9', 'shelf', %L, null, '9', null, null, null)$q$,
+    format($q$select * from public.mint_placement_location(%L, %L, 'rack', 'I423 Rack 9', 'shelf', %L, null, '9', null, null, null)$q$,
            :orgA, :whA, :locA), null,
-    $q$select (select parent_id::text from public.locations where name = 'I461 Rack 9')$q$)
+    $q$select (select parent_id::text from public.locations where name = 'I423 Rack 9')$q$)
   || ' / ' || pg_temp.attempt('authenticated', :mgr,
-    format($q$select * from public.mint_placement_location(%L, %L, 'rack', 'I461 Rack 8', 'shelf', %L, null, '8', null, null, null)$q$,
+    format($q$select * from public.mint_placement_location(%L, %L, 'rack', 'I423 Rack 8', 'shelf', %L, null, '8', null, null, null)$q$,
            :orgA, :whA, :locB)),
   'ok:1:' || :locA || ' / 42501:The parent location does not belong to this organization.:insufficient_privilege',
   'L5: mint_placement_location makes a rack under A''s own location, and refuses B''s location as the parent (its own check), as before');
 select is(
   pg_temp.attempt('authenticated', :adm,
-    format($q$insert into public.warehouses (id, organization_id, name, code, status) values (%L, %L, 'I461 New', 'WH-I461N', 'active')$q$, :whNew, :orgA),
+    format($q$insert into public.warehouses (id, organization_id, name, code, status) values (%L, %L, 'I423 New', 'WH-I423N', 'active')$q$, :whNew, :orgA),
     null,
     format($q$select string_agg(coalesce(kind, '-'), ',' order by kind collate "C") from public.locations where warehouse_id = %L$q$, :whNew))
   || ' / ' || pg_temp.attempt('authenticated', :mgr,
     $q$insert into public.inventory_items (organization_id, warehouse_id, sku, name, quantity_on_hand, status, item_type)
-       values ('04610000-0000-0000-0000-00000000000a', null, 'I461-L6', 'Banquet table', 5, 'active', 'asset')$q$,
+       values ('04230000-0000-0000-0000-00000000000a', null, 'I423-L6', 'Banquet table', 5, 'active', 'asset')$q$,
     null,
-    $q$select count(*)::text from public.locations where organization_id = '04610000-0000-0000-0000-00000000000a'
+    $q$select count(*)::text from public.locations where organization_id = '04230000-0000-0000-0000-00000000000a'
                                                     and warehouse_id is null and kind = 'unplaced' and parent_id is null$q$)
   || ' / ' || pg_temp.attempt('service_role', null,
-    $q$insert into public.locations (organization_id, name, type) values ('04610000-0000-0000-0000-00000000000a', 'I461 Main Warehouse', 'warehouse')$q$),
+    $q$insert into public.locations (organization_id, name, type) values ('04230000-0000-0000-0000-00000000000a', 'I423 Main Warehouse', 'warehouse')$q$),
   'ok:1:staging,unplaced / ok:1:1 / ok:1',
   'L6: the writers past the rules: a new warehouse''s default locations, the organization''s Unplaced bucket for an item with no warehouse, and a service-role location with no parent');
 select is(
@@ -723,7 +723,7 @@ select is(
 select is(
   pg_temp.attempt('authenticated', :mgr,
     format($q$insert into public.locations (id, organization_id, warehouse_id, name, type, parent_id)
-              values (%L, %L, %L, 'I461 Shelf 1', 'shelf', %L)
+              values (%L, %L, %L, 'I423 Shelf 1', 'shelf', %L)
               on conflict (id) do update set parent_id = excluded.parent_id$q$, :locA2, :orgA, :whA, :locB)),
   '42501:-:new row violates row-level security policy for table "locations"',
   'L8: an upsert onto a location of A that proposes B''s location as its parent is refused');
@@ -736,18 +736,18 @@ select is(
 select is(
   pg_temp.each(array['two', 'both'],
     $q$insert into public.schedule_events (organization_id, title, starts_at, ends_at, warehouse_id, created_by)
-       values ('04610000-0000-0000-0000-00000000000a', 'I461 E1 %1$s', now() + interval '2 days', now() + interval '2 days 1 hour',
-               '04610000-0000-0000-0000-0000000000d3', auth.uid())$q$),
+       values ('04230000-0000-0000-0000-00000000000a', 'I423 E1 %1$s', now() + interval '2 days', now() + interval '2 days 1 hour',
+               '04230000-0000-0000-0000-0000000000d3', auth.uid())$q$),
   'two=42501:-:new row violates row-level security policy for table "schedule_events", both=42501:-:new row violates row-level security policy for table "schedule_events"',
   'E1: an event of A naming B''s warehouse, filed by members of both organizations (who may write that warehouse in B): refused 42501');
 select is(
   pg_temp.each(array['own', 'adm', 'mgr', 'stf', 'vwr', 'two'],
     $q$insert into public.schedule_events (organization_id, title, starts_at, ends_at, warehouse_id, created_by)
-       values ('04610000-0000-0000-0000-00000000000a', 'I461 E2 %1$s', now() + interval '2 days', now() + interval '2 days 1 hour',
-               '04610000-0000-0000-0000-0000000000d1', auth.uid())$q$)
+       values ('04230000-0000-0000-0000-00000000000a', 'I423 E2 %1$s', now() + interval '2 days', now() + interval '2 days 1 hour',
+               '04230000-0000-0000-0000-0000000000d1', auth.uid())$q$)
   || ' / ' || pg_temp.each(array['own', 'adm', 'mgr', 'stf', 'vwr', 'two'],
     $q$insert into public.schedule_events (organization_id, title, starts_at, ends_at, warehouse_id, created_by)
-       values ('04610000-0000-0000-0000-00000000000a', 'I461 E2n %1$s', now() + interval '2 days', now() + interval '2 days 1 hour',
+       values ('04230000-0000-0000-0000-00000000000a', 'I423 E2n %1$s', now() + interval '2 days', now() + interval '2 days 1 hour',
                null, auth.uid())$q$),
   'own=ok:1, adm=ok:1, mgr=ok:1, stf=ok:1, vwr=42501:-:new row violates row-level security policy for table "schedule_events", two=ok:1'
   || ' / own=ok:1, adm=ok:1, mgr=ok:1, stf=ok:1, vwr=ok:1, two=ok:1',
@@ -759,7 +759,7 @@ select is(
 select is(
   pg_temp.attempt('service_role', null,
     format($q$insert into public.schedule_events (organization_id, title, starts_at, ends_at, warehouse_id, created_by)
-              values (%L, 'I461 Order pickup', now() + interval '3 days', now() + interval '3 days 1 hour', %L, %L)$q$, :orgA, :whA, :mgr))
+              values (%L, 'I423 Order pickup', now() + interval '3 days', now() + interval '3 days 1 hour', %L, %L)$q$, :orgA, :whA, :mgr))
   || ' / ' || pg_temp.attempt('service_role', null,
     format('update public.schedule_events set reminded_24h_at = now() where id = %L', :evA)),
   'ok:1 / ok:1',
@@ -773,7 +773,7 @@ select is(
 select is(pg_temp.state(), (select v from snap),
   'Z1: the refused inserts and the undone attempts left organization A''s items, their holdings and categories, organization B''s locations, both organizations'' movements, rentals and events, and organization A''s locations and their parents as they were');
 select is(
-  (select count(*)::int from public.inventory_items where sku like 'I461-I%'),
+  (select count(*)::int from public.inventory_items where sku like 'I423-I%'),
   0,
   'Z2: no item of the I section exists');
 
