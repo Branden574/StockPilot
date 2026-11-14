@@ -803,6 +803,10 @@ const TABLE_WRITES: Record<string, ClassifiedWrite> = {
     'not_org_data',
     "The signing-in person's own device row, read just above.",
   ],
+  'lib/auth/login-device.ts#noteLoginDevice::user_login_devices.delete': [
+    'own_row',
+    "The signing-in person's own device row this call just inserted, by user id and device hash, removed when the alert could not be counted.",
+  ],
   'lib/books/lookup.ts#writeBookCache::book_metadata_cache.upsert': [
     'not_org_data',
     "Shared book metadata cache keyed by ISBN; no organization's row.",
