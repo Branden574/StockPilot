@@ -28,11 +28,8 @@
 --     two times as before (S1a, S1, S2a, S2b, S2).
 -- P.  Posture: one BEFORE INSERT OR UPDATE row trigger, SECURITY INVOKER,
 --     EXECUTE for no API role (P1-P3).
--- Written to fail before the migration in I1-I4, U1-U10, K2 (the earlier
--- updates went through there), R3-R5, R8, R10 and P1, after which the file
--- stops (the function does not exist). The I5, I6, K1, K3, K4, R1, R2,
--- R11-R14 and S lines pass before and after: they hold the paths that must
--- keep working.
+-- I1-I4, U1-U10, K2, R3-R5, R8, R10 and P1 hold the trigger's rule. I5, I6,
+-- K1, K3, K4, R1, R2, R11-R14 and S hold the paths that keep working.
 
 begin;
 

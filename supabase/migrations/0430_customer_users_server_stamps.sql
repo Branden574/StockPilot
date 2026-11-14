@@ -12,10 +12,9 @@
 --     accepted one comes first, and among accepted rows the earliest
 --     acceptance comes first.
 --
--- Which rows a member may write stays the policy's (customer_users_write: a
--- manager of the customer's organization, or a holder of customers:manage
--- there). This file adds one BEFORE INSERT OR UPDATE trigger that holds, for
--- every caller that is not the service role or a direct database connection:
+-- Row access is unchanged by this file. It adds one BEFORE INSERT OR UPDATE
+-- trigger that holds, for every caller that is not the service role or a
+-- direct database connection:
 --   INSERT  accepted_at is null and invited_at is the database's now(),
 --           whatever the statement named (the app's invite names neither, so
 --           it writes exactly what it wrote before);
@@ -23,8 +22,7 @@
 --           values; a statement that would change any of them is refused
 --           with 42501 and hint customer_users_server_managed, and nothing
 --           is written.
--- email and invited_by stay writable by the policy, as before. DELETE is not
--- touched (removing a portal user is the organization's to do).
+-- DELETE is not touched.
 --
 -- WHO IS "THE SERVER". current_user, as 0218 and 0309 decided and measured:
 -- PostgREST switches it per request to the token's role (authenticated,
