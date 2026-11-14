@@ -71,8 +71,19 @@
 -- M.  Mutations: each block taken out of the live body (inside an undone
 --     attempt) lets the refused calls through, so the U and A lines are not
 --     tautological.
+--     M3: with only the S87 block taken out, the S42 blocks still refuse the
+--     callers outside organization A (42501 forbidden).
 -- G.  The body names neither 40001 nor 40P01.
 -- Z.  Every undone attempt changed nothing.
+--
+-- Since S87 (a later migration) release_cycle_count first looks the count up
+-- in the organizations the caller is an active member of (is_org_member) and
+-- answers a count outside them as an id that does not exist (P0002
+-- cycle_count_not_found). The removed member, the disabled account, the
+-- expired seat, another organization's manager and the member of no
+-- organization are outside organization A, so the lines that call them (A3-A7,
+-- A9, A10, U1, S2, M1, M2) expect P0002 for them; R1 takes the S87 block out
+-- too. Every member of organization A gets what they got before.
 --
 -- Two sessions (an assignee's release waiting on a manager's release of the
 -- same count) need two connections: the race script for this migration in
@@ -86,7 +97,7 @@
 
 begin;
 
-select plan(24);
+select plan(25);
 
 \set orgA     '\'54200000-0000-0000-0000-00000000000a\''
 \set orgZ     '\'54200000-0000-0000-0000-00000000000b\''
@@ -405,7 +416,7 @@ create temp table snap as select pg_temp.state() as v;
 
 -- ══ R. One change: the two S42 blocks ════════════════════════════════════
 select is(
-  (select md5(p.prosrc) || '|' || md5(replace(p.prosrc, $b0$  -- S42: a count nobody is assigned to is nobody's own. The check below
+  (select md5(p.prosrc) || '|' || md5(replace(replace(p.prosrc, $b0$  -- S42: a count nobody is assigned to is nobody's own. The check below
   -- compares assigned_to with the caller, which is NULL for such a count,
   -- and an IF treats NULL as false, so that check refused no one: any
   -- signed-in caller, of any organization, who knew the count's id could
@@ -435,10 +446,23 @@ select is(
      and not public.has_org_role(v_count.organization_id, 'manager') then
     raise exception 'forbidden' using errcode = '42501';
   end if;
-$b0$, ''))
+$b0$, ''), $b1$  -- S87: the count is looked up first in the organizations the caller is an
+  -- active member of (is_org_member: an accepted membership, not an expired
+  -- "act as" seat, of an account that is not disabled). A count outside
+  -- them gets the answer an id that does not exist gets, with nothing
+  -- locked; the status and permission checks below come after this one.
+  if not exists (
+    select 1
+      from public.cycle_counts c
+     where c.id = p_count_id
+       and public.is_org_member(c.organization_id)
+  ) then
+    raise exception 'cycle_count_not_found' using errcode = 'P0002';
+  end if;
+$b1$, ''))
      from pg_proc p where p.oid = to_regprocedure('public.release_cycle_count(uuid, text)')),
-  '168808f20dd326d3710e1900c7d029a4|a428c8f73f73ee31516dd186e47bc9f9',
-  'R1: release_cycle_count has the S42 body (md5 168808f2), and removing the two S42 blocks gives production''s body exactly (a428c8f7, 0282''s): the blocks are the only change');
+  'bbbb2ddd68a6076be0dbd754d7ad38b8|a428c8f73f73ee31516dd186e47bc9f9',
+  'R1: release_cycle_count has the S42 body with the S87 block (md5 bbbb2ddd; the S42 body alone was 168808f2), and removing the two S42 blocks and the S87 block gives 0282''s body exactly (a428c8f7): the blocks are the only change');
 
 -- ══ P. Posture unchanged; the comment says the rule ═══════════════════════
 select is(
@@ -479,8 +503,9 @@ select is(
 select is(
   pg_temp.own(array[array['rmv', :cRmv], array['dis', :cDis], array['exp', :cExp], array['vwr', :cVwr],
                     array['noAdj', :cNoAdj]]),
-  'rmv=42501:-:forbidden, dis=42501:-:forbidden, exp=42501:-:forbidden, vwr=42501:-:forbidden, noAdj=42501:-:forbidden',
-  'A3-A7: an assignee who may no longer count in the count''s organization is refused their own count (42501 forbidden, no hint): the member removed from it, the disabled account, the expired act-as seat, the viewer and the member whose stock:adjust was revoked. Before S42 each of them released it');
+  'rmv=P0002:-:cycle_count_not_found, dis=P0002:-:cycle_count_not_found, exp=P0002:-:cycle_count_not_found, '
+  'vwr=42501:-:forbidden, noAdj=42501:-:forbidden',
+  'A3-A7: an assignee who may no longer count in the count''s organization is refused their own count: the member removed from it, the disabled account and the expired act-as seat are outside the organization and get not found (P0002, since S87); the viewer and the member whose stock:adjust was revoked get 42501 forbidden, no hint. Before S42 each of them released it');
 select is(
   pg_temp.attempt('authenticated', :mgrNoAdj, format($q$select public.release_cycle_count(%L, 'Reassigning')$q$, :cAsg), null,
                   format('select pg_temp.assignment(%L)', :cAsg)),
@@ -488,15 +513,15 @@ select is(
   'A8: a manager without stock:adjust still releases someone else''s count: the manager arm is unchanged (0282''s owner decision: managers may act as override)');
 select is(
   pg_temp.each(array['stf', 'outZ', 'nobody'], format($q$select public.release_cycle_count(%L, 'Not mine')$q$, :cAsg)),
-  'stf=42501:-:forbidden, outZ=42501:-:forbidden, nobody=42501:-:forbidden',
-  'A9: on a count assigned to someone else, plain staff, another organization''s manager and a member of no organization are refused, as before (the old check)');
+  'stf=42501:-:forbidden, outZ=P0002:-:cycle_count_not_found, nobody=P0002:-:cycle_count_not_found',
+  'A9: on a count assigned to someone else, plain staff is refused, as before (the old check); another organization''s manager and a member of no organization get not found (P0002, since S87)');
 select is(
   pg_temp.attempt('authenticated', :rmv, format($q$select public.release_cycle_count(%L, '   ')$q$, :cRmv)) || ' / '
   || pg_temp.attempt('authenticated', :rmv, format($q$select public.release_cycle_count(%L, 'Shift ending')$q$, :cNone)) || ' / '
   || pg_temp.each(array['rmv', 'nobody'], format($q$select public.release_cycle_count(%L, 'Shift ending')$q$, :cDone)),
   'P0001:-:release_reason_required / P0002:-:cycle_count_not_found / '
-  'rmv=P0001:-:invalid_status_transition, nobody=P0001:-:invalid_status_transition',
-  'A10: the refusals ahead of the new checks come first, as before: a blank reason (P0001 release_reason_required), an unknown id (P0002 cycle_count_not_found), and a closed count (P0001 invalid_status_transition), for the removed assignee and for a member of no organization alike');
+  'rmv=P0002:-:cycle_count_not_found, nobody=P0002:-:cycle_count_not_found',
+  'A10: the refusals ahead of the new checks come first, as before: a blank reason (P0001 release_reason_required) and an unknown id (P0002 cycle_count_not_found); a closed count of organization A is not found (P0002, since S87) for the removed assignee and for a member of no organization alike, both outside it');
 select is(
   pg_temp.attempt('authenticated', :mgrNoAdj, format($q$select public.release_cycle_count(%L, 'Shift ending')$q$, :cMgr), null,
                   format('select pg_temp.assignment(%L)', :cMgr)),
@@ -512,9 +537,10 @@ select is(
 select is(
   pg_temp.each(array['nobody', 'outZ', 'rmv', 'dis', 'exp', 'vwr', 'noAdj', 'stf'],
                format($q$select r.notes from public.release_cycle_count(%L, 'Not mine') r where r.notes = 'S42 private note'$q$, :cUn)),
-  'nobody=42501:-:forbidden, outZ=42501:-:forbidden, rmv=42501:-:forbidden, dis=42501:-:forbidden, '
-  'exp=42501:-:forbidden, vwr=42501:-:forbidden, noAdj=42501:-:forbidden, stf=42501:-:forbidden',
-  'U1: a count with no assignee is released by no one but a manager: a member of no organization, another organization''s manager, the removed member, the disabled account, the expired seat, the viewer, the revoked member and plain staff are refused (42501 forbidden). Before S42 each of them released it and got its row back, private note and all (ok:1)');
+  'nobody=P0002:-:cycle_count_not_found, outZ=P0002:-:cycle_count_not_found, rmv=P0002:-:cycle_count_not_found, '
+  'dis=P0002:-:cycle_count_not_found, exp=P0002:-:cycle_count_not_found, '
+  'vwr=42501:-:forbidden, noAdj=42501:-:forbidden, stf=42501:-:forbidden',
+  'U1: a count with no assignee is released by no one but a manager: the viewer, the revoked member and plain staff are refused (42501 forbidden); a member of no organization, another organization''s manager, the removed member, the disabled account and the expired seat are outside the organization and get not found (P0002, since S87). Before S42 each of them released it and got its row back, private note and all (ok:1)');
 select is(
   pg_temp.each(array['mgr', 'mgrNoAdj'], format($q$select public.release_cycle_count(%L, 'Tidy up')$q$, :cUn),
                format('select pg_temp.assignment(%L)', :cUn)),
@@ -540,8 +566,9 @@ select is(
   pg_temp.each(array['rmvMgr', 'disMgr', 'mgr'], format('select public.assign_cycle_count(%L, %L)', :cUn, :asg)) || ' / '
   || pg_temp.each(array['rmvMgr', 'disMgr', 'mgr'],
                   format($q$select public.force_reassign_cycle_count(%L, %L, 'Cover the shift')$q$, :cAsg, :stf)),
-  'rmvMgr=42501:-:forbidden, disMgr=42501:-:forbidden, mgr=ok:1 / rmvMgr=42501:-:forbidden, disMgr=42501:-:forbidden, mgr=ok:1',
-  'S2: the family: assign_cycle_count and force_reassign_cycle_count refuse a removed manager and a disabled manager (has_org_role); a manager assigns and reassigns');
+  'rmvMgr=P0002:-:cycle_count_not_found, disMgr=P0002:-:cycle_count_not_found, mgr=ok:1 / '
+  'rmvMgr=P0002:-:cycle_count_not_found, disMgr=P0002:-:cycle_count_not_found, mgr=ok:1',
+  'S2: the family: assign_cycle_count and force_reassign_cycle_count refuse a removed manager and a disabled manager (outside the organization: not found, P0002, since S87); a manager assigns and reassigns');
 
 -- ══ M. Mutations: each block taken out of the live body, inside an undone attempt ══
 select is(
@@ -562,8 +589,9 @@ select is(
   end if;
 $c$)), ', ' order by u.o)
      from unnest(array['nobody', 'outZ', 'rmv', 'stf', 'asg']) with ordinality u(w, o)),
-  'nobody=ok:1, outZ=ok:1, rmv=ok:1, stf=ok:1, asg=ok:1',
-  'M1: release_cycle_count without the unassigned block lets a member of no organization, another organization''s manager, the removed member, plain staff and a stale assignee release a count with no assignee: U1 and U3 fail on it');
+  'nobody=P0002:-:cycle_count_not_found, outZ=P0002:-:cycle_count_not_found, rmv=P0002:-:cycle_count_not_found, '
+  'stf=ok:1, asg=ok:1',
+  'M1: release_cycle_count without the unassigned block lets plain staff and a stale assignee release a count with no assignee: U1 and U3 fail on it (a member of no organization, another organization''s manager and the removed member still get not found from the S87 lookup)');
 select is(
   pg_temp.own(array[array['rmv', :cRmv], array['dis', :cDis], array['exp', :cExp], array['vwr', :cVwr],
                     array['noAdj', :cNoAdj]],
@@ -585,8 +613,50 @@ select is(
     raise exception 'forbidden' using errcode = '42501';
   end if;
 $c$)),
-  'rmv=ok:1, dis=ok:1, exp=ok:1, vwr=ok:1, noAdj=ok:1',
-  'M2: release_cycle_count without the assignee block lets the removed member, the disabled account, the expired seat, the viewer and the revoked member release their own count: A3-A7 fail on it');
+  'rmv=P0002:-:cycle_count_not_found, dis=P0002:-:cycle_count_not_found, exp=P0002:-:cycle_count_not_found, '
+  'vwr=ok:1, noAdj=ok:1',
+  'M2: release_cycle_count without the assignee block lets the viewer and the revoked member release their own count: A6 and A7 fail on it (the removed member, the disabled account and the expired seat still get not found from the S87 lookup)');
+
+-- M3: with ONLY the S87 lookup block of the later migration taken out
+-- (the two S42 blocks kept), the S42 blocks refuse on their own the callers
+-- the lookup answers first.
+select is(
+  pg_temp.own(array[array['rmv', :cRmv], array['dis', :cDis], array['exp', :cExp]],
+              format('select pg_temp.unpatch(%L, %L)', 'public.release_cycle_count(uuid, text)', $c$  -- S87: the count is looked up first in the organizations the caller is an
+  -- active member of (is_org_member: an accepted membership, not an expired
+  -- "act as" seat, of an account that is not disabled). A count outside
+  -- them gets the answer an id that does not exist gets, with nothing
+  -- locked; the status and permission checks below come after this one.
+  if not exists (
+    select 1
+      from public.cycle_counts c
+     where c.id = p_count_id
+       and public.is_org_member(c.organization_id)
+  ) then
+    raise exception 'cycle_count_not_found' using errcode = 'P0002';
+  end if;
+$c$))
+  || ' / '
+  || (select string_agg(w || '=' || pg_temp.attempt('authenticated', (select p.id from persona p where p.who = w),
+             format($q$select public.release_cycle_count(%L, 'Not mine')$q$, :cUn),
+             format('select pg_temp.unpatch(%L, %L)', 'public.release_cycle_count(uuid, text)', $c$  -- S87: the count is looked up first in the organizations the caller is an
+  -- active member of (is_org_member: an accepted membership, not an expired
+  -- "act as" seat, of an account that is not disabled). A count outside
+  -- them gets the answer an id that does not exist gets, with nothing
+  -- locked; the status and permission checks below come after this one.
+  if not exists (
+    select 1
+      from public.cycle_counts c
+     where c.id = p_count_id
+       and public.is_org_member(c.organization_id)
+  ) then
+    raise exception 'cycle_count_not_found' using errcode = 'P0002';
+  end if;
+$c$)), ', ' order by u.o)
+        from unnest(array['nobody', 'outZ', 'rmv']) with ordinality u(w, o)),
+  'rmv=42501:-:forbidden, dis=42501:-:forbidden, exp=42501:-:forbidden / '
+  'nobody=42501:-:forbidden, outZ=42501:-:forbidden, rmv=42501:-:forbidden',
+  'M3: with the S87 block taken out, the two S42 blocks still refuse them (42501 forbidden): the removed member, the disabled account and the expired seat on their own counts, and a member of no organization, another organization''s manager and the removed member on a count with no assignee');
 
 -- ══ G. Never a retryable error ════════════════════════════════════════════
 select is(

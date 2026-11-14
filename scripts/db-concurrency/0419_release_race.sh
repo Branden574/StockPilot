@@ -17,8 +17,10 @@
 #       count, still assigned to it when B gets the row. The count ends
 #       released once, by B.
 #   3.  The mutation the unassigned block exists for: a copy of
-#       release_cycle_count without the two S42 blocks (production's body
-#       before this migration, md5 a428c8f7), in a probe schema, raced
+#       release_cycle_count without the two S42 blocks (and without the
+#       S87 lookup block of a later migration, when the stack has it):
+#       production's body before this migration, md5 a428c8f7, in a probe
+#       schema, raced
 #       exactly as case 1: B's release goes through after A's, a no-op on
 #       the assignment that moves assignment_version a second time and
 #       returns the row. The real function (case 1) refuses it. The probe
@@ -205,6 +207,10 @@ begin
     raise exception 'probe: the S42 blocks were not found';
   end if;
   v_def := replace(v_def, v_cut, E'\n');
+  -- A later migration (S87) adds a lookup block before the row lock; it is
+  -- taken out too, so the probe is the same body with or without it (no
+  -- change on a stack without it).
+  v_def := regexp_replace(v_def, '  -- S87: the count is looked up first.*?\n  end if;\n', '');
   v_def := replace(v_def, 'FUNCTION public.release_cycle_count(', 'FUNCTION zz_probe_s42.release_cycle_count(');
   execute v_def;
 end $probe$;

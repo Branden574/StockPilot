@@ -860,6 +860,16 @@ PGTAP_TESTS=(
   # user_can_see_item_category answers service_role only. The lock footprint
   # is scripts/db-concurrency/0421_migration_lock_footprint.sh.
   supabase/tests/0421_categories_select_category_sets.test.sql
+  # Cycle count assignment lookups (docket S87; no check reads the number):
+  # release_cycle_count, assign_cycle_count and force_reassign_cycle_count
+  # look the count up in the organizations the caller is an active member of
+  # (is_org_member) first, and answer a count outside them as an id that does
+  # not exist (P0002 cycle_count_not_found, no detail, no hint); a member of
+  # the count's organization gets every answer they got before. Each body is the one it replaced plus one block
+  # tagged S87 (taking it out gives the body it replaced; a mutation line
+  # shows the answers above depend on it), and the migration's preflight is
+  # replayed from the recorded statements.
+  supabase/tests/0457_cycle_count_assignment_member_lookup.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
