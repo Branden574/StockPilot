@@ -1,0 +1,278 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+import { describe, expect, it } from 'vitest';
+
+import {
+  hasPermission,
+  MODULE_REGISTRY,
+  PERMISSION_META,
+  PERMISSIONS,
+  releaseSchema,
+  ROLE_PERMISSIONS,
+  type ModuleId,
+  type Release,
+  type ReleaseViewer,
+} from '@stockpilot/core';
+
+import { buildReleaseList, visibleReleases } from './logic';
+import { RELEASES } from './registry';
+
+/**
+ * Added by docs/whats-new-order-request-alerts (2026-11-14): the release for
+ * docket S36, part a (#440, migration 0422), published at the top, directly
+ * below the Liquid Glass draft and above the phone authenticator code release.
+ * Two entries:
+ *
+ *  - the New order request alert stops for an admin or manager whose
+ *    "Approve / fulfill orders" permission was removed;
+ *  - Today's briefing and the morning briefing notification show only the
+ *    lines the reader can open.
+ *
+ * The plan's entry for a staff member given the permission
+ * (order-request-alert-approvers) is not published, so the summary does not
+ * name staff members either. Its own file, so the release tests other open
+ * branches edit stay as they are.
+ */
+const ID = 'order-request-alerts-follow-approve-2026-11';
+const REMOVED_ID = 'order-request-alert-removed-approvers';
+const BRIEFING_ID = 'briefing-follows-permissions';
+const PHONE_CODE_ID = 'phone-authenticator-code-2026-11';
+
+const release = () => RELEASES.find((r) => r.id === ID)!;
+const entry = (entryId: string) => release().entries.find((e) => e.id === entryId)!;
+
+const viewer = (
+  role: ReleaseViewer['role'],
+  permissions: ReleaseViewer['permissions'],
+  enabledModules: ReleaseViewer['enabledModules'],
+): ReleaseViewer => ({ role, permissions, enabledModules });
+const EVERY_MODULE = Object.keys(MODULE_REGISTRY) as ModuleId[];
+const owner = viewer('owner', [...PERMISSIONS], EVERY_MODULE);
+const member = viewer('viewer', [], []);
+const entriesFor = (v: ReleaseViewer) =>
+  visibleReleases(RELEASES, v)
+    .find((r) => r.id === ID)
+    ?.entries.map((e) => e.id) ?? [];
+
+const REPO = resolve(__dirname, '../../../../..');
+const repoFile = (rel: string) => readFileSync(resolve(REPO, rel), 'utf8');
+/** A source file under apps/web/src, as written. */
+const source = (rel: string) => repoFile(`apps/web/src/${rel}`);
+
+function readerText(r: Release): string[] {
+  return [
+    r.title,
+    r.summary,
+    ...r.entries.flatMap((e) => [
+      e.title,
+      e.area ?? '',
+      e.whatChanged,
+      e.whyItMatters,
+      e.howItAffectsYou,
+      e.whatToDo,
+      e.link?.label ?? '',
+    ]),
+  ];
+}
+
+describe('the order request alerts release: order, status and date', () => {
+  it('is published once, as revision 1, directly below the Liquid Glass draft, the newest published release', () => {
+    expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
+    expect(release().status).toBe('published');
+    expect(release().revision).toBe(1);
+    expect(release().withdrawnNote).toBeUndefined();
+    expect(RELEASES.slice(0, 3).map((r) => [r.id, r.status])).toEqual([
+      ['liquid-glass-2026-11', 'draft'],
+      [ID, 'published'],
+      [PHONE_CODE_ID, 'published'],
+    ]);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+  });
+
+  it('is dated the whole minute after the web deploy and migration 0422 were both live, with the draft placeholder at that minute and no later release below', () => {
+    // #440 was deployed at 17:24:39Z; migration 0422 went live at 17:57:33Z.
+    expect(release().publishedAt).toBe('2026-11-14T17:58:00Z');
+    const at = Date.parse(release().publishedAt);
+    expect(at).toBeGreaterThan(Date.parse('2026-11-14T17:24:39Z'));
+    expect(at).toBeGreaterThan(Date.parse('2026-11-14T17:57:33Z'));
+    expect(at).toBeLessThanOrEqual(Date.now());
+    expect(RELEASES[0]!.publishedAt).toBe(release().publishedAt);
+    for (const r of RELEASES.slice(2)) {
+      expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('parses under the shared schema, in plain text, with its two entries in order', () => {
+    expect(releaseSchema.safeParse(release()).success).toBe(true);
+    for (const text of readerText(release())) expect(text).not.toMatch(/[<>]/);
+    expect(release().entries.map((e) => [e.id, e.category, e.area])).toEqual([
+      [REMOVED_ID, 'fixed', 'Orders'],
+      [BRIEFING_ID, 'fixed', 'Briefing'],
+    ]);
+  });
+});
+
+describe('the order request alerts release: the words', () => {
+  it('has the reviewed title, and a summary that names nothing the two entries do not cover', () => {
+    expect(release().title).toBe(
+      'New order request alerts go to the people who can approve the order',
+    );
+    expect(release().summary).toBe(
+      'The New order request alert now goes to everyone with the "Approve / fulfill orders" permission who can approve orders in the request\'s warehouse, and stops for anyone whose permission was removed. It arrives on the web and in the mobile app, with no app update needed.',
+    );
+  });
+
+  it('says the alert stops with the permission, in the reviewed words', () => {
+    const e = entry(REMOVED_ID);
+    expect(e.title).toBe(
+      'Removing "Approve / fulfill orders" now also stops the New order request alert',
+    );
+    expect(e.whatChanged).toBe(
+      'An admin or manager whose "Approve / fulfill orders" permission was removed no longer gets the New order request alert.',
+    );
+    expect(e.whyItMatters).toBe(
+      'They still got the alert for every new request, although they could no longer approve one.',
+    );
+    expect(e.howItAffectsYou).toBe(
+      'Nothing changes for an admin or manager who keeps the permission, which they have by default: they are alerted about requests in every warehouse, as before.',
+    );
+    expect(e.whatToDo).toBe('No action needed.');
+  });
+
+  it("says Today's briefing shows only what the reader can open, in the reviewed words", () => {
+    const e = entry(BRIEFING_ID);
+    expect(e.title).toBe("Today's briefing shows only what you can open");
+    expect(e.whatChanged).toBe(
+      'Today\'s briefing and the morning briefing notification now leave out any line about something you cannot open. "Orders awaiting approval" shows only to people with the "Approve / fulfill orders" permission, and for a staff member it counts only the requests in the warehouses they are assigned to. Lines about purchase orders, cycle counts and items show only to people who can open those pages, and a purchase order or cycle count line only while that module is on.',
+    );
+    expect(e.whyItMatters).toBe(
+      "Everyone who could open Today's briefing saw the organization's count of orders awaiting approval, and its link took anyone who cannot approve orders to their own requests instead.",
+    );
+    expect(e.howItAffectsYou).toBe(
+      'Owners, and admins whose permissions were not changed, still see every line for the modules that are on.',
+    );
+    expect(e.whatToDo).toBe('No action needed.');
+  });
+
+  it('leaves out the entry for staff approvers, and no text names them as newly alerted', () => {
+    expect(release().entries).toHaveLength(2);
+    expect(
+      RELEASES.flatMap((r) => r.entries).some((e) => e.id === 'order-request-alert-approvers'),
+    ).toBe(false);
+    expect(release().summary).not.toMatch(/staff/i);
+    expect(entry(REMOVED_ID).title).not.toMatch(/staff/i);
+    expect(readerText(release()).join(' ')).not.toMatch(/given the permission|gave you/i);
+  });
+
+  it('names the permission as Team settings show it, never calls a recorded quantity a book, and keeps to what people see', () => {
+    expect(PERMISSION_META['orders:approve'].label).toBe('Approve / fulfill orders');
+    const text = readerText(release()).join(' ');
+    expect(release().summary).toContain('"Approve / fulfill orders"');
+    expect(entry(REMOVED_ID).whatChanged).toContain('"Approve / fulfill orders"');
+    expect(entry(BRIEFING_ID).whatChanged).toContain('"Approve / fulfill orders"');
+    expect(text).not.toMatch(/\bbook(s|ed)?\b/i);
+    expect(text).not.toMatch(/secur|vulnerab|exploit|leak|expos|attack|breach|unauthori/i);
+    expect(text).not.toMatch(/former member|act as|support session|disabled account/i);
+  });
+});
+
+describe('the order request alerts release: who is told', () => {
+  it('is addressed to organizations with Orders on, each entry to the people it changes something for', () => {
+    expect(release().audience).toEqual({ modules: ['orders'] });
+    expect(entry(REMOVED_ID).audience).toEqual({
+      roles: ['admin', 'manager'],
+      modules: ['orders'],
+    });
+    expect(entry(REMOVED_ID).link).toBeUndefined();
+    expect(entry(BRIEFING_ID).audience).toEqual({
+      anyPermission: ['items:update'],
+      modules: ['ai'],
+    });
+    expect(entry(BRIEFING_ID).link).toEqual({
+      href: '/dashboard/insights',
+      label: 'Open Briefing',
+    });
+  });
+
+  it('reaches admins and managers where Orders is on, briefing readers where the AI module is on too, and nobody where Orders is off', () => {
+    expect(entriesFor(owner)).toEqual([BRIEFING_ID]);
+    expect(entriesFor(viewer('admin', ROLE_PERMISSIONS.admin, EVERY_MODULE))).toEqual([
+      REMOVED_ID,
+      BRIEFING_ID,
+    ]);
+    expect(entriesFor(viewer('manager', ROLE_PERMISSIONS.manager, ['orders']))).toEqual([
+      REMOVED_ID,
+    ]);
+    // An admin or manager without the permission is told too: the entry is about them.
+    expect(entriesFor(viewer('manager', [], ['orders']))).toEqual([REMOVED_ID]);
+    expect(entriesFor(viewer('staff', ['items:update'], ['orders', 'ai']))).toEqual([BRIEFING_ID]);
+    expect(entriesFor(viewer('staff', ['orders:approve'], ['orders']))).toEqual([]);
+    expect(entriesFor(viewer('staff', ['items:update'], ['ai']))).toEqual([]);
+    expect(entriesFor(viewer('admin', ROLE_PERMISSIONS.admin, ['ai']))).toEqual([]);
+    expect(entriesFor(member)).toEqual([]);
+  });
+
+  it('is the newest notice for a reader it reaches, and changes nothing for a reader it does not', () => {
+    expect(buildReleaseList(RELEASES, owner, [], null).latestUnread?.id).toBe(ID);
+    expect(
+      buildReleaseList(RELEASES, viewer('manager', ROLE_PERMISSIONS.manager, ['orders']), [], null)
+        .latestUnread?.id,
+    ).toBe(ID);
+    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(PHONE_CODE_ID);
+  });
+});
+
+describe('the order request alerts release: the code the words rest on', () => {
+  it('the alert goes to whoever holds the permission and can write in the warehouse (migration 0422)', () => {
+    const migration = repoFile('supabase/migrations/0422_notice_audience_follows_permission.sql');
+    expect(migration).toContain("v_title := 'New order request' ||");
+    expect(migration).toContain(
+      "from public._notify_recipients_with_permission(new.organization_id, 'orders:approve') r\n       where public.user_can_access_warehouse(r.user_id, new.warehouse_id, 'write')",
+    );
+  });
+
+  it('an admin or manager has the permission by default and works in every warehouse', () => {
+    for (const role of ['owner', 'admin', 'manager'] as const) {
+      expect(hasPermission(role, 'orders:approve'), role).toBe(true);
+    }
+    for (const role of ['staff', 'viewer'] as const) {
+      expect(hasPermission(role, 'orders:approve'), role).toBe(false);
+    }
+    expect(source('lib/auth/warehouse.ts')).toContain(
+      'export function roleSeesEveryWarehouse(role: Role): boolean {\n  return isManagerOrAbove(role);\n}',
+    );
+  });
+
+  it('each briefing line follows the gate of the page it opens', () => {
+    const access = source('server/services/insights-access.ts');
+    expect(access).toContain(
+      "pending_approvals: (r) =>\n    isModuleEnabled(r, 'orders') && can(r, 'orders:approve') && r.role !== 'viewer',",
+    );
+    expect(access).toContain(
+      "overdue_pos: (r) => isModuleEnabled(r, 'purchase_orders') && can(r, 'purchase_orders:read'),",
+    );
+    expect(access).toContain(
+      "open_pos: (r) => isModuleEnabled(r, 'purchase_orders') && can(r, 'purchase_orders:read'),",
+    );
+    expect(access).toContain("low_stock: (r) => can(r, 'items:read'),");
+    expect(access).toContain(
+      "open_cycle_counts: (r) => isModuleEnabled(r, 'cycle_counts') && canOpenCountPage(r),",
+    );
+    const insights = source('server/services/insights.ts');
+    expect(insights).toContain("'orders awaiting approval'");
+    expect(insights).toContain('approvablePendingCount()');
+    const orders = source('server/services/order-requests.ts');
+    expect(orders).toContain(
+      "if (this.ctx.role === 'viewer' || !can(this.ctx, 'orders:approve')) return 0;",
+    );
+    expect(orders).toContain('if (!roleSeesEveryWarehouse(this.ctx.role)) {');
+  });
+
+  it("the linked page is Today's briefing, behind the AI module and items:update", () => {
+    const page = source('app/(dashboard)/dashboard/insights/page.tsx');
+    expect(page).toContain("const access = await checkModuleAccess('ai');");
+    expect(page).toContain("if (!can(ctx, 'items:update')) redirect('/dashboard');");
+    expect(page).toContain('Today&apos;s briefing');
+  });
+});
