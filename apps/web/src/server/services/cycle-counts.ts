@@ -735,8 +735,15 @@ export class CycleCountsService {
     // before the function. release_cycle_count decides on the COUNT's own
     // organization, so for a member of two organizations a phone screen left
     // open after a switch released the other organization's count while the
-    // audit row below (with the reason) went to this one.
-    await readInActiveOrg(this.ctx, 'cycle_counts', id, 'Cycle count not found.');
+    // audit row below (with the reason) went to this one. A count the caller
+    // does not read is still its assignee's to release (S48): see
+    // assertAssigneeInActiveOrg.
+    try {
+      await readInActiveOrg(this.ctx, 'cycle_counts', id, 'Cycle count not found.');
+    } catch (e) {
+      if (!(e instanceof ServiceError && e.code === 'not_found')) throw e;
+      await this.assertAssigneeInActiveOrg(id);
+    }
     const { data, error } = await this.ctx.supabase.rpc('release_cycle_count', {
       p_count_id: id,
       p_reason: reason,
@@ -778,6 +785,39 @@ export class CycleCountsService {
   }
 
   /**
+   * release() found no count in the active organization under the caller's
+   * own read. A member reads the counts of their warehouses
+   * (cycle_counts_select, S48), and a count of another warehouse is still
+   * its assignee's to release (release_cycle_count's own rule). So the miss
+   * is asked once more with the service role: the same count id, in the
+   * active organization, assigned to the caller. Found, the function then
+   * runs as the caller; otherwise not found, before the function, as for a
+   * count of another organization or one assigned to someone else. Without
+   * the service client, or when its read fails, nothing passes
+   * (internal_error).
+   */
+  private async assertAssigneeInActiveOrg(id: string): Promise<void> {
+    let admin: ReturnType<typeof createAdminClient>;
+    try {
+      admin = createAdminClient();
+    } catch (e) {
+      throw new ServiceError(
+        'internal_error',
+        `cycle count assignee unreadable: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    const { data, error } = await admin
+      .from('cycle_counts')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .eq('assigned_to', this.ctx.userId)
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) throw new ServiceError('not_found', 'Cycle count not found.');
+  }
+
+  /**
    * After release_cycle_count refused a release ('forbidden'): is the count
    * in progress with no assignee? Then the caller's release has nothing left
    * to do, and "Only the assigned employee or a manager can release this
@@ -785,10 +825,12 @@ export class CycleCountsService {
    * went through, or a manager's did) that only the assignee may release.
    *
    * One read, with the caller's own client in the active organization, as
-   * every read here: row level security decides what it sees (cycle_counts
-   * is readable by the members of its organization). Someone outside the
-   * count's organization never gets here: release() read the count in the
-   * active organization before the function (S39) and answered not found. A
+   * every read here: row level security decides what it sees (a member reads
+   * the counts of their warehouses, cycle_counts_select, S48). Someone outside
+   * the count's organization never gets here: release() found the count in
+   * the active organization before the function (S39) and answered not found.
+   * An assignee whose count this read does not show keeps the generic
+   * refusal. A
    * count this read no longer finds keeps the generic refusal, and so does a
    * failed read (the refusal stands either way), which is reported. Asks no
    * permission and writes nothing.

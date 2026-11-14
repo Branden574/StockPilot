@@ -860,11 +860,16 @@ PGTAP_TESTS=(
   # members), count lines also by item, AI scans for their creator and
   # managers, scan photos for managers by their own token and written only by
   # the service role; progress parity per persona; a counter recounts a line
-  # another person recorded from an AI scan. The lock footprint is
+  # another person recorded from an AI scan; an AI scan row is filed by a
+  # manager, or by staff holding stock:adjust on a count assigned to them or
+  # to no one; the item page's last count and open count come only from a
+  # count line the caller may read (cc_caller_reads_count_line, held equal to
+  # the line rule per persona). The lock footprint is
   # scripts/db-concurrency/0452_migration_lock_footprint.sh.
   supabase/tests/0452_cycle_count_warehouse_scope.test.sql
   supabase/tests/0452_cycle_count_item_scope.test.sql
   supabase/tests/0452_cycle_count_ai_scan_recount.test.sql
+  supabase/tests/0452_cycle_count_edges.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

@@ -21,14 +21,27 @@
 --            OR (the line's warehouse is mine AND I may read its item,
 --                inventory_items_select nested, as in 0321))
 --          A line with no warehouse is read by managers only.
---   scan   its count is readable AND (I took it OR manager)
+--   scan   read: its count is readable AND (I took it OR manager)
+--          file (insert): staff or above, in my own name, unconfirmed, its
+--            count readable and in progress in the scan's organization, I
+--            hold stock:adjust there, AND the count is assigned to me or to
+--            no one, or I am a manager (the AI scan route's own gate)
 --   photo  read: the count named by the path's second folder exists in the
 --            path's organization AND I am a manager there; insert, update
 --            and delete: no rule for an API role (the service role only).
--- Staff and viewers read the counts of their warehouses alike; writing stays
--- as 0368 has it (a line update needs write access to the line's warehouse,
--- a header update and line insert or delete need a manager). A read-only
--- auditor who needs every warehouse gets the all-warehouses flag.
+-- Staff and viewers read the counts of their warehouses alike. A member
+-- records a line they can read under the line rule above, as 0368 asks (a
+-- warehouse they may write, the count's assignee or no one, stock:adjust); a
+-- manager records any line. A header update and a line insert or delete need
+-- a manager (0368). A read-only auditor who needs every warehouse gets the
+-- all-warehouses flag.
+--
+-- item_verification_summaries (0374, SECURITY DEFINER, restated) is the item
+-- page's Physical count card. It gives an item's last count only when that
+-- count's line is one the caller may read, and the open count holding the
+-- item only from lines the caller may read; otherwise those fields are null.
+-- cc_caller_reads_count_line is the line rule in one helper for it. The
+-- item's own fields, the gates and the 500-item cap are 0374's.
 --
 -- cycle_count_line_progress (SECURITY DEFINER, kept) restates the line rule
 -- and the count rule's non-manager arms in its body (parity tested for every
@@ -48,21 +61,23 @@
 --   0. Preflight: the bodies, owners and security modes this file builds on,
 --      every policy on the three tables and the bucket, and
 --      inventory_items_select (restated inside progress) are the ones it was
---      proven against; the three new names are free. my_warehouse_ids may be
+--      proven against; the four new names are free. my_warehouse_ids may be
 --      either the 0310 body or docket S47's (one added expiry term): the rule
 --      is the same for every live membership, and the membership arm refuses
 --      an expired seat either way.
 --   1. One lock prelude.
---   2. Three new STABLE SECURITY DEFINER helpers, search_path public, EXECUTE
+--   2. Four new STABLE SECURITY DEFINER helpers, search_path public, EXECUTE
 --      for authenticated and service_role only: rls_all_warehouses_org_ids(),
---      rls_cc_unheaded_count_ids(), cc_ai_scan_in_count(uuid, uuid).
---   3. cycle_count_line_progress restated (same signature, result, STABLE,
---      SECURITY DEFINER, search_path, owner and grants), and its comment and
---      cycle_counts_page's comment updated.
+--      rls_cc_unheaded_count_ids(), cc_ai_scan_in_count(uuid, uuid),
+--      cc_caller_reads_count_line(uuid, uuid).
+--   3. cycle_count_line_progress and item_verification_summaries restated
+--      (same signature, result, STABLE, SECURITY DEFINER, search_path, owner
+--      and grants), their comments and cycle_counts_page's comment updated.
 --   4. ALTER POLICY cycle_count_lines_update WITH CHECK: the scan link only;
 --      its USING clause is untouched.
 --   5. The three table read rules (cycle_counts_select,
---      cycle_count_lines_select, cc_ai_scans_select), recreated.
+--      cycle_count_lines_select, cc_ai_scans_select) and the scan insert rule
+--      (cc_ai_scans_insert), recreated.
 --   6. LAST (the storage-policy-order guard): the bucket's read rule
 --      recreated, and its write and delete rules dropped (S52).
 -- No row is written, changed or removed; no table, column, view or sequence
@@ -83,17 +98,20 @@
 -- ── ERRORS ─────────────────────────────────────────────────────────────────
 -- The push raises 55000 hint cc_scope_preflight (drift or a second run:
 -- nothing applied) or 55P03 (busy after 40 attempts: nothing applied, run it
--- again). Never 40001 or 40P01. Reads answer fewer rows and never raise; an
--- AI scan row filed against a count the caller cannot read, and a scan photo
--- upload or removal by an API role, are refused with 42501.
+-- again). Never 40001 or 40P01. Reads answer fewer rows and never raise. An
+-- update or delete that no rule lets the caller make changes no row. An AI
+-- scan row the scan insert rule does not let the caller file, and a scan
+-- photo upload by an API role, are refused with 42501.
 --
 -- ── ROLLBACK (the owner's call only) ───────────────────────────────────────
 -- A forward migration: recreate the four read policies from
 -- 0140_rls_initplan_wrap.sql (cycle_counts_select, cycle_count_lines_select,
 -- cc_ai_scans_select, 'cycle-count-scans org read') and the two bucket write
 -- policies from the same file, restate cycle_count_line_progress from
--- 0358_cycle_count_numbers.sql and the line update WITH CHECK from
--- 0368_count_line_column_grants.sql, and drop the three helpers.
+-- 0358_cycle_count_numbers.sql, item_verification_summaries from
+-- 0374_verification_summaries.sql, and the line update WITH CHECK and
+-- cc_ai_scans_insert from 0368_count_line_column_grants.sql, and drop the
+-- four helpers.
 
 set lock_timeout = '900ms';
 
@@ -116,7 +134,11 @@ begin
         ('public.account_is_disabled(uuid)',              '16e89ccc9f3755879e39a96351e4efc3', null),
         ('public.is_org_member(uuid)',                    '76492a6556e9f6a7c33d942aa9726f9f', null),
         ('public.cycle_counts_page(uuid,bigint,text,text,uuid,uuid,boolean,timestamptz,uuid[],integer,integer)',
-                                                          '9d90e3a1530ce9680b48da67796f4451', null)
+                                                          '9d90e3a1530ce9680b48da67796f4451', null),
+        ('public.item_verification_summaries(uuid,uuid[])', '833809196500b7846ce7999e37e6e144', null),
+        ('public.caller_can_read_item(uuid)',             '80523d2cc0fafe7fc6b3599903d7f014', null),
+        ('public._latest_count_lines(uuid,uuid[],timestamptz)',
+                                                          'fbf8501a3022fe84a9209c3ddfe1dd09', null)
       ) v(sig, want, want_alt)
       left join pg_proc p on p.oid = to_regprocedure(v.sig)
   loop
@@ -179,7 +201,8 @@ begin
   end;
 
   if exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace
-               and p.proname in ('rls_all_warehouses_org_ids', 'rls_cc_unheaded_count_ids', 'cc_ai_scan_in_count')) then
+               and p.proname in ('rls_all_warehouses_org_ids', 'rls_cc_unheaded_count_ids', 'cc_ai_scan_in_count',
+                                 'cc_caller_reads_count_line')) then
     v_bad := v_bad || ' a helper this file creates already exists;';
   end if;
 
@@ -301,6 +324,46 @@ comment on function public.cc_ai_scan_in_count(uuid, uuid) is
   'may not read. Answers only inside the caller''s own organizations (no cross-organization oracle, '
   'docs/security/data-classification.md), about two ids the caller already holds.';
 
+create function public.cc_caller_reads_count_line(p_cycle_count_id uuid, p_item_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select (select auth.uid()) is not null and exists (
+    select 1
+      from public.cycle_count_lines l
+      join public.cycle_counts c on c.id = l.cycle_count_id
+     where l.cycle_count_id = p_cycle_count_id
+       and l.item_id = p_item_id
+       and c.organization_id in (select public.rls_member_org_ids())
+       and (
+         c.organization_id in (select public.rls_manager_org_ids())
+         or (
+           l.warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw)
+           and (
+             c.organization_id in (select public.rls_all_warehouses_org_ids())
+             or c.warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw)
+             or (c.warehouse_id is null
+                 and (c.assigned_to = (select auth.uid())
+                      or c.id in (select public.rls_cc_unheaded_count_ids())))
+           )
+           and public.caller_can_read_item(l.item_id)
+         )
+       )
+  );
+$$;
+
+revoke all on function public.cc_caller_reads_count_line(uuid, uuid) from public, anon;
+grant execute on function public.cc_caller_reads_count_line(uuid, uuid) to authenticated, service_role;
+
+comment on function public.cc_caller_reads_count_line(uuid, uuid) is
+  'S48. True when cycle_count_lines_select would show the caller the line of this item in this cycle count: its count '
+  'readable (cycle_counts_select) and the caller a manager there, or the line in one of the caller''s warehouses and '
+  'its item readable (caller_can_read_item). For SECURITY DEFINER readers that must answer within the caller''s view '
+  '(item_verification_summaries). The parity with the policy is tested; change them together.';
+
 -- ═══ 3. Line progress (0358) counts the lines the caller may read ═════════
 create or replace function public.cycle_count_line_progress(
   p_organization_id uuid,
@@ -372,6 +435,169 @@ comment on function public.cycle_counts_page(uuid, bigint, text, text, uuid, uui
   'when assigned to the caller or touching one of their warehouses). p_scope_warehouse_ids only narrows that '
   'further (null: no narrowing; empty: only the caller''s own null-warehouse assignments). authenticated may '
   'execute; anon/public revoked.';
+
+-- ═══ 3b. item_verification_summaries (0374) counts only lines the caller may read ═
+-- The body is 0374's with two terms added: the last count joins only when
+-- cc_caller_reads_count_line holds for its line, and the open count is chosen
+-- among such lines. Everything else (the gates, the item's own fields, the
+-- movement counts, the cap) is unchanged; the result columns are the same.
+create or replace function public.item_verification_summaries(
+  p_org      uuid,
+  p_item_ids uuid[]
+)
+returns table (
+  item_id                   uuid,
+  item_status               text,
+  item_is_rental            boolean,
+  item_is_bundle            boolean,
+  item_deleted              boolean,
+  item_countable            boolean,
+  quantity_on_hand          numeric,
+  cycle_count_id            uuid,
+  count_number              bigint,
+  scope                     text,
+  completed_at              timestamptz,
+  completed_by              uuid,
+  counted_by                uuid,
+  counted_at                timestamptz,
+  captured_at               timestamptz,
+  baseline_at               timestamptz,
+  expected_quantity         numeric,
+  expected_at_start         numeric,
+  counted_quantity          numeric,
+  counted_location_id       uuid,
+  counted_location_name     text,
+  counted_location_kind     text,
+  counted_location_type     text,
+  counted_location_archived boolean,
+  ai_assisted               boolean,
+  movements_since           integer,
+  outside_ledger_since      integer,
+  open_count_id             uuid,
+  open_count_number         bigint
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  -- Gate 1: a signed-in caller, arguments present.
+  if auth.uid() is null or p_org is null or p_item_ids is null then
+    return;
+  end if;
+  if cardinality(p_item_ids) > 500 then
+    raise exception 'too_many_items' using errcode = '22023', hint = 'too_many_items';
+  end if;
+  -- Gate 2: an accepted, enabled member of the org asked about.
+  if not public.is_org_member(p_org) then
+    return;
+  end if;
+
+  return query
+  with readable as (
+    -- Gate 3, per item: in p_org and readable by the caller (warehouse,
+    -- charter and category scope: the inventory_items_select predicate).
+    select i.id,
+           i.status,
+           i.is_rental,
+           i.is_bundle,
+           i.deleted_at,
+           i.quantity_on_hand
+      from public.inventory_items i
+     where i.id = any (p_item_ids)
+       and i.organization_id = p_org
+       and public.caller_can_read_item(i.id)
+  ),
+  latest as materialized (
+    select l.*
+      from public._latest_count_lines(p_org, array(select r.id from readable r)) l
+  )
+  select r.id,
+         r.status,
+         r.is_rental,
+         r.is_bundle,
+         r.deleted_at is not null,
+         -- start_cycle_count's own predicate (0369, D8).
+         (r.deleted_at is null and r.status = 'active' and not r.is_rental and not r.is_bundle),
+         r.quantity_on_hand,
+         lc.cycle_count_id,
+         lc.count_number,
+         lc.scope,
+         lc.completed_at,
+         lc.completed_by,
+         lc.counted_by,
+         lc.counted_at,
+         lc.captured_at,
+         lc.baseline_at,
+         lc.expected_quantity,
+         lc.expected_at_start,
+         lc.counted_quantity,
+         lc.counted_location_id,
+         lc.counted_location_name,
+         loc.kind,
+         loc.type,
+         case when lc.counted_location_id is null or loc.id is null then null
+              else loc.deleted_at is not null end,
+         lc.ai_assisted,
+         mv.movements,
+         mv.outside,
+         oc.id,
+         oc.count_number
+    from readable r
+    -- S48: the last count only when its line is one the caller may read.
+    left join latest lc
+      on lc.item_id = r.id
+     and public.cc_caller_reads_count_line(lc.cycle_count_id, lc.item_id)
+    left join public.locations loc
+      on loc.id = lc.counted_location_id
+     and loc.organization_id = p_org
+    -- Movements after the moment the count is true for. Null (not 0) when the
+    -- item was never counted, or its line has no moment at all: "unknown" is
+    -- never shown as "none".
+    left join lateral (
+      select count(*) filter (
+               where m.via_ledger
+                 -- the count's own correction is not a movement "since" it;
+                 -- IS DISTINCT FROM so a row with no reference is counted
+                 and (m.reference_type is distinct from 'cycle_count'
+                      or m.reference_id is distinct from lc.cycle_count_id))::integer as movements,
+             count(*) filter (where not m.via_ledger)::integer as outside
+        from public.stock_movements m
+       where m.item_id = r.id
+         and m.organization_id = p_org
+         and m.created_at > coalesce(lc.baseline_at, lc.counted_at)
+    ) mv
+      on lc.cycle_count_id is not null
+     and coalesce(lc.baseline_at, lc.counted_at) is not null
+    -- The newest in-progress count holding the item, among the lines the
+    -- caller may read (S48).
+    left join lateral (
+      select c.id, c.count_number
+        from public.cycle_count_lines l
+        join public.cycle_counts c
+          on c.id = l.cycle_count_id
+       where l.item_id = r.id
+         and c.organization_id = p_org
+         and c.status = 'in_progress'
+         and public.cc_caller_reads_count_line(c.id, l.item_id)
+       order by c.started_at desc, c.id desc
+       limit 1
+    ) oc on true
+   order by r.id;
+end;
+$$;
+
+comment on function public.item_verification_summaries(uuid, uuid[]) is
+  'F1-3 (0374), S48: per requested item the caller can read in p_org (is_org_member, caller_can_read_item, same '
+  'org), the item''s countability facts and on-hand, its latest physical count (_latest_count_lines: count, people, '
+  'moments, on-record and counted quantity, counted location with kind, type and archived state, AI assisted) when '
+  'that count''s line is one the caller may read (cc_caller_reads_count_line), movements_since (via_ledger rows after '
+  'coalesce(baseline_at, counted_at), excluding the count''s own cycle_count movement), outside_ledger_since '
+  '(via_ledger = false rows in the same window) and the newest in-progress count holding the item among the lines '
+  'the caller may read. Never-counted items, and items whose count lines the caller may not read, get a row with '
+  'null count fields; unreadable or foreign items get none. At most 500 ids (22023 too_many_items). SECURITY '
+  'DEFINER, gated in its body; counts only, never movement rows. EXECUTE to authenticated.';
 
 -- ═══ 4. The line UPDATE rule's scan link asks cc_ai_scan_in_count ═════════
 -- The USING clause is untouched; the WITH CHECK is 0368's with its last arm
@@ -451,6 +677,31 @@ create policy cc_ai_scans_select on public.cycle_count_ai_scans
       select 1 from public.cycle_counts cc
        where cc.id = cycle_count_ai_scans.cycle_count_id
          and cc.organization_id = cycle_count_ai_scans.organization_id
+    )
+  );
+
+-- An AI scan row is filed as the AI scan route's gate asks (0368's rule plus
+-- the count's assignee arm and stock:adjust, as the line UPDATE rule asks).
+-- The count is read under cycle_counts_select (nested RLS).
+drop policy if exists cc_ai_scans_insert on public.cycle_count_ai_scans;
+create policy cc_ai_scans_insert on public.cycle_count_ai_scans
+  for insert to authenticated
+  with check (
+    (select public.has_org_role(organization_id, 'staff'))
+    and created_by = (select auth.uid())
+    and confirmed_at is null
+    and confirmed_by is null
+    and exists (
+      select 1 from public.cycle_counts cc
+       where cc.id = cycle_count_ai_scans.cycle_count_id
+         and cc.organization_id = cycle_count_ai_scans.organization_id
+         and cc.status = 'in_progress'
+         and (
+           cc.assigned_to = (select auth.uid())
+           or cc.assigned_to is null
+           or (select public.has_org_role(cc.organization_id, 'manager'))
+         )
+         and (select public.has_permission(cc.organization_id, 'stock:adjust'))
     )
   );
 

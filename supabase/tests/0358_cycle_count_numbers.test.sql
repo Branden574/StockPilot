@@ -23,10 +23,10 @@
 --      started-from filters, identical totals, line progress, and the
 --      warehouse-restricted member's scope (own null-warehouse assignments
 --      included, a guessed reference outside it and another org's id
---      returning nothing). Since 0452 the DATABASE decides that scope: G22,
---      G24, G26b and G29-G31 pass no p_scope_warehouse_ids (as the phone's
---      direct reads and a hand-made Data API call pass none); G22w and G24w
---      keep the web's own narrowing on top.
+--      returning nothing). The database's read rule (cycle_counts_select)
+--      decides that scope: G22, G24, G26b and G29-G31 pass no
+--      p_scope_warehouse_ids, as the phone's direct reads and a Data API call
+--      pass none; G22w and G24w add the web's own narrowing on top.
 --
 -- Namespace cc035800. Wrapped in begin/rollback: nothing leaks.
 
@@ -617,7 +617,7 @@ select is(
 select is(
   (select min(total_count)::int from public.cycle_counts_page('cc035800-0000-4000-8000-00000000000d',
      p_status => 'in_progress')),
-  3, 'G26b: with no scope passed the open total is the same 3 (not all 8)');
+  3, 'G26b: with no scope passed the open total is the same 3 the member may see');
 select is(
   (select assignee_name from public.cycle_counts_page('cc035800-0000-4000-8000-00000000000d',
      p_number => 2, p_scope_warehouse_ids => array['cc035800-0000-4000-8000-0000000000b4']::uuid[])),

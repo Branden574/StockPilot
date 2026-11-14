@@ -26,9 +26,10 @@
 --      item; another org's item, a non-member, a signed-out caller get none;
 --      a member of two orgs asking about one gets no row for the other's
 --      item (mutation: drop the org pin -> a false "never counted");
---    * a member who can read the item but not its movements (no
---      activity_logs:read, and the item's warehouse outside my_warehouse_ids)
---      still gets the true count (mutation: SECURITY INVOKER);
+--    * a member who can read the item but has no warehouse of her own (no
+--      activity_logs:read, my_warehouse_ids empty) reads neither its
+--      movements nor its count line, and gets the item's own facts with no
+--      count facts (the count facts follow the count line rule, 0452);
 --    * more than 500 ids is 22023 too_many_items; 500 is fine; duplicates
 --      and nulls in the array give one row per item.
 --    * THE COUNTED LOCATION, recorded by the REAL rebase trigger (0342, v2 in
@@ -146,8 +147,8 @@ insert into public.warehouses (id, organization_id, name, code, status) values
 -- stfX read warehouse A's items, while my_warehouse_ids() requires the row's
 -- own organization to match and so gives stfX no warehouse at all. stfX can
 -- read an item in warehouse A and none of its movements (no
--- activity_logs:read): the divergence 0371 names, and the one persona for
--- whom a SECURITY INVOKER summary would under-count.
+-- activity_logs:read): the divergence 0371 names. Her count line is not
+-- hers to read either (0452), so S18 pins the item's facts with no count.
 insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, is_primary) values
   (:orgA, :stf,  :whA,  true),
   (:orgA, :vwr,  :whA,  true),
@@ -524,13 +525,17 @@ select is(
 insert into s
 select 'stfX', to_jsonb(v) from public.item_verification_summaries(:orgA, array[:iMatch]::uuid[]) v;
 reset role;
--- Mutation: SECURITY INVOKER -> stfX gets 0 (or, with _latest_count_lines
--- still service_role only, no answer at all).
+-- The count's facts come only from a count line the caller may read
+-- (cc_caller_reads_count_line, 0452, S48). stfX has no warehouse of her own
+-- (my_warehouse_ids is empty), so she reads neither the count nor its line:
+-- her row carries the item's own facts and no count.
 select is(
-  (select row((r->>'movements_since')::int, (r->>'outside_ledger_since')::int,
-              (r->>'cycle_count_id')::uuid)::text from s where who = 'stfX'),
-  row(3, 1, :ccMatch::uuid)::text,
-  'S18: a member without activity_logs:read who cannot see the item''s movements still gets the true counts');
+  (select row((r->>'item_id')::uuid, (r->>'quantity_on_hand')::numeric, (r->>'item_countable')::boolean,
+              (r->>'cycle_count_id')::uuid, (r->>'movements_since')::int, (r->>'open_count_id')::uuid)::text
+     from s where who = 'stfX'),
+  row(:iMatch::uuid, (select quantity_on_hand from public.inventory_items where id = :iMatch), true,
+      null::uuid, null::int, null::uuid)::text,
+  'S18: a member who reads the item but not its count line gets the item''s own facts and no count facts');
 
 -- Not a member, another org's manager, signed out: nothing.
 set local "request.jwt.claim.sub" to :nobody;

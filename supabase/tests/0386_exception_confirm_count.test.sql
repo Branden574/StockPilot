@@ -525,7 +525,8 @@ select is(
        ('link',      'public._exc_link_recount(uuid, uuid)',                               'aca3114bc8688ca7f6b2de032bc57d8f'),
        ('rechecks',  'public.cycle_count_line_rechecks(public.cycle_count_lines)',         'd9b450a79b8b516c891fa79db1a021e7'),
        ('recount',   'public.start_targeted_recount(uuid, uuid[], uuid[], text, text)',    'b22850a25b3b92d9a5f1ed02aa717aad'),
-       ('summaries', 'public.item_verification_summaries(uuid, uuid[])',                   '833809196500b7846ce7999e37e6e144'),
+       -- 0452's body (S48: count facts only from count lines the caller may read).
+       ('summaries', 'public.item_verification_summaries(uuid, uuid[])',                   '9bb444c822e49bffca6eec33d0ae5ea1'),
        ('visible',   'public._exc_occurrence_visible(uuid, uuid, uuid)',                   '62662f8300373203ad06b7a64d147c0c')
      ) v(fn, sig, want)
      join pg_proc p on p.oid = v.sig::regprocedure),
