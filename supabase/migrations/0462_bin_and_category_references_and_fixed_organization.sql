@@ -533,8 +533,9 @@ comment on function public.set_user_category_access(uuid, uuid, uuid, uuid[]) is
   'organization." otherwise, nothing changed).';
 
 comment on function public.tg_organization_id_fixed() is
-  'BEFORE UPDATE guard on warehouses, locations, bins and categories (WHEN organization_id changes): for an API role '
-  'the row''s organization never changes (42501). service_role, SECURITY DEFINER bodies and foreign key actions are not held. '
+  'BEFORE UPDATE guard (bound WHEN organization_id changes) on tables whose organization never changes: for an API role '
+  'the row''s organization never changes (42501); the trigger argument names the kind of record in the message. '
+  'service_role, SECURITY DEFINER bodies and foreign key actions are not held. '
   'SECURITY INVOKER on purpose (a DEFINER trigger sees postgres and never enforces).';
 
 reset lock_timeout;

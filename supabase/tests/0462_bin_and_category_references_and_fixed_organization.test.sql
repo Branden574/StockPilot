@@ -619,8 +619,8 @@ select is(
 select is(
   (select string_agg(t.tgrelid::regclass::text || ':' || t.tgname || ':' || t.tgtype::text || ':' || t.tgenabled::text
                      || ':' || pg_get_triggerdef(t.oid), E'\n' order by t.tgrelid::regclass::text)
-     -- Narrowed to this file's four tables when the guard was bound on more
-     -- (0463 pins those, and the whole list).
+     -- Narrowed to this file's four tables, so a binding on another table
+     -- leaves this pin unchanged.
      from pg_trigger t where t.tgfoid = to_regprocedure('public.tg_organization_id_fixed()')
       and t.tgrelid in ('public.warehouses'::regclass, 'public.locations'::regclass,
                         'public.bins'::regclass, 'public.categories'::regclass)),
