@@ -255,3 +255,30 @@ describe('acceptInviteWithSignupAction never creates the account of a platform a
     expect(createUser).not.toHaveBeenCalled();
   });
 });
+
+describe('acceptInviteWithSignupAction refuses a revoked invite before any account is created (S11-A)', () => {
+  const TOKEN_REVOKED = 'invite-token-revoked-1';
+
+  it('answers a revoked invite with a future expiry as expired, and creates no account', async () => {
+    h.invites.push({
+      id: 'invite-revoked',
+      organization_id: INVITE_ORG,
+      email: 'withdrawn.person@example.com',
+      accepted_at: null,
+      expires_at: IN_A_WEEK(),
+      revoked_at: '2026-01-02T03:04:05.000Z',
+      token: TOKEN_REVOKED,
+    });
+
+    const res = await acceptInviteWithSignupAction({ token: TOKEN_REVOKED, password: PASSWORD });
+
+    expect(res).toEqual({
+      ok: false,
+      error: { code: 'validation_error', message: 'Invite has expired' },
+    });
+    expect(String(stub.chainArgs.get('organization_invites.select')?.[0]?.[0])).toContain(
+      'revoked_at',
+    );
+    expectNoAccount();
+  });
+});

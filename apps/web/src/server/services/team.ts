@@ -37,6 +37,9 @@ function formatInviteExpiry(iso: string): string {
   });
 }
 
+const INVITE_CANNOT_BE_RESENT = 'This invite can no longer be resent. Send a new invite.';
+const INVITE_COULD_NOT_BE_RENEWED = 'Could not renew this invite, so nothing was sent. Try again.';
+
 export class TeamService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -175,6 +178,9 @@ export class TeamService {
       .select('id, email, role, token, expires_at, created_at')
       .eq('organization_id', this.ctx.organizationId)
       .is('accepted_at', null)
+      // A withdrawn invitation (revoked_at: a removal, 0429, or an account
+      // deletion, 0393) is never pending, whatever its expiry says.
+      .is('revoked_at', null)
       .gt('expires_at', new Date().toISOString())
       .order('created_at', { ascending: false });
     if (error) throw new ServiceError('internal_error', error.message);
@@ -253,13 +259,14 @@ export class TeamService {
       }
     }
 
-    // Already invited and not yet expired?
+    // Already invited, not withdrawn and not yet expired?
     const { data: existingInvite } = await this.ctx.supabase
       .from('organization_invites')
       .select('id')
       .eq('organization_id', this.ctx.organizationId)
       .eq('email', normalizedEmail)
       .is('accepted_at', null)
+      .is('revoked_at', null)
       .gt('expires_at', new Date().toISOString())
       .maybeSingle();
     if (existingInvite) {
@@ -379,6 +386,9 @@ export class TeamService {
       )
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', inviteId)
+      // A revoked invite (0393: its sender's account was deleted) is terminal
+      // (0098), so it is never resent.
+      .is('revoked_at', null)
       .maybeSingle();
     if (fetchErr) throw new ServiceError('internal_error', fetchErr.message);
     if (!invite) throw new ServiceError('not_found', 'Invite not found');
@@ -391,16 +401,55 @@ export class TeamService {
 
     // Refresh the expiry so a recipient who acts on a re-sent email
     // doesn't immediately hit "invite expired". The reminder email states
-    // this NEW expiry (registry: invite-reminder).
+    // this NEW expiry (registry: invite-reminder). The renewed row is asked
+    // back (pattern #2): the database renews only an open invite of this
+    // organization, for an admin (S11-A, organization_invites_update), and a
+    // filtered update that matches no row is not an error. With no row back,
+    // nothing is sent and nothing is audited.
     const newExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-    const { error: updErr } = await this.ctx.supabase
+    const { data: renewed, error: updErr } = await this.ctx.supabase
       .from('organization_invites')
       .update({
         expires_at: newExpiresAt,
       })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', inviteId);
-    if (updErr) throw new ServiceError('internal_error', updErr.message);
+      .eq('id', inviteId)
+      // Only a row still open: the write itself decides, so an invite
+      // accepted or revoked between the read above and this write is not
+      // renewed (no row back).
+      .is('accepted_at', null)
+      .is('revoked_at', null)
+      .select('id, expires_at')
+      .maybeSingle();
+    // No database text reaches the admin on any error of this write. A
+    // refusal by the database's rules (42501: the row is not this admin's to
+    // renew, or the change is more than the expiry; 22023: the expiry is out
+    // of range) answers the same fixed sentence as no row back; a 42501 is
+    // also reported as a warning, so a privilege denial is recorded. Any
+    // other error is reported and answers that nothing was sent.
+    if (updErr && (updErr.code === '42501' || updErr.code === '22023')) {
+      if (updErr.code === '42501') {
+        void reportError(new Error(`invite renew refused: ${postgrestErrorText(updErr)}`), {
+          tag: 'team.invite.resend_renew',
+          level: 'warning',
+          organizationId: this.ctx.organizationId,
+          extra: { inviteId },
+        });
+      }
+      throw new ServiceError('conflict', INVITE_CANNOT_BE_RESENT);
+    }
+    if (updErr) {
+      void reportError(new Error(`invite renew failed: ${postgrestErrorText(updErr)}`), {
+        tag: 'team.invite.resend_renew',
+        organizationId: this.ctx.organizationId,
+        extra: { inviteId },
+      });
+      throw new ServiceError('conflict', INVITE_COULD_NOT_BE_RENEWED);
+    }
+    if (!renewed) {
+      throw new ServiceError('conflict', INVITE_CANNOT_BE_RESENT);
+    }
+    const renewedExpiresAt = (renewed.expires_at as string | null) ?? newExpiresAt;
 
     // Inviter name: prefer current user's full_name, fallback to email.
     const { data: profile } = await this.ctx.supabase
@@ -431,7 +480,7 @@ export class TeamService {
       inviterEmail: (profile?.email as string | null) ?? null,
       role: (invite.role as Role | null) ?? 'staff',
       acceptUrl,
-      expiresOn: formatInviteExpiry(newExpiresAt),
+      expiresOn: formatInviteExpiry(renewedExpiresAt),
       appUrl: env.NEXT_PUBLIC_APP_URL,
     });
     const sent = await sendEmail({
@@ -1193,14 +1242,16 @@ export async function acceptInviteWithToken(
   const { data: invite, error: inviteErr } = await admin
     .from('organization_invites')
     .select(
-      'id, organization_id, email, role, expires_at, accepted_at, warehouse_id, charter_id, charter_ids, all_warehouses, invited_by',
+      'id, organization_id, email, role, expires_at, accepted_at, revoked_at, warehouse_id, charter_id, charter_ids, all_warehouses, invited_by',
     )
     .eq('token', token)
     .maybeSingle();
   if (inviteErr) throw new ServiceError('internal_error', inviteErr.message);
   if (!invite) throw new ServiceError('not_found', 'Invite not found');
   if (invite.accepted_at) throw new ServiceError('conflict', 'Invite already accepted');
-  if (new Date(invite.expires_at as string).getTime() < Date.now()) {
+  // A revoked invite answers as an expired one, whatever its expiry says
+  // (0393 also moves its expiry into the past; this is the second check).
+  if (invite.revoked_at || new Date(invite.expires_at as string).getTime() < Date.now()) {
     throw new ServiceError('validation_error', 'Invite has expired');
   }
 

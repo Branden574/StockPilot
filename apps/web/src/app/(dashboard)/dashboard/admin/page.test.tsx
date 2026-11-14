@@ -30,12 +30,18 @@ const COUNTS: Record<string, number> = {
   audit_logs: 4210,
 };
 const selects: Array<{ table: string; options: unknown }> = [];
+/** Every filter call per table, in order: [method, column, value]. */
+const filters: Record<string, unknown[][]> = {};
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(async () => ({
     from(table: string) {
       const result = { count: COUNTS[table] ?? 0, data: null, error: null };
       const chain: Record<string, unknown> = {};
-      for (const m of ['eq', 'neq', 'not', 'is', 'gt']) chain[m] = () => chain;
+      for (const m of ['eq', 'neq', 'not', 'is', 'gt'])
+        chain[m] = (...args: unknown[]) => {
+          (filters[table] ??= []).push([m, ...args]);
+          return chain;
+        };
       chain.then = (resolve: (v: unknown) => unknown) => resolve(result);
       return {
         select(_cols: string, options: unknown) {
@@ -53,6 +59,7 @@ beforeEach(() => {
   platform.admin = false;
   navLabel.override = null;
   selects.length = 0;
+  for (const t of Object.keys(filters)) delete filters[t];
 });
 
 describe('/dashboard/admin overview', () => {
@@ -95,6 +102,17 @@ describe('/dashboard/admin overview', () => {
       ].sort(),
     );
     for (const s of selects) expect(s.options).toEqual({ count: 'exact', head: true });
+  });
+
+  it('counts as pending only invitations not accepted, not withdrawn and not expired (B94 review)', async () => {
+    // Removing a member or deleting an account withdraws the invitations the
+    // person sent (revoked_at); a withdrawn one is never pending, even when an
+    // old Resend moved its expiry ahead.
+    render(await AdminOverviewPage());
+    const invites = filters.organization_invites ?? [];
+    expect(invites).toContainEqual(['is', 'accepted_at', null]);
+    expect(invites).toContainEqual(['is', 'revoked_at', null]);
+    expect(invites.some(([m, col]) => m === 'gt' && col === 'expires_at')).toBe(true);
   });
 
   it('hides the platform block from an org admin who is not a platform admin', async () => {

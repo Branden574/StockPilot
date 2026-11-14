@@ -560,13 +560,15 @@ export async function acceptInviteWithSignupAction(input: {
   //    to clean up later.
   const { data: invite, error: inviteErr } = await admin
     .from('organization_invites')
-    .select('id, organization_id, email, accepted_at, expires_at')
+    .select('id, organization_id, email, accepted_at, expires_at, revoked_at')
     .eq('token', parsed.data.token)
     .maybeSingle();
   if (inviteErr) return unexpectedActionError(inviteErr, 'actions.team.invite_signup');
   if (!invite) return err('not_found', 'Invite not found');
   if (invite.accepted_at) return err('conflict', 'Invite already accepted');
-  if (new Date(invite.expires_at as string).getTime() < Date.now()) {
+  // A revoked invite answers as an expired one, whatever its expiry says, and
+  // before any account is created (acceptInviteWithToken refuses it too).
+  if (invite.revoked_at || new Date(invite.expires_at as string).getTime() < Date.now()) {
     return err('validation_error', 'Invite has expired');
   }
 
