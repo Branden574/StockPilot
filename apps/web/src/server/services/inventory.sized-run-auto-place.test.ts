@@ -78,12 +78,14 @@ const RUN = {
   ],
 };
 
-/** The rows the insert hands back — ids/quantities the service then places.
- *  `primary_location_id` echoes the caller's SITE, exactly as the DB would. */
+/** The rows the insert hands back. Every row is inserted at 0 (open_item_stock opens it), so the
+ *  service must key the opening, the label and the placement on the quantity
+ *  each SKU asked for, never on these. `primary_location_id` echoes the
+ *  caller's SITE. */
 const INSERTED = [
-  { id: 'v-9', name: 'Nike Vapor - 9', sku: 'SP-VAPOR-9', quantity_on_hand: 3, primary_location_id: SITE },
-  { id: 'v-95', name: 'Nike Vapor - 9.5', sku: 'SP-VAPOR-9.5', quantity_on_hand: 5, primary_location_id: SITE },
-  { id: 'v-10', name: 'Nike Vapor - 10', sku: 'SP-VAPOR-10', quantity_on_hand: 7, primary_location_id: SITE },
+  { id: 'v-9', name: 'Nike Vapor - 9', sku: 'SP-VAPOR-9', quantity_on_hand: 0, primary_location_id: SITE },
+  { id: 'v-95', name: 'Nike Vapor - 9.5', sku: 'SP-VAPOR-9.5', quantity_on_hand: 0, primary_location_id: SITE },
+  { id: 'v-10', name: 'Nike Vapor - 10', sku: 'SP-VAPOR-10', quantity_on_hand: 0, primary_location_id: SITE },
 ];
 
 const categoryRow = {
@@ -147,7 +149,10 @@ function buildStub(over: Record<string, unknown> = {}) {
     'custom_field_definitions.select': { data: [], error: null },
     // The fan-out insert returns every created row back to the service.
     'inventory_items.insert': { data: INSERTED, error: null },
-    'stock_movements.insert': { data: null, error: null },
+    // Opening stock through the ledger: the run's stocked sizes are
+    // opened by open_item_stock, which writes the holding, on-hand and the
+    // 'initial' movement (destination null: the insert carried no primary).
+    'rpc:open_item_stock': { data: [], error: null },
     // findOrCreateRackOrCrate's resolve step finds an existing "28-A" rack in
     // wh-1, so no location is minted.
     'locations.select': { data: [{ id: 'rack-28a', name: '28-A' }], error: null },
@@ -165,10 +170,11 @@ function insertedRows(stub: SupabaseStub) {
   >;
 }
 
-function insertedMovements(stub: SupabaseStub) {
-  return (stub.chainArgs.get('stock_movements.insert')?.[0]?.[0] ?? []) as Array<
-    Record<string, unknown>
-  >;
+/** The lines handed to open_item_stock, across every call. */
+function openings(stub: SupabaseStub) {
+  return stub.rpcCalls
+    .filter((c) => c.name === 'open_item_stock')
+    .flatMap((c) => (c.args as { p_lines: Array<{ itemId: string; quantity: number }> }).p_lines);
 }
 
 function transfers(stub: SupabaseStub) {
@@ -241,13 +247,9 @@ describe('InventoryService.bulkCreateSizedVariants — size-run auto-place onto 
       // The typed rack still lands where it always did: the text LABEL column.
       expect(row.bin_location).toBe('28-A');
     }
-    // The opening entries record Unplaced (null), where the stock really went.
-    const movements = insertedMovements(stub);
-    expect(movements).toHaveLength(3);
-    for (const m of movements) {
-      expect(m.movement_type).toBe('initial');
-      expect(m.to_location_id).toBeNull();
-    }
+    // Every stocked size is opened through the ledger, from an insert with no
+    // primary, so it lands in Unplaced (the database records the destination).
+    expect(openings(stub)).toHaveLength(3);
     // Exactly ONE inventory_items write afterwards: the SITE label, never the
     // rack id, so "just set primary_location_id to the rack" cannot sneak in.
     const updates = stub.chainArgsAll.get('inventory_items.update') ?? [];
@@ -268,10 +270,13 @@ describe('InventoryService.bulkCreateSizedVariants — size-run auto-place onto 
 
     await svc.bulkCreateSizedVariants({ ...RUN });
 
-    // 'initial' rows are written by the service BEFORE any placement (the
-    // transfer rows are written by transfer_stock itself), so the ledger reads
-    // initial → transfer per variant, exactly as the single create path does.
-    expect(insertedMovements(stub).map((m) => [m.item_id, m.quantity_change])).toEqual([
+    // The opening (open_item_stock writes the 'initial' rows) runs BEFORE any
+    // placement (the transfer rows are written by transfer_stock itself), so
+    // the ledger reads initial → transfer per variant, exactly as the single
+    // create path does.
+    const calls = stub.rpcCalls.map((c) => c.name);
+    expect(calls.indexOf('open_item_stock')).toBeLessThan(calls.indexOf('transfer_stock'));
+    expect(openings(stub).map((l) => [l.itemId, l.quantity])).toEqual([
       ['v-9', 3],
       ['v-95', 5],
       ['v-10', 7],
@@ -290,7 +295,7 @@ describe('InventoryService.bulkCreateSizedVariants — size-run auto-place onto 
     expect(transfers(stub)).toHaveLength(0);
     // Still a normal create: rows and their opening ledger are untouched.
     expect(insertedRows(stub)).toHaveLength(3);
-    expect(insertedMovements(stub)).toHaveLength(3);
+    expect(openings(stub)).toHaveLength(3);
   });
 
   it('a whitespace-only rack label is not a typed rack either', async () => {
@@ -332,8 +337,8 @@ describe('InventoryService.bulkCreateSizedVariants — size-run auto-place onto 
     expect(holdingsReadScope()).toEqual(['v-9', 'v-10']);
     // And it is placed nowhere.
     expect(transfers(stub).map((t) => t.p_item_id)).toEqual(['v-9', 'v-10']);
-    // Consistent with the rest of the path: no opening movement for it either.
-    expect(insertedMovements(stub).map((m) => m.item_id)).toEqual(['v-9', 'v-10']);
+    // Consistent with the rest of the path: nothing is opened for it either.
+    expect(openings(stub).map((l) => l.itemId)).toEqual(['v-9', 'v-10']);
   });
 
   it('a run where NO size carries stock places nothing at all', async () => {
@@ -413,8 +418,10 @@ describe('InventoryService.bulkCreateSizedVariants — size-run auto-place onto 
     const many = Array.from({ length: 25 }, (_, i) => ({
       id: `m-${i}`,
       name: `n-${i}`,
-      sku: `s-${i}`,
-      quantity_on_hand: 2,
+      // The SKU the run builds for size 20 + i, so each row is matched to its
+      // requested quantity.
+      sku: `SP-VAPOR-${20 + i}`,
+      quantity_on_hand: 0,
       primary_location_id: SITE,
     }));
     for (const row of many) SEEDED[row.id] = { location_id: `seed-${row.id}`, quantity: 2 };

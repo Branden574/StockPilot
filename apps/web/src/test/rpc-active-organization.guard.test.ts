@@ -438,7 +438,7 @@ const REGISTRY: Record<string, Entry> = {
   'server/services/movements.ts::dashboard_value_series': RO(),
   'server/services/movements.ts::get_dashboard_summary': RO(),
   'server/services/movements.ts::low_stock_items': RO(),
-  'server/services/opening-stock-compensation.ts::compensate_opening_stock': [
+  'server/services/opening-stock.ts::open_item_stock': [
     'takes_org',
     'Passes the active organization.',
   ],

@@ -1790,6 +1790,15 @@ WEB_TESTS=(
   # anywhere else on the web, the phone and core.
   src/test/outbox-publish-sites.guard.test.ts
   src/server/lib/outbox-events.test.ts
+
+  # The apps only read the movement ledger (docket S8): every
+  # .from('stock_movements') in the web app, the phone and the packages is a
+  # read (.select( first, no write later in the chain), the table is named
+  # nowhere else but in the listed read holders, and no builder takes a
+  # computed table name. Movements are written by the database's ledger
+  # functions, opening stock by open_item_stock. The guard carries the
+  # "Security invariant" marker.
+  src/server/services/stock-movements-writers.guard.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

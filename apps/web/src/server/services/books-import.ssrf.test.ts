@@ -137,7 +137,8 @@ function stub() {
       data: [{ id: ITEM_ID, barcode: ISBN }],
       error: null,
     },
-    'stock_movements.insert': { data: null, error: null },
+    // Opening stock goes through the ledger.
+    'rpc:open_item_stock': { data: [], error: null },
     'item_images.insert': { data: null, error: null },
   });
 }

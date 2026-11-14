@@ -78,7 +78,7 @@ beforeEach(() => {
  *  - hoisted plan-limit: organizations.select (plan), inventory_items.select (count)
  *  - hoisted charter check (only when charterId !== null) — caller seeds
  *  - batch write: inventory_items.insert
- *  - batch stock movements: stock_movements.insert
+ *  - opening stock: rpc open_item_stock
  *  - cover rehost: item_images.insert (only when thumbnailUrl present)
  */
 function execStub(opts: {
@@ -87,12 +87,8 @@ function execStub(opts: {
   currentItemCount?: number;
   insertedItems?: Array<{ id: string; barcode: string }>;
   insertError?: { message: string; code?: string } | null;
-  /** Fail the opening `stock_movements` batch insert (RLS refusal, transient). */
-  movementError?: { message: string; code?: string } | null;
-  /** Ids compensate_opening_stock (0359) reports it actually rolled back. */
-  zeroedItems?: Array<{ id: string }>;
-  /** Placements still carrying quantity > 0 after the compensation re-read. */
-  survivingPlacements?: Array<{ id: string }>;
+  /** Fail the opening (open_item_stock refuses: nothing written). */
+  openingError?: { message: string; code?: string; hint?: string } | null;
 } = {}) {
   return makeSupabaseStub({
     // Preview: rows that already exist by barcode.
@@ -108,23 +104,15 @@ function execStub(opts: {
     'inventory_items.insert': opts.insertError
       ? { data: null, error: opts.insertError }
       : { data: opts.insertedItems ?? [], error: null },
-    'stock_movements.insert': opts.movementError
-      ? { data: null, error: opts.movementError }
-      : { data: null, error: null },
-    // Compensation path (opening-movement failure): one RPC zeroes the
-    // 0199-seeded placements and the row quantity, then a re-read looks for
-    // survivors.
-    'rpc:compensate_opening_stock': {
-      data: (opts.zeroedItems ?? []).map((r) => r.id),
-      error: null,
-    },
-    'item_stock_levels.select': { data: opts.survivingPlacements ?? [], error: null },
+    'rpc:open_item_stock': opts.openingError
+      ? { data: null, error: opts.openingError }
+      : { data: [], error: null },
     'item_images.insert': { data: null, error: null },
   });
 }
 
 describe('BooksImportService.execute', () => {
-  it('happy path: hoists plan/charter checks ONCE, batches inventory_items + stock_movements inserts', async () => {
+  it('happy path: hoists plan/charter checks ONCE, inserts the books at 0 in one batch and opens them in one call', async () => {
     const stub = execStub({
       plan: 'pro',
       currentItemCount: 5,
@@ -144,7 +132,7 @@ describe('BooksImportService.execute', () => {
     expect(result.skipped).toBe(0);
     expect(result.failed).toEqual([]);
 
-    // Exactly ONE inventory_items.insert and ONE stock_movements.insert.
+    // Exactly ONE inventory_items.insert, every book at 0, and ONE opening.
     const itemInsertArgs = stub.chainArgs.get('inventory_items.insert') ?? [];
     expect(itemInsertArgs.length).toBeGreaterThan(0);
     const payload = itemInsertArgs[0]![0] as Array<Record<string, unknown>>;
@@ -152,20 +140,25 @@ describe('BooksImportService.execute', () => {
     expect(payload).toHaveLength(2);
     expect(payload[0]!.barcode).toBe(ISBN_A);
     expect(payload[1]!.barcode).toBe(ISBN_B);
+    expect(payload.map((r) => r.quantity_on_hand)).toEqual([0, 0]);
 
-    const movementInsertArgs = stub.chainArgs.get('stock_movements.insert') ?? [];
-    expect(movementInsertArgs.length).toBe(1);
-    const movements = movementInsertArgs[0]![0] as Array<Record<string, unknown>>;
-    expect(movements).toHaveLength(2);
-    expect(movements[0]!.movement_type).toBe('initial');
-    expect(movements[0]!.quantity_change).toBe(3);
+    const openings = stub.rpcCalls.filter((c) => c.name === 'open_item_stock');
+    expect(openings).toHaveLength(1);
+    expect(openings[0]!.args).toEqual({
+      p_org_id: 'org-test',
+      p_lines: [
+        { itemId: 'item-1', quantity: 3 },
+        { itemId: 'item-2', quantity: 3 },
+      ],
+    });
+    expect(stub.fromCalls).not.toContain('stock_movements');
 
     // organizations.select hit ONCE (hoisted plan-limit), not per-row.
     const orgFromCalls = stub.fromCalls.filter((t) => t === 'organizations').length;
     expect(orgFromCalls).toBe(1);
   });
 
-  it('skips stock_movements insert entirely when defaultQuantity is 0', async () => {
+  it('opens nothing when defaultQuantity is 0', async () => {
     const stub = execStub({
       insertedItems: [{ id: 'item-1', barcode: ISBN_A }],
     });
@@ -177,10 +170,9 @@ describe('BooksImportService.execute', () => {
     });
 
     expect(result.created).toBe(1);
-    // No stock_movements work at all when defaultQty is 0 — none of the
-    // books moved, so no initial movement to record.
-    const movementCalls = stub.fromCalls.filter((t) => t === 'stock_movements').length;
-    expect(movementCalls).toBe(0);
+    // No opening at all when defaultQty is 0: none of the books has stock.
+    expect(stub.rpcCalls.filter((c) => c.name === 'open_item_stock')).toEqual([]);
+    expect(stub.fromCalls).not.toContain('stock_movements');
   });
 
   it('throws plan_limit_exceeded BEFORE the insert when batch would overflow plan limit', async () => {
@@ -235,32 +227,23 @@ describe('BooksImportService.execute', () => {
     }
     expect(caught).toBeInstanceOf(ServiceError);
     expect((caught as ServiceError).code).toBe('conflict');
-    // No stock_movements insert when the inventory_items insert failed —
-    // we never reached that phase.
-    const movementCalls = stub.fromCalls.filter((t) => t === 'stock_movements').length;
-    expect(movementCalls).toBe(0);
+    // No opening when the inventory_items insert failed: we never reached
+    // that phase.
+    expect(stub.rpcCalls.filter((c) => c.name === 'open_item_stock')).toEqual([]);
   });
 
-  // ── Opening-ledger invariant (SP-084) ────────────────────────────────────
-  // SUM(stock_movements.quantity_change) MUST equal quantity_on_hand for every
-  // item. The import used to push a single 'batch:stock_movements' line into
-  // result.failed[] and report the books as created, leaving N books holding
-  // stock that no movement anywhere explains (and, via the 0199 trigger, N
-  // placed holdings too).
-  it('opening-movement failure: compensates on-hand + the 0199 placements, then throws', async () => {
+  // ── Opening stock through the ledger ──────────────────────────────
+  // A refused opening leaves every book at 0 with nothing written (the call is
+  // one transaction), and the import fails loudly instead of reporting books
+  // created with stock no movement explains.
+  it('a refused opening throws the zero-on-hand sentence and writes nothing else', async () => {
     const stub = execStub({
       insertedItems: [
         { id: 'item-1', barcode: ISBN_A },
         { id: 'item-2', barcode: ISBN_B },
       ],
-      // The reachable-every-time case: a viewer granted items:create passes the
-      // inventory_items insert and is refused by stock_movements RLS.
-      movementError: {
-        message: 'new row violates row-level security policy for table "stock_movements"',
-        code: '42501',
-      },
-      zeroedItems: [{ id: 'item-1' }, { id: 'item-2' }],
-      survivingPlacements: [],
+      // A viewer granted items:create may insert books but not add stock.
+      openingError: { message: 'forbidden', code: '42501', hint: 'stock:adjust' },
     });
 
     const svc = new BooksImportService(makeServiceContext(stub.client));
@@ -277,53 +260,16 @@ describe('BooksImportService.execute', () => {
 
     // Fails LOUDLY — never "created 2 books, one failed ISBN".
     expect(caught).toBeInstanceOf(ServiceError);
-    expect((caught as ServiceError).code).toBe('internal_error');
-    // `internal_error` REDACTS the public message by design (S13), so the
-    // operator-facing sentence lives on internalDetail — same as the sibling
-    // InventoryService compensation.
-    expect((caught as ServiceError).internalDetail).toMatch(/stock adjustment/i);
-
-    // (a)+(b) The 0199-seeded placements and the row quantity are rolled back
-    // by compensate_opening_stock for exactly the inserted books, and never by
-    // a direct write (0359 refuses those).
-    const rpc = stub.rpcCalls.filter((c) => c.name === 'compensate_opening_stock');
-    expect(rpc.flatMap((c) => (c.args as { p_item_ids: string[] }).p_item_ids).sort()).toEqual([
-      'item-1',
-      'item-2',
-    ]);
-    expect(stub.chains.has('item_stock_levels.update')).toBe(false);
+    // A 'conflict': the person reads the sentence itself, never the generic
+    // "try again" an internal_error shows.
+    expect((caught as ServiceError).code).toBe('conflict');
+    expect((caught as ServiceError).message).toBe(
+      'These books were saved with zero on hand: their opening quantities could not be recorded. Open each one and use Adjust stock to set its quantity.',
+    );
+    // Nothing of the ledger is written directly.
+    expect(stub.fromCalls).not.toContain('stock_movements');
+    expect(stub.fromCalls).not.toContain('item_stock_levels');
     expect(stub.chains.has('inventory_items.update')).toBe(false);
-
-    // (c) Survivors are re-read — "no error" is not proof anything matched.
-    expect(stub.chains.get('item_stock_levels.select')).toContain('gt');
-  });
-
-  it('opening-movement failure whose rollback is incomplete escalates to contact-support', async () => {
-    const stub = execStub({
-      insertedItems: [
-        { id: 'item-1', barcode: ISBN_A },
-        { id: 'item-2', barcode: ISBN_B },
-      ],
-      movementError: { message: 'boom', code: '42501' },
-      // The RPC rolled back only ONE of the two rows — a partial compensation
-      // is still a broken ledger, so it counts as a failure.
-      zeroedItems: [{ id: 'item-1' }],
-    });
-
-    const svc = new BooksImportService(makeServiceContext(stub.client));
-
-    let caught: unknown = null;
-    try {
-      await svc.execute([ISBN_A, ISBN_B], {
-        warehouseId: WAREHOUSE_ID,
-        defaultQuantity: 1,
-      });
-    } catch (e) {
-      caught = e;
-    }
-    expect(caught).toBeInstanceOf(ServiceError);
-    expect((caught as ServiceError).code).toBe('internal_error');
-    expect((caught as ServiceError).internalDetail).toMatch(/Contact support/i);
   });
 
   it('routes ISBNs already in the org to result.skipped without touching the insert path', async () => {

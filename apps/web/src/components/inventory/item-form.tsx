@@ -872,6 +872,15 @@ export function ItemForm({
    * well as in the toast, so the person is pointed at the box to fix.
    */
   function reportSaveError(error: ActionError) {
+    // Saved, but its opening quantity was not recorded: the record exists, so
+    // the form must not stay open for a second press (a second item). Show the
+    // sentence (it says where to set the quantity) and go to the record.
+    const savedHref = openingStockSavedHref(error, isBook);
+    if (savedHref) {
+      toast.error(error.message, { duration: 15000 });
+      router.push(savedHref);
+      return;
+    }
     const field = error.details?.field;
     if (sportsFieldsShown && isRequiredAttributeField(field)) {
       setError(field, { type: 'server', message: error.message }, { shouldFocus: true });
@@ -3100,6 +3109,21 @@ export function skuTakenOpenHref(error: ActionError, isBook: boolean): string | 
   const id = error.details?.conflictItemId;
   if (error.details?.reason !== 'sku_taken' || typeof id !== 'string' || !id) return null;
   return `${isBook ? '/dashboard/books' : '/dashboard/inventory'}/${id}`;
+}
+
+/**
+ * Where to go after a create whose items were SAVED but whose opening quantity
+ * could not be recorded (the opening helper's 'opening_stock_not_recorded'
+ * conflict): the item's page for one item, the list for several. Null for any
+ * other refusal, which keeps the form as it is.
+ */
+export function openingStockSavedHref(error: ActionError, isBook: boolean): string | null {
+  if (error.code !== 'conflict' || error.details?.reason !== 'opening_stock_not_recorded') return null;
+  const base = isBook ? '/dashboard/books' : '/dashboard/inventory';
+  const ids = error.details?.itemIds;
+  const one =
+    error.details?.total === 1 && Array.isArray(ids) && ids.length === 1 && typeof ids[0] === 'string';
+  return one ? `${base}/${ids[0] as string}` : base;
 }
 
 function PlacementOnlyNote({ children }: { children?: React.ReactNode }) {
