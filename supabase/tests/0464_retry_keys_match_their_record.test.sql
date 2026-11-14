@@ -47,6 +47,7 @@ select plan(37);
 \set po2   '\'04640000-0000-0000-0000-0000000000e5\''
 \set l2    '\'04640000-0000-0000-0000-0000000000e6\''
 \set bn    '\'04640000-0000-0000-0000-0000000000f1\''
+\set bn2   '\'04640000-0000-0000-0000-0000000000f3\''
 \set ev    '\'04640000-0000-0000-0000-0000000000f2\''
 \set gone  '\'04640000-0000-0000-0000-0000000000ff\''
 
@@ -92,12 +93,16 @@ insert into public.purchase_order_items
   (:l1, :org, :po1, :itR, 100, 0, 1),
   (:lK, :org, :po1, :itK, 5,   0, 1),
   (:l2, :org, :po2, :itR, 100, 0, 1);
--- bn: 1 x C1 + 2 x C2, built from components only.
+-- bn: 1 x C1 + 2 x C2, built from components only. bn2: another kit of the
+-- same components (K4's kit term).
 insert into public.bundles (id, organization_id, name, sku, is_active, preassembly_enabled) values
-  (:bn, :org, '0464 Kit', 'KIT-0464', true, false);
+  (:bn,  :org, '0464 Kit',       'KIT-0464',   true, false),
+  (:bn2, :org, '0464 Kit Two',   'KIT-0464-2', true, false);
 insert into public.bundle_components (bundle_id, item_id, quantity, is_optional) values
-  (:bn, :itC1, 1, false),
-  (:bn, :itC2, 2, false);
+  (:bn,  :itC1, 1, false),
+  (:bn,  :itC2, 2, false),
+  (:bn2, :itC1, 1, false),
+  (:bn2, :itC2, 2, false);
 -- ev: a completed event handing out 1 x bn from whA (what the Schedule saves
 -- before it calls distribute_bundle).
 insert into public.schedule_events
@@ -386,14 +391,16 @@ select is(
                                                       format('update public.bundle_distributions set %s where id = %L', v.sets, (select id from ids where k = 'd1'))),
                      ' ' order by v.n)
      from (values (1, 'organization_id', format('organization_id = %L', :orgB)),
+                  (7, 'bundle_id',       format('bundle_id = %L', :bn2)),
                   (2, 'warehouse_id',    format('warehouse_id = %L', :whA2)),
                   (3, 'quantity',        'quantity = 2'),
                   (4, 'distributed_by',  format('distributed_by = %L', :mgr2)),
                   (5, 'idempotency_key', $s$idempotency_key = 'kk-other'$s$),
                   (6, 'no key, other time', $s$idempotency_key = null, distributed_at = distributed_at - interval '1 second'$s$)) v(n, col, sets)),
   'organization_id=55000:-:idempotency_conflict warehouse_id=55000:-:idempotency_conflict quantity=55000:-:idempotency_conflict '
-  'distributed_by=55000:-:idempotency_conflict idempotency_key=55000:-:idempotency_conflict no key, other time=55000:-:idempotency_conflict',
-  'K4: a replay is answered only with a distribution of this organization, warehouse and quantity, handed out by the caller, that carries this key (or, carrying none, was made with the key row): each term alone answers 55000');
+  'distributed_by=55000:-:idempotency_conflict idempotency_key=55000:-:idempotency_conflict no key, other time=55000:-:idempotency_conflict '
+  'bundle_id=55000:-:idempotency_conflict',
+  'K4: a replay is answered only with a distribution of this organization, kit, warehouse and quantity, handed out by the caller, that carries this key (or, carrying none, was made with the key row): each term alone answers 55000');
 select is(
   pg_temp.attempt('authenticated', :mgr, pg_temp.kit_sql(1, 'kk-1'),
     format('update public.bundle_distributions set bundle_id = %L where id = %L', :bn, (select id from ids where k = 'd1'))),
@@ -464,7 +471,8 @@ select is(
   pg_temp.attempt('authenticated', :mgr, format($s$delete from public.idempotency_keys where organization_id = %L and key = 'rk-1'$s$, :org)) || ' / '
   || pg_temp.attempt('authenticated', :mgr, 'truncate public.idempotency_keys') || ' / '
   || pg_temp.attempt('anon', null, 'select count(*) from public.idempotency_keys') || ' / '
-  || pg_temp.attempt('anon', null, format($s$insert into public.idempotency_keys (organization_id, scope, key, request_hash) values (%L, 'receipt', 'anon-0464', 'x')$s$, :org)),
+  || pg_temp.attempt('anon', null, format($s$insert into public.idempotency_keys (organization_id, scope, key, request_hash) values (%L, 'receipt', 'anon-0464', 'x')$s$, :org),
+                     'drop trigger _t0464_flag_probe on public.idempotency_keys'),
   '42501:-:permission denied for table idempotency_keys / 42501:-:permission denied for table idempotency_keys / '
   '42501:-:permission denied for table idempotency_keys / 42501:-:permission denied for table idempotency_keys',
   'D1: a manager''s DELETE and TRUNCATE, and anon''s read and write, of idempotency_keys are refused 42501');
