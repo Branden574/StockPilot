@@ -1,3 +1,4 @@
+import { AuthSessionMissingError } from '@supabase/supabase-js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn(), updateTag: vi.fn() }));
@@ -44,6 +45,10 @@ vi.mock('next/headers', () => ({ headers: vi.fn(async () => new Headers()) }));
 vi.mock('@/server/services/auth-audit', () => ({ emitAuthAudit: vi.fn(async () => {}) }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn() }));
 
+// Dull values under neutral names (src/test/secret-shaped-fixtures.guard.test.ts).
+const ACCOUNT_VALUE = 'correct horse battery staple';
+const WRONG_VALUE = 'not-the-account-value';
+
 // GoTrue's wrong-code answer, in the shape auth-js hands it back.
 const GOTRUE_WRONG_CODE = {
   name: 'AuthApiError',
@@ -63,8 +68,29 @@ const mfaStub = {
   unenroll: vi.fn(async () => ({ data: null, error: null })),
 };
 
+/**
+ * GoTrue's answer for the session's own account (auth.getUser): its id and its
+ * factor list. The code step reads the list from it, so it knows whose list it
+ * is. Default: user-1 with f1, a verified authenticator.
+ */
+const account: {
+  user: { id: string; factors: Array<{ id: string; status: string; factor_type: string }> } | null;
+  error: unknown;
+} = { user: null, error: null };
+
+function accountWith(factors: Array<{ id: string; status: string }>, id = 'user-1') {
+  account.user = { id, factors: factors.map((f) => ({ ...f, factor_type: 'totp' })) };
+  account.error = null;
+}
+
+const authStub = {
+  mfa: mfaStub,
+  getUser: vi.fn(async () => ({ data: { user: account.user }, error: account.error })),
+  signOut: vi.fn(async () => ({ error: null })),
+};
+
 vi.mock('@/lib/supabase/server', () => ({
-  createClient: vi.fn(async () => ({ auth: { mfa: mfaStub } })),
+  createClient: vi.fn(async () => ({ auth: authStub })),
 }));
 
 import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
@@ -119,7 +145,7 @@ describe('verifyEnrollmentAction — password re-confirm is mandatory', () => {
     const res = await verifyEnrollmentAction({
       factorId: 'f1',
       code: '123456',
-      password: 'wrong',
+      password: WRONG_VALUE,
     });
 
     expect(res.ok).toBe(false);
@@ -138,7 +164,7 @@ describe('verifyEnrollmentAction — password re-confirm is mandatory', () => {
     const res = await verifyEnrollmentAction({
       factorId: 'f1',
       code: '123456',
-      password: 'correct horse battery staple',
+      password: ACCOUNT_VALUE,
     });
 
     expect(res.ok).toBe(false);
@@ -151,13 +177,13 @@ describe('verifyEnrollmentAction — password re-confirm is mandatory', () => {
     const res = await verifyEnrollmentAction({
       factorId: 'f1',
       code: '123456',
-      password: 'correct horse battery staple',
+      password: ACCOUNT_VALUE,
     });
 
     expect(res.ok).toBe(true);
     expect(verifyPasswordSideChannel).toHaveBeenCalledWith(
       'u@example.test',
-      'correct horse battery staple',
+      ACCOUNT_VALUE,
     );
     expect(mfaStub.challenge).toHaveBeenCalledWith({ factorId: 'f1' });
     expect(mfaStub.verify).toHaveBeenCalledWith({
@@ -200,7 +226,7 @@ describe('verifyEnrollmentAction — gate shape and audit', () => {
     await verifyEnrollmentAction({
       factorId: 'f1',
       code: '123456',
-      password: 'correct horse battery staple',
+      password: ACCOUNT_VALUE,
     });
 
     expect(checkRateLimit).toHaveBeenCalledWith(
@@ -215,7 +241,7 @@ describe('verifyEnrollmentAction — gate shape and audit', () => {
     await verifyEnrollmentAction({
       factorId: 'f1',
       code: '123456',
-      password: 'correct horse battery staple',
+      password: ACCOUNT_VALUE,
     });
 
     // Ordering is a property in its own right: a password check that ran after
@@ -233,7 +259,7 @@ describe('verifyEnrollmentAction — gate shape and audit', () => {
     const res = await verifyEnrollmentAction({
       factorId: 'f1',
       code: '123456',
-      password: 'correct horse battery staple',
+      password: ACCOUNT_VALUE,
     });
 
     expect(res.ok).toBe(true);
@@ -251,7 +277,7 @@ describe('verifyEnrollmentAction — gate shape and audit', () => {
     const res = await verifyEnrollmentAction({
       factorId: 'f1',
       code: '123456',
-      password: 'correct horse battery staple',
+      password: ACCOUNT_VALUE,
     });
 
     expect(res.ok).toBe(false);
@@ -274,6 +300,7 @@ describe('verifyEnrollmentAction — gate shape and audit', () => {
 describe('challengeFactorAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    accountWith([{ id: 'f1', status: 'verified' }]);
     mfaStub.challenge.mockResolvedValue({ data: { id: 'challenge-1' }, error: null });
     mfaStub.verify.mockResolvedValue({ data: null, error: null });
   });
@@ -360,6 +387,7 @@ describe('challengeFactorAction — code budget, words and rows', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    accountWith([{ id: 'f1', status: 'verified' }]);
     mfaStub.challenge.mockResolvedValue({ data: { id: 'challenge-1' }, error: null });
     mfaStub.verify.mockResolvedValue({ data: null, error: null });
     vi.mocked(checkRateLimit).mockResolvedValue({
@@ -446,6 +474,8 @@ describe('challengeFactorAction — code budget, words and rows', () => {
         amr: [],
         email: null,
       });
+      // The factor list is that account's own (the code step reads it first).
+      accountWith([{ id: 'f1', status: 'verified' }], 'verified-account');
 
       await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
 
@@ -586,13 +616,347 @@ describe('challengeFactorAction — code budget, words and rows', () => {
 });
 
 /**
+ * The code step checks a code only against a VERIFIED authenticator of the
+ * account the session verified as. The factor id comes from the page, so the
+ * action reads the account's own factor list (GoTrue's user answer, which
+ * names the account it is the list of) before any code attempt is spent. An
+ * unfinished set-up is completed only by the set-up's own confirm step, which
+ * asks for the account password (verifyEnrollmentAction).
+ */
+describe('challengeFactorAction — only a verified authenticator of the account', () => {
+  const SUBMITTED = '246813';
+  const NOT_STARTED = 'Could not start the authenticator check. Please try again.';
+  const SESSION_ENDED = 'You were signed out on this device. Sign in again to continue.';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    accountWith([{ id: 'f1', status: 'verified' }]);
+    mfaStub.challenge.mockResolvedValue({ data: { id: 'challenge-1' }, error: null });
+    mfaStub.verify.mockResolvedValue({ data: null, error: null });
+    vi.mocked(checkRateLimit).mockResolvedValue({
+      allowed: true,
+      count: 1,
+      resetAt: Date.now() + 1000,
+    });
+    vi.mocked(readVerifiedSessionClaims).mockResolvedValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      aal: 'aal1',
+      amr: [],
+      email: null,
+    });
+  });
+
+  // No code attempt: neither bucket of the code budget is counted (S78: a
+  // refused factor id may count only in the report counter below).
+  function expectNothingSpent() {
+    expect(
+      vi.mocked(checkRateLimit).mock.calls.filter((c) => /^mfa-code(-account)?:/.test(String(c[0]))),
+    ).toEqual([]);
+    expect(mfaStub.challenge).not.toHaveBeenCalled();
+    expect(mfaStub.verify).not.toHaveBeenCalled();
+    expect(emitAuthAudit).not.toHaveBeenCalled();
+  }
+
+  it('an unfinished set-up of the account is refused before any code attempt, and reported', async () => {
+    accountWith([{ id: 'f1', status: 'unverified' }]);
+
+    const res = await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
+
+    expect(res).toEqual({ ok: false, error: { code: 'internal_error', message: NOT_STARTED } });
+    expectNothingSpent();
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(reportError).mock.calls[0]![1]).toEqual(
+      expect.objectContaining({ tag: 'actions.mfa.challenge', level: 'warning' }),
+    );
+    // Never the factor id or the code.
+    const report = JSON.stringify(vi.mocked(reportError).mock.calls);
+    expect(report).not.toContain('f1');
+    expect(report).not.toContain(SUBMITTED);
+  });
+
+  it('an id the account’s list does not show (unknown, or another account’s) is refused the same way', async () => {
+    accountWith([{ id: 'f-own', status: 'verified' }]);
+
+    const res = await challengeFactorAction({ factorId: 'f-elsewhere', code: SUBMITTED });
+
+    expect(res).toEqual({ ok: false, error: { code: 'internal_error', message: NOT_STARTED } });
+    expectNothingSpent();
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'actions.mfa.challenge', level: 'warning' }),
+    );
+  });
+
+  it('reads the account’s list once, before the code budget, and checks a verified authenticator as before', async () => {
+    const res = await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
+
+    expect(res).toEqual({ ok: true, data: undefined });
+    expect(authStub.getUser).toHaveBeenCalledTimes(1);
+    const [listOrder] = authStub.getUser.mock.invocationCallOrder;
+    for (const limiterOrder of vi.mocked(checkRateLimit).mock.invocationCallOrder) {
+      expect(listOrder as number).toBeLessThan(limiterOrder);
+    }
+    expect(mfaStub.challenge).toHaveBeenCalledWith({ factorId: 'f1' });
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('a refused factor id is reported at most a few times per account in a window, counted apart from the code budget', async () => {
+    accountWith([{ id: 'f1', status: 'unverified' }]);
+
+    await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
+    expect(vi.mocked(checkRateLimit).mock.calls).toEqual([
+      ['mfa-factor-refused-report:user-1', 3, 60 * 60_000, 'closed'],
+    ]);
+    expect(reportError).toHaveBeenCalledTimes(1);
+
+    vi.clearAllMocks();
+    vi.mocked(checkRateLimit).mockResolvedValue({ allowed: false, count: 3, resetAt: 0 });
+    const res = await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
+
+    // The same refusal, no report.
+    expect(res).toEqual({ ok: false, error: { code: 'internal_error', message: NOT_STARTED } });
+    expect(reportError).not.toHaveBeenCalled();
+    expectNothingSpent();
+  });
+
+  it('a list of another account than the verified one is no answer: this session is signed out and nothing is spent', async () => {
+    accountWith([{ id: 'f1', status: 'verified' }], 'user-2');
+
+    const res = await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
+
+    expect(res).toEqual({ ok: false, error: { code: 'unauthenticated', message: SESSION_ENDED } });
+    expect(authStub.signOut).toHaveBeenCalledWith({ scope: 'local' });
+    expectNothingSpent();
+  });
+
+  it('a list that cannot be read refuses with the could-not-start words, and nothing is spent', async () => {
+    account.user = null;
+    account.error = { name: 'AuthRetryableFetchError', status: 503, message: 'fetch failed' };
+
+    const res = await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
+
+    expect(res).toEqual({ ok: false, error: { code: 'internal_error', message: NOT_STARTED } });
+    expectNothingSpent();
+  });
+
+  it('a session gone at the list read says the person was signed out, and nothing is spent', async () => {
+    account.user = null;
+    account.error = new AuthSessionMissingError();
+
+    const res = await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
+
+    expect(res).toEqual({ ok: false, error: { code: 'unauthenticated', message: SESSION_ENDED } });
+    expectNothingSpent();
+  });
+});
+
+/**
+ * The account the code budget was spent on and the account GoTrue checked the
+ * code for are one account (S78): after GoTrue's answer the session is read
+ * again, held to the account the press was checked for. A session that now
+ * holds another account is signed out here and the press is refused.
+ */
+describe('challengeFactorAction — the answer counts only for the account it was checked for', () => {
+  const SUBMITTED = '246813';
+  const SESSION_ENDED = 'You were signed out on this device. Sign in again to continue.';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    accountWith([{ id: 'f1', status: 'verified' }]);
+    mfaStub.challenge.mockResolvedValue({ data: { id: 'challenge-1' }, error: null });
+    mfaStub.verify.mockResolvedValue({ data: null, error: null });
+    vi.mocked(checkRateLimit).mockResolvedValue({
+      allowed: true,
+      count: 1,
+      resetAt: Date.now() + 1000,
+    });
+    vi.mocked(readVerifiedSessionClaims).mockResolvedValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      aal: 'aal1',
+      amr: [],
+      email: null,
+    });
+  });
+
+  it('a code accepted while the session moved to another account is refused, and this session is signed out', async () => {
+    vi.mocked(readVerifiedSessionClaims)
+      .mockResolvedValueOnce({ userId: 'user-1', sessionId: 's', aal: 'aal1', amr: [], email: null })
+      .mockResolvedValueOnce({ userId: 'user-2', sessionId: 's2', aal: 'aal2', amr: [], email: null });
+
+    const res = await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
+
+    expect(res).toEqual({ ok: false, error: { code: 'unauthenticated', message: SESSION_ENDED } });
+    expect(authStub.signOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(emitAuthAudit).not.toHaveBeenCalled();
+  });
+
+  it('a code accepted while the session could not be verified is not used, and the session stays', async () => {
+    vi.mocked(readVerifiedSessionClaims)
+      .mockResolvedValueOnce({ userId: 'user-1', sessionId: 's', aal: 'aal1', amr: [], email: null })
+      .mockResolvedValueOnce(null);
+
+    const res = await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
+
+    expect(res).toEqual({
+      ok: false,
+      error: { code: 'internal_error', message: 'Could not check your code just now. Try again.' },
+    });
+    expect(authStub.signOut).not.toHaveBeenCalled();
+    expect(emitAuthAudit).not.toHaveBeenCalled();
+  });
+
+  it('a code refused while the session could not be verified is not used: no row, the session stays, and the attempt stays spent', async () => {
+    mfaStub.verify.mockResolvedValueOnce({ data: null, error: GOTRUE_WRONG_CODE } as never);
+    vi.mocked(readVerifiedSessionClaims)
+      .mockResolvedValueOnce({ userId: 'user-1', sessionId: 's', aal: 'aal1', amr: [], email: null })
+      .mockResolvedValueOnce(null);
+
+    const res = await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
+
+    expect(res).toEqual({
+      ok: false,
+      error: { code: 'internal_error', message: 'Could not check your code just now. Try again.' },
+    });
+    expect(authStub.signOut).not.toHaveBeenCalled();
+    expect(emitAuthAudit).not.toHaveBeenCalled();
+    const keys = vi.mocked(checkRateLimit).mock.calls.map((call) => call[0]);
+    expect(keys).toContain('mfa-code-account:user-1');
+  });
+
+  it('reads the session again after GoTrue answered, and counts the answer for the same account', async () => {
+    const res = await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
+
+    expect(res).toEqual({ ok: true, data: undefined });
+    const reads = vi.mocked(readVerifiedSessionClaims).mock.invocationCallOrder;
+    expect(reads).toHaveLength(2);
+    expect(reads[1]!).toBeGreaterThan(mfaStub.verify.mock.invocationCallOrder[0]!);
+    expect(authStub.signOut).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The set-up is confirmed only for the account whose password was checked
+ * (S78): after the factor list, and again after GoTrue's answer, the session
+ * is read held to that account. A session that now holds another account is
+ * signed out here and refused; no row is written.
+ */
+describe('verifyEnrollmentAction — confirms only for the account whose password was checked', () => {
+  const CONFIRM_VALUE = ACCOUNT_VALUE;
+  const CHANGED = {
+    ok: false,
+    error: {
+      code: 'unauthenticated',
+      message: 'Sign in again, then try again.',
+      details: { reason: 'session_changed' },
+    },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mfaStub.challenge.mockResolvedValue({ data: { id: 'challenge-1' }, error: null });
+    mfaStub.verify.mockResolvedValue({ data: null, error: null });
+    mfaStub.listFactors.mockResolvedValue({
+      data: { all: [{ id: 'f1', status: 'unverified', factor_type: 'totp' }], totp: [] },
+      error: null,
+    } as unknown as Awaited<ReturnType<typeof mfaStub.listFactors>>);
+    vi.mocked(verifyPasswordSideChannel).mockResolvedValue({ ok: true } as Awaited<
+      ReturnType<typeof verifyPasswordSideChannel>
+    >);
+    vi.mocked(checkRateLimit).mockResolvedValue({
+      allowed: true,
+      count: 1,
+      resetAt: Date.now() + 1000,
+    });
+  });
+
+  const OTHER = { userId: 'user-2', sessionId: 's2', aal: 'aal1' as const, amr: [], email: null };
+  const SAME = { userId: 'user-1', sessionId: 's', aal: 'aal1' as const, amr: [], email: null };
+
+  it('a session that holds another account after the factor list checks no code', async () => {
+    vi.mocked(readVerifiedSessionClaims).mockResolvedValueOnce(OTHER);
+
+    const res = await verifyEnrollmentAction({ factorId: 'f1', code: '123456', password: CONFIRM_VALUE });
+
+    expect(res).toEqual(CHANGED);
+    expect(mfaStub.challenge).not.toHaveBeenCalled();
+    expect(authStub.signOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('a code accepted while the session moved to another account is refused, with no row', async () => {
+    vi.mocked(readVerifiedSessionClaims).mockResolvedValueOnce(SAME).mockResolvedValueOnce(OTHER);
+
+    const res = await verifyEnrollmentAction({ factorId: 'f1', code: '123456', password: CONFIRM_VALUE });
+
+    expect(res).toEqual(CHANGED);
+    expect(mfaStub.verify).toHaveBeenCalledTimes(1);
+    expect(authStub.signOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('a session that cannot be verified after the factor list checks no code and stays signed in', async () => {
+    vi.mocked(readVerifiedSessionClaims).mockResolvedValueOnce(null);
+
+    const res = await verifyEnrollmentAction({ factorId: 'f1', code: '123456', password: CONFIRM_VALUE });
+
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message: 'Could not confirm your sign-in just now. Try again in a moment.',
+      },
+    });
+    expect(mfaStub.challenge).not.toHaveBeenCalled();
+    expect(authStub.signOut).not.toHaveBeenCalled();
+  });
+
+  it('a code accepted while the session could not be verified: no row, the session stays, the person is told to reload, and it is reported', async () => {
+    vi.mocked(readVerifiedSessionClaims).mockResolvedValueOnce(SAME).mockResolvedValueOnce(null);
+
+    const res = await verifyEnrollmentAction({ factorId: 'f1', code: '123456', password: CONFIRM_VALUE });
+
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message:
+          'Could not confirm your sign-in just now. Reload this page to see whether the authenticator was added.',
+      },
+    });
+    expect(audit).not.toHaveBeenCalled();
+    expect(authStub.signOut).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        tag: 'actions.mfa.verify_enrollment_unconfirmed',
+        level: 'warning',
+        extra: { userId: 'user-1' },
+      }),
+    );
+  });
+
+  it('control: held to the account whose password was checked, before the challenge and after the verify', async () => {
+    const res = await verifyEnrollmentAction({ factorId: 'f1', code: '123456', password: CONFIRM_VALUE });
+
+    expect(res.ok).toBe(true);
+    const held = vi.mocked(readVerifiedSessionClaims).mock;
+    expect(held.calls).toHaveLength(2);
+    expect(held.invocationCallOrder[0]!).toBeLessThan(mfaStub.challenge.mock.invocationCallOrder[0]!);
+    expect(held.invocationCallOrder[1]!).toBeGreaterThan(mfaStub.verify.mock.invocationCallOrder[0]!);
+    expect(authStub.signOut).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * verifyEnrollmentAction confirms the authenticator set-up that was just
  * started, and only that one: a factor id that the account's factor list does
  * not show as an open (unverified) set-up is refused before any code is
  * checked.
  */
 describe('verifyEnrollmentAction — only the set-up just started', () => {
-  const CONFIRM_VALUE = 'correct horse battery staple';
+  const CONFIRM_VALUE = ACCOUNT_VALUE;
   const SETUP_CLOSED = 'This authenticator set-up is no longer open. Start again.';
 
   beforeEach(() => {

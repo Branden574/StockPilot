@@ -216,7 +216,10 @@ describe('Bundles', () => {
   // threw left Refresh busy for good).
   it('a refresh ends when it ends, whatever happened', () => {
     expect(code).toContain(
-      'async function refresh() { setRefreshing(true); try { await syncNow(); await load(); } finally { setRefreshing(false); } }',
+      // S75: by the member's access (bundles-gate-view.ts); nothing is synced
+      // or read for a member who may not see bundles
+      // (bundle-screens-access.test.ts runs it).
+      "async function refresh() { if (gate.refresh === null) return; setRefreshing(true); try { if (gate.refresh === 'reread') { await retrySavedAccess(); } else { await syncNow(); if (allowed) await load(); } } finally { setRefreshing(false); } }",
     );
   });
 
@@ -229,7 +232,11 @@ describe('Bundles', () => {
     expect(code).toContain(
       'async function pull() { setPulling(true); try { await refresh(); } finally { setPulling(false); } }',
     );
-    expect(code).toContain('const body = bundlesListBody(read, rows.length, refreshing, pulling);');
+    // S75: the rule decides for a member who may see bundles; otherwise the
+    // gate's spinner, never beside the pull's (bundle-screens-access.test.ts).
+    expect(code).toContain(
+      'const body = allowed ? bundlesListBody(shownRead, shownRows.length, refreshing, pulling) : { spinner: gate.spinner && !pulling, words: null, staleNote: false };',
+    );
     expect(code).toContain(
       '{body.spinner ? <ActivityIndicator color={c.ink} style={{ marginTop: space.xl }} /> : null}',
     );
@@ -266,9 +273,12 @@ describe('Bundles', () => {
   // (onPress={refresh}) and from a pull (void pull()).
   it('the cache read is caught and kept, so the first load, Refresh and a pull never reject', () => {
     expect(code).toContain(
-      "const load = React.useCallback(async () => { try { const list = await listBundles(); setRows(list); setRead('ok'); } catch (e) { console.warn('[bundles] cache read failed:', e instanceof Error ? e.message : e); setRead('failed'); } }, []);",
+      "const load = React.useCallback(async () => { const forWhom = readFor; try { const list = await listBundles(); if (readForRef.current !== forWhom) return; setHeld({ key: forWhom, rows: list, read: 'ok' }); } catch (e) { if (readForRef.current !== forWhom) return; console.warn('[bundles] cache read failed:', e instanceof Error ? e.message : e); setHeld((prev) => ({ key: forWhom, rows: prev !== null && prev.key === forWhom ? prev.rows : NO_BUNDLES, read: 'failed', })); } }, [readFor]);",
     );
-    expect(code).toContain("const [read, setRead] = React.useState<CacheRead>('pending');");
+    // Before this account's first read answers in this workspace: pending.
+    expect(code).toContain(
+      "const shownRead: CacheRead = held !== null && held.key === readFor ? held.read : 'pending';",
+    );
   });
 
   // Mutation caught: the failure words swapped into the empty words' place
@@ -323,10 +333,12 @@ describe('a bundle', () => {
   // as looked.
   it('the cache read always ends as looked, and no id is a bundle this phone cannot hold', () => {
     expect(code).toMatch(
-      /\} catch \(e\) \{ console\.warn\('\[bundle\] cache read failed:', e instanceof Error \? e\.message : e\); setFailedRead\(reading\); \} finally \{ setLooked\(true\); \}/,
+      /\} catch \(e\) \{ if \(cancelled\) return; console\.warn\('\[bundle\] cache read failed:', e instanceof Error \? e\.message : e\); setFailedRead\(reading\); \} finally \{ if \(!cancelled\) setLooked\(true\); \}/,
     );
     expect(code).toContain(
-      "const state = bundleScreenState(bundle, looked || !id, failedRead === 'bundle');",
+      // S75: a member the side menu does not offer Bundles to sees the gate's
+      // words, or its spinner (bundle-screens-access.test.ts).
+      "const state = access === 'allowed' ? bundleScreenState(bundle, looked || !id, failedRead === 'bundle') : gate.words !== null ? 'gate' : 'loading';",
     );
     expect(classicFlat(sourceOf(DETAIL), DETAIL)).toContain(
       flatNorm(
@@ -343,11 +355,11 @@ describe('a bundle', () => {
   it('a read that threw is said as a failure, never as a bundle not on this phone', () => {
     expect(classicFlat(sourceOf(DETAIL), DETAIL)).toContain(
       flatNorm(
-        "{state === 'failed' ? ( <View style={styles.body}> <Card padding={16}> <Body size={14.5} color={c.warnText} accessibilityRole=\"alert\"> Could not read this bundle on this phone. Go back and try again. </Body> </Card> </View> ) : state === 'missing' ? (",
+        "state === 'failed' ? ( <View style={styles.body}> <Card padding={16}> <Body size={14.5} color={c.warnText} accessibilityRole=\"alert\"> Could not read this bundle on this phone. Go back and try again. </Body> </Card> </View> ) : state === 'missing' ? (",
       ),
     );
     expect(code).toContain(
-      "{state === 'failed' ? ( <View style={[styles.body, lg && GLASS_OPS.scroll]}> <Card padding={16}> <Body size={14.5} color={c.warnText} accessibilityRole=\"alert\"> Could not read this bundle on this phone. Go back and try again. </Body> </Card> </View> ) : state === 'missing' ? (",
+      "state === 'failed' ? ( <View style={[styles.body, lg && GLASS_OPS.scroll]}> <Card padding={16}> <Body size={14.5} color={c.warnText} accessibilityRole=\"alert\"> Could not read this bundle on this phone. Go back and try again. </Body> </Card> </View> ) : state === 'missing' ? (",
     );
   });
 
@@ -411,7 +423,14 @@ describe('a bundle', () => {
   // Mutation caught: Distribute back on a bespoke Pressable with no role, a
   // variant other than the ink primary, or its words hidden while it sends.
   it('Distribute is the ink button that commits the work, with its words beside the spinner', () => {
-    const { sf, els } = elements(DETAIL, (el, s) => tagOf(el, s) === 'Button');
+    // S75: the screen's other Button is Try again, shown only when what the
+    // phone saved about the member's access could not be read
+    // (bundle-screens-access.test.ts).
+    const { sf, els } = elements(
+      DETAIL,
+      (el, s) =>
+        tagOf(el, s) === 'Button' && attrText(el, 'onPress', s) !== '() => void retrySavedAccess()',
+    );
     expect(els).toHaveLength(1);
     const btn = els[0]!;
     expect(attrText(btn, 'variant', sf)).toBeUndefined(); // the default, primary (ink)

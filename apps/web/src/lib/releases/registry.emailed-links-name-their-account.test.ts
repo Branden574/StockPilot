@@ -66,9 +66,17 @@ describe('the emailed links release', () => {
     expect(release().withdrawnNote).toBeUndefined();
     expect(RELEASES[0]?.id).toBe('liquid-glass-2026-11');
     expect(RELEASES[0]?.status).toBe('draft');
-    expect(RELEASES[1]?.id).toBe(ID);
-    expect(RELEASES[2]?.id).toBe('cycle-count-already-released-2026-11');
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    expect(RELEASES[3]?.id).toBe(ID);
+    expect(RELEASES[4]?.id).toBe('cycle-count-already-released-2026-11');
+    // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: this release, the newest published): the phone authenticator code and access check releases are published later, directly above it.
+    expect(RELEASES.slice(1, 3).map((r) => [r.id, r.status])).toEqual([
+      ['phone-authenticator-code-2026-11', 'published'],
+      ['phone-access-check-retry-2026-11', 'published'],
+    ]);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
+      'phone-authenticator-code-2026-11',
+    );
     // #429's build went live on production at 2026-11-13T17:38:06Z.
     expect(release().publishedAt).toBe('2026-11-13T17:39:00Z');
     expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse('2026-11-13T17:38:06Z'));
@@ -76,7 +84,8 @@ describe('the emailed links release', () => {
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(
       Date.parse(release().publishedAt),
     );
-    for (const r of RELEASES.slice(2)) {
+    // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    for (const r of RELEASES.slice(4)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThanOrEqual(
         Date.parse(r.publishedAt),
       );
@@ -116,10 +125,20 @@ describe('the emailed links release', () => {
   it('reaches every member, with no audience and no link, and is the first notice for each', () => {
     expect(entry().audience).toBeUndefined();
     expect(entry().link).toBeUndefined();
+    // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: nothing read or seen): the phone authenticator code release (every member) and the access check release (the owner here) are published later, at the top, so each reader reads and sees them first, and the notice this test checks is the one it checked before.
+    const newerIds = ['phone-authenticator-code-2026-11', 'phone-access-check-retry-2026-11'];
+    const newerReads = newerIds.map((id) => ({
+      release_id: id,
+      revision: 1,
+      dismissed_at: null,
+      opened_at: '2026-11-13T21:30:00Z',
+      read_at: '2026-11-13T21:30:00Z',
+    }));
+    const newerSeen = Object.fromEntries(newerIds.map((id) => [id, true]));
     for (const v of [owner, member, staff]) {
       expect(told(v), v.role).toBe(true);
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
-      expect(legacyAnnouncementsFor(RELEASES, v, {})[0], v.role).toEqual({
+      expect(buildReleaseList(RELEASES, v, newerReads, null).latestUnread?.id, v.role).toBe(ID);
+      expect(legacyAnnouncementsFor(RELEASES, v, newerSeen)[0], v.role).toEqual({
         id: ID,
         date: '2026-11-13',
         title: release().title,
@@ -134,7 +153,8 @@ describe('the emailed links release', () => {
     const source = web('lib/releases/registry.ts');
     const block = source.slice(
       source.indexOf(`id: '${ID}'`),
-      source.indexOf(`id: '${RELEASES[2]!.id}'`),
+      // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+      source.indexOf(`id: '${RELEASES[4]!.id}'`),
     );
     expect(block).toContain(`It supersedes the howItAffectsYou sentence of the published entry`);
     expect(block).toContain(OLDER_ENTRY);

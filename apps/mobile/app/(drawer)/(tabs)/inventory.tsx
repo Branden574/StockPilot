@@ -85,6 +85,7 @@ import {
 import { supabase } from '@/lib/supabase';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
+import { useCreateControlOffer } from '@/lib/use-screen-access';
 import {
   GROUP_COPY,
   countingUnitLabel,
@@ -95,10 +96,14 @@ import {
 import { FONT, RADIUS } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useWarehouseScope, warehouseScopeMessage } from '@/lib/warehouse-scope';
-import { useWorkspace } from '@/lib/use-workspace';
+import { NO_WORKSPACE_LINE, retryWorkspace, useWorkspace } from '@/lib/use-workspace';
 import { MobileTour } from '@/components/onboarding/mobile-tour';
-import { useTourActive, useTourTarget } from '@/lib/tour-targets';
-import { MOBILE_INVENTORY_TOUR } from '@/lib/onboarding';
+import { useTourActive, useTourTarget, useTourVisible } from '@/lib/tour-targets';
+import {
+  inventoryTourToShow,
+  MOBILE_INVENTORY_TOUR,
+  type MobileTourDefinition,
+} from '@/lib/onboarding';
 import { SceneBackground } from '@/components/ui/glass/scene-background';
 import { GlassSubline } from '@/components/ui/glass/parts';
 import {
@@ -230,7 +235,7 @@ export default function Inventory() {
   const { fontScale } = useWindowDimensions();
   const stackRows = shouldStackRow(fontScale);
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
-  const { activeOrgId, activeWarehouseId } = useWorkspace();
+  const { activeOrgId, activeWarehouseId, loading: workspaceLoading } = useWorkspace();
   // Derived, not stored: orgId IS the workspace switcher's active org. It used
   // to be useState mirrored from activeOrgId by an effect, which is the same
   // value one render late.
@@ -268,6 +273,19 @@ export default function Inventory() {
   const { role } = useRole();
   const permissions = useEffectivePermissions();
   const canEditItems = showWriteCtaForRole(role, permissions, 'items:update');
+  // New item is offered only to someone who can create items (items:create,
+  // which the server asserts on every create), by the one rule for create
+  // controls (screen-access.ts createControlOffer). A viewer was offered the
+  // form and refused on Save.
+  const createOffer = useCreateControlOffer('items:create');
+  const canCreateItems = createOffer === 'offered';
+  // The tour, with or without its + step: none until that answer is settled,
+  // and the one it started with while it is open (onboarding.ts
+  // inventoryTourToShow). Held in state, updated while rendering.
+  const tourOpen = useTourVisible(MOBILE_INVENTORY_TOUR.id);
+  const [inventoryTour, setInventoryTour] = React.useState<MobileTourDefinition | null>(null);
+  const nextInventoryTour = inventoryTourToShow(inventoryTour, createOffer, tourOpen);
+  if (nextInventoryTour !== inventoryTour) setInventoryTour(nextInventoryTour);
   // Select is offered only when the select bar has something to offer (B42):
   // Review to someone who can start a count, Group and Ungroup to someone who
   // can edit items. A viewer was offered Select and a bar whose Review the
@@ -282,6 +300,13 @@ export default function Inventory() {
   /** A refused list read, disclosed above the list. Never a silent empty state
    *  — an error is not the same claim as "this org has no items". */
   const [loadError, setLoadError] = React.useState<string | null>(null);
+  // No workspace could be loaded (a first sign-in offline): the read never
+  // starts, so the list says so, with a pull that loads the workspace again,
+  // never a skeleton that does not end. Every place that asks whether the
+  // read failed asks listFailed, so no count is quoted and the empty list is
+  // a list that did not load.
+  const noWorkspace = !orgId && !workspaceLoading;
+  const listFailed = noWorkspace || loadError !== null;
   // Load token: only the newest load may write state. The load is debounced
   // and pull-to-refresh can overlap it, so an older load finishing late could
   // otherwise put back its rows, or its error, over a newer answer.
@@ -647,6 +672,15 @@ export default function Inventory() {
   }, [q, filter, orgId, load, activeWarehouseId]);
 
   async function onRefresh() {
+    if (noWorkspace) {
+      setRefreshing(true);
+      try {
+        await retryWorkspace();
+      } finally {
+        setRefreshing(false);
+      }
+      return;
+    }
     if (!orgId) return;
     setRefreshing(true);
     await load(orgId, q, filter, activeWarehouseId);
@@ -1005,14 +1039,16 @@ export default function Inventory() {
                 minTap
               />
             ) : null}
-            <View ref={addTargetRef} collapsable={false}>
-              <IconChip
-                icon={Plus}
-                onPress={() => router.push('/item/new')}
-                accessibilityLabel="New item"
-                minTap
-              />
-            </View>
+            {canCreateItems ? (
+              <View ref={addTargetRef} collapsable={false}>
+                <IconChip
+                  icon={Plus}
+                  onPress={() => router.push('/item/new')}
+                  accessibilityLabel="New item"
+                  minTap
+                />
+              </View>
+            ) : null}
           </View>
         </View>
         <View style={lg ? GLASS_LOOKUP.head : styles.head}>
@@ -1026,7 +1062,7 @@ export default function Inventory() {
           {/* Liquid Glass says the count under the search field, as the board. */}
           {lg ? null : (
             <Eyebrow>
-              {loadError !== null
+              {listFailed
                 ? 'INVENTORY · ITEMS'
                 : `INVENTORY · ${datasetRowCount.toLocaleString()} ITEMS`}
             </Eyebrow>
@@ -1039,7 +1075,7 @@ export default function Inventory() {
             </Display>
           )}
           <View style={{ marginTop: lg ? 0 : 10 }}>
-            <MobileTour tour={MOBILE_INVENTORY_TOUR} />
+            {inventoryTour ? <MobileTour tour={inventoryTour} /> : null}
           </View>
         </View>
 
@@ -1102,7 +1138,7 @@ export default function Inventory() {
           {/* The board's count line (.ios-sub num): the rows the list holds. */}
           {lg ? (
             <GlassSubline style={GLASS_LOOKUP.count}>
-              {loadError !== null ? 'Items' : glassCountLine(datasetRowCount, 'item', 'items')}
+              {listFailed ? 'Items' : glassCountLine(datasetRowCount, 'item', 'items')}
             </GlassSubline>
           ) : null}
 
@@ -1139,7 +1175,11 @@ export default function Inventory() {
               than left to the list's own "No items match." so a refused
               select — the shape a mobile build takes when it is ahead of the
               database — is visible instead of looking like a clean org. */}
-          {loadError !== null ? (
+          {noWorkspace ? (
+            <Body size={11.5} color={c.warnText} style={{ marginTop: 8 }}>
+              {NO_WORKSPACE_LINE}
+            </Body>
+          ) : loadError !== null ? (
             <Body size={11.5} color={c.warnText} style={{ marginTop: 8 }}>
               {`Could not load items: ${loadError}. Pull to retry — if the app was just updated, the server may still be catching up.`}
             </Body>
@@ -1147,7 +1187,7 @@ export default function Inventory() {
         </View>
       </SafeAreaView>
 
-      {loading ? (
+      {loading && !noWorkspace ? (
         <ItemListSkeleton count={8} />
       ) : (
         <FlatList
@@ -1170,7 +1210,7 @@ export default function Inventory() {
                Ghost only for a genuinely empty org — an empty SEARCH result
                must not claim the org has no items yet. Both states take the
                Books tab's look (its twin), the words unchanged. */
-            loadError !== null ? (
+            listFailed ? (
               <View style={styles.empty}>
                 <Display size={18}>Items did not load.</Display>
                 <Body muted style={{ marginTop: 6, textAlign: 'center' }}>

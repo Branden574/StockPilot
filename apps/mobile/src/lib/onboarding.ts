@@ -1,3 +1,4 @@
+import type { CreateControlOffer } from './screen-access';
 import { supabase } from './supabase';
 
 /**
@@ -132,6 +133,39 @@ export const MOBILE_INVENTORY_TOUR: MobileTourDefinition = {
     },
   ],
 };
+
+/** The Inventory tour without its + step ("Add from anywhere"). */
+const MOBILE_INVENTORY_TOUR_WITHOUT_ADD: MobileTourDefinition = {
+  ...MOBILE_INVENTORY_TOUR,
+  steps: MOBILE_INVENTORY_TOUR.steps.filter((s) => s.targetId !== 'inventory-add'),
+};
+
+/**
+ * The Inventory tour for a member: the + step only for a member Inventory
+ * shows the + to (items:create, B124); for anyone else it would point at a
+ * button they do not have. The same object each time for each answer.
+ */
+export function inventoryTourFor(canCreateItems: boolean): MobileTourDefinition {
+  return canCreateItems ? MOBILE_INVENTORY_TOUR : MOBILE_INVENTORY_TOUR_WITHOUT_ADD;
+}
+
+/**
+ * The Inventory tour Inventory mounts, given the one it holds, whether the +
+ * is offered (screen-access.ts createControlOffer) and whether the tour is
+ * open (offered or running). None while that answer is not settled, so the
+ * tour never starts, and its outcome is never recorded, for a definition
+ * chosen by accident; and while the tour is open, the one it started with,
+ * so its steps never change under it.
+ */
+export function inventoryTourToShow(
+  held: MobileTourDefinition | null,
+  offer: CreateControlOffer,
+  tourOpen: boolean,
+): MobileTourDefinition | null {
+  if (tourOpen && held !== null) return held;
+  if (offer === 'pending') return null;
+  return inventoryTourFor(offer === 'offered');
+}
 
 export const MOBILE_ORDERS_TOUR: MobileTourDefinition = {
   id: 'mobile-orders',

@@ -847,6 +847,19 @@ PGTAP_TESTS=(
   # two-session proof is scripts/db-concurrency/0419_release_race.sh; the
   # lock footprint is scripts/db-concurrency/0419_migration_lock_footprint.sh.
   supabase/tests/0419_release_cycle_count_assignee_check.test.sql
+  # Permission override updates (0420, docket S62): the database asks for the
+  # same permission the app asks before a restriction changes. The UPDATE
+  # rules of user_permission_overrides and role_permission_overrides ask of
+  # the row being changed what their DELETE rules ask (0322); WITH CHECK
+  # stays 0215's. The lock footprint is
+  # scripts/db-concurrency/0420_migration_lock_footprint.sh.
+  supabase/tests/0420_permission_override_updates_follow_0322.test.sql
+  # Category reads (0421, docket S49): categories_select reads the membership
+  # set stock_movements_select reads and the two category sets
+  # inventory_items_select reads (the same rows for 13 personas), and
+  # user_can_see_item_category answers service_role only. The lock footprint
+  # is scripts/db-concurrency/0421_migration_lock_footprint.sh.
+  supabase/tests/0421_categories_select_category_sets.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -1001,6 +1014,7 @@ WEB_TESTS=(
 
   # Permissions and escalation.
   src/server/actions/permissions.override-clear.test.ts
+  src/server/actions/permissions.restriction-rewrite.test.ts
   src/server/actions/permissions.auditor-preset.test.ts
   'src/app/(dashboard)/dashboard/auditor-read-gates.test.tsx'
 

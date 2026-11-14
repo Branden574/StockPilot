@@ -84,7 +84,7 @@ describe('scan tab — quick adjust goes through the API, not the RPC', () => {
     expect(scan).toMatch(/\{unconfirmedScanLabel\(unconfirmed\)\}/);
     // Every read of the card's item reports its total and when it was sent.
     expect(scan).toMatch(
-      /const reportRead = unconfirmedStock\.beginRead\(id\);\s*const \{ data: row \} = await supabase/,
+      /const reportRead = unconfirmedStock\.beginRead\(id\);\s*const \{ data: row, error: rowError \} = await supabase/,
     );
     expect(scan).toMatch(/if \(!row\) return null;[\s\S]{0,500}reportRead\(Number\(/);
     // ...and it re-reads once when the bound passes.
@@ -93,7 +93,8 @@ describe('scan tab — quick adjust goes through the API, not the RPC', () => {
 
   it('a re-read cannot repaint over a newer answer or onto another item', () => {
     expect(adjustBody()).toMatch(/rereadSeq\.current\+\+;/);
-    expect(scan).toMatch(/if \(seq !== rereadSeq\.current \|\| !found\) return;/);
+    // A read that failed ('failed', B124) keeps the card too.
+    expect(scan).toMatch(/if \(seq !== rereadSeq\.current \|\| !found \|\| found === 'failed'\) return;/);
     expect(scan).toMatch(/setItem\(\(prev\) => \(prev && prev\.id === itemId \? found : prev\)\);/);
   });
 
@@ -108,10 +109,10 @@ describe('scan tab — quick adjust goes through the API, not the RPC', () => {
     const code = scan.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
     // The helper's own call is the only bare paint of a looked-up item...
     expect(code.match(/setItem\(found\)/g)?.length).toBe(1);
-    // ...and the barcode scan, the placement pick and both "just created"
-    // cards all go through it.
-    expect(code.match(/showScannedItem\(found\)/g)?.length).toBe(4);
-    expect(code).toMatch(/const found = await loadItemById\(candidate\.id\);[\s\S]{0,80}if \(found\) showScannedItem\(found\);/);
+    // ...and the barcode scan, the placement pick, both "just created"
+    // cards and a photo's match in the workspace all go through it.
+    expect(code.match(/showScannedItem\(found\)/g)?.length).toBe(5);
+    expect(code).toMatch(/const found = await loadItemById\(candidate\.id\);[\s\S]{0,300}\} else if \(found\) showScannedItem\(found\);/);
   });
 
   // Same class as the item screen's photo replace: a spread of the copy taken

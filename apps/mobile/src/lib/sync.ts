@@ -36,17 +36,29 @@ import {
   setMeta,
   withDbTransaction,
 } from './db';
+import {
+  BUNDLE_REFILL_META_KEY,
+  bundleRefillStep,
+  parseBundleRefill,
+  serializeBundleRefill,
+} from './bundle-refill';
 import { classifyDrainFailure } from './drain-failure';
-import { ENABLED_MODULES_META_KEY, refreshEnabledModules } from './enabled-modules';
+import {
+  ENABLED_MODULES_META_KEY,
+  refreshEnabledModules,
+  rereadFailedEnabledModules,
+} from './enabled-modules';
 import {
   EFFECTIVE_PERMISSIONS_META_KEY,
   refreshEffectivePermissions,
+  rereadFailedEffectivePermissions,
 } from './use-effective-permissions';
 import { OutboxSessionChangedError, OWNED_BY_USER_SQL, outboxSendDecision } from './outbox-scope';
 import { clearPhotoCaches, wipeWithPhotoCaches } from './photo-cache-wipe';
 import { listPending, markFailed, markHeld, markOk, markRejected, markSending } from './queue';
 import { liveOutboxScope } from './session-scope';
 import { unconfirmedStock } from './unconfirmed-stock';
+import { refreshCacheOwner } from './use-cache-owner';
 import { WAREHOUSE_SCOPE_META_KEY, refreshWarehouseScope } from './warehouse-scope';
 
 /**
@@ -403,6 +415,7 @@ export async function pullSnapshot(
     refreshEnabledModules();
     refreshEffectivePermissions();
     refreshWarehouseScope();
+    void refreshCacheOwner();
   }
   if (liveUserId && ownerAction === 'adopt') {
     // No owner recorded: a fresh install, a cache a sign-out or an eviction
@@ -441,6 +454,7 @@ export async function pullSnapshot(
     refreshEnabledModules();
     refreshEffectivePermissions();
     refreshWarehouseScope();
+    void refreshCacheOwner();
   }
   if (liveUserId && ownerAction === 'clear-photos') {
     // This account's own cache, with a photo clear still owed: the one its
@@ -453,6 +467,12 @@ export async function pullSnapshot(
   }
 
   if (!(await isOnline())) return null;
+
+  // A kit the server lists as active was missing from the phone after an
+  // earlier pull (bundle-refill.ts): this pull goes in full, once, to fetch it.
+  if (!force && parseBundleRefill(await getMeta(BUNDLE_REFILL_META_KEY)).fullPullOwed) {
+    force = true;
+  }
 
   // Noted before the cursor is read and before api() reads the workspace
   // header: any cache wipe asked for after this point (a workspace switch or
@@ -501,6 +521,9 @@ export async function pullSnapshot(
   let modulesChanged = false;
   let permissionsChanged = false;
   let scopeChanged = false;
+  // Active kits a full pull still did not send (bundle-refill.ts), reported
+  // once the pull has committed.
+  let kitsStillMissing: string[] | null = null;
 
   await withDbTransaction(db, async () => {
     // A wipe asked for while the request was out (a workspace switch or
@@ -708,6 +731,28 @@ export async function pullSnapshot(
       await db.runAsync(STALE_BUNDLES_DELETE_SQL, [activeIds]);
     }
 
+    // A kit the list names that the phone does not hold (it was dropped
+    // while the member could not see kits, and has not changed since): the
+    // next pull goes in full, once. A full pull ends that request whatever its
+    // answer says about kits, a missing list included (bundle-refill.ts).
+    {
+      const listed = Array.isArray(snap.activeBundleIds)
+        ? snap.activeBundleIds.filter((id): id is string => typeof id === 'string')
+        : null;
+      const cached =
+        listed === null ? [] : await db.getAllAsync<{ id: string }>('select id from bundles');
+      const prevRefill = await getMeta(BUNDLE_REFILL_META_KEY);
+      const refill = bundleRefillStep({
+        fullPull: since === null,
+        activeIds: listed,
+        cachedIds: new Set(cached.map((r) => r.id)),
+        previous: parseBundleRefill(prevRefill),
+      });
+      const nextRefill = serializeBundleRefill(refill.next);
+      if (nextRefill !== prevRefill) await setMeta(BUNDLE_REFILL_META_KEY, nextRefill);
+      kitsStillMissing = refill.stillMissing;
+    }
+
     // Full pull: everything the server returned was just stamped with `now`,
     // so an older stamp means "the server no longer lists this row".
     if (since === null) {
@@ -762,12 +807,15 @@ export async function pullSnapshot(
     // Same pattern for the user's EFFECTIVE permissions — drives the drawer's
     // permission-based nav gating. Re-renders the drawer immediately when an
     // admin grants/revokes access (next foreground/60s sync, no restart).
-    const nextPermsJson = JSON.stringify(
-      Array.isArray(snap.permissions) ? snap.permissions : [],
-    );
-    const prevPermsJson = await getMeta(EFFECTIVE_PERMISSIONS_META_KEY);
-    await setMeta(EFFECTIVE_PERMISSIONS_META_KEY, nextPermsJson);
-    permissionsChanged = prevPermsJson !== nextPermsJson;
+    // Saved only when the server sent a list: an empty list is a member who
+    // holds no permission (the server refuses a request whose permissions it
+    // cannot read), and a snapshot without one leaves the saved set as it is.
+    if (Array.isArray(snap.permissions)) {
+      const nextPermsJson = JSON.stringify(snap.permissions);
+      const prevPermsJson = await getMeta(EFFECTIVE_PERMISSIONS_META_KEY);
+      await setMeta(EFFECTIVE_PERMISSIONS_META_KEY, nextPermsJson);
+      permissionsChanged = prevPermsJson !== nextPermsJson;
+    }
 
     // Warehouse scope (same persist+notify pattern) — drives the Items
     // screen's scoped-view banner. Only written when the server actually sent
@@ -794,9 +842,22 @@ export async function pullSnapshot(
     );
     return null;
   }
-  // Notify the live readers only after the new values are committed.
+  if (kitsStillMissing) {
+    const n = (kitsStillMissing as string[]).length;
+    console.warn(
+      `[sync] a full pull did not send ${n} active kit${n === 1 ? '' : 's'} the server lists; it is not asked for again until the list changes`,
+    );
+  }
+  // Notify the live readers only after the new values are committed. Whose
+  // cache this is was recorded with them (a screen counts the saved access as
+  // the signed-in member's only once it is theirs: use-cache-owner.ts).
+  void refreshCacheOwner();
   if (modulesChanged) refreshEnabledModules();
   if (permissionsChanged) refreshEffectivePermissions();
+  // A screen whose read of the saved sets failed reads again now, changed or
+  // not (it would otherwise stay 'unreadable' until Try again or a remount).
+  void rereadFailedEnabledModules();
+  void rereadFailedEffectivePermissions();
   if (scopeChanged) refreshWarehouseScope();
 
   return {

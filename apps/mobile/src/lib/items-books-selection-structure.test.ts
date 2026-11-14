@@ -603,7 +603,9 @@ describe('both tabs keep every word, label and tour target', () => {
       /<View ref=\{addTargetRef\} collapsable=\{false\}>\s*<IconChip\s+icon=\{Plus\}/,
     );
     expect(code.match(/useTourTarget\('inventory-first-row'\)/g)).toHaveLength(2);
-    expect(code).toContain('<MobileTour tour={MOBILE_INVENTORY_TOUR} />');
+    // B124: the tour leaves out the + step for a member who has no +, and
+    // starts once that is settled (create-control-offer.test.ts).
+    expect(code).toContain('{inventoryTour ? <MobileTour tour={inventoryTour} /> : null}');
   });
 
   it('no emoji in either tab', () => {
@@ -622,8 +624,9 @@ describe('the look on both tabs, measured in both modes', () => {
       expect(code, file).not.toMatch(/c\.ink4|c\.ink5|c\.paper2/);
       // The decorative pips by row position are gone.
       expect(code, file).not.toMatch(/\bpip=/);
-      // Error and notice lines: the warning words of the palette.
-      expect(code.match(/color=\{c\.warnText\}/g)?.length, file).toBe(file === ITEMS ? 1 : 2);
+      // Error and notice lines: the warning words of the palette (one more
+      // each for the no-workspace line).
+      expect(code.match(/color=\{c\.warnText\}/g)?.length, file).toBe(file === ITEMS ? 2 : 3);
     }
   });
 
@@ -776,7 +779,9 @@ describe.each(REVIEWS)('$name review', (r) => {
       flatNorm('style={[styles.footer, { backgroundColor: c.paper, borderTopColor: c.hair }]}'),
     );
     // Liquid Glass: the floating bar, its material first, the scroll clear of its lift.
-    expect(code).toMatch(/lg && GLASS_FOOT_BAR,\s*\]\}\s*>\s*\{lg \? <GlassFootBackdrop \/> : null\}/);
+    expect(code).toMatch(
+      /lg && GLASS_FOOT_BAR,\s*\]\}\s*>\s*\{lg \? <GlassFootBackdrop \/> : null\}/,
+    );
     expect(code).toMatch(/\? footerReservation\(footerHeight, 170\) \+ 8\s*:/);
     expect(styleBlock(sourceOf(r.file), 'footer')).toMatch(/borderTopWidth: 1,/);
   });

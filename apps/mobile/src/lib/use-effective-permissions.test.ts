@@ -89,7 +89,7 @@ describe('useEffectivePermissionsState', () => {
   it('before the saved set is read: not read, no set, and a gate on it offers nothing (mutation: start as read)', () => {
     db.getMeta.mockReturnValue(new Promise(() => undefined));
     const first = useEffectivePermissionsState();
-    expect(first).toEqual({ permissions: undefined, read: false });
+    expect(first).toEqual({ permissions: undefined, read: false, answered: false });
     expect(permissionsOnceRead(first)).toBe(NO_PERMISSIONS);
     expect(db.getMeta).toHaveBeenCalledWith(EFFECTIVE_PERMISSIONS_META_KEY);
   });
@@ -104,16 +104,29 @@ describe('useEffectivePermissionsState', () => {
     expect(permissionsOnceRead(now)).toBe(now.permissions);
   });
 
+  // S75: an empty set is a saved set. Only a pull and the light permission
+  // read write the key, and both write a list only when the server sent one
+  // (the server refuses a request whose permissions it cannot read), so an
+  // empty saved set is a member who holds no permission.
+  it('an empty set: read, with it (no permission held)', async () => {
+    db.getMeta.mockResolvedValue('[]');
+    useEffectivePermissionsState();
+    await settle();
+    const now = useEffectivePermissionsState();
+    expect(now.read).toBe(true);
+    expect(now.answered).toBe(true);
+    expect(now.permissions).toEqual(new Set());
+  });
+
   it.each([
     ['nothing saved', null],
-    ['an empty set', '[]'],
     ['a set that does not parse', 'not json'],
   ])('%s: read, with no set, so the static defaults decide as before', async (_label, raw) => {
     db.getMeta.mockResolvedValue(raw);
     useEffectivePermissionsState();
     await settle();
     const now = useEffectivePermissionsState();
-    expect(now).toEqual({ permissions: undefined, read: true });
+    expect(now).toEqual({ permissions: undefined, read: true, answered: true });
     expect(permissionsOnceRead(now)).toBeUndefined();
   });
 
@@ -123,7 +136,13 @@ describe('useEffectivePermissionsState', () => {
     db.getMeta.mockRejectedValue(new Error('database is locked'));
     useEffectivePermissionsState();
     await settle();
-    expect(useEffectivePermissionsState()).toEqual({ permissions: undefined, read: true });
+    // Read, for the order screen; failed, for a screen that must not decide
+    // from the defaults (screen-access.ts offers Try again).
+    expect(useEffectivePermissionsState()).toEqual({
+      permissions: undefined,
+      read: true,
+      answered: 'failed',
+    });
   });
 
   it('a later read that fails keeps the set already read (as before: a failed read never blanked it)', async () => {
@@ -134,7 +153,10 @@ describe('useEffectivePermissionsState', () => {
     db.getMeta.mockRejectedValue(new Error('database is locked'));
     refreshEffectivePermissions();
     await settle();
-    expect(useEffectivePermissionsState()).toBe(before);
+    // The menu keeps the set (S75: a screen sees the read failed, below).
+    const after = useEffectivePermissionsState();
+    expect(after.permissions).toBe(before.permissions);
+    expect(after.read).toBe(true);
   });
 
   // Review of the S2 follow-up, F5: the order screen's load waits for
@@ -148,11 +170,19 @@ describe('useEffectivePermissionsState', () => {
     try {
       const late = deferredRead();
       db.getMeta.mockReturnValue(late.promise);
-      expect(useEffectivePermissionsState()).toEqual({ permissions: undefined, read: false });
+      expect(useEffectivePermissionsState()).toEqual({
+        permissions: undefined,
+        read: false,
+        answered: false,
+      });
       await vi.advanceTimersByTimeAsync(SAVED_PERMISSIONS_READ_WAIT_MS - 1);
       expect(useEffectivePermissionsState().read).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
-      expect(useEffectivePermissionsState()).toEqual({ permissions: undefined, read: true });
+      expect(useEffectivePermissionsState()).toEqual({
+        permissions: undefined,
+        read: true,
+        answered: false,
+      });
       // The set lands late: it replaces the static defaults, still read.
       late.resolve(saved('orders:approve'));
       await vi.advanceTimersByTimeAsync(0);
@@ -204,6 +234,94 @@ describe('useEffectivePermissionsState', () => {
     const now = useEffectivePermissionsState();
     expect(now.read).toBe(true);
     expect(now.permissions?.has('orders:approve')).toBe(true);
+  });
+});
+
+describe('answered: the device store has answered, never the wait (S75)', () => {
+  /**
+   * `read` turns true after SAVED_PERMISSIONS_READ_WAIT_MS with nothing
+   * saved, for the order screen, which must never wait for good. A screen
+   * deciding what it reads or shows by the saved set (screen-access.ts) must
+   * not decide from that default: it waits for `answered`, which only a read
+   * that came back sets, however long it takes.
+   */
+  it('a store that has not answered is not answered, however long it takes; the wait never sets it', async () => {
+    vi.useFakeTimers();
+    try {
+      const late = deferredRead();
+      db.getMeta.mockReturnValue(late.promise);
+      useEffectivePermissionsState();
+      await vi.advanceTimersByTimeAsync(SAVED_PERMISSIONS_READ_WAIT_MS * 20);
+      const waited = useEffectivePermissionsState();
+      expect(waited.read).toBe(true);
+      expect(waited.answered).toBe(false);
+      late.resolve(saved('cycle_counts:read'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(useEffectivePermissionsState().answered).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['a saved set', saved('items:create')],
+    ['nothing saved', null],
+    ['a set that does not parse', 'not json'],
+  ])('%s: answered', async (_label, raw) => {
+    db.getMeta.mockResolvedValue(raw);
+    useEffectivePermissionsState();
+    await settle();
+    expect(useEffectivePermissionsState().answered).toBe(true);
+  });
+
+  it('a store that throws answers failed; a later read that comes back answers', async () => {
+    db.getMeta.mockRejectedValue(new Error('database is locked'));
+    useEffectivePermissionsState();
+    await settle();
+    expect(useEffectivePermissionsState().answered).toBe('failed');
+    db.getMeta.mockResolvedValue(saved('items:create'));
+    await refreshEffectivePermissions();
+    expect(useEffectivePermissionsState().answered).toBe(true);
+  });
+
+  // A re-read is asked for after a wipe (a workspace switch): one that
+  // throws must not let the previous answer stand for the new workspace.
+  it('a later read that throws stops counting as answered; the menu keeps the set read', async () => {
+    db.getMeta.mockResolvedValue(saved('items:create'));
+    useEffectivePermissionsState();
+    await settle();
+    db.getMeta.mockRejectedValue(new Error('database is locked'));
+    await refreshEffectivePermissions();
+    const now = useEffectivePermissionsState();
+    expect(now.answered).toBe('failed');
+    expect(now.read).toBe(true);
+    expect([...(now.permissions ?? [])]).toEqual(['items:create']);
+  });
+});
+
+describe('a read that failed is read again at the end of every pull (S75)', () => {
+  it('rereadFailedEffectivePermissions reads again a reader whose last read failed', async () => {
+    const { rereadFailedEffectivePermissions } = await import('./use-effective-permissions');
+    db.getMeta.mockRejectedValue(new Error('database is locked'));
+    useEffectivePermissionsState();
+    await settle();
+    expect(useEffectivePermissionsState().answered).toBe('failed');
+    db.getMeta.mockReset().mockResolvedValue(saved('items:create'));
+    await rereadFailedEffectivePermissions();
+    expect(db.getMeta).toHaveBeenCalledTimes(1);
+    const now = useEffectivePermissionsState();
+    expect(now.answered).toBe(true);
+    expect([...(now.permissions ?? [])]).toEqual(['items:create']);
+  });
+
+  it('a reader whose last read answered is not read again', async () => {
+    const { rereadFailedEffectivePermissions } = await import('./use-effective-permissions');
+    db.getMeta.mockResolvedValue(saved('items:create'));
+    useEffectivePermissionsState();
+    await settle();
+    db.getMeta.mockClear();
+    await rereadFailedEffectivePermissions();
+    expect(db.getMeta).not.toHaveBeenCalled();
   });
 });
 

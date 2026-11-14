@@ -125,7 +125,8 @@ describe('useRole wiring (use-role.ts)', () => {
   });
 
   it('clears the shared cache when the user signs out', () => {
-    expect(src).toMatch(/if \(!user\) \{\s*clearRoleCache\(\);\s*\}/);
+    // B124: the hook keys on the user's id (use-role.ts).
+    expect(src).toMatch(/if \(!userId\) \{\s*clearRoleCache\(\);\s*\}/);
   });
 
   it('re-reads a role that is due, and follows the shared cache', () => {
