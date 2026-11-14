@@ -7,6 +7,7 @@ import { contextUnavailableBody, type ModuleId } from '@stockpilot/core';
 import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { withApiContext } from '@/lib/auth/api-context';
 import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
+import { MembershipUnavailableError } from '@/lib/auth/membership-unavailable';
 import { moduleStateUnreadable } from '@/lib/modules/module-state';
 import type { ServiceContext } from '@/server/services/context';
 
@@ -16,16 +17,18 @@ import type { ServiceContext } from '@/server/services/context';
  *
  * THE PROBLEM. When get_request_context() gives no usable answer,
  * withApiContext falls back to separate reads. When one of those cannot read
- * the caller's account status (AccountStatusUnavailableError, anyone) or a
- * non-owner's permission overrides (PermissionsUnavailableError, S19), it
- * refuses the request by throwing, before the route has done anything. That
- * throw escaped as the framework's bare 500, and the phone reads every 5xx on
- * these routes as "may or may not have been saved", because none of them takes
- * an idempotency key and a gateway 5xx can arrive after a commit: online it
+ * the caller's account status (AccountStatusUnavailableError, anyone), the
+ * membership that decides the caller's organization
+ * (MembershipUnavailableError, S90) or a non-owner's permission overrides
+ * (PermissionsUnavailableError, S19), it refuses the request by throwing,
+ * before the route has done anything. That throw escaped as the framework's
+ * bare 500, and the phone reads every 5xx on these routes as "may or may not
+ * have been saved", because none of them takes an idempotency key and a
+ * gateway 5xx can arrive after a commit: online it
  * said "Adjustment not confirmed" and labelled the on-hand for up to 90 s, and
  * a queued adjustment was parked in Unsent work and never sent again.
  *
- * THE ANSWER. Exactly those two refusals, matched by class, become a 503 with
+ * THE ANSWER. Exactly those three refusals, matched by class, become a 503 with
  * core's contextUnavailableBody() (`check_failed`, details.reason
  * `context_unavailable`, retryable and nothingWritten), Retry-After 5 and no
  * caching. The phone reads it through core's isRefusedBeforeAnyWrite only: it
@@ -43,7 +46,9 @@ import type { ServiceContext } from '@/server/services/context';
  * Anything else withApiContext throws is thrown again unchanged: an unknown
  * throw is a bug that must stay loud, and Next.js control flow stays Next's
  * (recurring pattern #23). Nothing is reported here: the loaders already
- * report both failures (`auth.permissions.read`, `auth.account-status.read`).
+ * report two of the failures (`auth.permissions.read`,
+ * `auth.account-status.read`), and the membership choice logs one line naming
+ * the read that did not answer (lib/auth/api-context.ts pickActiveMembership).
  *
  * THE MODULES THE ROUTE NEEDS (docket S81). `opts.modules` names the
  * optional modules the route refuses without. When withApiContext could not
@@ -71,7 +76,11 @@ export async function apiContextGate(
   try {
     ctx = await withApiContext(req);
   } catch (e) {
-    if (e instanceof PermissionsUnavailableError || e instanceof AccountStatusUnavailableError) {
+    if (
+      e instanceof PermissionsUnavailableError ||
+      e instanceof AccountStatusUnavailableError ||
+      e instanceof MembershipUnavailableError
+    ) {
       return refusedBeforeAnyWork(e.name);
     }
     throw e;

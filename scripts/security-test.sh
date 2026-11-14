@@ -860,6 +860,18 @@ PGTAP_TESTS=(
   # user_can_see_item_category answers service_role only. The lock footprint
   # is scripts/db-concurrency/0421_migration_lock_footprint.sh.
   supabase/tests/0421_categories_select_category_sets.test.sql
+  # Notice audience (0422, docket S36a): the New order request alert goes to
+  # the members who hold orders:approve and can write in the order's
+  # warehouse, and every notice the database writes goes only to a current
+  # member of the organization (an accepted membership that is not an Act-as
+  # seat, on an account that is not disabled). Both helper functions answer
+  # service_role only. The lock footprint is
+  # scripts/db-concurrency/0422_migration_lock_footprint.sh.
+  supabase/tests/0422_notice_audience_follows_permission.test.sql
+  # Audit rows (S80): the id is the only unique index, a later try with an id
+  # already there writes and changes nothing, and neither a member nor a
+  # signed-out caller can insert an audit row.
+  supabase/tests/audit_logs_row_id_contract.test.sql
   # References in their own organization (0423): an item's warehouse and
   # category, a location's parent and an event's warehouse belong to the
   # row's organization, for every rank (the rules' *_in_org terms; the item
@@ -941,6 +953,11 @@ WEB_TESTS=(
   src/server/services/exception-occurrences.confirm.test.ts
   src/app/api/v1/exceptions/confirm-count-route.test.ts
   src/server/actions/exceptions.confirm.test.ts
+  # Exception recount facts (0460): one function read with the active
+  # organization; only "function missing" (PGRST202 or 42883 naming it) takes
+  # the direct read; any other error, or an answer that is not a list, fails
+  # the list and the detail.
+  src/server/services/exception-occurrences.recount-facts.test.ts
   # Maintenance photos (2026-09-27): what finalize stores carries no EXIF,
   # GPS, XMP or ICC (real sharp on GPS-tagged JPEG, PNG and WEBP), the
   # thumbnail is the server's, made from the clean photo at the mint's name,
@@ -1055,6 +1072,15 @@ WEB_TESTS=(
   # token, timed to refresh after getUser(), reads as not aal2. The real server
   # client and auth-js against the fixture's Auth server.
   src/lib/auth/api-context.refresh-swap.test.ts
+  # The organization an API request is served in (docket S90): only an answer
+  # moves the membership choice along. A membership or profile read that does
+  # not answer refuses with a retryable 5xx (the gate's 503 marker on the
+  # writes the phone cannot send twice), and nothing is read for any
+  # organization; "no row" answers exactly as before. Both paths, the routes
+  # behind them, and the answers the real PostgREST client resolves.
+  src/lib/auth/api-context.membership-answer-shapes.test.ts
+  src/lib/auth/api-context.membership-unreadable.test.ts
+  src/app/api/v1/membership-unreadable.routes.test.ts
   src/app/api/v1/mobile/snapshot/route.step-up.test.ts
   src/app/api/client-error/route.test.ts
   # A session that still owes its authenticator code gets no organization
@@ -1226,6 +1252,14 @@ WEB_TESTS=(
   src/lib/rate-limit.failed.test.ts
   src/server/services/auth-audit.address.test.ts
   src/app/api/v1/auth/password-reset/route.address.test.ts
+  # S80: an audit row's id is chosen by the writer, never by its caller, and a
+  # row that was not written is sent again as an insert that skips a row
+  # already there (no upsert on audit_logs may overwrite one). While the
+  # limiter cannot answer, the phone's sign-in and sign-out notes are bounded
+  # per instance.
+  src/server/services/audit.retry.test.ts
+  src/server/services/audit-writes.guard.test.ts
+  src/lib/auth/session-note.test.ts
 
   # Only a platform admin creates a workspace (S20, owner decision b.9):
   # createOrganizationAction runs checkPlatformAdmin({ requireStepUp: true })
@@ -1823,6 +1857,19 @@ WEB_TESTS=(
   src/server/services/platform/permission-exceptions.test.ts
   src/server/actions/platform/permission-exceptions.test.ts
   src/lib/auth/effective-permissions.test.ts
+
+  # Notice audience (0422, docket S36a; the database half is in MANIFEST 1):
+  # every notice and push the app writes (createNotification), and every
+  # email to a member's own address, goes only to a current member of the
+  # record's organization: an accepted membership that is not an Act-as seat,
+  # on an account that is not disabled. A membership or profile read that
+  # fails, or answers no list, writes nothing and sends nothing, and is
+  # reported. An address the order recorded for an outside person is emailed
+  # whoever placed the order.
+  src/server/lib/current-member.test.ts
+  src/server/services/notifications.requester-paths.test.ts
+  src/server/services/order-requests.member-email.test.ts
+  src/server/email/maintenance-resolved.member.test.ts
 
   # Connector export events (outbox_events) are recorded only by
   # server/lib/outbox-events.ts, through the service client, after the action

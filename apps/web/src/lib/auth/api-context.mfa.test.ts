@@ -75,11 +75,14 @@ function table(single: unknown, list: unknown[] = []) {
   q.in = self;
   q.limit = self;
   q.order = self;
-  q.maybeSingle = async () => ({ data: single, error: null });
+  q.maybeSingle = async () => ({ data: single, error: null, status: 200 });
   q.then = (resolve: (v: unknown) => unknown) =>
-    Promise.resolve({ data: list, error: null }).then(resolve);
+    Promise.resolve({ data: list, error: null, status: 200 }).then(resolve);
   return q;
 }
+
+/** A single-row fake that also answers its row as a one-row list (the membership choice reads lists). */
+const row = (r: unknown) => table(r, r ? [r] : []);
 
 function fakeUser() {
   return { id: USER_ID, email: 'user@example.com', factors: state.factors };
@@ -90,9 +93,9 @@ function makeClient() {
     from: (name: string) => {
       if (name === 'organizations') return table({ mfa_policy: state.policy });
       if (name === 'organization_members')
-        return table({ organization_id: ORG_ID, role: state.role });
+        return row({ organization_id: ORG_ID, role: state.role });
       if (name === 'user_profiles')
-        return table({
+        return row({
           id: USER_ID,
           email: 'user@example.com',
           default_organization_id: ORG_ID,

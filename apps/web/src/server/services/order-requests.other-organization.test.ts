@@ -11,7 +11,15 @@ vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
 vi.mock('./integration-events', () => ({ dispatchEvent: vi.fn(async () => {}) }));
 vi.mock('./notifications', () => ({ createNotification: vi.fn(async () => 'notif-1') }));
 vi.mock('@/lib/email/order-requests', () => ({ sendOrderRequestEmail: vi.fn(async () => {}) }));
-vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => makeSupabaseStub().client }));
+// The service-role reads answer as PostgREST does for nobody: the current-member
+// check's list reads (docket S36) find no row, so no own address is used.
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: () =>
+    makeSupabaseStub({
+      'organization_members.select': { data: [], error: null },
+      'user_profiles.select': { data: [], error: null },
+    }).client,
+}));
 vi.mock('@/lib/realtime/broadcast', () => ({ broadcastOrderChanged: vi.fn(async () => {}) }));
 vi.mock('@/server/lib/order-handover-notify', () => ({
   notifyRequesterBackordered: vi.fn(async () => undefined),

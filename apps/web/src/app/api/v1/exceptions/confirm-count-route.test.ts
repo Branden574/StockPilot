@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
 
 import { makeSupabaseStub } from '@/test/supabase-mock';
+import { RECOUNT_FACTS_NOT_YET } from '@/test/recount-facts';
 
 /**
  * POST /api/v1/exceptions/[id]/confirm-count (count differences R2, 0386)
@@ -87,6 +88,7 @@ function ctxWith(
   } = {},
 ) {
   const stub = makeSupabaseStub({
+    ...RECOUNT_FACTS_NOT_YET,
     'exception_occurrences.select.maybeSingle': { data: opts.row === undefined ? cvRow() : opts.row, error: null },
     'exception_sync_state.select.maybeSingle': { data: SYNC_ROW, error: null },
     'rpc:exception_confirm_count': opts.rpc ?? {
@@ -151,7 +153,7 @@ describe.runIf(EXCEPTION_COUNT_CONFIRM_ENABLED)('POST /api/v1/exceptions/[id]/co
       const body = await res.json();
       expect(body.replay).toBe(false);
       expect(body.occurrence).toMatchObject({ id: OCC, reference: 'EX-000059', rule: 'count_variance' });
-      expect(stub.rpcCalls).toEqual([
+      expect(stub.rpcCalls.filter((c) => c.name !== 'exception_recount_facts')).toEqual([
         {
           name: 'exception_confirm_count',
           args: { p_id: OCC, p_cycle_count_id: CC, p_counted_quantity: 2, p_note: 'counted twice' },

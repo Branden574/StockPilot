@@ -58,7 +58,7 @@ export function defer(fn: () => Promise<unknown>): void {
  * nothing holding the invocation, so Vercel could suspend the instance as soon
  * as the response was sent, and the next request to reach it resumed it with
  * the 5 s insert deadline long past: 33 rows that had committed were reported
- * lost (the reply was never read), and 2 Learn4Life item-create rows were
+ * lost (the reply was never read), and 2 item-create rows were
  * never sent at all.
  *
  * WHY NOT defer: defer(fn) starts `fn` only once the response has closed. An
