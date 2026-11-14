@@ -106,7 +106,10 @@ export const RELEASES: Release[] = [
     // release below is dated 2026-11-13T08:18:00Z, so the placeholder is that same minute.
     // Moved again by docs/whatsnew-emailed-links-1113 (2026-11-13; was: '2026-11-13T08:18:00Z'): the emailed
     // links release below is dated 2026-11-13T17:39:00Z, so the placeholder is that same minute.
-    publishedAt: '2026-11-13T17:39:00Z',
+    // Moved again by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: '2026-11-13T17:39:00Z'): the
+    // phone authenticator code and access check releases below share one minute, so the placeholder is that
+    // same minute. Set at merge (2026-11-14): the same value as those two releases' publishedAt.
+    publishedAt: '2026-11-14T01:24:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -191,6 +194,151 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'phone-authenticator-code-2026-11',
+    revision: 1,
+    // S43b, release 2 of the authenticator entry (release 1 is
+    // authenticator-code-requests-2026-11). Phone code only: the web half of
+    // #510 (squash d5bcaa5c3, live 2026-11-13 18:05:33Z) changes nothing on
+    // the web; the phone has it from the update published 2026-11-13
+    // 20:08:51Z (group c6f9ebd1, runtime 1.4.0). SET AT MERGE: publishedAt is
+    // the whole minute at or after the first iOS launch of that update (the
+    // integrator's record, not readable from the code); the access check
+    // release below and the Liquid Glass placeholder above take the same
+    // minute.
+    // From the plan's release 2 draft (S43 section 8), reworded where the lab
+    // and simulator walk of 2026-11-13 (head 0fd0250b3) decided it:
+    // - the plan's second entry (the phone after an authenticator is turned
+    //   on on the web) is left out: the walk showed the phone is asked to sign
+    //   in again, which is not a change of this update (release 1's note
+    //   below records that outcome from 2026-11-02);
+    // - the words never say that nothing at all is read before the code: one
+    //   read of the member's own tour state remains (filed as S69). They say
+    //   the organization's data.
+    // Claims checked against the code at 8e1330dcd (paths under
+    // apps/mobile/src): the code is owed when the account has a verified
+    // factor and the session is not at the code's level, read from the
+    // session the phone holds, with or without a connection
+    // (lib/mfa-level.ts header); the data reads, both outbox drains and push
+    // registration wait for it (lib/auth-context.tsx, lib/session-scope.ts,
+    // lib/sync.ts, lib/use-push-notifications.ts:112, :172); the places are
+    // listed by code-gate-wiring.test.ts.
+    // Who is told: every member (no audience), as release 1: whoever uses an
+    // authenticator app. Platform: the mobile app. No link.
+    status: 'published',
+    title: 'The mobile app waits for your authenticator code',
+    summary:
+      "If you use an authenticator app, the mobile app now shows the code screen before your organization's data and waits for your 6-digit code before it loads your items and orders or sends changes waiting on the phone.",
+    // Set at merge: EAS showed the first iOS launch of the update on 2026-11-14 (read 01:22Z).
+    publishedAt: '2026-11-14T01:24:00Z',
+    entries: [
+      {
+        id: 'phone-waits-for-authenticator-code',
+        category: 'fixed',
+        area: 'Mobile app',
+        title:
+          "The mobile app waits for your authenticator code before it loads your organization's data",
+        whatChanged:
+          "If you use an authenticator app, the mobile app now shows the code screen first. It waits for your 6-digit code before it loads your organization's items, orders and other data, before it sends changes waiting on the phone, and before it turns on notifications for the phone. Without a connection, it shows the code screen and waits.",
+        whyItMatters:
+          "The mobile app now asks for your code before it shows or loads your organization's data, as the web app does.",
+        howItAffectsYou:
+          'After you enter your code, the app works as before, and changes that were waiting are sent. Entering the code needs a connection.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'phone-access-check-retry-2026-11',
+    revision: 1,
+    // S26: the web half is #510 (squash d5bcaa5c3, live 2026-11-13
+    // 18:05:33Z): the three phone routes answer a marked 503 before any work
+    // when access cannot be checked. The phone reads the mark from the update
+    // published 2026-11-13 20:08:51Z (group c6f9ebd1, runtime 1.4.0); phones
+    // without it read it as any other server error, so this is told once
+    // phones have it. SET AT MERGE: publishedAt is the same minute as the
+    // authenticator code release above.
+    // The words are the plan's draft (S26 section 7), word for word, except
+    // "Settings > Unsent work", written "Unsent work in Settings" because the
+    // schema allows no markup characters; the plan gave no entry ids or entry
+    // titles, so those are chosen here. The integrator decided to publish it
+    // (items/S26.json integrator_decision_whats_new).
+    // Claims checked against the code at 8e1330dcd (phone paths under
+    // apps/mobile/src):
+    // - Entry 1: "Adjustment not saved" with core's CONTEXT_UNAVAILABLE_COPY,
+    //   "... so nothing was changed. Try again in a moment."
+    //   (lib/item-adjust.ts:137-140, :173; packages/core/src/auth/
+    //   context-unavailable.ts:49-50); an adjustment saved offline stays
+    //   queued and its scope waits for the next pass instead of going to
+    //   Settings > Unsent work (lib/adjust-outbox.ts:179, lib/sync.ts:907-914).
+    //   The route checks stock:adjust (app/api/v1/items/[id]/adjust/route.ts
+    //   in apps/web/src).
+    // - Entry 2: "Could not check out" with "... so nothing was checked out.
+    //   Try again in a moment." (lib/rental-view.ts:110-111, :152-153); the
+    //   route needs the rentals module and rentals:create (server/services/
+    //   rentals.ts:212-213 in apps/web/src).
+    // - Entry 3: "Could not escalate" (app/maintenance/new.tsx:498, under
+    //   apps/mobile) with "... so nothing was saved. Try again in a moment.",
+    //   retryable, so the form stays (lib/exception-escalation.ts:531-532,
+    //   :630-631); the route needs the maintenance_requests module and
+    //   maintenance_requests:submit (app/api/v1/exceptions/[id]/escalate/
+    //   route.ts:24 in apps/web/src).
+    // Who is told: per entry, the permission and module each route checks.
+    // Platform: the mobile app. No links.
+    status: 'published',
+    title: 'Clearer words on the phone when your access cannot be checked',
+    summary:
+      'If StockPilot cannot check your access for a moment, the phone app now says that a stock adjustment, a rental checkout or an escalation was not saved, and asks you to try again. An adjustment saved offline now waits and is sent later, instead of being moved to Unsent work.',
+    // Set at merge: EAS showed the first iOS launch of the update on 2026-11-14 (read 01:22Z).
+    publishedAt: '2026-11-14T01:24:00Z',
+    entries: [
+      {
+        id: 'phone-adjustment-access-not-checked',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'A stock adjustment says it was not saved when your access cannot be checked',
+        whatChanged:
+          'When StockPilot cannot check your access for a moment, a stock adjustment on the phone now says Adjustment not saved and that nothing was changed. An adjustment saved offline stays queued and is sent once the check works again.',
+        whyItMatters:
+          'Before, the app said the adjustment may or may not have been saved, and an adjustment saved offline was moved to Unsent work in Settings, to be entered again by hand.',
+        howItAffectsYou:
+          'This is rare. If you see Adjustment not saved, nothing was changed: try again after a moment.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['stock:adjust'] },
+      },
+      {
+        id: 'phone-rental-checkout-access-not-checked',
+        category: 'fixed',
+        area: 'Rentals',
+        title: 'A rental checkout says nothing was checked out when your access cannot be checked',
+        whatChanged:
+          'A rental checkout refused for the same reason now says nothing was checked out and asks you to try again.',
+        whyItMatters:
+          'Before, it said the checkout may or may not have happened and asked you to check the Rentals list first.',
+        howItAffectsYou:
+          'Rarely, you may see Could not check out. Nothing was checked out: try again after a moment.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['rentals:create'], modules: ['rentals'] },
+      },
+      {
+        id: 'phone-escalation-access-not-checked',
+        category: 'fixed',
+        area: 'Maintenance',
+        title: 'Escalating an exception says nothing was saved when your access cannot be checked',
+        whatChanged:
+          'Escalating an exception refused for the same reason now says nothing was saved and keeps your form so you can try again.',
+        whyItMatters:
+          'Before, it said it was not known whether the request was saved and asked you to check your maintenance requests first.',
+        howItAffectsYou:
+          'Rarely, you may see Could not escalate. Nothing was saved: try again after a moment.',
+        whatToDo: 'No action needed.',
+        audience: {
+          anyPermission: ['maintenance_requests:submit'],
+          modules: ['maintenance_requests'],
+        },
       },
     ],
   },
