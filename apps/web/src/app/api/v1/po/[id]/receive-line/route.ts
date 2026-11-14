@@ -5,6 +5,8 @@ import { isUuid } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { ReceivingService } from '@/server/services/receiving';
 import { ServiceError } from '@/server/services/context';
@@ -224,6 +226,13 @@ export async function POST(
                   ? 401
                   : 500;
       return NextResponse.json({ error: e.code, message: e.message }, { status });
+    }
+    // A module state that could not be read (docket S81): the fixed
+    // try-again answer at warning level, which the phone's outbox sends again.
+    if (e instanceof ModulesUnavailableError) {
+      return internalErrorResponse(e, 'po.receive-line.module_state', {
+        organizationId: ctx.organizationId,
+      });
     }
     void reportError(e, {
       tag: 'po.receive-line.unhandled',

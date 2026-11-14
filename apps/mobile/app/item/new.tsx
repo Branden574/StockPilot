@@ -65,6 +65,8 @@ import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
+import { ITEMS_CREATE_NOT_ALLOWED } from '@/lib/screen-access';
+import { usePermissionAccess } from '@/lib/use-screen-access';
 import { useTheme } from '@/lib/use-theme';
 import { useWorkspace } from '@/lib/use-workspace';
 import { loadWarehouseRackNames } from '@/lib/warehouse-racks';
@@ -333,6 +335,11 @@ export default function NewItem() {
   // says so, the server's own rule (newRackBlockerFor).
   const { role } = useRole();
   const permissions = useEffectivePermissions();
+  // Creating needs items:create, which the server asserts. A member without
+  // it (a viewer reaching this form by a link, or from an older screen) is
+  // told so beside Create and refused before anything is sent; while it is
+  // not known yet, the server decides, as before (screen-access.ts).
+  const createAccess = usePermissionAccess('items:create');
   const { c } = useTheme();
   // Liquid Glass (inferred: the DS fields as a native grouped form with the
   // iOS Item board's size chips): the scene behind the form, Back in the glass
@@ -871,6 +878,10 @@ export default function NewItem() {
 
   async function save() {
     if (busy) return;
+    if (createAccess === 'denied') {
+      Alert.alert('Not allowed', ITEMS_CREATE_NOT_ALLOWED);
+      return;
+    }
     if (!user || !orgId) {
       Alert.alert('Not signed in', 'Sign in again to add inventory.');
       return;
@@ -1497,6 +1508,11 @@ export default function NewItem() {
             accent fill belongs to New item on the list, which opened it). The
             shared Button is announced as a button (the bare Pressable had no
             role) and keeps its words beside the spinner while it saves. */}
+        {createAccess === 'denied' ? (
+          <Body size={12.5} muted style={{ marginBottom: 8 }}>
+            {ITEMS_CREATE_NOT_ALLOWED}
+          </Body>
+        ) : null}
         <Button
           block
           onPress={save}

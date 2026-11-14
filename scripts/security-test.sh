@@ -855,6 +855,12 @@ PGTAP_TESTS=(
   # stays 0215's. The lock footprint is
   # scripts/db-concurrency/0420_migration_lock_footprint.sh.
   supabase/tests/0420_permission_override_updates_follow_0322.test.sql
+  # Category reads (0421, docket S49): categories_select reads the membership
+  # set stock_movements_select reads and the two category sets
+  # inventory_items_select reads (the same rows for 13 personas), and
+  # user_can_see_item_category answers service_role only. The lock footprint
+  # is scripts/db-concurrency/0421_migration_lock_footprint.sh.
+  supabase/tests/0421_categories_select_category_sets.test.sql
   # Cycle counts follow what the member may see (0452, docket S48 and S52):
   # counts by warehouse (every warehouse for managers and all-warehouses
   # members), count lines also by item, AI scans for their creator and
@@ -1210,6 +1216,17 @@ WEB_TESTS=(
   src/lib/auth/login-device.test.ts
   src/test/session-revoked-payload.guard.test.ts
   src/server/services/auth-audit.guard.test.ts
+  # S79: the caller's address is read in one place (lib/client-ip.ts:
+  # x-forwarded-for only on Vercel; clientIpForRecord stores an IP literal or
+  # null), and no other source file reads, names or builds an address header
+  # (the guard carries the "Security invariant" marker). New-device alerts are
+  # counted per account and per organization with closed buckets, and the
+  # limiter says when it could not answer (login-device.test.ts above).
+  src/test/request-address-headers.guard.test.ts
+  src/lib/client-ip.test.ts
+  src/lib/rate-limit.failed.test.ts
+  src/server/services/auth-audit.address.test.ts
+  src/app/api/v1/auth/password-reset/route.address.test.ts
 
   # Only a platform admin creates a workspace (S20, owner decision b.9):
   # createOrganizationAction runs checkPlatformAdmin({ requireStepUp: true })

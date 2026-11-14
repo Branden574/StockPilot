@@ -53,10 +53,12 @@ const INTERNAL_ERROR_BODY = {
  * A checkout carries no idempotency key, so the phone reads any 5xx as "may or
  * may not have been checked out", except the 503 the API context gate marks as
  * refused before any write (docket S26): the caller's access could not be
- * checked, so nothing below ran, and the phone says to try again.
+ * checked, so nothing below ran, and the phone says to try again. The same
+ * marker answers a Rentals module state that could not be read (docket S81),
+ * from the gate, before any of the work below.
  */
 export async function POST(req: NextRequest) {
-  const gate = await apiContextGate(req);
+  const gate = await apiContextGate(req, { modules: ['rentals'] });
   if ('response' in gate) return gate.response;
   const ctx = gate.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });

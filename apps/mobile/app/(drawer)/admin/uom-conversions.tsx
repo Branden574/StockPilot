@@ -8,6 +8,7 @@ import { GLASS_BARE_CARD, GlassJoinedRow } from '@/components/ui/glass/screens/a
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { Pill } from '@/components/ui/pill';
 import { Body, Mono } from '@/components/ui/text';
+import { createSequenceGuard } from '@/lib/debounced-list-load';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
 import { supabase } from '@/lib/supabase';
@@ -44,13 +45,19 @@ export default function UoMConversionsAdmin() {
   // keeps them only when they are this workspace's (never the last
   // workspace's rows under "Could not refresh" after a switch).
   const [list, setList] = React.useState<{ orgId: string; rows: ConversionRow[] } | null>(null);
-  const rows = list?.rows ?? NO_ROWS;
+  // Only rows read for the workspace on screen: after a switch, never the
+  // previous workspace's while this one's read is out.
+  const rows = list !== null && list.orgId === orgId ? list.rows : NO_ROWS;
+  // Only the newest read changes the list: an older one that lands last
+  // (the previous workspace's, or a slow refresh) is dropped.
+  const guard = React.useRef(createSequenceGuard());
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   // The last read failed (set by every read that completes).
   const [failed, setFailed] = React.useState(false);
 
   const load = React.useCallback(async () => {
+    const token = guard.current.next();
     if (!orgId || !isAdmin) {
       setLoading(false);
       return;
@@ -70,6 +77,7 @@ export default function UoMConversionsAdmin() {
     } catch {
       read = null;
     }
+    if (!guard.current.isCurrent(token)) return;
     if (!read || read.error) {
       setList((prev) => (prev !== null && prev.orgId === forOrg ? prev : null));
       setFailed(true);

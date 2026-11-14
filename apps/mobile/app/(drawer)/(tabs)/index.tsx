@@ -59,6 +59,7 @@ import { syncBadgeState } from '@/lib/sync-badge';
 import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { retryWorkspace, useWorkspace } from '@/lib/use-workspace';
+import { useDrawerEntryAccess } from '@/lib/use-screen-access';
 import { MobileTour } from '@/components/onboarding/mobile-tour';
 import { useTourTarget } from '@/lib/tour-targets';
 import { MOBILE_HOME_TOUR } from '@/lib/onboarding';
@@ -176,6 +177,10 @@ export default function Home() {
   const lg = useGlass();
   const profile = useProfile();
   const tabBarHeight = useBottomTabBarHeight();
+  // The Bundles card shows by the side menu's own rule: the bundles module on
+  // and bundles:read or bundles:distribute held, once the saved permissions
+  // and modules are read (screen-access.ts).
+  const bundlesOffered = useDrawerEntryAccess('/bundles') === 'allowed';
   const [summary, setSummary] = React.useState<Summary | null>(null);
   const scanTargetRef = useTourTarget('home-scan');
   const [recent, setRecent] = React.useState<RecentMovement[]>([]);
@@ -625,26 +630,28 @@ export default function Home() {
               )}
             </View>
 
-            <View style={lg ? GLASS_HOME.section : styles.section}>
-              <View style={lg ? GLASS_HOME.sectionHead : styles.sectionHead}>
-                {lg ? <GlassHeading>Bundles</GlassHeading> : <Eyebrow>BUNDLES</Eyebrow>}
+            {bundlesOffered ? (
+              <View style={lg ? GLASS_HOME.section : styles.section}>
+                <View style={lg ? GLASS_HOME.sectionHead : styles.sectionHead}>
+                  {lg ? <GlassHeading>Bundles</GlassHeading> : <Eyebrow>BUNDLES</Eyebrow>}
+                </View>
+                <Pressable
+                  onPress={() => router.push('/bundles')}
+                  accessibilityRole="button"
+                  style={({ pressed }) => ({ opacity: pressed ? 0.92 : 1 })}
+                >
+                  <Card>
+                    <Row
+                      leading={<Thumb size={40} icon={Link2} pip={c.accent} />}
+                      title="Bundles"
+                      subtitle={HOME_BUNDLES_SUBTITLE}
+                      trailing={<Pill status="ok">OPEN</Pill>}
+                      chevron
+                    />
+                  </Card>
+                </Pressable>
               </View>
-              <Pressable
-                onPress={() => router.push('/bundles')}
-                accessibilityRole="button"
-                style={({ pressed }) => ({ opacity: pressed ? 0.92 : 1 })}
-              >
-                <Card>
-                  <Row
-                    leading={<Thumb size={40} icon={Link2} pip={c.accent} />}
-                    title="Bundles"
-                    subtitle={HOME_BUNDLES_SUBTITLE}
-                    trailing={<Pill status="ok">OPEN</Pill>}
-                    chevron
-                  />
-                </Card>
-              </Pressable>
-            </View>
+            ) : null}
           </>
         )}
       </ScrollView>

@@ -124,6 +124,8 @@ describe('the Distribute screen (app/bundles/[id].tsx) when the queue refuses', 
       enqueue,
       syncNow,
       reportPhoneSaveFailure,
+      // One account and workspace throughout (a change is gated-lists-keyed.test.ts).
+      shownForRef: { current: 'user-a:org-a' },
     })();
   }
 

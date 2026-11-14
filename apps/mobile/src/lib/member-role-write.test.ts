@@ -112,7 +112,8 @@ describe('the admin users screen writes the role row-proof', () => {
 
   it('paints the new role only AFTER the write is proven', () => {
     const writeAt = changeRole.indexOf('await supabase');
-    const paintAt = changeRole.indexOf('setRows(');
+    // B124: the rows live in `list` with the workspace they were read for.
+    const paintAt = changeRole.indexOf('setList(');
     expect(writeAt).toBeGreaterThan(-1);
     expect(paintAt).toBeGreaterThan(-1);
     // Optimistic-before-write plus a fail-open check is how a failed change

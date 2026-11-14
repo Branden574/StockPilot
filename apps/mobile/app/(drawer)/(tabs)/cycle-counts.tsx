@@ -53,6 +53,7 @@ import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import {
   dirtyLineCounts,
   listCachedCycleCounts,
+  listCountsStoredForLiveAccount,
   type CachedCycleCountHeader,
 } from '@/lib/cycle-count-cache';
 import {
@@ -65,13 +66,22 @@ import {
   type CycleCountListSummary,
   type CycleCountListView,
 } from '@/lib/cycle-count-history';
+import { ApiError } from '@/lib/api';
 import { listCycleCounts } from '@/lib/cycle-counts-api';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { useSyncStatus } from '@/lib/cycle-count-sync';
 import { createDebouncedScheduler, createSequenceGuard } from '@/lib/debounced-list-load';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
+import {
+  CYCLE_COUNTS_NOT_AVAILABLE,
+  NOT_SYNCED_YET,
+  SAVED_ACCESS_UNREADABLE,
+} from '@/lib/screen-access';
+import { useAuth } from '@/lib/auth-context';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
+import { retrySavedAccess, useDrawerEntryAccess } from '@/lib/use-screen-access';
+import { retryWorkspace } from '@/lib/use-workspace';
 import { FONT, RADIUS, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useRole } from '@/lib/use-role';
@@ -167,6 +177,20 @@ async function readDownloaded(): Promise<CachedCycleCountHeader[] | null> {
   }
 }
 
+/**
+ * Of the downloaded counts, only those this account fetched from the server in
+ * this workspace (cycle-count-cache.ts listCountsStoredForLiveAccount), or
+ * null when the device store cannot be read: what is shown while the member's
+ * access is 'not-synced' (screen-access.ts).
+ */
+async function readDownloadedForAccount(): Promise<CachedCycleCountHeader[] | null> {
+  try {
+    return await listCountsStoredForLiveAccount();
+  } catch {
+    return null;
+  }
+}
+
 function sameView(a: CycleCountListView, b: CycleCountListView): boolean {
   return a.q === b.q && a.status === b.status && a.page === b.page;
 }
@@ -187,7 +211,9 @@ export default function CycleCounts() {
   // threshold lives in the pure, unit-tested helper.
   const stackedSummary = shouldStackRow(useWindowDimensions().fontScale);
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
-  const { orgId } = useOrg();
+  const { orgId, loading: workspaceLoading } = useOrg();
+  const { user } = useAuth();
+  const userId = user?.id ?? null;
   // Who is offered ＋ and the start hint (B42): someone who can start a count,
   // by the server's floors (core countStartAllowed: a manager with
   // cycle_counts:assign and stock:adjust, the module on). It followed
@@ -210,6 +236,11 @@ export default function CycleCounts() {
   // longer keep load's memoization (react-hooks/preserve-manual-memoization).
   const booksOn = enabledModules.has('books');
   const startHint = startCountHint(booksOn);
+  // The counts downloaded to this phone are shown (offline, or under a read
+  // that failed) only to a member who may see cycle counts: the side menu's
+  // rule, decided once the saved permissions and modules are read
+  // (screen-access.ts). The list itself is the server's, which decides.
+  const storedAccess = useDrawerEntryAccess('/cycle-counts');
 
   // What the list shows (search, status, page), restored per workspace when
   // the screen comes back, so opening a count and returning keeps the view.
@@ -220,6 +251,11 @@ export default function CycleCounts() {
   const [downloaded, setDownloaded] = React.useState<CachedCycleCountHeader[] | null>(null);
   const [offline, setOffline] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  // No workspace known once the workspace load has ended (a first sign-in
+  // offline): the not-synced sentence, with Try again, in place of the list.
+  // While it is still loading (a cold start), the spinner, as before.
+  const noWorkspace = !orgId && !workspaceLoading;
+  const shownError = noWorkspace ? NOT_SYNCED_YET : error;
   const [busy, setBusy] = React.useState(false);
   const [refreshing, setRefreshing] = React.useState(false);
   // This phone's unsynced count lines per count. Null when the phone's store
@@ -233,11 +269,16 @@ export default function CycleCounts() {
   const inFlight = React.useRef<AbortController | null>(null);
   const orgRef = React.useRef(orgId);
   const viewRef = React.useRef(view);
+  const storedAccessRef = React.useRef(storedAccess);
+  // The last load's outcome depended on storedAccess (it was offline, or its
+  // read failed), so a change of it loads again.
+  const needsAccessRef = React.useRef(false);
   // Kept current for the async load (a layout effect runs before every effect
   // below that reads them).
   React.useLayoutEffect(() => {
     orgRef.current = orgId;
     viewRef.current = view;
+    storedAccessRef.current = storedAccess;
   });
   // The view (and workspace) the last load was started for, so a view change
   // that only reconciles the page to what the server answered does not load
@@ -252,6 +293,7 @@ export default function CycleCounts() {
       inFlight.current = ctrl;
       const activeOrg = orgRef.current;
       requested.current = { orgId: activeOrg, view: target };
+      needsAccessRef.current = false;
 
       let online = true;
       try {
@@ -271,15 +313,54 @@ export default function CycleCounts() {
         },
       );
 
-      if (!activeOrg) return; // the workspace is still resolving; its switch loads
+      if (!activeOrg) {
+        // No workspace is known for this account yet: nothing of any
+        // workspace is read or shown. The render says so once the workspace
+        // load has ended without one (noWorkspace), and spins while it runs;
+        // online, the workspace is asked for again. When it arrives, the
+        // switch effect below loads its list; a sync that lands changes the
+        // saved access, which runs this load again.
+        needsAccessRef.current = true;
+        setPage(null);
+        setDownloaded(null);
+        setError(null);
+        setBusy(false);
+        if (online) void retryWorkspace();
+        return;
+      }
       if (!online) {
-        // Offline: only what this device downloaded. Read, never written back.
-        const cached = await readDownloaded();
+        // Offline: only what this device downloaded, and only for a member
+        // who may see cycle counts; until that is known, nothing is claimed.
+        // Not synced yet for this member: only the counts this account
+        // fetched here (screen-access.ts), and said when there are none.
+        needsAccessRef.current = true;
+        const access = storedAccessRef.current;
+        if (access !== 'allowed' && access !== 'not-synced') {
+          setPage(null);
+          setDownloaded(null);
+          setError(
+            access === 'denied'
+              ? CYCLE_COUNTS_NOT_AVAILABLE
+              : access === 'unreadable'
+                ? SAVED_ACCESS_UNREADABLE
+                : null,
+          );
+          setBusy(false);
+          return;
+        }
+        // Read, never written back.
+        const cached = access === 'allowed' ? await readDownloaded() : await readDownloadedForAccount();
         if (!guard.current.isCurrent(token)) return;
         // null (the read failed) stays null: the screen never claims "none
         // downloaded" about a store it could not read.
         setDownloaded(cached);
-        setError(cached ? null : 'Could not read the counts saved on this device.');
+        setError(
+          !cached
+            ? 'Could not read the counts saved on this device.'
+            : access === 'not-synced' && cached.length === 0
+              ? NOT_SYNCED_YET
+              : null,
+        );
         setBusy(false);
         return;
       }
@@ -317,7 +398,26 @@ export default function CycleCounts() {
         // labelled as downloaded counts only.
         setPage(null);
         setError(e instanceof Error ? e.message : 'Could not load cycle counts.');
-        const cached = await readDownloaded();
+        // A 403 with the route's `forbidden` or `module_disabled` is the
+        // server's answer about this member, so the list shows that answer
+        // alone. Any other 403 is a failed read, and the downloaded counts
+        // follow the saved access: shown when allowed, only the counts this
+        // account fetched here when not synced yet, none when denied.
+        if (
+          e instanceof ApiError &&
+          e.status === 403 &&
+          (e.code === 'forbidden' || e.code === 'module_disabled')
+        ) {
+          setDownloaded(null);
+          return;
+        }
+        needsAccessRef.current = true;
+        const access = storedAccessRef.current;
+        if (access !== 'allowed' && access !== 'not-synced') {
+          setDownloaded(null);
+          return;
+        }
+        const cached = access === 'allowed' ? await readDownloaded() : await readDownloadedForAccount();
         if (guard.current.isCurrent(token)) setDownloaded(cached);
       } finally {
         if (guard.current.isCurrent(token)) setBusy(false);
@@ -326,11 +426,15 @@ export default function CycleCounts() {
     [],
   );
 
-  // A workspace switch starts that workspace's own view.
+  // A workspace switch, or another account signed in, starts that workspace's
+  // own view: a new load, so an answer still out for the previous one is
+  // dropped when it lands (the sequence guard).
   const lastOrg = React.useRef(orgId);
+  const lastUser = React.useRef(userId);
   React.useEffect(() => {
-    if (lastOrg.current === orgId) return;
+    if (lastOrg.current === orgId && lastUser.current === userId) return;
     lastOrg.current = orgId;
+    lastUser.current = userId;
     const next = recallListView(orgId);
     debounce.current.cancel();
     setPage(null);
@@ -340,11 +444,21 @@ export default function CycleCounts() {
     setDraftQ(next.q);
     setView(next);
     void load(next, { withSummary: true });
-  }, [orgId, load]);
+  }, [orgId, userId, load]);
 
   React.useEffect(() => {
     rememberListView(orgId, view);
   }, [orgId, view]);
+
+  // Whether the downloaded counts may be shown became known, or changed: a
+  // load that depended on it (offline, or under a failed read) runs again.
+  const lastStoredAccess = React.useRef(storedAccess);
+  React.useEffect(() => {
+    if (lastStoredAccess.current === storedAccess) return;
+    lastStoredAccess.current = storedAccess;
+    if (!needsAccessRef.current) return;
+    void load(viewRef.current, { withSummary: true });
+  }, [storedAccess, load]);
 
   // Every return to the screen reloads the SAME view (never page 1), with the
   // tile totals.
@@ -410,8 +524,20 @@ export default function CycleCounts() {
 
   async function refresh() {
     setRefreshing(true);
+    // What the phone saved about this member's access could not be read: a
+    // pull reads it again first (a change of it loads the list again too).
+    if (storedAccessRef.current === 'unreadable') await retrySavedAccess();
+    // No workspace known yet: it is asked for first (its arrival loads the list).
+    if (!orgRef.current) await retryWorkspace();
     await load(viewRef.current, { withSummary: true });
     setRefreshing(false);
+  }
+
+  // Try again under the error: with no workspace known yet, the workspace is
+  // asked for first, offline too (the member asked).
+  async function tryAgain() {
+    if (!orgRef.current) await retryWorkspace();
+    await load(view, { withSummary: !summary });
   }
 
   // Downloaded counts are shown offline, and under the error when an online
@@ -522,18 +648,18 @@ export default function CycleCounts() {
             />
           ))}
         </View>
-        {error ? (
+        {shownError ? (
           <Card padding={16} style={{ gap: 10 }}>
             <Body>Cycle counts did not load.</Body>
             <Body size={12.5} muted>
-              {error}
+              {shownError}
             </Body>
-            {offline ? null : (
+            {offline && orgId ? null : (
               <Button
                 size="sm"
                 variant="outline"
                 disabled={busy}
-                onPress={() => void load(view, { withSummary: !summary })}
+                onPress={() => void tryAgain()}
                 style={TAP}
               >
                 {busy ? 'Trying again…' : 'Try again'}
@@ -548,7 +674,7 @@ export default function CycleCounts() {
   // Under an error, "none downloaded" is said only after the device store was
   // actually read (downloaded is null while unread or when the read failed;
   // the error card above already explains).
-  const empty = error ? (
+  const empty = shownError ? (
     downloaded ? (
       <View style={{ paddingVertical: 12 }}>
         <Body muted>No counts are downloaded to this device{view.q || view.status ? ' that match' : ''}.</Body>
@@ -689,7 +815,7 @@ export default function CycleCounts() {
       </SafeAreaView>
 
       {/* Nothing to show yet: a spinner, never an empty-history claim. */}
-      {!page && !downloaded && !error ? (
+      {!page && !downloaded && !shownError ? (
         <ActivityIndicator color={c.ink} style={{ marginTop: 32 }} />
       ) : (
         <FlatList

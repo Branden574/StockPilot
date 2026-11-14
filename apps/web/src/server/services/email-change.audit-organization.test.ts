@@ -56,6 +56,7 @@ const h = vi.hoisted(() => ({
 function selectQuery(table: string, columns: string) {
   const eqs: Array<[string, unknown]> = [];
   const notNull: string[] = [];
+  const isNull: string[] = [];
   const orders: Array<[string, boolean]> = [];
   let limit: number | null = null;
   const run = () => {
@@ -72,7 +73,10 @@ function selectQuery(table: string, columns: string) {
       return { data: null, error: { code: 'XX000', message: 'read failed in test' } };
     }
     let rows = (h.tables[table] ?? []).filter(
-      (r) => eqs.every(([c, v]) => r[c] === v) && notNull.every((c) => r[c] != null),
+      (r) =>
+        eqs.every(([c, v]) => r[c] === v) &&
+        notNull.every((c) => r[c] != null) &&
+        isNull.every((c) => r[c] == null),
     );
     for (const [col, asc] of [...orders].reverse()) {
       rows = [...rows].sort((a, b) => {
@@ -92,6 +96,11 @@ function selectQuery(table: string, columns: string) {
     not(col: string, op: string, v: unknown) {
       if (op !== 'is' || v !== null) throw new Error(`unexpected not(${col}, ${op})`);
       notNull.push(col);
+      return q;
+    },
+    is(col: string, v: unknown) {
+      if (v !== null) throw new Error(`unexpected is(${col}, ${String(v)})`);
+      isNull.push(col);
       return q;
     },
     order(col: string, opts?: { ascending?: boolean }) {
@@ -187,6 +196,22 @@ function member(orgId: string, accepted: boolean, createdAt: string): Row {
   };
 }
 
+/**
+ * A platform admin's temporary owner seat in a customer organization: accepted,
+ * with impersonation_expires_at set (platform/impersonation.ts). Not one of the
+ * person's own memberships, whether its time has passed or not.
+ */
+function seat(orgId: string, expiresAt: string, createdAt: string): Row {
+  return {
+    user_id: USER_ID,
+    organization_id: orgId,
+    role: 'owner',
+    accepted_at: createdAt,
+    created_at: createdAt,
+    impersonation_expires_at: expiresAt,
+  };
+}
+
 function authUser(overrides: Row = {}) {
   return { data: { user: { id: USER_ID, email: OLD, ...overrides } }, error: null };
 }
@@ -234,6 +259,43 @@ const WORLDS: Record<string, { world: World; expected: string | null }> = {
       ],
     },
     // The sign-in rule: the oldest accepted membership, never the default.
+    expected: ORG_HOME,
+  },
+  'a default organization where the person holds only a temporary seat, beside their own membership': {
+    world: {
+      defaultOrg: ORG_OTHER,
+      members: [
+        member(ORG_HOME, true, '2026-01-01T00:00:00Z'),
+        seat(ORG_OTHER, '2099-01-01T00:00:00Z', '2026-05-01T00:00:00Z'),
+      ],
+    },
+    expected: ORG_HOME,
+  },
+  'a default organization where the person holds only a temporary seat whose time has passed': {
+    world: {
+      defaultOrg: ORG_OTHER,
+      members: [
+        member(ORG_HOME, true, '2026-01-01T00:00:00Z'),
+        seat(ORG_OTHER, '2026-05-01T01:00:00Z', '2026-05-01T00:00:00Z'),
+      ],
+    },
+    expected: ORG_HOME,
+  },
+  'a temporary seat and no membership of their own': {
+    world: {
+      defaultOrg: ORG_OTHER,
+      members: [seat(ORG_OTHER, '2099-01-01T00:00:00Z', '2026-05-01T00:00:00Z')],
+    },
+    expected: null,
+  },
+  'no default organization, and a temporary seat older than their own membership': {
+    world: {
+      defaultOrg: null,
+      members: [
+        seat(ORG_OTHER, '2099-01-01T00:00:00Z', '2025-12-01T00:00:00Z'),
+        member(ORG_HOME, true, '2026-01-01T00:00:00Z'),
+      ],
+    },
     expected: ORG_HOME,
   },
 };
@@ -438,6 +500,22 @@ describe('resolveDefaultOrgAndRole: a failed read is reported and the next read 
   it('reads that succeed report nothing', async () => {
     setWorld(WORLDS[CURRENT]!.world);
     await expect(resolveDefaultOrgAndRole(USER_ID)).resolves.toEqual({ organizationId: ORG_HOME, role: 'staff' });
+    expect(reportError).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveDefaultOrgAndRole counts only memberships with no end time', () => {
+  it("a temporary seat in the default organization: the person's own membership and its role answer", async () => {
+    setWorld(
+      WORLDS['a default organization where the person holds only a temporary seat, beside their own membership']!.world,
+    );
+    await expect(resolveDefaultOrgAndRole(USER_ID)).resolves.toEqual({ organizationId: ORG_HOME, role: 'staff' });
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('only a temporary seat: no organization and no role', async () => {
+    setWorld(WORLDS['a temporary seat and no membership of their own']!.world);
+    await expect(resolveDefaultOrgAndRole(USER_ID)).resolves.toEqual({ organizationId: null, role: null });
     expect(reportError).not.toHaveBeenCalled();
   });
 });

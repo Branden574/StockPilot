@@ -39,6 +39,10 @@ const storage = vi.hoisted(() => ({
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: storage }));
 vi.mock('./db', () => ({ deleteOrgData: vi.fn(async () => {}) }));
 vi.mock('./enabled-modules', () => ({ refreshEnabledModules: vi.fn() }));
+// The saved permissions and warehouse scope a switch tells the screens to
+// read again (B124); their own tests are use-workspace.saved-access.test.ts.
+vi.mock('./use-effective-permissions', () => ({ refreshEffectivePermissions: async () => {} }));
+vi.mock('./warehouse-scope', () => ({ refreshWarehouseScope: async () => {} }));
 vi.mock('./sync', () => ({
   syncNow: vi.fn(async () => {}),
   syncAfterRunning: vi.fn(async () => {}),
@@ -97,7 +101,8 @@ vi.mock('./supabase', () => {
   };
   return {
     supabase: {
-      from: (t: string) => (t === 'organization_members' ? members : t === 'user_profiles' ? profiles : warehouses),
+      from: (t: string) =>
+        t === 'organization_members' ? members : t === 'user_profiles' ? profiles : warehouses,
       auth: {
         onAuthStateChange: (cb: typeof auth.listener) => {
           auth.listener = cb;
@@ -334,7 +339,11 @@ describe('a failed membership read is not "a member of nothing"', () => {
     warn.mockRestore();
 
     expect(published.length).toBeGreaterThan(before);
-    expect(published.at(-1)).toMatchObject({ activeOrgId: 'org-b', activeOrgName: 'B', loading: false });
+    expect(published.at(-1)).toMatchObject({
+      activeOrgId: 'org-b',
+      activeOrgName: 'B',
+      loading: false,
+    });
     expect(published.at(-1)?.orgs).toHaveLength(3);
     expect(published.slice(before).some((s) => s.activeOrgId === null)).toBe(false);
     expect(storage.setItem).not.toHaveBeenCalled();

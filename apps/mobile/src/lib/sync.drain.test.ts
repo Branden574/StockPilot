@@ -95,10 +95,12 @@ vi.mock('./db', () => ({
 vi.mock('./enabled-modules', () => ({
   ENABLED_MODULES_META_KEY: 'enabled_modules',
   refreshEnabledModules: vi.fn(),
+  rereadFailedEnabledModules: vi.fn(async () => undefined),
 }));
 vi.mock('./use-effective-permissions', () => ({
   EFFECTIVE_PERMISSIONS_META_KEY: 'effective_permissions',
   refreshEffectivePermissions: vi.fn(),
+  rereadFailedEffectivePermissions: vi.fn(async () => undefined),
 }));
 vi.mock('./warehouse-scope', () => ({
   WAREHOUSE_SCOPE_META_KEY: 'warehouse_scope',

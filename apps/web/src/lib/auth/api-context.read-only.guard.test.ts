@@ -75,6 +75,9 @@ const ENTRY = 'lib/auth/api-context.ts';
  *     in, a string or an Error out. It loads lib/redact-urls.ts, already listed.
  *   lib/chat-text.ts  the text of a report as a chat channel shows it
  *     (error-reporter-core.ts): strings in, strings out. It imports nothing.
+ *   lib/modules/module-state.ts  the module set held when a module read failed
+ *     (docket S81): a Set subclass and an error class, in memory only. It
+ *     loads @stockpilot/core (the module registry) and nothing in this app.
  */
 const REVIEWED_CLOSURE = [
   'lib/auth/account-status.ts',
@@ -90,6 +93,7 @@ const REVIEWED_CLOSURE = [
   'lib/error-reporter.ts',
   'lib/error-text.ts',
   'lib/modules/effective-modules.ts',
+  'lib/modules/module-state.ts',
   'lib/redact-urls.ts',
   'lib/share-paths.ts',
   'lib/supabase/middleware.ts',

@@ -85,3 +85,21 @@ export function drawerSectionsFor(
     })),
   }));
 }
+
+/**
+ * Whether the side menu lists `href` for this member: the very rule that draws
+ * the menu (drawerSectionsFor, core resolveSurface on the mobile_drawer
+ * surface). A screen reached another way (a Home card, a deep link, a
+ * notification) asks this, so it never opens for a member the menu hides it
+ * from, and the two can never disagree (screen-access.ts).
+ */
+export function drawerOffers(
+  href: string,
+  role: Role,
+  enabledModules: Set<ModuleId>,
+  permissions?: ReadonlySet<Permission>,
+): boolean {
+  return drawerSectionsFor(role, enabledModules, permissions).some((section) =>
+    section.items.some((item) => item.href === href),
+  );
+}
