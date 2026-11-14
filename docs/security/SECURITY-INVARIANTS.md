@@ -123,7 +123,10 @@
      owned by postgres (gate.session_meets_mfa, gate.factor_read_state), so
      INV-27 judges their search_path and INV-27b accepts first-party
      functions there and reads their bodies; their posture and grants are
-     pinned by the 0455 test. The pgTAP file count in section 10 was counted
+     pinned by the 0455 test. INV-B6 and INV-B7 (INV-40b, INV-40c and INV-40d)
+     now read `gate` too, as does test 18 of
+     `0359_ledger_flag_carriers.test.sql`; nothing they accept in the other
+     schemas changed. The pgTAP file count in section 10 was counted
      from the manifest in `scripts/security-test.sh`, which gains the 0455
      test with this entry (103 files besides the invariant test); the other
      two figures beside it were not re-derived. -->
@@ -649,8 +652,8 @@ select p.proname,
 
 ### INV-B6 — only listed functions set an identity setting
 
-- **Invariant**: every non-extension function in `public`, `ledger`, `storage`
-  and `graphql_public` that sets `request.jwt.*`, `role` or
+- **Invariant**: every non-extension function in `public`, `ledger`, `storage`,
+  `graphql_public` and `gate` that sets `request.jwt.*`, `role` or
   `session_authorization`, in its body (through `set_config`, or a `SET` or
   `RESET` statement) or through its own `SET` clause, is on **allowlist L**
   (`_sec_inv_identity_setter_allow`), keyed on its full signature with a
@@ -701,8 +704,8 @@ select p.proname,
 
 ### INV-B7 — only listed functions raise a transaction flag
 
-- **Invariant**: every non-extension function in `public`, `ledger`, `storage`
-  and `graphql_public` that sets a `stockpilot.*` setting, in its body
+- **Invariant**: every non-extension function in `public`, `ledger`, `storage`,
+  `graphql_public` and `gate` that sets a `stockpilot.*` setting, in its body
   (through `set_config` with a literal name, or a `SET` statement) or through
   its own `SET` clause, is on **allowlist M** (`_sec_inv_flag_setter_allow`)
   for that flag, and every row of the list still matches a function body or

@@ -19,8 +19,8 @@
 -- changed.
 --
 -- Run against the schema without the migration (origin/main b850db6ed, head
--- 0420, scratch stack, 2026-11-14) it fails 39 of its 40: every check but Z1
--- (the schema and both functions are missing).
+-- 0420, scratch stack, 2026-11-14) it fails all 44 (the schema and both
+-- functions are missing).
 --
 -- R.  The rule, one session shape per check: no factor at aal1 (true); a
 --     planted verified factor at aal1 (false: the helper sees the row, so a
@@ -28,6 +28,10 @@
 --     true for everyone); the same with no aal claim (false); the same at
 --     aal2 (true); only an unverified factor (true); no account on the
 --     request (true); anon and service_role may not call it (42501).
+-- N.  The shape PostgREST sends, only request.jwt.claims set: the enrolled
+--     account at aal1 (false) and aal2 (true), no factor (true); an aal claim
+--     that is JSON null, a number, an array or an object (false); a sub that
+--     is not a uuid (the call raises 22P02).
 -- V.  Variants: a verified webauthn factor and a verified phone factor
 --     (false); one verified beside one unverified, and two verified (false);
 --     the verified factor removed (true again); aal3 (false: only aal2
@@ -42,7 +46,10 @@
 --     first SQLSTATE. The real body's one handler names exactly the four
 --     conditions.
 -- P.  factor_read_state() answers ok for anon; authenticated and
---     service_role may not call it.
+--     service_role may not call it; it reads both columns the helper filters
+--     on, with the helper's predicate. Its other answers (blind, catalog,
+--     error) need the auth schema changed, which this role may not do:
+--     scripts/db-concurrency/0455_gate_catalog_errors.sh shows them.
 -- O.  The owner's premises: postgres owns both functions, may select
 --     auth.mfa_factors and holds BYPASSRLS (row security is on for that
 --     table).
@@ -57,7 +64,7 @@
 --     state before the migration it passes; there, run as a role that may
 --     not select the factor table and has neither BYPASSRLS nor SUPERUSER,
 --     it stops naming both.
--- Z.  Every undone attempt changed nothing.
+-- Z.  Every undone attempt changed nothing (and there is a state to compare).
 --
 -- Roles: fixtures as the test superuser. Every call runs through pg_temp.run
 -- (or pg_temp.run_sub_only), which sets the role and the claims with
@@ -66,7 +73,7 @@
 -- 9a7e0000. begin/rollback: nothing leaks.
 
 begin;
-select plan(40);
+select plan(44);
 
 \set nofactor   '\'9a7e0000-0000-4000-8000-0000000000a1\''
 \set totp       '\'9a7e0000-0000-4000-8000-0000000000a2\''
@@ -187,6 +194,47 @@ select is(
   'ERR:42501/ERR:42501',
   'R7: anon and service_role may not call the helper (42501)');
 
+-- ══ N. The shape PostgREST sends ══════════════════════════════════════════
+-- Only request.jwt.claims is set (request.jwt.claim.sub and
+-- request.jwt.claim are empty), as authenticated: the helper's answer as
+-- text, or ERR:<sqlstate>.
+create function pg_temp.claims_only(p_claims jsonb) returns text language plpgsql as $$
+declare v text;
+begin
+  begin
+    perform set_config('request.jwt.claim.sub', '', true);
+    perform set_config('request.jwt.claim', '', true);
+    perform set_config('request.jwt.claims', p_claims::text, true);
+    perform set_config('role', 'authenticated', true);
+    execute 'select gate.session_meets_mfa()::text' into v;
+    perform set_config('role', 'none', true);
+    perform set_config('request.jwt.claims', '', true);
+  exception when others then
+    perform set_config('role', 'none', true);
+    perform set_config('request.jwt.claims', '', true);
+    return 'ERR:' || sqlstate;
+  end;
+  return coalesce(v, 'null');
+end $$;
+
+select is(
+  pg_temp.claims_only(jsonb_build_object('role', 'authenticated', 'sub', :totp, 'aal', 'aal1')) || '/' ||
+  pg_temp.claims_only(jsonb_build_object('role', 'authenticated', 'sub', :totp, 'aal', 'aal2')) || '/' ||
+  pg_temp.claims_only(jsonb_build_object('role', 'authenticated', 'sub', :nofactor, 'aal', 'aal1')),
+  'false/true/true',
+  'N1: with only request.jwt.claims set: the enrolled account at aal1 false, at aal2 true; the account with no factor true');
+select is(
+  pg_temp.claims_only(jsonb_build_object('role', 'authenticated', 'sub', :totp) || '{"aal": null}'::jsonb) || '/' ||
+  pg_temp.claims_only(jsonb_build_object('role', 'authenticated', 'sub', :totp) || '{"aal": 2}'::jsonb) || '/' ||
+  pg_temp.claims_only(jsonb_build_object('role', 'authenticated', 'sub', :totp) || '{"aal": ["aal2"]}'::jsonb) || '/' ||
+  pg_temp.claims_only(jsonb_build_object('role', 'authenticated', 'sub', :totp) || '{"aal": {"aal": "aal2"}}'::jsonb),
+  'false/false/false/false',
+  'N2: an aal claim that is JSON null, a number, an array or an object is not aal2: false for the enrolled account');
+select is(
+  pg_temp.claims_only('{"role": "authenticated", "sub": "not-a-uuid", "aal": "aal2"}'::jsonb),
+  'ERR:22P02',
+  'N3: a sub that is not a uuid makes the call fail (22P02); nothing is answered');
+
 -- ══ V. Variants ════════════════════════════════════════════════════════════
 select is(pg_temp.meets(:webauthn, 'aal1') || '/' || pg_temp.meets(:phone, 'aal1'), 'false/false',
   'V1: a verified webauthn factor and a verified phone factor count, at aal1: false');
@@ -263,9 +311,10 @@ select is(
   (select replace(replace(pg_get_functiondef(to_regprocedure('gate_twin.meets()')),
                           'gate_twin.meets()', 'gate.session_meets_mfa()'), 'gate_twin.factors', 'auth.mfa_factors'))
   = pg_get_functiondef(to_regprocedure('gate.session_meets_mfa()'))
-  and (select count(*) from regexp_matches(pg_get_functiondef(to_regprocedure('gate.session_meets_mfa()')), 'auth\.mfa_factors', 'g')) = 1,
+  and (select count(*) from regexp_matches(pg_get_functiondef(to_regprocedure('gate.session_meets_mfa()')), 'auth\.mfa_factors', 'g')) = 1
+  and position('from gate_twin.factors f' in coalesce(pg_get_functiondef(to_regprocedure('gate_twin.meets()')), '')) > 0,
   true,
-  'D1: the twin is the helper''s own definition but for its name and the factor table''s name (which the helper names once)');
+  'D1: the twin is the helper''s own definition but for its name and the factor table''s name (which the helper names once), and it reads the test table');
 select is(pg_temp.twin_case('meets', null, null) || ' / ' || pg_temp.twin_case('meets', null, null),
   'false|none / false|none',
   'D2: control: with nothing broken the twin answers false for the enrolled account and sets no flag');
@@ -295,6 +344,14 @@ select is(
   pg_temp.code(pg_temp.run('service_role', null, 'select gate.factor_read_state()', null)),
   'ERR:42501/ERR:42501',
   'P2: authenticated and service_role may not call factor_read_state() (42501)');
+select is(
+  (select (position('where f.user_id = ''00000000-0000-0000-0000-000000000000''::pg_catalog.uuid and f.status = ''verified''' in p.prosrc) > 0)::text
+     from pg_proc p where p.oid = to_regprocedure('gate.factor_read_state()'))
+  || '|' ||
+  (select (position('where f.user_id = v_uid and f.status = ''verified''' in p.prosrc) > 0)::text
+     from pg_proc p where p.oid = to_regprocedure('gate.session_meets_mfa()')),
+  'true|true',
+  'P3: the premise check reads both columns the helper filters on (user_id and status), with the helper''s predicate, for an id no account has');
 
 -- ══ O. The owner's premises ════════════════════════════════════════════════
 select is(
@@ -314,7 +371,7 @@ select is(
           || p.proleakproof::text || '|' || p.proparallel::text || '|' || md5(p.prosrc)
      from pg_proc p join pg_language l on l.oid = p.prolang
     where p.oid = to_regprocedure('gate.session_meets_mfa()')),
-  '|boolean|plpgsql|f|true|s|search_path=""|false|false|u|420ee7cb8a1b292336383cb4f3376d1d',
+  '|boolean|plpgsql|f|true|s|search_path=""|false|false|u|85bf4ab1b6a710b1bb8a5595bb0ffff7',
   'H1: session_meets_mfa(): no arguments, boolean, plpgsql, SECURITY DEFINER, STABLE, search_path empty, not strict, not leakproof, parallel unsafe, and its body (md5)');
 select is(
   (select pg_get_function_identity_arguments(p.oid) || '|' || pg_get_function_result(p.oid) || '|' || l.lanname || '|'
@@ -323,7 +380,7 @@ select is(
           || p.proleakproof::text || '|' || p.proparallel::text || '|' || md5(p.prosrc)
      from pg_proc p join pg_language l on l.oid = p.prolang
     where p.oid = to_regprocedure('gate.factor_read_state()')),
-  '|text|plpgsql|f|true|s|search_path=""|false|false|u|774e6fb49825b3558626b883d1ef47ad',
+  '|text|plpgsql|f|true|s|search_path=""|false|false|u|452c02e2416cd29e84551e5338a3dee4',
   'H2: factor_read_state(): no arguments, text, plpgsql, SECURITY DEFINER, STABLE, search_path empty, not strict, not leakproof, parallel unsafe, and its body (md5)');
 select is(
   (select coalesce(p.proacl::text, '') from pg_proc p where p.oid = to_regprocedure('gate.session_meets_mfa()'))
@@ -433,8 +490,8 @@ select is(pg_temp.try_pre('set local client_min_messages = warning; drop schema 
   || ' auth.mfa_factors has row security on and the migration role (authenticated) has neither BYPASSRLS nor SUPERUSER;',
   'A4: on that state, run as a role that may not select the factor table and has neither BYPASSRLS nor SUPERUSER, it stops (55000) naming both');
 
-select is(pg_temp.state(), (select v from _snap),
-  'Z1: every undone attempt changed nothing (the functions, their bodies and ACLs, the schema ACL, the fixture factors)');
+select is(coalesce(pg_temp.state(), 'missing'), (select v from _snap),
+  'Z1: every undone attempt changed nothing, and the schema is there to compare (the functions, their bodies and ACLs, the schema ACL, the fixture factors)');
 
 select * from finish();
 rollback;

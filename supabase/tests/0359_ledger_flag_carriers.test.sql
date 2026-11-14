@@ -263,7 +263,7 @@ select is(
   '17: exactly the eight ledger wrappers can raise stockpilot.ledger');
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname in ('public', 'storage', 'graphql_public', 'ledger')
+    where n.nspname in ('public', 'storage', 'graphql_public', 'ledger', 'gate')
       and p.prosrc ~ 'set_config\s*\(\s*[^''\s]'),
   0, '18: no function passes a non-literal setting name to set_config (no caller-chosen flag)');
 

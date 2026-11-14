@@ -861,7 +861,8 @@ PGTAP_TESTS=(
   # otherwise (a planted verified factor at aal1 answers false, so a helper
   # that could not see factor rows fails the file); a catalog error reading
   # the factor table answers true, sets sp_gate.catalog_error and logs once,
-  # any other error is raised (on a twin of the helper's own text). Both
+  # any other error is raised (on a twin of the helper's own text); the
+  # premise check reads both columns the helper filters on. Both
   # functions are SECURITY DEFINER owned by postgres with search_path empty;
   # EXECUTE for authenticated only (the helper) and anon only (the premise
   # check); the migration's own preflight is replayed from the recorded

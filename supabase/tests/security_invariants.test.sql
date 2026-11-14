@@ -2417,7 +2417,7 @@ drop function public._sec_inv_probe_draw_scope();
 -- reads request.jwt.claim.sub and request.jwt.claims), role and
 -- session_authorization, set through set_config, through a SET or RESET
 -- statement, or through the function's own SET clause (pg_proc.proconfig).
--- Every function in public, ledger, storage and graphql_public that sets one
+-- Every function in public, ledger, storage, graphql_public and gate that sets one
 -- is on allowlist L with its reason, and none of them is executable by anon
 -- or authenticated. Extension members are not judged. The second census
 -- holds every stockpilot.* flag and every function that raises it (allowlist
@@ -2433,7 +2433,7 @@ create temporary view _sec_inv_identity_setters as
   with setters as (
     select f.oid, f.sig
       from _sec_inv_fn_scope f
-     where f.nspname in ('public', 'ledger', 'storage', 'graphql_public') and not f.ext
+     where f.nspname in ('public', 'ledger', 'storage', 'graphql_public', 'gate') and not f.ext
        and (f.c ~* (select re from _sec_inv_identity_set_re)
             or exists (select 1 from unnest(f.config) k
                         where k ~* (select cfg from _sec_inv_identity_set_re)))),
@@ -2557,12 +2557,12 @@ create temporary view _sec_inv_flag_setters as
     select distinct lower(m[1]) as flag, f.fn
       from _sec_inv_fn_scope f
       cross join lateral regexp_matches(f.c, (select re from _sec_inv_flag_set_re), 'gi') m
-     where f.nspname in ('public', 'ledger', 'storage', 'graphql_public') and not f.ext
+     where f.nspname in ('public', 'ledger', 'storage', 'graphql_public', 'gate') and not f.ext
     union
     select lower((regexp_match(k, (select cfg from _sec_inv_flag_set_re), 'i'))[1]), f.fn
       from _sec_inv_fn_scope f
       cross join lateral unnest(f.config) k
-     where f.nspname in ('public', 'ledger', 'storage', 'graphql_public') and not f.ext
+     where f.nspname in ('public', 'ledger', 'storage', 'graphql_public', 'gate') and not f.ext
        and k ~* (select cfg from _sec_inv_flag_set_re))
   select 'unlisted flag setter: ' || d.flag || ' <- ' || d.fn as x, d.flag, d.fn
     from found d
@@ -2658,14 +2658,14 @@ create temporary view _sec_inv_setting_names as
       select (select count(*) from regexp_matches(f.s, r.any_re, 'gi')) as n_all,
              (select count(*) from regexp_matches(f.s, r.literal_re, 'gi')) as n_lit
         from _sec_inv_setting_call_re r) t
-   where f.nspname in ('public', 'ledger', 'storage', 'graphql_public') and not f.ext
+   where f.nspname in ('public', 'ledger', 'storage', 'graphql_public', 'gate') and not f.ext
      and t.n_all <> t.n_lit;
 
 -- INV-40d. The census. Offenders are named.
 select is(
   (select coalesce(string_agg(v.x, ', ' order by v.x collate "C"), '') from _sec_inv_setting_names v),
   '',
-  'INV-40d: every set_config call in public, ledger, storage and graphql_public names its setting with one quoted literal'
+  'INV-40d: every set_config call in public, ledger, storage, graphql_public and gate names its setting with one quoted literal'
 );
 
 -- INV-41d. VACUITY + MUTATION CONTROL for INV-40d. The census has calls to

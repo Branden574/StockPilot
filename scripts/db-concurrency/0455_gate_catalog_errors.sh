@@ -14,22 +14,25 @@
 #      pg_read_all_data membership).
 #   3. column status renamed (42703): helper true, flag 42703; premise check
 #      catalog.
-#   4. table renamed (42P01): helper true, flag 42P01; premise check catalog.
-#   5. enum label verified renamed (22P02, not one of the four catalog
-#      errors): the helper's call fails; nothing is answered.
-#   6. postgres without BYPASSRLS (no error at all): helper true with no
+#   4. column user_id renamed (42703): helper true, flag 42703; premise check
+#      catalog (it reads both columns the helper filters on).
+#   5. table renamed (42P01): helper true, flag 42P01; premise check catalog.
+#   6. enum label verified renamed (22P02, not one of the four catalog
+#      errors): the helper's call fails; nothing is answered. The premise
+#      check, read in a transaction of its own, answers error.
+#   7. postgres without BYPASSRLS (no error at all): helper true with no
 #      flag; premise check blind. This case raises nothing for the helper to
 #      catch; the premise check and the migration's preflight are what see it.
 #
 # And:
-#   7. Cases 3 and 4 each call the helper twice in their transaction, and the
-#      server log holds exactly one catalog_error line for each (one per
-#      transaction), naming 42703 and 42P01.
-#   8. The migration's own preflight, run as postgres with postgres's
+#   8. Cases 3, 4 and 5 each call the helper twice in their transaction, and
+#      the server log holds exactly one catalog_error line for each (one per
+#      transaction), naming 42703, 42703 and 42P01.
+#   9. The migration's own preflight, run as postgres with postgres's
 #      BYPASSRLS taken away (rolled back), stops with 55000 (hint
 #      gate_helper_preflight) naming the missing BYPASSRLS or SUPERUSER.
-#   9. The stack is as it was: postgres has BYPASSRLS, auth.mfa_factors and
-#      its status column and label are in place, and the helper's body is the
+#  10. The stack is as it was: postgres has BYPASSRLS, auth.mfa_factors and
+#      its user_id and status columns and label are in place, and the helper's body is the
 #      one pinned below.
 #
 # Runs against a LOCAL stack only (CONTAINER, default the dev stack's
@@ -51,7 +54,7 @@ MIG=""
 for f in "$REPO"/supabase/migrations/*_session_factor_helper.sql; do [ -f "$f" ] && MIG="$f" && break; done
 TMP="$(mktemp -d)"
 
-HELPER_MD5='420ee7cb8a1b292336383cb4f3376d1d'
+HELPER_MD5='85bf4ab1b6a710b1bb8a5595bb0ffff7'
 U='9a7e00f0-0000-4000-8000-0000000000f1'
 CLAIMS="{\"sub\": \"$U\", \"role\": \"authenticated\", \"aal\": \"aal1\"}"
 
@@ -133,54 +136,64 @@ fi
 SINCE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 sleep 1
 
-# ═══ 1-6. The six cases ═══════════════════════════════════════════════════
-echo "== 1-6. the six cases, each rolled back"
+# ═══ 1-7. The seven cases ═════════════════════════════════════════════════
+echo "== 1-7. the seven cases, each rolled back"
 run_case c1 "select 1" 1
 check "1: nothing broken (control)" "$(answer c1)" "helper=false|flag=none|premise=ok"
 run_case c2 "revoke select on auth.mfa_factors from postgres" 1
 check "2: SELECT revoked from postgres (pg_read_all_data still reads)" "$(answer c2)" "helper=false|flag=none|premise=ok"
 run_case c3 "alter table auth.mfa_factors rename column status to status_gone" 2
 check "3: column status renamed (42703)" "$(answer c3)" "helper=true|flag=42703|premise=catalog"
-run_case c4 "alter table auth.mfa_factors rename to mfa_factors_gone" 2
-check "4: table renamed (42P01)" "$(answer c4)" "helper=true|flag=42P01|premise=catalog"
-run_case c5 "alter type auth.factor_status rename value 'verified' to 'verified_gone'" 1
-check "5: enum label renamed (22P02): the call fails, nothing answered" "$(answer c5)" "error=invalid input value for enum|helper=none|premise="
-run_case c6 "alter role postgres nobypassrls" 1
-check "6: postgres without BYPASSRLS: true with no flag; the premise check says blind" "$(answer c6)" "helper=true|flag=none|premise=blind"
+run_case c4 "alter table auth.mfa_factors rename column user_id to user_id_gone" 2
+check "4: column user_id renamed (42703): the premise check sees it too" "$(answer c4)" "helper=true|flag=42703|premise=catalog"
+run_case c5 "alter table auth.mfa_factors rename to mfa_factors_gone" 2
+check "5: table renamed (42P01)" "$(answer c5)" "helper=true|flag=42P01|premise=catalog"
+run_case c6 "alter type auth.factor_status rename value 'verified' to 'verified_gone'" 1
+check "6: enum label renamed (22P02): the call fails, nothing answered" "$(answer c6)" "error=invalid input value for enum|helper=none|premise="
+"${SU[@]}" > "$TMP/c6p.out" 2>&1 <<SQL
+begin;
+alter type auth.factor_status rename value 'verified' to 'verified_gone';
+select 'premise=' || gate.factor_read_state();
+rollback;
+SQL
+check "6: the same, the premise check read on its own answers error" "$(grep '^premise=' "$TMP/c6p.out")" "premise=error"
+run_case c7 "alter role postgres nobypassrls" 1
+check "7: postgres without BYPASSRLS: true with no flag; the premise check says blind" "$(answer c7)" "helper=true|flag=none|premise=blind"
 
-# ═══ 7. One log line per transaction ══════════════════════════════════════
-echo "== 7. the server log: one catalog_error line per transaction"
+# ═══ 8. One log line per transaction ══════════════════════════════════════
+echo "== 8. the server log: one catalog_error line per transaction"
 sleep 1
 docker logs --since "$SINCE" "$CONTAINER" > "$TMP/server.log" 2>&1
-check "7: exactly two catalog_error lines (cases 3 and 4 each called the helper twice)" \
-  "$(grep -c 'aal2_gate catalog_error' "$TMP/server.log")" "2"
-check "7: one names 42703 and one 42P01" \
+check "8: exactly three catalog_error lines (cases 3, 4 and 5 each called the helper twice)" \
+  "$(grep -c 'aal2_gate catalog_error' "$TMP/server.log")" "3"
+check "8: they name 42703, 42703 and 42P01" \
   "$(grep -oE 'aal2_gate catalog_error sqlstate=[0-9A-Z]+' "$TMP/server.log" | sort | tr '\n' ' ' | sed 's/ $//')" \
-  "aal2_gate catalog_error sqlstate=42703 aal2_gate catalog_error sqlstate=42P01"
+  "aal2_gate catalog_error sqlstate=42703 aal2_gate catalog_error sqlstate=42703 aal2_gate catalog_error sqlstate=42P01"
 
-# ═══ 8. The preflight sees the missing BYPASSRLS ══════════════════════════
-echo "== 8. the migration's preflight as postgres without BYPASSRLS (rolled back)"
+# ═══ 9. The preflight sees the missing BYPASSRLS ══════════════════════════
+echo "== 9. the migration's preflight as postgres without BYPASSRLS (rolled back)"
 PRE="$(awk '/^do \$gate_pre\$$/ { on = 1 } on { print } /^\$gate_pre\$;$/ { exit }' "$MIG")"
-[ -n "$PRE" ] || bad "8: could not find the preflight block in the file"
+[ -n "$PRE" ] || bad "9: could not find the preflight block in the file"
 { echo "begin;"; echo "alter role postgres nobypassrls;"; echo "set local role postgres;"; echo "$PRE"; echo "select 'DONE';"; echo "rollback;"; } \
   | "${SU[@]}" -v VERBOSITY=verbose > "$TMP/pre.x55" 2>&1
 if grep -q 'ERROR:  55000' "$TMP/pre.x55" && grep -q 'HINT:  gate_helper_preflight' "$TMP/pre.x55" \
    && grep -qF 'the migration role (postgres) has neither BYPASSRLS nor SUPERUSER' "$TMP/pre.x55" && ! grep -q '^DONE$' "$TMP/pre.x55"; then
-  ok "8: 55000 gate_helper_preflight naming 'the migration role (postgres) has neither BYPASSRLS nor SUPERUSER'"
+  ok "9: 55000 gate_helper_preflight naming 'the migration role (postgres) has neither BYPASSRLS nor SUPERUSER'"
 else
-  bad "8: $(grep -E 'ERROR|HINT' "$TMP/pre.x55" | head -3 | tr '\n' ' ')"
+  bad "9: $(grep -E 'ERROR|HINT' "$TMP/pre.x55" | head -3 | tr '\n' ' ')"
 fi
 
-# ═══ 9. As it was ═════════════════════════════════════════════════════════
-echo "== 9. the stack is as it was"
-check "9: postgres has BYPASSRLS; the table, its status column and the label verified are in place; the helper's body is unchanged" \
+# ═══ 10. As it was ════════════════════════════════════════════════════════
+echo "== 10. the stack is as it was"
+check "10: postgres has BYPASSRLS; the table, its user_id and status columns and the label verified are in place; the helper's body is unchanged" \
   "$(q "select (select rolbypassrls from pg_roles where rolname = 'postgres')::text
               || '|' || (to_regclass('auth.mfa_factors') is not null)::text
+              || '|' || exists (select 1 from pg_attribute where attrelid = 'auth.mfa_factors'::regclass and attname = 'user_id')::text
               || '|' || exists (select 1 from pg_attribute where attrelid = 'auth.mfa_factors'::regclass and attname = 'status')::text
               || '|' || exists (select 1 from pg_enum where enumtypid = 'auth.factor_status'::regtype and enumlabel = 'verified')::text
               || '|' || (select md5(prosrc) from pg_proc where oid = to_regprocedure('gate.session_meets_mfa()'))")" \
-  "true|true|true|true|$HELPER_MD5"
-check "9: postgres may select auth.mfa_factors" "$(q "select has_table_privilege('postgres', 'auth.mfa_factors', 'SELECT')")" "t"
+  "true|true|true|true|true|$HELPER_MD5"
+check "10: postgres may select auth.mfa_factors" "$(q "select has_table_privilege('postgres', 'auth.mfa_factors', 'SELECT')")" "t"
 
 echo
 if [ "$FAILS" -eq 0 ]; then echo "ALL CHECKS PASSED"; else echo "$FAILS CHECK(S) FAILED"; fi

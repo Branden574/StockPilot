@@ -7,9 +7,11 @@
 -- changes, and no row of any table changes.
 --
 -- NUMBER. 0455 is provisional; the integrator sets the final number. Nothing
--- reads it: the preflight is the block tagged $gate_pre$, and the pgTAP file
--- finds the statements the CLI recorded by the migration's name
--- (session_factor_helper).
+-- in the database carries it (the comments on the schema and the functions do
+-- not name it), the preflight is the block tagged $gate_pre$, and the pgTAP
+-- file finds the statements the CLI recorded by the migration's name
+-- (session_factor_helper). Only file names and cross-references in comments
+-- carry the number.
 --
 -- ── WHAT IT DOES ───────────────────────────────────────────────────────────
 --   0. A catalog preflight stops with 55000 (hint gate_helper_preflight),
@@ -30,7 +32,10 @@
 --      (totp, webauthn and phone all count; an unverified factor does not);
 --      false otherwise. A token with no aal claim counts as aal1. PL/pgSQL,
 --      SECURITY DEFINER (authenticated cannot read auth.mfa_factors), STABLE,
---      search_path empty, every name schema-qualified, no argument. If the
+--      search_path empty, no argument. Every table, type and function name in
+--      both bodies and in the preflight is schema-qualified; operators and
+--      COALESCE resolve in pg_catalog, and PostgreSQL never looks in the
+--      temporary schema for a function or an operator. If the
 --      factor read fails with one of four catalog errors (undefined_table
 --      42P01, invalid_schema_name 3F000, undefined_column 42703,
 --      insufficient_privilege 42501) it answers true, records the SQLSTATE in
@@ -38,12 +43,14 @@
 --      writes one LOG line per transaction. Any other error is raised.
 --      EXECUTE for authenticated only.
 --   3. gate.factor_read_state() returns text, one of four words and nothing
---      about any account: ok (the owner reads factor rows), blind (the table
+--      about any account. It runs the helper's read (user_id and status) for
+--      an id no account has: ok (the owner reads factor rows), blind (the table
 --      has row security on and the owner has neither BYPASSRLS nor SUPERUSER,
 --      so the helper would see no row), catalog (one of the four catalog
 --      errors above), error (anything else). PL/pgSQL, SECURITY DEFINER,
 --      STABLE, search_path empty. EXECUTE for anon only.
 --   4. Comments on the schema and both functions.
+--   5. reset lock_timeout, so the bound does not carry to a later file.
 --
 -- WHO CHANGES: no one using StockPilot. Nothing calls the two functions.
 --
@@ -78,13 +85,13 @@ set lock_timeout = '900ms';
 -- ═══ 0. Preflight ══════════════════════════════════════════════════════════
 do $gate_pre$
 declare
-  v_bad    text := '';
-  v_tbl    regclass := to_regclass('auth.mfa_factors');
-  v_status oid;
-  v_rls    boolean;
-  v_exempt boolean;
+  v_bad    pg_catalog.text := '';
+  v_tbl    pg_catalog.regclass := pg_catalog.to_regclass('auth.mfa_factors');
+  v_status pg_catalog.oid;
+  v_rls    pg_catalog.bool;
+  v_exempt pg_catalog.bool;
 begin
-  if to_regnamespace('gate') is not null then
+  if pg_catalog.to_regnamespace('gate') is not null then
     v_bad := v_bad || ' schema gate already exists;';
   end if;
 
@@ -110,22 +117,22 @@ begin
       v_bad := v_bad || ' no valid index on auth.mfa_factors leads with user_id;';
     end if;
     if not pg_catalog.has_table_privilege(current_user, v_tbl, 'SELECT') then
-      v_bad := v_bad || format(' the migration role (%s) may not select auth.mfa_factors;', current_user);
+      v_bad := v_bad || pg_catalog.format(' the migration role (%s) may not select auth.mfa_factors;', current_user);
     end if;
     select c.relrowsecurity into v_rls from pg_catalog.pg_class c where c.oid = v_tbl;
     select r.rolbypassrls or r.rolsuper into v_exempt from pg_catalog.pg_roles r where r.rolname = current_user;
     if v_rls and not coalesce(v_exempt, false) then
-      v_bad := v_bad || format(' auth.mfa_factors has row security on and the migration role (%s) has neither BYPASSRLS nor SUPERUSER;',
+      v_bad := v_bad || pg_catalog.format(' auth.mfa_factors has row security on and the migration role (%s) has neither BYPASSRLS nor SUPERUSER;',
                                current_user);
     end if;
   end if;
 
-  if to_regprocedure('auth.uid()') is null
-     or pg_catalog.pg_get_function_result(to_regprocedure('auth.uid()')) <> 'uuid' then
+  if pg_catalog.to_regprocedure('auth.uid()') is null
+     or pg_catalog.pg_get_function_result(pg_catalog.to_regprocedure('auth.uid()')) <> 'uuid' then
     v_bad := v_bad || ' auth.uid() returning uuid missing;';
   end if;
-  if to_regprocedure('auth.jwt()') is null
-     or pg_catalog.pg_get_function_result(to_regprocedure('auth.jwt()')) <> 'jsonb' then
+  if pg_catalog.to_regprocedure('auth.jwt()') is null
+     or pg_catalog.pg_get_function_result(pg_catalog.to_regprocedure('auth.jwt()')) <> 'jsonb' then
     v_bad := v_bad || ' auth.jwt() returning jsonb missing;';
   end if;
 
@@ -150,7 +157,7 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid pg_catalog.uuid := auth.uid();
 begin
   if v_uid is null then return true; end if;                                    -- no account on the request
   if coalesce(auth.jwt() ->> 'aal', 'aal1') = 'aal2' then return true; end if;  -- the session is at aal2
@@ -161,8 +168,8 @@ begin
     when undefined_table or undefined_column or insufficient_privilege or invalid_schema_name then
       -- The factor table cannot be read: answer true, keep the first SQLSTATE
       -- of the transaction and write one LOG line per transaction.
-      if coalesce(current_setting('sp_gate.catalog_error', true), '') = '' then
-        perform set_config('sp_gate.catalog_error', sqlstate, true);
+      if coalesce(pg_catalog.current_setting('sp_gate.catalog_error', true), '') = '' then
+        perform pg_catalog.set_config('sp_gate.catalog_error', sqlstate, true);
         raise log 'aal2_gate catalog_error sqlstate=% (the factor table cannot be read; the helper answers true)', sqlstate;
       end if;
       return true;
@@ -182,8 +189,12 @@ security definer
 set search_path = ''
 as $$
 begin
-  perform 1 from auth.mfa_factors f where f.status = 'verified' limit 1;
-  if (select c.relrowsecurity from pg_catalog.pg_class c where c.oid = 'auth.mfa_factors'::regclass)
+  -- The same predicate as the helper, for an id no account has: both columns
+  -- are read, through the index that leads with user_id.
+  perform 1 from auth.mfa_factors f
+   where f.user_id = '00000000-0000-0000-0000-000000000000'::pg_catalog.uuid and f.status = 'verified'
+   limit 1;
+  if (select c.relrowsecurity from pg_catalog.pg_class c where c.oid = 'auth.mfa_factors'::pg_catalog.regclass)
      and not (select r.rolbypassrls or r.rolsuper from pg_catalog.pg_roles r where r.rolname = current_user) then
     return 'blind';      -- the owner would see no factor row
   end if;
@@ -199,13 +210,16 @@ grant execute on function gate.factor_read_state() to anon;
 
 -- ═══ 4. Comments ═══════════════════════════════════════════════════════════
 comment on schema gate is
-  'Functions about the session''s sign-in level (0455). Not served by the Data API. '
+  'Functions about the session''s sign-in level. Not served by the Data API. '
   'USAGE for anon, authenticated and service_role.';
 comment on function gate.session_meets_mfa() is
   'True when the request carries no account, when the token''s aal claim is aal2, or when the account '
-  'has no verified factor; false otherwise (0455). A catalog error reading auth.mfa_factors answers true, '
+  'has no verified factor; false otherwise. A catalog error reading auth.mfa_factors answers true, '
   'sets sp_gate.catalog_error and logs once per transaction; any other error is raised. '
   'SECURITY DEFINER; EXECUTE for authenticated only.';
 comment on function gate.factor_read_state() is
   'ok, blind, catalog or error: whether this function''s owner (the owner of gate.session_meets_mfa) can read '
-  'factor rows (0455). Nothing about any account. EXECUTE for anon only.';
+  'factor rows. Nothing about any account. EXECUTE for anon only.';
+
+-- The 900 ms bound applies to this file only.
+reset lock_timeout;
