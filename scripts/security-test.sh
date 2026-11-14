@@ -872,6 +872,11 @@ PGTAP_TESTS=(
   # already there writes and changes nothing, and neither a member nor a
   # signed-out caller can insert an audit row.
   supabase/tests/audit_logs_row_id_contract.test.sql
+  # References in their own organization (0423): an item's warehouse and
+  # category, a location's parent and an event's warehouse belong to the
+  # row's organization, for every rank (the rules' *_in_org terms; the item
+  # guard asks a member's insert for the warehouse). NULL passes.
+  supabase/tests/0423_item_location_and_event_references_in_own_organization.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
