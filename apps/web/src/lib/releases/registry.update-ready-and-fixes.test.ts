@@ -104,6 +104,8 @@ const S2_IDS = [
   // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: without them): the Release count, AI Assistant and not found releases are published later, at the top, and reach an owner with every permission and module, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
   // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: without it): the emailed links release is published later, at the top, and reaches every member (it has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
   // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: without them): the phone authenticator code and access check releases are published later, at the top; the authenticator code release reaches every member and the access check release reaches whoever can adjust stock, check out rentals or escalate exceptions, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+  // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: without it): the phone screens by access release is published later, at the top, and reaches every member (two of its three entries have no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+  'phone-screens-by-access-2026-11',
   'phone-authenticator-code-2026-11',
   'phone-access-check-retry-2026-11',
   'emailed-links-name-their-account-2026-11',
@@ -250,9 +252,10 @@ describe('the update-ready-and-fixes release', () => {
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    expect(RELEASES[21]?.id).toBe(ID);
-    expect(RELEASES.slice(18, 21).map((r) => r.id)).toEqual(NEWER_IDS);
-    expect(RELEASES[22]?.id).toBe('export-fixes-2026-10');
+    // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: every pinned position one place higher): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[22]?.id).toBe(ID);
+    expect(RELEASES.slice(19, 22).map((r) => r.id)).toEqual(NEWER_IDS);
+    expect(RELEASES[23]?.id).toBe('export-fixes-2026-10');
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
@@ -284,7 +287,8 @@ describe('the update-ready-and-fixes release', () => {
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    for (const r of RELEASES.slice(22)) {
+    // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: every pinned position one place higher): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(23)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
@@ -293,7 +297,8 @@ describe('the update-ready-and-fixes release', () => {
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    for (const r of RELEASES.slice(18, 21)) {
+    // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: every pinned position one place higher): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(19, 22)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(at);
     }
   });
@@ -437,7 +442,8 @@ describe('the update-ready-and-fixes release', () => {
         // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: .slice(11, 15)): the AI Assistant and not found releases are published later, at the top, and reach an owner (the Release count release reaches staff and viewers only), so these move down by two.
         // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: .slice(13, 17)): the emailed links release is published later, at the top, and reaches every member, so these move down by one.
         // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: .slice(14, 18)): the phone authenticator code release reaches every member and the access check release reaches this owner, so these move down by two.
-        .slice(16, 20),
+        // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: .slice(16, 20)): the phone screens by access release is published later, at the top, and reaches every member, so these move down by one.
+        .slice(17, 21),
     ).toEqual([...NEWER_IDS, ID]);
     // Re-pinned in the review round of docs/whats-new-2026-11-02c (2026-11-02; was: NEWER_IDS before #461, [authenticator, retries, ID] before #471, [ID] after #471): the two releases in LATER_IDS, published later and unseen on each of these phones, reach this member and come first.
     const [webFixes, charters] = LATER_IDS as [string, string];
