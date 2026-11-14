@@ -773,7 +773,10 @@ select is(
   'create_order_request(jsonb,jsonb)|4d65cef6c569a8c2c699fd9d5c8b77d5|false|{search_path=public}|postgres\n'
   'ledger.adjust_stock(uuid,numeric,text,uuid,text,text,text)|e78aa783a243eebbda087eb2cbbb9647|false|{search_path=public}|postgres\n'
   'ledger.apply_level_delta_for(uuid,numeric,text,boolean,uuid)|9c3301fedd607398dccc72c7b4cfe371|true|{search_path=public}|postgres\n'
-  'ledger.post_receipt_v2(uuid,uuid,jsonb,text,text,text)|f044c3a1ea7b125a094a42f736db77c8|false|{"search_path=public, extensions"}|postgres\n'
+  -- Re-pinned by 0464 (was f044c3a1ea7b125a094a42f736db77c8): lines tagged -- 0464 match a
+  -- replay to its receipt and raise stockpilot.idempotency_write around the key insert
+  -- (0464 P4: removing them gives the earlier body exactly); posture unchanged.
+  'ledger.post_receipt_v2(uuid,uuid,jsonb,text,text,text)|ecd99069fa482371ac5bafeb3363b248|false|{"search_path=public, extensions"}|postgres\n'
   'ledger.transfer_stock(uuid,uuid,uuid,numeric,text)|c7863c809eab4fc8e7698b421bf37587|false|{search_path=public}|postgres\n'
   'location_holdings_visible(uuid)|fb5dc7aa7d0acd81e7752f0b163a9002|false|{search_path=public}|postgres\n'
   'next_po_number(uuid)|b6bebc9ae8b1ec3a9ba6d89b73e39d91|false|{search_path=public}|postgres\n'
