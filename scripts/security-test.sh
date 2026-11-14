@@ -871,6 +871,11 @@ PGTAP_TESTS=(
   # (bin_in_org, category_in_org; set_user_category_access asks it too), and
   # an API role cannot change a warehouse's or a location's organization.
   supabase/tests/0462_bin_and_category_references_and_fixed_organization.test.sql
+  # A fixed organization (0463): an API role cannot change the organization
+  # of a customer, a stored API key, a connection, a connection mapping, a
+  # sync log entry, a notification endpoint, a public request link, a queued
+  # event, a supplier or a charter (tg_organization_id_fixed on each table).
+  supabase/tests/0463_organization_fixed_on_connected_records.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
