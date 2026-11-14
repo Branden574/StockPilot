@@ -730,12 +730,15 @@ async function ensurePhotos(admin, scope, plan, state, concurrency) {
 
 /**
  * Orders fire ONE database side effect on INSERT: trg_order_requests_notify
- * writes an in-app notification for every owner/admin/manager whose
- * push_order_request_created is not false, and each notification fans out to
- * that person's push tokens. So orders are seeded only when it is PROVEN that
- * this cannot reach anyone: every notify-eligible member is a Perf Lab account,
- * has that preference off, and has no push token. Otherwise this step is
- * skipped, loudly, and everything else is still seeded.
+ * writes an in-app notification for every member who holds orders:approve
+ * (an override can grant it to any role, or take it from a manager) and may
+ * write in the order's warehouse, whose push_order_request_created is not
+ * false, and each notification fans out to that person's push tokens. So
+ * orders are seeded only when it is PROVEN that this cannot reach anyone:
+ * every accepted member, whatever their role (a superset of anyone the alert
+ * can reach), is a Perf Lab account, has that preference off, and has no push
+ * token. Otherwise this step is skipped, loudly, and everything else is still
+ * seeded.
  */
 async function ordersAreSilent(admin, scope, profiles) {
   const ours = new Set([...profiles.values()].map((p) => p.id));
@@ -743,9 +746,7 @@ async function ordersAreSilent(admin, scope, profiles) {
     scope.select('organization_members', 'user_id, role, accepted_at'),
     'read members',
   );
-  const eligible = members.filter(
-    (m) => m.accepted_at && ['owner', 'admin', 'manager'].includes(m.role),
-  );
+  const eligible = members.filter((m) => m.accepted_at);
   if (eligible.some((m) => !ours.has(m.user_id)))
     return 'a member who is not a Perf Lab account would be notified';
   const ids = eligible.map((m) => m.user_id);

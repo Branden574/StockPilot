@@ -5,7 +5,11 @@ import { fileURLToPath } from 'node:url';
 import type { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeSupabaseStub } from '@/test/supabase-mock';
+import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
+import { reportError } from '@/lib/error-reporter';
+import { makeSupabaseStub, type MockCall, type QueryResult } from '@/test/supabase-mock';
+
+import { ROLE_PERMISSIONS, type Permission, type Role } from '@stockpilot/core';
 
 /**
  * Daily briefing cron — first tests for this route.
@@ -72,9 +76,22 @@ const gatherMock = vi.fn(async (_ctx: CapturedCtx) => ({
     { key: 'low_stock', label: 'items at or under their reorder point', count: 4 },
   ],
 }));
+const summarizeMock = vi.fn(async (_insights: unknown): Promise<string | null> => null);
 vi.mock('@/server/services/insights', () => ({
   gatherInsightsForCtx: (ctx: CapturedCtx) => gatherMock(ctx),
-  summarizeInsights: vi.fn(async () => null),
+  summarizeInsights: (insights: unknown) => summarizeMock(insights),
+}));
+
+// Each recipient's own permission set (overrides applied). The loader has its
+// own suite; here it answers by role unless a test says otherwise.
+const loadPermissionsMock = vi.fn(
+  async (_client: unknown, _orgId: string, _userId: string, role: Role) =>
+    new Set<Permission>(ROLE_PERMISSIONS[role]),
+);
+vi.mock('@/lib/auth/effective-permissions', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth/effective-permissions')>()),
+  loadEffectivePermissions: (client: unknown, orgId: string, userId: string, role: Role) =>
+    loadPermissionsMock(client, orgId, userId, role),
 }));
 
 import { GET } from './route';
@@ -103,6 +120,10 @@ beforeEach(() => {
       { key: 'low_stock', label: 'items at or under their reorder point', count: 4 },
     ],
   });
+  summarizeMock.mockResolvedValue(null);
+  loadPermissionsMock.mockImplementation(
+    async (_client, _orgId, _userId, role) => new Set<Permission>(ROLE_PERMISSIONS[role]),
+  );
 });
 
 describe('GET /api/cron/daily-briefing — cron secret gate', () => {
@@ -143,7 +164,8 @@ describe('GET /api/cron/daily-briefing — system actor predicate', () => {
 
     // The FIRST organization_members chain is buildSystemContext's actor
     // pick (the second is the notification recipient list, which has no
-    // .limit). Assert the whole predicate, arguments included.
+    // .limit, and is pinned under "who is told" below). Assert the whole
+    // predicate, arguments included.
     const chain = stub.chainsAll.get('organization_members.select')?.[0] ?? [];
     const args = stub.chainArgsAll.get('organization_members.select')?.[0] ?? [];
     const at = (method: string) => args[chain.indexOf(method)];
@@ -201,6 +223,319 @@ describe('GET /api/cron/daily-briefing — system actor predicate', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ briefingsSent: 0 });
     expect(createNotificationMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Who is told, and what each recipient reads (docket S36 part a, B72 part 3)
+// ---------------------------------------------------------------------------
+
+/** Two organization_members reads: buildSystemContext's actor pick (it has
+ *  .limit) and the recipient list. `recipients` answers the second. */
+function membersAnswer(recipients: QueryResult) {
+  return (call: MockCall): QueryResult =>
+    call.methods.includes('limit')
+      ? { data: [{ user_id: 'user-owner', role: 'owner' }], error: null }
+      : recipients;
+}
+
+const OWNER_AND_ADMIN: QueryResult = {
+  data: [
+    { user_id: 'user-owner', role: 'owner' },
+    { user_id: 'user-admin', role: 'admin' },
+  ],
+  error: null,
+};
+
+const APPROVALS_AND_LOW_STOCK = {
+  signals: [
+    { key: 'pending_approvals', label: 'orders awaiting approval', count: 3 },
+    { key: 'low_stock', label: 'items at or under their reorder point', count: 4 },
+  ],
+};
+
+/** The org scan (.eq('module_id', 'ai')) finds org-1; its module set is `moduleIds`. */
+function modulesAnswer(moduleIds: string[]) {
+  return (call: MockCall): QueryResult =>
+    call.methods.some((m, i) => m === 'eq' && call.args[i]?.[0] === 'module_id')
+      ? { data: [{ organization_id: 'org-1' }], error: null }
+      : { data: moduleIds.map((module_id) => ({ module_id })), error: null };
+}
+
+const ALL_LINES_MODULES = ['ai', 'orders', 'purchase_orders', 'cycle_counts'];
+
+function briefingStub(recipients: QueryResult = OWNER_AND_ADMIN, moduleIds = ALL_LINES_MODULES) {
+  return makeSupabaseStub({
+    'organization_modules.select': modulesAnswer(moduleIds),
+    'organization_members.select': membersAnswer(recipients),
+    'notifications.select.maybeSingle': { data: null, error: null },
+  });
+}
+
+type NotificationArgs = {
+  userId: string;
+  title: string;
+  body: string;
+  metadata: { signalKeys: string[]; counts: Record<string, number> };
+};
+const sentTo = (userId: string) =>
+  createNotificationMock.mock.calls
+    .map((c) => c[0] as NotificationArgs)
+    .filter((a) => a.userId === userId);
+
+function adminSet(...remove: Permission[]) {
+  return new Set<Permission>(ROLE_PERMISSIONS.admin.filter((k) => !remove.includes(k)));
+}
+
+describe('GET /api/cron/daily-briefing — who is told, and what', () => {
+  it('reads the recipients as accepted owners and admins, never an Act-as seat, with their role', async () => {
+    const stub = briefingStub();
+    adminHolder.client = stub.client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(res.status).toBe(200);
+
+    const chain = stub.chainsAll.get('organization_members.select')?.[1] ?? [];
+    const args = stub.chainArgsAll.get('organization_members.select')?.[1] ?? [];
+    const at = (method: string) => args[chain.indexOf(method)];
+    expect(at('select')).toEqual(['user_id, role']);
+    expect(at('eq')).toEqual(['organization_id', 'org-1']);
+    expect(at('in')).toEqual(['role', ['owner', 'admin']]);
+    expect(at('not')).toEqual(['accepted_at', 'is', null]);
+    expect(at('is')).toEqual(['impersonation_expires_at', null]);
+    expect(chain).not.toContain('limit');
+    // Each recipient's own set, read with the service role.
+    expect(loadPermissionsMock.mock.calls.map((c) => [c[1], c[2], c[3]])).toEqual([
+      ['org-1', 'user-owner', 'owner'],
+      ['org-1', 'user-admin', 'admin'],
+    ]);
+  });
+
+  it('an admin whose orders:approve was revoked gets no approvals line, and a title, lines and metadata of their own', async () => {
+    gatherMock.mockResolvedValue(APPROVALS_AND_LOW_STOCK);
+    loadPermissionsMock.mockImplementation(async (_c, _o, _u, role) =>
+      role === 'admin' ? adminSet('orders:approve') : new Set<Permission>(ROLE_PERMISSIONS.owner),
+    );
+    adminHolder.client = briefingStub().client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ briefingsSent: 2 });
+
+    const [owner] = sentTo('user-owner');
+    expect(owner).toMatchObject({
+      title: 'Morning briefing: 2 things need attention',
+      body: '3 orders awaiting approval · 4 items at or under their reorder point',
+      metadata: {
+        signalKeys: ['pending_approvals', 'low_stock'],
+        counts: { pending_approvals: 3, low_stock: 4 },
+      },
+    });
+    const [admin] = sentTo('user-admin');
+    expect(admin).toMatchObject({
+      title: 'Morning briefing: 1 thing needs attention',
+      body: '4 items at or under their reorder point',
+    });
+    // Exactly their own lines: no approvals key, no approvals count.
+    expect(admin!.metadata).toEqual({ signalKeys: ['low_stock'], counts: { low_stock: 4 } });
+  });
+
+  it('an admin without items:update (the page they would land on) gets nothing', async () => {
+    loadPermissionsMock.mockImplementation(async (_c, _o, _u, role) =>
+      role === 'admin' ? adminSet('items:update') : new Set<Permission>(ROLE_PERMISSIONS.owner),
+    );
+    adminHolder.client = briefingStub().client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ briefingsSent: 1 });
+    expect(sentTo('user-admin')).toEqual([]);
+    expect(sentTo('user-owner')).toHaveLength(1);
+  });
+
+  it('an admin whose permissions could not be read is skipped and reported once; the owner is still told', async () => {
+    loadPermissionsMock.mockImplementation(async (_c, _o, _u, role) => {
+      if (role === 'admin') throw new PermissionsUnavailableError();
+      return new Set<Permission>(ROLE_PERMISSIONS.owner);
+    });
+    adminHolder.client = briefingStub({
+      data: [
+        { user_id: 'user-owner', role: 'owner' },
+        { user_id: 'user-admin', role: 'admin' },
+        { user_id: 'user-admin-2', role: 'admin' },
+      ],
+      error: null,
+    }).client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ briefingsSent: 1 });
+    expect(sentTo('user-owner')).toHaveLength(1);
+    expect(sentTo('user-admin')).toEqual([]);
+    expect(sentTo('user-admin-2')).toEqual([]);
+    const reports = vi
+      .mocked(reportError)
+      .mock.calls.filter(([, c]) => c.tag === 'cron.daily-briefing.overrides');
+    expect(reports).toHaveLength(1);
+    expect(reports[0]![1]).toMatchObject({
+      level: 'warning',
+      organizationId: 'org-1',
+      extra: { skipped: 2 },
+    });
+  });
+
+  it('a failed recipients read is reported and tells no one (never read as "nobody")', async () => {
+    for (const recipients of [
+      {
+        data: null,
+        error: { message: 'canceling statement due to statement timeout', code: '57014' },
+      },
+      { data: null, error: null },
+    ] as QueryResult[]) {
+      vi.clearAllMocks();
+      adminHolder.client = briefingStub(recipients).client;
+
+      const res = await GET(buildRequest('Bearer test-cron-secret'));
+      expect(res.status).toBe(200);
+      expect(createNotificationMock).not.toHaveBeenCalled();
+      const reports = vi
+        .mocked(reportError)
+        .mock.calls.filter(([, c]) => c.tag === 'cron.daily-briefing.recipients');
+      expect(reports).toHaveLength(1);
+      expect(reports[0]![1]).toMatchObject({ organizationId: 'org-1' });
+    }
+  });
+
+  it('the AI narrative is used only for a recipient who sees every line, and written once', async () => {
+    gatherMock.mockResolvedValue(APPROVALS_AND_LOW_STOCK);
+    summarizeMock.mockResolvedValue('Three orders wait for approval and four items are low.');
+    loadPermissionsMock.mockImplementation(async (_c, _o, _u, role) =>
+      role === 'admin' ? adminSet('orders:approve') : new Set<Permission>(ROLE_PERMISSIONS.owner),
+    );
+    adminHolder.client = briefingStub().client;
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+    expect(sentTo('user-owner')[0]!.body).toBe(
+      'Three orders wait for approval and four items are low.',
+    );
+    // The narrative speaks of approvals this admin cannot act on.
+    expect(sentTo('user-admin')[0]!.body).toBe('4 items at or under their reorder point');
+    expect(summarizeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('two readers who see every line share one narrative, written once', async () => {
+    gatherMock.mockResolvedValue(APPROVALS_AND_LOW_STOCK);
+    summarizeMock.mockResolvedValue('Three orders wait for approval and four items are low.');
+    // The owner and an admin with the admin defaults: both read both lines.
+    adminHolder.client = briefingStub().client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ briefingsSent: 2 });
+    for (const userId of ['user-owner', 'user-admin']) {
+      expect(sentTo(userId)[0]!.body).toBe(
+        'Three orders wait for approval and four items are low.',
+      );
+    }
+    expect(summarizeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('an admin with no line they can open is sent nothing, while the owner still is', async () => {
+    gatherMock.mockResolvedValue({
+      signals: [{ key: 'pending_approvals', label: 'orders awaiting approval', count: 3 }],
+    });
+    // The only line is approvals, and this admin cannot approve. They can
+    // still open the briefing (items:update), so only the empty-lines rule
+    // keeps "Morning briefing: 0 things need attention" from them.
+    loadPermissionsMock.mockImplementation(async (_c, _o, _u, role) =>
+      role === 'admin' ? adminSet('orders:approve') : new Set<Permission>(ROLE_PERMISSIONS.owner),
+    );
+    adminHolder.client = briefingStub().client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ briefingsSent: 1 });
+    expect(sentTo('user-admin')).toEqual([]);
+    expect(sentTo('user-owner')).toEqual([
+      expect.objectContaining({ title: 'Morning briefing: 1 thing needs attention' }),
+    ]);
+  });
+
+  it('a line no reader can open (its module is off) does not stop the narrative for the readers who see every other line', async () => {
+    // Open purchase orders are still counted with the module off (the counts
+    // ask no module), and no reader is shown them.
+    gatherMock.mockResolvedValue({
+      signals: [
+        { key: 'pending_approvals', label: 'orders awaiting approval', count: 3 },
+        { key: 'open_pos', label: 'open purchase orders', count: 2 },
+      ],
+    });
+    summarizeMock.mockResolvedValue('Three orders wait for approval.');
+    adminHolder.client = briefingStub(OWNER_AND_ADMIN, ['ai', 'orders', 'cycle_counts']).client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ briefingsSent: 2 });
+    for (const userId of ['user-owner', 'user-admin']) {
+      expect(sentTo(userId)[0]).toMatchObject({
+        title: 'Morning briefing: 1 thing needs attention',
+        body: 'Three orders wait for approval.',
+        metadata: { signalKeys: ['pending_approvals'] },
+      });
+    }
+    // Written once, and only from the lines the organization can open: the
+    // purchase order line never reaches the narrative.
+    expect(summarizeMock).toHaveBeenCalledTimes(1);
+    const told = summarizeMock.mock.calls[0]![0] as { signals: Array<{ key: string }> };
+    expect(told.signals.map((s) => s.key)).toEqual(['pending_approvals']);
+  });
+
+  it('an organization whose module set cannot be read is skipped for the day and reported, never sent a trimmed briefing', async () => {
+    gatherMock.mockResolvedValue(APPROVALS_AND_LOW_STOCK);
+    for (const perOrgModules of [
+      // The read failed: buildSystemContext keeps every copy's shape and
+      // drops the error, so the set arrives empty.
+      {
+        data: null,
+        error: { message: 'canceling statement due to statement timeout', code: '57014' },
+      },
+      // Or ai was turned off between the scan and this read.
+      { data: [{ module_id: 'orders' }], error: null },
+    ] as QueryResult[]) {
+      vi.clearAllMocks();
+      adminHolder.client = makeSupabaseStub({
+        'organization_modules.select': (call: MockCall): QueryResult =>
+          call.methods.some((m, i) => m === 'eq' && call.args[i]?.[0] === 'module_id')
+            ? { data: [{ organization_id: 'org-1' }], error: null }
+            : perOrgModules,
+        'organization_members.select': membersAnswer(OWNER_AND_ADMIN),
+        'notifications.select.maybeSingle': { data: null, error: null },
+      }).client;
+
+      const res = await GET(buildRequest('Bearer test-cron-secret'));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ orgsProcessed: 0, briefingsSent: 0 });
+      expect(createNotificationMock).not.toHaveBeenCalled();
+      expect(gatherMock).not.toHaveBeenCalled();
+      const reports = vi
+        .mocked(reportError)
+        .mock.calls.filter(([, c]) => c.tag === 'cron.daily-briefing.modules');
+      expect(reports).toHaveLength(1);
+      expect(reports[0]![1]).toMatchObject({ organizationId: 'org-1' });
+    }
+  });
+
+  it('a purchase order line is dropped when the Purchase orders module is off', async () => {
+    gatherMock.mockResolvedValue({
+      signals: [
+        { key: 'overdue_pos', label: 'overdue inbound POs', count: 2 },
+        { key: 'low_stock', label: 'items at or under their reorder point', count: 4 },
+      ],
+    });
+    // Purchase orders is off for this organization.
+    adminHolder.client = briefingStub(OWNER_AND_ADMIN, ['ai', 'orders', 'cycle_counts']).client;
+
+    await GET(buildRequest('Bearer test-cron-secret'));
+    for (const userId of ['user-owner', 'user-admin']) {
+      expect(sentTo(userId)[0]).toMatchObject({
+        title: 'Morning briefing: 1 thing needs attention',
+        metadata: { signalKeys: ['low_stock'] },
+      });
+    }
   });
 });
 

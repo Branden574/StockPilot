@@ -215,7 +215,9 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    expect(RELEASES.slice(12, 17).map((r) => r.id)).toEqual([...NEW_IDS, WEB_FIXES_ID]);
+    // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: every pinned position one place higher): the order request alerts release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: every pinned position one place higher): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES.slice(14, 19).map((r) => r.id)).toEqual([...NEW_IDS, WEB_FIXES_ID]);
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: EXPORT_ID): the S2 release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: S2_ID): the count sheet release is published after it, at the top, the newest published release.
     // Re-pinned by feat/order-add-all (2026-11-10; was: COUNT_SHEET_ID): the Add all release is published after it, at the top, the newest published release.
@@ -225,7 +227,9 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
       // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: the phone appearance and returns release): the Release count release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: the Release count release): the emailed links release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: the emailed links release): the phone authenticator code release is published after it, at the top, the newest published release.
-      'phone-authenticator-code-2026-11',
+      // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: the phone authenticator code release): the order request alerts release is published after it, at the top, the newest published release.
+      // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: the order request alerts release): the phone screens by access release is published after it, at the top, the newest published release.
+      'phone-screens-by-access-2026-11',
     );
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
       'liquid-glass-2026-11',
@@ -257,7 +261,9 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
       // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: i + 7): the Release count, AI Assistant and not found releases are published at the top, so every position below them moves down by three.
       // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: i + 10): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
       // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: i + 11): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-      for (const r of RELEASES.slice(i + 13)) {
+      // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: i + 13): the order request alerts release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+      // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: i + 14): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+      for (const r of RELEASES.slice(i + 15)) {
         expect(at(NEW_IDS[i]!), `${NEW_IDS[i]} after ${r.id}`).toBeGreaterThan(
           Date.parse(r.publishedAt),
         );
@@ -296,6 +302,10 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: without them): the Release count, AI Assistant and not found releases are published later, at the top, and reach an owner with every permission and module, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: without it): the emailed links release is published later, at the top, and reaches every member (it has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: without them): the phone authenticator code and access check releases are published later, at the top; the authenticator code release reaches every member and the access check release reaches whoever can adjust stock, check out rentals or escalate exceptions, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: without it): the order request alerts release is published later, at the top, and reaches owners, admins and managers where Orders is on and, where the AI module is on too, whoever can open Today's briefing, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: without it): the phone screens by access release is published later, at the top, and reaches every member (two of its three entries have no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          read('phone-screens-by-access-2026-11'),
+          read('order-request-alerts-follow-approve-2026-11'),
           read('phone-authenticator-code-2026-11'),
           read('phone-access-check-retry-2026-11'),
           read('emailed-links-name-their-account-2026-11'),
@@ -320,6 +330,10 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: without them): the Release count, AI Assistant and not found releases are published later, at the top, and reach an owner with every permission and module, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: without it): the emailed links release is published later, at the top, and reaches every member (it has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: without them): the phone authenticator code and access check releases are published later, at the top; the authenticator code release reaches every member and the access check release reaches whoever can adjust stock, check out rentals or escalate exceptions, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: without it): the order request alerts release is published later, at the top, and reaches owners, admins and managers where Orders is on and, where the AI module is on too, whoever can open Today's briefing, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: without it): the phone screens by access release is published later, at the top, and reaches every member (two of its three entries have no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          read('phone-screens-by-access-2026-11'),
+          read('order-request-alerts-follow-approve-2026-11'),
           read('phone-authenticator-code-2026-11'),
           read('phone-access-check-retry-2026-11'),
           read('emailed-links-name-their-account-2026-11'),
@@ -345,6 +359,10 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: without them): the Release count, AI Assistant and not found releases are published later, at the top, and reach an owner with every permission and module, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: without it): the emailed links release is published later, at the top, and reaches every member (it has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: without them): the phone authenticator code and access check releases are published later, at the top; the authenticator code release reaches every member and the access check release reaches whoever can adjust stock, check out rentals or escalate exceptions, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: without it): the order request alerts release is published later, at the top, and reaches owners, admins and managers where Orders is on and, where the AI module is on too, whoever can open Today's briefing, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: without it): the phone screens by access release is published later, at the top, and reaches every member (two of its three entries have no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          read('phone-screens-by-access-2026-11'),
+          read('order-request-alerts-follow-approve-2026-11'),
           read('phone-authenticator-code-2026-11'),
           read('phone-access-check-retry-2026-11'),
           read('emailed-links-name-their-account-2026-11'),
@@ -371,6 +389,10 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: without them): the Release count, AI Assistant and not found releases are published later, at the top, and reach an owner with every permission and module, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: without it): the emailed links release is published later, at the top, and reaches every member (it has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: without them): the phone authenticator code and access check releases are published later, at the top; the authenticator code release reaches every member and the access check release reaches whoever can adjust stock, check out rentals or escalate exceptions, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: without it): the order request alerts release is published later, at the top, and reaches owners, admins and managers where Orders is on and, where the AI module is on too, whoever can open Today's briefing, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: without it): the phone screens by access release is published later, at the top, and reaches every member (two of its three entries have no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          read('phone-screens-by-access-2026-11'),
+          read('order-request-alerts-follow-approve-2026-11'),
           read('phone-authenticator-code-2026-11'),
           read('phone-access-check-retry-2026-11'),
           read('emailed-links-name-their-account-2026-11'),
@@ -398,6 +420,10 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: without them): the Release count, AI Assistant and not found releases are published later, at the top, and reach an owner with every permission and module, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: without it): the emailed links release is published later, at the top, and reaches every member (it has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: without them): the phone authenticator code and access check releases are published later, at the top; the authenticator code release reaches every member and the access check release reaches whoever can adjust stock, check out rentals or escalate exceptions, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: without it): the order request alerts release is published later, at the top, and reaches owners, admins and managers where Orders is on and, where the AI module is on too, whoever can open Today's briefing, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: without it): the phone screens by access release is published later, at the top, and reaches every member (two of its three entries have no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          'phone-screens-by-access-2026-11',
+          'order-request-alerts-follow-approve-2026-11',
           'phone-authenticator-code-2026-11',
           'phone-access-check-retry-2026-11',
           'emailed-links-name-their-account-2026-11',
@@ -418,7 +444,8 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: the phone appearance and returns release with nothing read, and the Export items release once it is read): the emailed links release reaches every member, so a member is told it first, the phone appearance and returns release once it is read, and the Export items release once both are read.
     expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(
       // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: the emailed links release): the phone authenticator code release is published after it, at the top, the newest published release.
-      'phone-authenticator-code-2026-11',
+      // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: the phone authenticator code release): the phone screens by access release is published after it, at the top, the newest published release.
+      'phone-screens-by-access-2026-11',
     );
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: the emailed links release read alone): the phone authenticator code release reaches every member and is read first too (the access check release does not reach this member).
     expect(
@@ -426,6 +453,8 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
         RELEASES,
         member,
         [
+          // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: without it): the phone screens by access release is published later, at the top, and reaches every member (two of its three entries have no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          read('phone-screens-by-access-2026-11'),
           read('phone-authenticator-code-2026-11'),
           read('emailed-links-name-their-account-2026-11'),
         ],
@@ -437,6 +466,8 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
         RELEASES,
         member,
         [
+          // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: without it): the phone screens by access release is published later, at the top, and reaches every member (two of its three entries have no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          read('phone-screens-by-access-2026-11'),
           read('phone-authenticator-code-2026-11'),
           read('emailed-links-name-their-account-2026-11'),
           read(PHONE_APPEARANCE_ID),

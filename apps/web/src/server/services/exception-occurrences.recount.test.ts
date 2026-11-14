@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
 
 import { makeServiceContext, makeSupabaseStub, servedLikePostgrest, type MockCall } from '@/test/supabase-mock';
+import { RECOUNT_FACTS_NOT_YET } from '@/test/recount-facts';
 
 /**
  * The recount state and outcome the Exception Center's list, detail and a
@@ -93,6 +94,7 @@ function svcFor(
   } = {},
 ) {
   const stub = makeSupabaseStub({
+    ...RECOUNT_FACTS_NOT_YET,
     'exception_sync_state.select.maybeSingle': { data: SYNC_ROW, error: null },
     ...results,
   });

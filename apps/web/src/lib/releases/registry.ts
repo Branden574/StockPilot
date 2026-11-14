@@ -109,7 +109,12 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: '2026-11-13T17:39:00Z'): the
     // phone authenticator code and access check releases below share one minute, so the placeholder is that
     // same minute. Set at merge (2026-11-14): the same value as those two releases' publishedAt.
-    publishedAt: '2026-11-14T01:24:00Z',
+    // Moved again by docs/whats-new-order-request-alerts (2026-11-14; was: '2026-11-14T01:24:00Z'): the order
+    // request alerts release below is dated 2026-11-14T17:58:00Z, so the placeholder is that same minute.
+    // Moved again by docs/whats-new-phone-screens-by-access (2026-11-14; was: '2026-11-14T17:58:00Z'): the
+    // phone screens by access release below is dated 2026-11-14T18:44:00Z, so the placeholder is that same
+    // minute. Set at merge (2026-11-14): the same value as that release's publishedAt.
+    publishedAt: '2026-11-14T18:44:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -194,6 +199,177 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'phone-screens-by-access-2026-11',
+    revision: 1,
+    // S75 and B124: #527 (squash 60f1bfe48), phone only. The phone has it
+    // from the update published 2026-11-14 05:39:05Z (group 8c30f488,
+    // runtime 1.4.0). SET AT MERGE: publishedAt is the whole minute
+    // at or after the first iOS launch of that update (the integrator's
+    // record, not readable from the code); the Liquid Glass placeholder above
+    // takes the same minute.
+    // One release, as #527 is one phone change. From #527's four suggested
+    // lines, checked against the phone code at 60f1bfe48 (paths under
+    // apps/mobile):
+    // - Line 1 (access): the + on Items and Books and the Scan tab's add
+    //   cards follow items:create (app/(drawer)/(tabs)/inventory.tsx:280,
+    //   books.tsx:255, scan.tsx:232); Cycle counts and Bundles ask the side
+    //   menu's own rule (src/lib/screen-access.ts:88-97, drawer-nav.ts
+    //   drawerOffers), as the Home Bundles card does. Reassign is left out: it
+    //   differs only before the phone's first sync of a workspace
+    //   (src/lib/count-reassign-offer.test.ts:14-20).
+    // - Line 2 (workspace switch): Users, Team, Accounts, Bundles, Cycle
+    //   counts and six admin lists draw only the workspace's own rows; the
+    //   switch re-reads the saved access before the new workspace is shown
+    //   (src/lib/use-workspace.ts:577-596, rereadSavedAccess). "Every list,
+    //   menu and role ... straight away, even offline" is not said: the menu keeps the module
+    //   set it shows until the pull saves the new one (use-workspace.ts:584-
+    //   586). The not-synced sentence is screen-access.ts:143-144.
+    // - Line 3 (count not saved): the alert existed for other refusals; the
+    //   new case is a line no longer on the phone (count-save-refusal.ts:54-
+    //   58); the count screen and the scanner say it and load the count again or close
+    //   (app/cycle-count/[id].tsx:450-456, :778-802; scan/[id].tsx:268-317).
+    //   Before #527 the line was marked saved whatever updateLocalLine
+    //   answered.
+    // - Line 4 (bundles come back after access returns) is left out: no
+    //   member notices it today; src/lib/bundle-refill.ts is groundwork only.
+    // Who is told: the first two entries every member (no audience); the
+    // count entry whoever counts (stock:adjust, module cycle_counts).
+    // Platform: the mobile app. No links.
+    status: 'published',
+    title: "The phone follows your access and keeps each workspace's own lists",
+    summary:
+      "The mobile app's add buttons, Cycle counts and Bundles now follow your access, and after a workspace switch its lists show only the new workspace. A screen still waiting for a workspace now says so, and a cycle count now also says Count not saved when a line is no longer in the count.",
+    // Set at merge: the first iOS launch of the update showed on 2026-11-14, between the reads of 18:34:04Z and 18:44:07Z.
+    publishedAt: '2026-11-14T18:44:00Z',
+    entries: [
+      {
+        id: 'phone-add-item-and-screens-by-access',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: "The phone's add buttons, Cycle counts and Bundles follow your access",
+        whatChanged:
+          'The buttons that add an item, on Items, Books and Scan, now show only if you can add items in the workspace on screen. Cycle counts and Bundles, with the Bundles card on Home, now follow the side menu.',
+        whyItMatters:
+          'What the phone offers now matches the side menu and what you can save, so a button you see is one you can use.',
+        howItAffectsYou:
+          'If you can add items and use cycle counts and bundles, nothing changes for you once the phone has synced.',
+        whatToDo: 'No action needed. If you need one of these, ask an admin in your organization.',
+      },
+      {
+        id: 'phone-workspace-switch-own-lists',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'After a workspace switch, the phone shows only the new workspace',
+        whatChanged:
+          "After you switch workspaces, Users, Team, Accounts, Bundles, Cycle counts and the admin lists on the phone show only the new workspace's records, and the phone uses your role in the new workspace as soon as it shows it, and your permissions there once it has synced. If a workspace has not finished loading or syncing, a screen with nothing to show says so and lets you try again.",
+        whyItMatters:
+          'Each workspace keeps its own records and your access in it, and a screen that is still waiting tells you so.',
+        howItAffectsYou:
+          'Right after a switch or a sign-in, before the phone has synced, a screen may say the phone has not finished syncing this workspace yet. Check your connection: the screen loads once the phone has synced, or when you try again.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'phone-count-not-saved-line-gone',
+        category: 'fixed',
+        area: 'Cycle counts',
+        title:
+          'A cycle count now also says Count not saved when a line is no longer in the count on the phone',
+        whatChanged:
+          'If a number you type or scan on a cycle count cannot be saved because its line is no longer in the count on the phone, the phone now says Count not saved. When you tap OK, the phone loads the count again, or closes it if it is no longer open to you.',
+        whyItMatters: 'Before, the number stayed on the line as if it had been saved.',
+        howItAffectsYou:
+          'This is rare: it happens when the count changes while you are counting, for example when someone posts or cancels it.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['stock:adjust'], modules: ['cycle_counts'] },
+      },
+    ],
+  },
+  {
+    id: 'order-request-alerts-follow-approve-2026-11',
+    revision: 1,
+    // Docket S36, part a (#440, squash a1cd8247a, deployed 2026-11-14
+    // 17:24:39Z) with migration 0422 (live 2026-11-14 17:57:33Z). Both halves
+    // are on the server, so there is no phone update: publishedAt is the
+    // whole minute after the later of the two.
+    // The words are the plan's draft (the What's New section of #440's
+    // description). Two of its three entries are published:
+    // - order-request-alert-removed-approvers and briefing-follows-permissions
+    //   as drafted, word for word;
+    // - the plan's first entry (order-request-alert-approvers, a staff member
+    //   given the permission) is left out by the integrator's decision
+    //   (items/S36.json), so the summary drops its clause about a staff
+    //   member given the permission and promises nothing that entry alone
+    //   covered;
+    // - the summary gains a last sentence about Today's briefing, so a reader
+    //   who sees only the briefing entry (staff who can open Today's
+    //   briefing) is covered by the summary too. The rest of the summary is
+    //   the draft's.
+    // Claims checked against the code at a1cd8247a:
+    // - The alert: supabase/migrations/0422_notice_audience_follows_permission.sql
+    //   section 3: the New order request notice is written for whoever holds
+    //   orders:approve (overrides applied) and can write in the request's
+    //   warehouse. Admins and managers hold it by default (core
+    //   ROLE_PERMISSIONS) and work in every warehouse (lib/auth/warehouse.ts
+    //   roleSeesEveryWarehouse), so one who keeps it is told as before. The
+    //   notice is written on the server and shows on the web and in the
+    //   mobile app as it did, so no app update is needed.
+    // - The briefing: server/services/insights-access.ts, one rule per line
+    //   (approvals: Orders on, orders:approve, never a viewer; purchase
+    //   orders: the module and purchase_orders:read; low stock: items:read;
+    //   counts: the module and the count pages' gate); the approvals count is
+    //   approvablePendingCount() (server/services/order-requests.ts), which
+    //   counts a staff approver's own warehouses; the morning notification
+    //   (app/api/cron/daily-briefing/route.ts) is built from the same lines.
+    //   The line reads "orders awaiting approval" (server/services/
+    //   insights.ts) and the page is titled Today's briefing
+    //   (dashboard/insights/page.tsx).
+    // Who is told: organizations with Orders on. The alert entry goes to
+    // admins and managers, the people whose own alert can stop, and to
+    // owners, who can always change who holds the permission (the plan's
+    // audience was admins and managers; owners were added at review). Its
+    // words are in the third person and hold for an owner. The briefing entry
+    // links to /dashboard/insights, which checks the AI module and
+    // items:update, so it goes to whoever can open that page.
+    status: 'published',
+    title: 'New order request alerts go to the people who can approve the order',
+    summary:
+      'The New order request alert now goes to everyone with the "Approve / fulfill orders" permission who can approve orders in the request\'s warehouse, and stops for anyone whose permission was removed. It arrives on the web and in the mobile app, with no app update needed. Today\'s briefing also shows only the lines you can open.',
+    // Migration 0422 went live at 17:57:33Z, after the web deploy.
+    publishedAt: '2026-11-14T17:58:00Z',
+    audience: { modules: ['orders'] },
+    entries: [
+      {
+        id: 'order-request-alert-removed-approvers',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Removing "Approve / fulfill orders" now also stops the New order request alert',
+        whatChanged:
+          'An admin or manager whose "Approve / fulfill orders" permission was removed no longer gets the New order request alert.',
+        whyItMatters:
+          'They still got the alert for every new request, although they could no longer approve one.',
+        howItAffectsYou:
+          'Nothing changes for an admin or manager who keeps the permission, which they have by default: they are alerted about requests in every warehouse, as before.',
+        whatToDo: 'No action needed.',
+        audience: { roles: ['owner', 'admin', 'manager'], modules: ['orders'] },
+      },
+      {
+        id: 'briefing-follows-permissions',
+        category: 'fixed',
+        area: 'Briefing',
+        title: "Today's briefing shows only what you can open",
+        whatChanged:
+          'Today\'s briefing and the morning briefing notification now leave out any line about something you cannot open. "Orders awaiting approval" shows only to people with the "Approve / fulfill orders" permission, and for a staff member it counts only the requests in the warehouses they are assigned to. Lines about purchase orders, cycle counts and items show only to people who can open those pages, and a purchase order or cycle count line only while that module is on.',
+        whyItMatters:
+          "Everyone who could open Today's briefing saw the organization's count of orders awaiting approval, and its link took anyone who cannot approve orders to their own requests instead.",
+        howItAffectsYou:
+          'Owners, and admins whose permissions were not changed, still see every line for the modules that are on.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/insights', label: 'Open Briefing' },
+        audience: { anyPermission: ['items:update'], modules: ['ai'] },
       },
     ],
   },
