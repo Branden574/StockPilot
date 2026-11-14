@@ -14,7 +14,17 @@ const h = vi.hoisted(() => ({
   names: {} as Record<string, string>,
   /** The exact object withContext() handed out. */
   ctx: null as null | Record<string, unknown>,
+  /** The account requireSession() answers with. */
+  session: null as null | Record<string, unknown>,
 }));
+
+const INVITER_SESSION = {
+  userId: 'inviter-user',
+  email: 'inviter@example.com',
+  fullName: 'Casey Inviter',
+  avatarUrl: null,
+  defaultOrganizationId: ORG_DEFAULT,
+};
 
 function fakeClient() {
   return {
@@ -35,13 +45,7 @@ vi.mock('@/lib/env', () => ({ env: { NEXT_PUBLIC_APP_URL: 'https://app.example.c
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn(async () => fakeClient()) }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn(() => fakeClient()) }));
 vi.mock('@/lib/auth/session', () => ({
-  requireSession: vi.fn(async () => ({
-    userId: 'inviter-user',
-    email: 'inviter@example.com',
-    fullName: 'Casey Inviter',
-    avatarUrl: null,
-    defaultOrganizationId: ORG_DEFAULT,
-  })),
+  requireSession: vi.fn(async () => h.session),
 }));
 vi.mock('@/server/services/context', () => {
   class ServiceError extends Error {
@@ -91,6 +95,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   seen.length = 0;
   h.ctx = null;
+  h.session = { ...INVITER_SESSION };
   h.names = { [ORG_CONTEXT]: 'Harbor Supply', [ORG_DEFAULT]: 'Ridge Depot' };
   vi.spyOn(TeamService.prototype, 'invite').mockImplementation(async function (
     this: unknown,
@@ -111,5 +116,36 @@ describe('inviteMemberAction runs the real TeamService on the resolved context',
     expect(seen[0]!.ctx).toBe(h.ctx);
     expect((seen[0]!.ctx as { organizationId: string }).organizationId).toBe(ORG_CONTEXT);
     expect(seen[0]!.params).toMatchObject({ organizationName: 'Harbor Supply' });
+  });
+});
+
+describe("inviteMemberAction names the inviter from the context's own account", () => {
+  it('the invitation names the account the context resolved', async () => {
+    const res = await inviteMemberAction({ email: 'new.person@example.com', role: 'staff' });
+    expect(res.ok).toBe(true);
+    expect(seen[0]!.params).toMatchObject({
+      inviterName: 'Casey Inviter',
+      inviterEmail: 'inviter@example.com',
+    });
+  });
+
+  it('a session that answers with another account is refused, and no invitation is made', async () => {
+    h.session = {
+      userId: 'someone-else',
+      email: 'someone.else@example.com',
+      fullName: 'Jordan Other',
+      avatarUrl: null,
+      defaultOrganizationId: ORG_DEFAULT,
+    };
+    const res = await inviteMemberAction({ email: 'new.person@example.com', role: 'staff' });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'unauthenticated',
+        message: 'Sign in again, then try again.',
+        details: { reason: 'session_changed' },
+      },
+    });
+    expect(seen).toHaveLength(0);
   });
 });

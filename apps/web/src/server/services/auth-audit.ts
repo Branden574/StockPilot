@@ -127,8 +127,14 @@ async function readOrReport<T>(
  * otherwise none. A row with no organization is still written
  * (audit_logs.organization_id is nullable) and is in no organization's log.
  *
+ * Only the person's own memberships count: a platform admin's temporary seat
+ * in an organization (impersonation_expires_at set, whether its time has
+ * passed or not) is not one, the same rule as lib/auth/login-device.ts. The
+ * acting-as flow points the default organization at that seat's organization,
+ * so there the default is skipped and the oldest own membership answers.
+ *
  * A read that fails or throws is reported (audit.organization_unresolved) and
- * the next read runs. Both membership reads ask only for this person's
+ * the next read runs. Both membership reads ask only for this person's own
  * accepted rows, so whatever they answer is one of the person's memberships.
  * The answer is no organization only when every read failed or found nothing.
  * Never throws. Uses the admin client because the user may be on a
@@ -160,6 +166,7 @@ export async function resolveDefaultOrgAndRole(
           .eq('user_id', userId)
           .eq('organization_id', defaultOrgId)
           .not('accepted_at', 'is', null)
+          .is('impersonation_expires_at', null)
           .maybeSingle(),
     );
     if (member) return { organizationId: member.organization_id, role: member.role };
@@ -173,6 +180,7 @@ export async function resolveDefaultOrgAndRole(
         .select('organization_id, role')
         .eq('user_id', userId)
         .not('accepted_at', 'is', null)
+        .is('impersonation_expires_at', null)
         // Oldest first: the same tie-break as every other membership resolver (0355).
         .order('created_at', { ascending: true })
         .order('organization_id', { ascending: true })
