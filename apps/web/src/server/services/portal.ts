@@ -201,12 +201,16 @@ const PORTAL_GATE_ORG_COLUMNS =
  * two requests however many orgs: the per-org reads it always made for one
  * org, and one batched read of each table for several. A failed read gives no
  * row, which the gate treats as the portal off, as before.
+ *
+ * At most PORTAL_MAPPINGS_TRIED_MAX distinct orgs are read (the caller already
+ * passes no more): an org past that bound gets no gate, which is the portal
+ * off. So each batched `.in()` list holds at most that many ids.
  */
 async function readPortalGates(
   admin: ReturnType<typeof createAdminClient>,
   orgIds: readonly string[],
 ): Promise<Map<string, PortalGate>> {
-  const ids = [...new Set(orgIds)];
+  const ids = [...new Set(orgIds)].slice(0, PORTAL_MAPPINGS_TRIED_MAX);
   const gates = new Map<string, PortalGate>();
   if (ids.length === 0) return gates;
   if (ids.length === 1) {
@@ -228,9 +232,11 @@ async function readPortalGates(
     admin
       .from('organization_modules')
       .select('organization_id, module_id, settings')
+      // in-list-bound: ids is sliced to PORTAL_MAPPINGS_TRIED_MAX (10) above.
       .in('organization_id', ids)
       .eq('module_id', 'b2b_portal')
       .eq('enabled', true),
+    // in-list-bound: ids is sliced to PORTAL_MAPPINGS_TRIED_MAX (10) above.
     admin.from('organizations').select(`id, ${PORTAL_GATE_ORG_COLUMNS}`).in('id', ids),
   ]);
   const modules = new Map(

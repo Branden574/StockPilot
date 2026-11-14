@@ -105,6 +105,8 @@ function makeAdmin(db: Record<string, Row[]>, failTables: readonly string[] = []
   const updates: Array<{ table: string; patch: Row; rows: Row[] }> = [];
   /** One entry per request the service sends, by table. */
   const requests: string[] = [];
+  /** One entry per `.in()` filter the service builds: table, column, values. */
+  const inLists: Array<{ table: string; column: string; values: unknown[] }> = [];
 
   function chain(table: string) {
     const preds: Array<(r: Row) => boolean> = [];
@@ -121,6 +123,7 @@ function makeAdmin(db: Record<string, Row[]>, failTables: readonly string[] = []
         return builder;
       },
       in: (col: string, vals: unknown[]) => {
+        inLists.push({ table, column: col, values: [...vals] });
         preds.push((r) => vals.includes(r[col]));
         return builder;
       },
@@ -148,7 +151,7 @@ function makeAdmin(db: Record<string, Row[]>, failTables: readonly string[] = []
     return builder;
   }
 
-  return { client: { from: (table: string) => chain(table) }, updates, requests };
+  return { client: { from: (table: string) => chain(table) }, updates, requests, inLists };
 }
 
 let admin: ReturnType<typeof makeAdmin>;
@@ -483,6 +486,26 @@ describe('resolvePortalContext: the reads are bounded', () => {
   it('the earliest acceptance is always considered, however many mappings there are', async () => {
     manyAccepted(40, (i) => i === 1);
     expect((await resolvePortalContext())?.customerId).toBe(cust(1));
+  });
+
+  it(`sends no .in() list longer than ${PORTAL_MAPPINGS_TRIED_MAX} values, however many mappings`, async () => {
+    for (const n of [2, PORTAL_MAPPINGS_TRIED_MAX, PORTAL_MAPPINGS_TRIED_MAX + 1, 40]) {
+      manyAccepted(n, () => false);
+      expect(await resolvePortalContext()).toBeNull();
+      const gateLists = admin.inLists.filter(
+        (l) => l.table === 'organization_modules' || l.table === 'organizations',
+      );
+      expect(gateLists.map((l) => l.table).sort()).toEqual([
+        'organization_modules',
+        'organizations',
+      ]);
+      for (const l of admin.inLists) {
+        expect(l.values.length).toBeLessThanOrEqual(PORTAL_MAPPINGS_TRIED_MAX);
+      }
+      for (const l of gateLists) {
+        expect(l.values.length).toBe(Math.min(n, PORTAL_MAPPINGS_TRIED_MAX));
+      }
+    }
   });
 
   it(`considers only the first ${PORTAL_MAPPINGS_TRIED_MAX} accepted mappings in the order`, async () => {
