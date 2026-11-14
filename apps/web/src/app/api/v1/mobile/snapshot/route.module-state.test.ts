@@ -69,6 +69,11 @@ describe('GET /api/v1/mobile/snapshot with the module state unreadable', () => {
     ['the rows read failed', { moduleRowsFail: true }],
     ['the comp flag read failed', { organizationFail: true, moduleRows: ['orders'] }],
     ['the organization row read back hidden', { organizationHidden: true, moduleRows: ['orders'] }],
+    ['the rows read answered no list', { moduleRowsNoList: true }],
+    [
+      'the organization row answered without its comp flag',
+      { organizationNoComp: true, moduleRows: ['orders'] },
+    ],
   ])(
     '%s: a 500 with the fixed sentence, its own tag at warning level, and no read after it',
     async (_what, failure) => {
@@ -179,6 +184,11 @@ describe('GET /api/v1/mobile/snapshot: module-gated lists with the module state 
     ['the rows read failed', { moduleRowsFail: true }],
     ['the comp flag read failed', { organizationFail: true, moduleRows: ['orders'] }],
     ['the organization row read back hidden', { organizationHidden: true, moduleRows: ['orders'] }],
+    ['the rows read answered no list', { moduleRowsNoList: true }],
+    [
+      'the organization row answered without its comp flag',
+      { organizationNoComp: true, moduleRows: ['orders'] },
+    ],
   ])('%s: the refusal, with no list in the body and no list read sent', async (_what, failure) => {
     Object.assign(world, failure);
     const res = await pull();

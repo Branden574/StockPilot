@@ -401,25 +401,45 @@ async function resolveApiEnabledModules(
   // other module's state is unknown, and asking about it, or listing the set,
   // throws ModulesUnavailableError (lib/modules/module-state.ts), which the
   // phone retries. Codes only: the message can quote request details.
+  //
+  // Only a list of rows that each name a module is an answer. postgrest-js
+  // resolves an empty body with no error and data null (a 2xx as it came, a
+  // 404 rewritten to 204), the same shape effective-permissions.ts refuses
+  // for the overrides, so that counts as a failed read too.
+  const rowsUnread =
+    Boolean(mods.error) ||
+    !Array.isArray(mods.data) ||
+    (mods.data as unknown[]).some(
+      (r) =>
+        !r || typeof r !== 'object' || typeof (r as { module_id?: unknown }).module_id !== 'string',
+    );
   if (mods.error) {
     console.error('[resolveApiEnabledModules] rows unreadable:', mods.error.code || 'unknown');
+  } else if (rowsUnread) {
+    console.error('[resolveApiEnabledModules] rows unreadable: not a list of module rows');
   }
+  // The comp flag is a NOT NULL boolean, so only an organization row that
+  // carries a boolean flag is an answer. No row without an error is row
+  // level security hiding it from a member, the case the one-round-trip read
+  // hands here on purpose (resolveApiContextFromBundle: `if
+  // (!held.organization) return null`); the MFA policy read above holds a
+  // hidden row to the strictest policy. Either way the flag was never seen,
+  // so it counts as a failed read and grants nothing.
+  const orgRow = org.data as { all_modules_comp?: unknown } | null;
+  const compUnread =
+    Boolean(org.error) ||
+    !orgRow ||
+    typeof orgRow !== 'object' ||
+    typeof orgRow.all_modules_comp !== 'boolean';
   if (org.error) {
     console.error('[resolveApiEnabledModules] comp flag unreadable:', org.error.code || 'unknown');
   }
-  const comped = org.error
-    ? false
-    : (org.data as { all_modules_comp?: boolean | null } | null)?.all_modules_comp === true;
+  const comped = compUnread ? false : orgRow!.all_modules_comp === true;
   const known = effectiveModules(
-    mods.error ? null : (mods.data as Array<{ module_id: string }> | null),
+    rowsUnread ? null : (mods.data as Array<{ module_id: string }>),
     comped,
   );
-  // No organization row without an error is row level security hiding it
-  // from a member, the case the one-round-trip read hands here on purpose
-  // (resolveApiContextFromBundle: `if (!held.organization) return null`). Its
-  // comp flag was never seen, so it counts as a failed read, as the MFA
-  // policy read above holds a hidden row to the strictest policy.
-  const readFailed = Boolean(mods.error || org.error || org.data == null);
+  const readFailed = rowsUnread || compUnread;
   return moduleSetFromReads(known, readFailed, NON_CORE_MODULE_IDS);
 }
 

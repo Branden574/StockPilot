@@ -134,18 +134,27 @@ const receiveLine = () => {
 
 const borrowers = () => borrowersGET(get('/api/v1/rentals/borrowers'));
 
+/** Each answer of the module rows read that leaves the module state unread. */
+const UNREAD_ROWS: Array<[string, Partial<LegacyContextWorld>]> = [
+  ['the rows read failed', { moduleRowsFail: true }],
+  ['the rows read answered no list', { moduleRowsNoList: true }],
+];
+
 describe('a write the phone cannot send twice: POST /api/v1/rentals (checkout)', () => {
-  it('module state unreadable: the 503 marked as refused before any write, and no work', async () => {
-    world.moduleRowsFail = true;
-    const res = await checkout();
-    expect(res.status).toBe(503);
-    expect(res.headers.get('retry-after')).toBe('5');
-    expect(res.headers.get('cache-control')).toBe('no-store');
-    const err = await asPhoneError(res);
-    expect(err.body).toEqual(contextUnavailableBody());
-    expect(isRefusedBeforeAnyWrite(err)).toBe(true);
-    expect(routeWork(world)).toEqual([]);
-  });
+  it.each(UNREAD_ROWS)(
+    'module state unreadable: the 503 marked as refused before any write, and no work (%s)',
+    async (_shape, shape) => {
+      Object.assign(world, shape);
+      const res = await checkout();
+      expect(res.status).toBe(503);
+      expect(res.headers.get('retry-after')).toBe('5');
+      expect(res.headers.get('cache-control')).toBe('no-store');
+      const err = await asPhoneError(res);
+      expect(err.body).toEqual(contextUnavailableBody());
+      expect(isRefusedBeforeAnyWrite(err)).toBe(true);
+      expect(routeWork(world)).toEqual([]);
+    },
+  );
 
   it('the module really off: the 403 module_disabled it always got', async () => {
     world.moduleRows = ['orders'];
@@ -156,24 +165,30 @@ describe('a write the phone cannot send twice: POST /api/v1/rentals (checkout)',
 });
 
 describe('a write the phone cannot send twice: POST /api/v1/exceptions/[id]/escalate', () => {
-  it('module state unreadable: the 503 marked as refused before any write, and no work', async () => {
-    world.moduleRowsFail = true;
-    const res = await escalate();
-    expect(res.status).toBe(503);
-    const err = await asPhoneError(res);
-    expect(err.body).toEqual(contextUnavailableBody());
-    expect(isRefusedBeforeAnyWrite(err)).toBe(true);
-    expect(routeWork(world)).toEqual([]);
-  });
+  it.each(UNREAD_ROWS)(
+    'module state unreadable: the 503 marked as refused before any write, and no work (%s)',
+    async (_shape, shape) => {
+      Object.assign(world, shape);
+      const res = await escalate();
+      expect(res.status).toBe(503);
+      const err = await asPhoneError(res);
+      expect(err.body).toEqual(contextUnavailableBody());
+      expect(isRefusedBeforeAnyWrite(err)).toBe(true);
+      expect(routeWork(world)).toEqual([]);
+    },
+  );
 });
 
 describe('a write the outbox sends: POST /api/v1/po/[id]/receive-line', () => {
-  it('module state unreadable: a 5xx the outbox sends again, never the final 403', async () => {
-    world.moduleRowsFail = true;
-    const res = await receiveLine();
-    expect(res.status).toBeGreaterThanOrEqual(500);
-    expect(((await res.json()) as { error: string }).error).toBe('internal_error');
-  });
+  it.each(UNREAD_ROWS)(
+    'module state unreadable: a 5xx the outbox sends again, never the final 403 (%s)',
+    async (_shape, shape) => {
+      Object.assign(world, shape);
+      const res = await receiveLine();
+      expect(res.status).toBeGreaterThanOrEqual(500);
+      expect(((await res.json()) as { error: string }).error).toBe('internal_error');
+    },
+  );
 
   it('the module really off: the 403 module_disabled it always got', async () => {
     world.moduleRows = ['orders'];
@@ -184,12 +199,15 @@ describe('a write the outbox sends: POST /api/v1/po/[id]/receive-line', () => {
 });
 
 describe('a read: GET /api/v1/rentals/borrowers', () => {
-  it('module state unreadable: a 5xx the phone retries, never module_disabled', async () => {
-    world.moduleRowsFail = true;
-    const res = await borrowers();
-    expect(res.status).toBeGreaterThanOrEqual(500);
-    expect(((await res.json()) as { error: string }).error).not.toBe('module_disabled');
-  });
+  it.each(UNREAD_ROWS)(
+    'module state unreadable: a 5xx the phone retries, never module_disabled (%s)',
+    async (_shape, shape) => {
+      Object.assign(world, shape);
+      const res = await borrowers();
+      expect(res.status).toBeGreaterThanOrEqual(500);
+      expect(((await res.json()) as { error: string }).error).not.toBe('module_disabled');
+    },
+  );
 
   it('the module really off: the 403 module_disabled it always got', async () => {
     world.moduleRows = ['orders'];
@@ -206,10 +224,13 @@ describe('a read: GET /api/v1/rentals/borrowers', () => {
 });
 
 describe('a route that depends on no optional module: GET /api/v1/me/permissions', () => {
-  it('module state unreadable: still answers 200, as before', async () => {
-    world.moduleRowsFail = true;
-    const res = await permissionsGET(get('/api/v1/me/permissions'));
-    expect(res.status).toBe(200);
-    expect(((await res.json()) as { role: string }).role).toBe('admin');
-  });
+  it.each(UNREAD_ROWS)(
+    'module state unreadable: still answers 200, as before (%s)',
+    async (_shape, shape) => {
+      Object.assign(world, shape);
+      const res = await permissionsGET(get('/api/v1/me/permissions'));
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { role: string }).role).toBe('admin');
+    },
+  );
 });

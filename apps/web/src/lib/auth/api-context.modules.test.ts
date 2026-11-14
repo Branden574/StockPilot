@@ -125,11 +125,16 @@ describe.each([
     expect([...ctx!.enabledModules!]).toEqual(['orders']);
   });
 
-  it('a NULL comp flag grants nothing: only an explicit true is a comp', async () => {
+  it('a NULL comp flag grants nothing: only an explicit true is a comp, and the rest is unknown', async () => {
+    // The column is boolean NOT NULL (0175), so a null is not an answer: it
+    // grants nothing, and like an unreadable flag it leaves every module the
+    // rows did not name unknown rather than off.
     state.comped = null;
     state.moduleRows = [{ module_id: 'orders' }];
     const ctx = await withApiContext(request());
-    expect([...ctx!.enabledModules!]).toEqual(['orders']);
+    expect(ctx!.enabledModules!.has('orders')).toBe(true);
+    expect(() => ctx!.enabledModules!.has('rentals')).toThrow(ModulesUnavailableError);
+    expect(() => [...ctx!.enabledModules!]).toThrow(ModulesUnavailableError);
   });
 
   it('an UNREADABLE comp flag grants nothing: the rows that were read answer on, the rest is unknown', async () => {

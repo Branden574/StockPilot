@@ -110,6 +110,17 @@ const FAILURES: Array<[string, Partial<LegacyContextWorld>, ModuleId[]]> = [
     { organizationHidden: true, comped: true, moduleRows: ['orders'] },
     ['orders'],
   ],
+  ['the rows read answered no list (not comped)', { moduleRowsNoList: true }, []],
+  [
+    'the rows read answered a row with no module id',
+    { moduleRowsMalformed: true, moduleRows: ['orders'] },
+    [],
+  ],
+  [
+    'the organization row answered without its comp flag (rows read)',
+    { organizationNoComp: true, moduleRows: ['orders'] },
+    ['orders'],
+  ],
 ];
 
 describe.each([
@@ -169,8 +180,11 @@ describe.each([
     );
   });
 
-  it('a comp that was read is every non-core module even when the rows read failed', async () => {
-    world.moduleRowsFail = true;
+  it.each<[string, Partial<LegacyContextWorld>]>([
+    ['the rows read failed', { moduleRowsFail: true }],
+    ['the rows read answered no list', { moduleRowsNoList: true }],
+  ])('a comp that was read is every non-core module even when %s', async (_what, rows) => {
+    Object.assign(world, rows);
     world.comped = true;
     const ctx = await withApiContext(request());
     expect(ctx!.enabledModules.size).toBe(NON_CORE_MODULE_IDS.length);

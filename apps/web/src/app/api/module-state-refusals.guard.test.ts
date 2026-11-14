@@ -220,7 +220,17 @@ const ROUTES: Array<[string, Expected, () => Promise<Response>, string?]> = [
   ],
 ];
 
-describe('routes with the module state unreadable', () => {
+/** Each answer of the module rows read that leaves the module state unread. */
+const UNREAD_ROWS: Array<[string, Partial<LegacyContextWorld>]> = [
+  ['the rows read failed', { moduleRowsFail: true }],
+  ['the rows read answered no list', { moduleRowsFail: false, moduleRowsNoList: true }],
+];
+
+describe.each(UNREAD_ROWS)('routes with the module state unreadable: %s', (_shape, shape) => {
+  beforeEach(() => {
+    Object.assign(world, shape);
+  });
+
   it.each(ROUTES)('%s answers %s', async (_route, expected, send, tag) => {
     const res = await send();
     if (expected === '5xx') {
@@ -260,6 +270,7 @@ describe('routes with the module state unreadable', () => {
 
   it('the barcode lookup with the AI module on still offers the AI description (control)', async () => {
     world.moduleRowsFail = false;
+    world.moduleRowsNoList = false;
     world.moduleRows = ['ai'];
     const res = await upcGET(get('/api/v1/items/upc-lookup?upc=012345678905'));
     expect(res.status).toBe(200);

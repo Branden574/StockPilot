@@ -27,12 +27,21 @@ export interface LegacyContextWorld {
   moduleRows: string[];
   /** organization_modules answers an error instead of its rows. */
   moduleRowsFail: boolean;
+  /**
+   * organization_modules answers neither a list nor an error: what
+   * postgrest-js resolves for an empty-bodied 2xx, or a 404 it rewrites to 204.
+   */
+  moduleRowsNoList: boolean;
+  /** organization_modules answers a list with a row that carries no module id. */
+  moduleRowsMalformed: boolean;
   /** organizations.all_modules_comp when the organizations row is read. */
   comped: boolean;
   /** The organizations row read answers an error (MFA policy and comp flag). */
   organizationFail: boolean;
   /** The organizations row reads back as absent with no error (row level security hid it). */
   organizationHidden: boolean;
+  /** The organizations row reads back without a boolean comp flag. */
+  organizationNoComp: boolean;
   /** Single-row answers for other tables, by table name. */
   singles: Record<string, unknown>;
   /** List answers for other tables, by table name. */
@@ -46,9 +55,12 @@ export function legacyContextWorld(over: Partial<LegacyContextWorld> = {}): Lega
     role: 'admin',
     moduleRows: [],
     moduleRowsFail: false,
+    moduleRowsNoList: false,
+    moduleRowsMalformed: false,
     comped: false,
     organizationFail: false,
     organizationHidden: false,
+    organizationNoComp: false,
     singles: {},
     lists: {},
     calls: [],
@@ -88,11 +100,21 @@ export function legacyContextClient(world: LegacyContextWorld) {
           list: () =>
             world.moduleRowsFail
               ? { data: null, error: READ_FAILED }
-              : { data: world.moduleRows.map((module_id) => ({ module_id })), error: null },
+              : world.moduleRowsNoList
+                ? { data: null, error: null }
+                : {
+                    data: [
+                      ...world.moduleRows.map((module_id) => ({ module_id })),
+                      ...(world.moduleRowsMalformed ? [{ module_id: null }] : []),
+                    ],
+                    error: null,
+                  },
           single: () => ({ data: null, error: null }),
         };
       case 'organizations': {
-        const row = { mfa_policy: 'optional', all_modules_comp: world.comped };
+        const row = world.organizationNoComp
+          ? { mfa_policy: 'optional' }
+          : { mfa_policy: 'optional', all_modules_comp: world.comped };
         return {
           list: () =>
             world.organizationFail
