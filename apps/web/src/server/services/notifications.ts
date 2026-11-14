@@ -2,6 +2,7 @@ import 'server-only';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { reportError } from '@/lib/error-reporter';
+import { readCurrentMember } from '@/server/lib/current-member';
 
 import { ServiceError, withContext, type ServiceContext } from './context';
 
@@ -26,6 +27,10 @@ export interface CreateNotificationArgs {
  * banners, diagnosed 2026-07-14 — 1 row + 1 token, yet 2 banners: one from
  * this code path, one from the trigger).
  *
+ * Writes nothing (returns null) for a disabled account, or for anyone who is
+ * not a current member of `organizationId` (removed, left, an invite never
+ * accepted, a support Act-as seat), or when either cannot be read (reported).
+ *
  * Returns the inserted row id. Never throws — failures are reported
  * via reportError so the calling write path (e.g. approving a PO)
  * doesn't fail just because the notification side errored.
@@ -41,26 +46,42 @@ export async function createNotification(
     // trigger fans out to push unconditionally — so a user disabled for
     // suspected compromise kept getting lock-screen push banners carrying
     // PO numbers, low-stock SKUs and deep links. This is the ONE insert
-    // path every caller in the codebase funnels through, so one point-read
-    // here closes the gap for all of them rather than requiring each call
-    // site to remember it. A failed read is treated as "unknown, not
-    // disabled" (fail OPEN): this function's contract is best-effort
-    // delivery that never throws, and an unreadable profile is a read
-    // error, not evidence of a disable.
-    const { data: profile, error: profileError } = await admin
-      .from('user_profiles')
-      .select('disabled_at')
-      .eq('id', args.userId)
-      .maybeSingle();
-    if (profileError) {
-      void reportError(new Error(profileError.message), {
-        tag: 'notifications.create_disabled_check',
-        extra: { userId: args.userId },
-      });
-    }
-    if ((profile as { disabled_at: string | null } | null)?.disabled_at) {
+    // path every caller in the codebase funnels through, so one check here
+    // closes the gap for all of them rather than requiring each call site
+    // to remember it.
+    //
+    // The recipient must also still be a member of the notice's organization
+    // (docket S36): an accepted membership that is not a support Act-as seat,
+    // the rule the database's own notices follow (0422,
+    // _notify_is_current_member). Several callers address a stored id, such as
+    // an order's requester, which stays when the membership row goes, so the
+    // membership is read here for every notice.
+    //
+    // Both facts come from the one current-member read the app's emails to a
+    // member's own address use too (server/lib/current-member.ts), from the
+    // tables rather than the 0422 function, so a web deploy never depends on
+    // the migration. Both fail CLOSED (docket S36, integrator decision
+    // 2026-11-01): a read that fails is reported and nothing is written, so
+    // nothing is pushed. An unreadable profile never counts as "not
+    // disabled". Best-effort delivery makes a notice dropped on a read error
+    // acceptable; a push carrying the organization's data to an account
+    // disabled for suspected compromise is not.
+    const recipient = await readCurrentMember(admin, args.organizationId, args.userId);
+    if (!recipient.readable) {
+      for (const failure of recipient.failures) {
+        void reportError(
+          failure.error,
+          failure.read === 'profile'
+            ? { tag: 'notifications.create_disabled_check', extra: { userId: args.userId } }
+            : {
+                tag: 'notifications.create_member_check',
+                extra: { organizationId: args.organizationId, userId: args.userId },
+              },
+        );
+      }
       return null;
     }
+    if (!recipient.current) return null;
 
     const { data, error } = await admin
       .from('notifications')

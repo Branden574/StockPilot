@@ -2,6 +2,10 @@ import { timingSafeEqual } from 'node:crypto';
 
 import { NextResponse, type NextRequest } from 'next/server';
 
+import {
+  loadEffectivePermissions,
+  PermissionsUnavailableError,
+} from '@/lib/auth/effective-permissions';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -9,9 +13,10 @@ import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { createNotification } from '@/server/services/notifications';
 import { gatherInsightsForCtx, summarizeInsights } from '@/server/services/insights';
+import { insightsVisibleTo, type InsightReader } from '@/server/services/insights-access';
 import type { ServiceContext } from '@/server/services/context';
 
-import type { ModuleId } from '@stockpilot/core';
+import { can, type ModuleId, type Role } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,8 +34,11 @@ function secretsEqual(a: string, b: string): boolean {
  * /dashboard/insights page. Weekday mornings, for every org with the `ai`
  * module enabled, gather the actionable signals (pending approvals, overdue
  * POs, low stock, open counts/POs) and push ONE in-app + push notification to
- * the org's owners/admins linking to the insights page. Quiet by design:
- *  - zero signals → no notification (no "all clear" noise),
+ * each of the org's owners/admins linking to the insights page. Each one reads
+ * only the lines their own permissions let them open (docket S36: their
+ * overrides apply, as on the page), and nobody who cannot open the page
+ * (items:update) is told. Quiet by design:
+ *  - zero signals, or zero lines for a reader → no notification for them,
  *  - one briefing per user per day (skips when today's already exists), so a
  *    cron re-fire never double-notifies.
  * CRON_SECRET-gated; FAIL-OPEN per org (one org's error never blocks the rest).
@@ -65,39 +73,89 @@ export async function GET(req: NextRequest) {
       try {
         const ctx = await buildSystemContext(admin, orgId);
         if (!ctx) continue;
+        // The organization was picked because its ai module is on, so a set
+        // without ai means its module read failed (buildSystemContext keeps
+        // every cron copy's shape and drops that error, leaving an empty set)
+        // or ai was turned off since. Either way every module's line would be
+        // dropped for every reader: skip the organization for this run and
+        // say so, rather than send a briefing trimmed without a trace.
+        if (!ctx.enabledModules.has('ai')) {
+          void reportError(new Error('Daily briefing could not confirm the organization modules'), {
+            tag: 'cron.daily-briefing.modules',
+            organizationId: orgId,
+          });
+          continue;
+        }
         orgsProcessed += 1;
 
-        const insights = await gatherInsightsForCtx(ctx);
+        // Every line the counts produce, then the lines the organization can
+        // open: the cron's context is the owner (buildSystemContext), so its
+        // view is the module rules alone. A line whose module is off is counted
+        // anyway (the counts ask no module) and no reader is ever shown it.
+        const gathered = await gatherInsightsForCtx(ctx);
+        const insights = insightsVisibleTo(gathered, ctx);
         if (insights.signals.length === 0) continue; // quiet day — say nothing
 
-        // Narrative is a graceful enhancement; the signal lines stand alone.
-        // 10s race so one slow Gemini call can't eat the 300s budget across a
-        // multi-org fan-out (summarizeInsights itself never throws).
-        const narrative = await Promise.race([
-          summarizeInsights(insights),
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000)),
-        ]);
-        const top = insights.signals
-          .slice(0, 3)
-          .map((s) => `${s.count} ${s.label}`)
-          .join(' · ');
-        const title = `Morning briefing: ${insights.signals.length} thing${
-          insights.signals.length === 1 ? '' : 's'
-        } need${insights.signals.length === 1 ? 's' : ''} attention`;
-        const body = narrative ?? top;
-
-        const { data: admins } = await admin
+        // Who may be told: the accepted owners and admins, never an Act-as
+        // seat, with their role (their permissions are read below). A failed
+        // read is not "nobody": it is reported and the organization is
+        // skipped for this run.
+        const { data: recipients, error: recipientsError } = await admin
           .from('organization_members')
-          .select('user_id')
+          .select('user_id, role')
           .eq('organization_id', orgId)
           .in('role', ['owner', 'admin'])
           .not('accepted_at', 'is', null)
           .is('impersonation_expires_at', null);
+        if (recipientsError || !Array.isArray(recipients)) {
+          void reportError(new Error('Daily briefing recipients could not be read'), {
+            tag: 'cron.daily-briefing.recipients',
+            organizationId: orgId,
+            extra: { code: recipientsError?.code ?? 'unexpected' },
+          });
+          continue;
+        }
+
+        // Narrative is a graceful enhancement; the signal lines stand alone.
+        // It is written from every line the organization can open, so it goes
+        // only to a recipient who reads all of them, and only once per
+        // organization, when the first such recipient needs it. 10s race so
+        // one slow Gemini call can't eat the 300s budget across a multi-org
+        // fan-out (summarizeInsights itself never throws).
+        let narrative: Promise<string | null> | null = null;
+        const fullNarrative = () =>
+          (narrative ??= Promise.race([
+            summarizeInsights(insights),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000)),
+          ]));
 
         const startOfToday = new Date();
         startOfToday.setUTCHours(0, 0, 0, 0);
+        let skippedUnreadable = 0;
 
-        for (const m of (admins ?? []) as Array<{ user_id: string }>) {
+        for (const m of recipients as Array<{ user_id: string; role: Role }>) {
+          // Each recipient's own permissions, overrides applied (the page reads
+          // the same set). An admin's that cannot be read is skipped for this
+          // run, never told with the role's defaults; the loader reports the
+          // read and the count is reported once below. The owner's never throws.
+          let permissions: InsightReader['permissions'];
+          try {
+            permissions = await loadEffectivePermissions(admin, orgId, m.user_id, m.role);
+          } catch (e) {
+            if (!(e instanceof PermissionsUnavailableError)) throw e;
+            skippedUnreadable += 1;
+            continue;
+          }
+          const reader: InsightReader = {
+            role: m.role,
+            permissions,
+            enabledModules: ctx.enabledModules,
+          };
+          // The briefing page's own gate: nobody is told of a page they cannot open.
+          if (!can(reader, 'items:update')) continue;
+          const lines = insightsVisibleTo(insights, reader).signals;
+          if (lines.length === 0) continue;
+
           // One briefing per user per day — idempotent across cron re-fires.
           // Read-then-insert (not atomic): two exactly-concurrent invocations
           // could double-send. Vercel cron never runs the same job in
@@ -115,6 +173,17 @@ export async function GET(req: NextRequest) {
             .maybeSingle();
           if (existing) continue;
 
+          // Title, lines and metadata from this recipient's own lines.
+          const top = lines
+            .slice(0, 3)
+            .map((s) => `${s.count} ${s.label}`)
+            .join(' · ');
+          const title = `Morning briefing: ${lines.length} thing${
+            lines.length === 1 ? '' : 's'
+          } need${lines.length === 1 ? 's' : ''} attention`;
+          const seesEveryLine = lines.length === insights.signals.length;
+          const body = (seesEveryLine ? await fullNarrative() : null) ?? top;
+
           await createNotification({
             organizationId: orgId,
             userId: m.user_id,
@@ -123,11 +192,23 @@ export async function GET(req: NextRequest) {
             body,
             link: '/dashboard/insights',
             metadata: {
-              signalKeys: insights.signals.map((s) => s.key),
-              counts: Object.fromEntries(insights.signals.map((s) => [s.key, s.count])),
+              signalKeys: lines.map((s) => s.key),
+              counts: Object.fromEntries(lines.map((s) => [s.key, s.count])),
             },
           });
           briefingsSent += 1;
+        }
+
+        if (skippedUnreadable > 0) {
+          void reportError(
+            new Error('Daily briefing skipped admins whose permissions could not be read'),
+            {
+              tag: 'cron.daily-briefing.overrides',
+              level: 'warning',
+              organizationId: orgId,
+              extra: { skipped: skippedUnreadable },
+            },
+          );
         }
       } catch (e) {
         void reportError(e, { tag: 'cron.daily-briefing.org', extra: { orgId } });

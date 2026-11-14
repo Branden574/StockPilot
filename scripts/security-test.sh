@@ -860,6 +860,14 @@ PGTAP_TESTS=(
   # user_can_see_item_category answers service_role only. The lock footprint
   # is scripts/db-concurrency/0421_migration_lock_footprint.sh.
   supabase/tests/0421_categories_select_category_sets.test.sql
+  # Notice audience (0422, docket S36a): the New order request alert goes to
+  # the members who hold orders:approve and can write in the order's
+  # warehouse, and every notice the database writes goes only to a current
+  # member of the organization (an accepted membership that is not an Act-as
+  # seat, on an account that is not disabled). Both helper functions answer
+  # service_role only. The lock footprint is
+  # scripts/db-concurrency/0422_migration_lock_footprint.sh.
+  supabase/tests/0422_notice_audience_follows_permission.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -1815,6 +1823,19 @@ WEB_TESTS=(
   src/server/services/platform/permission-exceptions.test.ts
   src/server/actions/platform/permission-exceptions.test.ts
   src/lib/auth/effective-permissions.test.ts
+
+  # Notice audience (0422, docket S36a; the database half is in MANIFEST 1):
+  # every notice and push the app writes (createNotification), and every
+  # email to a member's own address, goes only to a current member of the
+  # record's organization: an accepted membership that is not an Act-as seat,
+  # on an account that is not disabled. A membership or profile read that
+  # fails, or answers no list, writes nothing and sends nothing, and is
+  # reported. An address the order recorded for an outside person is emailed
+  # whoever placed the order.
+  src/server/lib/current-member.test.ts
+  src/server/services/notifications.requester-paths.test.ts
+  src/server/services/order-requests.member-email.test.ts
+  src/server/email/maintenance-resolved.member.test.ts
 
   # Connector export events (outbox_events) are recorded only by
   # server/lib/outbox-events.ts, through the service client, after the action

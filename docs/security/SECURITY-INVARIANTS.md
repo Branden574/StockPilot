@@ -2401,8 +2401,8 @@ checked.
   functions it judges.
 - **A high-assurance baseline is implemented and covered by executable
   invariants**: 60 class-wide assertions in
-  `supabase/tests/security_invariants.test.sql`, plus the 103 other pgTAP
-  files and the 364 vitest files on the manifests of
+  `supabase/tests/security_invariants.test.sql`, plus the 104 other pgTAP
+  files and the 368 vitest files on the manifests of
   `scripts/security-test.sh`, gated together as `pnpm security:test` and
   wired into CI.
 - **Two risks are accepted and tracked**, not closed (section 7), each with a

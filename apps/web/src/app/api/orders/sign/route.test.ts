@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeSupabaseStub, type QueryResult } from '@/test/supabase-mock';
+import {
+  callArgs,
+  makeSupabaseStub,
+  servedLikePostgrest,
+  type MockCall,
+  type QueryResult,
+} from '@/test/supabase-mock';
 
 /**
  * SP-020 — the QR/digital signature path must reach INTERNAL requesters.
@@ -114,6 +120,16 @@ interface Scenario {
   prefReadFails?: boolean;
   /** The order's number on the row read after the hand-over. */
   orderNumber?: number | null;
+  /** S36: whether the requester (u1) is still a current member of org-1 (default yes). */
+  requesterIsMember?: boolean;
+  /** S36: the current-member read fails. */
+  membershipReadFails?: boolean;
+  /** S36: the current-member check's disabled_at read (user_profiles) fails. */
+  disabledReadFails?: boolean;
+  /** S36: the requester's own address read (user_profiles email, full_name) fails. */
+  ownAddressReadFails?: boolean;
+  /** Returns RX-2: the order is the exchange replacement for this RMA. */
+  replacementForReturnId?: string;
 }
 
 const READ_ERROR = { message: 'connection reset' };
@@ -137,7 +153,14 @@ function buildAdmin(s: Scenario) {
     return statusReads <= (s.statusReadFailures ?? 0)
       ? { data: null, error: READ_ERROR }
       : {
-          data: { ...INTERNAL_ORDER, status: s.status, order_number: s.orderNumber ?? null },
+          data: {
+            ...INTERNAL_ORDER,
+            status: s.status,
+            order_number: s.orderNumber ?? null,
+            ...(s.replacementForReturnId
+              ? { replacement_for_return_id: s.replacementForReturnId, source: 'internal' }
+              : {}),
+          },
           error: null,
         };
   };
@@ -147,13 +170,43 @@ function buildAdmin(s: Scenario) {
     'order_requests.select.single': statusResult,
     'order_request_lines.select': linesResult,
     'rpc:confirm_order_signature': { data: { id: 'ord-1' }, error: null },
-    'user_profiles.select.maybeSingle': {
-      data: s.profile === undefined ? { email: 'alice@site.org', full_name: 'Alice' } : s.profile,
-      error: null,
+    // Two reads, each able to fail on its own (S36): the current-member
+    // check's (disabled_at, a list read) and the requester's own address
+    // (email, full_name, a point read).
+    'user_profiles.select': (call: MockCall): QueryResult => {
+      const columns = String(callArgs(call, 'select')?.[0] ?? '');
+      const memberCheck = columns.includes('disabled_at');
+      const fails = memberCheck ? s.disabledReadFails : s.ownAddressReadFails;
+      if (fails) return { data: null, error: READ_ERROR };
+      const row = s.profile === undefined ? { email: 'alice@site.org', full_name: 'Alice' } : s.profile;
+      return { data: memberCheck ? (row ? [row] : []) : row, error: null };
     },
     'notification_preferences.select.maybeSingle': s.prefReadFails
       ? { data: null, error: READ_ERROR }
       : { data: { email_order_completed: s.emailOrderCompleted ?? true }, error: null },
+    // S36: the requester's own address is used only while they are a current
+    // member of the order's organization (server/lib/current-member.ts).
+    'organization_members.select': s.membershipReadFails
+      ? { data: null, error: READ_ERROR }
+      : servedLikePostgrest(
+          s.requesterIsMember === false
+            ? [
+                {
+                  organization_id: 'org-1',
+                  user_id: 'someone-else',
+                  accepted_at: '2026-01-05T00:00:00Z',
+                  impersonation_expires_at: null,
+                },
+              ]
+            : [
+                {
+                  organization_id: 'org-1',
+                  user_id: 'u1',
+                  accepted_at: '2026-01-05T00:00:00Z',
+                  impersonation_expires_at: null,
+                },
+              ],
+        ),
   }).client;
 }
 
@@ -630,6 +683,282 @@ describe('POST /api/orders/sign — reads after the signature is recorded', () =
     };
     expect(args.unitsShipped).toBeNull();
     expect(reportedTags()).toContain('orders.sign.line_totals_read');
+  });
+});
+
+/**
+ * Docket S36 (integrator decision 2026-11-01 on #440, with its precision): a
+ * member's OWN address (their profile's; the order kept none) is used only
+ * while they are a current member of the order's organization, the rule 0422
+ * and createNotification apply to every notice and push. That covers every
+ * hand-over email to the requester's own address: the partial hand-over
+ * (order-handover-notify.ts :210), backordered items shipped (:282), a
+ * replacement's partial hand-over (:139) and the completion receipt. An
+ * address the order recorded is emailed whoever placed the order (the
+ * on-behalf and deleted-requester tests above).
+ */
+describe('POST /api/orders/sign — a requester who is no longer a member (S36)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const former = { requesterIsMember: false } as const;
+
+  it('a partial hand-over: no address for the requester notice (:210); another signer still gets the receipt', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'backordered',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 2,
+      ...former,
+    });
+
+    const res = await POST(request());
+    expect(res.status).toBe(200);
+
+    expect(notifyRequesterBackordered).toHaveBeenCalledTimes(1);
+    expect((notifyRequesterBackordered.mock.calls[0]?.[0] as NotifyCall).requesterEmail).toBeNull();
+    expect(sendPartialReceiptEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ to: 'bob@site.org' }),
+    );
+    // An expected recipient to drop, not an error.
+    expect(reportedTags()).not.toContain('orders.sign.requester_member_check');
+  });
+
+  it('an exchange replacement handed over in part: no address for its email either (:139)', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'backordered',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 2,
+      replacementForReturnId: 'rma-1',
+      ...former,
+    });
+
+    await POST(request());
+
+    expect(notifyRequesterBackordered).toHaveBeenCalledWith(
+      expect.objectContaining({ requesterEmail: null, replacementForReturnId: 'rma-1' }),
+    );
+  });
+
+  it('the remainder handed over: no address for backordered items shipped (:282); only the signer gets a completion receipt', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'completed',
+      priorFulfilled: 2,
+      totalRequested: 5,
+      totalFulfilled: 5,
+      ...former,
+    });
+
+    await POST(request());
+
+    expect(notifyRequesterBackorderShipped).toHaveBeenCalledTimes(1);
+    expect(
+      (notifyRequesterBackorderShipped.mock.calls[0]?.[0] as NotifyCall).requesterEmail,
+    ).toBeNull();
+    expect(sentTo()).toEqual(['bob@site.org']);
+  });
+
+  it('a completed hand-over: no completion receipt to their own address', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'completed',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 5,
+      ...former,
+    });
+
+    await POST(request());
+
+    expect(sentTo()).toEqual(['bob@site.org']);
+  });
+
+  // The sign page fills the signer email with the requester's own address
+  // (orders/sign/[token]/page.tsx), and the server cannot tell an accepted
+  // default from a typed one: as for a deleted requester's kept address (A3),
+  // the withheld address gets no signer receipt either, or the requester
+  // notice would only have changed its name.
+  it('their own address entered as the signer email gets no receipt on a completed hand-over', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'completed',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 5,
+      ...former,
+    });
+
+    const res = await POST(request('Alice@Site.org'));
+    expect(res.status).toBe(200);
+
+    expect(sentTo()).toEqual([]);
+  });
+
+  it('their own address entered as the signer email gets no partial receipt', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'backordered',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 2,
+      ...former,
+    });
+
+    await POST(request('alice@site.org'));
+
+    expect(sendPartialReceiptEmail).not.toHaveBeenCalled();
+    expect((notifyRequesterBackordered.mock.calls[0]?.[0] as NotifyCall).requesterEmail).toBeNull();
+  });
+
+  // The two refusals above compare the signer email with the withheld
+  // address, which comes from a profile read of its own. When that read
+  // fails, the address is unknown and no signer receipt goes out at all. A
+  // receipt lost to a read error is acceptable (every email here is
+  // best-effort); one to a former member's own address is not.
+  /** The requester's own profile: the address the sign page offers as the
+   *  default signer email (the read of it fails in these tests). */
+  const OWN = { email: 'former@example.com', full_name: 'Former Requester' };
+
+  it('their own address cannot be read: no completion receipt to it, and the failed read is reported', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'completed',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 5,
+      profile: OWN,
+      ...former,
+      ownAddressReadFails: true,
+    });
+
+    const res = await POST(request(OWN.email));
+    expect(res.status).toBe(200);
+
+    expect(sentTo()).toEqual([]);
+    expect(reportedTags()).toEqual(['orders.sign.requester_member_check']);
+  });
+
+  it('their own address cannot be read: no partial receipt to it either', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'backordered',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 2,
+      profile: OWN,
+      ...former,
+      ownAddressReadFails: true,
+    });
+
+    await POST(request(OWN.email));
+
+    expect(sendPartialReceiptEmail).not.toHaveBeenCalled();
+    expect((notifyRequesterBackordered.mock.calls[0]?.[0] as NotifyCall).requesterEmail).toBeNull();
+  });
+
+  it('their own address cannot be read: any other signer email loses its receipt too (it cannot be told apart)', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'completed',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 5,
+      profile: OWN,
+      ...former,
+      ownAddressReadFails: true,
+    });
+
+    await POST(request('dock.signer@example.com'));
+
+    expect(sentTo()).toEqual([]);
+  });
+
+  it('both profile reads fail, so the member check cannot answer either: no receipt, each failed read reported', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'completed',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 5,
+      profile: OWN,
+      disabledReadFails: true,
+      ownAddressReadFails: true,
+    });
+
+    await POST(request(OWN.email));
+
+    expect(sentTo()).toEqual([]);
+    expect(reportedTags()).toEqual([
+      'orders.sign.requester_member_check',
+      'orders.sign.requester_member_check',
+    ]);
+  });
+
+  it('a current member whose address read fails: the signer still gets the receipt, and the failed read is reported', async () => {
+    const member = { email: 'member@example.com', full_name: 'Member Requester' };
+    adminHolder.client = buildAdmin({
+      status: 'completed',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 5,
+      profile: member,
+      ownAddressReadFails: true,
+    });
+
+    await POST(request(member.email));
+
+    // No requester email (no address), and the signer's receipt as always.
+    expect(sentTo()).toEqual([member.email]);
+    expect(reportedTags()).toEqual(['orders.sign.requester_member_check']);
+  });
+
+  it('a membership read that fails: no requester address (fail closed), reported once', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'backordered',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 2,
+      membershipReadFails: true,
+    });
+
+    await POST(request());
+
+    expect((notifyRequesterBackordered.mock.calls[0]?.[0] as NotifyCall).requesterEmail).toBeNull();
+    expect(reportedTags().filter((t) => t === 'orders.sign.requester_member_check')).toHaveLength(
+      1,
+    );
+  });
+
+  it('a current member is still reached at their own address (control)', async () => {
+    adminHolder.client = buildAdmin({
+      status: 'backordered',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 2,
+    });
+
+    await POST(request());
+
+    expect((notifyRequesterBackordered.mock.calls[0]?.[0] as NotifyCall).requesterEmail).toBe(
+      'alice@site.org',
+    );
+  });
+
+  it('a portal order (the buyer signed in, never a member) keeps the address it recorded', async () => {
+    const portal = {
+      ...INTERNAL_ORDER,
+      source: 'portal',
+      requester_user_id: 'portal-buyer',
+      requester_email: 'buyer@example.com',
+      requester_name: 'Buyer Example',
+    };
+    adminHolder.client = makeSupabaseStub({
+      'order_requests.select.maybeSingle': { data: portal, error: null },
+      'order_requests.select.single': { data: { ...portal, status: 'completed' }, error: null },
+      'order_request_lines.select': { data: [{ quantity_fulfilled: 0 }], error: null },
+      'rpc:confirm_order_signature': { data: { id: 'ord-1' }, error: null },
+      'notification_preferences.select.maybeSingle': { data: null, error: null },
+      'organization_members.select': servedLikePostgrest([]),
+    }).client;
+
+    await POST(request());
+
+    expect(sentTo()).toEqual(['buyer@example.com', 'bob@site.org']);
   });
 });
 
