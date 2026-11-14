@@ -69,7 +69,7 @@ const CUSTOMER = '77777777-7777-4777-8777-777777777777';
 function table(single: unknown, list: unknown[] = []) {
   const q: Record<string, unknown> = {};
   const self = () => q;
-  for (const m of ['select', 'eq', 'is', 'update']) q[m] = self;
+  for (const m of ['select', 'eq', 'is', 'update', 'order', 'limit']) q[m] = self;
   q.maybeSingle = async () => ({ data: single, error: null });
   q.then = (resolve: (v: unknown) => unknown) =>
     Promise.resolve({ data: list, error: null }).then(resolve);

@@ -48,7 +48,7 @@ vi.mock('@/server/services/returns', () => ({
   pendingReturnQuantitiesByLine: vi.fn(async () => new Map<string, number>()),
 }));
 
-import { PORTAL_MAPPINGS_TRIED_MAX, resolvePortalContext } from './portal';
+import { PORTAL_MAPPINGS_TRIED_MAX, readPortalGates, resolvePortalContext } from './portal';
 
 const ACCOUNT = '0a000000-0000-4000-8000-000000000001';
 const ORG_NORTH = '0b000000-0000-4000-8000-000000000001';
@@ -96,9 +96,28 @@ interface OrgSetup {
   billing?: Row;
 }
 
+/** PostgREST's row cap for one read (supabase/config.toml `max_rows`). */
+const MAX_ROWS = 1000;
+
+type OrderSpec = { column: string; ascending: boolean; nullsFirst: boolean };
+
+/** A column ending in `_at` is a time and is compared as one. */
+function compareValues(column: string, a: unknown, b: unknown): number {
+  if (column.endsWith('_at')) return Date.parse(String(a)) - Date.parse(String(b));
+  const x = String(a);
+  const y = String(b);
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+
 /**
  * `failTables`: reads of these tables come back the way PostgREST reports a
  * failure, `{ data: null, error: { message } }`.
+ *
+ * Reads behave as PostgREST's do: rows come back in the order they are
+ * stored unless the read names an order (ASC puts a missing value last and
+ * DESC first, unless `nullsFirst` says otherwise), at most `.limit()` rows and
+ * never more than MAX_ROWS. A filter on an embedded column (`customer.status`)
+ * drops the row when the embed is `!inner`, and otherwise empties the embed.
  */
 function makeAdmin(db: Record<string, Row[]>, failTables: readonly string[] = []) {
   const failed = { data: null, error: { message: 'read failed' } };
@@ -107,15 +126,63 @@ function makeAdmin(db: Record<string, Row[]>, failTables: readonly string[] = []
   const requests: string[] = [];
   /** One entry per `.in()` filter the service builds: table, column, values. */
   const inLists: Array<{ table: string; column: string; values: unknown[] }> = [];
+  /** One entry per `.limit()` the service sets: table, row count. */
+  const limits: Array<{ table: string; count: number }> = [];
 
   function chain(table: string) {
     const preds: Array<(r: Row) => boolean> = [];
+    const embedFilters: Array<{ alias: string; column: string; val: unknown }> = [];
+    const orders: OrderSpec[] = [];
+    let selected = '';
+    let limit: number | null = null;
     let patch: Row | null = null;
     const rows = () => (db[table] ?? []).filter((r) => preds.every((p) => p(r)));
+    const readRows = () => {
+      let out = rows().map((r) => ({ ...r }));
+      for (const f of embedFilters) {
+        const inner = new RegExp(`(^|[\\s,])${f.alias}:[a-z_]+!inner\\(`).test(selected);
+        const hit = (r: Row) => (r[f.alias] as Row | null)?.[f.column] === f.val;
+        out = inner ? out.filter(hit) : out.map((r) => (hit(r) ? r : { ...r, [f.alias]: null }));
+      }
+      if (orders.length > 0) {
+        out.sort((a, b) => {
+          for (const o of orders) {
+            const va = a[o.column] ?? null;
+            const vb = b[o.column] ?? null;
+            if (va === null || vb === null) {
+              if (va === vb) continue;
+              return (va === null) === o.nullsFirst ? -1 : 1;
+            }
+            const c = compareValues(o.column, va, vb);
+            if (c !== 0) return o.ascending ? c : -c;
+          }
+          return 0;
+        });
+      }
+      return out.slice(0, Math.min(limit ?? MAX_ROWS, MAX_ROWS));
+    };
     const builder: Record<string, unknown> = {
-      select: () => builder,
+      select: (columns?: string) => {
+        selected = columns ?? '';
+        return builder;
+      },
       eq: (col: string, val: unknown) => {
+        const dot = col.indexOf('.');
+        if (dot > 0) {
+          embedFilters.push({ alias: col.slice(0, dot), column: col.slice(dot + 1), val });
+          return builder;
+        }
         preds.push((r) => r[col] === val);
+        return builder;
+      },
+      order: (column: string, opts: { ascending?: boolean; nullsFirst?: boolean } = {}) => {
+        const ascending = opts.ascending ?? true;
+        orders.push({ column, ascending, nullsFirst: opts.nullsFirst ?? !ascending });
+        return builder;
+      },
+      limit: (count: number) => {
+        limits.push({ table, count });
+        limit = count;
         return builder;
       },
       is: (col: string, val: unknown) => {
@@ -134,7 +201,7 @@ function makeAdmin(db: Record<string, Row[]>, failTables: readonly string[] = []
       maybeSingle: async () => {
         requests.push(table);
         if (failTables.includes(table)) return failed;
-        return { data: rows()[0] ?? null, error: null };
+        return { data: readRows()[0] ?? null, error: null };
       },
       then: (resolve: (v: unknown) => unknown) => {
         requests.push(table);
@@ -145,13 +212,19 @@ function makeAdmin(db: Record<string, Row[]>, failTables: readonly string[] = []
           updates.push({ table, patch, rows: hit });
           return Promise.resolve({ data: null, error: null }).then(resolve);
         }
-        return Promise.resolve({ data: rows(), error: null }).then(resolve);
+        return Promise.resolve({ data: readRows(), error: null }).then(resolve);
       },
     };
     return builder;
   }
 
-  return { client: { from: (table: string) => chain(table) }, updates, requests, inLists };
+  return {
+    client: { from: (table: string) => chain(table) },
+    updates,
+    requests,
+    inLists,
+    limits,
+  };
 }
 
 let admin: ReturnType<typeof makeAdmin>;
@@ -432,8 +505,13 @@ describe('resolvePortalContext: the reads are bounded', () => {
   const cust = (i: number) => `${CUST_BASE}${pad(100 - i)}`;
 
   /** n accepted mappings, each in its own organization, accepted in order 1..n
-   *  (one a day from 2026-01-01, every one a real date). */
-  function manyAccepted(n: number, portalOn: (i: number) => boolean | null): Mapping[] {
+   *  (one a day from 2026-01-01, every one a real date); stored in that order,
+   *  or latest acceptance first. */
+  function manyAccepted(
+    n: number,
+    portalOn: (i: number) => boolean | null,
+    storedLatestFirst = false,
+  ): Mapping[] {
     const mappings: Mapping[] = [];
     const orgs: OrgSetup[] = [];
     for (let i = 1; i <= n; i += 1) {
@@ -446,9 +524,100 @@ describe('resolvePortalContext: the reads are bounded', () => {
       });
       orgs.push({ id: `${ORG_BASE}${pad(i)}`, name: `Supply ${i}`, portal: portalOn(i) });
     }
-    seed(mappings, orgs);
+    seed(storedLatestFirst ? [...mappings].reverse() : mappings, orgs);
     return mappings;
   }
+
+  /** A customer id for the k-th of many mappings (k from 0). */
+  const bulkCust = (k: number) => `0f000000-0000-4000-8000-${String(k).padStart(12, '0')}`;
+
+  /** n invitations, none accepted, all to customers of North, invited one a
+   *  minute from 2026-01-01 and stored in that order (the newest last). */
+  function manyInvitations(n: number): Mapping[] {
+    return Array.from({ length: n }, (_, k) => ({
+      customerId: bulkCust(k),
+      orgId: ORG_NORTH,
+      name: `Invited Academy ${k}`,
+      invitedAt: new Date(START + k * 60_000).toISOString(),
+      acceptedAt: null,
+    }));
+  }
+
+  it('the mappings read asks for as many rows as are tried, and no more', async () => {
+    manyAccepted(3, () => true);
+    await resolvePortalContext();
+    expect(admin.limits.filter((l) => l.table === 'customer_users')).toEqual([
+      { table: 'customer_users', count: PORTAL_MAPPINGS_TRIED_MAX },
+    ]);
+  });
+
+  it('an accepted mapping stored after more invitations than one read returns still opens', async () => {
+    seed(
+      [
+        ...manyInvitations(MAX_ROWS + 4),
+        {
+          customerId: CUST_SOUTH,
+          orgId: ORG_SOUTH,
+          name: 'South Academy',
+          invitedAt: '2025-06-01T00:00:00+00:00',
+          acceptedAt: '2025-06-02T00:00:00+00:00',
+        },
+      ],
+      [
+        { id: ORG_NORTH, name: 'North Supply', portal: true },
+        { id: ORG_SOUTH, name: 'South Supply', portal: true },
+      ],
+    );
+    expect((await resolvePortalContext())?.customerId).toBe(CUST_SOUTH);
+    expect(stamped()).toEqual([]);
+  });
+
+  it('with only invitations, more than one read returns, the newest is the one tried and stamped', async () => {
+    const invitations = manyInvitations(MAX_ROWS + 5);
+    const newest = invitations[invitations.length - 1]!.customerId;
+    seed(invitations, [{ id: ORG_NORTH, name: 'North Supply', portal: true }]);
+    expect((await resolvePortalContext())?.customerId).toBe(newest);
+    expect(stamped()).toEqual([newest]);
+  });
+
+  it('with more accepted mappings than the bound, stored latest first, the earliest acceptance opens', async () => {
+    manyAccepted(
+      PORTAL_MAPPINGS_TRIED_MAX + 5,
+      (i) => i === 1 || i > PORTAL_MAPPINGS_TRIED_MAX,
+      true,
+    );
+    expect((await resolvePortalContext())?.customerId).toBe(cust(1));
+    manyAccepted(PORTAL_MAPPINGS_TRIED_MAX + 5, (i) => i > PORTAL_MAPPINGS_TRIED_MAX, true);
+    expect(await resolvePortalContext()).toBeNull();
+  });
+
+  it('archived customers take no place in the bounded read: a later accepted active mapping opens', async () => {
+    const archived: Mapping[] = Array.from({ length: PORTAL_MAPPINGS_TRIED_MAX + 2 }, (_, k) => ({
+      customerId: bulkCust(k),
+      orgId: ORG_NORTH,
+      name: `Archived Academy ${k}`,
+      invitedAt: new Date(START + k * 60_000).toISOString(),
+      acceptedAt: new Date(START + k * 60_000 + 1_000).toISOString(),
+      status: 'archived',
+    }));
+    seed(
+      [
+        ...archived,
+        {
+          customerId: CUST_SOUTH,
+          orgId: ORG_SOUTH,
+          name: 'South Academy',
+          invitedAt: '2026-06-01T00:00:00+00:00',
+          acceptedAt: '2026-06-02T00:00:00+00:00',
+        },
+      ],
+      [
+        { id: ORG_NORTH, name: 'North Supply', portal: true },
+        { id: ORG_SOUTH, name: 'South Supply', portal: true },
+      ],
+    );
+    expect((await resolvePortalContext())?.customerId).toBe(CUST_SOUTH);
+  });
 
   it('reads each gate table once, however many mappings the account has', async () => {
     for (const n of [2, 5, 20]) {
@@ -695,5 +864,38 @@ describe('resolvePortalContext: what stays as it was', () => {
     authUser.current = null;
     seed([], []);
     expect(await resolvePortalContext()).toBeNull();
+  });
+});
+
+describe('readPortalGates: the gate read holds its own bound', () => {
+  const orgId = (k: number) => `0d100000-0000-4000-8000-${String(k).padStart(12, '0')}`;
+
+  it(`reads at most ${PORTAL_MAPPINGS_TRIED_MAX} distinct organizations, the first given, when handed more`, async () => {
+    const ids = Array.from({ length: PORTAL_MAPPINGS_TRIED_MAX + 5 }, (_, k) => orgId(k));
+    seed(
+      [],
+      ids.map((id, k) => ({ id, name: `Supply ${k}`, portal: true })),
+    );
+    const gates = await readPortalGates(admin.client as never, ids);
+    expect([...gates.keys()]).toEqual(ids.slice(0, PORTAL_MAPPINGS_TRIED_MAX));
+    for (const id of ids.slice(PORTAL_MAPPINGS_TRIED_MAX)) expect(gates.has(id)).toBe(false);
+    expect(admin.inLists.map((l) => [l.table, l.values]).sort()).toEqual([
+      ['organization_modules', ids.slice(0, PORTAL_MAPPINGS_TRIED_MAX)],
+      ['organizations', ids.slice(0, PORTAL_MAPPINGS_TRIED_MAX)],
+    ]);
+    for (const id of ids.slice(0, PORTAL_MAPPINGS_TRIED_MAX)) {
+      expect(gates.get(id)?.moduleRow).toBeTruthy();
+      expect(gates.get(id)?.org).toBeTruthy();
+    }
+  });
+
+  it('counts distinct organizations: a repeated id takes no place in the bound', async () => {
+    const ids = Array.from({ length: PORTAL_MAPPINGS_TRIED_MAX }, (_, k) => orgId(k));
+    seed(
+      [],
+      ids.map((id, k) => ({ id, name: `Supply ${k}`, portal: true })),
+    );
+    const gates = await readPortalGates(admin.client as never, [ids[0]!, ...ids, ids[1]!]);
+    expect([...gates.keys()]).toEqual(ids);
   });
 });

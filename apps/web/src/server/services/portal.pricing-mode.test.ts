@@ -174,7 +174,9 @@ function makeAdmin(
     const builder: Record<string, unknown> = {
       select: () => builder,
       eq: (col: string, val: unknown) => {
-        preds.push((r) => r[col] === val);
+        // `customer.status`: a column of an `!inner` embed, which drops the row.
+        const [embed, sub] = col.split('.');
+        preds.push((r) => (sub ? (r[embed!] as Row | null)?.[sub] : r[col]) === val);
         return builder;
       },
       in: (col: string, vals: unknown[]) => {

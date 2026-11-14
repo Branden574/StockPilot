@@ -206,7 +206,7 @@ const PORTAL_GATE_ORG_COLUMNS =
  * passes no more): an org past that bound gets no gate, which is the portal
  * off. So each batched `.in()` list holds at most that many ids.
  */
-async function readPortalGates(
+export async function readPortalGates(
   admin: ReturnType<typeof createAdminClient>,
   orgIds: readonly string[],
 ): Promise<Map<string, PortalGate>> {
@@ -297,13 +297,24 @@ export async function resolvePortalContext(): Promise<PortalContext | null> {
   // and page-step-up guards hold that they ask this first).
   if (await stepUpIsOwedByUser(supabase, user)) redirect(PORTAL_CODE_PAGE);
 
+  // The account's mappings at active customers, in the database in the order
+  // comparePortalMappings gives (earliest acceptance first, invitations after
+  // it, newest first), and only as many as are ever tried: the first
+  // PORTAL_MAPPINGS_TRIED_MAX accepted ones, or, with none accepted, the
+  // newest invitation, which is then the first row. So the earliest
+  // acceptance is in the read however many rows the account has.
   const admin = createAdminClient();
   const { data: mappings } = await admin
     .from('customer_users')
     .select(
-      'customer_id, email, accepted_at, invited_at, customer:customers(id, name, status, organization_id, price_list_id)',
+      'customer_id, email, accepted_at, invited_at, customer:customers!inner(id, name, status, organization_id, price_list_id)',
     )
-    .eq('user_id', user.id);
+    .eq('user_id', user.id)
+    .eq('customer.status', 'active')
+    .order('accepted_at', { ascending: true, nullsFirst: false })
+    .order('invited_at', { ascending: false, nullsFirst: false })
+    .order('customer_id', { ascending: true })
+    .limit(PORTAL_MAPPINGS_TRIED_MAX);
 
   type Cust = {
     id: string;
