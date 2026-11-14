@@ -30,9 +30,11 @@
 --      organization_id    the organization
 --      user_id            the token's subject when it is an account
 --                         (auth.uid(), looked up in user_profiles), else
---                         null. A subject that is not a uuid, or claims that
---                         cannot be read, count as no subject: they never
---                         stop the change
+--                         null. For a policy change, a token whose subject
+--                         is not a uuid, or whose claims are not JSON, is
+--                         recorded with no actor. A role change keeps the
+--                         membership guard's own refusal of such a token
+--                         (0393), which comes before this trigger
 --      ip, user_agent     null: the database is called by the Data API
 --                         server, not by the person's device
 --      entity_type / id   organization / its id;
@@ -45,7 +47,7 @@
 --                         setting, which names the caller inside a SECURITY
 --                         DEFINER body too (0413)
 --      aal                the token's aal claim, or null (no claim, or
---                         claims that cannot be read)
+--                         claims that are not JSON)
 --      target_user_id     (roles only) the member whose role changed
 --      created_at         the table default: the time of the change's
 --                         transaction
@@ -148,11 +150,13 @@
 --
 -- Afterwards a change is refused only when its audit row cannot be written
 -- (see 1). The audit row's two foreign keys ask for the organization's row
--- and the actor's account row while the change holds the row it changed, so
--- a role or policy change that overlaps the deletion of that organization,
--- or of the actor's own account, can be refused: deadlock detected (40P01),
--- or the actor's account is no longer there (23503). Nothing is recorded and
--- nothing is changed in that case, and the caller can try again.
+-- and the actor's account row while the change holds the row it changed. So
+-- a role change that overlaps the deletion of that organization or of the
+-- actor's own account can end in a deadlock (40P01), which refuses one side,
+-- the change or the deletion; and a role or policy change whose actor's
+-- account is deleted meanwhile can be refused because that account is no
+-- longer there (23503). The refused side records nothing and changes
+-- nothing, and can be tried again.
 --
 -- ── ORDER ─────────────────────────────────────────────────────────────────
 -- After every lower number. No queued migration creates a function or a

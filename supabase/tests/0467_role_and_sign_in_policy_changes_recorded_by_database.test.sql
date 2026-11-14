@@ -440,7 +440,8 @@ select is(
   'ok:0 rows=0',
   'R10: an admin of another organization changes no row and leaves no audit row');
 
--- The token's form never stops a change (organization B, at 'optional').
+-- A policy change with a token whose subject or claims cannot be read
+-- (organization B, at 'optional').
 insert into outcome (step, got) values ('R11',
   pg_temp.run_text('service_role', '{"role": "service_role", "sub": "not-a-uuid"}', pg_temp.policy_sql(:orgB, 'all_required')));
 select is(
