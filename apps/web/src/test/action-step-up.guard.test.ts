@@ -291,7 +291,6 @@ const REVIEWED: Record<string, Reviewed> = {
 const ASKS_LATER: Record<string, string> = {
   'server/actions/mfa.ts#unenrollFactorAction': `requireSession() and the cookie client come first, and neither reads anything; withContext() is next, before the session's level, the policy or the factor is looked at.`,
   'server/actions/profile.ts#deleteOwnAccountAction': `requireSession() comes first because an account with no organization must be able to delete itself; one with a membership then goes through withContext() (gateMfaForSelfService), and the deletion itself asks an account that has an authenticator for aal2 (docket S50a).`,
-  'server/actions/team.ts#inviteMemberAction': `requireSession() and one read of the organization's own name, for the invitation email, come before TeamService.forCurrentUser(); the name is never returned, and nothing is sent or written before the context answers.`,
 };
 
 /* ───────────────────────────── the reading ───────────────────────────── */
