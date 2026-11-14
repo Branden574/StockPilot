@@ -59,6 +59,7 @@ vi.mock('@/lib/rate-limit', () => ({
   }),
 }));
 
+import { MembershipUnavailableError } from '@/lib/auth/membership-unavailable';
 import { resetUncountedNoteReportForTests } from '@/lib/auth/session-note';
 
 import { POST } from './route';
@@ -557,6 +558,23 @@ describe('POST /api/v1/auth/signed-in — the device’s name: the model in the 
     expect(
       (await note({ model: 'iPhone 15 Pro', osName: 'iOS', osVersion: '18.1.1.1.1.1.1.1' })).label,
     ).toBe('StockPilot app on iPhone 15 Pro (iOS 18.1.1.1.1.1.1.1)');
+  });
+});
+
+describe('POST /api/v1/auth/signed-in — the membership choice could not be read', () => {
+  it('answers the 5xx the phone retries with the try-again sentence, counts nothing and writes nothing', async () => {
+    h.withApiContext.mockRejectedValue(new MembershipUnavailableError());
+    const res = await POST(req());
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      error: 'internal_error',
+      message: 'Your access could not be checked. Please try again.',
+    });
+    expect(h.rateCalls).toEqual([]);
+    expect(h.emitAuthAudit).not.toHaveBeenCalled();
+    await runAfter();
+    expect(h.noteLoginDevice).not.toHaveBeenCalled();
+    expect(h.reportError.mock.calls[0]![1]).toMatchObject({ level: 'warning' });
   });
 });
 

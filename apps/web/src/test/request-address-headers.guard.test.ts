@@ -97,19 +97,37 @@ const VERCEL_IP_HELPERS = /\b(?:ipAddress|geolocation)\b/g;
 /**
  * The source with comments turned to spaces; strings and templates are kept,
  * and every line stays where it was. A `/*` or `//` inside a string is not a
- * comment, and a comment ends where it ends. A slash after a backslash never
- * opens a comment, so a regex literal with an escaped slash (`/Chrome\//`,
- * `/\/*$/`) keeps the rest of its line. A comment opener inside a regex
- * character class (`/[/]/`) is the one case left.
+ * comment, and a comment ends where it ends. Outside a string a backslash
+ * and the character after it are read as one (an escape in a regex literal),
+ * and a slash right after such an escape closes the regex, so neither opens a
+ * comment: `/Chrome\//i`, `/\/*$/` and `/\//* 2` keep the rest of their
+ * line. Not read: a comment opener inside a regex character class (`/[/]/`),
+ * and `//` in JSX text, which hides the rest of that line.
  */
 function code(src: string): string {
   let out = '';
   let i = 0;
   let st: 'code' | "'" | '"' | '`' | 'line' | 'block' = 'code';
+  /** The last thing read in code was an escape (`\x`). */
+  let afterEscape = false;
   while (i < src.length) {
     const c = src[i]!;
     const d = src[i + 1];
     if (st === 'code') {
+      if (c === '\\') {
+        out += c + (d ?? '');
+        i += 2;
+        afterEscape = true;
+        continue;
+      }
+      if (c === '/' && afterEscape) {
+        // Closes the regex the escape was in.
+        afterEscape = false;
+        out += c;
+        i++;
+        continue;
+      }
+      afterEscape = false;
       if (c === '/' && d === '/' && src[i - 1] !== '\\') {
         st = 'line';
         out += '  ';
@@ -282,6 +300,8 @@ describe('self-test: the readings find what they must', () => {
     // A regex literal with an escaped slash: `\//` and `\/*` open no comment.
     ["const b = /Chrome\\//i.test(ua) ? h.get('x-real-ip') : null;"],
     ["const t = s.replace(/\\/*$/, '');\nconst ip = h.get('x-real-ip');\n/* end */"],
+    // A slash that closes a regex right after an escaped slash, then `*`.
+    ["const n = /\\//* 2;\nconst ip = h.get('x-real-ip');\n/* end */"],
   ])('both readings find a reader after text the comment strip must keep: %s', (src) => {
     expect(addressHeaderReads(src).length).toBeGreaterThanOrEqual(1);
     expect(strictFindings(src).length).toBeGreaterThanOrEqual(1);

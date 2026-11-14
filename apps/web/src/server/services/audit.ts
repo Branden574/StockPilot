@@ -591,10 +591,30 @@ export const AUDIT_WRITE_TRIES = 3;
 /**
  * The wait before each later try, times a random 0.5 to 1.5 so the writes of
  * one incident do not come back together (the dispatcher's delays,
- * integration-events.ts DISPATCH_RETRY_DELAYS_MS). With the deadline of each
- * try, the last try of a write ends at most about 21 s after the event.
+ * integration-events.ts DISPATCH_RETRY_DELAYS_MS).
+ *
+ * How long a write's tries last: each try of a write sends its INSERTs two at
+ * a time, each with its own AUDIT_INSERT_TIMEOUT_MS deadline, so one try of a
+ * write of N chunks takes at most ceil(N / 2) x 5 s, the first try included
+ * (as it always did). For a write of one or two INSERTs (every audit() and
+ * insertAuditRowReported() call, and auditMany() up to 200 rows) the last try
+ * ends at most about 21 s after the event. A larger batch is held to
+ * AUDIT_WRITE_BUDGET_MS.
  */
 export const AUDIT_RETRY_DELAYS_MS = [1_000, 3_000] as const;
+
+/**
+ * A later try is sent only when its wait and its own worst case (ceil(pending
+ * chunks / 2) x 5 s) end within this long of the event; otherwise the rows it
+ * would have sent are reported as never written, at once. So the tries of any
+ * write whose first try ended within the budget are over by 40 s after the
+ * event, and its last report (plus at most one window of
+ * AUDIT_LOSS_REPORT_WINDOW_MS and the webhook's 2 s) is sent inside a 60 s
+ * function. The first try itself is not shortened: a batch of N chunks still
+ * waits up to ceil(N / 2) x 5 s for it, as before. One or two chunks never meet
+ * the budget (their last try ends by about 21 s).
+ */
+export const AUDIT_WRITE_BUDGET_MS = 40_000;
 
 /**
  * Writes one instance holds in their later tries at once. A write that is
@@ -850,9 +870,11 @@ function releaseRetrySlot(generation: number): void {
   if (generation === slotGeneration) writesBeingSentAgain = Math.max(0, writesBeingSentAgain - 1);
 }
 
-/** Waits about `nominalMs` (times 0.5 to 1.5). False when the wait was ended by the test reset. */
-function waitBeforeATry(nominalMs: number): Promise<boolean> {
-  const ms = Math.round(nominalMs * (0.5 + Math.random()));
+/** A wait of about `nominalMs`: times a random 0.5 to 1.5. */
+const jittered = (nominalMs: number) => Math.round(nominalMs * (0.5 + Math.random()));
+
+/** Waits `ms`. False when the wait was ended by the test reset. */
+function waitBeforeATry(ms: number): Promise<boolean> {
   return new Promise((resolve) => {
     const end = () => {
       clearTimeout(timer);
@@ -881,7 +903,8 @@ function startAuditWrite(
   shaped: Array<AuditRowInsert | AuditRowInsert[]>,
   subject: WriteSubject,
 ): AuditWrite {
-  const occurredAt = new Date().toISOString();
+  // The time of the event: later tries carry it as created_at.
+  const startedAt = Date.now();
   const chunks: Chunk[] = shaped.map((c) => {
     if (Array.isArray(c)) {
       const rows = c.map(rowForSending);
@@ -895,7 +918,7 @@ function startAuditWrite(
     settleFirst = resolve;
   });
   const total = chunks.reduce((n, c) => n + rowsOf(c), 0);
-  const done = runAuditWrite(admin, chunks, occurredAt, subject, settleFirst).finally(() =>
+  const done = runAuditWrite(admin, chunks, startedAt, subject, settleFirst).finally(() =>
     settleFirst({ written: 0, lost: total }),
   );
   return { firstTry, done };
@@ -904,10 +927,11 @@ function startAuditWrite(
 async function runAuditWrite(
   admin: ReturnType<typeof createAdminClient>,
   chunks: Chunk[],
-  occurredAt: string,
+  startedAt: number,
   subject: WriteSubject,
   settleFirst: (counts: FirstTryCounts) => void,
 ): Promise<void> {
+  const occurredAt = new Date(startedAt).toISOString();
   const total = chunks.reduce((n, c) => n + rowsOf(c), 0);
   const failed: Failed[] = [];
   // `run` never throws (sendAuditRows returns its failure), so
@@ -952,7 +976,7 @@ async function runAuditWrite(
         failure: unanswered[0]!.failure,
       }),
     );
-    const outcome = await laterTries(admin, unanswered, occurredAt);
+    const outcome = await laterTries(admin, unanswered, startedAt);
     if (outcome) reports.push(reportAuditWrite(outcomeReport(subject, outcome, total)));
   } finally {
     releaseRetrySlot(slot);
@@ -971,12 +995,17 @@ type LaterOutcome = {
   failure: InsertFailure | null;
 };
 
-/** The later tries of a write's unwritten chunks. Null when the test reset ended them. */
+/**
+ * The later tries of a write's unwritten chunks, each sent only when it can
+ * end within AUDIT_WRITE_BUDGET_MS of the event. Null when the test reset
+ * ended them.
+ */
 async function laterTries(
   admin: ReturnType<typeof createAdminClient>,
   unanswered: Failed[],
-  occurredAt: string,
+  startedAt: number,
 ): Promise<LaterOutcome | null> {
+  const occurredAt = new Date(startedAt).toISOString();
   let pending = unanswered;
   const writtenLate: string[] = [];
   const lost: string[] = [];
@@ -984,7 +1013,10 @@ async function laterTries(
   let tries = 1;
   for (const delay of AUDIT_RETRY_DELAYS_MS) {
     if (pending.length === 0) break;
-    if (!(await waitBeforeATry(delay))) return null;
+    const wait = jittered(delay);
+    const worstTry = Math.ceil(pending.length / AUDIT_INSERT_CONCURRENCY) * AUDIT_INSERT_TIMEOUT_MS;
+    if (Date.now() + wait + worstTry - startedAt > AUDIT_WRITE_BUDGET_MS) break;
+    if (!(await waitBeforeATry(wait))) return null;
     tries += 1;
     const next: Failed[] = [];
     await mapWithConcurrency(pending, AUDIT_INSERT_CONCURRENCY, async (p) => {
@@ -1363,7 +1395,7 @@ export function resetAuditLossReportsForTests(): void {
  * flight, and the next request resumed it with the 5 s deadline long past: 35
  * reports from 2026-09-24 to 10-12, 33 of them rows that had committed but
  * whose reply was never read (17 from the nightly restore-points cron), and 2
- * Learn4Life item-create rows that were never sent. The promise the caller
+ * item-create rows that were never sent. The promise the caller
  * gets settles after the first try, so a caller that awaits waits no longer
  * than it did. auditMany and insertAuditRowReported do the same.
  *

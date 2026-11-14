@@ -7,8 +7,9 @@
 -- it is, so the web stays right on it.
 --
 -- WHAT IS PINNED
---   1. id is the primary key, and the only unique key: the skip is decided by
---      the id alone.
+--   1. id is the primary key, and the only unique index: the skip is decided
+--      by the id alone. A later try of a batch writes the rows that are not
+--      there and leaves the ones that are.
 --   2. As the server's role (service_role): a row with a chosen id is written;
 --      the later try with the same id writes nothing and changes nothing (the
 --      first row's values and time stay); with a new id it writes the row
@@ -24,7 +25,7 @@
 
 begin;
 
-select plan(14);
+select plan(16);
 
 \set rowA '\'a0800000-0000-4000-8000-0000000000a1\''
 \set rowB '\'a0800000-0000-4000-8000-0000000000b1\''
@@ -34,11 +35,14 @@ select plan(14);
 
 -- ── 1. The key ──────────────────────────────────────────────────────────────
 select col_is_pk('public', 'audit_logs', 'id', 'S80/1: id is the primary key');
+-- Indexes, not constraints: a plain or partial unique index makes no
+-- constraint row, and any second unique index would refuse a later try's row.
 select is(
-  (select array_agg(conname::text order by conname) from pg_constraint
-    where conrelid = 'public.audit_logs'::regclass and contype in ('p', 'u')),
+  (select array_agg(c.relname::text order by c.relname)
+     from pg_index i join pg_class c on c.oid = i.indexrelid
+    where i.indrelid = 'public.audit_logs'::regclass and i.indisunique),
   array['audit_logs_pkey'],
-  'S80/2: the primary key is the only unique key');
+  'S80/2: the primary key is the only unique index');
 select ok(
   (select c.relrowsecurity from pg_class c join pg_namespace n on n.oid = c.relnamespace
     where n.nspname = 'public' and c.relname = 'audit_logs'),
@@ -85,6 +89,21 @@ select is(
   (select created_at from public.audit_logs where id = :rowB),
   '2026-11-14 10:00:00+00'::timestamptz,
   'S80/11: with the time of the event it was sent with');
+
+-- A later try of a batch in which one row is already there writes the others.
+select lives_ok(
+  $$ insert into public.audit_logs (id, event, metadata, created_at)
+     values ('a0800000-0000-4000-8000-0000000000a1', 'user.sign_in_failed', '{"try": 2}', '2026-11-14 10:00:00+00'),
+            ('a0800000-0000-4000-8000-0000000000a2', 'user.sign_in_failed', '{"try": 2}', '2026-11-14 10:00:00+00'),
+            ('a0800000-0000-4000-8000-0000000000a3', 'user.sign_in_failed', '{"try": 2}', '2026-11-14 10:00:00+00')
+     on conflict (id) do nothing $$,
+  'S80/15: a later try of a batch with one row already there is accepted');
+select is(
+  (select array_agg(metadata->>'try' order by id) from public.audit_logs
+    where id in ('a0800000-0000-4000-8000-0000000000a1', 'a0800000-0000-4000-8000-0000000000a2',
+                 'a0800000-0000-4000-8000-0000000000a3')),
+  array['1', '2', '2'],
+  'S80/16: and writes the two that were not, leaving the one that was');
 
 -- ── 3. The other order: the later try landed first ──────────────────────────
 insert into public.audit_logs (id, event, metadata, created_at)

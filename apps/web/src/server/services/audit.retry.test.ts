@@ -82,6 +82,7 @@ import {
   AUDIT_LOSS_REPORT_WINDOW_MS,
   AUDIT_RETRY_DELAYS_MS,
   AUDIT_RETRY_SLOTS,
+  AUDIT_WRITE_BUDGET_MS,
   AUDIT_WRITE_TRIES,
   auditMany,
   insertAuditRowReported,
@@ -273,26 +274,33 @@ describe('a row whose first try was not written', () => {
     expect(upsertedRows()[0]!.created_at).toBe('2026-11-14T10:00:00.000Z');
   });
 
-  it('the caller waits for the first try only; the later tries are held with the write', async () => {
-    h.insert.mockImplementation(never);
-    h.upsert.mockImplementation(never);
-    const returned = watch(audit(payload(1), ctx));
-    const all = watch(held());
+  it.each<[string, () => Promise<unknown>]>([
+    ['audit()', () => audit(payload(1), ctx)],
+    ['insertAuditRowReported()', () => insertAuditRowReported(signIn)],
+    ['auditMany()', () => auditMany([payload(1)], ctx)],
+  ])(
+    '%s: the caller waits for the first try only; the later tries are held with the write',
+    async (_name, write) => {
+      h.insert.mockImplementation(never);
+      h.upsert.mockImplementation(never);
+      const returned = watch(write());
+      const all = watch(held());
 
-    await vi.advanceTimersByTimeAsync(AUDIT_INSERT_TIMEOUT_MS);
-    expect(returned.settled).toBe(true);
-    expect(all.settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(AUDIT_INSERT_TIMEOUT_MS);
+      expect(returned.settled).toBe(true);
+      expect(all.settled).toBe(false);
 
-    // Try 2 at 5 s + 1 s, try 3 at 11 s + 3 s, each with its own deadline.
-    await vi.advanceTimersByTimeAsync(AUDIT_RETRY_DELAYS_MS[0] + AUDIT_INSERT_TIMEOUT_MS);
-    expect(h.upsert).toHaveBeenCalledTimes(1);
-    expect(all.settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(AUDIT_RETRY_DELAYS_MS[1] + AUDIT_INSERT_TIMEOUT_MS);
-    expect(h.upsert).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(all.settled).toBe(true);
-    expect(AUDIT_WRITE_TRIES).toBe(3);
-  });
+      // Try 2 at 5 s + 1 s, try 3 at 11 s + 3 s, each with its own deadline.
+      await vi.advanceTimersByTimeAsync(AUDIT_RETRY_DELAYS_MS[0] + AUDIT_INSERT_TIMEOUT_MS);
+      expect(h.upsert).toHaveBeenCalledTimes(1);
+      expect(all.settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(AUDIT_RETRY_DELAYS_MS[1] + AUDIT_INSERT_TIMEOUT_MS);
+      expect(h.upsert).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(all.settled).toBe(true);
+      expect(AUDIT_WRITE_TRIES).toBe(3);
+    },
+  );
 
   it('a row no try could write: sending again at once, then never written after 3 tries, with the ids in the text and never the row', async () => {
     h.insert.mockImplementation(never);
@@ -421,6 +429,44 @@ describe('auditMany', () => {
     // The rest comes with the window: 100 sent again, then written on a later try.
     expect(extras.at(-1)).toMatchObject({ sentAgain: 100, writtenLate: 100 });
     expect(JSON.stringify(h.reportError.mock.calls)).not.toContain(SENSITIVE);
+  });
+});
+
+describe('a later try starts only when it can end within AUDIT_WRITE_BUDGET_MS of the event', () => {
+  it('a 6-chunk batch nothing answers: one later try, then never written after 2 tries, held 31 s', async () => {
+    expect(AUDIT_WRITE_BUDGET_MS).toBe(40_000);
+    h.insert.mockImplementation(never);
+    h.upsert.mockImplementation(never);
+    void auditMany(
+      Array.from({ length: 600 }, (_, i) => payload(i)),
+      ctx,
+    );
+    const all = watch(held());
+    // First try: 6 chunks, two at a time, 5 s each: 15 s. Try 2: 1 s, then
+    // 15 s (ends at 31 s). Try 3 would end at 31 + 3 + 15 = 49 s: not sent.
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(all.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(all.settled).toBe(true);
+    expect(h.insert).toHaveBeenCalledTimes(6);
+    expect(h.upsert).toHaveBeenCalledTimes(6);
+    const last = h.reportError.mock.calls.length - 1;
+    expect(reportExtra(last)).toMatchObject({ outcome: 'not_written', tries: 2, lost: 600 });
+    expect(reportText(last)).toMatch(/never written after 2 tries/);
+    await vi.runAllTimersAsync();
+    expect(h.upsert).toHaveBeenCalledTimes(6);
+  });
+
+  it('one or two chunks keep both later tries (they end about 21 s after the event)', async () => {
+    h.insert.mockImplementation(never);
+    h.upsert.mockImplementation(never);
+    void auditMany(
+      Array.from({ length: 200 }, (_, i) => payload(i)),
+      ctx,
+    );
+    await vi.runAllTimersAsync();
+    expect(h.upsert).toHaveBeenCalledTimes(4);
   });
 });
 

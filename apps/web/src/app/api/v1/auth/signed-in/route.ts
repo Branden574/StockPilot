@@ -189,7 +189,7 @@ export async function POST(req: Request) {
 
     if (uncounted) {
       // No count from the limiter: this instance's own bound decides.
-      const admitted = admitUncountedNote(ctx.userId, sessionId);
+      const admitted = admitUncountedNote('in', ctx.userId, sessionId);
       if (admitted !== 'write') {
         reportUncountedNote(uncounted);
         if (admitted === 'repeat') return NextResponse.json({ ok: true });

@@ -87,7 +87,7 @@ let lastUncountedReportAt = 0;
 /** Keys each in-memory bound below holds at most; the oldest is forgotten first. */
 export const UNCOUNTED_NOTES_REMEMBERED = 5_000;
 
-/** Full session-id hash -> when its uncounted row was written, on this instance. */
+/** Note and full session-id hash -> when its uncounted row was written, on this instance. */
 const uncountedSessions = new Map<string, number>();
 /** Account id -> its uncounted rows in the hour that started at `since`, on this instance. */
 const uncountedAccounts = new Map<string, { since: number; count: number }>();
@@ -104,28 +104,32 @@ function remember<V>(map: Map<string, V>, key: string, value: V): void {
 }
 
 /**
- * While the limiter cannot answer, this instance bounds the sign-in note's
- * rows itself, in memory: a session's row once a day (SESSION_NOTE_WINDOW_MS),
- * an account's ACCOUNT_NOTE_LIMIT rows an hour. The memory is this instance's
- * own and goes with it.
+ * While the limiter cannot answer, this instance bounds the phone notes' rows
+ * itself, in memory, as the buckets do when it can: a session's sign-in row
+ * and its sign-out row once a day each (SESSION_NOTE_WINDOW_MS), and an
+ * account's ACCOUNT_NOTE_LIMIT rows an hour (sign-in notes, and sign-out notes
+ * of a token with no session id, which the bucket counts the same way). The
+ * memory is this instance's own and goes with it.
  *   'write'          the row is written (and counted here);
- *   'repeat'         this session's row was already written here: no row;
- *   'account_limit'  the account's hour is used up here: no row, a 429.
+ *   'repeat'         this session's note was already written here: no row;
+ *   'account_limit'  the account's hour is used up here: no row, answered as
+ *                    the route answers a counted refusal.
  */
 export function admitUncountedNote(
+  note: 'in' | 'out',
   userId: string,
-  sessionId: string,
+  sessionId: string | null,
   now: number = Date.now(),
 ): 'write' | 'repeat' | 'account_limit' {
-  const sessionKey = sha256(sessionId);
-  const writtenAt = uncountedSessions.get(sessionKey);
+  const sessionKey = sessionId ? `${note}:${sha256(sessionId)}` : null;
+  const writtenAt = sessionKey ? uncountedSessions.get(sessionKey) : undefined;
   if (writtenAt !== undefined && now - writtenAt < SESSION_NOTE_WINDOW_MS) return 'repeat';
   const account = uncountedAccounts.get(userId);
   const hour =
     account && now - account.since < ACCOUNT_NOTE_WINDOW_MS ? account : { since: now, count: 0 };
   if (hour.count >= ACCOUNT_NOTE_LIMIT) return 'account_limit';
   remember(uncountedAccounts, userId, { since: hour.since, count: hour.count + 1 });
-  remember(uncountedSessions, sessionKey, now);
+  if (sessionKey) remember(uncountedSessions, sessionKey, now);
   return 'write';
 }
 
