@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { confirmLanding } from '@/lib/auth/confirm-landing';
 import {
+  emailChangeRequestTimeMissing,
   lookUpConfirmRecipient,
   pendingEmailChangeFor,
   verifyConfirmRecipient,
@@ -65,8 +66,9 @@ import type { EmailOtpType } from '@supabase/supabase-js';
  *     moved or relabelled `r` gets the type's refused answer and one past its
  *     hour the expired answer, with no lookup. An email-change link whose
  *     change GoTrue no longer holds (done, cancelled, or replaced by a newer
- *     request) gets the expired answer and no address. POST checks `r` again
- *     before verifyOtp, so the token is not spent;
+ *     request), or whose pending change comes back without a readable request
+ *     time (reported), gets the expired answer and no address. POST checks
+ *     `r` again before verifyOtp, so the token is not spent;
  *   - a browser already signed in as another account is told both addresses
  *     (and the one already signed in as the link's account is told nothing);
  *     another site can no longer sign the browser out first
@@ -476,11 +478,24 @@ export async function GET(request: NextRequest) {
   if (type === 'email_change') {
     // GoTrue keeps one pending change, and every new request replaces the
     // links of the last one. A link whose change is done, cancelled or
-    // replaced gets the expired answer and no address: the account's
+    // replaced, or whose pending change GoTrue gives no readable request time
+    // for, gets the expired answer and no address: the account's
     // addresses now are not the ones it was sent for (a link sent to a
     // mistyped address must not show the corrected one).
     const pending = pendingEmailChangeFor(account, verdict.issued);
-    if (pending === null) return expiredAnswer(origin, type);
+    if (pending === null) {
+      if (emailChangeRequestTimeMissing(account)) {
+        // GoTrue stores a request time with every pending change; without a
+        // readable one no link can be told from a later request's, so this one
+        // gets the expired answer too, and the change in GoTrue is reported.
+        // The type only (never the id, an address, the token or r).
+        void reportError(
+          new Error('a pending email change came back without a readable request time'),
+          { tag: 'auth.email_change_request_time_missing', level: 'warning', extra: { type } },
+        );
+      }
+      return expiredAnswer(origin, type);
+    }
     line = emailChangeLine(account.email, pending);
     newEmail = pending;
   } else {

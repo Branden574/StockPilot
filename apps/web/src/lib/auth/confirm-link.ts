@@ -85,7 +85,8 @@ export const CONFIRM_RECIPIENT_LOOKUP_TIMEOUT_MS = 5000;
  * The account a signed link is for, read from GoTrue with the service client:
  *   found   its sign-in address, the new one an email change is waiting on
  *           (null when none) and when GoTrue recorded that change's latest
- *           request (email_change_sent_at, in ms; null when it gives none);
+ *           request (email_change_sent_at, in ms; null when it gives none or
+ *           one that cannot be read as a date);
  *   gone    GoTrue answered 404 user_not_found (lib/auth/gotrue-user-not-found,
  *           the one reading account deletion uses), the account has no address,
  *           or it is disabled (banned_until in the future,
@@ -122,22 +123,48 @@ export const EMAIL_CHANGE_REQUEST_SKEW_S = 5;
  * The page then shows the expired answer and no address: the account's
  * addresses are no longer the ones the link was sent for, and a link sent to a
  * mistyped address must not show its holder the address the person meant.
+ *   - GoTrue gives no request time for the pending change, or one that cannot
+ *     be read (emailChangeRequestTimeMissing): without it no link can be told
+ *     apart from a later request's, so none is taken as the live one.
  * GoTrue stores the request time with the pending address (and the cancel
- * clears both); were it ever missing, the link is taken as the live one, as
- * before this check, rather than refusing every email change.
+ * clears both), so the last case is not expected; the route reports it
+ * (auth.email_change_request_time_missing), so a change in what GoTrue
+ * returns shows up as a report.
  */
 export function pendingEmailChangeFor(
   account: { newEmail: string | null; emailChangeSentAt: number | null },
   issued: number,
 ): string | null {
   if (!account.newEmail) return null;
-  if (
-    account.emailChangeSentAt !== null &&
-    account.emailChangeSentAt / 1000 > issued + EMAIL_CHANGE_REQUEST_SKEW_S
-  ) {
-    return null;
-  }
+  const sentAt = account.emailChangeSentAt;
+  // Pending with no readable request time (emailChangeRequestTimeMissing).
+  if (sentAt === null) return null;
+  if (sentAt / 1000 > issued + EMAIL_CHANGE_REQUEST_SKEW_S) return null;
   return account.newEmail;
+}
+
+/**
+ * An email change is pending but GoTrue gave no readable time for its request
+ * (readRecipient reads a missing or unreadable one as null).
+ */
+export function emailChangeRequestTimeMissing(account: {
+  newEmail: string | null;
+  emailChangeSentAt: number | null;
+}): boolean {
+  return Boolean(account.newEmail) && account.emailChangeSentAt === null;
+}
+
+/**
+ * GoTrue's email_change_sent_at in ms, or null when it is missing or is not a
+ * date written as one (GoTrue writes RFC 3339). A bare number, or a string
+ * Date.parse would stretch into some year, is not read as a time.
+ */
+function requestTime(value: unknown): number | null {
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}[T ]/.test(text)) return null;
+  const ms = Date.parse(text);
+  return Number.isFinite(ms) ? ms : null;
 }
 
 async function readRecipient(userId: string, now: Date): Promise<ConfirmRecipientAccount> {
@@ -152,12 +179,11 @@ async function readRecipient(userId: string, now: Date): Promise<ConfirmRecipien
     const bannedUntil = Date.parse(user.banned_until ?? '');
     if (Number.isFinite(bannedUntil) && bannedUntil > now.getTime()) return { kind: 'gone' };
     const pending = typeof user.new_email === 'string' ? user.new_email.trim() : '';
-    const sentAt = Date.parse(user.email_change_sent_at ?? '');
     return {
       kind: 'found',
       email,
       newEmail: pending || null,
-      emailChangeSentAt: Number.isFinite(sentAt) ? sentAt : null,
+      emailChangeSentAt: requestTime(user.email_change_sent_at),
     };
   } catch {
     return { kind: 'failed', reason: 'error' };
