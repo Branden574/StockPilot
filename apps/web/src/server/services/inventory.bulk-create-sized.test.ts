@@ -76,6 +76,8 @@ function buildStub(
     opening?: { message: string; code?: string; hint?: string };
     /** The SKU the insert hands back for a row (a SKU the request did not send). */
     renameSku?: (sku: string) => string;
+    /** The insert hands back one row fewer than it was sent. */
+    dropLastRow?: boolean;
   } = {},
 ) {
   const insertedItems: Array<Record<string, unknown>> = [];
@@ -144,11 +146,13 @@ function buildStub(
 
                 then: (cb: any) =>
                   cb({
-                    data: rows.map((r, i) => ({
-                      ...r,
-                      id: `i-${i}`,
-                      sku: failure.renameSku ? failure.renameSku(r.sku as string) : r.sku,
-                    })),
+                    data: rows
+                      .map((r, i) => ({
+                        ...r,
+                        id: `i-${i}`,
+                        sku: failure.renameSku ? failure.renameSku(r.sku as string) : r.sku,
+                      }))
+                      .slice(0, failure.dropLastRow ? rows.length - 1 : rows.length),
                     error: null,
                   }),
               }),
@@ -621,8 +625,28 @@ describe('InventoryService.bulkCreateSizedVariants: opening failure', () => {
 
     expect(err.code).toBe('conflict');
     expect(err.message).toBe(
-      'These variants were saved with zero on hand: their opening quantities could not be recorded. Open each one and use Adjust stock to set its quantity.',
+      'These variants were saved with zero on hand: you do not have permission to add stock. Someone who can adjust stock must set their quantities.',
     );
+  });
+
+  it('an insert that hands back fewer rows than were sent says could not be confirmed, and opens nothing', async () => {
+    const stub = buildStub([], undefined, [], { dropLastRow: true });
+    const err = (await makeSvc(stub)
+      .bulkCreateSizedVariants({
+        ...BASE_INPUT,
+        variants: [
+          { size: 'S', quantity: 3 },
+          { size: 'M', quantity: 2 },
+        ],
+      })
+      .catch((e: unknown) => e)) as { code: string; message: string; details: { itemIds: string[] } };
+
+    expect(stub.openings).toEqual([]);
+    expect(err.code).toBe('conflict');
+    expect(err.message).toBe(
+      'These variants were saved, but their opening quantities could not be confirmed. Open each one and check its quantity on hand before receiving, picking or counting against it.',
+    );
+    expect(err.details.itemIds).toEqual(['i-0']);
   });
 
   it('a size whose SKU comes back other than requested is told, never left at 0 in silence', async () => {

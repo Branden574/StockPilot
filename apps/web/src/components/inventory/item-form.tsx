@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import { AddSizedVariantsButton } from '@/components/inventory/add-sized-variants-button';
 import { CustomFieldsInputs } from '@/components/inventory/custom-fields-inputs';
 import { GroupingPreview } from '@/components/inventory/grouping-preview';
+import { openingStockSavedHref } from '@/components/inventory/opening-stock-saved';
 import { touchTargetClass } from '@/components/patterns/touch-target';
 import { BatchProgress, uploadWithProgress } from '@/lib/upload-with-progress';
 import {
@@ -3109,21 +3110,6 @@ export function skuTakenOpenHref(error: ActionError, isBook: boolean): string | 
   const id = error.details?.conflictItemId;
   if (error.details?.reason !== 'sku_taken' || typeof id !== 'string' || !id) return null;
   return `${isBook ? '/dashboard/books' : '/dashboard/inventory'}/${id}`;
-}
-
-/**
- * Where to go after a create whose items were SAVED but whose opening quantity
- * could not be recorded (the opening helper's 'opening_stock_not_recorded'
- * conflict): the item's page for one item, the list for several. Null for any
- * other refusal, which keeps the form as it is.
- */
-export function openingStockSavedHref(error: ActionError, isBook: boolean): string | null {
-  if (error.code !== 'conflict' || error.details?.reason !== 'opening_stock_not_recorded') return null;
-  const base = isBook ? '/dashboard/books' : '/dashboard/inventory';
-  const ids = error.details?.itemIds;
-  const one =
-    error.details?.total === 1 && Array.isArray(ids) && ids.length === 1 && typeof ids[0] === 'string';
-  return one ? `${base}/${ids[0] as string}` : base;
 }
 
 function PlacementOnlyNote({ children }: { children?: React.ReactNode }) {

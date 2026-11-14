@@ -110,7 +110,7 @@ describe('InventoryService.create: opening stock through open_item_stock', () =>
     await expect(svc.create({ ...CREATE_BASE })).rejects.toMatchObject({
       code: 'conflict',
       message:
-        'This item was saved with zero on hand: its opening quantity could not be recorded. Open the item and use Adjust stock to set its quantity.',
+        'This item was saved with zero on hand: you do not have permission to add stock. Someone who can adjust stock must set its quantity.',
       details: expect.objectContaining({ reason: 'opening_stock_not_recorded', itemIds: ['itm-new'] }),
     });
     expect(directLedgerWrites(stub)).toEqual([]);
@@ -192,7 +192,7 @@ describe('InventoryService.bulkCreate: opening stock through open_item_stock', (
       svc.bulkCreate({ warehouseId: 'wh-1', items: ITEMS.slice(0, 2) }),
     ).rejects.toMatchObject({
       code: 'conflict',
-      message: expect.stringMatching(/^These items were saved with zero on hand: their opening quantities could not be recorded\./),
+      message: expect.stringMatching(/^These items were saved with zero on hand: you do not have permission to add stock\./),
     });
     expect(directLedgerWrites(stub)).toEqual([]);
   });
@@ -220,6 +220,47 @@ describe('InventoryService.bulkCreate: opening stock through open_item_stock', (
       message: expect.stringMatching(/^These items were saved, but 1 of 2 have zero on hand/),
     });
     expect(err.details.itemIds).toEqual(['itm-x']);
+  });
+
+  it('an insert that hands back fewer rows than were sent opens nothing and says the quantities could not be confirmed', async () => {
+    const stub = openingStub({
+      'inventory_items.select': { data: [], error: null, count: 0 },
+      'inventory_items.insert': { data: [{ id: 'itm-a', sku: 'SKU-A' }], error: null },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    const err = (await svc
+      .bulkCreate({ warehouseId: 'wh-1', items: ITEMS.slice(0, 2) })
+      .catch((e: unknown) => e)) as { code: string; message: string; details: { itemIds: string[]; outcome: string } };
+    expect(stub.rpcCalls.filter((c) => c.name === 'open_item_stock')).toEqual([]);
+    expect(err.code).toBe('conflict');
+    expect(err.message).toBe(
+      'These items were saved, but their opening quantities could not be confirmed. Open each one and check its quantity on hand before receiving, picking or counting against it.',
+    );
+    expect(err.details.itemIds).toEqual(['itm-a']);
+    expect(err.details.outcome).toBe('unchecked');
+  });
+
+  it('a stocked SKU missing from the rows, with no row left to account for it, says could not be confirmed', async () => {
+    const stub = openingStub({
+      'inventory_items.select': { data: [], error: null, count: 0 },
+      // Two rows for two sent, but both under SKU-A: SKU-B (asked for 5) is unaccounted for.
+      'inventory_items.insert': {
+        data: [
+          { id: 'itm-a', sku: 'SKU-A' },
+          { id: 'itm-a2', sku: 'SKU-A' },
+        ],
+        error: null,
+      },
+    });
+    const svc = new InventoryService(makeServiceContext(stub.client));
+
+    const err = (await svc
+      .bulkCreate({ warehouseId: 'wh-1', items: ITEMS.slice(0, 2) })
+      .catch((e: unknown) => e)) as { message: string; details: { itemIds: string[] } };
+    expect(stub.rpcCalls.filter((c) => c.name === 'open_item_stock')).toEqual([]);
+    expect(err.message).toMatch(/^These items were saved, but their opening quantities could not be confirmed\./);
+    expect(err.details.itemIds).toEqual(['itm-a', 'itm-a2']);
   });
 
   it('a batch with no stocked rows opens nothing', async () => {

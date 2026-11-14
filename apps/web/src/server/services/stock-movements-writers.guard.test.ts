@@ -12,8 +12,9 @@
  * WHAT IS SCANNED. Every source file (.ts .tsx .js .jsx .mjs .cjs .mts .cts)
  * that git lists under apps/web/src, apps/mobile and packages (tracked files
  * and new files that are not ignored). Declaration files and test or spec
- * files are left out: they never ship. The scan reads the TypeScript syntax
- * tree, so comments are never code; a string or template in a TYPE position
+ * files are left out: they never ship, and rule 4 keeps it so (no scanned
+ * file imports one). The scan reads the TypeScript syntax tree, so comments
+ * are never code; a string or template in a TYPE position
  * (Database['public']['Tables']['stock_movements']) is never a request.
  *
  * THE RULES.
@@ -25,13 +26,21 @@
  *   2. Every other string or template text that names stock_movements fails
  *      (a constant, a helper argument, a REST path, an object field), unless
  *      it is one of the HOLDERS below, each a read or metadata, each pinned
- *      to its exact place.
- *   3. A `.from(` whose table is computed (a template with a part, a
- *      concatenation, a call) fails: the name it builds cannot be read.
+ *      to its file and its exact place (the read helper's argument: in a file
+ *      that imports readInActiveOrg from lib/in-active-org).
+ *   3. A table builder `.from(` takes a string literal (or a template with no
+ *      part). Any other table argument (a variable, a template with a part, a
+ *      concatenation, a call, a value read from the environment or JSON)
+ *      fails, because the name it carries cannot be read, unless the call sits
+ *      in one of the DYNAMIC_SITES below (file and function), each a read
+ *      checked by hand. Storage buckets (`.storage.from(`) and Array.from and
+ *      the like are not table builders.
+ *   4. No scanned file imports a test or spec file (import, export from,
+ *      import(), require()), so code left out of the scan never ships.
  *
  * IF THIS FAILS. Write the movement through a ledger function (an RPC), never
  * through the table. A new READ that cannot be a plain .from('...').select(
- * goes in HOLDERS with the reason.
+ * goes in HOLDERS or DYNAMIC_SITES with the reason.
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -54,8 +63,67 @@ const READ_HELPER = {
 } as const;
 
 /**
- * Places that name the table without a builder call, each a read or metadata.
- * `file` null = any file (the read helper's argument).
+ * Table builders whose table is a variable, each pinned to its file and the
+ * function it sits in. Each reads only (select, or a head count).
+ */
+const DYNAMIC_SITES: ReadonlyArray<{ file: string; fn: string; why: string }> = [
+  { file: 'apps/mobile/src/lib/id-batches.ts', fn: 'idReadSelect', why: 'reads rows by id in batches' },
+  { file: 'apps/mobile/src/lib/rental-view.ts', fn: 'selectFrom', why: 'reads a rental view' },
+  { file: 'apps/web/src/server/services/context.ts', fn: 'readCount', why: 'a head count' },
+  { file: 'apps/web/src/server/services/item-grouping.ts', fn: 'named', why: 'reads names by id' },
+  { file: READ_HELPER.file, fn: READ_HELPER.name, why: 'reads one row in the active organization' },
+  { file: 'apps/web/src/server/services/maintenance-requests.ts', fn: 'resolveRelatedId', why: 'reads one related row' },
+  { file: 'apps/web/src/server/services/recovery.ts', fn: 'listDeleted', why: 'lists archived rows' },
+  { file: 'apps/web/src/server/services/recovery.ts', fn: 'restore', why: 'restores an archived row of an allow-listed table' },
+  { file: 'apps/web/src/server/services/restore-points.ts', fn: 'matchRefMap', why: 'reads rows to match a restore point' },
+  { file: 'apps/web/src/server/services/restore-points.ts', fn: 'ensureRefMap', why: 'reads rows to match a restore point' },
+];
+
+/** A specifier that names a test or spec file. */
+const TEST_SPECIFIER = /\.(test|spec)(\.[cm]?[jt]sx?)?$/;
+
+/**
+ * True when the file is the read helper's own, or imports readInActiveOrg
+ * under that name from lib/in-active-org.
+ */
+function importsReadHelper(sf: ts.SourceFile): boolean {
+  if (sf.fileName === READ_HELPER.file) return true;
+  return sf.statements.some((st) => {
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) return false;
+    if (!/(^|\/)in-active-org$/.test(st.moduleSpecifier.text)) return false;
+    const named = st.importClause?.namedBindings;
+    return (
+      !!named &&
+      ts.isNamedImports(named) &&
+      named.elements.some(
+        (e) => e.name.text === READ_HELPER.name && (!e.propertyName || e.propertyName.text === READ_HELPER.name),
+      )
+    );
+  });
+}
+
+/** True when the file declares its own readInActiveOrg (it would shadow the import). */
+function declaresReadHelper(sf: ts.SourceFile): boolean {
+  if (sf.fileName === READ_HELPER.file) return false;
+  let found = false;
+  const visit = (n: ts.Node) => {
+    if (
+      (ts.isFunctionDeclaration(n) || ts.isVariableDeclaration(n) || ts.isParameter(n)) &&
+      n.name &&
+      ts.isIdentifier(n.name) &&
+      n.name.text === READ_HELPER.name
+    ) {
+      found = true;
+    }
+    if (!found) ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return found;
+}
+
+/**
+ * Places that name the table without a builder call, each a read or metadata,
+ * each pinned by file path (the read helper's argument: by its import).
  */
 const HOLDERS: ReadonlyArray<{
   file: string | null;
@@ -67,7 +135,10 @@ const HOLDERS: ReadonlyArray<{
     why: 'the table argument of readInActiveOrg, which only reads (checked below)',
     holds: (lit) => {
       const call = lit.parent;
+      const sf = lit.getSourceFile();
       return (
+        importsReadHelper(sf) &&
+        !declaresReadHelper(sf) &&
         !!call &&
         ts.isCallExpression(call) &&
         ts.isIdentifier(call.expression) &&
@@ -255,18 +326,81 @@ function where(sf: ts.SourceFile, node: ts.Node): string {
   return `${sf.fileName}:${line + 1}`;
 }
 
-/** Every place the apps could write stock_movements (rules 1-3). */
+/** `x.storage.from(`: a storage bucket, not a table. */
+function isStorageFrom(call: ts.CallExpression): boolean {
+  const callee = unwrap(call.expression);
+  if (!ts.isPropertyAccessExpression(callee) && !ts.isElementAccessExpression(callee)) return false;
+  const obj = unwrap(callee.expression);
+  return ts.isPropertyAccessExpression(obj) && obj.name.text === 'storage';
+}
+
+/** A table builder whose table argument is not a string literal (or a template with no part). */
+function isVariableTableFrom(node: ts.Node): node is ts.CallExpression {
+  if (!isFromCall(node) || !node.arguments[0] || isBuiltinFrom(node) || isStorageFrom(node)) return false;
+  const a = unwrap(node.arguments[0]);
+  return !ts.isStringLiteral(a) && !ts.isNoSubstitutionTemplateLiteral(a);
+}
+
+/** The name of the nearest named function around `node` (anonymous ones are passed through). */
+function enclosingFunctionName(node: ts.Node): string | null {
+  for (let p = node.parent; p; p = p.parent) {
+    if ((ts.isFunctionDeclaration(p) || ts.isMethodDeclaration(p)) && p.name && ts.isIdentifier(p.name)) {
+      return p.name.text;
+    }
+    if (ts.isArrowFunction(p) || ts.isFunctionExpression(p)) {
+      const holder = outer(p).parent;
+      if (holder && (ts.isVariableDeclaration(holder) || ts.isPropertyAssignment(holder)) && ts.isIdentifier(holder.name)) {
+        return holder.name.text;
+      }
+      if (ts.isFunctionExpression(p) && p.name) return p.name.text;
+    }
+  }
+  return null;
+}
+
+/** The functions of a file that hold a table builder with a variable table. */
+function dynamicSitesIn(fileName: string, text: string): string[] {
+  const sf = parse(fileName, text);
+  const names: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (isVariableTableFrom(node)) names.push(enclosingFunctionName(node) ?? '(top level)');
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return names;
+}
+
+/** The specifier when `node` imports a module (import, export from, import(), require()). */
+function importedSpecifier(node: ts.Node): string | null {
+  if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
+    return ts.isStringLiteral(node.moduleSpecifier) ? node.moduleSpecifier.text : null;
+  }
+  if (ts.isCallExpression(node) && node.arguments[0]) {
+    const isImport = node.expression.kind === ts.SyntaxKind.ImportKeyword;
+    const isRequire = ts.isIdentifier(node.expression) && node.expression.text === 'require';
+    const a = unwrap(node.arguments[0]);
+    if ((isImport || isRequire) && (ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a))) return a.text;
+  }
+  return null;
+}
+
+/** Every place the apps could write stock_movements (rules 1-4). */
 function findLedgerWrites(fileName: string, text: string): string[] {
   const sf = parse(fileName, text);
   const found: string[] = [];
   const visit = (node: ts.Node) => {
-    // Rule 3: a computed table name (Array.from, Buffer.from and the like
-    // are not table builders).
-    if (isFromCall(node) && node.arguments[0] && !isBuiltinFrom(node)) {
-      const a = unwrap(node.arguments[0]);
-      if (ts.isTemplateExpression(a) || ts.isBinaryExpression(a) || ts.isCallExpression(a)) {
-        found.push(`${where(sf, node)} .from(${a.getText(sf)}) (computed table name)`);
+    // Rule 3: a table builder whose table is not a literal, outside a pinned
+    // site (Array.from, Buffer.from and storage buckets are not table builders).
+    if (isVariableTableFrom(node)) {
+      const fn = enclosingFunctionName(node);
+      if (!DYNAMIC_SITES.some((d) => d.file === fileName && d.fn === fn)) {
+        found.push(`${where(sf, node)} .from(${unwrap(node.arguments[0]!).getText(sf)}) (table name not a literal)`);
       }
+    }
+    // Rule 4: no test or spec file is imported by shipped code.
+    const spec = importedSpecifier(node);
+    if (spec !== null && TEST_SPECIFIER.test(spec)) {
+      found.push(`${where(sf, node)} imports a test file ('${spec}')`);
     }
     // Rules 1 and 2: every text naming the table.
     if (isTableText(node) && !inTypePosition(node)) {
@@ -311,8 +445,15 @@ describe('stock_movements is read, never written, by the apps', () => {
     let scanned = 0;
     for (const f of files) {
       const text = readFileSync(path.join(REPO, f), 'utf8');
-      // A file that neither names the table nor calls a builder cannot break a rule.
-      if (!text.includes(TABLE) && !/\.from\(|\[\s*['"`]from['"`]\s*\]/.test(text)) continue;
+      // A file that neither names the table, calls a builder nor names a test
+      // or spec file cannot break a rule.
+      if (
+        !text.includes(TABLE) &&
+        !/\.from\(|\[\s*['"`]from['"`]\s*\]/.test(text) &&
+        !/\.(test|spec)\b/.test(text)
+      ) {
+        continue;
+      }
       scanned += 1;
       found.push(...findLedgerWrites(f, text));
       reads += (text.match(/\.from\(\s*['"`]stock_movements['"`]\s*\)/g) ?? []).length;
@@ -362,6 +503,18 @@ describe('stock_movements is read, never written, by the apps', () => {
     ['a raw REST fetch', "fetch(url + '/rest/v1/stock_movements', { method: 'POST', body });"],
     ['a raw REST fetch in a template', 'fetch(`${url}/rest/v1/stock_movements`, { method: "POST", body });'],
     ['a string in an object', "post({ table: 'stock_movements', row });"],
+    ['a name built without the literal, in a variable', "const T = 'stock_' + 'movements'; sb.from(T).insert({});"],
+    ['a name read from the environment', 'sb.from(process.env.LEDGER_TABLE!).insert({});'],
+    ['a name read from JSON', 'sb.from(JSON.parse(cfg).table).insert({});'],
+    [
+      'a local function named like the read helper',
+      "function readInActiveOrg(c: unknown, t: string) { return sb.from(t).delete(); } readInActiveOrg(ctx, 'stock_movements');",
+    ],
+    ['the read helper called without its import', "await readInActiveOrg(ctx, 'stock_movements', id, 'x');"],
+    ['a static import of a test file', "import { rows } from './fixtures.test';"],
+    ['a re-export of a spec file', "export * from '../lib/ledger.spec';"],
+    ['a dynamic import of a test file', "const m = await import('./writer.test.ts');"],
+    ['a require of a test file', "const m = require('./writer.test.js');"],
   ])('control: %s is caught', (_label, code) => {
     expect(findLedgerWrites('sample.ts', code).length).toBeGreaterThan(0);
   });
@@ -375,9 +528,29 @@ describe('stock_movements is read, never written, by the apps', () => {
       "/* fetch('/rest/v1/stock_movements', { method: 'POST' }) */",
       "type T = Database['public']['Tables']['stock_movements']['Row'];",
       "type U = 'stock_movements' | 'inventory_items';",
+      "import { readInActiveOrg } from '@/server/services/lib/in-active-org';",
       "await readInActiveOrg(ctx, 'stock_movements', id, 'Movement not found.');",
+      "import { latest } from './latest-test-run';",
     ].join('\n');
     expect(findLedgerWrites('sample.ts', reads)).toEqual([]);
+  });
+
+  it('a table builder with a variable table name passes only in a pinned function of a pinned file', () => {
+    const code = 'export async function readCount(table: string) { return sb.from(table).select("id"); }';
+    expect(findLedgerWrites('apps/web/src/server/services/context.ts', code)).toEqual([]);
+    expect(findLedgerWrites('apps/web/src/server/services/other.ts', code)).toHaveLength(1);
+    const renamed = 'export async function countAll(table: string) { return sb.from(table).select("id"); }';
+    expect(findLedgerWrites('apps/web/src/server/services/context.ts', renamed)).toHaveLength(1);
+    // A storage bucket is not a table.
+    expect(findLedgerWrites('x.ts', 'sb.storage.from(BUCKET).upload(p, f);')).toEqual([]);
+  });
+
+  it('every pinned variable-table site still exists', () => {
+    const missing = DYNAMIC_SITES.filter((d) => {
+      const text = readFileSync(path.join(REPO, d.file), 'utf8');
+      return !dynamicSitesIn(d.file, text).includes(d.fn);
+    }).map((d) => `${d.file}::${d.fn}`);
+    expect(missing).toEqual([]);
   });
 
   it('the read helper that takes the table name only reads it', () => {

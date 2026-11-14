@@ -110,7 +110,7 @@ import {
 } from './lib/fetch-by-ids';
 import { dbGuardRefusal } from './lib/db-guard-refusal';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
-import { openItemStockOrThrow } from './opening-stock';
+import { openItemStockOrThrow, openingUnconfirmedError } from './opening-stock';
 import { fetchAllRows } from './lib/paginate';
 import { audit, auditMany, type AuditEvent, type AuditPayload } from './audit';
 import { dispatchEvent } from './integration-events';
@@ -1257,6 +1257,25 @@ function unmatchedRowIds(
   const returned = new Set(inserted.map((r) => r.sku));
   const lost = [...requestedBySku].some(([sku, q]) => q > 0 && !returned.has(sku));
   return lost ? inserted.filter((r) => !requestedBySku.has(r.sku)).map((r) => r.id) : [];
+}
+
+/**
+ * True when the rows an insert handed back cannot account for the quantities
+ * asked for: a different number of rows than were sent, or a stocked SKU with
+ * no row and no unmatched row left to count it. Only when some quantity is
+ * above 0; the caller then opens nothing and says the quantities could not be
+ * confirmed (openingUnconfirmedError).
+ */
+function openingRowsUnaccounted(
+  inserted: ReadonlyArray<{ id: string; sku: string }>,
+  sent: number,
+  requestedBySku: ReadonlyMap<string, number>,
+): boolean {
+  if (![...requestedBySku.values()].some((q) => q > 0)) return false;
+  if (inserted.length !== sent) return true;
+  const returned = new Set(inserted.map((r) => r.sku));
+  const lost = [...requestedBySku].some(([sku, q]) => q > 0 && !returned.has(sku));
+  return lost && unmatchedRowIds(inserted, requestedBySku).length === 0;
 }
 
 export class InventoryService {
@@ -3572,8 +3591,9 @@ export class InventoryService {
         [{ itemId: data.id as string, quantity: input.quantityOnHand }],
         { tag: '[create]', subject: 'This item was', pronoun: 'its', invalidateLabel: 'item.open_stock' },
       );
-      (data as { quantity_on_hand: number }).quantity_on_hand =
-        opened.get(data.id as string) ?? input.quantityOnHand;
+      // The helper throws unless this id was opened; set only what it answered.
+      const q = opened.get(data.id as string);
+      if (q !== undefined) (data as { quantity_on_hand: number }).quantity_on_hand = q;
     }
 
     // The primary location, as a label only (see primaryIsLabelOnly). The stock
@@ -4649,23 +4669,31 @@ export class InventoryService {
     // this run did not send, its quantity cannot be matched: the rows that
     // match no requested SKU are never opened, and the helper counts them as
     // not opened, so the person is told instead of left with a silent 0.
+    // When the rows cannot account for what was sent (fewer rows, or a
+    // stocked SKU with nothing left to count it), nothing is opened and the
+    // person is told the quantities could not be confirmed, with the ids that
+    // came back.
+    const sizedWording = {
+      tag: '[bulkCreateSizedVariants]',
+      subject: 'These variants were',
+      pronoun: 'their' as const,
+      invalidateLabel: 'item.open_stock',
+    };
+    if (openingRowsUnaccounted(inserted, rows.length, requestedBySku)) {
+      throw openingUnconfirmedError(
+        this.ctx,
+        sizedWording,
+        inserted.map((r) => r.id),
+        { sent: rows.length, returned: inserted.length },
+      );
+    }
     const requestedOf = (r: { sku: string }) => requestedBySku.get(r.sku) ?? 0;
     const unmatchedIds = unmatchedRowIds(inserted, requestedBySku);
     const openingLines = inserted
       .filter((r) => requestedOf(r) > 0)
       .map((r) => ({ itemId: r.id, quantity: requestedOf(r) }));
     if (openingLines.length > 0 || unmatchedIds.length > 0) {
-      const opened = await openItemStockOrThrow(
-        this.ctx,
-        openingLines,
-        {
-          tag: '[bulkCreateSizedVariants]',
-          subject: 'These variants were',
-          pronoun: 'their',
-          invalidateLabel: 'item.open_stock',
-        },
-        unmatchedIds,
-      );
+      const opened = await openItemStockOrThrow(this.ctx, openingLines, sizedWording, unmatchedIds);
       for (const r of inserted) {
         const q = opened.get(r.id);
         if (q !== undefined) r.quantity_on_hand = q;
@@ -5013,24 +5041,32 @@ export class InventoryService {
     // batch did not send, its quantity cannot be matched: the rows that match
     // no requested SKU are never opened, and the helper counts them as not
     // opened, so the person is told instead of left with a silent 0.
+    // When the rows cannot account for what was sent (fewer rows, or a
+    // stocked SKU with nothing left to count it), nothing is opened and the
+    // person is told the quantities could not be confirmed, with the ids that
+    // came back.
     const insertedRows = (inserted ?? []) as Array<{ id: string; sku: string }>;
+    const bulkWording = {
+      tag: '[bulkCreate]',
+      subject: 'These items were',
+      pronoun: 'their' as const,
+      invalidateLabel: 'item.open_stock',
+    };
+    if (openingRowsUnaccounted(insertedRows, rows.length, requestedBySku)) {
+      throw openingUnconfirmedError(
+        this.ctx,
+        bulkWording,
+        insertedRows.map((r) => r.id),
+        { sent: rows.length, returned: insertedRows.length },
+      );
+    }
     const unmatchedIds = unmatchedRowIds(insertedRows, requestedBySku);
     const openingLines = insertedRows
       .filter((r) => requestedBySku.has(r.sku))
       .map((r) => ({ itemId: r.id, quantity: requestedBySku.get(r.sku) as number }))
       .filter((l) => l.quantity > 0);
     if (openingLines.length > 0 || unmatchedIds.length > 0) {
-      await openItemStockOrThrow(
-        this.ctx,
-        openingLines,
-        {
-          tag: '[bulkCreate]',
-          subject: 'These items were',
-          pronoun: 'their',
-          invalidateLabel: 'item.open_stock',
-        },
-        unmatchedIds,
-      );
+      await openItemStockOrThrow(this.ctx, openingLines, bulkWording, unmatchedIds);
     }
 
     // Up to 500 rows per import: batched INSERTs (auditMany), not one

@@ -109,7 +109,12 @@ function buildStub(over: Record<string, unknown> = {}) {
     'organizations.select': { data: { plan: 'enterprise' }, error: null },
     'custom_field_definitions.select': { data: [], error: null },
     'inventory_items.insert': { data: { id: 'item-new' }, error: null },
-    'rpc:open_item_stock': { data: [], error: null },
+    'rpc:open_item_stock': (call: { args: unknown[][] }) => ({
+      data: (((call.args[0]?.[0] as { p_lines?: Array<{ itemId: string }> } | undefined)?.p_lines) ?? []).map(
+        (l) => ({ opened_item_id: l.itemId }),
+      ),
+      error: null,
+    }),
     // Answered like PostgREST: the lookup's own filters decide what it sees.
     'locations.select': servedLikePostgrest(LOCATIONS),
     'locations.insert': { data: { id: 'rack-1b-new' }, error: null },

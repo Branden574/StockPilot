@@ -120,7 +120,7 @@ describe('openItemStockOrThrow', () => {
 
   it('a refusal (a SQLSTATE) tells the person the item was saved with zero on hand and where to set it, and never re-reads', async () => {
     const { stub, reads } = stubWith({
-      answer: () => ({ data: null, error: { message: 'forbidden', code: '42501', hint: 'stock:adjust' } }),
+      answer: () => ({ data: null, error: { message: 'forbidden', code: '42501', hint: 'warehouse_write' } }),
     });
     const err = (await open(stub.client, [{ itemId: uuid(1), quantity: 5 }], ITEM).catch(
       (e: unknown) => e,
@@ -133,6 +133,7 @@ describe('openItemStockOrThrow', () => {
     expect(err.message).not.toBe(GENERIC);
     expect(err.details).toEqual({
       reason: 'opening_stock_not_recorded',
+      cause: 'not_recorded',
       outcome: 'zero',
       itemIds: [uuid(1)],
       notOpened: 1,
@@ -140,6 +141,100 @@ describe('openItemStockOrThrow', () => {
     });
     expect(reads).toEqual([]);
     expect(invalidate).toHaveBeenCalledWith('org-test', 'item.open_stock');
+  });
+
+  // The person may not add stock (42501, hint stock:adjust): they are never
+  // sent to Adjust stock, which they cannot use.
+  it('a stock:adjust refusal says the item was saved with zero on hand and someone who can adjust stock must set it', async () => {
+    const { stub } = stubWith({
+      answer: () => ({ data: null, error: { message: 'forbidden', code: '42501', hint: 'stock:adjust' } }),
+    });
+    const one = (await open(stub.client, [{ itemId: uuid(1), quantity: 5 }], ITEM).catch(
+      (e: unknown) => e,
+    )) as ServiceError;
+    expect(one.code).toBe('conflict');
+    expect(one.message).toBe(
+      'This item was saved with zero on hand: you do not have permission to add stock. Someone who can adjust stock must set its quantity.',
+    );
+    expect(one.message).not.toMatch(/use Adjust stock/);
+    expect(one.details).toMatchObject({ reason: 'opening_stock_not_recorded', cause: 'no_stock_permission', outcome: 'zero' });
+
+    const many = (await open(stub.client, [
+      { itemId: uuid(1), quantity: 5 },
+      { itemId: uuid(2), quantity: 1 },
+    ]).catch((e: unknown) => e)) as ServiceError;
+    expect(many.message).toBe(
+      'These books were saved with zero on hand: you do not have permission to add stock. Someone who can adjust stock must set their quantities.',
+    );
+  });
+
+  it('a stock:adjust refusal of a later batch names how many were left at 0', async () => {
+    const lines = Array.from({ length: 1_500 }, (_, i) => ({ itemId: uuid(i), quantity: 1 }));
+    const { stub } = stubWith({
+      answer: (n, ls) =>
+        n === 2
+          ? { data: null, error: { message: 'forbidden', code: '42501', hint: 'stock:adjust' } }
+          : { data: ls.map((l) => ({ opened_item_id: l.itemId })), error: null },
+    });
+    const err = (await open(stub.client, lines).catch((e: unknown) => e)) as ServiceError;
+    expect(err.message).toBe(
+      'These books were saved, but 500 of 1500 have zero on hand: you do not have permission to add stock. Someone who can adjust stock must set their quantities.',
+    );
+    expect(err.details).toMatchObject({ cause: 'no_stock_permission', outcome: 'partial' });
+  });
+
+  // Only the ids the function answered are opened; a line missing from the
+  // answer is settled by reading on-hand back.
+  it('an answer with no error and no rows is read back, and never counted as opened', async () => {
+    const { stub, reads } = stubWith({
+      answer: () => ({ data: [], error: null }),
+      onHand: { [uuid(1)]: 0 },
+    });
+    const err = (await open(stub.client, [{ itemId: uuid(1), quantity: 5 }], ITEM).catch(
+      (e: unknown) => e,
+    )) as ServiceError;
+    expect(reads).toEqual([[uuid(1)]]);
+    expect(err.message).toBe(
+      'This item was saved with zero on hand: its opening quantity could not be recorded. Open the item and use Adjust stock to set its quantity.',
+    );
+  });
+
+  it('an answer missing one id: that line is read back, and the person is told about it alone', async () => {
+    const { stub, reads } = stubWith({
+      answer: (_n, ls) => ({ data: ls.slice(1).map((l) => ({ opened_item_id: l.itemId })), error: null }),
+      onHand: { [uuid(1)]: 0 },
+    });
+    const err = (await open(stub.client, [
+      { itemId: uuid(1), quantity: 5 },
+      { itemId: uuid(2), quantity: 3 },
+    ]).catch((e: unknown) => e)) as ServiceError;
+    expect(reads).toEqual([[uuid(1)]]);
+    expect(err.message).toBe(
+      'These books were saved, but 1 of 2 have zero on hand: their opening quantities could not be recorded. Open each of those and use Adjust stock to set its quantity.',
+    );
+    expect((err.details as { itemIds: string[] }).itemIds).toEqual([uuid(1)]);
+  });
+
+  it('an answer missing one id whose read-back shows its quantity counts it as opened', async () => {
+    const { stub } = stubWith({
+      answer: (_n, ls) => ({ data: ls.slice(1).map((l) => ({ opened_item_id: l.itemId })), error: null }),
+      onHand: { [uuid(1)]: 5 },
+    });
+    const opened = await open(stub.client, [
+      { itemId: uuid(1), quantity: 5 },
+      { itemId: uuid(2), quantity: 3 },
+    ]);
+    expect([...opened.entries()].sort()).toEqual([
+      [uuid(1), 5],
+      [uuid(2), 3],
+    ]);
+  });
+
+  it('a normal answer opens every line it names, with no read-back', async () => {
+    const { stub, reads } = stubWith({});
+    const opened = await open(stub.client, [{ itemId: uuid(4), quantity: 2 }], ITEM);
+    expect(opened.get(uuid(4))).toBe(2);
+    expect(reads).toEqual([]);
   });
 
   it('a function not deployed yet (PGRST202) is a refusal too: nothing was written', async () => {

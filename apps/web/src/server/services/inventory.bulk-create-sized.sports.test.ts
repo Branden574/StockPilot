@@ -93,6 +93,13 @@ function buildStub(over: Record<string, unknown> = {}) {
       ],
       error: null,
     },
+    // open_item_stock answers one row per line it opened.
+    'rpc:open_item_stock': (call: MockCall) => ({
+      data: (((call.args[0]?.[0] as { p_lines?: Array<{ itemId: string }> } | undefined)?.p_lines) ?? []).map(
+        (l) => ({ opened_item_id: l.itemId }),
+      ),
+      error: null,
+    }),
     ...over,
   });
 }

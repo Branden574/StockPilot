@@ -82,7 +82,12 @@ function buildStub(over: Record<string, unknown> = {}) {
     'inventory_items.insert': { data: { id: 'item-new' }, error: null },
     // Opening stock through the ledger: the holding, on-hand and the
     // 'initial' movement are the function's; the service writes none of them.
-    'rpc:open_item_stock': { data: [], error: null },
+    'rpc:open_item_stock': (call: { args: unknown[][] }) => ({
+      data: (((call.args[0]?.[0] as { p_lines?: Array<{ itemId: string }> } | undefined)?.p_lines) ?? []).map(
+        (l) => ({ opened_item_id: l.itemId }),
+      ),
+      error: null,
+    }),
     'rpc:transfer_stock': { data: null, error: null },
     ...over,
   });
@@ -346,9 +351,10 @@ describe('InventoryService.create — manual auto-place onto a typed rack', () =
     const stub = buildStub({
       ...SEEDED_AT_UNPLACED,
       'locations.select': { data: [{ id: 'rack-28a', name: '28-A' }], error: null },
-      'rpc:open_item_stock': () => {
+      'rpc:open_item_stock': (call: { args: unknown[][] }) => {
         order.push('opening');
-        return { data: [], error: null };
+        const lines = (call.args[0]?.[0] as { p_lines?: Array<{ itemId: string }> } | undefined)?.p_lines ?? [];
+        return { data: lines.map((l) => ({ opened_item_id: l.itemId })), error: null };
       },
       'inventory_items.update': () => {
         order.push('label');

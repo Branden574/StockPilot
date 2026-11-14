@@ -104,9 +104,15 @@ function execStub(opts: {
     'inventory_items.insert': opts.insertError
       ? { data: null, error: opts.insertError }
       : { data: opts.insertedItems ?? [], error: null },
+    // The function answers one row per line it opened.
     'rpc:open_item_stock': opts.openingError
       ? { data: null, error: opts.openingError }
-      : { data: [], error: null },
+      : (call: { args: unknown[][] }) => ({
+          data: (((call.args[0]?.[0] as { p_lines?: Array<{ itemId: string }> } | undefined)?.p_lines) ?? []).map(
+            (l) => ({ opened_item_id: l.itemId }),
+          ),
+          error: null,
+        }),
     'item_images.insert': { data: null, error: null },
   });
 }
@@ -264,7 +270,7 @@ describe('BooksImportService.execute', () => {
     // "try again" an internal_error shows.
     expect((caught as ServiceError).code).toBe('conflict');
     expect((caught as ServiceError).message).toBe(
-      'These books were saved with zero on hand: their opening quantities could not be recorded. Open each one and use Adjust stock to set its quantity.',
+      'These books were saved with zero on hand: you do not have permission to add stock. Someone who can adjust stock must set their quantities.',
     );
     // Nothing of the ledger is written directly.
     expect(stub.fromCalls).not.toContain('stock_movements');

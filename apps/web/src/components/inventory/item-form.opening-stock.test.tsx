@@ -22,7 +22,7 @@ vi.mock('@/server/actions/item-images', () => ({
 }));
 vi.mock('@/server/actions/tags', () => ({ setItemTagsAction: vi.fn() }));
 
-import { openingStockSavedHref } from './item-form';
+import { openingStockSavedHref } from './opening-stock-saved';
 
 const ID = '33333333-3333-4333-8333-333333333333';
 const saved = (details: Record<string, unknown>) => ({

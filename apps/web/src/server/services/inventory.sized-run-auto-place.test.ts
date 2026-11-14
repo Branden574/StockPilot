@@ -152,7 +152,12 @@ function buildStub(over: Record<string, unknown> = {}) {
     // Opening stock through the ledger: the run's stocked sizes are
     // opened by open_item_stock, which writes the holding, on-hand and the
     // 'initial' movement (destination null: the insert carried no primary).
-    'rpc:open_item_stock': { data: [], error: null },
+    'rpc:open_item_stock': (call: { args: unknown[][] }) => ({
+      data: (((call.args[0]?.[0] as { p_lines?: Array<{ itemId: string }> } | undefined)?.p_lines) ?? []).map(
+        (l) => ({ opened_item_id: l.itemId }),
+      ),
+      error: null,
+    }),
     // findOrCreateRackOrCrate's resolve step finds an existing "28-A" rack in
     // wh-1, so no location is minted.
     'locations.select': { data: [{ id: 'rack-28a', name: '28-A' }], error: null },
