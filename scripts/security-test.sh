@@ -854,6 +854,23 @@ PGTAP_TESTS=(
   # stays 0215's. The lock footprint is
   # scripts/db-concurrency/0420_migration_lock_footprint.sh.
   supabase/tests/0420_permission_override_updates_follow_0322.test.sql
+  # Session factor helper (0455; no check reads the number): schema gate,
+  # not served by the Data API, holds gate.session_meets_mfa() and
+  # gate.factor_read_state(). The helper answers true with no account on the
+  # request, at aal2, or for an account with no verified factor, and false
+  # otherwise (a planted verified factor at aal1 answers false, so a helper
+  # that could not see factor rows fails the file); a catalog error reading
+  # the factor table answers true, sets sp_gate.catalog_error and logs once,
+  # any other error is raised (on a twin of the helper's own text); the
+  # premise check reads both columns the helper filters on. Both
+  # functions are SECURITY DEFINER owned by postgres with search_path empty;
+  # EXECUTE for authenticated only (the helper) and anon only (the premise
+  # check); the migration's own preflight is replayed from the recorded
+  # statements. The lock footprint is
+  # scripts/db-concurrency/0455_migration_lock_footprint.sh; the catalog
+  # error cases on the real factor table, as a local superuser, are
+  # scripts/db-concurrency/0455_gate_catalog_errors.sh.
+  supabase/tests/0455_session_factor_helper.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

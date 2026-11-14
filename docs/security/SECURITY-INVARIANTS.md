@@ -116,7 +116,20 @@
      applied. The two file counts in section 10 were counted again from the
      manifests in `scripts/security-test.sh`, which gain one pgTAP file and
      one vitest file with this entry; the assertion count beside them was
-     not re-derived. -->
+     not re-derived.
+
+     AMENDED 2026-11-14 (migration 0455): INV-B5 now reads `public`, `ledger`
+     and `gate`. 0455 adds schema `gate` with two SECURITY DEFINER functions
+     owned by postgres (gate.session_meets_mfa, gate.factor_read_state), so
+     INV-27 judges their search_path and INV-27b accepts first-party
+     functions there and reads their bodies; their posture and grants are
+     pinned by the 0455 test. INV-B6 and INV-B7 (INV-40b, INV-40c and INV-40d)
+     now read `gate` too, as does test 18 of
+     `0359_ledger_flag_carriers.test.sql`; nothing they accept in the other
+     schemas changed. The pgTAP file count in section 10 was counted
+     from the manifest in `scripts/security-test.sh`, which gains the 0455
+     test with this entry (103 files besides the invariant test); the other
+     two figures beside it were not re-derived. -->
 
 # Security invariants
 
@@ -580,13 +593,13 @@ select p.proname,
 
 ### INV-B5 — every first-party function pins `search_path`
 
-- **Invariant**: every non-extension function in `public` and `ledger` sets
-  `search_path` in its own definition, unless **allowlist J**
+- **Invariant**: every non-extension function in `public`, `ledger` and `gate`
+  sets `search_path` in its own definition, unless **allowlist J**
   (`_sec_inv_search_path_allow`) lists its exact signature with a reason and
   the function is `SECURITY INVOKER` with no `EXECUTE` for `anon`,
   `authenticated` or `service_role`. Every first-party function (non-extension,
-  owned by `postgres`) lives in `public` or `ledger`, and none there has an
-  SQL-standard body (`BEGIN ATOMIC`, or `RETURN` with no `AS` string) or a
+  owned by `postgres`) lives in `public`, `ledger` or `gate`, and none there
+  has an SQL-standard body (`BEGIN ATOMIC`, or `RETURN` with no `AS` string) or a
   body the invariant test's strip pass does not follow: a backslash-escaped
   quote inside an `E''` string, a dollar-quoted literal, a block comment
   inside a block comment, a quote left once the pass is done,
@@ -596,7 +609,11 @@ select p.proname,
   its caller's `search_path`. Under `SECURITY DEFINER` that is a
   privilege-escalation primitive; under `SECURITY INVOKER` it is a correctness
   hazard. `ledger` is first-party: `authenticated` holds `USAGE` and `EXECUTE`
-  there. A first-party function in a schema the sweep does not read would go
+  there. So is `gate` (0455): `anon`, `authenticated` and `service_role` hold
+  `USAGE` there, and each of its two functions is `SECURITY DEFINER` with
+  `EXECUTE` for one API role; their posture and grants are pinned in
+  [`0455_session_factor_helper.test.sql`](../../supabase/tests/0455_session_factor_helper.test.sql)
+  (H1 to H6). A first-party function in a schema the sweep does not read would go
   unjudged, and a trigger function fires for a role with no `USAGE` on its
   schema, so `USAGE` is not the test. An SQL-standard body stores an empty
   `prosrc`, which every text census in the invariant test reads. Those
@@ -617,9 +634,9 @@ select p.proname,
 - **Tested at**: INV-27 (the sweep, naming offenders, plus allowlist J's own
   audit: an entry whose function is gone or pinned now, or that is
   `SECURITY DEFINER` or executable by an API role, fails), INV-27b (the
-  first-party census: a function outside the two schemas, an SQL-standard
+  first-party census: a function outside the three schemas, an SQL-standard
   body, or a body the strip pass does not follow, each by name), INV-28 (the
-  population is not empty in either schema, and the unpinned detector still
+  population is not empty in `public` or in `ledger`, and the unpinned detector still
   fires on the excluded extension members) and INV-28b (plants an unpinned
   `ledger` function, an unpinned second overload of the allowlisted name,
   three bad allowlist-J rows, a function in a new schema, an SQL-standard
@@ -635,8 +652,8 @@ select p.proname,
 
 ### INV-B6 — only listed functions set an identity setting
 
-- **Invariant**: every non-extension function in `public`, `ledger`, `storage`
-  and `graphql_public` that sets `request.jwt.*`, `role` or
+- **Invariant**: every non-extension function in `public`, `ledger`, `storage`,
+  `graphql_public` and `gate` that sets `request.jwt.*`, `role` or
   `session_authorization`, in its body (through `set_config`, or a `SET` or
   `RESET` statement) or through its own `SET` clause, is on **allowlist L**
   (`_sec_inv_identity_setter_allow`), keyed on its full signature with a
@@ -687,8 +704,8 @@ select p.proname,
 
 ### INV-B7 — only listed functions raise a transaction flag
 
-- **Invariant**: every non-extension function in `public`, `ledger`, `storage`
-  and `graphql_public` that sets a `stockpilot.*` setting, in its body
+- **Invariant**: every non-extension function in `public`, `ledger`, `storage`,
+  `graphql_public` and `gate` that sets a `stockpilot.*` setting, in its body
   (through `set_config` with a literal name, or a `SET` statement) or through
   its own `SET` clause, is on **allowlist M** (`_sec_inv_flag_setter_allow`)
   for that flag, and every row of the list still matches a function body or
@@ -2319,7 +2336,7 @@ checked.
   first P0 was declared closed.
 - **A high-assurance baseline is implemented and covered by executable
   invariants**: 58 class-wide assertions in
-  `supabase/tests/security_invariants.test.sql`, plus the 101 other pgTAP
+  `supabase/tests/security_invariants.test.sql`, plus the 103 other pgTAP
   files and the 342 vitest files on the manifests of
   `scripts/security-test.sh`, gated together as `pnpm security:test` and
   wired into CI.
