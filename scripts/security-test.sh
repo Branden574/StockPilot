@@ -866,10 +866,11 @@ PGTAP_TESTS=(
   # guard asks a member's insert for the warehouse). NULL passes.
   supabase/tests/0423_item_location_and_event_references_in_own_organization.test.sql
   # References in their own organization, and a fixed organization (0462): a
-  # stock or put-away row's bins, a category's parent and a category
+  # stock or put-away row's bins and item, a category's parent and a category
   # assignment's category belong to the row's organization, for every rank
-  # (bin_in_org, category_in_org; set_user_category_access asks it too), and
-  # an API role cannot change a warehouse's or a location's organization.
+  # (bin_in_org, item_in_org, category_in_org; set_user_category_access asks
+  # it too), and an API role cannot change the organization of a warehouse,
+  # a location, a bin or a category.
   supabase/tests/0462_bin_and_category_references_and_fixed_organization.test.sql
 
   # AI read scoping.
