@@ -18,6 +18,14 @@ vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn() }));
 
+// The service client release() asks, past row level security, whether the
+// caller is the assignee of a count their own read does not show (S48). It
+// holds every organization's counts.
+const adminState = vi.hoisted(() => ({ stub: null as unknown }));
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: vi.fn(() => (adminState.stub as { client: unknown }).client),
+}));
+
 // ═══════════════════════════════════════════════════════════════════════════
 // WHAT THE PHONE'S RELEASE SHEET IS ANSWERED, THROUGH THE REAL SERVICE.
 //
@@ -40,6 +48,12 @@ vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn() }));
 // organization (its id only). A count that read does not find (outside the
 // caller's organizations, or in another organization the caller belongs to)
 // answers 404 'Cycle count not found.' with no function call.
+//
+// S48: when that read finds nothing, the service client is asked once for
+// the same count in the active organization assigned to the caller (an
+// assignee may release a count of a warehouse they do not read). A count of
+// another organization is not found there either: the same 404, before the
+// function.
 // ═══════════════════════════════════════════════════════════════════════════
 
 const CC = '11111111-1111-4111-8111-111111111111';
@@ -100,6 +114,7 @@ beforeEach(() => {
     count: 1,
     resetAt: Date.now() + 60_000,
   });
+  adminState.stub = makeSupabaseStub({ 'cycle_counts.select': servedLikePostgrest([]) });
 });
 
 describe('POST /api/v1/cycle-counts/[id]/release, as the phone release sheet reads it', () => {
@@ -154,10 +169,24 @@ describe('POST /api/v1/cycle-counts/[id]/release, as the phone release sheet rea
       'rpc:release_cycle_count': REFUSED,
       'cycle_counts.select': servedLikePostgrest([]),
     });
+    // The count is another organization's; the service client sees it there.
+    const admin = makeSupabaseStub({
+      'cycle_counts.select': servedLikePostgrest([
+        count({ organization_id: 'org-other', assigned_to: 'someone-else' }),
+      ]),
+    });
+    adminState.stub = admin;
     signedInAs(stub, 'outsider');
     expect(await release()).toEqual({ status: 404, body: NOT_FOUND });
     expect(stub.rpcCalls).toHaveLength(0);
     expect(audit).not.toHaveBeenCalled();
+    // One read past row level security: this count, in the active
+    // organization, assigned to the caller. It writes nothing.
+    expect(admin.chainArgsAll.get('cycle_counts.select')).toEqual([
+      [...IN_ORG_READ, ['assigned_to', 'outsider']],
+    ]);
+    expect([...admin.chainsAll.keys()]).toEqual(['cycle_counts.select']);
+    expect(admin.rpcCalls).toHaveLength(0);
   });
 
   it("a closed count: 409 with its own words, and no refusal's read of the count", async () => {
