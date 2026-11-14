@@ -103,9 +103,9 @@ insert into public.user_warehouse_assignments (organization_id, user_id, warehou
   on conflict do nothing;
 insert into public.user_category_assignments (organization_id, user_id, category_id) values
   (:'org', :'vwCat', :'catA'), (:'org', :'vwAll', :'catA');
--- The two viewers are read-only auditors: since 0460 a viewer reads counts
--- only once granted cycle_counts:read (0460's own suite holds a viewer
--- without it to no count). The item and category scope below is theirs.
+-- The two viewers are read-only auditors (granted cycle_counts:read), the
+-- role this suite's warehouse rows are about. The item and category scope
+-- below is theirs.
 insert into public.user_permission_overrides (organization_id, user_id, permission, granted) values
   (:'org', :'vwCat', 'cycle_counts:read', true), (:'org', :'vwAll', 'cycle_counts:read', true);
 insert into public.inventory_items (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type, category_id, charter_id) values

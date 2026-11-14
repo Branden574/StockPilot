@@ -20,11 +20,18 @@
 --    can read, for that exception's item only; nothing for an exception the
 --    caller cannot read, another organization's, an expired seat, anon.
 -- S. Posture of the new and restated functions and the two rules.
+-- G. exception_recount_facts answers row for row what its first form did
+--    (progress per pair, the gate per row, kept below as
+--    s93_facts_first_form) for every persona on several exceptions sharing
+--    one count, several counts, a posted count, a count in another warehouse
+--    and holding rules; a counter of one warehouse and a count of another;
+--    the lines read for 200 exceptions on one 2,000-line count; a disabled
+--    account.
 --
 -- Fixtures as the test superuser; reads as `authenticated` with
 -- request.jwt.claim.sub. begin/rollback: nothing leaks. Namespace c5930000.
 begin;
-select plan(90);
+select plan(100);
 
 \set org      c5930000-0000-4000-8000-00000000000a
 \set org2     c5930000-0000-4000-8000-00000000000b
@@ -485,6 +492,298 @@ select is(pg_temp.permission_set_loops(pg_temp.plan_lines(:'stN')), 'sets=4 run_
 select ok(array_to_string(pg_temp.plan_lines(:'stN'), E'\n') ilike '%hashed SubPlan%'
       and array_to_string(pg_temp.plan_lines(:'stN'), E'\n') not like '%has_permission(%',
   'P2 the rules probe hashed sets and call has_permission on no row');
+
+-- ══ G. Parity with the first form, edges, cost ════════════════════════════
+reset role;
+-- Fixtures as the superuser with no request claims (the count number
+-- trigger reads them).
+set local "request.jwt.claim.role" to '';
+set local "request.jwt.claim.sub" to '';
+\set vwDis    c5930000-0000-4000-8000-0000000000ad
+\set lN       c5930000-0000-4000-8000-0000000000c4
+\set lS       c5930000-0000-4000-8000-0000000000c5
+\set cBig     c5930000-0000-4000-8000-0000000000e4
+\set occN3    c5930000-0000-4000-8000-0000000000f4
+\set occH1    c5930000-0000-4000-8000-0000000000f5
+\set occH2    c5930000-0000-4000-8000-0000000000f6
+\set occD     c5930000-0000-4000-8000-0000000000f7
+
+-- The first form of exception_recount_facts, verbatim but for its name.
+create function public.s93_facts_first_form(p_org uuid, p_exception_ids uuid[])
+returns table (
+  exception_id      uuid,
+  cycle_count_id    uuid,
+  is_active_recount boolean,
+  is_closed_recount boolean,
+  count_number      bigint,
+  status            text,
+  completed_at      timestamptz,
+  line_total        bigint,
+  line_counted      bigint,
+  line_found        boolean,
+  counted_quantity  numeric,
+  expected_quantity numeric,
+  rechecks          boolean
+)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+#variable_conflict use_column
+begin
+  -- Gate 1: a signed-in caller, arguments present, at most 500 ids.
+  if auth.uid() is null or p_org is null or p_exception_ids is null then
+    return;
+  end if;
+  if cardinality(p_exception_ids) > 500 then
+    raise exception 'too_many_exceptions' using errcode = '22023', hint = 'too_many_exceptions';
+  end if;
+  -- Gate 2: an accepted, enabled member of the organization asked about.
+  if not public.is_org_member(p_org) then
+    return;
+  end if;
+
+  return query
+  with occ as materialized (
+    -- Gate 3, per exception: of p_org, and the caller may see it (0370's
+    -- one rule: member, can read the item, and for a holding rule can see
+    -- the holding).
+    select o.id, o.organization_id, o.item_id, o.recount_cycle_count_id, o.confirmed_cycle_count_id
+      from public.exception_occurrences o
+     where o.id = any (p_exception_ids)
+       and o.organization_id = p_org
+       and public._exc_occurrence_visible(o.organization_id, o.item_id, o.location_id)
+  ),
+  named as (
+    -- The counts the exception names: its open recount, the count that
+    -- confirmed it, and every count its timeline names.
+    select n.exception_id, n.cycle_count_id, bool_or(n.active) as active, bool_or(n.closed) as closed
+      from (
+        select x.id as exception_id, x.recount_cycle_count_id as cycle_count_id, true as active, false as closed
+          from occ x
+         where x.recount_cycle_count_id is not null
+        union all
+        select x.id, x.confirmed_cycle_count_id, false, false
+          from occ x
+         where x.confirmed_cycle_count_id is not null
+        union all
+        select x.id, e.cycle_count_id, false, e.kind = 'recount_closed'
+          from occ x
+          join public.exception_occurrence_events e
+            on e.occurrence_id = x.id
+           and e.organization_id = x.organization_id
+         where e.cycle_count_id is not null
+      ) n
+     group by n.exception_id, n.cycle_count_id
+  )
+  select nm.exception_id,
+         c.id,
+         nm.active,
+         nm.closed,
+         c.count_number::bigint,
+         c.status::text,
+         c.completed_at,
+         pr.line_total,
+         pr.line_counted,
+         case when wl.with_line then l.id is not null end,
+         case when wl.with_line then l.counted_quantity::numeric end,
+         case when wl.with_line then l.expected_quantity::numeric end,
+         case when wl.with_line and l.id is not null then public.cycle_count_line_rechecks(l) end
+    from named nm
+    join occ x on x.id = nm.exception_id
+    join public.cycle_counts c
+      on c.id = nm.cycle_count_id
+     and c.organization_id = x.organization_id
+    -- The item's line, for a recount that is open or posted (what the
+    -- outcome words read).
+    cross join lateral (
+      select (nm.active or nm.closed) and c.status::text in ('in_progress', 'completed') as with_line
+    ) wl
+    left join public.cycle_count_lines l
+      on wl.with_line
+     and l.cycle_count_id = c.id
+     and l.item_id = x.item_id
+    -- An open recount's progress: the lines the caller's warehouses hold
+    -- whose item they may read (a manager: every line), as 0452's line rule
+    -- reads them.
+    left join lateral (
+      select count(*)::bigint as line_total,
+             count(*) filter (where pl.counted_quantity is not null)::bigint as line_counted
+        from public.cycle_count_lines pl
+       where pl.cycle_count_id = c.id
+         and (
+           c.organization_id in (select public.rls_manager_org_ids())
+           or (
+             pl.warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw)
+             and exists (
+               select 1 from public.inventory_items i
+                where i.id = pl.item_id
+                  and (
+                    i.warehouse_id in (select public.rls_inv_read_full_warehouse_ids())
+                    or (i.charter_id is null
+                        and i.warehouse_id in (select public.rls_inv_read_assigned_warehouse_ids()))
+                    or (i.warehouse_id, i.charter_id) in (select * from public.rls_inv_read_warehouse_charter_ids())
+                  )
+                  and (
+                    i.organization_id in (select public.rls_cat_unrestricted_org_ids())
+                    or (i.organization_id, i.category_id) in (select * from public.rls_cat_allowed_category_ids())
+                  )
+             )
+           )
+         )
+    ) pr
+      on (nm.active or nm.closed) and c.status::text = 'in_progress'
+   order by nm.exception_id, c.id;
+end;
+$$;
+alter function public.s93_facts_first_form(uuid, uuid[]) owner to postgres;
+grant execute on function public.s93_facts_first_form(uuid, uuid[]) to authenticated;
+
+insert into auth.users (id, email, raw_user_meta_data)
+values (:'vwDis', 'uad-s93@test.local', '{}') on conflict (id) do nothing;
+insert into public.organization_members (organization_id, user_id, role, accepted_at, all_warehouses)
+values (:'org', :'vwDis', 'viewer', now(), false) on conflict do nothing;
+insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id)
+values (:'org', :'vwDis', :'whN') on conflict do nothing;
+update public.user_profiles set disabled_at = now() where id = :'vwDis';
+insert into public.locations (id, organization_id, warehouse_id, name, type) values
+  (:'lN', :'org', :'whN', 'S93 North bin', 'bin'), (:'lS', :'org', :'whS', 'S93 South bin', 'bin')
+  on conflict (id) do nothing;
+insert into public.inventory_items (id, organization_id, warehouse_id, sku, name, quantity_on_hand, status, tracking_type)
+select ('c5930000-0000-4000-9000-' || lpad(g::text, 12, '0'))::uuid, :'org', :'whN', 'S93-B' || g, 'S93 big ' || g, 5, 'active', 'none'
+  from generate_series(1, 2000) g;
+insert into public.cycle_counts (id, organization_id, warehouse_id, scope, status, started_by, assigned_to, started_at) values
+  (:'cBig', :'org', :'whN', 'warehouse', 'in_progress', :'mgr', null, now() - interval '30 minutes');
+set local session_replication_role = replica;
+-- cS (South) also holds a line of the North item iN3, stored under South.
+insert into public.cycle_count_lines (cycle_count_id, item_id, warehouse_id, expected_quantity, counted_quantity, counted_by, counted_at) values
+  (:'cS', :'iN3', :'whS', 5, 6, :'mgr', now() - interval '5 minutes');
+insert into public.cycle_count_lines (cycle_count_id, item_id, warehouse_id, expected_quantity, counted_quantity, counted_by, counted_at)
+select :'cBig', ('c5930000-0000-4000-9000-' || lpad(g::text, 12, '0'))::uuid, :'whN', 5,
+       case when g % 2 = 0 then 5 end, case when g % 2 = 0 then :'mgr'::uuid end, case when g % 2 = 0 then now() end
+  from generate_series(1, 2000) g;
+set local session_replication_role = origin;
+--   occN3  North item iN3, its recount the South count cS (line stored under South)
+--   occH1  a holding rule at a North location, recount cN
+--   occH2  a holding rule at a South location on the North item iN1, recount cN
+--   occD   North item iN3, cleared, its recount the posted count cDone
+--   200 exceptions on the first 200 items of cBig, each with cBig as its recount
+insert into public.exception_occurrences
+  (id, organization_id, occurrence_number, rule, item_id, location_id, warehouse_id,
+   first_seen_at, last_seen_at, recount_cycle_count_id) values
+  (:'occN3', :'org', 10, 'count_variance', :'iN3', null, :'whN', now(), now(), :'cS'),
+  (:'occH1', :'org', 11, 'orphaned_stock', :'iN2', :'lN', :'whN', now(), now(), :'cN'),
+  (:'occH2', :'org', 12, 'orphaned_stock', :'iN1', :'lS', :'whS', now(), now(), :'cN');
+insert into public.exception_occurrences
+  (id, organization_id, occurrence_number, rule, item_id, location_id, warehouse_id,
+   first_seen_at, last_seen_at, recount_cycle_count_id, resolved_at, resolved_reason) values
+  (:'occD',  :'org', 13, 'count_variance', :'iN3', null, :'whN', now(), now(), :'cDone', now(), 'cleared');
+insert into public.exception_occurrences
+  (id, organization_id, occurrence_number, rule, item_id, location_id, warehouse_id,
+   first_seen_at, last_seen_at, recount_cycle_count_id)
+select ('c5930000-0000-4000-a000-' || lpad(g::text, 12, '0'))::uuid, :'org', 100 + g, 'count_variance',
+       ('c5930000-0000-4000-9000-' || lpad(g::text, 12, '0'))::uuid, null, :'whN', now(), now(), :'cBig'
+  from generate_series(1, 200) g;
+insert into public.exception_occurrence_events (organization_id, occurrence_id, kind, cycle_count_id) values
+  (:'org', :'occN3', 'recount_linked', :'cS'),
+  (:'org', :'occH1', 'recount_linked', :'cN'),
+  (:'org', :'occH2', 'recount_linked', :'cN'),
+  (:'org', :'occD',  'recount_linked', :'cDone'),
+  (:'org', :'occD',  'recount_closed', :'cDone'),
+  (:'org', :'occD',  'recount_linked', :'cN');
+analyze public.cycle_count_lines;
+analyze public.exception_occurrences;
+
+-- The first form's answer and today's, as one text each, for one caller.
+create function pg_temp.parity(p_uid uuid, p_org uuid, p_ids uuid[]) returns text language plpgsql as $$
+declare a text; b text; n int;
+begin
+  perform set_config('request.jwt.claim.sub', p_uid::text, true);
+  set local role authenticated;
+  select coalesce(string_agg(f::text, ';' order by f::text), ''), count(*) into a, n
+    from public.s93_facts_first_form(p_org, p_ids) f;
+  select coalesce(string_agg(f::text, ';' order by f::text), '') into b
+    from public.exception_recount_facts(p_org, p_ids) f;
+  reset role;
+  return case when a = b then 'same:' || n else 'differ' end;
+end $$;
+create function pg_temp.parity_all() returns text language plpgsql as $$
+declare
+  ids uuid[] := array['c5930000-0000-4000-8000-0000000000f1', 'c5930000-0000-4000-8000-0000000000f2',
+                      'c5930000-0000-4000-8000-0000000000f3', 'c5930000-0000-4000-8000-0000000000f9',
+                      'c5930000-0000-4000-8000-0000000000f4', 'c5930000-0000-4000-8000-0000000000f5',
+                      'c5930000-0000-4000-8000-0000000000f6', 'c5930000-0000-4000-8000-0000000000f7',
+                      'c5930000-0000-4000-a000-000000000001', 'c5930000-0000-4000-a000-000000000002',
+                      gen_random_uuid()]::uuid[];
+  who uuid; o uuid; r text; bad text := ''; rows int := 0;
+begin
+  foreach who in array array['c5930000-0000-4000-8000-0000000000a0', 'c5930000-0000-4000-8000-0000000000a1',
+      'c5930000-0000-4000-8000-0000000000a2', 'c5930000-0000-4000-8000-0000000000a3',
+      'c5930000-0000-4000-8000-0000000000a4', 'c5930000-0000-4000-8000-0000000000a5',
+      'c5930000-0000-4000-8000-0000000000a6', 'c5930000-0000-4000-8000-0000000000a7',
+      'c5930000-0000-4000-8000-0000000000a8', 'c5930000-0000-4000-8000-0000000000a9',
+      'c5930000-0000-4000-8000-0000000000aa', 'c5930000-0000-4000-8000-0000000000ab',
+      'c5930000-0000-4000-8000-0000000000ac', 'c5930000-0000-4000-8000-0000000000ad',
+      'c5930000-0000-4000-8000-0000000000b1']::uuid[] loop
+    foreach o in array array['c5930000-0000-4000-8000-00000000000a', 'c5930000-0000-4000-8000-00000000000b']::uuid[] loop
+      r := pg_temp.parity(who, o, ids);
+      if r = 'differ' then bad := bad || right(who::text, 2) || '@' || right(o::text, 1) || ' ';
+      else rows := rows + split_part(r, ':', 2)::int; end if;
+    end loop;
+  end loop;
+  return case when bad = '' then 'same rows=' || rows else 'differ: ' || bad end;
+end $$;
+-- Lines of cycle_count_lines this transaction has read so far.
+create function pg_temp.lines_read_so_far() returns bigint language sql as $$
+  select coalesce(seq_tup_read, 0) + coalesce(idx_tup_fetch, 0)
+    from pg_stat_xact_user_tables where relid = 'public.cycle_count_lines'::regclass $$;
+-- One call of exception_recount_facts for the 200 exceptions on cBig:
+-- its row count and the lines it read.
+create function pg_temp.big_call(p_uid uuid) returns text language plpgsql as $$
+declare b0 bigint; n int; ids uuid[];
+begin
+  select array_agg(('c5930000-0000-4000-a000-' || lpad(g::text, 12, '0'))::uuid) into ids from generate_series(1, 200) g;
+  b0 := pg_temp.lines_read_so_far();
+  perform set_config('request.jwt.claim.sub', p_uid::text, true);
+  set local role authenticated;
+  select count(*) into n from public.exception_recount_facts('c5930000-0000-4000-8000-00000000000a', ids);
+  reset role;
+  return 'rows=' || n || ' lines_read_under_6000=' || ((pg_temp.lines_read_so_far() - b0) < 6000)::text;
+end $$;
+
+select is(pg_temp.parity_all(), 'same rows=119',
+  'G1 every persona, under both organizations: exception_recount_facts answers row for row what its first form answers');
+set local role authenticated;
+set local "request.jwt.claim.role" to 'authenticated';
+set local "request.jwt.claim.sub" to :'vwN';
+select is(pg_temp.facts(array[:'occH1']::uuid[]), 'n:a:in_progress:1/2:true:-/5:true',
+  'G2 viewer North: a holding rule at a North location gives its recount');
+select is(pg_temp.facts(array[:'occH2']::uuid[]), '(none)',
+  'G3 viewer North: nothing for a holding rule at a South location');
+set local "request.jwt.claim.sub" to :'mgr';
+select is(pg_temp.facts(array[:'occH2']::uuid[]), 'n:a:in_progress:1/2:true:4/5:true',
+  'G4 manager: the holding rule at the South location');
+set local "request.jwt.claim.sub" to :'stN';
+select is(pg_temp.q($$select (select count(*) from public.cycle_counts where id = 'c5930000-0000-4000-8000-0000000000e2')
+       || ' ' || (select count(*) from public.cycle_count_lines where cycle_count_id = 'c5930000-0000-4000-8000-0000000000e2')$$)
+     || ' ' || pg_temp.facts(array[:'occN3']::uuid[]),
+  '0 0 s:a:in_progress:0/0:true:6/5:true',
+  'G5 counter of North and a South count holding her North item: 0 counts and 0 lines read directly; through exception_recount_facts the count''s number and status and her item''s line, with progress over her warehouses'' lines');
+reset role;
+select is(pg_temp.big_call(:'vwN'), 'rows=200 lines_read_under_6000=true',
+  'G6 viewer: 200 exceptions on one 2,000-line open count read each line about once');
+select is(pg_temp.big_call(:'mgr'), 'rows=200 lines_read_under_6000=true',
+  'G7 manager: the same');
+select is(pg_temp.q($$select pg_get_function_result('public.exception_recount_facts(uuid, uuid[])'::regprocedure)$$),
+  'TABLE(exception_id uuid, cycle_count_id uuid, is_active_recount boolean, is_closed_recount boolean, count_number bigint, status text, completed_at timestamp with time zone, line_total bigint, line_counted bigint, line_found boolean, counted_quantity numeric, expected_quantity numeric, rechecks boolean)',
+  'S10 exception_recount_facts returns these thirteen columns');
+set local role authenticated;
+set local "request.jwt.claim.role" to 'authenticated';
+set local "request.jwt.claim.sub" to :'vwDis';
+select is(pg_temp.counts_seen(), '(none)', 'C21 a disabled account reads no count');
+select is(pg_temp.facts(array[:'occA']::uuid[]), '(none)', 'E20 a disabled account gets no recount facts');
+reset role;
 
 select * from finish();
 rollback;

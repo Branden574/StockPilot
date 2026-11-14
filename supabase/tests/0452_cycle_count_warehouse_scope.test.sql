@@ -327,7 +327,7 @@ select is(pg_temp.snapshot_seen(array['c5480000-0000-4000-8000-0000000000c1']::u
   '(none)', 'N2 viewer North: the snapshot read gets no count (0460; the route also refuses her)');
 select is(pg_temp.n_rb($$update public.cycle_count_lines set counted_quantity = 3
      where cycle_count_id = 'c5480000-0000-4000-8000-0000000000e1'$$),
-  '0', 'W1v viewer North: reads North''s lines but records none');
+  '0', 'W1v viewer North: records no line');
 
 set local "request.jwt.claim.sub" to :'audN';
 select is(pg_temp.counts_seen(), 'mix mixu n', 'C12 auditor without the flag: only the counts of her warehouse');
@@ -507,10 +507,10 @@ end $$;
 select is(pg_temp.parity(:'own'),    'equal', 'Q1 parity owner');
 select is(pg_temp.parity(:'mgr'),    'equal', 'Q2 parity manager');
 select is(pg_temp.parity(:'stAll'),  'equal', 'Q3 parity flag staff');
--- Q4 and Q6: since 0460 both sides are empty for a viewer (no count permission).
-select is(pg_temp.parity(:'vwAll'),  'equal', 'Q4 parity flag viewer (both empty since 0460)');
+-- Q4 and Q6: both sides are empty for a viewer (no count permission).
+select is(pg_temp.parity(:'vwAll'),  'equal', 'Q4 parity flag viewer (both sides empty)');
 select is(pg_temp.parity(:'stN'),    'equal', 'Q5 parity staff North');
-select is(pg_temp.parity(:'vwN'),    'equal', 'Q6 parity viewer North (both empty since 0460)');
+select is(pg_temp.parity(:'vwN'),    'equal', 'Q6 parity viewer North (both sides empty)');
 select is(pg_temp.parity(:'stS'),    'equal', 'Q7 parity staff South');
 select is(pg_temp.parity(:'stNS'),   'equal', 'Q8 parity staff North and South');
 select is(pg_temp.parity(:'stNo'),   'equal', 'Q9 parity staff with no warehouse');

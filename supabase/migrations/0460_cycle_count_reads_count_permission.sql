@@ -36,7 +36,11 @@
 -- lines counted of the lines the caller's warehouses hold (what the progress
 -- shows today). Never another item's line, never another count. At most 500
 -- ids (22023 too_many_exceptions); no signed-in user, or not a member of
--- p_org: no rows.
+-- p_org: no rows. Its gate states _exc_occurrence_visible term by term in a
+-- form computed once per call (the manager role asked once, the item and
+-- holding terms as the set helpers), and an open recount's progress is
+-- computed once per count however many exceptions name it: 500 exceptions
+-- on one 20,000-line count answer in one pass over that count's lines.
 --
 -- ── WHAT THIS MIGRATION DOES ───────────────────────────────────────────────
 --   0. Preflight: the policy texts on both tables, the bodies this file
@@ -50,6 +54,8 @@
 --      SECURITY DEFINER, search_path public, owner and grants).
 --   4. cycle_counts_select and cycle_count_lines_select recreated: 0452's
 --      bodies with the permission term added.
+--   5. notify pgrst, 'reload schema' (PostgREST learns the new function at
+--      commit).
 -- Applied as one transaction (the CLI runs each migration file as one). No
 -- row is written, changed or removed; no table, column, view or sequence is
 -- created, dropped or changed. Tier A.
@@ -75,7 +81,9 @@
 -- cycle_count_lines_select from 0452_cycle_count_warehouse_scope.sql,
 -- restate cycle_count_line_progress from the same file, and drop
 -- exception_recount_facts (the web reads the recount facts directly when the
--- function is missing).
+-- function is missing). The migration stays recorded as applied, and the
+-- digest pin test (digest_reader_policies) then fails until the digest's
+-- copy of the rules is reverted with it.
 
 set lock_timeout = '900ms';
 
@@ -100,6 +108,8 @@ begin
         ('public.my_warehouse_ids()',                                '7129bb768bce52a1ec1271be95afdffc',
                                                                      'eacc28d3bd2d1ebd09242f61b8a094ad', true),
         ('public._exc_occurrence_visible(uuid,uuid,uuid)',           '62662f8300373203ad06b7a64d147c0c',        null, true),
+        -- its item term, stated inline by exception_recount_facts
+        ('public.caller_can_read_item(uuid)',                        '80523d2cc0fafe7fc6b3599903d7f014',       null, true),
         ('public.cycle_count_line_rechecks(public.cycle_count_lines)', 'd9b450a79b8b516c891fa79db1a021e7',    null, false),
         ('public.rls_inv_read_full_warehouse_ids()',                 '740c1d4753a3a67b8f8cae850c4c6a0e',       null, true),
         ('public.rls_inv_read_assigned_warehouse_ids()',             'b4f82ab8aa1d63be4da042966c205014',   null, true),
@@ -228,6 +238,8 @@ security definer
 set search_path = ''
 as $$
 #variable_conflict use_column
+declare
+  v_manager boolean;
 begin
   -- Gate 1: a signed-in caller, arguments present, at most 500 ids.
   if auth.uid() is null or p_org is null or p_exception_ids is null then
@@ -240,17 +252,45 @@ begin
   if not public.is_org_member(p_org) then
     return;
   end if;
+  -- The same for every exception of p_org: asked once.
+  v_manager := public.has_org_role(p_org, 'manager');
 
   return query
   with occ as materialized (
-    -- Gate 3, per exception: of p_org, and the caller may see it (0370's
-    -- one rule: member, can read the item, and for a holding rule can see
-    -- the holding).
+    -- Gate 3, per exception: of p_org, and the caller may see it:
+    -- _exc_occurrence_visible(o.organization_id, o.item_id, o.location_id)
+    -- (0370), term by term, each in a form computed once per call:
+    --   is_org_member(p_org)            Gate 2 (o.organization_id = p_org)
+    --   caller_can_read_item(o.item_id)  its body (0361): a signed-in caller
+    --                                    (Gate 1) and the item under the five
+    --                                    set helpers
+    --   has_org_role(p_org, 'manager')   v_manager
+    --   the holding's location           its body
     select o.id, o.organization_id, o.item_id, o.recount_cycle_count_id, o.confirmed_cycle_count_id
       from public.exception_occurrences o
      where o.id = any (p_exception_ids)
        and o.organization_id = p_org
-       and public._exc_occurrence_visible(o.organization_id, o.item_id, o.location_id)
+       and exists (
+         select 1
+           from public.inventory_items it
+          where it.id = o.item_id
+            and (it.warehouse_id in (select public.rls_inv_read_full_warehouse_ids())
+                 or (it.charter_id is null
+                     and it.warehouse_id in (select public.rls_inv_read_assigned_warehouse_ids()))
+                 or (it.warehouse_id, it.charter_id) in
+                    (select r.warehouse_id, r.charter_id from public.rls_inv_read_warehouse_charter_ids() r))
+            and (it.organization_id in (select public.rls_cat_unrestricted_org_ids())
+                 or (it.organization_id, it.category_id) in
+                    (select c.organization_id, c.category_id from public.rls_cat_allowed_category_ids() c))
+       )
+       and (o.location_id is null
+            or v_manager
+            or exists (
+                 select 1
+                   from public.locations l
+                  where l.id = o.location_id
+                    and (l.warehouse_id is null
+                         or l.warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw))))
   ),
   named as (
     -- The counts the exception names: its open recount, the count that
@@ -273,6 +313,43 @@ begin
          where e.cycle_count_id is not null
       ) n
      group by n.exception_id, n.cycle_count_id
+  ),
+  prog as (
+    -- An open recount's progress, once per count however many exceptions
+    -- name it: the lines the caller's warehouses hold whose item they may
+    -- read (a manager: every line), as 0452's line rule reads them; 0 of 0
+    -- when none.
+    select pc.id as cycle_count_id,
+           count(pl.id)::bigint as line_total,
+           count(pl.id) filter (where pl.counted_quantity is not null)::bigint as line_counted
+      from (select distinct d.cycle_count_id from named d where d.active or d.closed) dc
+      join public.cycle_counts pc
+        on pc.id = dc.cycle_count_id
+       and pc.organization_id = p_org
+       and pc.status::text = 'in_progress'
+      left join public.cycle_count_lines pl
+        on pl.cycle_count_id = pc.id
+       and (
+         pc.organization_id in (select public.rls_manager_org_ids())
+         or (
+           pl.warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw)
+           and exists (
+             select 1 from public.inventory_items i
+              where i.id = pl.item_id
+                and (
+                  i.warehouse_id in (select public.rls_inv_read_full_warehouse_ids())
+                  or (i.charter_id is null
+                      and i.warehouse_id in (select public.rls_inv_read_assigned_warehouse_ids()))
+                  or (i.warehouse_id, i.charter_id) in (select * from public.rls_inv_read_warehouse_charter_ids())
+                )
+                and (
+                  i.organization_id in (select public.rls_cat_unrestricted_org_ids())
+                  or (i.organization_id, i.category_id) in (select * from public.rls_cat_allowed_category_ids())
+                )
+           )
+         )
+       )
+     group by pc.id
   )
   select nm.exception_id,
          c.id,
@@ -301,36 +378,11 @@ begin
       on wl.with_line
      and l.cycle_count_id = c.id
      and l.item_id = x.item_id
-    -- An open recount's progress: the lines the caller's warehouses hold
-    -- whose item they may read (a manager: every line), as 0452's line rule
-    -- reads them.
-    left join lateral (
-      select count(*)::bigint as line_total,
-             count(*) filter (where pl.counted_quantity is not null)::bigint as line_counted
-        from public.cycle_count_lines pl
-       where pl.cycle_count_id = c.id
-         and (
-           c.organization_id in (select public.rls_manager_org_ids())
-           or (
-             pl.warehouse_id in (select mw.warehouse_id from public.my_warehouse_ids() mw)
-             and exists (
-               select 1 from public.inventory_items i
-                where i.id = pl.item_id
-                  and (
-                    i.warehouse_id in (select public.rls_inv_read_full_warehouse_ids())
-                    or (i.charter_id is null
-                        and i.warehouse_id in (select public.rls_inv_read_assigned_warehouse_ids()))
-                    or (i.warehouse_id, i.charter_id) in (select * from public.rls_inv_read_warehouse_charter_ids())
-                  )
-                  and (
-                    i.organization_id in (select public.rls_cat_unrestricted_org_ids())
-                    or (i.organization_id, i.category_id) in (select * from public.rls_cat_allowed_category_ids())
-                  )
-             )
-           )
-         )
-    ) pr
-      on (nm.active or nm.closed) and c.status::text = 'in_progress'
+    -- An open recount's progress (prog, once per count).
+    left join prog pr
+      on pr.cycle_count_id = c.id
+     and (nm.active or nm.closed)
+     and c.status::text = 'in_progress'
    order by nm.exception_id, c.id;
 end;
 $$;
@@ -341,10 +393,10 @@ grant execute on function public.exception_recount_facts(uuid, uuid[]) to authen
 
 comment on function public.exception_recount_facts(uuid, uuid[]) is
   'S93. The recount facts the Exception Center shows, for up to 500 exceptions of p_org the caller may see '
-  '(is_org_member(p_org), then _exc_occurrence_visible, 0370): per count the exception names (its open recount, the counts its timeline '
+  '(is_org_member(p_org), then _exc_occurrence_visible, 0370, stated as sets): per count the exception names (its open recount, the counts its timeline '
   'names, the count that confirmed it) the number, status and completed time; for its open and closed recounts, '
   'the line of the exception''s own item (counted, on record, cycle_count_line_rechecks); for an open recount, the '
-  'lines counted of the lines in the caller''s warehouses (every line for a manager). Never another item''s line, '
+  'lines counted of the lines in the caller''s warehouses (every line for a manager), once per count. Never another item''s line, '
   'never another count. No signed-in user: no rows; over 500 ids: 22023 too_many_exceptions. STABLE SECURITY '
   'DEFINER, search_path empty; EXECUTE to authenticated and service_role.';
 
@@ -461,5 +513,8 @@ create policy cycle_count_lines_select on public.cycle_count_lines
          )
     )
   );
+
+-- Make exception_recount_facts visible to PostgREST at commit.
+notify pgrst, 'reload schema';
 
 reset lock_timeout;

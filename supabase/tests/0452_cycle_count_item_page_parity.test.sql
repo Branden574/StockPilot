@@ -181,9 +181,8 @@ begin
            where i.id in (select id from s48p_items));
 end $$;
 
--- Since 0460 the direct line read is for members who hold a count permission
--- (cycle_counts:read or stock:adjust), and a viewer holds neither, while the
--- Physical count card is kept for every item reader by design. So for a
+-- The direct line read is for members who hold a count permission; the
+-- Physical count card is for every item reader. So for a
 -- viewer the card is compared with what the line rule shows the same person
 -- once granted cycle_counts:read (a per-member override added and removed
 -- here): the same warehouses, items and categories.
