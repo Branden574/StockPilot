@@ -133,6 +133,9 @@ const TIMELINE_CAP = 2_000;
 const COUNT_LINKS_CAP = 5_000;
 /** Counts whose outcome one read works out at once. */
 const OUTCOME_CONCURRENCY = 4;
+/** exception_recount_facts (0460) answers at most this many ids a call. */
+const RECOUNT_FACTS_BATCH = 500;
+const RECOUNT_FACTS_FN = 'exception_recount_facts';
 /** Lines of in-progress counts read for one item (countConfirm): one per
  *  open count that holds the item, so a backstop far above real use. */
 const OPEN_COUNT_LINES_CAP = 1_000;
@@ -614,6 +617,93 @@ function outcomeFromStatus(status: string): RecountOutcome {
   return recountOutcome({ status }, null);
 }
 
+/**
+ * One row of exception_recount_facts (0460): one count an exception names
+ * (its open recount, a count its timeline names, the count that confirmed
+ * it), with the line of the exception's own item for its open and closed
+ * recounts, and the progress of an open one.
+ */
+type RecountFactRow = {
+  exception_id: string;
+  cycle_count_id: string;
+  is_active_recount: boolean;
+  is_closed_recount: boolean;
+  count_number: number | string | null;
+  status: string;
+  completed_at: string | null;
+  line_total: number | string | null;
+  line_counted: number | string | null;
+  /** Null when the count is not one of its recounts (no line is given). */
+  line_found: boolean | null;
+  counted_quantity: number | string | null;
+  expected_quantity: number | string | null;
+  rechecks: boolean | null;
+};
+
+/** The recount facts of some exceptions: exception id, then count id. */
+type RecountFacts = Map<string, Map<string, RecountFactRow>>;
+
+/** Whether the database does not have exception_recount_facts yet (the web
+ *  deploys before the migration is pushed): PostgREST's schema cache answers
+ *  PGRST202, Postgres 42883, each naming the function. Any other error,
+ *  including a 42883 about another function, is a failed read. */
+function recountFactsMissing(error: { code?: unknown; message?: unknown } | null | undefined): boolean {
+  const code = typeof error?.code === 'string' ? error.code : '';
+  const message = typeof error?.message === 'string' ? error.message : '';
+  return (code === 'PGRST202' || code === '42883') && message.includes(RECOUNT_FACTS_FN);
+}
+
+/** What a recount came to for its exception's item, from its facts: the same
+ *  inputs recountOutcomes reads directly (core recountOutcome). */
+function outcomeFromFact(f: RecountFactRow): RecountOutcome {
+  if (f.status === 'completed' || f.status === 'in_progress') {
+    return recountOutcome(
+      {
+        status: f.status,
+        countedLines: f.status === 'in_progress' ? toNumber(f.line_counted) : null,
+        totalLines: f.status === 'in_progress' ? toNumber(f.line_total) : null,
+      },
+      f.line_found
+        ? {
+            countedQuantity: f.counted_quantity,
+            expectedQuantity: f.expected_quantity,
+            rechecks: typeof f.rechecks === 'boolean' ? f.rechecks : null,
+          }
+        : null,
+    );
+  }
+  return recountOutcome({ status: f.status }, null);
+}
+
+/** The rows that name a count on the row itself (an open recount or the
+ *  count that confirmed them): the list's only use for recount facts. */
+function namingCounts(rows: readonly OccurrenceRow[]): string[] {
+  return rows.filter((r) => r.recount_cycle_count_id || r.confirmed_cycle_count_id).map((r) => r.id);
+}
+
+/** The row's open recount and confirming count as its facts name them. A
+ *  count the facts do not name keeps the row's own embed. */
+function withFactEmbeds(row: OccurrenceRow, facts: RecountFacts | null): OccurrenceRow {
+  const mine = facts?.get(row.id);
+  if (!mine) return row;
+  const active = row.recount_cycle_count_id ? mine.get(row.recount_cycle_count_id) : undefined;
+  const confirmed = row.confirmed_cycle_count_id ? mine.get(row.confirmed_cycle_count_id) : undefined;
+  return {
+    ...row,
+    ...(active
+      ? {
+          recount: {
+            id: active.cycle_count_id,
+            count_number: active.count_number,
+            status: active.status,
+            completed_at: active.completed_at,
+          },
+        }
+      : {}),
+    ...(confirmed ? { confirmed_count: { count_number: confirmed.count_number } } : {}),
+  };
+}
+
 /** The count confirmation as the occurrence carries it (0386), or null. */
 function mapConfirmation(row: OccurrenceRow): OccurrenceConfirmation | null {
   if (!row.confirmed_at) return null;
@@ -822,17 +912,18 @@ export class ExceptionOccurrencesService {
       this.readOrgTimeZone(),
     ]);
 
+    const facts = await this.readRecountFacts(namingCounts(rows));
     const recountBlock = countStartBlock(this.ctx);
     const escBlock = escalateBlock(this.ctx);
     const occurrences: ExceptionOccurrence[] = [];
     let unknown = 0;
     for (const row of rows) {
-      const mapped = mapOccurrence(row, syncState, gate, recountBlock, escBlock);
+      const mapped = mapOccurrence(withFactEmbeds(row, facts), syncState, gate, recountBlock, escBlock);
       if (mapped) occurrences.push(mapped);
       else unknown += 1;
     }
     if (unknown > 0) this.reportUnknownRules(unknown);
-    await this.withRecountOutcomes(occurrences);
+    await this.withRecountOutcomes(occurrences, facts);
 
     return {
       status,
@@ -857,7 +948,7 @@ export class ExceptionOccurrencesService {
     if (!UUID.test(id)) throw new ServiceError('not_found', 'Exception not found.');
     const orgId = this.ctx.organizationId;
 
-    const [row, storedEvents, syncState, gate, timeZone, liveEvidence] = await Promise.all([
+    const [rawRow, storedEvents, syncState, gate, timeZone, liveEvidence, facts] = await Promise.all([
       this.readOccurrenceRow(id),
       fetchAllRows<Record<string, unknown>>(
         (from, to) =>
@@ -883,8 +974,13 @@ export class ExceptionOccurrencesService {
           return null;
         },
       ),
+      // Its recounts as the Exception Center shows them (0460), read beside
+      // the row; a failed read fails the detail, never "no recount".
+      this.readRecountFacts([id]),
     ]);
-    if (!row) throw new ServiceError('not_found', 'Exception not found.');
+    if (!rawRow) throw new ServiceError('not_found', 'Exception not found.');
+    const row = withFactEmbeds(rawRow, facts);
+    const countFacts = facts?.get(id) ?? null;
     // A kind a newer build stored has no words here: it is left out, as the
     // phone does, rather than passed on for a surface to render as nothing.
     const events = storedEvents.filter(
@@ -900,18 +996,27 @@ export class ExceptionOccurrencesService {
     // now and run beside everything below, so the page waits for no extra
     // round trip. They never throw (a failed read is state `unavailable`).
     const confirmReads = this.offersCountConfirm(occurrence) ? this.readCountConfirmInputs(row, gate) : null;
+    const activeFact =
+      facts === null ? undefined : occurrence.recount ? (countFacts?.get(occurrence.recount.cycleCountId) ?? null) : null;
     // What each recount came to for this item: the active one, and every
     // closed one the timeline names ("Recount CC-000031 closed: Matched the
     // stock on record"). One set of reads for both.
     const closedCounts = events
       .filter((e) => e.kind === 'recount_closed' && e.cycle_count_id !== null)
       .map((e) => e.cycle_count_id as string);
-    const outcomes = await this.recountOutcomes(
-      [
-        ...(occurrence.recount ? [occurrence.recount.cycleCountId] : []),
-        ...closedCounts,
-      ].map((cycleCountId) => ({ cycleCountId, itemId: occurrence.itemId })),
-    );
+    const outcomes =
+      facts === null
+        ? await this.recountOutcomes(
+            [
+              ...(occurrence.recount ? [occurrence.recount.cycleCountId] : []),
+              ...closedCounts,
+            ].map((cycleCountId) => ({ cycleCountId, itemId: occurrence.itemId })),
+          )
+        : new Map(
+            [...(countFacts?.values() ?? [])]
+              .filter((f) => f.is_active_recount || f.is_closed_recount)
+              .map((f) => [pairKey(f.cycle_count_id, occurrence.itemId), outcomeFromFact(f)] as const),
+          );
     if (occurrence.recount) {
       occurrence.recount.outcome =
         outcomes.get(pairKey(occurrence.recount.cycleCountId, occurrence.itemId)) ?? occurrence.recount.outcome;
@@ -969,10 +1074,16 @@ export class ExceptionOccurrencesService {
       ),
       this.readVisibleRequests(namedRequests),
       confirmReads
-        ? this.countConfirmBlock(occurrence, syncState, confirmReads, {
-            rows: chain,
-            truncated: chain.length > HISTORY_LIMIT,
-          })
+        ? this.countConfirmBlock(
+            occurrence,
+            syncState,
+            confirmReads,
+            {
+              rows: chain,
+              truncated: chain.length > HISTORY_LIMIT,
+            },
+            activeFact,
+          )
         : Promise.resolve(null),
     ]);
     if (occurrence.escalation) {
@@ -991,7 +1102,9 @@ export class ExceptionOccurrencesService {
         cycleCount: e.cycle_count_id
           ? {
               id: e.cycle_count_id,
-              countNumber: toNumber(e.cycle_count?.count_number),
+              countNumber: toNumber(
+                e.cycle_count?.count_number ?? countFacts?.get(e.cycle_count_id)?.count_number,
+              ),
               ...(e.kind === 'recount_closed'
                 ? {
                     outcome: outcomes.get(pairKey(e.cycle_count_id, occurrence.itemId)) ?? {
@@ -1114,16 +1227,17 @@ export class ExceptionOccurrencesService {
 
     // Re-read with the embeds so the caller gets the same shape the list and
     // detail return (the RPC returns the bare row).
-    const [fresh, syncState, gate] = await Promise.all([
+    const [fresh, syncState, gate, facts] = await Promise.all([
       this.readOccurrenceRow(id),
       this.readSyncState(),
       this.actGate(),
+      this.readRecountFacts([id]),
     ]);
     const mapped = fresh
-      ? mapOccurrence(fresh, syncState, gate, countStartBlock(this.ctx), escalateBlock(this.ctx))
+      ? mapOccurrence(withFactEmbeds(fresh, facts), syncState, gate, countStartBlock(this.ctx), escalateBlock(this.ctx))
       : null;
     if (!mapped) throw new ServiceError('not_found', 'Exception not found.');
-    await this.withRecountOutcomes([mapped]);
+    await this.withRecountOutcomes([mapped], facts);
     return mapped;
   }
 
@@ -1195,16 +1309,17 @@ export class ExceptionOccurrencesService {
 
     // Re-read with the embeds so the caller gets the same shape the list and
     // detail return (the RPC answers ids only).
-    const [fresh, syncState, gate] = await Promise.all([
+    const [fresh, syncState, gate, facts] = await Promise.all([
       this.readOccurrenceRow(id),
       this.readSyncState(),
       this.actGate(),
+      this.readRecountFacts([id]),
     ]);
     const mapped = fresh
-      ? mapOccurrence(fresh, syncState, gate, countStartBlock(this.ctx), escalateBlock(this.ctx))
+      ? mapOccurrence(withFactEmbeds(fresh, facts), syncState, gate, countStartBlock(this.ctx), escalateBlock(this.ctx))
       : null;
     if (!mapped) throw new ServiceError('not_found', 'Exception not found.');
-    await this.withRecountOutcomes([mapped]);
+    await this.withRecountOutcomes([mapped], facts);
     return { occurrence: mapped, replay };
   }
 
@@ -1266,12 +1381,13 @@ export class ExceptionOccurrencesService {
           .range(from, to),
     )) as unknown as OccurrenceRow[];
 
+    const facts = await this.readRecountFacts(namingCounts(rows));
     const recountBlock = countStartBlock(this.ctx);
     const escBlock = escalateBlock(this.ctx);
     const occurrences: ExceptionOccurrence[] = [];
     let unknown = 0;
     for (const row of rows) {
-      const mapped = mapOccurrence(row, syncState, gate, recountBlock, escBlock);
+      const mapped = mapOccurrence(withFactEmbeds(row, facts), syncState, gate, recountBlock, escBlock);
       if (mapped) occurrences.push(mapped);
       else unknown += 1;
     }
@@ -1309,7 +1425,10 @@ export class ExceptionOccurrencesService {
     const lineByItem = new Map(lineRows.map((l) => [l.item_id, l]));
     // The other occurrences' active recounts (a link that has since moved on
     // to another count), worked out like the list does.
-    await this.withRecountOutcomes(occurrences.filter((o) => o.recount?.cycleCountId !== cycleCountId));
+    await this.withRecountOutcomes(
+      occurrences.filter((o) => o.recount?.cycleCountId !== cycleCountId),
+      facts,
+    );
 
     const exceptions: CountLinkedException[] = occurrences.map((o) => {
       const l = lineByItem.get(o.itemId) ?? null;
@@ -1630,6 +1749,9 @@ export class ExceptionOccurrencesService {
       rows: ReadonlyArray<{ id: string; confirmed_cycle_count_id?: string | null }>;
       truncated: boolean;
     },
+    /** The open recount's facts (0460): undefined when the database has no
+     *  exception_recount_facts yet, null when they name none. */
+    activeFact?: RecountFactRow | null,
   ): Promise<CountConfirmBlock | null> {
     const n = countVarianceNumbers(o.facts);
     if (n.cycleCountId === null || n.counted === null) return null;
@@ -1664,9 +1786,17 @@ export class ExceptionOccurrencesService {
           cycleCountId: o.recount.cycleCountId,
           status: o.recount.status,
           // A recount in progress that no longer holds the item cannot settle
-          // it (exception_confirm_count agrees); unknown when unread.
-          lineRechecks:
-            lines === null
+          // it (exception_confirm_count agrees); unknown when unread. Its own
+          // facts answer when the database has them (0460).
+          lineRechecks: activeFact
+            ? activeFact.line_found
+              ? typeof activeFact.rechecks === 'boolean'
+                ? activeFact.rechecks
+                : null
+              : o.recount.status === 'in_progress'
+                ? false
+                : null
+            : lines === null
               ? null
               : recountLine
                 ? typeof recountLine.rechecks === 'boolean'
@@ -1867,12 +1997,59 @@ export class ExceptionOccurrencesService {
   }
 
   /**
+   * The recount facts of these exceptions (exception_recount_facts, 0460),
+   * read through the caller's own client in batches of 500: per exception the
+   * counts it names, with its item's line in its open and closed recounts and
+   * an open recount's progress, for the exceptions the caller may see. One
+   * read for everything the Exception Center shows about a recount.
+   *
+   * Null when the database does not have the function yet (the web can be
+   * live before the migration): the caller then reads the counts directly,
+   * as before. Any other failure THROWS: an unread answer is never shown as
+   * "no recount".
+   */
+  private async readRecountFacts(ids: readonly string[]): Promise<RecountFacts | null> {
+    const out: RecountFacts = new Map();
+    const unique = [...new Set(ids)];
+    for (let i = 0; i < unique.length; i += RECOUNT_FACTS_BATCH) {
+      const res = await this.ctx.supabase.rpc('exception_recount_facts', {
+        p_org: this.ctx.organizationId,
+        p_exception_ids: unique.slice(i, i + RECOUNT_FACTS_BATCH),
+      });
+      if (res.error) {
+        if (recountFactsMissing(res.error)) return null;
+        throw new ServiceError('internal_error', postgrestErrorText(res.error));
+      }
+      if (!Array.isArray(res.data)) {
+        throw new ServiceError('internal_error', `${RECOUNT_FACTS_FN} returned no rows array`);
+      }
+      for (const f of res.data as RecountFactRow[]) {
+        const counts = out.get(f.exception_id) ?? new Map<string, RecountFactRow>();
+        counts.set(f.cycle_count_id, f);
+        out.set(f.exception_id, counts);
+      }
+    }
+    return out;
+  }
+
+  /**
    * Replace each occurrence's recount outcome (from its status alone) with
    * what the count came to for its item. Cosmetic: see recountOutcomes.
    */
-  private async withRecountOutcomes(occurrences: ExceptionOccurrence[]): Promise<void> {
+  private async withRecountOutcomes(
+    occurrences: ExceptionOccurrence[],
+    facts: RecountFacts | null = null,
+  ): Promise<void> {
     const withRecount = occurrences.filter((o) => o.recount !== null);
     if (withRecount.length === 0) return;
+    if (facts !== null) {
+      // exception_recount_facts (0460) answered: no direct read of counts.
+      for (const o of withRecount) {
+        const f = facts.get(o.id)?.get(o.recount!.cycleCountId);
+        if (f) o.recount!.outcome = outcomeFromFact(f);
+      }
+      return;
+    }
     const outcomes = await this.recountOutcomes(
       withRecount.map((o) => ({ cycleCountId: o.recount!.cycleCountId, itemId: o.itemId })),
     );

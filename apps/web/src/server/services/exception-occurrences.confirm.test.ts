@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeServiceContext, makeSupabaseStub, type MockCall, type QueryResult } from '@/test/supabase-mock';
+import { RECOUNT_FACTS_NOT_YET } from '@/test/recount-facts';
 
 /**
  * Count differences, R2 (migration 0386): "Confirm this count" in the
@@ -185,7 +186,7 @@ function svcFor(
   who: { role?: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer'; userId?: string } = {},
   opts: { countConfirmEnabled?: boolean } = {},
 ) {
-  const stub = makeSupabaseStub(results);
+  const stub = makeSupabaseStub({ ...RECOUNT_FACTS_NOT_YET, ...results });
   const ctx = makeServiceContext(stub.client, {
     organizationId: ORG,
     role: who.role ?? 'staff',
@@ -215,7 +216,7 @@ describe('D6: EXCEPTION_COUNT_CONFIRM_ENABLED', () => {
   });
 
   it('a service built without the option follows the constant', async () => {
-    const stub = makeSupabaseStub(detailResults());
+    const stub = makeSupabaseStub({ ...RECOUNT_FACTS_NOT_YET, ...detailResults() });
     const ctx = makeServiceContext(stub.client, { organizationId: ORG, role: 'staff', userId: STAFF });
     const d = await new ExceptionOccurrencesService(ctx as never).get(OCC);
     expect(d.countConfirm !== null).toBe(EXCEPTION_COUNT_CONFIRM_ENABLED);
@@ -574,7 +575,8 @@ describe('confirmCount', () => {
   it('calls the RPC with the count, the number and the trimmed note, audits once, and returns the re-read row', async () => {
     const { svc, stub } = svcFor(confirmResults());
     const res = await svc.confirmCount(OCC, { cycleCountId: CC, countedQuantity: 2, note: '  counted twice  ' });
-    expect(stub.rpcCalls).toEqual([
+    // The writes (the re-read's exception_recount_facts read is not one).
+    expect(stub.rpcCalls.filter((c) => c.name !== 'exception_recount_facts')).toEqual([
       {
         name: 'exception_confirm_count',
         args: { p_id: OCC, p_cycle_count_id: CC, p_counted_quantity: 2, p_note: 'counted twice' },
@@ -639,7 +641,9 @@ describe('confirmCount', () => {
   it('the live warehouse lets through a counter whose item moved INTO their warehouse (the stamp still says another)', async () => {
     const { svc, stub } = svcFor(confirmResults({ row: { warehouse_id: 'wh-b' } }));
     await svc.confirmCount(OCC, { cycleCountId: CC, countedQuantity: 2 });
-    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['exception_confirm_count']);
+    expect(stub.rpcCalls.map((c) => c.name).filter((n) => n !== 'exception_recount_facts')).toEqual([
+      'exception_confirm_count',
+    ]);
   });
 
   it('maps the RPC answers by SQLSTATE and hint, and a refusal writes no audit row', async () => {

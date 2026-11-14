@@ -924,6 +924,11 @@ WEB_TESTS=(
   src/server/services/exception-occurrences.confirm.test.ts
   src/app/api/v1/exceptions/confirm-count-route.test.ts
   src/server/actions/exceptions.confirm.test.ts
+  # Exception recount facts (0460): one function read with the active
+  # organization; only "function missing" (PGRST202 or 42883 naming it) takes
+  # the direct read; any other error, or an answer that is not a list, fails
+  # the list and the detail.
+  src/server/services/exception-occurrences.recount-facts.test.ts
   # Maintenance photos (2026-09-27): what finalize stores carries no EXIF,
   # GPS, XMP or ICC (real sharp on GPS-tagged JPEG, PNG and WEBP), the
   # thumbnail is the server's, made from the clean photo at the mint's name,
