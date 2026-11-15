@@ -8,9 +8,11 @@ import { z } from 'zod';
  * multiplies: receipt lines times the serial numbers on each. This total holds
  * the whole request to one budget.
  *
- * A purchase order, recurring order, import approval or receipt at
- * MAX_PO_LINES (50,000) lines is 50,000 entries with nothing nested: the
- * budget is four times that. A receipt's serial numbers are one per accepted
+ * The budget wraps receipt input only. The walker counts list entries and,
+ * separately, the objects and arrays it visits, so a receipt with one object
+ * per line plus a nested list per line uses several nodes per line: a receipt
+ * near MAX_PO_LINES (50,000) lines with lots on every line can pass it. Real
+ * receipts are far smaller. A receipt's serial numbers are one per accepted
  * unit; the web form sends them through a Server Action, whose body Next.js
  * limits to 1 MB, so even serials of three characters stay under 175,000
  * entries. The phone sends no serials or lots.
