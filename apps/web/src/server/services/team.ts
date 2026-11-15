@@ -303,31 +303,65 @@ export class TeamService {
     // Short alias /i/<token> redirects to /invite/<token>; keeps the URL
     // on one line in chat clients so the entire link stays clickable.
     const acceptUrl = `${env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')}/i/${token}`;
-    const message = renderTeamInviteEmail({
-      email: normalizedEmail,
-      org: organizationName,
-      inviterName,
-      inviterEmail: params.inviterEmail ?? null,
-      role: params.role,
-      acceptUrl,
-      expiresOn: formatInviteExpiry(expiresAt),
-      window: '7 days',
-      appUrl: env.NEXT_PUBLIC_APP_URL,
-    });
-    // sendEmail NEVER throws — it returns { ok: false, error } on a non-2xx
-    // Resend response or a network failure (lib/email/resend.ts). Discarding
+    // sendEmail returns its failures ({ ok: false, error } on a non-2xx
+    // Resend response or a network failure, lib/email/resend.ts). Discarding
     // that made "Invite sent" a lie: the row existed, the admin was told it
     // was delivered, and the person was never contacted. The invite is real,
-    // so the row stays and the message hands the admin the link.
-    const sent = await sendEmail({
-      to: normalizedEmail,
-      subject: message.subject,
-      html: message.html,
-      text: message.text,
-      from: message.from,
-    });
+    // so the row stays and the message hands the admin the link. Anything
+    // thrown while the message is built or sent counts as an unsent email
+    // too, so the invitation below is recorded on every path.
+    let sent: Awaited<ReturnType<typeof sendEmail>>;
+    let thrown: unknown;
+    try {
+      const message = renderTeamInviteEmail({
+        email: normalizedEmail,
+        org: organizationName,
+        inviterName,
+        inviterEmail: params.inviterEmail ?? null,
+        role: params.role,
+        acceptUrl,
+        expiresOn: formatInviteExpiry(expiresAt),
+        window: '7 days',
+        appUrl: env.NEXT_PUBLIC_APP_URL,
+      });
+      sent = await sendEmail({
+        to: normalizedEmail,
+        subject: message.subject,
+        html: message.html,
+        text: message.text,
+        from: message.from,
+      });
+    } catch (e) {
+      // The thrown error goes to the report below as it is; the result keeps
+      // a fixed sentence.
+      thrown = e;
+      sent = { ok: false, error: 'The invitation email could not be built or sent.' };
+    }
+    // The invite row exists whether or not the email went out (its link can
+    // be copied from Pending invites), so it is recorded either way.
+    // email_sent says which, so the row never claims a message that was not
+    // sent. Same entity and address as the resend row below; the access the
+    // invite offers is recorded as the acceptance row records it.
+    await audit(
+      {
+        event: 'user.invited',
+        entityType: 'org_invite',
+        entityId: invite.id as string,
+        after: {
+          email: normalizedEmail,
+          role: params.role,
+          all_warehouses: allWarehouses,
+          warehouse_id: warehouseId,
+          // null when the invite names no charter (all charters), as the
+          // invite row stores it.
+          charter_ids: charterIds.length > 0 ? charterIds : null,
+          email_sent: sent.ok,
+        },
+      },
+      this.ctx,
+    );
     if (!sent.ok) {
-      void reportError(new Error(String(sent.error)), {
+      void reportError(thrown ?? new Error(String(sent.error)), {
         tag: 'team.invite.email',
         organizationId: this.ctx.organizationId,
       });
@@ -349,16 +383,29 @@ export class TeamService {
     assertPermission(this.ctx, 'members:invite');
     // The deleted row is asked back (S41): a filtered delete that matches no
     // row is not an error, so only the returned row proves an invite of this
-    // organization was revoked.
+    // organization was revoked. Its address and role go into the audit row,
+    // since the invite itself is gone once this returns.
     const { data: row, error } = await this.ctx.supabase
       .from('organization_invites')
       .delete()
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', inviteId)
-      .select('id')
+      .select('id, email, role')
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
     if (!row) throw new ServiceError('not_found', 'Invite not found');
+    await audit(
+      {
+        event: 'user.invite.revoked',
+        entityType: 'org_invite',
+        entityId: row.id as string,
+        before: {
+          email: (row.email as string | null) ?? null,
+          role: (row.role as string | null) ?? null,
+        },
+      },
+      this.ctx,
+    );
   }
 
   /**

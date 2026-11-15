@@ -1294,7 +1294,8 @@ const S41_ROW_PROOFS: ReadonlyArray<{ file: string; member: string; write: strin
 
 /**
  * The table writes S41 changed, for the mutation proof below: what is taken
- * out of the member (`rows`: the `.select('id')` that asks the row back;
+ * out of the member (`rows`: the `.select('id')` or `.select('id, ...')` that
+ * asks the row back;
  * `test`: the miss test on the row that came back, turned into a test for a
  * hit; `read`: the readInActiveOrg call; `filter`: the organization filter)
  * and the words the guard must then say about `write`.
@@ -3059,7 +3060,9 @@ describe('every table write in apps/web/src stays in the active organization and
           ? withoutGate(tree, file, member, 'readInActiveOrg')
           : withMemberChanged(tree, file, member, remove, (body) =>
               remove === 'rows'
-                ? body.replace(".select('id')", '')
+                ? // The row asked back: `.select('id')`, or `.select('id, …')`
+                  // when the member also records columns of it.
+                  body.replace(/\.select\('id(?:, [a-z_, ]+)?'\)/, '')
                 : remove === 'test'
                   ? body.replace(/if \(!(row|data)\)/, 'if ($1)')
                   : body.replace(/\.eq\('organization_id', this\.ctx\.organizationId\)/, ''),
