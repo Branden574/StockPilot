@@ -1957,9 +1957,14 @@ WEB_TESTS=(
   # row, never the member's set. A save of the role a member already has, or
   # of the authenticator policy an organization already has, changes nothing:
   # no update, no audit row, no security event. The two route suites and the
-  # single-grant suite carry the "Security invariant" marker.
+  # single-grant suite carry the "Security invariant" marker. An account with
+  # an authenticator, on a session signed in with the password alone, reaches
+  # neither service: the real gate and withApiContext refuse it before any
+  # read and both routes answer their 401, and each route's Answers list says
+  # so instead of promising that session a 403 aal2_required.
   'src/app/api/v1/members/[id]/role/route.test.ts'
   'src/app/api/v1/members/[id]/category-access/route.test.ts'
+  src/app/api/v1/members/step-up-answer.test.ts
   src/server/services/user-categories.single-grant.test.ts
   src/server/services/team.update-member-role.test.ts
   src/server/actions/mfa.policy-unchanged.test.ts
