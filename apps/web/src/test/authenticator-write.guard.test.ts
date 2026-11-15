@@ -28,14 +28,17 @@ import {
  *
  *   1. every name a 'use server' module exports (a Server Action), every
  *      POST, PUT, PATCH and DELETE handler of a route under app/api/v1, and
- *      every method of an exported class and every exported function under
- *      server/services. Each one that writes passes a gate unconditionally
- *      before its first write, or is listed in REVIEWED with its kind and a
- *      reason. A gate that sits inside a condition is named in the report.
- *      An action or route export this reading cannot read as one function is
- *      reported by name, listed or not;
+ *      every method of an exported class, every function of an exported
+ *      object of functions and every exported function under server/services.
+ *      Each one that writes passes a gate unconditionally before its first
+ *      write, or is listed in REVIEWED with its kind, a reason and the writes
+ *      it makes. A gate that sits inside a condition is named in the report.
+ *      An export this reading cannot read as one function is reported by
+ *      name, listed or not, and so is an entry that calls a collaborator this
+ *      reading cannot follow, unless a person read it (RESOLVED_BY_READING);
  *   2. every listed entry is current: it exists, it writes, it still has a
- *      write before any gate (one that is gated leaves the list), it gives a
+ *      write before any gate (one that is gated leaves the list), it writes
+ *      exactly what it pins (a new write fails until it is pinned), it gives a
  *      reason, a 'platform' entry reaches a platform-admin gate (or is a
  *      function of server/services/platform), a 'portal' entry reaches
  *      resolvePortalContext() (or is a function of server/services/portal.ts),
@@ -54,6 +57,29 @@ import {
  *
  * The self-test at the bottom plants one of each shape, so this cannot pass
  * by reading nothing.
+ *
+ * WHEN THIS FAILS. Each line names the entry and, for a write, the line that
+ * writes and how it is reached.
+ *   - A new method, action or handler that changes organization data: give
+ *     the answer before its first write. Call assertPermission (or
+ *     assertAnyPermission) with the permission it needs, or, where no
+ *     permission fits, write the policy test out as its first statement:
+ *     `if (ctx.mfaRequired && !ctx.mfaSatisfied) throw mfaGateError(ctx);`.
+ *   - An entry renamed or moved ("no such entry"): move its REVIEWED or
+ *     MUTATIONS row to the new name. A listed entry that now gives the answer
+ *     ("leaves the list"): delete its row.
+ *   - A listed entry that writes something new ("does not pin"): if the new
+ *     write is still the person's own (or the kind's), add it to `writes`;
+ *     if it changes organization data, give the answer before it instead.
+ *   - A new RPC that only reads, reported as a write: declare it STABLE (or
+ *     IMMUTABLE) in its migration. A function that writes must not be.
+ *   - A new entry that is the person's own (a preference, a session, a sign-in
+ *     step): list it in REVIEWED with the kind that fits, a reason of what it
+ *     writes and why the policy does not apply, and the writes it makes, as
+ *     the failure prints them.
+ *   - A collaborator this guard cannot follow: give the field a default it can
+ *     name (`deps.x ?? new X(ctx)`), or read it and list the entry in
+ *     RESOLVED_BY_READING with what it writes and where the answer is given.
  */
 
 const WEB_SRC = path.resolve(__dirname, '..');
@@ -95,8 +121,6 @@ type Kind =
   | 'own-account'
   /** The caller's own preferences, sessions, notifications, views, devices, read markers, tour, default organization or support request. */
   | 'personal'
-  /** Writes only an audit row of the caller's own act. */
-  | 'record'
   /** The platform console. */
   | 'platform'
   /** The customer portal, which applies the step-up rule itself. */
@@ -113,6 +137,11 @@ type Kind =
 interface Reviewed {
   kind: Kind;
   reason: string;
+  /**
+   * Every write the entry makes that no gate holds (WriteVerdict.writeSet):
+   * a write it gains that is not pinned here is reported.
+   */
+  writes: readonly string[];
 }
 
 const PERSONAL_PREFS = "The caller's own preferences row; no organization data.";
@@ -121,7 +150,7 @@ const OWN_SESSIONS =
 const PORTAL =
   'The customer portal: resolvePortalContext() comes first and applies the step-up rule to a portal account itself.';
 const PLATFORM_CONSOLE =
-  'The platform console: checkPlatformAdmin (or currentUserIsPlatformAdmin) answers first, with its own step-up.';
+  "The platform console: checkPlatformAdmin({ requireStepUp: true }) answers first, on the platform admin's own session.";
 const PLATFORM_SERVICE =
   'Called only by the platform console actions, after checkPlatformAdmin answered (server/actions/platform*).';
 const NOTIFY_HELPER =
@@ -133,50 +162,102 @@ const REVIEWED: Record<string, Reviewed> = {
   'server/actions/auth.ts#signInAction': {
     kind: 'sign-in',
     reason: 'Creates the session from the password; a failed attempt writes its audit row.',
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'integration_deliveries.update',
+      'integration_deliveries.upsert',
+      'integration_endpoints.update',
+      'user_login_devices.delete',
+      'user_login_devices.insert',
+      'user_login_devices.update',
+    ],
   },
   'server/actions/auth.ts#signOutAction': {
     kind: 'sign-in',
     reason: 'Ends the session, which anyone must be able to do, whatever the policy.',
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'rpc:admin_revoke_user_sessions'],
   },
   'server/actions/auth.ts#requestPasswordResetAction': {
     kind: 'sign-in',
     reason: 'Public by design: one answer for every address, limited per IP and address.',
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'auth.admin.generateLink'],
   },
   'server/actions/auth.ts#completePasswordResetAction': {
     kind: 'sign-in',
     reason:
       'Sets the new password on the recovery session the emailed link created; asks an enrolled account for its code.',
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'rpc:admin_revoke_user_sessions'],
   },
   'server/actions/team.ts#acceptInviteAction': {
     kind: 'sign-in',
     reason:
       'Joins the organization a single-use invitation names; the membership the policy covers starts here.',
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'organization_invites.update',
+      'organization_members.upsert',
+      'user_profiles.update',
+      'user_warehouse_assignments.insert',
+    ],
   },
   'server/actions/team.ts#acceptInviteWithSignupAction': {
     kind: 'sign-in',
     reason: 'Creates the invited account and joins it: a new account has no authenticator yet.',
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'auth.admin.createUser',
+      'organization_invites.update',
+      'organization_members.upsert',
+      'user_profiles.update',
+      'user_profiles.upsert',
+      'user_warehouse_assignments.insert',
+    ],
   },
   'app/api/v1/auth/password-reset/route.ts#POST': {
     kind: 'sign-in',
     reason: "The phone's password reset request: public by design, one answer for every address.",
+    writes: ['auth.admin.generateLink'],
   },
   'app/api/v1/auth/signed-in/route.ts#POST': {
     kind: 'sign-in',
     reason: "The phone's sign-in bookkeeping: one audit row that the person signed in.",
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'integration_deliveries.update',
+      'integration_deliveries.upsert',
+      'integration_endpoints.update',
+      'user_login_devices.delete',
+      'user_login_devices.insert',
+      'user_login_devices.update',
+    ],
   },
   'app/api/v1/auth/signed-out/route.ts#POST': {
     kind: 'sign-in',
     reason: "The phone's sign-out: ends the person's own other sessions when asked.",
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'rpc:revoke_my_other_sessions'],
   },
   'server/services/team.ts#acceptInviteWithToken': {
     kind: 'sign-in',
     reason:
       'The invitation acceptance the two accept actions share: marks a single-use invitation used.',
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'organization_invites.update',
+      'organization_members.upsert',
+      'user_profiles.update',
+      'user_warehouse_assignments.insert',
+    ],
   },
   'server/services/auth-audit.ts#emitAuthAudit': {
     kind: 'sign-in',
     reason:
       'Audit rows for sign-in events (signed in, failed, code checked), written whatever the policy.',
+    writes: ['audit_logs.insert', 'audit_logs.upsert'],
   },
 
   // ── setting up the authenticator ──
@@ -184,21 +265,30 @@ const REVIEWED: Record<string, Reviewed> = {
     kind: 'set-up',
     reason:
       'Checks the authenticator code: the step that satisfies the policy. It writes its audit row.',
+    writes: ['audit_logs.insert', 'audit_logs.upsert'],
   },
   'server/actions/mfa.ts#verifyEnrollmentAction': {
     kind: 'set-up',
     reason:
       'Confirms a first authenticator: exactly what the policy asks of a person who has none.',
+    writes: ['audit_logs.insert', 'audit_logs.upsert'],
   },
   'server/actions/mfa-recovery.ts#consumeMfaRecoveryCodeAction': {
     kind: 'set-up',
     reason:
       'The recovery code on the code page, for a person without their authenticator; password and rate limit.',
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'auth.admin.mfa.deleteFactor',
+      'rpc:consume_mfa_recovery_code',
+    ],
   },
   'server/actions/mfa-recovery.ts#generateMfaRecoveryCodesAction': {
     kind: 'set-up',
     reason:
       "The caller's own recovery codes, per account, on a verified aal2 token (its own rule).",
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'rpc:generate_mfa_recovery_codes'],
   },
 
   // ── the person's own account ──
@@ -206,61 +296,87 @@ const REVIEWED: Record<string, Reviewed> = {
     kind: 'own-account',
     reason:
       'Checks the current password and asks an account that has an authenticator for aal2 itself.',
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'rpc:admin_revoke_user_sessions',
+      'rpc:revoke_my_other_sessions',
+    ],
   },
   'server/actions/email-change.ts#requestEmailChangeAction': {
     kind: 'own-account',
     reason: "The caller's own email change; an enrolled account must be at aal2 (its own rule).",
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'auth.admin.generateLink'],
   },
   'server/actions/email-change.ts#resendEmailChangeAction': {
     kind: 'own-account',
     reason: "Sends the caller's own pending email change again; same rule as requesting it.",
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'auth.admin.generateLink'],
   },
   'server/actions/email-change.ts#cancelEmailChangeAction': {
     kind: 'own-account',
     reason: "Withdraws the caller's own pending email change; returns no data.",
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'rpc:cancel_pending_email_change'],
   },
   'server/actions/profile.ts#deleteOwnAccountAction': {
     kind: 'own-account',
     reason:
       'Every member can delete their own account; a member goes through gateMfaForSelfService first.',
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'auth.admin.deleteUser',
+      'rpc:account_deletion_check',
+      'rpc:admin_revoke_user_sessions',
+      'storage:user-avatars.remove',
+    ],
   },
   'app/api/v1/account/email/request/route.ts#POST': {
     kind: 'own-account',
     reason: "The phone's own email change; an enrolled account must be at aal2 (its own rule).",
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'auth.admin.generateLink'],
   },
   'app/api/v1/account/email/resend/route.ts#POST': {
     kind: 'own-account',
     reason: "The phone's resend of the caller's own pending email change.",
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'auth.admin.generateLink'],
   },
   'app/api/v1/account/email/cancel/route.ts#POST': {
     kind: 'own-account',
     reason: "The phone's cancel of the caller's own pending email change.",
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'rpc:cancel_pending_email_change'],
   },
   'server/services/email-change.ts#requestEmailChange': {
     kind: 'own-account',
     reason:
       'The email change the web and phone entries share, handed the account posture by its caller.',
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'auth.admin.generateLink'],
   },
   'server/services/email-change.ts#resendEmailChange': {
     kind: 'own-account',
     reason: 'The resend the web and phone entries share, handed the account posture by its caller.',
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'auth.admin.generateLink'],
   },
   'server/services/email-change.ts#cancelEmailChange': {
     kind: 'own-account',
     reason: "Withdraws the caller's own pending email change, for the web and phone entries.",
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'rpc:cancel_pending_email_change'],
   },
   'server/services/email-change.ts#completeEmailChange': {
     kind: 'own-account',
     reason: 'Runs when the emailed link is opened: copies the confirmed address onto the profile.',
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'user_profiles.update'],
   },
   'server/services/email-change.ts#mintEmailChangeLinks': {
     kind: 'own-account',
     reason:
       'Makes the two confirmation links of the caller own email change; its callers apply the rule.',
+    writes: ['auth.admin.generateLink'],
   },
   'server/services/email-change.ts#reconcileProfileEmail': {
     kind: 'own-account',
     reason: "Copies the account's confirmed email onto its own profile row.",
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'user_profiles.update'],
   },
 
   // ── personal ──
@@ -268,288 +384,537 @@ const REVIEWED: Record<string, Reviewed> = {
     kind: 'personal',
     reason:
       "Saves the caller's own Design and Theme; runs on every page, the sign-in pages included.",
+    writes: ['user_appearance.upsert'],
   },
-  'server/actions/digest.ts#setDigestOptinAction': { kind: 'personal', reason: PERSONAL_PREFS },
-  'server/actions/digest.ts#setDigestPrefsAction': { kind: 'personal', reason: PERSONAL_PREFS },
+  'server/actions/digest.ts#setDigestOptinAction': {
+    kind: 'personal',
+    reason: PERSONAL_PREFS,
+    writes: ['user_profiles.update'],
+  },
+  'server/actions/digest.ts#setDigestPrefsAction': {
+    kind: 'personal',
+    reason: PERSONAL_PREFS,
+    writes: ['user_profiles.update'],
+  },
   'server/actions/notification-preferences.ts#updateNotificationPreferencesAction': {
     kind: 'personal',
     reason: PERSONAL_PREFS,
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'notification_preferences.upsert'],
   },
   'server/services/notification-preferences.ts#writeDigestPrefs': {
     kind: 'personal',
     reason: PERSONAL_PREFS,
+    writes: ['user_profiles.update'],
   },
   'server/services/notification-preferences.ts#writeNotificationPrefs': {
     kind: 'personal',
     reason: PERSONAL_PREFS,
+    writes: ['notification_preferences.upsert'],
   },
   'server/actions/notifications.ts#markNotificationReadAction': {
     kind: 'personal',
     reason: "Marks one of the caller's own notifications read.",
+    writes: ['notifications.update'],
   },
   'server/actions/notifications.ts#markAllNotificationsReadAction': {
     kind: 'personal',
     reason: "Marks the caller's own notifications read.",
+    writes: ['notifications.update'],
   },
   'server/services/notifications.ts#NotificationsService.markRead': {
     kind: 'personal',
     reason: "Marks one of the caller's own notifications read.",
+    writes: ['notifications.update'],
   },
   'server/services/notifications.ts#NotificationsService.markAllRead': {
     kind: 'personal',
     reason: "Marks the caller's own notifications read.",
+    writes: ['notifications.update'],
   },
-  'server/actions/sessions.ts#renameSessionAction': { kind: 'personal', reason: OWN_SESSIONS },
-  'server/actions/sessions.ts#revokeSessionAction': { kind: 'personal', reason: OWN_SESSIONS },
+  'server/actions/sessions.ts#renameSessionAction': {
+    kind: 'personal',
+    reason: OWN_SESSIONS,
+    writes: ['rpc:set_my_session_name'],
+  },
+  'server/actions/sessions.ts#revokeSessionAction': {
+    kind: 'personal',
+    reason: OWN_SESSIONS,
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'rpc:revoke_my_session'],
+  },
   'server/actions/sessions.ts#revokeOtherSessionsAction': {
     kind: 'personal',
     reason: OWN_SESSIONS,
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'rpc:revoke_my_other_sessions'],
   },
-  'server/services/sessions.ts#SessionsService.rename': { kind: 'personal', reason: OWN_SESSIONS },
-  'server/services/sessions.ts#SessionsService.revoke': { kind: 'personal', reason: OWN_SESSIONS },
+  'server/services/sessions.ts#SessionsService.rename': {
+    kind: 'personal',
+    reason: OWN_SESSIONS,
+    writes: ['rpc:set_my_session_name'],
+  },
+  'server/services/sessions.ts#SessionsService.revoke': {
+    kind: 'personal',
+    reason: OWN_SESSIONS,
+    writes: ['rpc:revoke_my_session'],
+  },
   'server/services/sessions.ts#SessionsService.revokeOthers': {
     kind: 'personal',
     reason: OWN_SESSIONS,
+    writes: ['rpc:revoke_my_other_sessions'],
   },
   'server/actions/saved-views.ts#createSavedViewAction': {
     kind: 'personal',
-    reason: "The caller's own saved list view (filters and columns); no organization data changes.",
+    reason:
+      "Saves the caller's own private list view; a shared one goes through SavedViewsService.createShared, which gives the answer.",
+    writes: ['saved_views.insert'],
   },
   'server/actions/saved-views.ts#deleteSavedViewAction': {
     kind: 'personal',
-    reason: "Deletes the caller's own saved view, or (an admin) a shared one whose owner is gone.",
-  },
-  'server/actions/saved-views.ts#toggleSavedViewShareAction': {
-    kind: 'personal',
     reason:
-      "Shares or unshares the caller's own saved view with the organization: a view, not data.",
+      "Deletes the caller's own saved view; an admin's delete of an ownerless shared one goes through removeOwnerless, which gives the answer.",
+    writes: ['saved_views.delete'],
   },
   'server/services/saved-views.ts#SavedViewsService.create': {
     kind: 'personal',
-    reason: "The caller's own saved list view (filters and columns); no organization data changes.",
+    reason:
+      "Saves the caller's own private list view; a shared one goes through createShared, which gives the answer.",
+    writes: ['saved_views.insert'],
   },
   'server/services/saved-views.ts#SavedViewsService.remove': {
     kind: 'personal',
-    reason: "Deletes the caller's own saved view, or (an admin) a shared one whose owner is gone.",
-  },
-  'server/services/saved-views.ts#SavedViewsService.setSharing': {
-    kind: 'personal',
     reason:
-      "Shares or unshares the caller's own saved view with the organization: a view, not data.",
+      "Deletes the caller's own saved view; an admin's delete of an ownerless shared one goes through removeOwnerless, which gives the answer.",
+    writes: ['saved_views.delete'],
   },
   'server/actions/org-switcher.ts#switchOrganizationAction': {
     kind: 'personal',
     reason:
       "The caller's own default organization: the person may need another organization's Security page.",
+    writes: ['user_profiles.update'],
   },
   'server/actions/onboarding.ts#dismissOnboardingAction': {
     kind: 'personal',
     reason: "The caller's own onboarding banner state.",
+    writes: ['user_profiles.update'],
   },
   'lib/onboarding/actions.ts#recordTourOutcomeAction': {
     kind: 'personal',
     reason: "The caller's own product-tour outcome (finished or skipped).",
+    writes: ['user_onboarding.upsert'],
   },
   'server/actions/order-requests.ts#withdrawOrderSubmissionAction': {
     kind: 'personal',
     reason:
       "Settles the caller's own submission key (a placement that did not finish); placing is gated.",
+    writes: ['rpc:withdraw_order_submission'],
   },
   'app/api/v1/orders/submissions/[key]/withdraw/route.ts#POST': {
     kind: 'personal',
     reason: "The phone's settle of the caller's own submission key; placing is gated.",
+    writes: ['rpc:withdraw_order_submission'],
   },
   'server/services/order-requests.ts#OrderRequestsService.withdrawSubmission': {
     kind: 'personal',
     reason:
       "Settles the caller's own submission key, for the web and phone entries; placing is gated.",
+    writes: ['rpc:withdraw_order_submission'],
   },
   'server/actions/support-tickets.ts#submitDashboardTicketAction': {
     kind: 'personal',
     reason:
       'A support request to the platform: a person held by the policy must still be able to ask for help.',
+    writes: ['support_tickets.insert'],
   },
   'app/api/v1/support/route.ts#POST': {
     kind: 'personal',
     reason:
       "The phone's support request to the platform: a person held by the policy must be able to ask for help.",
+    writes: ['support_tickets.insert'],
   },
   'app/api/v1/me/announcements/route.ts#POST': {
     kind: 'personal',
     reason: "The caller's own announcement read markers.",
+    writes: ['user_onboarding.upsert'],
   },
   'app/api/v1/me/release-state/route.ts#POST': {
     kind: 'personal',
     reason: "The caller's own What's New read state, from the phone.",
+    writes: ['rpc:record_release_state'],
   },
   'app/api/v1/me/seen/route.ts#POST': {
     kind: 'personal',
     reason: "The caller's own last-seen time in the organization.",
+    writes: ['rpc:touch_member_last_seen'],
   },
   'server/services/releases.ts#recordReleaseState': {
     kind: 'personal',
     reason: "The caller's own What's New read state, for the web and phone entries.",
+    writes: ['rpc:record_release_state'],
   },
   'app/api/v1/push/register/route.ts#POST': {
     kind: 'personal',
     reason: "Registers the caller's own device for push notifications.",
+    writes: ['rpc:register_push_token'],
   },
   'app/api/v1/push/register/route.ts#DELETE': {
     kind: 'personal',
     reason: "Removes the caller's own device token on sign-out.",
+    writes: ['push_tokens.delete'],
   },
   'app/api/v1/push/test/route.ts#POST': {
     kind: 'personal',
     reason:
       "Sends a test push to the caller's own devices (a token that no longer works is removed).",
-  },
-
-  // ── a record of the caller's own act ──
-  'server/actions/delivery-request.ts#recordDeliveryRequestDraftedAction': {
-    kind: 'record',
-    reason:
-      'Writes one audit row that the caller opened a delivery request email draft; changes nothing else.',
+    writes: ['push_tokens.delete'],
   },
 
   // ── the platform console ──
   'server/actions/organization.ts#createOrganizationAction': {
     kind: 'platform',
     reason: PLATFORM_CONSOLE,
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'locations.insert',
+      'organization_members.insert',
+      'organizations.delete',
+      'organizations.insert',
+      'platform_admin_audit.insert',
+      'user_profiles.update',
+    ],
   },
   'server/actions/platform-admin.ts#createOrgForCustomerAction': {
     kind: 'platform',
     reason: PLATFORM_CONSOLE,
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'auth.admin.generateLink',
+      'locations.insert',
+      'organization_members.insert',
+      'organizations.delete',
+      'organizations.insert',
+      'platform_admin_audit.insert',
+      'user_profiles.update',
+      'user_profiles.upsert',
+    ],
   },
   'server/actions/platform-admin.ts#removeOrgAction': {
     kind: 'platform',
     reason: PLATFORM_CONSOLE,
+    writes: [
+      'auth.admin.deleteUser',
+      'organizations.delete',
+      'platform_admin_audit.insert',
+      'rpc:account_deletion_check',
+      'storage:user-avatars.remove',
+    ],
   },
   'server/actions/platform-admin.ts#setOrgDeletionPassphraseAction': {
     kind: 'platform',
     reason: PLATFORM_CONSOLE,
+    writes: ['platform_admin_audit.insert', 'platform_settings.upsert'],
   },
   'server/actions/platform/billing.ts#setOrgBillingAction': {
     kind: 'platform',
     reason: PLATFORM_CONSOLE,
+    writes: ['organizations.update', 'platform_admin_audit.insert'],
   },
   'server/actions/platform/billing.ts#startOrgTrialAction': {
     kind: 'platform',
     reason: PLATFORM_CONSOLE,
+    writes: ['organizations.update', 'platform_admin_audit.insert'],
   },
   'server/actions/platform/impersonation.ts#startActingAsAction': {
     kind: 'platform',
     reason: PLATFORM_CONSOLE,
+    writes: [
+      'organization_members.delete',
+      'organization_members.upsert',
+      'platform_admin_audit.insert',
+      'platform_impersonation_sessions.insert',
+      'platform_impersonation_sessions.update',
+      'user_profiles.update',
+    ],
   },
   'server/actions/platform/impersonation.ts#stopActingAsAction': {
     kind: 'platform',
-    reason: PLATFORM_CONSOLE,
+    reason:
+      "Ends the platform admin's own acting-as grant, which only removes access; currentUserIsPlatformAdmin answers first.",
+    writes: [
+      'organization_members.delete',
+      'platform_admin_audit.insert',
+      'platform_impersonation_sessions.update',
+      'user_profiles.update',
+    ],
   },
   'server/actions/platform/users.ts#disableUserAccountAction': {
     kind: 'platform',
     reason: PLATFORM_CONSOLE,
+    writes: [
+      'auth.admin.updateUserById',
+      'platform_admin_audit.insert',
+      'rpc:admin_revoke_user_sessions',
+      'user_profiles.update',
+    ],
   },
   'server/actions/platform/users.ts#reenableUserAccountAction': {
     kind: 'platform',
     reason: PLATFORM_CONSOLE,
+    writes: ['auth.admin.updateUserById', 'platform_admin_audit.insert', 'user_profiles.update'],
   },
   'server/actions/platform/users.ts#sendUserPasswordResetAction': {
     kind: 'platform',
-    reason: PLATFORM_CONSOLE,
+    reason:
+      'Emails a password-reset link to an account, which changes nothing until its owner uses it; checkPlatformAdmin answers first.',
+    writes: ['auth.admin.generateLink', 'platform_admin_audit.insert'],
   },
   'server/actions/support-tickets.ts#updateSupportTicketAction': {
     kind: 'platform',
+    reason:
+      "Triages a support ticket (status, priority, the platform's own notes); currentUserIsPlatformAdmin answers first.",
+    writes: ['support_tickets.update'],
+  },
+  'server/actions/platform/permission-exceptions.ts#setOrderItemsAccessAction': {
+    kind: 'platform',
     reason: PLATFORM_CONSOLE,
+    writes: ['rpc:platform_set_permission_exception'],
+  },
+  'server/services/platform/permission-exceptions.ts#PermissionExceptionsService.set': {
+    kind: 'platform',
+    reason:
+      'Called only by setOrderItemsAccessAction after checkPlatformAdmin answered; it checks the platform allowlist again itself.',
+    writes: ['rpc:platform_set_permission_exception'],
   },
   'server/services/platform/account-status.ts#disableUserAccount': {
     kind: 'platform',
     reason: PLATFORM_SERVICE,
+    writes: [
+      'auth.admin.updateUserById',
+      'platform_admin_audit.insert',
+      'rpc:admin_revoke_user_sessions',
+      'user_profiles.update',
+    ],
   },
   'server/services/platform/account-status.ts#reenableUserAccount': {
     kind: 'platform',
     reason: PLATFORM_SERVICE,
+    writes: ['auth.admin.updateUserById', 'platform_admin_audit.insert', 'user_profiles.update'],
   },
   'server/services/platform/audit.ts#recordPlatformAudit': {
     kind: 'platform',
     reason: PLATFORM_SERVICE,
+    writes: ['platform_admin_audit.insert'],
   },
-  'server/services/platform/billing.ts#setBilling': { kind: 'platform', reason: PLATFORM_SERVICE },
-  'server/services/platform/billing.ts#startTrial': { kind: 'platform', reason: PLATFORM_SERVICE },
+  'server/services/platform/billing.ts#setBilling': {
+    kind: 'platform',
+    reason: PLATFORM_SERVICE,
+    writes: ['organizations.update', 'platform_admin_audit.insert'],
+  },
+  'server/services/platform/billing.ts#startTrial': {
+    kind: 'platform',
+    reason: PLATFORM_SERVICE,
+    writes: ['organizations.update', 'platform_admin_audit.insert'],
+  },
   'server/services/platform/impersonation.ts#startActingAs': {
     kind: 'platform',
     reason: PLATFORM_SERVICE,
+    writes: [
+      'organization_members.delete',
+      'organization_members.upsert',
+      'platform_admin_audit.insert',
+      'platform_impersonation_sessions.insert',
+      'platform_impersonation_sessions.update',
+      'user_profiles.update',
+    ],
   },
   'server/services/platform/impersonation.ts#stopActingAs': {
     kind: 'platform',
     reason: PLATFORM_SERVICE,
+    writes: [
+      'organization_members.delete',
+      'platform_admin_audit.insert',
+      'platform_impersonation_sessions.update',
+      'user_profiles.update',
+    ],
   },
   'server/services/platform/impersonation.ts#sweepExpiredImpersonations': {
     kind: 'platform',
     reason:
       'Ends temporary platform memberships past their end time; run by the console actions and a job.',
+    writes: [
+      'organization_members.delete',
+      'platform_impersonation_sessions.update',
+      'user_profiles.update',
+    ],
   },
   'server/services/platform/sessions.ts#revokeAllSessionsForUser': {
     kind: 'platform',
     reason:
       'Ends every session of one account: the console, and the sign-out and password paths for the own account.',
+    writes: ['rpc:admin_revoke_user_sessions'],
   },
   'server/services/platform/users.ts#sendPasswordResetForUser': {
     kind: 'platform',
     reason: PLATFORM_SERVICE,
+    writes: ['auth.admin.generateLink', 'platform_admin_audit.insert'],
   },
   'server/services/support-tickets.ts#updateSupportTicket': {
     kind: 'platform',
     reason: PLATFORM_SERVICE,
+    writes: ['support_tickets.update'],
   },
 
   // ── the customer portal ──
-  'server/actions/portal.ts#submitPortalOrderAction': { kind: 'portal', reason: PORTAL },
-  'server/actions/portal.ts#requestPortalReturnAction': { kind: 'portal', reason: PORTAL },
-  'server/actions/portal.ts#portalReturnSheetAction': { kind: 'portal', reason: PORTAL },
-  'server/actions/portal.ts#portalReturnOptionsAction': { kind: 'portal', reason: PORTAL },
+  'server/actions/portal.ts#submitPortalOrderAction': {
+    kind: 'portal',
+    reason: PORTAL,
+    writes: [
+      'customer_users.update',
+      'integration_deliveries.update',
+      'integration_deliveries.upsert',
+      'integration_endpoints.update',
+      'rpc:insert_order_request_with_lines',
+    ],
+  },
+  'server/actions/portal.ts#requestPortalReturnAction': {
+    kind: 'portal',
+    reason: PORTAL,
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'customer_users.update',
+      'integration_deliveries.update',
+      'integration_deliveries.upsert',
+      'integration_endpoints.update',
+      'notifications.insert',
+      'rpc:create_requester_return_request',
+      'rpc:publish_outbox',
+    ],
+  },
+  'server/actions/portal.ts#portalReturnSheetAction': {
+    kind: 'portal',
+    reason: PORTAL,
+    writes: ['customer_users.update'],
+  },
+  'server/actions/portal.ts#portalReturnOptionsAction': {
+    kind: 'portal',
+    reason: PORTAL,
+    writes: ['customer_users.update'],
+  },
   'server/services/portal.ts#resolvePortalContext': {
     kind: 'portal',
     reason:
       "The portal's own funnel: it applies the step-up rule, then stamps the portal account accepted.",
+    writes: ['customer_users.update'],
   },
-  'server/services/portal.ts#portalSubmitOrder': { kind: 'portal', reason: PORTAL },
-  'server/services/returns.ts#createPortalReturn': { kind: 'portal', reason: PORTAL },
+  'server/services/portal.ts#portalSubmitOrder': {
+    kind: 'portal',
+    reason: PORTAL,
+    writes: [
+      'integration_deliveries.update',
+      'integration_deliveries.upsert',
+      'integration_endpoints.update',
+      'rpc:insert_order_request_with_lines',
+    ],
+  },
+  'server/services/returns.ts#createPortalReturn': {
+    kind: 'portal',
+    reason: PORTAL,
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'integration_deliveries.update',
+      'integration_deliveries.upsert',
+      'integration_endpoints.update',
+      'notifications.insert',
+      'rpc:create_requester_return_request',
+      'rpc:publish_outbox',
+    ],
+  },
 
   // ── no member session ──
   'server/actions/support-tickets.ts#createSupportTicketAction': {
     kind: 'public',
     reason: 'The public support form: no session, limited per IP, written with the service client.',
+    writes: ['support_tickets.insert'],
   },
   'server/services/support-tickets.ts#createSupportTicket': {
     kind: 'public',
     reason:
       'The support request both the public form and the members entries write; no organization data.',
+    writes: ['support_tickets.insert'],
   },
   'app/api/v1/public/order-requests/route.ts#POST': {
     kind: 'public',
     reason: 'The public order link: no member session; the link token and its own limits decide.',
+    writes: [
+      'rpc:cleanup_expired_unconfirmed_order_requests',
+      'rpc:insert_order_request_with_lines',
+      'rpc:publish_outbox',
+    ],
   },
   'app/api/v1/public/returns/route.ts#POST': {
     kind: 'public',
     reason: 'The public return link: no member session; the return token decides.',
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'integration_deliveries.update',
+      'integration_deliveries.upsert',
+      'integration_endpoints.update',
+      'notifications.insert',
+      'rpc:create_requester_return_request',
+      'rpc:publish_outbox',
+    ],
   },
   'server/services/returns.ts#createRequesterReturn': {
     kind: 'public',
     reason: 'The return a token link holder files; no member session.',
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'integration_deliveries.update',
+      'integration_deliveries.upsert',
+      'integration_endpoints.update',
+      'notifications.insert',
+      'rpc:create_requester_return_request',
+      'rpc:publish_outbox',
+    ],
   },
   'server/services/member-email-unsubscribe.ts#unsubscribeMemberEmail': {
     kind: 'public',
     reason:
       "The unsubscribe link in an email: a signed claim names the person; it turns that person's own digest off.",
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'notification_preferences.upsert',
+      'user_profiles.update',
+    ],
   },
   'server/services/delivery-tracking.ts#getPublicDriverLocation': {
     kind: 'public',
     reason:
       "The customer's tracking page: no member session; it keeps a geocode of the destination.",
+    writes: ['charters.update'],
   },
   'app/api/v1/orders/sign/route.ts#POST': {
     kind: 'link-or-member',
     reason:
       'The signature link needs no member (the customer signs); the member branch gives the answer first.',
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'delivery_locations.delete',
+      'integration_deliveries.update',
+      'integration_deliveries.upsert',
+      'integration_endpoints.update',
+      'notifications.insert',
+      'order_requests.update',
+      'rpc:confirm_order_signature',
+      'rpc:order_return_token_ensure',
+      'schedule_events.update',
+    ],
   },
 
   // ── scheduled jobs and the pipeline ──
@@ -557,138 +922,191 @@ const REVIEWED: Record<string, Reviewed> = {
     kind: 'system',
     reason:
       'The nightly clean-up of items archived past the retention window, under a system context.',
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'inventory_items.update'],
   },
   'server/services/auto-archive.ts#archiveExpiredZeroStockItems': {
     kind: 'system',
     reason: "The scheduled auto-archive of out-of-stock items, by each organization's own setting.",
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'inventory_items.update'],
   },
   'server/services/auto-archive.ts#notifyAutoArchived': {
     kind: 'system',
     reason: 'The notice the scheduled auto-archive sends.',
+    writes: ['notifications.insert'],
   },
   'server/services/billing.ts#syncSubscriptionFromStripe': {
     kind: 'system',
     reason: "The billing webhook: the processor's signed event, no member session.",
+    writes: ['organizations.update'],
   },
   'server/services/exception-occurrences.ts#ExceptionOccurrencesService.syncOrg': {
     kind: 'system',
     reason:
       'Recomputes the Exception Center for an organization with the service role, after gated changes and on a schedule.',
+    writes: ['rpc:exceptions_sync'],
   },
   'server/services/lib/exception-sync-schedule.ts#scheduleExceptionSync': {
     kind: 'system',
     reason: 'Schedules that recompute after a gated change has been written.',
+    writes: ['rpc:exceptions_sync'],
   },
   'server/services/integration-events.ts#drainIntegrationDeliveries': {
     kind: 'system',
     reason: 'The scheduled delivery of queued webhook events.',
+    writes: ['integration_deliveries.update', 'integration_endpoints.update'],
   },
   'server/services/price-tracking.ts#refreshBookPricesForOrg': {
     kind: 'system',
     reason:
       'The scheduled price refresh, and the gated Refresh prices action, record public price observations.',
+    writes: ['inventory_items.update', 'item_price_observations.insert'],
   },
   'server/services/price-tracking.ts#recordBookObservation': {
     kind: 'system',
     reason: 'One price observation written by the price refresh.',
+    writes: ['inventory_items.update', 'item_price_observations.insert'],
   },
   'server/services/restore-points.ts#pruneSnapshots': {
     kind: 'system',
     reason: 'The nightly prune of restore points past their keep window.',
+    writes: ['restore_points.delete'],
   },
   'server/services/shipping.ts#ShippingService.reapStuckShipment': {
     kind: 'system',
     reason:
       'The scheduled job that settles a label purchase left unfinished (api/cron/reap-stuck-shipments).',
+    writes: ['carrier_shipments.update', 'rpc:connector_secret_get'],
   },
 
   // ── helpers its callers gate ──
   'server/services/audit.ts#audit': {
     kind: 'internal',
     reason: 'Writes the audit row of an act; the act decided whether it was allowed.',
+    writes: ['audit_logs.insert', 'audit_logs.upsert'],
   },
   'server/services/audit.ts#auditMany': {
     kind: 'internal',
     reason:
       'Writes the audit rows of an act over a selection; the act decided whether it was allowed.',
+    writes: ['audit_logs.insert', 'audit_logs.upsert'],
   },
   'server/services/audit.ts#insertAuditRowReported': {
     kind: 'internal',
     reason: 'Writes one prepared audit row; its callers decided whether the act was allowed.',
+    writes: ['audit_logs.insert', 'audit_logs.upsert'],
   },
   'server/services/notifications.ts#createNotification': {
     kind: 'internal',
     reason: NOTIFY_HELPER,
+    writes: ['notifications.insert'],
   },
   'server/services/maintenance-notify.ts#notifyMaintenanceEvent': {
     kind: 'internal',
     reason: NOTIFY_HELPER,
+    writes: ['notifications.insert'],
   },
   'server/services/returns-notify.ts#notifyRequesterReturnEvent': {
     kind: 'internal',
     reason: NOTIFY_HELPER,
+    writes: ['notifications.insert'],
   },
   'server/services/returns-notify.ts#notifyStaffNewReturnRequest': {
     kind: 'internal',
     reason: NOTIFY_HELPER,
+    writes: ['notifications.insert'],
   },
   'server/services/push.ts#notifyUser': {
     kind: 'internal',
     reason:
       'Sends a push a gated step (or the caller to their own devices) asked for; removes tokens that no longer work.',
+    writes: ['push_tokens.delete'],
   },
   'server/services/integration-events.ts#dispatchEvent': {
     kind: 'internal',
     reason:
       'Queues the webhook events of a change that has already been written behind its own gate.',
+    writes: [
+      'integration_deliveries.update',
+      'integration_deliveries.upsert',
+      'integration_endpoints.update',
+    ],
   },
   'server/services/order-requests.ts#syncOrderScheduleEvent': {
     kind: 'internal',
     reason:
       "Moves an order's calendar entry after a gated order step (or the signature link) changed the order.",
+    writes: ['schedule_events.update'],
   },
   'server/services/opening-stock-compensation.ts#compensateOpeningStockOrThrow': {
     kind: 'internal',
     reason:
       'Undoes the opening stock of a create that failed half way; its callers are gated creates.',
+    writes: ['rpc:compensate_opening_stock'],
   },
   'server/services/po-imports-lines.ts#createItemsFromPoLines': {
     kind: 'internal',
     reason:
       'Creates items for the lines of a PO import; its one caller (PoImportsService) asks its permission first.',
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'po_import_lines.update'],
   },
   'server/services/returns.ts#createMemberReturn': {
     kind: 'internal',
     reason:
       'Files the return a member asks for; its route gives the answer first (api/v1/orders/[id]/return-request).',
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'integration_deliveries.update',
+      'integration_deliveries.upsert',
+      'integration_endpoints.update',
+      'notifications.insert',
+      'rpc:create_requester_return_request',
+      'rpc:publish_outbox',
+    ],
   },
   'server/services/inventory.ts#InventoryService.stampPlacementBin': {
     kind: 'internal',
     reason: 'Stamps the rack label after a gated transfer or put-away moved the stock.',
+    writes: ['rpc:inventory_set_bin_location', 'rpc:inventory_set_rack'],
   },
   'server/services/inventory.ts#InventoryService.syncBookCratePlacement': {
     kind: 'internal',
     reason: "Reconciles a book's crate label after a gated transfer or put-away moved the stock.",
+    writes: ['audit_logs.insert', 'audit_logs.upsert', 'rpc:inventory_set_book_placement'],
   },
   'server/services/item-imports.ts#ItemImportBatchesService.claim': {
     kind: 'internal',
     reason:
       'Claims an import batch for the import action, which asks its permission before it calls this.',
+    writes: ['item_import_batches.insert', 'item_import_batches.update'],
   },
   'server/services/item-imports.ts#ItemImportBatchesService.recordOutcome': {
     kind: 'internal',
     reason: 'Records the outcome of an import batch, for the import action, after its gate.',
+    writes: ['item_import_batches.update'],
   },
   'server/services/item-imports.ts#ItemImportBatchesService.release': {
     kind: 'internal',
     reason: 'Releases a claimed import batch, for the import action, after its gate.',
+    writes: ['item_import_batches.update'],
   },
   'server/services/delivery-tracking.ts#DeliveryTrackingService.purgeForOrder': {
     kind: 'internal',
     reason:
       'Deletes the live point of an order that left in_transit; a clean-up for the order step that calls it.',
+    writes: ['delivery_locations.delete'],
   },
 };
+
+/**
+ * Entries that call a collaborator this guard cannot follow (WriteVerdict
+ * .unresolved: a value a class is handed, with no default this reading can
+ * name), each read by a person: `<entry>: what it writes through them and
+ * where the answer is given`. Empty on the real tree: every collaborator in it
+ * is followed (a field given `deps.x ?? new X(ctx)` or `deps.f ?? f`, and an
+ * object of functions, `export const S = { set, list }`).
+ */
+const RESOLVED_BY_READING: Record<string, string> = {};
 
 /**
  * The gates this rule holds, each taken out of the real source in turn: the
@@ -708,6 +1126,7 @@ const SERVICE_GATE =
 const ACTION_GATE = 'if (ctx.mfaRequired && !ctx.mfaSatisfied) throw mfaGateError(ctx);';
 const ORDERS = 'server/services/order-requests.ts';
 const MAINTENANCE = 'server/services/maintenance-requests.ts';
+const SAVED_VIEWS = 'server/services/saved-views.ts';
 const MUTATIONS: Mutation[] = [
   {
     file: 'server/services/api-keys.ts',
@@ -920,6 +1339,44 @@ const MUTATIONS: Mutation[] = [
     expect: ['server/actions/inventory.ts#bulkPlaceStockAction'],
     conditional: 'invSvc.transferStock(',
   },
+  {
+    file: SAVED_VIEWS,
+    anchor: 'private gateOrganizationChange(): void {',
+    remove: SERVICE_GATE,
+    expect: [
+      `${SAVED_VIEWS}#SavedViewsService.createShared`,
+      `${SAVED_VIEWS}#SavedViewsService.setSharing`,
+      `${SAVED_VIEWS}#SavedViewsService.removeOwnerless`,
+      'server/actions/saved-views.ts#toggleSavedViewShareAction',
+    ],
+  },
+  {
+    file: SAVED_VIEWS,
+    anchor: 'async createShared(',
+    remove: 'this.gateOrganizationChange();',
+    expect: [`${SAVED_VIEWS}#SavedViewsService.createShared`],
+  },
+  {
+    file: SAVED_VIEWS,
+    anchor: 'async setSharing(',
+    remove: 'this.gateOrganizationChange();',
+    expect: [
+      `${SAVED_VIEWS}#SavedViewsService.setSharing`,
+      'server/actions/saved-views.ts#toggleSavedViewShareAction',
+    ],
+  },
+  {
+    file: SAVED_VIEWS,
+    anchor: 'async removeOwnerless(',
+    remove: 'this.gateOrganizationChange();',
+    expect: [`${SAVED_VIEWS}#SavedViewsService.removeOwnerless`],
+  },
+  {
+    file: 'server/actions/delivery-request.ts',
+    anchor: 'export async function recordDeliveryRequestDraftedAction(',
+    remove: 'if (ctx.mfaRequired && !ctx.mfaSatisfied) return;',
+    expect: ['server/actions/delivery-request.ts#recordDeliveryRequestDraftedAction'],
+  },
 ];
 
 /* ───────────────────────────── the reading ───────────────────────────── */
@@ -1031,10 +1488,25 @@ function entriesOf(
           verdict: gate.methodVerdict(f.path, m.className, m.method),
         });
       }
-      for (const name of tree.graph.exportedFunctions(f.path)) {
-        const verdict = gate.exportVerdict(f.path, name);
-        // A class: its methods are read above.
-        if (verdict) out.push({ key: `${rel}#${name}`, kind: 'service', verdict });
+      for (const m of gate.objectMethods(f.path)) {
+        out.push({
+          key: `${rel}#${m.objectName}.${m.method}`,
+          kind: 'service',
+          verdict: gate.methodVerdict(f.path, m.objectName, m.method),
+        });
+      }
+      // A class's methods and an object's functions are read above; another
+      // value (a constant, a schema) runs nothing. A function that cannot be
+      // read is reported (rule 1).
+      for (const name of tree.graph.runtimeExports(f.path)) {
+        const kind = gate.exportKind(f.path, name);
+        if (kind !== 'fn' && kind !== 'alias') continue;
+        out.push({
+          key: `${rel}#${name}`,
+          kind: 'service',
+          verdict:
+            kind === 'fn' ? gate.exportVerdict(f.path, name) : gate.aliasVerdict(f.path, name),
+        });
       }
     }
   }
@@ -1058,9 +1530,38 @@ function describeOpen(e: Entry): string {
 function openEntries(entries: Entry[], reviewed: Record<string, Reviewed>): string[] {
   return entries
     .flatMap((e) => {
-      if (!e.verdict) return e.kind === 'service' ? [] : [`${e.key}: ${UNREADABLE}`];
+      if (!e.verdict) return [`${e.key}: ${UNREADABLE}`];
       if (!e.verdict.openWrite || reviewed[e.key]) return [];
       return [describeOpen(e)];
+    })
+    .sort();
+}
+
+/** Rule 1: entries that call a collaborator this reading cannot follow, and are not read by a person. */
+function unfollowedEntries(entries: Entry[], resolved: Record<string, string>): string[] {
+  return entries
+    .flatMap((e) =>
+      e.verdict?.unresolved.length && !resolved[e.key]
+        ? [
+            `${e.key}: calls a collaborator this guard cannot follow: ${e.verdict.unresolved.join('; ')}`,
+          ]
+        : [],
+    )
+    .sort();
+}
+
+/** Rule 2: entries resolved by reading that are gone, follow now, or give no reason. */
+function staleResolved(entries: Entry[], resolved: Record<string, string>): string[] {
+  const byKey = new Map(entries.map((e) => [e.key, e]));
+  return Object.entries(resolved)
+    .flatMap(([key, reason]) => {
+      const found = byKey.get(key);
+      if (!found?.verdict) return [`${key}: no such entry`];
+      const out: string[] = [];
+      if (!found.verdict.unresolved.length)
+        out.push(`${key}: every call is followed now, so it leaves the list`);
+      if (reason.length <= 40) out.push(`${key}: no reason given`);
+      return out;
     })
     .sort();
 }
@@ -1082,6 +1583,15 @@ function staleEntries(tree: Tree, entries: Entry[], reviewed: Record<string, Rev
     if (!v.writes) problems.push(`${key}: writes nothing, so it leaves the list`);
     else if (!v.openWrite)
       problems.push(`${key}: gives the answer before every write, so it leaves the list`);
+    else {
+      const pinned = new Set(entry.writes);
+      for (const w of v.writeSet) {
+        if (!pinned.has(w)) problems.push(`${key}: writes ${w}, which its entry does not pin`);
+      }
+      for (const w of entry.writes) {
+        if (!v.writeSet.includes(w)) problems.push(`${key}: pins ${w}, which it does not write`);
+      }
+    }
     if (entry.reason.length <= 40) problems.push(`${key}: no reason given`);
     const [rel, name] = [key.slice(0, key.indexOf('#')), key.slice(key.indexOf('#') + 1)];
     const abs = tree.abs(rel);
@@ -1155,19 +1665,34 @@ describe('every change to organization data gives the authenticator answer first
       'app/api/v1/orders/[id]/lines/route.ts#POST',
       'server/actions/customers.ts#createCustomerAction',
       'server/services/order-requests.ts#OrderRequestsService.approve',
+      // Injected collaborators with a default: `deps.grouping ?? new ItemGroupingService(ctx)`.
+      'server/actions/item-grouping.ts#ungroupSelectedAction',
+      'app/api/v1/items/ungroup-selected/route.ts#POST',
+      // A signed upload URL is a storage write.
+      'server/services/item-images.ts#ItemImagesService.createUploadUrl',
     ]) {
       const e = REAL_ENTRIES.find((x) => x.key === key);
       expect(e?.verdict?.writes, key).toBe(true);
       expect(e?.verdict?.openWrite, key).toBeNull();
     }
+    // An object of functions: `export const PermissionExceptionsService = { set, listForMembers }`.
+    const objectCall = REAL_ENTRIES.find(
+      (x) => x.key === 'server/actions/platform/permission-exceptions.ts#setOrderItemsAccessAction',
+    );
+    expect(objectCall?.verdict?.writeSet).toContain('rpc:platform_set_permission_exception');
   });
 
   it('1. every entry that writes passes a gate before its first write, or is listed with a reason', () => {
     expect(openEntries(REAL_ENTRIES, REVIEWED)).toEqual([]);
   });
 
-  it('2. every listed entry is current', () => {
+  it('1. every entry that calls a collaborator this guard cannot follow is read by a person', () => {
+    expect(unfollowedEntries(REAL_ENTRIES, RESOLVED_BY_READING)).toEqual([]);
+  });
+
+  it('2. every listed entry is current, and writes only what it pins', () => {
     expect(staleEntries(REAL, REAL_ENTRIES, REVIEWED)).toEqual([]);
+    expect(staleResolved(REAL_ENTRIES, RESOLVED_BY_READING)).toEqual([]);
   });
 
   it('3. the gates are where this guard thinks they are, and the context builders are none', () => {
@@ -1387,6 +1912,101 @@ describe('self-test: planted shapes are read as written', () => {
     ]);
   });
 
+  it('1. an object of functions, an injected collaborator and a storage write are followed', () => {
+    const t = tree({
+      'server/services/objects.ts': `
+        async function set(admin: any) { await admin.rpc('write_things'); }
+        async function list(admin: any) { return admin.from('t').select('*'); }
+        export const ThingsStore = { set, list, async drop(admin: any) { await admin.from('t').delete(); } };`,
+      'server/services/writer.ts': `
+        export class Writer {
+          constructor(private ctx: any) {}
+          async write() { await this.ctx.supabase.from('t').insert({}); }
+        }
+        export async function writeFn(ctx: any) { await ctx.supabase.from('t').update({}); }`,
+      'server/services/holder.ts': `
+        import { Writer, writeFn } from './writer';
+        interface Deps { writer?: Writer; fn?: (ctx: any) => Promise<void> }
+        export class Holder {
+          private readonly writer: NonNullable<Deps['writer']>;
+          private readonly fn: NonNullable<Deps['fn']>;
+          constructor(private readonly ctx: any, deps: Deps = {}) {
+            this.writer = deps.writer ?? new Writer(ctx);
+            this.fn = deps.fn ?? writeFn;
+          }
+          async viaField() { await this.writer.write(); }
+          async viaFunctionField() { await this.fn(this.ctx); }
+        }`,
+      'server/services/files.ts': `
+        export class Files {
+          constructor(private ctx: any) {}
+          async signedUpload() { return this.ctx.supabase.storage.from('b').createSignedUploadUrl('p'); }
+          async throughALocal() { const store = this.ctx.supabase.storage.from('b'); await store.upload('p', 'x'); }
+        }`,
+      'server/actions/a.ts': `'use server';
+        import { ThingsStore } from '@/server/services/objects';
+        import { Holder } from '@/server/services/holder';
+        export async function viaObject(admin: any) { await ThingsStore.set(admin); }
+        export async function viaHolder(ctx: any) { await new Holder(ctx).viaField(); }`,
+    });
+    expect(open(t)).toEqual([
+      'server/actions/a.ts#viaHolder:5: `new Holder(ctx).viaField()` writes before any authenticator gate',
+      'server/actions/a.ts#viaObject:4: `ThingsStore.set(admin)` writes before any authenticator gate',
+      "server/services/files.ts#Files.signedUpload:4: `this.ctx.supabase.storage.from('b').createSignedUploadUrl('p')` writes before any authenticator gate",
+      "server/services/files.ts#Files.throughALocal:5: `store.upload('p', 'x')` writes before any authenticator gate",
+      'server/services/holder.ts#Holder.viaField:11: `this.writer.write()` writes before any authenticator gate',
+      'server/services/holder.ts#Holder.viaFunctionField:12: `this.fn(this.ctx)` writes before any authenticator gate',
+      "server/services/objects.ts#ThingsStore.drop:4: `admin.from('t').delete()` writes before any authenticator gate",
+      "server/services/objects.ts#ThingsStore.set:2: `admin.rpc('write_things')` writes before any authenticator gate",
+      "server/services/writer.ts#Writer.write:4: `this.ctx.supabase.from('t').insert({})` writes before any authenticator gate",
+      "server/services/writer.ts#writeFn:6: `ctx.supabase.from('t').update({})` writes before any authenticator gate",
+    ]);
+  });
+
+  it('1. a collaborator handed in with no default this guard can name is reported until a person reads it', () => {
+    const t = tree({
+      'server/services/holder.ts': `
+        interface Store { save(): Promise<void> }
+        export class Holder {
+          private readonly store: Store;
+          constructor(private readonly ctx: any, deps: { store: Store }) {
+            this.store = deps.store;
+          }
+          async save() { await this.store.save(); }
+        }`,
+    });
+    const entries = entriesOf(t, READS, NOT_WRITES);
+    const line =
+      'server/services/holder.ts#Holder.save: calls a collaborator this guard cannot follow: server/services/holder.ts:8 this.store.save()';
+    expect(unfollowedEntries(entries, {})).toEqual([line]);
+    expect(unfollowedEntries(entries, { 'server/services/holder.ts#Holder.save': reason })).toEqual(
+      [],
+    );
+    expect(staleResolved(entries, { 'server/services/holder.ts#Holder.save': 'short' })).toEqual([
+      'server/services/holder.ts#Holder.save: no reason given',
+    ]);
+    expect(staleResolved(entries, { 'server/services/holder.ts#Gone.save': reason })).toEqual([
+      'server/services/holder.ts#Gone.save: no such entry',
+    ]);
+  });
+
+  it('1. a service export that is another name for a function is read as that function', () => {
+    const t = tree({
+      'server/services/aliases.ts': `
+        async function write(ctx: any) { await ctx.supabase.from('t').insert({}); }
+        const handlers = { write };
+        export const alias = handlers.write;
+        export const direct = write;
+        export const LIMIT = 5;
+        export const COPY = 'Try again.';
+        export const SAME_COPY = COPY;`,
+    });
+    expect(open(t)).toEqual([
+      "server/services/aliases.ts#alias:2: `ctx.supabase.from('t').insert({})` writes before any authenticator gate",
+      "server/services/aliases.ts#direct:2: `ctx.supabase.from('t').insert({})` writes before any authenticator gate",
+    ]);
+  });
+
   it('1. an action export that cannot be read is reported, listed or not', () => {
     const t = tree({
       'server/actions/a.ts': `'use server';
@@ -1395,9 +2015,9 @@ describe('self-test: planted shapes are read as written', () => {
     });
     const expected = [`server/actions/a.ts#alias: ${UNREADABLE}`];
     expect(open(t)).toEqual(expected);
-    expect(open(t, { 'server/actions/a.ts#alias': { kind: 'personal', reason } })).toEqual(
-      expected,
-    );
+    expect(
+      open(t, { 'server/actions/a.ts#alias': { kind: 'personal', reason, writes: [] } }),
+    ).toEqual(expected);
   });
 
   it('1. listing an entry covers that entry only', () => {
@@ -1406,7 +2026,9 @@ describe('self-test: planted shapes are read as written', () => {
         export async function one(ctx: any) { await ctx.supabase.from('t').insert({}); }
         export async function two(ctx: any) { await ctx.supabase.from('t').insert({}); }`,
     });
-    expect(open(t, { 'server/actions/a.ts#one': { kind: 'personal', reason } })).toEqual([
+    expect(
+      open(t, { 'server/actions/a.ts#one': { kind: 'personal', reason, writes: [] } }),
+    ).toEqual([
       "server/actions/a.ts#two:3: `ctx.supabase.from('t').insert({})` writes before any authenticator gate",
     ]);
   });
@@ -1425,13 +2047,13 @@ describe('self-test: planted shapes are read as written', () => {
     const entries = entriesOf(t, READS, NOT_WRITES);
     expect(
       staleEntries(t, entries, {
-        'server/actions/a.ts#gated': { kind: 'personal', reason },
-        'server/actions/a.ts#readOnly': { kind: 'personal', reason },
-        'server/actions/a.ts#gone': { kind: 'personal', reason },
-        'server/actions/a.ts#console': { kind: 'platform', reason },
-        'server/actions/a.ts#open': { kind: 'platform', reason: 'short' },
-        'server/actions/a.ts#member': { kind: 'public', reason },
-        'server/actions/a.ts#member2': { kind: 'internal', reason },
+        'server/actions/a.ts#gated': { kind: 'personal', reason, writes: [] },
+        'server/actions/a.ts#readOnly': { kind: 'personal', reason, writes: [] },
+        'server/actions/a.ts#gone': { kind: 'personal', reason, writes: [] },
+        'server/actions/a.ts#console': { kind: 'platform', reason, writes: ['t.insert'] },
+        'server/actions/a.ts#open': { kind: 'platform', reason: 'short', writes: ['t.insert'] },
+        'server/actions/a.ts#member': { kind: 'public', reason, writes: ['t.insert'] },
+        'server/actions/a.ts#member2': { kind: 'internal', reason, writes: [] },
       }),
     ).toEqual([
       'server/actions/a.ts#gated: gives the answer before every write, so it leaves the list',
@@ -1441,6 +2063,37 @@ describe('self-test: planted shapes are read as written', () => {
       "server/actions/a.ts#open: listed as 'platform' but reaches no platform-admin gate",
       'server/actions/a.ts#open: no reason given',
       'server/actions/a.ts#readOnly: writes nothing, so it leaves the list',
+    ]);
+  });
+
+  it('2. a listed entry that gains a write it does not pin, or pins one it does not make, is reported', () => {
+    const t = tree({
+      'server/actions/a.ts': `'use server';
+        export async function open(ctx: any) {
+          await ctx.supabase.from('prefs').upsert({});
+          await ctx.supabase.from('orders').update({});
+          await ctx.supabase.storage.from('docs').remove(['p']);
+          await ctx.supabase.rpc('write_things');
+        }`,
+    });
+    const entries = entriesOf(t, READS, NOT_WRITES);
+    const key = 'server/actions/a.ts#open';
+    const all = ['orders.update', 'prefs.upsert', 'rpc:write_things', 'storage:docs.remove'];
+    expect(entries.find((e) => e.key === key)?.verdict?.writeSet).toEqual(all);
+    expect(staleEntries(t, entries, { [key]: { kind: 'personal', reason, writes: all } })).toEqual(
+      [],
+    );
+    expect(
+      staleEntries(t, entries, {
+        [key]: {
+          kind: 'personal',
+          reason,
+          writes: ['prefs.upsert', 'rpc:write_things', 'storage:docs.remove', 'audit_logs.insert'],
+        },
+      }),
+    ).toEqual([
+      `${key}: pins audit_logs.insert, which it does not write`,
+      `${key}: writes orders.update, which its entry does not pin`,
     ]);
   });
 

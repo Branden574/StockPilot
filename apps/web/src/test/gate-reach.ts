@@ -194,13 +194,18 @@ export interface CallGraph {
  * a class, or whose initializer is one of those shapes, or a call of a
  * function (or static method) that is annotated to return the class or
  * returns `new Class(...)`. A method the class does not declare is looked up
- * on the class it extends.
+ * on the class it extends. A field the constructor gives a value
+ * (`this.x = deps.x ?? new X(ctx)`, `this.f = deps.f ?? f`) is read as each
+ * value it can take, and `S.m()` on an object of functions (`export const S =
+ * { set, list }`) as the function it names.
  *
  * A WRITE is, on the syntax tree:
  *   - `.insert(`, `.update(`, `.upsert(`, `.delete(` on a chain that starts
  *     with a `.from(...)` call (the query builder), or on a local whose
  *     initializer is such a chain;
- *   - `.upload(`, `.remove(`, `.move(`, `.copy(` on a chain through `.storage`;
+ *   - `.upload(`, `.update(`, `.remove(`, `.move(`, `.copy(`,
+ *     `.createSignedUploadUrl(`, `.uploadToSignedUrl(` and the bucket calls on
+ *     a chain through `.storage` (or on a local whose initializer is one);
  *   - `.rpc(name, ...)`, unless `name` is a string listed in `readRpcs`;
  *   - any method under `.auth.admin` whose name does not start with get or list;
  *   - a call of a function (or method) that writes and does not itself answer
@@ -220,8 +225,9 @@ export interface CallGraph {
  * unconditional is reported by name (`conditionalGates`).
  *
  * WHAT IT IS NOT. A reading, not a proof: a write through a function held in a
- * variable or an object, a receiver whose class this reading cannot name, or a
- * client handed through an untyped value is not seen. A catch that writes is
+ * variable, a receiver whose class this reading cannot name, or a client
+ * handed through an untyped value is not seen. A collaborator a class is
+ * handed with no default it can name is reported (WriteVerdict.unresolved). A catch that writes is
  * read as writing before the gate (it may run after the gate refused).
  */
 
@@ -245,13 +251,41 @@ export interface WriteVerdict {
   isGate: boolean;
   /** How that write is reached: each step as `<src-relative file>:<line> <text>`, down to the write itself. */
   writeChain: string[];
+  /**
+   * When it has an open write: every write it can make that no gate holds,
+   * as `<table>.<insert|update|upsert|delete>`, `storage:<bucket>.<method>`,
+   * `rpc:<name>` or `auth.admin.<method>` (`<dynamic>` for a name that is not
+   * a string). Empty otherwise.
+   */
+  writeSet: string[];
+  /**
+   * Calls on a collaborator a class holds that this reading cannot follow
+   * (`this.f.m()` where `f` holds a value whose class or function it cannot
+   * name), in the function and in what it calls: what it writes through them
+   * is not seen. Each as `<src-relative file>:<line> <text>`.
+   */
+  unresolved: string[];
 }
 
 export interface WriteGate {
   /** The function exported from `file` as `name`. Null when it is not one readable function. */
   exportVerdict(file: string, name: string): WriteVerdict | null;
-  /** The method `method` of the class `className` declared in `file`. Null when there is none. */
+  /**
+   * The method `method` of the class `className` declared in `file`, or the
+   * function `method` of the exported object of functions `className`. Null
+   * when there is none.
+   */
   methodVerdict(file: string, className: string, method: string): WriteVerdict | null;
+  /**
+   * What `file` exports as `name`: a function, a class, an object of
+   * functions, another name for a function (`export const a = handler`), or
+   * another value (a constant, a schema).
+   */
+  exportKind(file: string, name: string): 'fn' | 'class' | 'object' | 'alias' | 'other';
+  /** The function an `alias` export stands for (`export const a = handler`). Null when it is none. */
+  aliasVerdict(file: string, name: string): WriteVerdict | null;
+  /** The functions of each object of functions `file` declares and exports (`export const S = { set, list }`). */
+  objectMethods(file: string): Array<{ objectName: string; method: string }>;
   /** The methods other modules can call: of every exported class, neither private, protected nor `#`. */
   publicMethods(file: string): Array<{ className: string; method: string; isStatic: boolean }>;
 }
@@ -1317,7 +1351,19 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
     const gateKeys = new Set(options.gates);
     const quietKeys = new Set(options.notWrites ?? []);
     const TABLE_WRITES = new Set(['insert', 'update', 'upsert', 'delete']);
-    const STORAGE_WRITES = new Set(['upload', 'remove', 'move', 'copy']);
+    const STORAGE_WRITES = new Set([
+      'upload',
+      'update',
+      'remove',
+      'move',
+      'copy',
+      'createSignedUploadUrl',
+      'uploadToSignedUrl',
+      'createBucket',
+      'updateBucket',
+      'deleteBucket',
+      'emptyBucket',
+    ]);
     // `.from(` of these is no query builder.
     const BUILTIN_FROM = new Set([
       'Array',
@@ -1462,8 +1508,178 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
           }
         }
       }
+      for (const value of fieldValues(cls, name)) {
+        for (const alt of alternatives(value)) {
+          const found = classOfExpr(alt);
+          if (found) return found;
+        }
+      }
       return fieldClass(baseClass(cls), name, depth + 1);
     }
+
+    /**
+     * What a field of `cls` is given: its initializer, and each
+     * `this.<name> = <value>` in the constructor (an injected collaborator with
+     * its default, `deps.x ?? new X(ctx)`).
+     */
+    function fieldValues(cls: ClassRef, name: string): ts.Expression[] {
+      const out: ts.Expression[] = [];
+      for (const member of cls.decl.members) {
+        if (ts.isPropertyDeclaration(member) && memberName(member) === name && member.initializer) {
+          out.push(member.initializer);
+        }
+        if (!ts.isConstructorDeclaration(member) || !member.body) continue;
+        for (const st of member.body.statements) {
+          if (!ts.isExpressionStatement(st)) continue;
+          const e = unwrap(st.expression);
+          if (!ts.isBinaryExpression(e) || e.operatorToken.kind !== ts.SyntaxKind.EqualsToken)
+            continue;
+          const left = unwrap(e.left);
+          if (
+            ts.isPropertyAccessExpression(left) &&
+            left.expression.kind === ts.SyntaxKind.ThisKeyword &&
+            left.name.text === name
+          ) {
+            out.push(e.right);
+          }
+        }
+      }
+      return out;
+    }
+
+    /** The values an expression can take: each side of `a ?? b` and `a || b`, each branch of `c ? a : b`. */
+    function alternatives(expr: ts.Expression): ts.Expression[] {
+      const e = unwrap(expr);
+      if (
+        ts.isBinaryExpression(e) &&
+        (e.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken ||
+          e.operatorToken.kind === ts.SyntaxKind.BarBarToken)
+      ) {
+        return [...alternatives(e.left), ...alternatives(e.right)];
+      }
+      if (ts.isConditionalExpression(e)) {
+        return [...alternatives(e.whenTrue), ...alternatives(e.whenFalse)];
+      }
+      return [e];
+    }
+
+    /** The functions a field of `cls` (or of a class it extends) can hold: `this.unlink = deps.unlink ?? unlinkItems`. */
+    function fieldFunctions(cls: ClassRef | null, name: string, depth = 0): CallTarget[] {
+      if (!cls || depth > 5) return [];
+      const out: CallTarget[] = [];
+      for (const value of fieldValues(cls, name)) {
+        for (const alt of alternatives(value)) {
+          if (isFunctionNode(alt)) {
+            out.push(fnOf(alt));
+            continue;
+          }
+          if (ts.isIdentifier(alt) && localDeclaration(alt.text, alt)) continue;
+          const t = resolveExpression(cls.info, alt);
+          if (t?.kind === 'fn') out.push(...targetsOfKey(t.key));
+        }
+      }
+      return out.length ? out : fieldFunctions(baseClass(cls), name, depth + 1);
+    }
+
+    /** A module-level object of functions: `export const Service = { set, list }`. */
+    interface ObjectRef {
+      info: ModuleInfo;
+      name: string;
+      literal: ts.ObjectLiteralExpression;
+    }
+
+    function objectLiteralIn(info: ModuleInfo, name: string): ts.ObjectLiteralExpression | null {
+      for (const st of info.sf.statements) {
+        if (!ts.isVariableStatement(st)) continue;
+        for (const d of st.declarationList.declarations) {
+          if (!ts.isIdentifier(d.name) || d.name.text !== name || !d.initializer) continue;
+          const init = unwrap(d.initializer);
+          return ts.isObjectLiteralExpression(init) ? init : null;
+        }
+      }
+      return null;
+    }
+
+    function resolveObject(
+      module: string,
+      name: string,
+      seen = new Set<string>(),
+    ): ObjectRef | null {
+      const marker = `${module}#${name}`;
+      if (seen.has(marker)) return null;
+      seen.add(marker);
+      const info = modules.get(module);
+      if (!info) return null;
+      const local = info.exportsLocal.get(name);
+      if (local !== undefined) {
+        const literal = objectLiteralIn(info, local);
+        if (literal) return { info, name: local, literal };
+        const b = info.imports.get(local);
+        return b?.kind === 'named' ? resolveObject(b.module, b.name, seen) : null;
+      }
+      for (const re of info.reexports) {
+        const original = re.names ? re.names.get(name) : name;
+        if (original === undefined) continue;
+        const found = resolveObject(re.module, original, seen);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    /** The object of functions an identifier names, at module level or through an import. */
+    function objectOf(expr: ts.Expression): ObjectRef | null {
+      const e = unwrap(expr);
+      if (!ts.isIdentifier(e) || localDeclaration(e.text, e)) return null;
+      const info = infoOf(e);
+      if (!info) return null;
+      const literal = objectLiteralIn(info, e.text);
+      if (literal) return { info, name: e.text, literal };
+      const b = info.imports.get(e.text);
+      return b?.kind === 'named' ? resolveObject(b.module, b.name) : null;
+    }
+
+    /** What `obj.<prop>` is, when it is a function: a shorthand, a method, or a property. */
+    function objectMember(obj: ObjectRef, prop: string): CallTarget[] {
+      for (const p of obj.literal.properties) {
+        if (!p.name || !ts.isIdentifier(p.name) || p.name.text !== prop) continue;
+        if (ts.isShorthandPropertyAssignment(p)) {
+          const t = resolveLocal(obj.info, prop);
+          return t?.kind === 'fn' ? targetsOfKey(t.key) : [];
+        }
+        if (ts.isMethodDeclaration(p) && p.body) return [fnOf(p)];
+        if (ts.isPropertyAssignment(p)) {
+          const init = unwrap(p.initializer);
+          if (isFunctionNode(init)) return [fnOf(init)];
+          const t = resolveExpression(obj.info, init);
+          return t?.kind === 'fn' ? targetsOfKey(t.key) : [];
+        }
+      }
+      return [];
+    }
+
+    /** `export const alias = handler` (or `= Store.set`): the functions the other name stands for. */
+    function aliasTargets(file: string, name: string): Fn[] {
+      const info = modules.get(file);
+      const local = info?.exportsLocal.get(name);
+      for (const st of info && local !== undefined ? info.sf.statements : []) {
+        if (!ts.isVariableStatement(st)) continue;
+        for (const d of st.declarationList.declarations) {
+          if (!ts.isIdentifier(d.name) || d.name.text !== local || !d.initializer) continue;
+          const init = unwrap(d.initializer);
+          if (ts.isPropertyAccessExpression(init)) {
+            const obj = objectOf(init.expression);
+            if (obj) return fnTargets(objectMember(obj, init.name.text));
+          }
+          if (!ts.isIdentifier(init) && !ts.isPropertyAccessExpression(init)) return [];
+          const t = resolveExpression(info!, init);
+          return t?.kind === 'fn' ? fnsOfKey(t.key) : [];
+        }
+      }
+      return [];
+    }
+
+    const fnTargets = (targets: CallTarget[]): Fn[] =>
+      targets.filter((t): t is Fn => !('gate' in t));
 
     /** Does a function return an instance of `cls`: by its annotation, or a `return new Cls(...)`? */
     function returnsClass(info: ModuleInfo, fn: FunctionNode): ClassRef | null {
@@ -1665,7 +1881,16 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
     }
 
     /** What a call calls, as far as this reading can name it. */
+    const calleeMemo = new Map<ts.CallExpression, CallTarget[]>();
     function calleeTargets(call: ts.CallExpression): CallTarget[] {
+      let held = calleeMemo.get(call);
+      if (!held) {
+        held = readCallee(call);
+        calleeMemo.set(call, held);
+      }
+      return held;
+    }
+    function readCallee(call: ts.CallExpression): CallTarget[] {
       const info = infoOf(call);
       if (!info || info.isClientModule) return [];
       const callee = call.expression;
@@ -1692,7 +1917,14 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
         }
         const cls = classOfExpr(callee.expression);
         const m = cls ? findMethod(cls, callee.name.text) : null;
-        return m ? [fnOf(m)] : [];
+        if (m) return [fnOf(m)];
+        // `this.unlink(...)`: a field that holds a function.
+        if (unwrap(callee.expression).kind === ts.SyntaxKind.ThisKeyword) {
+          return fieldFunctions(enclosingClass(call), callee.name.text);
+        }
+        // `PermissionExceptionsService.set(...)`: an object of functions.
+        const obj = objectOf(callee.expression);
+        return obj ? objectMember(obj, callee.name.text) : [];
       }
       return [];
     }
@@ -1727,16 +1959,95 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
       return false;
     }
 
-    /** A property named `name` somewhere down a receiver chain. */
-    function chainHasProperty(expr: ts.Expression, name: string): boolean {
+    /** A property named `name` somewhere down a receiver chain (or in the initializer of the local it starts from). */
+    function chainHasProperty(expr: ts.Expression, name: string, depth = 0): boolean {
       for (let e = unwrap(expr); ;) {
         if (ts.isPropertyAccessExpression(e)) {
           if (e.name.text === name) return true;
           e = unwrap(e.expression);
         } else if (ts.isCallExpression(e) || ts.isElementAccessExpression(e)) {
           e = unwrap(e.expression);
+        } else if (ts.isIdentifier(e) && depth < 6) {
+          const decl = localDeclaration(e.text, e);
+          return (
+            !!decl &&
+            ts.isVariableDeclaration(decl) &&
+            !!decl.initializer &&
+            chainHasProperty(decl.initializer, name, depth + 1)
+          );
         } else return false;
       }
+    }
+
+    /** The first argument of the `.from(...)` call down a receiver chain: its string, or `<dynamic>`. */
+    function fromArgument(expr: ts.Expression, depth = 0): string {
+      if (depth > 12) return '<dynamic>';
+      const e = unwrap(expr);
+      if (ts.isCallExpression(e)) {
+        const callee = e.expression;
+        if (ts.isPropertyAccessExpression(callee) && callee.name.text === 'from') {
+          return literalOf(e.arguments[0]) ?? '<dynamic>';
+        }
+        return fromArgument(callee, depth + 1);
+      }
+      if (ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e)) {
+        return fromArgument(e.expression, depth + 1);
+      }
+      if (ts.isIdentifier(e)) {
+        const decl = localDeclaration(e.text, e);
+        if (decl && ts.isVariableDeclaration(decl) && decl.initializer) {
+          return fromArgument(decl.initializer, depth + 1);
+        }
+      }
+      return '<dynamic>';
+    }
+
+    /** A string literal, or a module-level `const` that holds one. */
+    function literalOf(arg: ts.Expression | undefined): string | null {
+      if (!arg) return null;
+      const e = unwrap(arg);
+      if (ts.isStringLiteralLike(e)) return e.text;
+      if (!ts.isIdentifier(e) || localDeclaration(e.text, e)) return null;
+      const info = infoOf(e);
+      for (const st of info?.sf.statements ?? []) {
+        if (!ts.isVariableStatement(st)) continue;
+        for (const d of st.declarationList.declarations) {
+          if (ts.isIdentifier(d.name) && d.name.text === e.text && d.initializer) {
+            const init = unwrap(d.initializer);
+            if (ts.isStringLiteralLike(init)) return init.text;
+          }
+        }
+      }
+      return null;
+    }
+
+    /**
+     * What a write primitive writes, as pinned on a reviewed entry:
+     * `<table>.<insert|update|upsert|delete>`, `storage:<bucket>.<method>`,
+     * `rpc:<name>`, or `auth.admin.<method path>`.
+     */
+    function writeLabel(call: ts.CallExpression): string {
+      const callee = call.expression as ts.PropertyAccessExpression;
+      const m = callee.name.text;
+      if (STORAGE_WRITES.has(m) && chainHasProperty(callee.expression, 'storage')) {
+        return /Bucket$/.test(m)
+          ? `storage.${m}`
+          : `storage:${fromArgument(callee.expression)}.${m}`;
+      }
+      if (TABLE_WRITES.has(m) && chainHasFrom(callee.expression)) {
+        return `${fromArgument(callee.expression)}.${m}`;
+      }
+      if (m === 'rpc') return `rpc:${literalOf(call.arguments[0]) ?? '<dynamic>'}`;
+      const parts: string[] = [m];
+      for (
+        let e = unwrap(callee.expression);
+        ts.isPropertyAccessExpression(e);
+        e = unwrap(e.expression)
+      ) {
+        if (e.name.text === 'admin') break;
+        parts.unshift(e.name.text);
+      }
+      return `auth.admin.${parts.join('.')}`;
     }
 
     function underAuthAdmin(expr: ts.Expression): boolean {
@@ -1760,8 +2071,8 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
       const callee = call.expression;
       if (!ts.isPropertyAccessExpression(callee)) return false;
       const m = callee.name.text;
-      if (TABLE_WRITES.has(m) && chainHasFrom(callee.expression)) return true;
       if (STORAGE_WRITES.has(m) && chainHasProperty(callee.expression, 'storage')) return true;
+      if (TABLE_WRITES.has(m) && chainHasFrom(callee.expression)) return true;
       if (m === 'rpc') {
         const name = call.arguments[0];
         return !(name && ts.isStringLiteralLike(name) && options.readRpcs.has(name.text));
@@ -1852,6 +2163,142 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
       writesInProgress.delete(node);
       writesMemo.set(node, found);
       return found;
+    }
+
+    /**
+     * What a function writes that no gate holds: each write primitive in its
+     * body (callbacks included), and what each function it calls writes,
+     * unless that callee is a gate or answers one before every write.
+     */
+    const writeSetMemo = new Map<ts.Node, Set<string>>();
+    const writeSetInProgress = new Set<ts.Node>();
+    function writeSetOf(node: FunctionNode): Set<string> {
+      const held = writeSetMemo.get(node);
+      if (held) return held;
+      const out = new Set<string>();
+      if (writeSetInProgress.has(node)) return out;
+      writeSetInProgress.add(node);
+      const visit = (n: ts.Node) => {
+        if (ts.isCallExpression(n)) {
+          if (isWritePrimitive(n)) out.add(writeLabel(n));
+          else {
+            for (const t of fnTargets(calleeTargets(n))) {
+              if (!verdictOf(t).openWrite) continue;
+              for (const w of writeSetOf(t.node)) out.add(w);
+            }
+          }
+        }
+        ts.forEachChild(n, visit);
+      };
+      if (node.body) visit(node.body);
+      writeSetInProgress.delete(node);
+      writeSetMemo.set(node, out);
+      return out;
+    }
+
+    /** Is a type one this tree declares (an interface, a type alias or a class), at its top level? */
+    function namesOwnType(info: ModuleInfo, type: ts.TypeNode | undefined, depth = 0): boolean {
+      if (!type || depth > 4) return false;
+      if (ts.isParenthesizedTypeNode(type)) return namesOwnType(info, type.type, depth + 1);
+      if (ts.isUnionTypeNode(type) || ts.isIntersectionTypeNode(type)) {
+        return type.types.some((t) => namesOwnType(info, t, depth + 1));
+      }
+      if (ts.isIndexedAccessTypeNode(type)) return namesOwnType(info, type.objectType, depth + 1);
+      if (ts.isTypeLiteralNode(type)) return false;
+      if (!ts.isTypeReferenceNode(type) || !ts.isIdentifier(type.typeName)) return false;
+      const name = type.typeName.text;
+      if (
+        name === 'NonNullable' ||
+        name === 'Readonly' ||
+        name === 'Required' ||
+        name === 'Partial'
+      ) {
+        return namesOwnType(info, type.typeArguments?.[0], depth + 1);
+      }
+      if (info.typeNames.has(name) || info.classes.has(name)) return true;
+      const b = info.typeImports.get(name) ?? info.imports.get(name);
+      return b?.kind === 'named' && modules.has(b.module);
+    }
+
+    /**
+     * A call this reading cannot follow on a collaborator a class holds:
+     * `this.f(...)` or `this.f.m(...)` where the field `f` is given a value
+     * (or typed with a type of this tree) whose class or function this reading
+     * cannot name.
+     */
+    function isUnresolvedCollaboratorCall(call: ts.CallExpression): boolean {
+      const callee = call.expression;
+      if (!ts.isPropertyAccessExpression(callee) || isWritePrimitive(call)) return false;
+      const recv = unwrap(callee.expression);
+      let field: string;
+      if (recv.kind === ts.SyntaxKind.ThisKeyword) field = callee.name.text;
+      else if (
+        ts.isPropertyAccessExpression(recv) &&
+        unwrap(recv.expression).kind === ts.SyntaxKind.ThisKeyword
+      ) {
+        field = recv.name.text;
+      } else return false;
+      if (calleeTargets(call).length > 0) return false;
+      const cls = enclosingClass(call);
+      if (!cls) return false;
+      if (recv.kind === ts.SyntaxKind.ThisKeyword && findMethod(cls, field)) return false;
+      if (recv.kind !== ts.SyntaxKind.ThisKeyword && classOfExpr(recv)) return false;
+      for (let c: ClassRef | null = cls, d = 0; c && d < 6; c = baseClass(c), d++) {
+        for (const member of c.decl.members) {
+          if (ts.isPropertyDeclaration(member) && memberName(member) === field) {
+            if (namesOwnType(c.info, member.type)) return true;
+          }
+          if (ts.isConstructorDeclaration(member)) {
+            for (const p of member.parameters) {
+              if (
+                ts.isIdentifier(p.name) &&
+                p.name.text === field &&
+                namesOwnType(c.info, p.type)
+              ) {
+                return true;
+              }
+            }
+          }
+        }
+        // A value handed in (`this.unlink = deps.unlink`), which no default names.
+        for (const value of fieldValues(c, field)) {
+          if (alternatives(value).some((alt) => isConstructorInput(alt))) return true;
+        }
+      }
+      return false;
+    }
+
+    /** A constructor parameter, or a property read from one (`deps.unlink`). */
+    function isConstructorInput(expr: ts.Expression): boolean {
+      let e = unwrap(expr);
+      while (ts.isPropertyAccessExpression(e)) e = unwrap(e.expression);
+      if (!ts.isIdentifier(e)) return false;
+      const decl = localDeclaration(e.text, e);
+      return !!decl && ts.isParameter(decl) && ts.isConstructorDeclaration(decl.parent);
+    }
+
+    /** Collaborator calls this reading cannot follow, in a function and in what it calls (gates left out). */
+    const unresolvedMemo = new Map<ts.Node, Set<ts.Node>>();
+    const unresolvedInProgress = new Set<ts.Node>();
+    function unresolvedOf(node: FunctionNode): Set<ts.Node> {
+      const held = unresolvedMemo.get(node);
+      if (held) return held;
+      const out = new Set<ts.Node>();
+      if (unresolvedInProgress.has(node)) return out;
+      unresolvedInProgress.add(node);
+      const visit = (n: ts.Node) => {
+        if (ts.isCallExpression(n)) {
+          if (isUnresolvedCollaboratorCall(n)) out.add(n);
+          for (const t of fnTargets(calleeTargets(n))) {
+            for (const u of unresolvedOf(t.node)) out.add(u);
+          }
+        }
+        ts.forEachChild(n, visit);
+      };
+      if (node.body) visit(node.body);
+      unresolvedInProgress.delete(node);
+      unresolvedMemo.set(node, out);
+      return out;
     }
 
     /** The first write or unconditional gate in an expression, in the order it runs; conditional gates are noted. */
@@ -2083,9 +2530,22 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
       }
       return out;
     };
-    const publicVerdict = (vs: Verdict[]): WriteVerdict => {
+    const publicVerdict = (fns: Fn[]): WriteVerdict => {
+      const vs = fns.map(verdictOf);
       const open = vs.find((v) => v.openWrite)?.openWrite ?? null;
       return {
+        // Worked out when read: a mutation run reads neither.
+        get writeSet() {
+          return open ? [...new Set(fns.flatMap((f) => [...writeSetOf(f.node)]))].sort() : [];
+        },
+        get unresolved() {
+          return [...new Set(fns.flatMap((f) => [...unresolvedOf(f.node)]))]
+            .map((n) => {
+              const at = where(n);
+              return `${path.relative(srcRoot, n.getSourceFile().fileName).split(path.sep).join('/')}:${at.line} ${at.text}`;
+            })
+            .sort();
+        },
         writeChain: open ? chainFrom(open) : [],
         writes: vs.some((v) => v.writes),
         openWrite: open ? where(open) : null,
@@ -2100,13 +2560,43 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
         if (t?.kind !== 'fn') return null;
         const fns = fnsOfKey(t.key);
         if (fns.length === 0) return null;
-        return publicVerdict(fns.map(verdictOf));
+        return publicVerdict(fns);
       },
       methodVerdict(file, className, method) {
         const info = modules.get(file);
         const decl = info?.classDecls.get(className);
-        const m = info && decl ? findMethod({ info, decl }, method) : null;
-        return m ? publicVerdict([verdictOf(fnOf(m))]) : null;
+        if (info && decl) {
+          const m = findMethod({ info, decl }, method);
+          return m ? publicVerdict([fnOf(m)]) : null;
+        }
+        const obj = resolveObject(file, className);
+        const fns = obj ? fnTargets(objectMember(obj, method)) : [];
+        return fns.length ? publicVerdict(fns) : null;
+      },
+      exportKind(file, name) {
+        const t = exportedNames(file).get(name);
+        if (t?.kind === 'fn' || t?.kind === 'class') return t.kind;
+        if (resolveObject(file, name)) return 'object';
+        return aliasTargets(file, name).length ? 'alias' : 'other';
+      },
+      aliasVerdict(file, name) {
+        const fns = aliasTargets(file, name);
+        return fns.length ? publicVerdict(fns) : null;
+      },
+      objectMethods(file) {
+        const out: Array<{ objectName: string; method: string }> = [];
+        for (const name of exportedNames(file).keys()) {
+          const obj = resolveObject(file, name);
+          if (!obj || obj.info.file !== file) continue;
+          for (const p of obj.literal.properties) {
+            if (!p.name || !ts.isIdentifier(p.name)) continue;
+            if (fnTargets(objectMember(obj, p.name.text)).length === 0) continue;
+            out.push({ objectName: name, method: p.name.text });
+          }
+        }
+        return out.sort((a, b) =>
+          `${a.objectName}.${a.method}`.localeCompare(`${b.objectName}.${b.method}`),
+        );
       },
       publicMethods(file) {
         const info = modules.get(file);

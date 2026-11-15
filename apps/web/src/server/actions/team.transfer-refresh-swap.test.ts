@@ -39,8 +39,7 @@ const state = vi.hoisted(() => ({
 }));
 // The action gives the context's authenticator answer before any of its own
 // checks. The first block takes that answer out by reporting the context as
-// not requiring the code; the block "the context's authenticator answer"
-// puts it back.
+// not requiring the code; the next two blocks put it back.
 vi.mock('@/server/services/context', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/server/services/context')>();
   return {
@@ -490,6 +489,7 @@ describe("transferOwnershipAction gives the context's authenticator answer first
 describe("transferOwnershipAction with requireOrgContext()'s own gate in front, as in a real request", () => {
   beforeEach(() => {
     state.codeGateOut = false;
+    state.contextGateOut = false;
   });
 
   it.each([

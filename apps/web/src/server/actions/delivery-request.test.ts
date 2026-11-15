@@ -21,12 +21,25 @@ vi.mock('@/server/services/audit', () => ({ audit: (...a: unknown[]) => auditSpy
  * visibility check against `order_requests` (RLS-scoped, migration 0044)
  * before writing the audit row. `makeSupabaseStub` (the repo's shared
  * chainable-query mock, already used by custom-fields.test.ts et al.) stands
- * in for `createClient()` so that check can be driven per-test without a
+ * in for the context's client so that check can be driven per-test without a
  * real DB.
  */
 const stubHolder: { stub: ReturnType<typeof makeSupabaseStub> | null } = { stub: null };
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: vi.fn(async () => stubHolder.stub!.client),
+/** The caller's context: its client is the stub, its session state settable per test. */
+const session = { mfaRequired: false, mfaSatisfied: true, noContext: false };
+vi.mock('@/server/services/context', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/services/context')>()),
+  withContext: vi.fn(async () => {
+    if (session.noContext) throw new Error('context read failed');
+    return {
+      userId: 'user-1',
+      organizationId: 'org-1',
+      role: 'staff',
+      mfaRequired: session.mfaRequired,
+      mfaSatisfied: session.mfaSatisfied,
+      supabase: stubHolder.stub!.client,
+    };
+  }),
 }));
 
 import { recordDeliveryRequestDraftedAction } from './delivery-request';
@@ -35,6 +48,9 @@ const ORDER = 'b3f1c2d4-1111-2222-3333-444455556666';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  session.mfaRequired = false;
+  session.mfaSatisfied = true;
+  session.noContext = false;
   // Default: the order exists and is visible to the caller — the case every
   // pre-existing test in this file below exercises. The one test that needs
   // the opposite (Finding 5) overrides this locally.
@@ -99,6 +115,29 @@ describe('recordDeliveryRequestDraftedAction', () => {
     expect(serialized).not.toContain('ticket');
     expect(serialized).not.toContain('assigned');
     expect(serialized).not.toContain('sent');
+  });
+
+  it("passes the caller's context to audit, so the row is the caller's own", async () => {
+    await recordDeliveryRequestDraftedAction({ orderId: ORDER, isCondensed: false });
+    expect(auditSpy.mock.calls[0]![1]).toMatchObject({ userId: 'user-1', organizationId: 'org-1' });
+  });
+
+  it('a session that has not satisfied a policy that requires an authenticator: records nothing, reads nothing', async () => {
+    session.mfaRequired = true;
+    session.mfaSatisfied = false;
+    await expect(
+      recordDeliveryRequestDraftedAction({ orderId: ORDER, isCondensed: false }),
+    ).resolves.toBeUndefined();
+    expect(auditSpy).not.toHaveBeenCalled();
+    expect(stubHolder.stub!.fromCalls).toEqual([]);
+  });
+
+  it('the context cannot be read: records nothing and does not throw', async () => {
+    session.noContext = true;
+    await expect(
+      recordDeliveryRequestDraftedAction({ orderId: ORDER, isCondensed: false }),
+    ).resolves.toBeUndefined();
+    expect(auditSpy).not.toHaveBeenCalled();
   });
 
   it('rejects a non-uuid order id without calling audit', async () => {
