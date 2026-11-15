@@ -177,9 +177,71 @@ describe('Settings > Navigation shows the sections the sidebar has', () => {
     expect(linksIn('Inventory')).not.toContain('Orders');
   });
 
-  it('with nothing saved, saving without a change saves nothing (null)', async () => {
+  it('with nothing saved, saving without a change sends an empty setting, not a reset (null)', async () => {
     render(<NavCustomizer baseSections={baseSections()} initialOverrides={null} />);
-    expect(await save()).toBeNull();
+    // null is Reset to default, which clears the entries of links not listed here too.
+    expect(await save()).toEqual({ v: 1 });
+  });
+});
+
+/**
+ * The editor lists the links of the modules that are on. Save names those
+ * links, so the server keeps the stored entries of every other link (a
+ * module that is off) instead of reading the save as the whole menu.
+ */
+describe('Save names the links the editor lists', () => {
+  const SOME_ON = new Set<ModuleId>(['orders', 'returns']);
+
+  function sectionsFor(enabledModules: Set<ModuleId>) {
+    return resolveSurface('web_sidebar', { role: 'admin', enabledModules }).map((sec) => ({
+      section: sec.section,
+      items: sec.items.map((it) => ({
+        href: it.href,
+        label: it.label,
+        iconName: it.iconName,
+        moduleId: it.moduleId,
+      })),
+    }));
+  }
+
+  it('Save sends every listed link, and only those', async () => {
+    const sections = sectionsFor(SOME_ON);
+    render(<NavCustomizer baseSections={sections} initialOverrides={null} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Hide Orders' }));
+    await save();
+    const listed = vi.mocked(setNavOverridesAction).mock.calls[0]![1] as string[] | undefined;
+    expect([...(listed ?? [])].sort()).toEqual(
+      sections.flatMap((s) => s.items.map((i) => i.href)).sort(),
+    );
+    expect(listed).not.toContain('/dashboard/rentals');
+    expect(listed).not.toContain('/dashboard/maintenance');
+  });
+
+  it('Reset to default sends null and names no links', async () => {
+    render(<NavCustomizer baseSections={sectionsFor(SOME_ON)} initialOverrides={null} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to default' }));
+    await waitFor(() => expect(setNavOverridesAction).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(setNavOverridesAction).mock.calls[0]).toEqual([null]);
+  });
+
+  it('with the module on again, its stored hide and rename open in the editor', () => {
+    render(
+      <NavCustomizer
+        baseSections={sectionsFor(new Set<ModuleId>([...SOME_ON, 'rentals', 'maintenance_requests']))}
+        initialOverrides={{
+          v: 1,
+          hidden: ['/dashboard/rentals'],
+          labels: { '/dashboard/maintenance': 'Work requests' },
+        }}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Show Rentals' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.getByRole('textbox', { name: 'Rename Maintenance' })).toHaveValue(
+      'Work requests',
+    );
   });
 });
 
