@@ -5,8 +5,9 @@
 // header warehouse is null (a manager's selection spanning two warehouses, or
 // an org-wide count) must still reach the warehouse-scoped staffer it is
 // assigned to. The RPC applies that arm with auth.uid(); the service's job is
-// to hand it the caller's WRITABLE warehouses (never readable, never a
-// widening) and to stop before querying when there is nothing to see.
+// to hand it the warehouses the caller can READ (the one count read rule,
+// lib/auth/count-read-scope.ts; cycle-counts.read-scope.test.ts) and to stop
+// before querying when there is nothing to see.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
@@ -49,7 +50,7 @@ function fullAccess() {
   });
 }
 
-function scopedAccess(writable = ['wh-a'], readable = ['wh-a', 'wh-c']) {
+function scopedAccess(writable = ['wh-a'], readable = writable) {
   vi.mocked(getWarehouseAccess).mockResolvedValue({
     readableIds: readable,
     writableIds: writable,
@@ -214,11 +215,21 @@ describe('CycleCountsService.listPage: search goes to the server, typed', () => 
 });
 
 describe('CycleCountsService.listPage: warehouse-scoped visibility', () => {
-  it('a warehouse-scoped staffer is narrowed to her WRITABLE warehouses (the null arm is the RPC)', async () => {
-    scopedAccess(['wh-a', 'wh-b'], ['wh-a', 'wh-b', 'wh-c']);
+  it('a warehouse-scoped staffer is narrowed to the warehouses she can read (the null arm is the RPC)', async () => {
+    scopedAccess(['wh-a', 'wh-b']);
     const { stub, svc } = svcWith({ data: [], error: null }, { role: 'staff', userId: 'u-dana' });
     await svc.listPage();
     expect(pageArgs(stub).p_scope_warehouse_ids).toEqual(['wh-a', 'wh-b']);
+  });
+
+  it('a read-only member is narrowed to the warehouses they can read, as on the count page', async () => {
+    scopedAccess([], ['wh-a', 'wh-c']);
+    const { stub, svc } = svcWith(
+      { data: [], error: null },
+      { role: 'viewer', userId: 'u-v', permissions: new Set(['cycle_counts:read']) },
+    );
+    await svc.listPage();
+    expect(pageArgs(stub).p_scope_warehouse_ids).toEqual(['wh-a', 'wh-c']);
   });
 
   it('a manager is not narrowed, and no warehouse read is spent deciding it', async () => {
@@ -241,8 +252,8 @@ describe('CycleCountsService.listPage: warehouse-scoped visibility', () => {
     expect(pageArgs(stub).p_scope_warehouse_ids).toBeNull();
   });
 
-  it('a member with no writable warehouse sees no counts, without querying', async () => {
-    scopedAccess([], ['wh-a']);
+  it('a member with no readable warehouse sees no counts, without querying', async () => {
+    scopedAccess([], []);
     const { stub, svc } = svcWith(
       { data: [row(1)], error: null },
       { role: 'viewer', userId: 'u-v', permissions: new Set(['cycle_counts:read']) },
@@ -351,7 +362,7 @@ describe('CycleCountsService.listPage: summary', () => {
   });
 
   it('a member who sees no counts gets zero totals, still in the workspace timezone', async () => {
-    scopedAccess([], ['wh-a']);
+    scopedAccess([], []);
     vi.mocked(getCachedOrgTimezone).mockResolvedValue('America/Chicago');
     const { stub, svc } = svcWith(
       { data: [row(1)], error: null },

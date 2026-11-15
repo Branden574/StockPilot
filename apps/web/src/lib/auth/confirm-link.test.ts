@@ -344,6 +344,33 @@ describe('lookUpConfirmRecipient', () => {
     await expect(lookUpConfirmRecipient(USER_A, NOW)).resolves.toEqual({ kind: 'gone' });
   });
 
+  it('gone: a ban time that is present and cannot be read as a date counts as disabled', async () => {
+    for (const banned_until of ['not a time', 'infinity', '4102444800', 4102444800000, true, {}]) {
+      getUserById.mockResolvedValueOnce(user({ banned_until }));
+      await expect(
+        lookUpConfirmRecipient(USER_A, NOW),
+        JSON.stringify(banned_until),
+      ).resolves.toEqual({ kind: 'gone' });
+    }
+  });
+
+  it('found: no ban time (absent, null or empty), or one that has passed', async () => {
+    for (const fields of [
+      {},
+      { banned_until: null },
+      { banned_until: '' },
+      { banned_until: '   ' },
+      { banned_until: '2026-10-31T11:59:59Z' },
+      { banned_until: '2020-01-01T00:00:00+00:00' },
+    ]) {
+      getUserById.mockResolvedValueOnce(user(fields));
+      await expect(
+        lookUpConfirmRecipient(USER_A, NOW),
+        JSON.stringify(fields),
+      ).resolves.toMatchObject({ kind: 'found', email: 'person@example.com' });
+    }
+  });
+
   it('failed: any other error, a missing user, or a throw (never thrown on)', async () => {
     getUserById.mockResolvedValueOnce({
       data: { user: null },
