@@ -40,6 +40,10 @@ interface TrackResult {
    *  only on a completed order with fulfilled items whose org has the
    *  returns module enabled. */
   returnPath?: string | null;
+  /** True when the tracker could not check whether a return can be requested
+   *  (the organization's returns module could not be read): not "no", so the
+   *  page says so and offers another try. Absent otherwise. */
+  returnPathUnavailable?: boolean;
 }
 
 interface Props {
@@ -137,8 +141,13 @@ export function TrackForm({ initialToken, initialId, initialEmail }: Props) {
   const [result, setResult] = useState<TrackResult | null>(null);
   const [notFound, setNotFound] = useState(false);
 
-  async function handleSubmit(e: React.FormEvent) {
+  function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    void lookUp();
+  }
+
+  /** Asks the tracker for this request: the form's submit, and Check again. */
+  async function lookUp() {
     if (loading) return;
     if (!id.trim() || !email.trim() || !token.trim()) return;
 
@@ -229,7 +238,7 @@ export function TrackForm({ initialToken, initialId, initialEmail }: Props) {
         </div>
       ) : null}
 
-      {result ? <TrackResultBlock result={result} /> : null}
+      {result ? <TrackResultBlock result={result} onCheckAgain={() => void lookUp()} /> : null}
 
       {result?.status === 'in_transit' ? (
         <DeliveryMap orderId={id.trim()} token={token.trim()} email={email.trim()} />
@@ -238,7 +247,14 @@ export function TrackForm({ initialToken, initialId, initialEmail }: Props) {
   );
 }
 
-function TrackResultBlock({ result }: { result: TrackResult }) {
+function TrackResultBlock({
+  result,
+  onCheckAgain,
+}: {
+  result: TrackResult;
+  /** Asks the tracker for this request again (the return link's Check again). */
+  onCheckAgain: () => void;
+}) {
   const statusLabel = trackStatusLabel(result.status, result.fulfillmentType);
   const isTerminalNegative =
     result.status === 'denied' || result.status === 'cancelled';
@@ -329,6 +345,23 @@ function TrackResultBlock({ result }: { result: TrackResult }) {
             </p>
             <Button asChild variant="outline" className="mt-2">
               <a href={result.returnPath}>Request a return</a>
+            </Button>
+          </div>
+        ) : result.returnPathUnavailable ? (
+          // The tracker could not check whether a return can be requested:
+          // that is not "no", so the page says so and offers another try.
+          <div className="border-border mt-5 border-t pt-4" role="status">
+            <p className="text-muted-foreground text-[13.5px]">
+              We couldn&apos;t check whether you can request a return for this order right now.
+              This is usually temporary.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              className="mt-2"
+              onClick={onCheckAgain}
+            >
+              Check again
             </Button>
           </div>
         ) : null}

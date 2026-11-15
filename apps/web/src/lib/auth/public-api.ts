@@ -7,7 +7,8 @@ import { hasScope, withApiKey, type ApiKeyContext, type ApiScope } from './api-k
 /**
  * Guard for a public-API route: authenticate the API key, then require a scope.
  * Returns the org-scoped context on success, or a ready-to-return error
- * response (401 missing/invalid, 403 module-off/missing-scope, 429 rate-limit).
+ * response (401 missing/invalid, 403 module-off/missing-scope, 429 rate-limit,
+ * 503 with Retry-After when the module check could not be read).
  *
  * IMPORTANT: there is NO user session on the public API, so RLS does not protect
  * these handlers. Every query MUST explicitly filter
@@ -21,9 +22,12 @@ export async function authorizePublicApi(
   const result = await withApiKey(req);
   if (!result.ok) {
     const headers: Record<string, string> = {};
-    if (result.status === 429 && result.retryAfter) {
+    if ((result.status === 429 || result.status === 503) && result.retryAfter) {
       headers['retry-after'] = String(result.retryAfter);
     }
+    // A 503 is about this moment only: nothing between the caller and here
+    // may keep it.
+    if (result.status === 503) headers['cache-control'] = 'no-store';
     return { res: NextResponse.json({ error: result.error }, { status: result.status, headers }) };
   }
   if (!hasScope(result.ctx, scope)) {

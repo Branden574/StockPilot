@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
+import { makeSupabaseStub } from '@/test/supabase-mock';
+
 import {
   AUTO_REORDER_DEFAULTS,
   parseAutoReorderSettings,
   planAutoReorder,
+  readAutoReorderSettings,
   shouldAutoSend,
   type AutoReorderCandidate,
 } from './auto-reorder';
@@ -15,6 +18,58 @@ const c = (
   unitCost = 2,
 ): AutoReorderCandidate => ({ itemId, supplierId, quantityOrdered, unitCost });
 
+/**
+ * The automatic reordering panel is seeded from this read and saves the whole
+ * setting, so the page has to tell a failed read (show no form) from no row
+ * (never configured: the defaults).
+ */
+describe('readAutoReorderSettings', () => {
+  const read = (result: { data: unknown; error: { message: string; code?: string } | null }) =>
+    readAutoReorderSettings(
+      makeSupabaseStub({ 'organization_modules.select': result }).client,
+      'org-1',
+    );
+
+  it('says the read failed, with its code, and still hands back the defaults', async () => {
+    await expect(
+      read({ data: null, error: { message: 'connection reset', code: '08006' } }),
+    ).resolves.toEqual({ settings: AUTO_REORDER_DEFAULTS, readError: { code: '08006' } });
+  });
+
+  it('says the read failed when the query throws', async () => {
+    const db = {
+      from: () => {
+        throw new Error('connection reset');
+      },
+    };
+    await expect(readAutoReorderSettings(db, 'org-1')).resolves.toEqual({
+      settings: AUTO_REORDER_DEFAULTS,
+      readError: { code: 'unknown' },
+    });
+  });
+
+  it('treats no row as never configured: the defaults and no read error', async () => {
+    await expect(read({ data: null, error: null })).resolves.toEqual({
+      settings: AUTO_REORDER_DEFAULTS,
+      readError: null,
+    });
+  });
+
+  it('hands back a stored row’s values and no read error', async () => {
+    await expect(
+      read({
+        data: {
+          settings: { autoReorder: { enabled: true, mode: 'send', maxAutoSendCents: 50000 } },
+        },
+        error: null,
+      }),
+    ).resolves.toEqual({
+      settings: { enabled: true, mode: 'send', maxAutoSendCents: 50000 },
+      readError: null,
+    });
+  });
+});
+
 describe('parseAutoReorderSettings — fail closed', () => {
   it('defaults to disabled/draft/no-cap on garbage', () => {
     expect(parseAutoReorderSettings(undefined)).toEqual(AUTO_REORDER_DEFAULTS);
@@ -25,9 +80,9 @@ describe('parseAutoReorderSettings — fail closed', () => {
   });
 
   it('parses valid settings', () => {
-    expect(parseAutoReorderSettings({ enabled: true, mode: 'send', maxAutoSendCents: 200000 })).toEqual(
-      { enabled: true, mode: 'send', maxAutoSendCents: 200000 },
-    );
+    expect(
+      parseAutoReorderSettings({ enabled: true, mode: 'send', maxAutoSendCents: 200000 }),
+    ).toEqual({ enabled: true, mode: 'send', maxAutoSendCents: 200000 });
   });
 
   it('only enabled===true counts as enabled', () => {

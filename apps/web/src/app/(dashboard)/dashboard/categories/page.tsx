@@ -7,6 +7,7 @@ import { CategoriesManager } from '@/components/categories/categories-manager';
 import { requireOrgContext } from '@/lib/auth/session';
 import { isNextControlFlowError } from '@/lib/error-reporter';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { moduleAnswer } from '@/lib/modules/module-state';
 import { effectiveNavLabel } from '@/lib/nav-labels';
 import { CategoriesService } from '@/server/services/categories';
 
@@ -88,8 +89,10 @@ async function CategoriesSection({
   // Sports Task 12: subcategory + tracking-profile administration is gated on
   // the sports module AND sports:manage. The server re-asserts both on every
   // write (CategoriesService.assertSportsWriteAllowed / setupSportsDefaults).
-  const [{ enabled: sportsEnabled }, rows] = await Promise.all([
-    checkModuleAccess('sports'),
+  // moduleAnswer: a state that could not be read is this page's error state
+  // with Try again, never the editor drawn as if the module were off.
+  const [sportsEnabled, rows] = await Promise.all([
+    checkModuleAccess('sports').then(moduleAnswer),
     svc.list({ includeArchived: isArchivedView }),
   ]);
   const canManageSports = can(ctx, 'sports:manage');

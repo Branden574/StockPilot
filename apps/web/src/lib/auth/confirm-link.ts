@@ -89,9 +89,10 @@ export const CONFIRM_RECIPIENT_LOOKUP_TIMEOUT_MS = 5000;
  *           one that cannot be read as a date);
  *   gone    GoTrue answered 404 user_not_found (lib/auth/gotrue-user-not-found,
  *           the one reading account deletion uses), the account has no address,
- *           or it is disabled (banned_until in the future,
- *           server/services/platform/account-status.ts): the link cannot be
- *           used, so the page answers as for an expired one;
+ *           or it is disabled (banned_until in the future, or one that
+ *           cannot be read as a time; server/services/platform/
+ *           account-status.ts): the link cannot be used, so the page answers
+ *           as for an expired one;
  *   failed  any other answer, or none within the time limit.
  * Shaped like readAuthEmail (server/lib/account-deletion.ts). Never throws,
  * and never returns GoTrue's message, which can carry the id.
@@ -155,16 +156,33 @@ export function emailChangeRequestTimeMissing(account: {
 }
 
 /**
- * GoTrue's email_change_sent_at in ms, or null when it is missing or is not a
- * date written as one (GoTrue writes RFC 3339). A bare number, or a string
- * Date.parse would stretch into some year, is not read as a time.
+ * A time GoTrue gives (email_change_sent_at, banned_until) in ms, or null when
+ * it is missing or is not a date written as one (GoTrue writes RFC 3339). A
+ * bare number, or a string Date.parse would stretch into some year, is not
+ * read as a time. The one reader of such a time: the page, the Settings card's
+ * status and the check made when links are minted
+ * (server/services/email-change.ts) all read it here, so they cannot disagree
+ * about whether a request time is there.
  */
-function requestTime(value: unknown): number | null {
+export function authServerTime(value: unknown): number | null {
   if (typeof value !== 'string') return null;
   const text = value.trim();
   if (!/^\d{4}-\d{2}-\d{2}[T ]/.test(text)) return null;
   const ms = Date.parse(text);
   return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * Whether GoTrue's banned_until says the account is disabled at `now`. None
+ * given (absent, null or blank) is not disabled; a time is compared; anything
+ * else that is there is taken as disabled, since a ban that cannot be read
+ * cannot be shown to have ended.
+ */
+function bannedAt(value: unknown, now: Date): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value === 'string' && value.trim() === '') return false;
+  const until = authServerTime(value);
+  return until === null || until > now.getTime();
 }
 
 async function readRecipient(userId: string, now: Date): Promise<ConfirmRecipientAccount> {
@@ -176,14 +194,13 @@ async function readRecipient(userId: string, now: Date): Promise<ConfirmRecipien
     if (!user) return { kind: 'failed', reason: 'error' };
     const email = typeof user.email === 'string' ? user.email.trim() : '';
     if (!email) return { kind: 'gone' };
-    const bannedUntil = Date.parse(user.banned_until ?? '');
-    if (Number.isFinite(bannedUntil) && bannedUntil > now.getTime()) return { kind: 'gone' };
+    if (bannedAt(user.banned_until, now)) return { kind: 'gone' };
     const pending = typeof user.new_email === 'string' ? user.new_email.trim() : '';
     return {
       kind: 'found',
       email,
       newEmail: pending || null,
-      emailChangeSentAt: requestTime(user.email_change_sent_at),
+      emailChangeSentAt: authServerTime(user.email_change_sent_at),
     };
   } catch {
     return { kind: 'failed', reason: 'error' };

@@ -7,6 +7,7 @@ import { cookieSessionOwesStepUp } from '@/lib/auth/api-context';
 import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { orgMayUseModule } from '@/lib/modules/org-may-use-module';
 import { audit } from '@/server/services/audit';
 import { putConnectionSecret } from '@/server/connectors/secret-store';
@@ -115,7 +116,19 @@ export async function GET(req: Request) {
     // comped organization could START a connection and never finish it. What
     // the connection then EXPORTS is a different question: the drainer still
     // requires the explicit enabled row, which is the export off switch.
-    if (!(await orgMayUseModule(supabase, organizationId, 'integrations'))) {
+    //
+    // A state the reads could not decide is not "off" (orgMayUseModule throws
+    // ModulesUnavailableError): the transient code, as for an unreadable
+    // account status, never module_disabled. Nothing is exchanged or stored.
+    let mayUse: boolean;
+    try {
+      mayUse = await orgMayUseModule(supabase, organizationId, 'integrations');
+    } catch (e) {
+      if (!(e instanceof ModulesUnavailableError)) throw e;
+      void reportError(e, { tag: 'intacct.callback.module_state', level: 'warning', organizationId });
+      return redirectWithError('internal_error');
+    }
+    if (!mayUse) {
       return redirectWithError('module_disabled');
     }
 

@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { uuidSchema } from '@stockpilot/core';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
+import { uncheckedAccessMessage } from '@/server/lib/action-error-result';
 import { ServiceError, withContext } from '@/server/services/context';
 import { MaintenanceRequestsService } from '@/server/services/maintenance-requests';
 import { MaintenanceShareLinksService } from '@/server/services/maintenance-share-links';
@@ -13,6 +14,9 @@ type ActionResult<T> = ({ ok: true } & T) | { error: { message: string } };
 
 function fail(e: unknown): { error: { message: string } } {
   rethrowControlFlow(e);
+  // A check of the caller's access that could not be read: its own sentence.
+  const unchecked = uncheckedAccessMessage(e, 'actions.maintenance_requests');
+  if (unchecked) return { error: { message: unchecked } };
   if (e instanceof ServiceError) return { error: { message: e.message } };
   return { error: { message: 'Something went wrong. Please try again.' } };
 }

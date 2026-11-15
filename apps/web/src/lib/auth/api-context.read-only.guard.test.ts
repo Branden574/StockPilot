@@ -77,7 +77,12 @@ const ENTRY = 'lib/auth/api-context.ts';
  *     (error-reporter-core.ts): strings in, strings out. It imports nothing.
  *   lib/modules/module-state.ts  the module set held when a module read failed
  *     (docket S81): a Set subclass and an error class, in memory only. It
- *     loads @stockpilot/core (the module registry) and nothing in this app.
+ *     loads @stockpilot/core (the module registry) and, in this app, only
+ *     lib/known-error-states.ts.
+ *   lib/known-error-states.ts  the fixed digest the module-state error class
+ *     carries, so an error card can name the state: string constants, a
+ *     lookup table and one function that reads an error's `digest`. In
+ *     memory only; it imports nothing.
  *   lib/auth/membership-unavailable.ts  the refusal of a membership read that
  *     did not answer (docket S90): an error class, in memory only. It imports
  *     nothing.
@@ -96,6 +101,7 @@ const REVIEWED_CLOSURE = [
   'lib/error-reporter-core.ts',
   'lib/error-reporter.ts',
   'lib/error-text.ts',
+  'lib/known-error-states.ts',
   'lib/modules/effective-modules.ts',
   'lib/modules/module-state.ts',
   'lib/redact-urls.ts',

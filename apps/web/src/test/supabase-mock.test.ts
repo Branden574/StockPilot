@@ -126,6 +126,24 @@ describe('servedLikePostgrest', () => {
       Promise.resolve().then(() => stub.client.from('items').select('id').not('gone', 'is', true)),
     ).rejects.toThrow(/cannot evaluate \.not\(gone, is, true\)/);
   });
+
+  it('evaluates .not(col, "is", null) through .maybeSingle(), as a point read asks', async () => {
+    const stub = makeSupabaseStub({ 'items.select': servedLikePostgrest(rows) });
+    const one = await stub.client
+      .from('items')
+      .select('id')
+      .eq('org', 'o1')
+      .not('gone', 'is', null)
+      .maybeSingle();
+    expect(one.data).toEqual(expect.objectContaining({ id: 'd' }));
+    const none = await stub.client
+      .from('items')
+      .select('id')
+      .eq('org', 'o2')
+      .not('gone', 'is', null)
+      .maybeSingle();
+    expect(none.data).toBeNull();
+  });
 });
 
 describe('countedLikePostgrest', () => {

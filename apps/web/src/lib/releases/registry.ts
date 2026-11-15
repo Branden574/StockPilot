@@ -109,7 +109,17 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: '2026-11-13T17:39:00Z'): the
     // phone authenticator code and access check releases below share one minute, so the placeholder is that
     // same minute. Set at merge (2026-11-14): the same value as those two releases' publishedAt.
-    publishedAt: '2026-11-14T01:24:00Z',
+    // Moved again by docs/whats-new-order-request-alerts (2026-11-14; was: '2026-11-14T01:24:00Z'): the order
+    // request alerts release below is dated 2026-11-14T17:58:00Z, so the placeholder is that same minute.
+    // Moved again by docs/whats-new-phone-screens-by-access (2026-11-14; was: '2026-11-14T17:58:00Z'): the
+    // phone screens by access release below is dated 2026-11-14T18:44:00Z, so the placeholder is that same
+    // minute. Set at merge (2026-11-14): the same value as that release's publishedAt.
+    // Moved again by docs/whats-new-count-read-rule (2026-11-15; was: '2026-11-14T18:44:00Z'): the count read
+    // rule and email change releases below share one minute, 2026-11-15T00:03:00Z, so the placeholder is
+    // that same minute.
+    // Moved again by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: '2026-11-15T00:03:00Z'):
+    // the settings release below is dated 2026-11-15T04:13:00Z, so the placeholder is that same minute.
+    publishedAt: '2026-11-15T04:13:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -194,6 +204,527 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'settings-not-loaded-2026-11',
+    revision: 1,
+    // #563 (squash 51ed64904), web only: no phone update and no migration.
+    // Live in production since 2026-11-15 04:12:00Z; publishedAt is the whole
+    // minute after. It went live after #557, so it sits above the module check
+    // release (module-check-try-again-2026-11) and is the newest published
+    // release.
+    // Claims checked against the code at 51ed64904 (paths under apps/web/src):
+    // - The state: components/settings/settings-read-failed.tsx, "We couldn't
+    //   load this settings page" (the settings error boundary's words) with
+    //   Try again; a panel on another page names itself. No form and no Save.
+    //   No stored row is still "never configured" and shows the defaults.
+    // - Organization: app/(dashboard)/dashboard/settings/organization/page.tsx,
+    //   owners and admins (ctx.role); the Name, Timezone, Labels and Purchase
+    //   order terms sections are replaced by the state.
+    // - Inventory cleanup: settings/inventory-cleanup/page.tsx, items:update or
+    //   items:delete; the panels save on or off plus days and default to off.
+    // - Maintenance requests: settings/maintenance/page.tsx,
+    //   maintenance_requests:configure (owner by default; an admin does not
+    //   hold it); the settings read or the member list read.
+    // - Reorder Planning: dashboard/planning/page.tsx, the two panels shown to
+    //   moduleAccess.canManage (owner or admin, lib/modules/module-gate.ts),
+    //   each replaced on its own; the suggestions table stays.
+    // - Purchase orders: dashboard/purchase-orders/page.tsx, the approval
+    //   threshold panel shown to owners and admins (isAdmin); a blank amount
+    //   turns approval off (po-approval-panel.tsx); the list stays.
+    // Who is told: per entry, whoever can open that page or panel. No links:
+    // each entry is a rare state, not a place to go.
+    status: 'published',
+    title: 'Settings that could not be loaded now say so, with Try again',
+    summary:
+      'If StockPilot cannot load your saved settings for a moment, the Organization, Inventory cleanup and Maintenance requests settings pages, the planning and automatic reordering settings on Reorder Planning, and the approval threshold on Purchase orders now say they could not be loaded and offer Try again, instead of showing a form filled with default values. Nothing changes while settings load normally, and no app update is needed.',
+    // #563 is live in production since 2026-11-15 04:12:00Z.
+    publishedAt: '2026-11-15T04:13:00Z',
+    entries: [
+      {
+        id: 'organization-settings-not-loaded',
+        category: 'fixed',
+        area: 'Settings',
+        title: 'Organization settings say so when they could not be loaded',
+        whatChanged:
+          "If Settings, Organization cannot load your saved settings, it now says We couldn't load this settings page, with Try again, instead of showing the name, time zone, labels and purchase order terms filled with default values.",
+        whyItMatters:
+          'Default values are not your saved settings, and saving them would have replaced what your organization had set.',
+        howItAffectsYou:
+          'This is rare and usually passes in a moment. Your saved settings are unchanged, and the other settings pages still work.',
+        whatToDo: 'If you see this, press Try again after a moment.',
+        audience: { roles: ['owner', 'admin'] },
+      },
+      {
+        id: 'inventory-cleanup-settings-not-loaded',
+        category: 'fixed',
+        area: 'Settings',
+        title: 'Inventory cleanup says so when its settings could not be loaded',
+        whatChanged:
+          "If Settings, Inventory cleanup cannot load your saved settings, it now says We couldn't load this settings page, with Try again, instead of showing automatic archiving and removal as off.",
+        whyItMatters:
+          'Off may not be what you saved, and saving a panel would have turned that automation off.',
+        howItAffectsYou:
+          'This is rare and usually passes in a moment. Your saved settings are unchanged, and the other settings pages still work.',
+        whatToDo: 'If you see this, press Try again after a moment.',
+        audience: { anyPermission: ['items:update', 'items:delete'] },
+      },
+      {
+        id: 'maintenance-settings-not-loaded',
+        category: 'fixed',
+        area: 'Settings',
+        title: 'Maintenance request settings say so when they could not be loaded',
+        whatChanged:
+          "If Settings, Maintenance requests cannot load your saved settings or your organization's members, it now says We couldn't load this settings page, with Try again, instead of showing the categories, notification audiences and photo link settings filled with default values.",
+        whyItMatters:
+          'Default values are not your saved settings, and saving them would have replaced what your organization had set.',
+        howItAffectsYou:
+          'This is rare and usually passes in a moment. Your saved settings are unchanged, and the other settings pages still work.',
+        whatToDo: 'If you see this, press Try again after a moment.',
+        audience: { anyPermission: ['maintenance_requests:configure'] },
+      },
+      {
+        id: 'planning-settings-not-loaded',
+        category: 'fixed',
+        area: 'Reorder Planning',
+        title:
+          'Reorder Planning says so when its planning or automatic reordering settings could not be loaded',
+        whatChanged:
+          "On Reorder Planning, if the planning settings or the automatic reordering settings cannot be loaded, that panel now says We couldn't load the planning settings or We couldn't load the automatic reordering settings, with Try again, instead of showing default values.",
+        whyItMatters:
+          'Default values are not your saved settings, and saving that panel would have replaced them.',
+        howItAffectsYou:
+          'This is rare and usually passes in a moment. Your saved settings are unchanged. The reorder suggestions still show, and so does the other panel when its own settings load.',
+        whatToDo: 'If you see this, press Try again after a moment.',
+        audience: { roles: ['owner', 'admin'], modules: ['planning'] },
+      },
+      {
+        id: 'approval-threshold-not-loaded',
+        category: 'fixed',
+        area: 'Purchase orders',
+        title: 'The approval threshold says so when it could not be loaded',
+        whatChanged:
+          "On Purchase orders, if the approval threshold cannot be loaded, its panel now says We couldn't load the approval threshold, with Try again, instead of showing an empty amount.",
+        whyItMatters:
+          'An empty amount means approval is off, so saving the panel would have turned approval off.',
+        howItAffectsYou:
+          'This is rare and usually passes in a moment. Your saved threshold is unchanged, and the purchase order list still shows.',
+        whatToDo: 'If you see this, press Try again after a moment.',
+        audience: { roles: ['owner', 'admin'], modules: ['purchase_orders'] },
+      },
+    ],
+  },
+  {
+    id: 'module-check-try-again-2026-11',
+    revision: 1,
+    // #557 (squash 4cd92b204), web only: no phone update and no migration.
+    // Live in production since 2026-11-15 03:45:33Z; publishedAt is the whole
+    // minute after. The settings release directly above went live later.
+    // Claims checked against the code at 4cd92b204 (paths under apps/web/src):
+    // - Entry 1: the strip, components/dashboard/modules-unread-banner.tsx,
+    //   drawn by app/(dashboard)/layout.tsx when the module state is unknown,
+    //   Try again a full page load; the page state "This page couldn't be
+    //   loaded" / "We couldn't check your access just now. This is usually
+    //   temporary." (lib/known-error-states.ts, app/(dashboard)/error.tsx);
+    //   a Server Action answers "Your access could not be checked. Please try
+    //   again." (lib/modules/module-state.ts ModulesUnavailableError, mapped
+    //   by server/lib/action-error-result.ts) before it writes anything.
+    //   Before, a page that asked about a module it could not read left that
+    //   feature out. Every member sees the dashboard layout: no audience.
+    // - Entry 2: settings/modules/page.tsx ("We couldn't load your modules")
+    //   and settings/navigation/page.tsx ("We couldn't check which modules
+    //   are on"), each with Try again and no switches or editor; both pages
+    //   check organization:update.
+    // - Entry 3: the /r/<token> page (app/r/[token]/page.tsx) reaches "We
+    //   couldn't check this link just now. This is usually temporary." with
+    //   Try again; the tracking page (app/r/track, components/orders/
+    //   track-form.tsx) keeps the order and says it could not check whether
+    //   a return can be requested, with Check again. Told to whoever manages
+    //   public request links, the audience public-link-sent-request-2026-10
+    //   uses.
+    // - Entry 4: components/portal/portal-shop.tsx, the unconfirmed state
+    //   (the words, Reload, Place order and the cart disabled until a reload);
+    //   a refusal the server answered gives Place order back with the cart
+    //   and note. The portal's own people do not read What's New, so it is
+    //   told to whoever manages portal customers (customers:manage, the
+    //   b2b_portal module).
+    // No links: each entry is a rare state, not a place to go.
+    status: 'published',
+    title: 'Clearer messages when StockPilot cannot check which modules are on',
+    summary:
+      'If StockPilot cannot check which modules are on, or your access, for a moment, pages, buttons and links on the web now say so, instead of leaving a feature out without saying why. This is usually temporary: try again in a moment. No app update is needed.',
+    // #557 is live in production since 2026-11-15 03:45:33Z.
+    publishedAt: '2026-11-15T03:46:00Z',
+    entries: [
+      {
+        id: 'pages-say-when-modules-not-checked',
+        category: 'fixed',
+        area: 'Web app',
+        title: 'Pages say so when StockPilot cannot check which modules are on',
+        whatChanged:
+          "If StockPilot cannot check which modules are on for your organization, a strip above the page now says We couldn't check which modules are on, with Try again. A page that needs that check says This page couldn't be loaded (a settings page says We couldn't load this settings page), with Try again, and a button that saves or changes something says Your access could not be checked. Please try again.",
+        whyItMatters: 'Before, a page could leave out a menu item or a feature without saying why.',
+        howItAffectsYou:
+          'This is rare and usually passes in a moment. When a button says your access could not be checked, nothing was changed.',
+        whatToDo: 'If you see one of these messages, wait a moment and press Try again.',
+      },
+      {
+        id: 'module-settings-say-when-not-checked',
+        category: 'fixed',
+        area: 'Settings',
+        title: 'Settings, Modules and Navigation say so when modules cannot be checked',
+        whatChanged:
+          "If StockPilot cannot check which modules are on, Settings, Modules says We couldn't load your modules and Settings, Navigation says We couldn't check which modules are on, each with Try again, instead of showing the switches or the menu editor.",
+        whyItMatters:
+          'Switches or a menu shown without that check might not match what your organization has turned on.',
+        howItAffectsYou: 'Nothing was changed. Both pages work as before once the check succeeds.',
+        whatToDo: 'If you see this, press Try again after a moment.',
+        audience: { anyPermission: ['organization:update'] },
+      },
+      {
+        id: 'public-links-say-when-not-checked',
+        category: 'fixed',
+        area: 'Public requests',
+        title: 'Public request links say so when they cannot be checked',
+        whatChanged:
+          "If StockPilot cannot check a public request link for a moment, the page it opens now says This page couldn't be loaded and We couldn't check this link just now, with Try again. On the order tracking page, if it cannot check whether a return can be requested, the order still shows, with a note saying so and Check again.",
+        whyItMatters:
+          'People who open your links can tell a passing problem from a link that no longer works.',
+        howItAffectsYou: 'Nothing changes while StockPilot works normally.',
+        whatToDo:
+          'No action needed. If someone tells you they saw this, ask them to try again in a moment.',
+        audience: {
+          anyPermission: ['public_links:manage', 'organization:update'],
+          modules: ['public_requests'],
+        },
+      },
+      {
+        id: 'portal-place-order-not-confirmed',
+        category: 'fixed',
+        area: 'Customer portal',
+        title: 'The customer portal asks to check orders before an order is placed again',
+        whatChanged:
+          "In the customer portal, if Place order sends an order and no answer comes back, the shop now says We couldn't confirm your order went through. Reload the page and check your orders before placing it again. It offers Reload and keeps Place order off until then, with the cart and note still on screen.",
+        whyItMatters: 'Pressing Place order again right away could send the same order twice.',
+        howItAffectsYou:
+          "When StockPilot turns an order down, the shop shows why and gives Place order back with the cart and note kept. If the portal cannot check a customer's access for a moment, its page says This page couldn't be loaded, with Try again.",
+        whatToDo:
+          'No action needed. If a customer asks, tell them to reload the page and check their orders before placing the order again.',
+        audience: { anyPermission: ['customers:manage'], modules: ['b2b_portal'] },
+      },
+    ],
+  },
+  {
+    id: 'count-read-rule-2026-11',
+    revision: 1,
+    // The cycle counts half of #558 (squash 29cb97190), web only: no phone
+    // update and no migration. Live in production since 2026-11-15 00:02Z;
+    // publishedAt is the whole minute after. The phone has it through the
+    // server: its online count list is GET /api/v1/cycle-counts and its
+    // downloaded list is what the sync is sent.
+    // The other half of #558, the Email card, is its own release directly
+    // below (email-change-expired-2026-11, the same minute), because it
+    // changed for every organization and this release is addressed to
+    // organizations with Cycle counts on. This one is the newer of the two,
+    // so a reader both reach is offered it first: it is the one with
+    // something to do.
+    // Claims checked against the code at 29cb97190 (paths under apps/web/src):
+    // - The rule: lib/auth/count-read-scope.ts. Managers and above, and a
+    //   member with every warehouse, read every count; anyone else a count in
+    //   a warehouse they can READ, and a count with no warehouse only when it
+    //   is assigned to them; a member with no readable warehouse none. Asked
+    //   by the list (server/services/cycle-counts.ts listPage), the count
+    //   itself (get and getDetailPage: the count page, the count sheet and
+    //   the variance report) and the phone's sync
+    //   (app/api/v1/mobile/snapshot/route.ts).
+    // - Entry 1: the list read the warehouses a member can change, and a
+    //   viewer can change none (lib/auth/warehouse.ts: writableIds is empty
+    //   for a viewer), so a viewer's list was empty while the count page,
+    //   which asked for read access, opened. A viewer opens Cycle counts only
+    //   when given cycle_counts:read (core ROLE_PERMISSIONS). For staff the
+    //   readable and the changeable warehouses are the same, so their web
+    //   list (and the phone's online list, the same read) is unchanged. The
+    //   phone's downloaded list is not the same for them: entry 2.
+    // - Entry 2: a count's header has no warehouse when it is started for
+    //   "All warehouses" (components/cycle-counts/start-cycle-count-form.tsx)
+    //   or is a selection whose items sit in more than one warehouse. The
+    //   list already showed such a count only to its assignee; the count page
+    //   and the phone's sync now do too. A count the rule does not show
+    //   answers not found, which the count page shows as "Page not found"
+    //   (app/not-found.tsx). The assignee is set under "Assigned to:" on the
+    //   count page (components/cycle-counts/cycle-count-detail.tsx) by whoever
+    //   holds cycle_counts:assign, while the count is open. The entry says
+    //   what such a count shows to now, in the present tense.
+    // Who is told: organizations with Cycle counts on. Entry 1 goes to whoever
+    // can open Cycle counts (the pages' gate: cycle_counts:read or
+    // stock:adjust). Entry 2 goes to them too, since the counter is the one a
+    // count stops showing to and needs to know whom to ask, and to whoever
+    // assigns counts (cycle_counts:assign).
+    status: 'published',
+    title: 'Who sees a cycle count is now the same everywhere',
+    summary:
+      "The cycle count list, a count's page and count sheet, and the mobile app's list now follow one rule. A viewer who can open Cycle counts sees the counts of their warehouses, a count with no warehouse of its own shows to the person it is assigned to, and owners, admins, managers and members with access to every warehouse see every count, as before. No app update is needed.",
+    // #558 is live in production since 2026-11-15 00:02Z.
+    publishedAt: '2026-11-15T00:03:00Z',
+    audience: { modules: ['cycle_counts'] },
+    entries: [
+      {
+        id: 'count-list-shows-readable-warehouses',
+        category: 'fixed',
+        area: 'Cycle counts',
+        title: "Viewers see their warehouses' counts in the count list",
+        whatChanged:
+          'A viewer who can open Cycle counts now sees the counts of the warehouses they are assigned to in the count list, on the web and in the mobile app.',
+        whyItMatters:
+          "The list showed only counts in warehouses a member can change, so a viewer's list was empty, although each of those counts opened from a link.",
+        howItAffectsYou:
+          'Staff, managers and admins see the same counts in the web list as before. Who can enter numbers in a count is unchanged.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/cycle-counts', label: 'Open Cycle counts' },
+        audience: {
+          anyPermission: ['cycle_counts:read', 'stock:adjust'],
+          modules: ['cycle_counts'],
+        },
+      },
+      {
+        id: 'count-without-warehouse-follows-assignee',
+        category: 'improved',
+        area: 'Cycle counts',
+        title: 'A count with no warehouse of its own shows to the person it is assigned to',
+        whatChanged:
+          "A count started for All warehouses, or for a selection of items in more than one warehouse, has no warehouse of its own. It now shows only to the person it is assigned to, and to owners, admins, managers and members with access to every warehouse. The count list, the count's page, its count sheet and variance report, and the mobile app's list after its next sync all follow this.",
+        whyItMatters:
+          "The count list, the count's page and the mobile app each decided this in their own way, so the same count could show in one place and not in another.",
+        howItAffectsYou:
+          'A count of this kind that is not assigned shows only to owners, admins, managers and members with access to every warehouse. For anyone else it is not in the list and its link opens Page not found. A member with no warehouse sees no counts, including one assigned to them. A count in one warehouse shows to members who can see that warehouse, assigned or not.',
+        whatToDo:
+          'If you assign counts, assign such a count to the person who will count it: open the count and choose them under Assigned to. If a count you were asked to do is missing from your list or opens Page not found, ask a manager to assign it to you.',
+        link: { href: '/dashboard/cycle-counts', label: 'Open Cycle counts' },
+        audience: {
+          anyPermission: ['cycle_counts:read', 'stock:adjust', 'cycle_counts:assign'],
+          modules: ['cycle_counts'],
+        },
+      },
+    ],
+  },
+  {
+    id: 'email-change-expired-2026-11',
+    revision: 1,
+    // The Email card half of #558 (squash 29cb97190), web only: no phone
+    // update and no migration. Live in production since 2026-11-15 00:02Z;
+    // publishedAt is the whole minute after, the minute of the count read
+    // rule release directly above, which is the newer of the two.
+    // Claims checked against the code at 29cb97190 (paths under apps/web/src):
+    // - components/settings/email-settings-card.tsx (Settings, Profile, the
+    //   Email panel) shows every change the account holds; one held without a
+    //   request time (the auth server clears the time and both link tokens
+    //   when the password is changed, and keeps the pending address) shows the
+    //   Expired badge with Resend verification, Use a different address and
+    //   Cancel change. Before, the card showed a pending change only when it
+    //   had a request time.
+    // - Resend mints and sends both links again for the waiting address;
+    //   Cancel change clears the pending change
+    //   (server/services/email-change.ts).
+    // - The mobile app: #558 changed no phone file. Its Email screen
+    //   (apps/mobile/app/(drawer)/settings/change-email.tsx) decides Expired
+    //   from the link time alone, as before, so the words claim nothing for
+    //   it and say it is unchanged.
+    // Who is told: every member of every organization (no audience). The
+    // link is /dashboard/settings/profile, a page open to every member.
+    status: 'published',
+    title: 'A waiting email change now shows as Expired after a password change',
+    summary:
+      "If you change your password while an email change is still waiting to be confirmed, Settings, Profile on the web now shows that change as Expired, with Resend verification, Use a different address and Cancel change. The mobile app's Email screen is unchanged, and no app update is needed.",
+    // #558 is live in production since 2026-11-15 00:02Z.
+    publishedAt: '2026-11-15T00:03:00Z',
+    entries: [
+      {
+        id: 'email-change-expired-after-password-change',
+        category: 'fixed',
+        area: 'Account',
+        title: 'An email change still waiting when you change your password now shows as Expired',
+        whatChanged:
+          'If you change your password while an email change is still waiting to be confirmed, Settings, Profile on the web now shows that change under Email as Expired, with Resend verification, Use a different address and Cancel change.',
+        whyItMatters:
+          'A password change ends the verification links that were sent, and the Email card then showed no pending change, so there was nothing to resend or cancel.',
+        howItAffectsYou:
+          'Your account keeps using your current address until both addresses are confirmed. Resend verification sends new links to both addresses, and Cancel change drops the change.',
+        whatToDo:
+          'If you changed your password while an email change was waiting, open Settings, Profile and resend or cancel it. Otherwise no action is needed.',
+        link: { href: '/dashboard/settings/profile', label: 'Open Profile settings' },
+      },
+    ],
+  },
+  {
+    id: 'phone-screens-by-access-2026-11',
+    revision: 1,
+    // S75 and B124: #527 (squash 60f1bfe48), phone only. The phone has it
+    // from the update published 2026-11-14 05:39:05Z (group 8c30f488,
+    // runtime 1.4.0). SET AT MERGE: publishedAt is the whole minute
+    // at or after the first iOS launch of that update (the integrator's
+    // record, not readable from the code); the Liquid Glass placeholder above
+    // takes the same minute.
+    // One release, as #527 is one phone change. From #527's four suggested
+    // lines, checked against the phone code at 60f1bfe48 (paths under
+    // apps/mobile):
+    // - Line 1 (access): the + on Items and Books and the Scan tab's add
+    //   cards follow items:create (app/(drawer)/(tabs)/inventory.tsx:280,
+    //   books.tsx:255, scan.tsx:232); Cycle counts and Bundles ask the side
+    //   menu's own rule (src/lib/screen-access.ts:88-97, drawer-nav.ts
+    //   drawerOffers), as the Home Bundles card does. Reassign is left out: it
+    //   differs only before the phone's first sync of a workspace
+    //   (src/lib/count-reassign-offer.test.ts:14-20).
+    // - Line 2 (workspace switch): Users, Team, Accounts, Bundles, Cycle
+    //   counts and six admin lists draw only the workspace's own rows; the
+    //   switch re-reads the saved access before the new workspace is shown
+    //   (src/lib/use-workspace.ts:577-596, rereadSavedAccess). "Every list,
+    //   menu and role ... straight away, even offline" is not said: the menu keeps the module
+    //   set it shows until the pull saves the new one (use-workspace.ts:584-
+    //   586). The not-synced sentence is screen-access.ts:143-144.
+    // - Line 3 (count not saved): the alert existed for other refusals; the
+    //   new case is a line no longer on the phone (count-save-refusal.ts:54-
+    //   58); the count screen and the scanner say it and load the count again or close
+    //   (app/cycle-count/[id].tsx:450-456, :778-802; scan/[id].tsx:268-317).
+    //   Before #527 the line was marked saved whatever updateLocalLine
+    //   answered.
+    // - Line 4 (bundles come back after access returns) is left out: no
+    //   member notices it today; src/lib/bundle-refill.ts is groundwork only.
+    // Who is told: the first two entries every member (no audience); the
+    // count entry whoever counts (stock:adjust, module cycle_counts).
+    // Platform: the mobile app. No links.
+    status: 'published',
+    title: "The phone follows your access and keeps each workspace's own lists",
+    summary:
+      "The mobile app's add buttons, Cycle counts and Bundles now follow your access, and after a workspace switch its lists show only the new workspace. A screen still waiting for a workspace now says so, and a cycle count now also says Count not saved when a line is no longer in the count.",
+    // Set at merge: the first iOS launch of the update showed on 2026-11-14, between the reads of 18:34:04Z and 18:44:07Z.
+    publishedAt: '2026-11-14T18:44:00Z',
+    entries: [
+      {
+        id: 'phone-add-item-and-screens-by-access',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: "The phone's add buttons, Cycle counts and Bundles follow your access",
+        whatChanged:
+          'The buttons that add an item, on Items, Books and Scan, now show only if you can add items in the workspace on screen. Cycle counts and Bundles, with the Bundles card on Home, now follow the side menu.',
+        whyItMatters:
+          'What the phone offers now matches the side menu and what you can save, so a button you see is one you can use.',
+        howItAffectsYou:
+          'If you can add items and use cycle counts and bundles, nothing changes for you once the phone has synced.',
+        whatToDo: 'No action needed. If you need one of these, ask an admin in your organization.',
+      },
+      {
+        id: 'phone-workspace-switch-own-lists',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'After a workspace switch, the phone shows only the new workspace',
+        whatChanged:
+          "After you switch workspaces, Users, Team, Accounts, Bundles, Cycle counts and the admin lists on the phone show only the new workspace's records, and the phone uses your role in the new workspace as soon as it shows it, and your permissions there once it has synced. If a workspace has not finished loading or syncing, a screen with nothing to show says so and lets you try again.",
+        whyItMatters:
+          'Each workspace keeps its own records and your access in it, and a screen that is still waiting tells you so.',
+        howItAffectsYou:
+          'Right after a switch or a sign-in, before the phone has synced, a screen may say the phone has not finished syncing this workspace yet. Check your connection: the screen loads once the phone has synced, or when you try again.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'phone-count-not-saved-line-gone',
+        category: 'fixed',
+        area: 'Cycle counts',
+        title:
+          'A cycle count now also says Count not saved when a line is no longer in the count on the phone',
+        whatChanged:
+          'If a number you type or scan on a cycle count cannot be saved because its line is no longer in the count on the phone, the phone now says Count not saved. When you tap OK, the phone loads the count again, or closes it if it is no longer open to you.',
+        whyItMatters: 'Before, the number stayed on the line as if it had been saved.',
+        howItAffectsYou:
+          'This is rare: it happens when the count changes while you are counting, for example when someone posts or cancels it.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['stock:adjust'], modules: ['cycle_counts'] },
+      },
+    ],
+  },
+  {
+    id: 'order-request-alerts-follow-approve-2026-11',
+    revision: 1,
+    // Docket S36, part a (#440, squash a1cd8247a, deployed 2026-11-14
+    // 17:24:39Z) with migration 0422 (live 2026-11-14 17:57:33Z). Both halves
+    // are on the server, so there is no phone update: publishedAt is the
+    // whole minute after the later of the two.
+    // The words are the plan's draft (the What's New section of #440's
+    // description). Two of its three entries are published:
+    // - order-request-alert-removed-approvers and briefing-follows-permissions
+    //   as drafted, word for word;
+    // - the plan's first entry (order-request-alert-approvers, a staff member
+    //   given the permission) is left out by the integrator's decision
+    //   (items/S36.json), so the summary drops its clause about a staff
+    //   member given the permission and promises nothing that entry alone
+    //   covered;
+    // - the summary gains a last sentence about Today's briefing, so a reader
+    //   who sees only the briefing entry (staff who can open Today's
+    //   briefing) is covered by the summary too. The rest of the summary is
+    //   the draft's.
+    // Claims checked against the code at a1cd8247a:
+    // - The alert: supabase/migrations/0422_notice_audience_follows_permission.sql
+    //   section 3: the New order request notice is written for whoever holds
+    //   orders:approve (overrides applied) and can write in the request's
+    //   warehouse. Admins and managers hold it by default (core
+    //   ROLE_PERMISSIONS) and work in every warehouse (lib/auth/warehouse.ts
+    //   roleSeesEveryWarehouse), so one who keeps it is told as before. The
+    //   notice is written on the server and shows on the web and in the
+    //   mobile app as it did, so no app update is needed.
+    // - The briefing: server/services/insights-access.ts, one rule per line
+    //   (approvals: Orders on, orders:approve, never a viewer; purchase
+    //   orders: the module and purchase_orders:read; low stock: items:read;
+    //   counts: the module and the count pages' gate); the approvals count is
+    //   approvablePendingCount() (server/services/order-requests.ts), which
+    //   counts a staff approver's own warehouses; the morning notification
+    //   (app/api/cron/daily-briefing/route.ts) is built from the same lines.
+    //   The line reads "orders awaiting approval" (server/services/
+    //   insights.ts) and the page is titled Today's briefing
+    //   (dashboard/insights/page.tsx).
+    // Who is told: organizations with Orders on. The alert entry goes to
+    // admins and managers, the people whose own alert can stop, and to
+    // owners, who can always change who holds the permission (the plan's
+    // audience was admins and managers; owners were added at review). Its
+    // words are in the third person and hold for an owner. The briefing entry
+    // links to /dashboard/insights, which checks the AI module and
+    // items:update, so it goes to whoever can open that page.
+    status: 'published',
+    title: 'New order request alerts go to the people who can approve the order',
+    summary:
+      'The New order request alert now goes to everyone with the "Approve / fulfill orders" permission who can approve orders in the request\'s warehouse, and stops for anyone whose permission was removed. It arrives on the web and in the mobile app, with no app update needed. Today\'s briefing also shows only the lines you can open.',
+    // Migration 0422 went live at 17:57:33Z, after the web deploy.
+    publishedAt: '2026-11-14T17:58:00Z',
+    audience: { modules: ['orders'] },
+    entries: [
+      {
+        id: 'order-request-alert-removed-approvers',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Removing "Approve / fulfill orders" now also stops the New order request alert',
+        whatChanged:
+          'An admin or manager whose "Approve / fulfill orders" permission was removed no longer gets the New order request alert.',
+        whyItMatters:
+          'They still got the alert for every new request, although they could no longer approve one.',
+        howItAffectsYou:
+          'Nothing changes for an admin or manager who keeps the permission, which they have by default: they are alerted about requests in every warehouse, as before.',
+        whatToDo: 'No action needed.',
+        audience: { roles: ['owner', 'admin', 'manager'], modules: ['orders'] },
+      },
+      {
+        id: 'briefing-follows-permissions',
+        category: 'fixed',
+        area: 'Briefing',
+        title: "Today's briefing shows only what you can open",
+        whatChanged:
+          'Today\'s briefing and the morning briefing notification now leave out any line about something you cannot open. "Orders awaiting approval" shows only to people with the "Approve / fulfill orders" permission, and for a staff member it counts only the requests in the warehouses they are assigned to. Lines about purchase orders, cycle counts and items show only to people who can open those pages, and a purchase order or cycle count line only while that module is on.',
+        whyItMatters:
+          "Everyone who could open Today's briefing saw the organization's count of orders awaiting approval, and its link took anyone who cannot approve orders to their own requests instead.",
+        howItAffectsYou:
+          'Owners, and admins whose permissions were not changed, still see every line for the modules that are on.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/insights', label: 'Open Briefing' },
+        audience: { anyPermission: ['items:update'], modules: ['ai'] },
       },
     ],
   },

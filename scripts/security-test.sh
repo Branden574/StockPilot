@@ -860,6 +860,35 @@ PGTAP_TESTS=(
   # user_can_see_item_category answers service_role only. The lock footprint
   # is scripts/db-concurrency/0421_migration_lock_footprint.sh.
   supabase/tests/0421_categories_select_category_sets.test.sql
+  # Notice audience (0422, docket S36a): the New order request alert goes to
+  # the members who hold orders:approve and can write in the order's
+  # warehouse, and every notice the database writes goes only to a current
+  # member of the organization (an accepted membership that is not an Act-as
+  # seat, on an account that is not disabled). Both helper functions answer
+  # service_role only. The lock footprint is
+  # scripts/db-concurrency/0422_migration_lock_footprint.sh.
+  supabase/tests/0422_notice_audience_follows_permission.test.sql
+  # Audit rows (S80): the id is the only unique index, a later try with an id
+  # already there writes and changes nothing, and neither a member nor a
+  # signed-out caller can insert an audit row.
+  supabase/tests/audit_logs_row_id_contract.test.sql
+  # References in their own organization (0423): an item's warehouse and
+  # category, a location's parent and an event's warehouse belong to the
+  # row's organization, for every rank (the rules' *_in_org terms; the item
+  # guard asks a member's insert for the warehouse). NULL passes.
+  supabase/tests/0423_item_location_and_event_references_in_own_organization.test.sql
+  # References in their own organization, and a fixed organization (0462): a
+  # stock or put-away row's bins and item, a category's parent and a category
+  # assignment's category belong to the row's organization, for every rank
+  # (bin_in_org, item_in_org, category_in_org; set_user_category_access asks
+  # it too), and an API role cannot change the organization of a warehouse,
+  # a location, a bin or a category.
+  supabase/tests/0462_bin_and_category_references_and_fixed_organization.test.sql
+  # A fixed organization (0463): an API role cannot change the organization
+  # of a customer, a stored API key, a connection, a connection mapping, a
+  # sync log entry, a notification endpoint, a public request link, a queued
+  # event, a supplier or a charter (tg_organization_id_fixed on each table).
+  supabase/tests/0463_organization_fixed_on_connected_records.test.sql
   # Retry keys (0464, docket S96 part one): a receipt post or kit hand-out
   # sent again with its retry key answers only the record that key was
   # written with: the receipt of this organization, purchase order,
@@ -937,6 +966,11 @@ WEB_TESTS=(
   src/server/services/exception-occurrences.confirm.test.ts
   src/app/api/v1/exceptions/confirm-count-route.test.ts
   src/server/actions/exceptions.confirm.test.ts
+  # Exception recount facts (0460): one function read with the active
+  # organization; only "function missing" (PGRST202 or 42883 naming it) takes
+  # the direct read; any other error, or an answer that is not a list, fails
+  # the list and the detail.
+  src/server/services/exception-occurrences.recount-facts.test.ts
   # Maintenance photos (2026-09-27): what finalize stores carries no EXIF,
   # GPS, XMP or ICC (real sharp on GPS-tagged JPEG, PNG and WEBP), the
   # thumbnail is the server's, made from the clean photo at the mint's name,
@@ -1060,6 +1094,39 @@ WEB_TESTS=(
   src/lib/auth/api-context.membership-answer-shapes.test.ts
   src/lib/auth/api-context.membership-unreadable.test.ts
   src/app/api/v1/membership-unreadable.routes.test.ts
+  # An organization's module state on the web: a state that could not be read
+  # is neither on nor off. withContext() holds it as unknown, so a Server
+  # Action answers its try-again sentence and a page says it could not check;
+  # the single-module check behind the public API key, the webhook
+  # subscriptions and the accounting connect callbacks throws for it (a 503
+  # with Retry-After, or the connect page's transient code); the public
+  # catalog's photo map never caches an answer built on a failed read; the
+  # public link resolver keeps a failed read only as "unread", reads again
+  # directly, and never serves an entry past its window or from before a link
+  # change (driven through the real unstable_cache); the public tracker says
+  # when the return link could not be checked; the customer portal does not
+  # take a failed read for "not a portal user", and its actions answer that
+  # as a result the page can show. The guard lists every file that reads the
+  # module table with what an unread answer becomes, so a new reader has to
+  # be listed. Nothing is granted on a read that failed.
+  src/lib/modules/module-state-readers.guard.test.ts
+  # Every catch in the Server Action modules reaches the shared mapping of a
+  # check that could not be read (or is listed with its reason), so a module
+  # with its own error mapping answers "Your access could not be checked.
+  # Please try again." and not its generic sentence.
+  src/server/actions/unchecked-access.guard.test.ts
+  src/lib/modules/module-state.test.ts
+  src/lib/modules/org-may-use-module.test.ts
+  src/lib/dashboard/request-cache.modules.test.ts
+  src/server/services/context.module-state.test.ts
+  src/server/actions/module-state-unread.actions.test.ts
+  src/lib/auth/api-key.module-gate.test.ts
+  src/lib/auth/public-api.module-state.test.ts
+  src/app/api/public/v1/hooks/route.test.ts
+  src/server/services/public-catalog.token-resolution.test.ts
+  src/server/services/portal.module-state.test.ts
+  src/server/actions/portal.module-state.test.ts
+  'src/app/(dashboard)/layout.module-state.test.tsx'
   src/app/api/v1/mobile/snapshot/route.step-up.test.ts
   src/app/api/client-error/route.test.ts
   # A session that still owes its authenticator code gets no organization
@@ -1231,6 +1298,14 @@ WEB_TESTS=(
   src/lib/rate-limit.failed.test.ts
   src/server/services/auth-audit.address.test.ts
   src/app/api/v1/auth/password-reset/route.address.test.ts
+  # S80: an audit row's id is chosen by the writer, never by its caller, and a
+  # row that was not written is sent again as an insert that skips a row
+  # already there (no upsert on audit_logs may overwrite one). While the
+  # limiter cannot answer, the phone's sign-in and sign-out notes are bounded
+  # per instance.
+  src/server/services/audit.retry.test.ts
+  src/server/services/audit-writes.guard.test.ts
+  src/lib/auth/session-note.test.ts
 
   # Only a platform admin creates a workspace (S20, owner decision b.9):
   # createOrganizationAction runs checkPlatformAdmin({ requireStepUp: true })
@@ -1829,6 +1904,27 @@ WEB_TESTS=(
   src/server/actions/platform/permission-exceptions.test.ts
   src/lib/auth/effective-permissions.test.ts
 
+  # Notice audience (0422, docket S36a; the database half is in MANIFEST 1):
+  # every notice and push the app writes (createNotification), and every
+  # email to a member's own address, goes only to a current member of the
+  # record's organization: an accepted membership that is not an Act-as seat,
+  # on an account that is not disabled. A membership or profile read that
+  # fails, or answers no list, writes nothing and sends nothing, and is
+  # reported. An address the order recorded for an outside person is emailed
+  # whoever placed the order.
+  src/server/lib/current-member.test.ts
+  src/server/services/notifications.requester-paths.test.ts
+  src/server/services/order-requests.member-email.test.ts
+  src/server/email/maintenance-resolved.member.test.ts
+
+  # Maintenance photo share links follow the organization's
+  # includeShareLinksInEmail setting. A setting never written means on; a
+  # settings read that returns an error means off (no link is created, shown
+  # or emailed) and is reported.
+  src/server/services/maintenance-share-links.setting.test.ts
+  src/server/services/maintenance-requests.link-setting.test.ts
+  src/server/email/maintenance-resolved.setting.test.ts
+
   # Connector export events (outbox_events) are recorded only by
   # server/lib/outbox-events.ts, through the service client, after the action
   # that causes them: a member action in the organization of its checked
@@ -1839,6 +1935,47 @@ WEB_TESTS=(
   # anywhere else on the web, the phone and core.
   src/test/outbox-publish-sites.guard.test.ts
   src/server/lib/outbox-events.test.ts
+  # Which cycle counts a member reads: one rule (lib/auth/count-read-scope.ts)
+  # for the count list, the count page and count sheet, a count's linked
+  # exceptions, and the open counts the phone's sync sends. Managers and
+  # above, and members with every warehouse, read every count; anyone else
+  # reads the counts of the warehouses they can read, and a count with no
+  # warehouse only when it is assigned to them; a member with no readable
+  # warehouse reads none.
+  src/lib/auth/count-read-scope.test.ts
+  src/server/services/cycle-counts.read-scope.test.ts
+  src/server/services/cycle-counts.list.test.ts
+  src/app/api/v1/mobile/snapshot/route.count-scope.test.ts
+  'src/app/api/v1/cycle-counts/[id]/exceptions/route.count-read-scope.test.ts'
+  # The email change an account holds: Settings shows it whenever the account
+  # has a pending address (a change with no request time shows as expired,
+  # with Resend and Cancel), and links are minted only once the auth server
+  # has recorded the request's time.
+  src/server/services/email-change.test.ts
+  src/components/settings/email-settings-card.test.tsx
+
+  # Member role and category access over /api/v1 (routes the phone can
+  # call). PATCH /api/v1/members/[id]/role changes a role through
+  # TeamService.updateMemberRole and nothing else, and
+  # POST /api/v1/members/[id]/category-access grants or revokes ONE category
+  # through UserCategoriesService.setMemberCategoryGrant and nothing else:
+  # each builds its context with withApiContext, through the API context gate,
+  # so the service's permission check, the organization's authenticator rule,
+  # its audit row and its security event are the web's own; a context that
+  # could not be read answers the gate's 503 before any work; a refusal keeps
+  # its code, words and reason; a database failure answers a fixed sentence.
+  # The role body is one of admin, manager, staff and viewer. The category
+  # body is exactly one category and one flag (a list is refused), the member and the
+  # category are read in the caller's organization, and the write is the one
+  # row, never the member's set. A save of the role a member already has, or
+  # of the authenticator policy an organization already has, changes nothing:
+  # no update, no audit row, no security event. The two route suites and the
+  # single-grant suite carry the "Security invariant" marker.
+  'src/app/api/v1/members/[id]/role/route.test.ts'
+  'src/app/api/v1/members/[id]/category-access/route.test.ts'
+  src/server/services/user-categories.single-grant.test.ts
+  src/server/services/team.update-member-role.test.ts
+  src/server/actions/mfa.policy-unchanged.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

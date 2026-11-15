@@ -11,6 +11,7 @@ import {
   toPlaceDest,
   type PlaceDest,
 } from '@/lib/locations/destination-option';
+import { uncheckedAccessResult } from '@/server/lib/action-error-result';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { auditMany, type AuditPayload } from '@/server/services/audit';
 import { InventoryService } from '@/server/services/inventory';
@@ -42,6 +43,11 @@ import {
 
 function toResult<T>(error: unknown): ActionResult<T> {
   rethrowControlFlow(error);
+  // A check of the caller's access that could not be read (a module state
+  // withContext() holds as unknown, the permission set, the account status):
+  // its own try-again sentence, never the generic one below.
+  const unchecked = uncheckedAccessResult(error, 'actions.inventory');
+  if (unchecked) return unchecked;
   if (error instanceof ServiceError) {
     // `details` is APP-AUTHORED structured metadata (e.g. the book-crate
     // confirmation payload the client retries on) and is forwarded — except

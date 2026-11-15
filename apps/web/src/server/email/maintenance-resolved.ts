@@ -13,6 +13,7 @@ import { sendEmail } from '@/lib/email/resend';
 import { reportError } from '@/lib/error-reporter';
 import { resolveOrgTimezone } from '@stockpilot/core';
 import { formatOrgDateTime } from '@/lib/timezone';
+import { ownAddressVerdict } from '@/server/lib/current-member';
 import { maintenanceRequesterAccountDeleted } from '@/server/lib/kept-address';
 import { listResolutionProofProxyPhotos } from '@/server/services/maintenance-share-links';
 
@@ -31,7 +32,9 @@ import { listResolutionProofProxyPhotos } from '@/server/services/maintenance-sh
  * resolved_by` (self-resolve: you don't
  * email someone about their own click; mirrors resolve()'s in-app
  * suppression, same two ids) -> cheap `resolution_email_sent_at` pre-check
- * -> the AUTHORITATIVE guarded claim (`.is('resolution_email_sent_at',
+ * -> the requester is still a current member of the request's organization
+ * (docket S36; a failed read is reported and returns `error`) -> the
+ * AUTHORITATIVE guarded claim (`.is('resolution_email_sent_at',
  * null)`, only the winner proceeds). Everything below the claim — org
  * timezone read, proof-photo lookup, rendering, the actual send — runs
  * ONLY for the winner, and a failure anywhere in that block reports and
@@ -53,6 +56,7 @@ export type MaintenanceResolvedEmailResult =
         | 'no_requester_email'
         | 'requester_deleted'
         | 'self_resolve'
+        | 'requester_not_member'
         | 'already_sent'
         | 'lost_race'
         | 'send_failed'
@@ -100,18 +104,30 @@ function firstNameOf(name: string | null): string | null {
  * `ServiceContext` (it runs fire-and-forget off `resolve()`, admin client
  * only), so it cannot call that ctx-shaped helper. An absent key or a
  * missing settings row both mean "never configured" and default ON, same
- * as every other reader of this setting.
+ * as every other reader of this setting. A read that returns an error is
+ * reported and answers OFF, same as maintenanceShareLinksEnabled: the email
+ * then carries the photo count and no link.
  */
 async function shareLinksEnabledForEmail(
   admin: SupabaseClient,
   organizationId: string,
+  requestId: string,
 ): Promise<boolean> {
-  const { data } = await admin
+  const { data, error } = await admin
     .from('organization_modules')
     .select('settings')
     .eq('organization_id', organizationId)
     .eq('module_id', 'maintenance_requests')
     .maybeSingle();
+  if (error) {
+    void reportError(new Error('Share-link setting read failed; the email carries no link'), {
+      tag: 'maintenance_resolved.email.share_links_setting_read',
+      level: 'warning',
+      organizationId,
+      extra: { requestId, code: error.code ?? null },
+    });
+    return false;
+  }
   const settings = (data as { settings?: unknown } | null)?.settings as
     { includeShareLinksInEmail?: boolean } | null | undefined;
   return settings?.includeShareLinksInEmail !== false;
@@ -176,6 +192,21 @@ export async function maybeSendMaintenanceResolvedEmail(
     // Cheap pre-check; the guarded update below is the authoritative gate.
     if (request.resolution_email_sent_at) return { sent: false, reason: 'already_sent' };
 
+    // Docket S36: the snapshot is the filer's OWN address (the 0362 guard
+    // fills it from their profile, and only a member files a request), so it
+    // is emailed only while they are a current member of the request's
+    // organization (readCurrentMember: accepted, not an Act-as seat, not
+    // disabled; the rule of 0422 and createNotification). Checked before the
+    // claim, so a skipped send never burns the one-shot marker; a read that
+    // fails sends nothing and is reported.
+    const verdict = await ownAddressVerdict(
+      admin,
+      { organizationId: request.organization_id, userId: request.requester_user_id },
+      { tag: 'maintenance_resolved.email.requester_member_check', extra: { requestId } },
+    );
+    if (verdict === 'unreadable') return { sent: false, reason: 'error' };
+    if (verdict !== 'current') return { sent: false, reason: 'requester_not_member' };
+
     // Claim the send BEFORE composing/rendering/sending anything — only the
     // winner of this guarded update proceeds (at-most-once; 0278 posture
     // verbatim). The marker deliberately stays set on a later send failure
@@ -221,7 +252,11 @@ export async function maybeSendMaintenanceResolvedEmail(
       // than re-deriving indices here — a locally re-filtered
       // "resolution-only" index would desync from what
       // /m/<token>/photo/<n> actually serves.
-      const shareEnabled = await shareLinksEnabledForEmail(admin, request.organization_id);
+      const shareEnabled = await shareLinksEnabledForEmail(
+        admin,
+        request.organization_id,
+        requestId,
+      );
       const proof = shareEnabled
         ? await listResolutionProofProxyPhotos(
             admin,
@@ -248,7 +283,8 @@ export async function maybeSendMaintenanceResolvedEmail(
         }));
       } else {
         // No usable link (none minted, revoked, expired, or the org has
-        // share links off) — photos may still exist, so count them
+        // share links off or its setting could not be read) — photos may
+        // still exist, so count them
         // directly: the renderer's honest fallback line still needs the
         // real total.
         proofPhotoTotal = await countResolutionPhotos(admin, request.organization_id, requestId);

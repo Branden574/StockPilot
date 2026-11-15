@@ -7,6 +7,7 @@ import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-heade
 import { forcedWarehouseId } from '@/lib/auth/warehouse';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { moduleAnswer } from '@/lib/modules/module-state';
 import { createClient } from '@/lib/supabase/server';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { CategoriesService } from '@/server/services/categories';
@@ -113,8 +114,10 @@ export default async function NewItemPage() {
     supabase.from('size_scales').select('id, size_system'),
   ]);
 
-  const { enabled: lotSerialEnabled } = await checkModuleAccess('lot_serial');
-  const { enabled: sportsEnabled } = await checkModuleAccess('sports');
+  // moduleAnswer: a state that could not be read is this page's error state
+  // with Try again, never a form drawn as if the module were off.
+  const lotSerialEnabled = moduleAnswer(await checkModuleAccess('lot_serial'));
+  const sportsEnabled = moduleAnswer(await checkModuleAccess('sports'));
 
   // A failed read leaves this EMPTY, which the form reads as "unknown": it
   // then leaves the size-system check to the server rather than asking more.

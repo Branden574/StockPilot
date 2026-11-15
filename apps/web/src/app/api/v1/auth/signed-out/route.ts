@@ -5,6 +5,7 @@ import {
   ACCOUNT_NOTE_LIMIT,
   ACCOUNT_NOTE_WINDOW_MS,
   accountNoteKey,
+  admitUncountedNote,
   SESSION_NOTE_WINDOW_MS,
   sessionNoteKey,
   sessionRef,
@@ -53,6 +54,12 @@ export const dynamic = 'force-dynamic';
  *
  * A token with no session id revokes nothing (revoke_my_other_sessions(null)
  * would end EVERY session) and its row says so.
+ *
+ * A limiter that cannot answer (lib/rate-limit's `failed`): the instance's own
+ * count decides (admitUncountedNote, as for the sign-in note): a session's
+ * row once, and the account's hourly budget for a token with no session id;
+ * past it no row, answered as a counted refusal. A row written that way
+ * carries limiter_unavailable.
  */
 
 const unauthenticated = () => NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
@@ -95,7 +102,11 @@ export async function POST(req: Request) {
           ACCOUNT_NOTE_WINDOW_MS,
           'open',
         );
-    if (write.allowed) {
+    const uncounted = write.failed === true;
+    const writes =
+      write.allowed &&
+      (!uncounted || admitUncountedNote('out', ctx.userId, sessionId ?? null) === 'write');
+    if (writes) {
       await emitAuthAudit({
         event: 'user.signed_out',
         userId: ctx.userId,
@@ -108,6 +119,7 @@ export async function POST(req: Request) {
           others_revoked: othersRevoked,
           revoke_error: revokeError,
           revoke_skipped: !sessionId,
+          ...(uncounted ? { limiter_unavailable: true } : {}),
         },
       });
     }
