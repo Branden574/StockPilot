@@ -32,6 +32,9 @@ vi.mock('next/cache', () => ({
   unstable_cache: (fn: unknown) => fn,
 }));
 vi.mock('@/server/services/audit', () => ({ audit: vi.fn(async () => undefined) }));
+vi.mock('@/lib/rate-limit', () => ({
+  checkRateLimit: vi.fn(async () => ({ allowed: true, remaining: 9, resetAt: Date.now() + 60_000 })),
+}));
 
 const holder = vi.hoisted(() => ({ ctx: null as unknown }));
 vi.mock('@/server/services/context', async (importOriginal) => ({
@@ -41,6 +44,7 @@ vi.mock('@/server/services/context', async (importOriginal) => ({
 
 import { setAutoReorderSettingsAction } from './auto-reorder-settings';
 import { startCycleCountAction } from './cycle-counts';
+import { escalateExceptionAction } from './exceptions';
 import { createItemAction } from './inventory';
 import { createMaintenanceRequestAction } from './maintenance-requests';
 import { setOrderCatalogVisibilityAction } from './order-catalog-visibility';
@@ -54,6 +58,7 @@ import { importSage50Action } from './sage50-import';
 const TRY_AGAIN = 'Your access could not be checked. Please try again.';
 const WAREHOUSE = '0a000000-0000-4000-8000-0000000000a1';
 const ITEM = '0a000000-0000-4000-8000-0000000000b1';
+const OCCURRENCE = '0a000000-0000-4000-8000-0000000000c1';
 
 const CORE = (Object.keys(MODULE_REGISTRY) as ModuleId[]).filter(
   (m) => MODULE_REGISTRY[m].tier === 'core',
@@ -204,6 +209,19 @@ const OWN_MAPPING: Array<{
         priority: 'normal',
       } as never),
     unread: { error: { message: TRY_AGAIN } },
+  },
+  {
+    // Its own words for a server failure say it is not known whether a
+    // request was saved; the access check comes before any write, so this
+    // answer is the try-again sentence instead.
+    name: 'escalate an exception to maintenance (its own words for a server failure)',
+    module: 'maintenance_requests',
+    run: () =>
+      escalateExceptionAction(OCCURRENCE, {
+        subject: 'Broken shelf',
+        description: 'The shelf is broken',
+      }),
+    unread: { error: { message: TRY_AGAIN, reason: null } },
   },
 ];
 

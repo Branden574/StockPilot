@@ -28,11 +28,20 @@ import { describe, expect, it } from 'vitest';
  * (a best-effort step that returns no error, a catch around one call that
  * cannot raise such a check, a per-item line of a bulk run).
  *
+ * THE SECOND RULE: once the mapping has answered, the answer is not replaced.
+ * Where the answer is bound to a name, nothing later in that block assigns
+ * the name, its `error` or a `message` under it, passes it to Object.assign,
+ * or spreads it into an object that sets its own `message`. A module's own
+ * words for its other failures go inside its mapper, after the shared helper
+ * was asked.
+ *
  * WHAT THIS IS NOT. It reads that the call is there, not what the mapping
  * does with it; the behaviour is held by module-state-unread.actions.test.ts
  * (real actions over an unknown module state) and by the shared module's own
- * suite. A REVIEWED entry is a person's judgement, checked only for being
- * current (the function still has that many such catches).
+ * suite. The second rule reads the bound answer only: an answer rebuilt from
+ * its parts into a new object is not seen. A REVIEWED entry is a person's
+ * judgement, checked only for being current (the function still has that
+ * many such catches).
  */
 
 const ACTIONS_DIR = __dirname;
@@ -58,8 +67,11 @@ interface Finding {
   line: number;
 }
 
-/** The catches of one source text that do not reach the shared mapping. */
-function unmappedCatches(fileName: string, text: string): Finding[] {
+/**
+ * One module read for both rules: its syntax tree, whether a node holds a
+ * call that reaches the shared mapping, and the function a node sits in.
+ */
+function readModule(fileName: string, text: string) {
   const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
   const usesRowFailures = /\bRowFailures\b/.test(text);
 
@@ -132,6 +144,13 @@ function unmappedCatches(fileName: string, text: string): Finding[] {
   };
 
   const rel = path.relative(ACTIONS_DIR, fileName).split(path.sep).join('/');
+  const lineOf = (node: ts.Node) => source.getLineAndCharacterOfPosition(node.getStart()).line + 1;
+  return { source, reaches, enclosingFunction, rel, lineOf };
+}
+
+/** The catches of one source text that do not reach the shared mapping. */
+function unmappedCatches(fileName: string, text: string): Finding[] {
+  const { source, reaches, enclosingFunction, rel } = readModule(fileName, text);
   const findings: Finding[] = [];
   const walk = (node: ts.Node) => {
     if (ts.isCatchClause(node) && !reaches(node.block, new Set())) {
@@ -139,6 +158,104 @@ function unmappedCatches(fileName: string, text: string): Finding[] {
         key: `${rel}#${enclosingFunction(node)}`,
         line: source.getLineAndCharacterOfPosition(node.getStart()).line + 1,
       });
+    }
+    ts.forEachChild(node, walk);
+  };
+  walk(source);
+  return findings;
+}
+
+/** `a`, `a.b.c`, `a['b']`, `a!.b`: the identifier at the root, and each name read on the way. */
+function accessChain(node: ts.Node): { root: ts.Identifier; names: string[] } | null {
+  const names: string[] = [];
+  let n: ts.Node = node;
+  for (;;) {
+    if (ts.isParenthesizedExpression(n) || ts.isNonNullExpression(n)) n = n.expression;
+    else if (ts.isPropertyAccessExpression(n)) {
+      names.unshift(n.name.text);
+      n = n.expression;
+    } else if (ts.isElementAccessExpression(n)) {
+      names.unshift(ts.isStringLiteralLike(n.argumentExpression) ? n.argumentExpression.text : '[]');
+      n = n.expression;
+    } else break;
+  }
+  return ts.isIdentifier(n) ? { root: n, names } : null;
+}
+
+const isAssignment = (kind: ts.SyntaxKind) =>
+  kind >= ts.SyntaxKind.FirstAssignment && kind <= ts.SyntaxKind.LastAssignment;
+
+/**
+ * Places in one source text where the answer of the shared mapping is
+ * replaced after it was given: the answer is bound to a name (`const failure
+ * = fail(e, tag)`, `const unchecked = uncheckedAccessResult(e, tag)`), and
+ * later in the same block
+ *   - the name itself, its `error` or a `message` under it is assigned or
+ *     deleted (`failure.error.message = OTHER`);
+ *   - it is the target of Object.assign;
+ *   - it, or a part of it, is spread into an object that sets its own
+ *     `message` (`{ ...failure.error, message: OTHER }`).
+ * Writing another field (a `reason` the screen reads) and spreading it with
+ * other fields are not replacements.
+ */
+function rewrittenAnswers(fileName: string, text: string): Finding[] {
+  const { source, reaches, enclosingFunction, rel, lineOf } = readModule(fileName, text);
+  const findings: Finding[] = [];
+  const flag = (node: ts.Node) =>
+    findings.push({ key: `${rel}#${enclosingFunction(node)}`, line: lineOf(node) });
+
+  const usesOf = (scope: ts.Node, name: ts.Identifier) => {
+    const writesAnswer = (target: ts.Node): boolean => {
+      const chain = accessChain(target);
+      if (!chain || chain.root.text !== name.text) return false;
+      return (
+        chain.names.length === 0 ||
+        chain.names.includes('message') ||
+        chain.names[chain.names.length - 1] === 'error'
+      );
+    };
+    const rootedHere = (node: ts.Node) => accessChain(node)?.root.text === name.text;
+    const visit = (n: ts.Node) => {
+      if (ts.isBinaryExpression(n) && isAssignment(n.operatorToken.kind) && writesAnswer(n.left)) flag(n);
+      else if (ts.isDeleteExpression(n) && writesAnswer(n.expression)) flag(n);
+      else if (
+        ts.isCallExpression(n) &&
+        ts.isPropertyAccessExpression(n.expression) &&
+        ts.isIdentifier(n.expression.expression) &&
+        n.expression.expression.text === 'Object' &&
+        n.expression.name.text === 'assign' &&
+        n.arguments[0] &&
+        rootedHere(n.arguments[0])
+      ) {
+        flag(n);
+      } else if (
+        ts.isObjectLiteralExpression(n) &&
+        n.properties.some((p) => ts.isSpreadAssignment(p) && rootedHere(p.expression)) &&
+        n.properties.some(
+          (p) =>
+            (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
+            (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) &&
+            p.name.text === 'message',
+        )
+      ) {
+        flag(n);
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(scope);
+  };
+
+  const walk = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      let init: ts.Node = node.initializer;
+      while (ts.isAwaitExpression(init) || ts.isParenthesizedExpression(init) || ts.isAsExpression(init)) {
+        init = init.expression;
+      }
+      if (ts.isCallExpression(init) && reaches(init, new Set())) {
+        let scope: ts.Node = node;
+        while (!ts.isBlock(scope) && !ts.isSourceFile(scope)) scope = scope.parent;
+        usesOf(scope, node.name);
+      }
     }
     ts.forEachChild(node, walk);
   };
@@ -310,6 +427,17 @@ describe('Server Action catches and a check that could not be read', () => {
       expect(entry.why.length, key).toBeGreaterThan(20);
     }
   });
+
+  it('no action replaces the answer of the shared mapping after it was given', () => {
+    // A module's own words for its other failures go inside its mapper, after
+    // the shared helper was asked (exceptions.ts fail()'s `serverProblem`),
+    // never onto the answer afterwards, where they would cover the sentence
+    // of a check that could not be read.
+    const rewritten = actionFiles(ACTIONS_DIR).flatMap((file) =>
+      rewrittenAnswers(file, readFileSync(file, 'utf8')).map((f) => `${f.key} (line ${f.line})`),
+    );
+    expect(rewritten).toEqual([]);
+  });
 });
 
 /* ─────────────────────────────── self-test ─────────────────────────────── */
@@ -372,5 +500,95 @@ describe('the scan itself', () => {
       }`;
     expect(scan(row)).toHaveLength(1);
     expect(scan(`const failures = new RowFailures('t');${row}`)).toEqual([]);
+  });
+});
+
+describe('the scan for an answer replaced after the shared mapping', () => {
+  const scan = (text: string) =>
+    rewrittenAnswers(path.join(ACTIONS_DIR, 'planted.ts'), text).map((f) => f.key);
+  const mapper = `
+    function fail(e: unknown, tag: string) {
+      const unchecked = uncheckedAccessMessage(e, tag);
+      if (unchecked) return { error: { message: unchecked, reason: null } };
+      return { error: { message: 'Something went wrong. Please try again.', reason: null } };
+    }`;
+
+  it("the module's own words written over the answer are found (through a local mapper too)", () => {
+    expect(
+      scan(`${mapper}
+      export async function a() {
+        try { await work(); } catch (e) {
+          const failure = fail(e, 't');
+          if (!(e instanceof ServiceError) || e.code === 'internal_error') {
+            failure.error.message = 'The server had a problem.';
+          }
+          return failure;
+        }
+      }`),
+    ).toEqual(['planted.ts#a']);
+    expect(
+      scan(`
+      export async function b() {
+        try { await work(); } catch (e) {
+          const res = actionErrorResult(e, 't');
+          res.error['message'] = 'Other words';
+          return res;
+        }
+      }`),
+    ).toEqual(['planted.ts#b']);
+  });
+
+  it('a whole answer or its error replaced, Object.assign, delete and a spread with its own message are found', () => {
+    const forms = [
+      `let r = actionErrorResult(e, 't'); r = err('internal_error', 'x'); return r;`,
+      `const r = actionErrorResult(e, 't'); r.error = { code: 'internal_error', message: 'x' }; return r;`,
+      `const r = actionErrorResult(e, 't'); Object.assign(r.error, { message: 'x' }); return r;`,
+      `const r = actionErrorResult(e, 't'); delete r.error.message; return r;`,
+      `const r = actionErrorResult(e, 't'); return { ...r, error: { ...r.error, message: 'x' } };`,
+      `const m = uncheckedAccessMessage(e, 't'); return { error: { ...m, message: 'x' } };`,
+    ];
+    for (const body of forms) {
+      expect(
+        scan(`export async function a() { try { await work(); } catch (e) { ${body} } }`),
+        body,
+      ).toEqual(['planted.ts#a']);
+    }
+  });
+
+  it('asking first, another field written, a spread with other fields and a fallback are not', () => {
+    expect(
+      scan(`${mapper}
+      export async function a(id: string) {
+        try { await work(); } catch (e) {
+          const failure = fail(e, 't');
+          if (failure.error.reason === null) failure.error.reason = 'module_disabled';
+          if (failure.error.reason === 'already_escalated') {
+            return { error: { ...failure.error, requestId: id } };
+          }
+          return failure;
+        }
+      }
+      export async function b() {
+        try { await work(); } catch (e) {
+          const unchecked = uncheckedAccessResult(e, 't');
+          if (unchecked) return unchecked;
+          const message = 'Could not save.';
+          return { ok: false, error: { code: 'internal_error', message } };
+        }
+      }`),
+    ).toEqual([]);
+  });
+
+  it('a name bound to something else is not followed', () => {
+    expect(
+      scan(`
+      export async function a() {
+        try { await work(); } catch (e) {
+          const failure = { error: { message: 'x' } };
+          failure.error.message = 'y';
+          return actionErrorResult(e, 't');
+        }
+      }`),
+    ).toEqual([]);
   });
 });
