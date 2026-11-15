@@ -117,7 +117,9 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whats-new-count-read-rule (2026-11-15; was: '2026-11-14T18:44:00Z'): the count read
     // rule and email change releases below share one minute, 2026-11-15T00:03:00Z, so the placeholder is
     // that same minute.
-    publishedAt: '2026-11-15T00:03:00Z',
+    // Moved again by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: '2026-11-15T00:03:00Z'):
+    // the settings release below is dated 2026-11-15T04:13:00Z, so the placeholder is that same minute.
+    publishedAt: '2026-11-15T04:13:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -202,6 +204,215 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'settings-not-loaded-2026-11',
+    revision: 1,
+    // #563 (squash 51ed64904), web only: no phone update and no migration.
+    // Live in production since 2026-11-15 04:12:00Z; publishedAt is the whole
+    // minute after. It went live after #557, so it sits above the module check
+    // release (module-check-try-again-2026-11) and is the newest published
+    // release.
+    // Claims checked against the code at 51ed64904 (paths under apps/web/src):
+    // - The state: components/settings/settings-read-failed.tsx, "We couldn't
+    //   load this settings page" (the settings error boundary's words) with
+    //   Try again; a panel on another page names itself. No form and no Save.
+    //   No stored row is still "never configured" and shows the defaults.
+    // - Organization: app/(dashboard)/dashboard/settings/organization/page.tsx,
+    //   owners and admins (ctx.role); the Name, Timezone, Labels and Purchase
+    //   order terms sections are replaced by the state.
+    // - Inventory cleanup: settings/inventory-cleanup/page.tsx, items:update or
+    //   items:delete; the panels save on or off plus days and default to off.
+    // - Maintenance requests: settings/maintenance/page.tsx,
+    //   maintenance_requests:configure (owner by default; an admin does not
+    //   hold it); the settings read or the member list read.
+    // - Reorder Planning: dashboard/planning/page.tsx, the two panels shown to
+    //   moduleAccess.canManage (owner or admin, lib/modules/module-gate.ts),
+    //   each replaced on its own; the suggestions table stays.
+    // - Purchase orders: dashboard/purchase-orders/page.tsx, the approval
+    //   threshold panel shown to owners and admins (isAdmin); a blank amount
+    //   turns approval off (po-approval-panel.tsx); the list stays.
+    // Who is told: per entry, whoever can open that page or panel. No links:
+    // each entry is a rare state, not a place to go.
+    status: 'published',
+    title: 'Settings that could not be loaded now say so, with Try again',
+    summary:
+      'If StockPilot cannot load your saved settings for a moment, the Organization, Inventory cleanup and Maintenance requests settings pages, the planning and automatic reordering settings on Reorder Planning, and the approval threshold on Purchase orders now say they could not be loaded and offer Try again, instead of showing a form filled with default values. Nothing changes while settings load normally, and no app update is needed.',
+    // #563 is live in production since 2026-11-15 04:12:00Z.
+    publishedAt: '2026-11-15T04:13:00Z',
+    entries: [
+      {
+        id: 'organization-settings-not-loaded',
+        category: 'fixed',
+        area: 'Settings',
+        title: 'Organization settings say so when they could not be loaded',
+        whatChanged:
+          "If Settings, Organization cannot load your saved settings, it now says We couldn't load this settings page, with Try again, instead of showing the name, time zone, labels and purchase order terms filled with default values.",
+        whyItMatters:
+          'Default values are not your saved settings, and saving them would have replaced what your organization had set.',
+        howItAffectsYou:
+          'This is rare and usually passes in a moment. Your saved settings are unchanged, and the other settings pages still work.',
+        whatToDo: 'If you see this, press Try again after a moment.',
+        audience: { roles: ['owner', 'admin'] },
+      },
+      {
+        id: 'inventory-cleanup-settings-not-loaded',
+        category: 'fixed',
+        area: 'Settings',
+        title: 'Inventory cleanup says so when its settings could not be loaded',
+        whatChanged:
+          "If Settings, Inventory cleanup cannot load your saved settings, it now says We couldn't load this settings page, with Try again, instead of showing automatic archiving and removal as off.",
+        whyItMatters:
+          'Off may not be what you saved, and saving a panel would have turned that automation off.',
+        howItAffectsYou:
+          'This is rare and usually passes in a moment. Your saved settings are unchanged, and the other settings pages still work.',
+        whatToDo: 'If you see this, press Try again after a moment.',
+        audience: { anyPermission: ['items:update', 'items:delete'] },
+      },
+      {
+        id: 'maintenance-settings-not-loaded',
+        category: 'fixed',
+        area: 'Settings',
+        title: 'Maintenance request settings say so when they could not be loaded',
+        whatChanged:
+          "If Settings, Maintenance requests cannot load your saved settings or your organization's members, it now says We couldn't load this settings page, with Try again, instead of showing the categories, notification audiences and photo link settings filled with default values.",
+        whyItMatters:
+          'Default values are not your saved settings, and saving them would have replaced what your organization had set.',
+        howItAffectsYou:
+          'This is rare and usually passes in a moment. Your saved settings are unchanged, and the other settings pages still work.',
+        whatToDo: 'If you see this, press Try again after a moment.',
+        audience: { anyPermission: ['maintenance_requests:configure'] },
+      },
+      {
+        id: 'planning-settings-not-loaded',
+        category: 'fixed',
+        area: 'Reorder Planning',
+        title:
+          'Reorder Planning says so when its planning or automatic reordering settings could not be loaded',
+        whatChanged:
+          "On Reorder Planning, if the planning settings or the automatic reordering settings cannot be loaded, that panel now says We couldn't load the planning settings or We couldn't load the automatic reordering settings, with Try again, instead of showing default values.",
+        whyItMatters:
+          'Default values are not your saved settings, and saving that panel would have replaced them.',
+        howItAffectsYou:
+          'This is rare and usually passes in a moment. Your saved settings are unchanged. The reorder suggestions and the other panel still show.',
+        whatToDo: 'If you see this, press Try again after a moment.',
+        audience: { roles: ['owner', 'admin'], modules: ['planning'] },
+      },
+      {
+        id: 'approval-threshold-not-loaded',
+        category: 'fixed',
+        area: 'Purchase orders',
+        title: 'The approval threshold says so when it could not be loaded',
+        whatChanged:
+          "On Purchase orders, if the approval threshold cannot be loaded, its panel now says We couldn't load the approval threshold, with Try again, instead of showing an empty amount.",
+        whyItMatters:
+          'An empty amount means approval is off, so saving the panel would have turned approval off.',
+        howItAffectsYou:
+          'This is rare and usually passes in a moment. Your saved threshold is unchanged, and the purchase order list still shows.',
+        whatToDo: 'If you see this, press Try again after a moment.',
+        audience: { roles: ['owner', 'admin'], modules: ['purchase_orders'] },
+      },
+    ],
+  },
+  {
+    id: 'module-check-try-again-2026-11',
+    revision: 1,
+    // #557 (squash 4cd92b204), web only: no phone update and no migration.
+    // Live in production since 2026-11-15 03:45:33Z; publishedAt is the whole
+    // minute after. The settings release directly above went live later.
+    // Claims checked against the code at 4cd92b204 (paths under apps/web/src):
+    // - Entry 1: the strip, components/dashboard/modules-unread-banner.tsx,
+    //   drawn by app/(dashboard)/layout.tsx when the module state is unknown,
+    //   Try again a full page load; the page state "This page couldn't be
+    //   loaded" / "We couldn't check your access just now. This is usually
+    //   temporary." (lib/known-error-states.ts, app/(dashboard)/error.tsx);
+    //   a Server Action answers "Your access could not be checked. Please try
+    //   again." (lib/modules/module-state.ts ModulesUnavailableError, mapped
+    //   by server/lib/action-error-result.ts) before it writes anything.
+    //   Before, a page that asked about a module it could not read left that
+    //   feature out. Every member sees the dashboard layout: no audience.
+    // - Entry 2: settings/modules/page.tsx ("We couldn't load your modules")
+    //   and settings/navigation/page.tsx ("We couldn't check which modules
+    //   are on"), each with Try again and no switches or editor; both pages
+    //   check organization:update.
+    // - Entry 3: the /r/<token> page (app/r/[token]/page.tsx) reaches "We
+    //   couldn't check this link just now. This is usually temporary." with
+    //   Try again; the tracking page (app/r/track, components/orders/
+    //   track-form.tsx) keeps the order and says it could not check whether
+    //   a return can be requested, with Check again. Told to whoever manages
+    //   public request links, the audience public-link-sent-request-2026-10
+    //   uses.
+    // - Entry 4: components/portal/portal-shop.tsx, the unconfirmed state
+    //   (the words, Reload, Place order and the cart disabled until a reload);
+    //   a refusal the server answered gives Place order back with the cart
+    //   and note. The portal's own people do not read What's New, so it is
+    //   told to whoever manages portal customers (customers:manage, the
+    //   b2b_portal module).
+    // No links: each entry is a rare state, not a place to go.
+    status: 'published',
+    title: 'Clearer messages when StockPilot cannot check which modules are on',
+    summary:
+      'If StockPilot cannot check which modules are on, or your access, for a moment, pages, buttons and links on the web now say so and offer Try again, instead of leaving a feature out without saying why. This is usually temporary: try again in a moment. No app update is needed.',
+    // #557 is live in production since 2026-11-15 03:45:33Z.
+    publishedAt: '2026-11-15T03:46:00Z',
+    entries: [
+      {
+        id: 'pages-say-when-modules-not-checked',
+        category: 'fixed',
+        area: 'Web app',
+        title: 'Pages say so when StockPilot cannot check which modules are on',
+        whatChanged:
+          "If StockPilot cannot check which modules are on for your organization, a strip above the page now says We couldn't check which modules are on, with Try again. A page that needs that check says This page couldn't be loaded, with Try again, and a button that saves or changes something says Your access could not be checked. Please try again.",
+        whyItMatters: 'Before, a page could leave out a menu item or a feature without saying why.',
+        howItAffectsYou:
+          'This is rare and usually passes in a moment. When a button says your access could not be checked, nothing was changed.',
+        whatToDo: 'If you see one of these messages, wait a moment and press Try again.',
+      },
+      {
+        id: 'module-settings-say-when-not-checked',
+        category: 'fixed',
+        area: 'Settings',
+        title: 'Settings, Modules and Navigation say so when modules cannot be checked',
+        whatChanged:
+          "If StockPilot cannot check which modules are on, Settings, Modules says We couldn't load your modules and Settings, Navigation says We couldn't check which modules are on, each with Try again, instead of showing the switches or the menu editor.",
+        whyItMatters:
+          'Switches or a menu shown without that check might not match what your organization has turned on.',
+        howItAffectsYou: 'Nothing was changed. Both pages work as before once the check succeeds.',
+        whatToDo: 'If you see this, press Try again after a moment.',
+        audience: { anyPermission: ['organization:update'] },
+      },
+      {
+        id: 'public-links-say-when-not-checked',
+        category: 'fixed',
+        area: 'Public requests',
+        title: 'Public request links say so when they cannot be checked',
+        whatChanged:
+          "If StockPilot cannot check a public request link for a moment, the page it opens now says This page couldn't be loaded and We couldn't check this link just now, with Try again. On the order tracking page, if it cannot check whether a return can be requested, the order still shows, with a note saying so and Check again.",
+        whyItMatters:
+          'People who open your links can tell a passing problem from a link that no longer works.',
+        howItAffectsYou: 'Nothing changes while StockPilot works normally.',
+        whatToDo:
+          'No action needed. If someone tells you they saw this, ask them to try again in a moment.',
+        audience: {
+          anyPermission: ['public_links:manage', 'organization:update'],
+          modules: ['public_requests'],
+        },
+      },
+      {
+        id: 'portal-place-order-not-confirmed',
+        category: 'fixed',
+        area: 'Customer portal',
+        title: 'The customer portal asks to check orders before an order is placed again',
+        whatChanged:
+          "In the customer portal, if Place order sends an order and no answer comes back, the shop now says We couldn't confirm your order went through. Reload the page and check your orders before placing it again. It offers Reload and keeps Place order off until then, with the cart and note still on screen.",
+        whyItMatters: 'Pressing Place order again right away could send the same order twice.',
+        howItAffectsYou:
+          "When StockPilot turns an order down, the shop shows why and gives Place order back with the cart and note kept. If the portal cannot check a customer's access for a moment, its page says This page couldn't be loaded, with Try again.",
+        whatToDo:
+          'No action needed. If a customer asks, tell them to reload the page and check their orders before placing the order again.',
+        audience: { anyPermission: ['customers:manage'], modules: ['b2b_portal'] },
       },
     ],
   },
