@@ -16,7 +16,7 @@ const ctxHolder = vi.hoisted(() => ({
 }));
 const pathHolder = vi.hoisted(() => ({ current: '/dashboard/settings/profile' }));
 
-const requireOrgContext = vi.hoisted(() =>
+const requireOrgContextForLayout = vi.hoisted(() =>
   vi.fn(async () => ({
     organizationId: 'org-1',
     userId: 'u-1',
@@ -24,7 +24,7 @@ const requireOrgContext = vi.hoisted(() =>
     role: ctxHolder.current.role,
   })),
 );
-vi.mock('@/lib/auth/session', () => ({ requireOrgContext }));
+vi.mock('@/lib/auth/session', () => ({ requireOrgContextForLayout }));
 
 const moduleAccess = vi.hoisted(() => ({
   current: { enabled: true, canManage: true } as {
@@ -33,13 +33,13 @@ const moduleAccess = vi.hoisted(() => ({
     checkFailed?: boolean;
   },
 }));
-const checkModuleAccess = vi.hoisted(() =>
+const checkModuleAccessFor = vi.hoisted(() =>
   vi.fn(async (moduleId: string) => {
     if (moduleId !== 'maintenance_requests') throw new Error(`unexpected module ${moduleId}`);
     return moduleAccess.current;
   }),
 );
-vi.mock('@/lib/modules/module-gate', () => ({ checkModuleAccess }));
+vi.mock('@/lib/modules/module-gate', () => ({ checkModuleAccessFor }));
 
 // Any Supabase client made while the layout renders is a new read: it must not happen.
 const createClient = vi.hoisted(() => vi.fn());
@@ -93,8 +93,8 @@ describe('settings layout', () => {
 
   it('makes no data read of its own: only the request-cached context and module set', async () => {
     await resolveLayout();
-    expect(requireOrgContext).toHaveBeenCalledTimes(1);
-    expect(checkModuleAccess).toHaveBeenCalledTimes(1);
+    expect(requireOrgContextForLayout).toHaveBeenCalledTimes(1);
+    expect(checkModuleAccessFor).toHaveBeenCalledTimes(1);
     expect(createClient).not.toHaveBeenCalled();
     expect(createAdminClient).not.toHaveBeenCalled();
     const source = readFileSync(path.join(__dirname, 'layout.tsx'), 'utf8');

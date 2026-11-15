@@ -3,25 +3,26 @@
 import { ShieldAlert } from 'lucide-react';
 import Link from 'next/link';
 
+import { AUTHENTICATOR_SET_UP_URL } from '@/lib/auth/authenticator-set-up';
 import { useWarmRoute } from '@/lib/hooks/use-warm-route';
 
-/** Where the banner sends someone to enroll. */
-const ENROLL_PAGE = '/dashboard/settings/security?enroll=1';
+/** Where the banner sends someone to enroll: where requireOrgContext() sends them too. */
+const ENROLL_PAGE = AUTHENTICATOR_SET_UP_URL;
 
 /**
- * Persistent banner shown above every dashboard page when the org's MFA
- * policy requires the current user to enroll a factor and they haven't
- * yet. We use a banner instead of a hard redirect because the redirect
- * approach was triggering Chrome's "Throttling navigation to prevent the
- * browser from hanging" warning (rendered as a black/blank screen) on
- * sections that prefetch + then navigate.
+ * The banner above the page when the org's MFA policy requires the current
+ * user to set up an authenticator and they have none verified. Such a member
+ * is sent to the security settings page from every other dashboard page
+ * (requireOrgContext() and the dashboard layout), so this shows on the pages
+ * open to them before set-up: the security page and the profile page
+ * (lib/auth/authenticator-set-up).
  *
  * A caution strip in the redesign's language: the warning wash with a hairline,
  * the icon in the warning tone beside the words (never colour alone), and the
  * one action as a small ink button (44px tall wherever a finger is the pointer).
  *
  * The button never prefetches its page on sight (PLAN 0.6): the banner is on
- * every page view until the person enrolls, and a default <Link> fetched the
+ * each of those page views until the person enrolls, and a default <Link> fetched the
  * security page on each one (two requests, a full dynamic render). It warms
  * that page when the person comes to it, as the top bar's links do.
  */

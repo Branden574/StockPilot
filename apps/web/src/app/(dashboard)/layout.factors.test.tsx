@@ -43,7 +43,7 @@ vi.mock('@/lib/auth/platform-admin', () => ({
   currentUserIsPlatformAdminFromRequestHeader: vi.fn(async () => false),
 }));
 vi.mock('@/lib/auth/session', () => ({
-  requireOrgContext: vi.fn(
+  requireOrgContextForLayout: vi.fn(
     () =>
       new Promise((resolve, reject) => {
         state.releaseContext = () =>
@@ -84,14 +84,14 @@ vi.mock('@/lib/dashboard/request-cache', () => ({
   getWarehousesForRequest: vi.fn(async () => []),
 }));
 vi.mock('@/lib/auth/warehouse', () => ({
-  getWarehouseAccess: vi.fn(async () => ({
+  getWarehouseAccessFor: vi.fn(async () => ({
     readableIds: [],
     writableIds: [],
     hasAllAccess: false,
     primaryWarehouseId: null,
   })),
 }));
-vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilter: vi.fn(async () => null) }));
+vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilterFor: vi.fn(async () => null) }));
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(async () => {
     const q: Record<string, unknown> = {};
@@ -111,7 +111,7 @@ vi.mock('@/lib/supabase/server', () => ({
   }),
 }));
 
-import { requireOrgContext } from '@/lib/auth/session';
+import { requireOrgContextForLayout as requireOrgContext } from '@/lib/auth/session';
 import { SessionEndedError } from '@/lib/auth/session-ended';
 
 import DashboardLayout from './layout';
@@ -154,13 +154,12 @@ describe('DashboardLayout — the factor read overlaps the context read', () => 
     state.factors = async () => ({ userId: 'u-1', factors: [{ status: 'verified' }] });
     const render = DashboardLayout({ children: null });
     state.releaseContext!();
-    await expect(render).rejects.toThrow(
-      'REDIRECT:/signin/mfa?redirect=%2Fdashboard%2Finventory',
-    );
+    await expect(render).rejects.toThrow('REDIRECT:/signin/mfa?redirect=%2Fdashboard%2Finventory');
   });
 
   it('an UNREADABLE factor list still fails the layout closed, with nothing unhandled', async () => {
-    state.factors = () => Promise.reject(new Error('getMfaFactorsForRequest: AuthRetryableFetchError'));
+    state.factors = () =>
+      Promise.reject(new Error('getMfaFactorsForRequest: AuthRetryableFetchError'));
     let thrown: unknown = null;
     const unhandled = await unhandledDuring(async () => {
       const render = DashboardLayout({ children: null });
@@ -193,7 +192,8 @@ describe('DashboardLayout — the factor read overlaps the context read', () => 
   });
 
   it('a context that REDIRECTS leaves the abandoned factor read observed, not unhandled', async () => {
-    state.factors = () => Promise.reject(new Error('getMfaFactorsForRequest: AuthSessionMissingError'));
+    state.factors = () =>
+      Promise.reject(new Error('getMfaFactorsForRequest: AuthSessionMissingError'));
     let thrown: unknown = null;
     const unhandled = await unhandledDuring(async () => {
       const render = DashboardLayout({ children: null });

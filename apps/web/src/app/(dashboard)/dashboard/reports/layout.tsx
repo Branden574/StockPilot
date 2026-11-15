@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 
-import { requireOrgContext } from '@/lib/auth/session';
+import { requireOrgContextForLayout } from '@/lib/auth/session';
 
 import { can } from '@stockpilot/core';
 
@@ -15,12 +15,9 @@ import { can } from '@stockpilot/core';
  * apps/web/src/components/dashboard/nav.ts is already gated on
  * reports:read, so viewers don't see the button either.
  */
-export default async function ReportsLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  const ctx = await requireOrgContext();
+export default async function ReportsLayout({ children }: { children: React.ReactNode }) {
+  // The layout's context: no set-up redirect from a layout (lib/auth/session.ts).
+  const ctx = await requireOrgContextForLayout();
   if (!can(ctx, 'reports:read')) {
     redirect('/dashboard');
   }

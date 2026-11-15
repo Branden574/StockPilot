@@ -28,6 +28,7 @@ vi.mock('next/navigation', () => ({ redirect: (to: string) => redirect(to) }));
 vi.mock('@/lib/auth/step-up-gate', () => ({
   startStepUpReads: () => ({}),
   stepUpIsOwed: async () => false,
+  authenticatorSetUpIsOwed: async () => false,
 }));
 
 let headerUserId: string | null = 'victim';

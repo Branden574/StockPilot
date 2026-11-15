@@ -121,8 +121,37 @@ function accessWhenUnreadable(role: Role): WarehouseAccess {
  *     A read that THROWS rejects this promise, which every caller already
  *     treats as a failure (none of them turns a rejection into access).
  */
-export const getWarehouseAccess = cache(async (ctx?: WarehouseCtxLike): Promise<WarehouseAccess> => {
-  const c = ctx ?? (await requireOrgContext());
+export const getWarehouseAccess = cache(
+  async (ctx?: WarehouseCtxLike): Promise<WarehouseAccess> => {
+    const c = ctx ?? (await requireOrgContext());
+    return getWarehouseAccessFor(c);
+  },
+);
+
+/**
+ * getWarehouseAccess() for a caller that already holds its context, with no
+ * fallback: it never asks requireOrgContext(). A dashboard layout uses it with
+ * the context it holds (a layout must not ask requireOrgContext(), whose
+ * set-up redirect no layout may throw). The same answer, request-cached per
+ * context object: a context without a client of its own is answered on the
+ * request's cookie session, so the layout's call and a page's
+ * getWarehouseAccess() share one answer (both hold the same cached context).
+ */
+export function getWarehouseAccessFor(ctx: WarehouseCtxLike): Promise<WarehouseAccess> {
+  return ctx.supabase ? accessWithOwnClient(ctx) : accessOnCookieSession(ctx);
+}
+
+const accessOnCookieSession = cache((c: WarehouseCtxLike): Promise<WarehouseAccess> =>
+  accessFor(c, undefined),
+);
+const accessWithOwnClient = cache((c: WarehouseCtxLike): Promise<WarehouseAccess> =>
+  accessFor(c, c),
+);
+
+async function accessFor(
+  c: WarehouseCtxLike,
+  ctx: WarehouseCtxLike | undefined,
+): Promise<WarehouseAccess> {
   // Prefer the caller's own authed client (Bearer API routes) — the cookie
   // client is anon on cookie-less requests and would return zero rows. Only
   // an explicitly PASSED ctx can carry one (the requireOrgContext fallback
@@ -223,9 +252,7 @@ export const getWarehouseAccess = cache(async (ctx?: WarehouseCtxLike): Promise<
 
   const readableIds = (assignments ?? []).map((a: { warehouse_id: string }) => a.warehouse_id);
   const writableIds = c.role === 'viewer' ? [] : readableIds;
-  const primaryAssignment = (assignments ?? []).find(
-    (a: { is_primary: boolean }) => a.is_primary,
-  );
+  const primaryAssignment = (assignments ?? []).find((a: { is_primary: boolean }) => a.is_primary);
   return {
     readableIds,
     writableIds,
@@ -233,7 +260,7 @@ export const getWarehouseAccess = cache(async (ctx?: WarehouseCtxLike): Promise<
     primaryWarehouseId:
       (primaryAssignment?.warehouse_id as string | undefined) ?? readableIds[0] ?? null,
   };
-});
+}
 
 /**
  * Throws a forbidden error if the user can't access the given warehouse for

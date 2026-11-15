@@ -18,6 +18,16 @@ export async function GET(req: Request) {
   const ctx = await withApiContext(req);
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
+  // A member who must set up an authenticator first (the API context decides
+  // it with policyRequiresAuthenticator from @stockpilot/core, the rule the
+  // pages ask), including a session whose token says the code was entered but
+  // that has no verified authenticator left. Nothing is searched for them: the
+  // palette on the pages open before set-up shows no results. A session that
+  // owes its code never gets here: withApiContext answers it (401 above).
+  if (ctx.mfaRequired && !ctx.mfaSatisfied) {
+    return NextResponse.json({ error: 'mfa_required' }, { status: 403 });
+  }
+
   // Per-user rate limit before the 4-table ilike fan-out (open mode: an authed
   // convenience endpoint shouldn't hard-fail on a limiter blip).
   const rl = await checkRateLimit(`search:${ctx.userId}`, 120, 60_000);
@@ -78,7 +88,9 @@ export async function GET(req: Request) {
         .limit(5)
     : ctx.supabase
         .from('purchase_orders')
-        .select('id, po_number, status, destination:locations!destination_location_id!inner (warehouse_id)')
+        .select(
+          'id, po_number, status, destination:locations!destination_location_id!inner (warehouse_id)',
+        )
         .eq('organization_id', ctx.organizationId)
         // in-list-bound: the caller's readable warehouses (an org's handful of sites)
         .in('destination.warehouse_id', access.readableIds)
@@ -123,7 +135,9 @@ export async function GET(req: Request) {
     ['warehouses', warehouses],
   ] as const) {
     if (res.error) {
-      console.warn(`[search] ${group} query failed: ${(res.error as { code?: string }).code || 'unknown'}`);
+      console.warn(
+        `[search] ${group} query failed: ${(res.error as { code?: string }).code || 'unknown'}`,
+      );
     }
   }
 

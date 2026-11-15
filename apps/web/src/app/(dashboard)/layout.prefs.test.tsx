@@ -73,7 +73,7 @@ vi.mock('@/lib/auth/platform-admin', () => ({
   currentUserIsPlatformAdminFromRequestHeader: async () => false,
 }));
 vi.mock('@/lib/auth/session', () => ({
-  requireOrgContext: async () => ({
+  requireOrgContextForLayout: async () => ({
     organizationId: 'org-1',
     organizationName: 'Org One',
     userId: 'u1',
@@ -100,9 +100,9 @@ vi.mock('@/lib/dashboard/request-cache', () => ({
   getModulesForRequest: async () => new Set<string>(),
 }));
 vi.mock('@/lib/auth/warehouse', () => ({
-  getWarehouseAccess: async () => ({ hasAllAccess: true, readableIds: ['wh-1'] }),
+  getWarehouseAccessFor: async () => ({ hasAllAccess: true, readableIds: ['wh-1'] }),
 }));
-vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilter: async () => null }));
+vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilterFor: async () => null }));
 vi.mock('@/lib/supabase/server', () => ({
   createClient: async () => ({
     from: () => {

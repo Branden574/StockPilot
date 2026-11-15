@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CommandPalette } from './command-palette';
@@ -51,5 +51,45 @@ describe('CommandPalette purchase-order hits', () => {
 
     fireEvent.click(screen.getByText('PO-1042'));
     expect(push).toHaveBeenCalledWith('/dashboard/purchase-orders/p1');
+  });
+});
+
+/**
+ * A member who must set up an authenticator first: /api/search answers 403
+ * (mfa_required) and the palette shows no results, only its navigation, and
+ * nothing breaks.
+ */
+describe('CommandPalette when the search is refused', () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: 'mfa_required' }), {
+            status: 403,
+            headers: { 'content-type': 'application/json' },
+          }),
+      ),
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('shows no search results and keeps the dialog working', async () => {
+    render(<CommandPalette open onOpenChange={() => {}} />);
+    const input = screen.getByPlaceholderText(/Search items, POs, suppliers/);
+    fireEvent.change(input, { target: { value: 'kettle' } });
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    // The spinner stops: the refusal ends the search, it does not hang it.
+    await waitFor(() => expect(document.querySelector('.animate-spin')).toBeNull());
+    const headings = [...document.querySelectorAll('[cmdk-group-heading]')].map(
+      (h) => h.textContent,
+    );
+    for (const hits of ['Items', 'Purchase orders', 'Suppliers', 'Warehouses']) {
+      expect(headings).not.toContain(hits);
+    }
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(input).toHaveValue('kettle');
   });
 });
