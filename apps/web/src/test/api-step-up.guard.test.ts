@@ -99,18 +99,22 @@ const BEFORE_REFUSAL = {
     reportError: 'lib/error-reporter',
     redirectWithError: 'local',
   } as Readonly<Record<string, string>>,
-  /** Methods by name, on any object: the auth and table reads, the URL and redirect calls. */
-  methods: new Set([
-    'getUser',
-    'from',
-    'select',
-    'eq',
-    'not',
-    'maybeSingle',
-    'get',
-    'set',
-    'redirect',
-  ]) as ReadonlySet<string>,
+  /**
+   * Methods by name, with the receiver each may be called on: any (the table
+   * reads), `<x>.auth` (getUser), a URL's searchParams (get, set: `<x>.searchParams`
+   * or a const bound to one), and NextResponse imported from next/server.
+   */
+  methods: {
+    getUser: 'auth',
+    from: 'any',
+    select: 'any',
+    eq: 'any',
+    not: 'any',
+    maybeSingle: 'any',
+    get: 'searchParams',
+    set: 'searchParams',
+    redirect: 'NextResponse',
+  } as Readonly<Record<string, 'any' | 'auth' | 'searchParams' | 'NextResponse'>>,
   /** Constructors by name. */
   constructors: new Set(['URL']) as ReadonlySet<string>,
 };
@@ -458,13 +462,17 @@ function sessionCallsIn(fileName: string, source: string): string[] {
  * How an OWN_SESSION route that acts in an organization uses the policy answer
  * (POLICY_CHECK, followed through an import alias):
  *   - each call's answer is kept in a const;
- *   - after it, an `if` whose condition is `!<answer>.mfaSatisfied` or
- *     `<answer>.mfaRequired && !<answer>.mfaSatisfied` returns directly (its
- *     then-branch is a return, or a block with a return among its statements);
- *   - every call and `new` in the file that starts before that `if` is on
- *     BEFORE_REFUSAL;
- *   - every mfaRequired, mfaSatisfied and mfaEnrolled property the file writes
- *     is `<answer>.<the same field>` (a spread of the answer is fine).
+ *   - a later statement of the same block as that const is an `if` whose
+ *     condition is `!<answer>.mfaSatisfied` or
+ *     `<answer>.mfaRequired && !<answer>.mfaSatisfied` and which returns
+ *     directly (its then-branch is a return, or a block with a return among
+ *     its statements);
+ *   - every call, `new` and tagged template in the file that starts before the
+ *     END of that `if` is on BEFORE_REFUSAL, a 'local' function counting only
+ *     when it is declared before the `if`;
+ *   - every mfaRequired, mfaSatisfied and mfaEnrolled the file sets (a
+ *     property, quoted or not, a shorthand, or an assignment) is
+ *     `<answer>.<the same field>` (a spread of the answer is fine).
  */
 function policyAnswerProblems(fileName: string, source: string): string[] {
   const sf = parse(fileName, source);
@@ -473,14 +481,18 @@ function policyAnswerProblems(fileName: string, source: string): string[] {
   const flat = (n: ts.Node) => n.getText(sf).replace(/\s+/g, '');
 
   /** local name -> the name it imports and the module it comes from. */
-  const imports = new Map<string, { imported: string; from: string | null }>();
+  const imports = new Map<string, { imported: string; from: string | null; spec: string }>();
   for (const st of sf.statements) {
     if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
     const bindings = st.importClause?.namedBindings;
     if (!bindings || !ts.isNamedImports(bindings)) continue;
     const from = resolveModule(fileName, st.moduleSpecifier.text);
     for (const el of bindings.elements) {
-      imports.set(el.name.text, { imported: (el.propertyName ?? el.name).text, from });
+      imports.set(el.name.text, {
+        imported: (el.propertyName ?? el.name).text,
+        from,
+        spec: st.moduleSpecifier.text,
+      });
     }
   }
   const isPolicyCall = (name: string) => {
@@ -488,19 +500,37 @@ function policyAnswerProblems(fileName: string, source: string): string[] {
     return !!i && POLICY_CHECK[i.imported] !== undefined && POLICY_CHECK[i.imported] === i.from;
   };
 
-  const declaredHere = new Set<string>();
+  /** Names the file declares, with where the declaration starts. */
+  const declaredHere = new Map<string, number>();
+  /** Consts bound to a URL's searchParams. */
+  const searchParamsConsts = new Set<string>();
   const policyCalls: ts.CallExpression[] = [];
-  const calls: Array<ts.CallExpression | ts.NewExpression> = [];
-  const fields: Array<ts.PropertyAssignment | ts.ShorthandPropertyAssignment> = [];
+  type Call = ts.CallExpression | ts.NewExpression | ts.TaggedTemplateExpression;
+  const calls: Call[] = [];
+  const fields: Array<{ node: ts.Node; field: string; value?: ts.Expression }> = [];
+  const fieldName = (name: ts.Node): string | null =>
+    (ts.isIdentifier(name) || ts.isStringLiteral(name)) && ANSWER_FIELDS.has(name.text)
+      ? name.text
+      : null;
   const visit = (n: ts.Node): void => {
     if (
       (ts.isVariableDeclaration(n) || ts.isFunctionDeclaration(n)) &&
       n.name &&
       ts.isIdentifier(n.name)
     ) {
-      declaredHere.add(n.name.text);
+      declaredHere.set(n.name.text, n.getStart(sf));
+      if (
+        ts.isVariableDeclaration(n) &&
+        n.initializer &&
+        ts.isPropertyAccessExpression(n.initializer) &&
+        n.initializer.name.text === 'searchParams'
+      ) {
+        searchParamsConsts.add(n.name.text);
+      }
     }
-    if (ts.isCallExpression(n) || ts.isNewExpression(n)) calls.push(n);
+    if (ts.isCallExpression(n) || ts.isNewExpression(n) || ts.isTaggedTemplateExpression(n)) {
+      calls.push(n);
+    }
     if (
       ts.isCallExpression(n) &&
       ts.isIdentifier(n.expression) &&
@@ -508,19 +538,46 @@ function policyAnswerProblems(fileName: string, source: string): string[] {
     ) {
       policyCalls.push(n);
     }
+    if (ts.isPropertyAssignment(n) || ts.isShorthandPropertyAssignment(n)) {
+      const field = fieldName(n.name);
+      if (field) {
+        fields.push({
+          node: n,
+          field,
+          value: ts.isPropertyAssignment(n) ? n.initializer : undefined,
+        });
+      }
+    }
     if (
-      (ts.isPropertyAssignment(n) || ts.isShorthandPropertyAssignment(n)) &&
-      ts.isIdentifier(n.name) &&
-      ANSWER_FIELDS.has(n.name.text)
+      ts.isBinaryExpression(n) &&
+      n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isPropertyAccessExpression(n.left)
     ) {
-      fields.push(n);
+      const field = fieldName(n.left.name);
+      if (field) fields.push({ node: n, field, value: n.right });
     }
     ts.forEachChild(n, visit);
   };
   visit(sf);
 
   /** Why a call is not on BEFORE_REFUSAL, as its name; null when it is. */
-  const unlisted = (c: ts.CallExpression | ts.NewExpression): string | null => {
+  const receiverFits = (rule: string, recv: ts.Expression): boolean => {
+    if (rule === 'any') return true;
+    if (rule === 'auth') return ts.isPropertyAccessExpression(recv) && recv.name.text === 'auth';
+    if (rule === 'searchParams') {
+      return (
+        (ts.isPropertyAccessExpression(recv) && recv.name.text === 'searchParams') ||
+        (ts.isIdentifier(recv) && searchParamsConsts.has(recv.text))
+      );
+    }
+    return (
+      ts.isIdentifier(recv) &&
+      recv.text === 'NextResponse' &&
+      imports.get('NextResponse')?.spec === 'next/server'
+    );
+  };
+  const unlisted = (c: Call, refusalStart: number): string | null => {
+    if (ts.isTaggedTemplateExpression(c)) return `tagged template ${flat(c.tag)}`;
     const e = c.expression;
     if (ts.isNewExpression(c)) {
       return ts.isIdentifier(e) && BEFORE_REFUSAL.constructors.has(e.text)
@@ -528,12 +585,17 @@ function policyAnswerProblems(fileName: string, source: string): string[] {
         : `new ${flat(e)}`;
     }
     if (ts.isPropertyAccessExpression(e)) {
-      return BEFORE_REFUSAL.methods.has(e.name.text) ? null : e.name.text;
+      const rule = BEFORE_REFUSAL.methods[e.name.text];
+      if (!rule) return e.name.text;
+      return receiverFits(rule, e.expression) ? null : `${e.name.text} on ${flat(e.expression)}`;
     }
     if (ts.isIdentifier(e)) {
       const i = imports.get(e.text);
       if (i) return BEFORE_REFUSAL.functions[i.imported] === i.from ? null : e.text;
-      return BEFORE_REFUSAL.functions[e.text] === 'local' && declaredHere.has(e.text)
+      const declared = declaredHere.get(e.text);
+      return BEFORE_REFUSAL.functions[e.text] === 'local' &&
+        declared !== undefined &&
+        declared < refusalStart
         ? null
         : e.text;
     }
@@ -558,21 +620,18 @@ function policyAnswerProblems(fileName: string, source: string): string[] {
     ]);
     const returnsDirectly = (st: ts.Statement) =>
       ts.isReturnStatement(st) || (ts.isBlock(st) && st.statements.some(ts.isReturnStatement));
-    let refusal: ts.IfStatement | undefined;
-    const findIf = (e: ts.Node): void => {
-      if (refusal) return;
-      if (
-        ts.isIfStatement(e) &&
-        e.pos > call.pos &&
-        refusalConditions.has(flat(e.expression)) &&
-        returnsDirectly(e.thenStatement)
-      ) {
-        refusal = e;
-        return;
-      }
-      ts.forEachChild(e, findIf);
-    };
-    findIf(sf);
+    // A later statement of the block that holds the const, never a nested one.
+    const holder = decl.parent.parent;
+    const block = holder.parent;
+    const siblings = ts.isBlock(block) || ts.isSourceFile(block) ? block.statements : undefined;
+    const refusal = siblings
+      ?.slice(siblings.indexOf(holder as ts.Statement) + 1)
+      .find(
+        (st): st is ts.IfStatement =>
+          ts.isIfStatement(st) &&
+          refusalConditions.has(flat(st.expression)) &&
+          returnsDirectly(st.thenStatement),
+      );
     if (!refusal) {
       problems.add(
         `${at(call)}: does not return on ${answer}.mfaRequired && !${answer}.mfaSatisfied`,
@@ -581,17 +640,14 @@ function policyAnswerProblems(fileName: string, source: string): string[] {
     }
     const refusalStart = refusal.getStart(sf);
     for (const c of calls) {
-      if (c.getStart(sf) >= refusalStart) continue;
-      const name = unlisted(c);
+      if (c.getStart(sf) >= refusal.getEnd()) continue;
+      const name = unlisted(c, refusalStart);
       if (name) problems.add(`${at(c)}: calls ${name} before the authenticator answer`);
     }
   }
-  for (const f of fields) {
-    const field = (f.name as ts.Identifier).text;
-    const fromAnswer =
-      ts.isPropertyAssignment(f) &&
-      [...answers].some((a) => flat(f.initializer) === `${a}.${field}`);
-    if (!fromAnswer) problems.add(`${at(f)}: sets ${field} to something other than the answer`);
+  for (const { node, field, value } of fields) {
+    const fromAnswer = !!value && [...answers].some((a) => flat(value) === `${a}.${field}`);
+    if (!fromAnswer) problems.add(`${at(node)}: sets ${field} to something other than the answer`);
   }
   return [...problems];
 }
@@ -1131,6 +1187,99 @@ describe('self-test: a planted violation of each rule is reported', () => {
         'OWN_SESSION app/api/cb/route.ts:11: sets mfaEnrolled to something other than the answer',
       ].sort(),
     );
+
+    // A listed method name on another receiver: get and set on anything but a
+    // URL's searchParams, redirect on a NextResponse that is not next/server's.
+    expect(
+      own(
+        route(`const http = { get: async (_u: string) => 1 }; const kv = { set: (_k: string, _v: string) => 1 };
+        await http.get('https://provider.example/token'); kv.set('k', 'v'); NextResponse.redirect('/x');
+        const mfa = await policy(s, data.user, 'org', 'admin');
+        if (!mfa.mfaSatisfied) return 'forbidden';
+        return data;`),
+      ),
+    ).toEqual(
+      [
+        'OWN_SESSION app/api/cb/route.ts:9: calls get on http before the authenticator answer',
+        'OWN_SESSION app/api/cb/route.ts:9: calls set on kv before the authenticator answer',
+        'OWN_SESSION app/api/cb/route.ts:9: calls redirect on NextResponse before the authenticator answer',
+      ].sort(),
+    );
+
+    // The refusal in an arrow nobody calls, or under `if (false)`: not a
+    // statement of the answer's block, so no refusal.
+    for (const nested of [
+      "const later = () => { if (!mfa.mfaSatisfied) return 'forbidden'; };",
+      "if (false) { if (!mfa.mfaSatisfied) return 'forbidden'; }",
+    ]) {
+      expect(
+        own(
+          route(`const mfa = await policy(s, data.user, 'org', 'admin');
+        ${nested}
+        await exchangeCode('c');
+        return data;`),
+        ),
+        nested,
+      ).toEqual(notRefused);
+    }
+
+    // A write inside the refusal's own branch.
+    expect(
+      own(
+        route(`const mfa = await policy(s, data.user, 'org', 'admin');
+        if (!mfa.mfaSatisfied) { await exchangeCode('c'); return 'forbidden'; }
+        return data;`),
+      ),
+    ).toEqual([
+      'OWN_SESSION app/api/cb/route.ts:9: calls exchangeCode before the authenticator answer',
+    ]);
+
+    // A 'local' function counts only when it is declared before the refusal.
+    expect(
+      own(
+        `${route(`redirectWithError('c');
+        const mfa = await policy(s, data.user, 'org', 'admin');
+        if (!mfa.mfaSatisfied) return 'forbidden';
+        return data;`)}
+      function redirectWithError(c: string) { return exchangeCode(c); }`,
+      ),
+    ).toEqual([
+      'OWN_SESSION app/api/cb/route.ts:8: calls redirectWithError before the authenticator answer',
+    ]);
+
+    // A tagged template is a call.
+    expect(
+      own(
+        route(`const sql = (..._a: unknown[]) => 1; sql\`delete from t\`;
+        const mfa = await policy(s, data.user, 'org', 'admin');
+        if (!mfa.mfaSatisfied) return 'forbidden';
+        return data;`),
+      ),
+    ).toEqual([
+      'OWN_SESSION app/api/cb/route.ts:8: calls tagged template sql before the authenticator answer',
+    ]);
+
+    // A quoted key and an assignment are fields too; an assignment from the answer is fine.
+    expect(
+      own(
+        good
+          .replace('{ ...mfa, mfaEnrolled: mfa.mfaEnrolled }', "{ ...mfa, 'mfaRequired': false }")
+          .replace('return data;', 'const ctx = { ...mfa }; ctx.mfaSatisfied = true; return data;'),
+      ),
+    ).toEqual(
+      [
+        'OWN_SESSION app/api/cb/route.ts:11: sets mfaRequired to something other than the answer',
+        'OWN_SESSION app/api/cb/route.ts:12: sets mfaSatisfied to something other than the answer',
+      ].sort(),
+    );
+    expect(
+      own(
+        good.replace(
+          'return data;',
+          'const ctx = { ...mfa }; ctx.mfaSatisfied = mfa.mfaSatisfied; return data;',
+        ),
+      ),
+    ).toEqual([]);
 
     // A namesake from another module is not the policy answer.
     expect(
