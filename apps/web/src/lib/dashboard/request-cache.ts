@@ -8,6 +8,7 @@ import {
   modulesFromMembership,
   orgRowFromMembership,
 } from '@/lib/auth/request-context-bundle';
+import { OrganizationRowUnavailableError } from '@/lib/auth/organization-row-unavailable';
 import { effectiveModules, NON_CORE_MODULE_IDS } from '@/lib/modules/effective-modules';
 import { moduleSetFromReads } from '@/lib/modules/module-state';
 import { readMfaFactorList, type MfaFactor, type MfaFactorList } from '@/lib/auth/mfa-factors';
@@ -92,7 +93,20 @@ export const getOrgRowForRequest = cache(async (organizationId: string): Promise
   // transient read error and returning null would resolve the policy to
   // 'optional' → silently disable MFA for the request. Throw so the gate
   // fails closed; a genuine missing row still returns null (no error).
-  if (error) throw new Error(`getOrgRowForRequest: ${error.message}`);
+  //
+  // The error is the "could not check your access" one
+  // (OrganizationRowUnavailableError, the digest a module state that could not
+  // be read carries): a page shows the plain state with Try again, and a
+  // Server Action answers its try-again sentence, instead of "Something went
+  // wrong". The read's own words go to the server log only.
+  if (error) {
+    console.error(
+      '[getOrgRowForRequest] organizations read failed:',
+      error.code || 'unknown',
+      error.message,
+    );
+    throw new OrganizationRowUnavailableError();
+  }
   return (data as OrgRow | null) ?? null;
 });
 
@@ -262,8 +276,10 @@ export const readModulesForRequest = cache(async (organizationId: string): Promi
  * NOTE: the rows read itself does not throw (the Supabase client surfaces
  * failures as `{ error }`, not exceptions), but on the legacy path the comp
  * flag comes from getOrgRowForRequest, which THROWS on a read error because
- * it also feeds the MFA gate. That rejection reaches the caller: the layout
- * shows its error screen, and checkModuleAccess catches it and denies.
+ * it also feeds the MFA gate. That rejection (OrganizationRowUnavailableError)
+ * reaches the caller: the layout shows the plain "couldn't check your access"
+ * state with Try again, a Server Action answers its try-again sentence, and
+ * checkModuleAccess catches it and denies.
  */
 export const getModulesForRequest = cache(async (organizationId: string): Promise<Set<ModuleId>> => {
   const read = await readModulesForRequest(organizationId);

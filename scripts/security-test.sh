@@ -1121,6 +1121,15 @@ WEB_TESTS=(
   src/server/services/portal.module-state.test.ts
   src/server/actions/portal.module-state.test.ts
   'src/app/(dashboard)/layout.module-state.test.tsx'
+  # The organization row the cookie session reads (its authenticator policy
+  # and settings) is the same kind of check: a read that did not answer is
+  # never a row with default settings. The dashboard layout reaches the plain
+  # "We couldn't check your access just now" state with Try again, and a
+  # Server Action answers "Your access could not be checked. Please try
+  # again.", with nothing written.
+  src/lib/dashboard/request-cache.organization-row.test.ts
+  'src/app/(dashboard)/layout.organization-row.test.tsx'
+  src/server/actions/organization-row-unread.actions.test.ts
   src/app/api/v1/mobile/snapshot/route.step-up.test.ts
   src/app/api/client-error/route.test.ts
   # A session that still owes its authenticator code gets no organization
