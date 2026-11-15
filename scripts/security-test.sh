@@ -1902,6 +1902,29 @@ WEB_TESTS=(
   # has recorded the request's time.
   src/server/services/email-change.test.ts
   src/components/settings/email-settings-card.test.tsx
+
+  # Member role and category access over /api/v1 (routes the phone can
+  # call). PATCH /api/v1/members/[id]/role changes a role through
+  # TeamService.updateMemberRole and nothing else, and
+  # POST /api/v1/members/[id]/category-access grants or revokes ONE category
+  # through UserCategoriesService.setMemberCategoryGrant and nothing else:
+  # each builds its context with withApiContext, through the API context gate,
+  # so the service's permission check, the organization's authenticator rule,
+  # its audit row and its security event are the web's own; a context that
+  # could not be read answers the gate's 503 before any work; a refusal keeps
+  # its code, words and reason; a database failure answers a fixed sentence.
+  # The role body is one of admin, manager, staff and viewer. The category
+  # body is exactly one category and one flag (a list is refused), the member and the
+  # category are read in the caller's organization, and the write is the one
+  # row, never the member's set. A save of the role a member already has, or
+  # of the authenticator policy an organization already has, changes nothing:
+  # no update, no audit row, no security event. The two route suites and the
+  # single-grant suite carry the "Security invariant" marker.
+  'src/app/api/v1/members/[id]/role/route.test.ts'
+  'src/app/api/v1/members/[id]/category-access/route.test.ts'
+  src/server/services/user-categories.single-grant.test.ts
+  src/server/services/team.update-member-role.test.ts
+  src/server/actions/mfa.policy-unchanged.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
