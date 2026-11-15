@@ -146,6 +146,13 @@ async function mfaFromPolicy(
     // an 'optional' policy, or a stolen password alone reaches the API at
     // AAL1 untouched.
     mfaRequired = policyRequired || hasVerifiedFactor;
+    // A policy that requires an authenticator is met only by an account that
+    // has one: the same answer resolveMfaState() in services/context.ts gives
+    // pages and Server Actions ('mfa_required', set one up first), with no
+    // level read.
+    if (policyRequired && !hasVerifiedFactor) {
+      return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false };
+    }
     if (mfaRequired) {
       // The bearer token's own claim, or the validated cookie user's own
       // level: never a level read from a session the request cannot tie to

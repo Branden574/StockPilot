@@ -1065,6 +1065,12 @@ WEB_TESTS=(
   # Both API paths and the page path (withContext).
   src/lib/auth/api-context.policy-unreadable.test.ts
   src/server/services/context.policy-unreadable.test.ts
+  # The API gives the authenticator answer the pages give: every policy, role,
+  # authenticator and level, on both API paths and through both reads, against
+  # withContext over the same rows. A policy that requires an authenticator is
+  # met only by an account that has one. Setting up a first authenticator, and
+  # the routes allowed before the code, do not pass through the gate.
+  src/lib/auth/api-context.page-parity.test.ts
   # A password alone reads nothing through the API (docket S43a): withApiContext
   # refuses an account with a verified authenticator factor whose session is
   # not aal2, on both paths, right after the identity check and before any
