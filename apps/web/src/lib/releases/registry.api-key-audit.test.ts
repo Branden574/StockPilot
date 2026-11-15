@@ -114,13 +114,13 @@ describe('the API key audit release: the words', () => {
     );
     expect(entry().title).toBe('Creating and revoking an API key now show in the Audit log');
     expect(entry().whatChanged).toBe(
-      'The Audit log now has an Api Key · Created row each time an API key is created and an Api Key · Revoked row each time one is revoked, under API keys in Settings, Integrations. The Created row records the key id, the key name and its scopes, and the Revoked row records the key id and name. Neither row holds the key itself.',
+      'The Audit log now has an Api Key · Created row each time an API key is created and an Api Key · Revoked row each time one is revoked, under API keys in Settings, Integrations.',
     );
     expect(entry().whyItMatters).toBe(
       'The Audit log shows who created or revoked an API key, and when.',
     );
     expect(entry().howItAffectsYou).toBe(
-      'On the web, both rows are under All events, with Api Key and the start of the key id in the Entity column. The page does not show the name or the scopes. People who can view the audit log see them: owners, admins and managers by default, and anyone given View audit log. The Audit log in the mobile app lists them among its recent events as api_key.created and api_key.revoked, without the details.',
+      'On the web, both rows are under All events, with Api Key and a short record id in the Entity column. That id is not part of the key, and the page does not show the key name. People who can view the audit log see them: owners, admins and managers by default, and anyone given View audit log. The Audit log in the mobile app lists them among its recent events as api_key.created and api_key.revoked.',
     );
     expect(entry().whatToDo).toBe(
       'No action needed. To see only one kind on the web, open the Audit log, type api_key.created or api_key.revoked in the Event filter and choose Apply.',
