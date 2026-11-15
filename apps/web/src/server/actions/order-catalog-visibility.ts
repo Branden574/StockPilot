@@ -2,6 +2,7 @@
 
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError } from '@/lib/error-reporter';
+import { uncheckedAccessResult } from '@/server/lib/action-error-result';
 import { ServiceError, withContext } from '@/server/services/context';
 import { OrderCatalogVisibilityService } from '@/server/services/order-catalog-visibility';
 
@@ -47,6 +48,9 @@ export async function setOrderCatalogVisibilityAction(input: {
     return ok(answer);
   } catch (error) {
     rethrowControlFlow(error);
+    // A check of the caller's access that could not be read: its own sentence.
+    const unchecked = uncheckedAccessResult(error, 'order_catalog_visibility.action');
+    if (unchecked) return unchecked;
     if (error instanceof ServiceError && error.code !== 'internal_error') {
       return error.details
         ? err(error.code, error.message, error.details)

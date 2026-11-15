@@ -496,6 +496,9 @@ export class TeamService {
         'You cannot change your own role. Ask another admin.',
       );
     }
+    // A save of the role the member already has changes nothing: no update,
+    // no audit row, no security event. Every check above has run.
+    if ((target.role as string) === role) return;
 
     const { data: row, error } = await this.ctx.supabase
       .from('organization_members')

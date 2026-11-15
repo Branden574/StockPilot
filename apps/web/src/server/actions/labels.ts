@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { cleanLabelIds, isUuid, LABELS_MAX_ITEMS } from '@/lib/inventory/labels-selection';
+import { uncheckedAccessResult } from '@/server/lib/action-error-result';
 import { mfaGateError, ServiceError, withContext } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 
@@ -63,6 +64,9 @@ export async function loadLabelItemsAction(input: {
   } catch (e) {
     // A signed-out session redirects to sign-in; that is not a failure.
     rethrowControlFlow(e);
+    // A check of the caller's access that could not be read: its own sentence.
+    const unchecked = uncheckedAccessResult(e, 'actions.labels');
+    if (unchecked) return unchecked;
     if (e instanceof ServiceError) {
       // internal_error's message is already the generic one (S13); its cause
       // stays in the server log, as the page's error boundary would log it.

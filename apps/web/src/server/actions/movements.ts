@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
+import { uncheckedAccessResult } from '@/server/lib/action-error-result';
 import { assertPermission, ServiceError, withContext } from '@/server/services/context';
 import { audit } from '@/server/services/audit';
 import { readInActiveOrg } from '@/server/services/lib/in-active-org';
@@ -129,6 +130,9 @@ export async function editMovementNoteAction(
     return ok({ note: nextNote });
   } catch (e) {
     rethrowControlFlow(e);
+    // A check of the caller's access that could not be read: its own sentence.
+    const unchecked = uncheckedAccessResult(e, 'actions.movements');
+    if (unchecked) return unchecked;
     if (e instanceof ServiceError) {
       return err(e.code, e.message);
     }

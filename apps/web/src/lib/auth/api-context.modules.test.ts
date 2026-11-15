@@ -46,11 +46,14 @@ function table(single: unknown, list: unknown[] = [], error: unknown = null) {
   const q: Record<string, unknown> = {};
   const self = () => q;
   for (const k of ['select', 'eq', 'is', 'not', 'in', 'limit', 'order']) q[k] = self;
-  q.maybeSingle = async () => ({ data: error ? null : single, error });
+  q.maybeSingle = async () => ({ data: error ? null : single, error, status: error ? 500 : 200 });
   q.then = (resolve: (v: unknown) => unknown) =>
-    Promise.resolve({ data: error ? null : list, error }).then(resolve);
+    Promise.resolve({ data: error ? null : list, error, status: error ? 500 : 200 }).then(resolve);
   return q;
 }
+
+/** A single-row fake that also answers its row as a one-row list (the membership choice reads lists). */
+const row = (r: unknown) => table(r, r ? [r] : []);
 
 function makeClient() {
   return {
@@ -61,9 +64,9 @@ function makeClient() {
           [],
           state.orgError,
         );
-      if (name === 'organization_members') return table({ organization_id: ORG_ID, role: 'staff' });
+      if (name === 'organization_members') return row({ organization_id: ORG_ID, role: 'staff' });
       if (name === 'user_profiles')
-        return table({
+        return row({
           id: USER_ID,
           email: 'user@example.com',
           default_organization_id: ORG_ID,

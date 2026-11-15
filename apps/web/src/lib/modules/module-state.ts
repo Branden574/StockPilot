@@ -1,5 +1,7 @@
 import { MODULE_REGISTRY, type ModuleId } from '@stockpilot/core';
 
+import { ACCESS_UNCHECKED_DIGEST } from '@/lib/known-error-states';
+
 /**
  * An organization's module state that could not be read, held as a refusal
  * instead of as "off" (docket S81).
@@ -36,9 +38,19 @@ import { MODULE_REGISTRY, type ModuleId } from '@stockpilot/core';
  * like PermissionsUnavailableError.
  */
 
-/** The module state could not be read: a refusal, never "the module is off". */
+/**
+ * The module state could not be read: a refusal, never "the module is off".
+ *
+ * `digest` is fixed so a page's error boundary can name this state. Thrown
+ * while a Server Component renders, the error reaches the browser only as
+ * its digest (Next keeps one an error already carries: lib/known-error-states
+ * has the detail), and the dashboard and root error cards then say "We
+ * couldn't check your access just now" with Try again, instead of the card
+ * for a crash. It changes nothing for a catch: this is not Next control flow.
+ */
 export class ModulesUnavailableError extends Error {
   readonly code = 'MODULES_UNAVAILABLE';
+  readonly digest = ACCESS_UNCHECKED_DIGEST;
 
   constructor() {
     super('Your access could not be checked. Please try again.');
@@ -166,4 +178,21 @@ export function moduleStateUnreadable(modules: ReadonlySet<ModuleId>, id: Module
     if (e instanceof ModulesUnavailableError) return true;
     throw e;
   }
+}
+
+/**
+ * A page gate's answer (checkModuleAccess, lib/modules/module-gate) for a
+ * page that asks about a module that is NOT its own gate: a form's extra
+ * fields, a card, a shortcut. True when the module is on, false when it is
+ * off, and ModulesUnavailableError when its state could not be read
+ * (`checkFailed`): the page then reaches its error state with Try again
+ * instead of being drawn as if the module were off.
+ *
+ * A page's OWN gate does not use this: it draws ModuleUnavailable, which has
+ * a "could not check" panel of its own. Pure, so a test that replaces
+ * checkModuleAccess keeps this rule.
+ */
+export function moduleAnswer(access: { enabled: boolean; checkFailed?: boolean }): boolean {
+  if (access.checkFailed) return refuse();
+  return access.enabled;
 }

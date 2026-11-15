@@ -467,11 +467,27 @@ describe('GET /auth/confirm names the account the link is for (S25)', () => {
     expect(html).toContain('Confirm your email change');
   });
 
-  it('an email change with nothing waiting (the change finished or was cancelled): the expired page, with no address and no form', async () => {
+  /**
+   * Runs one GET and returns its page. The info line about a pending change
+   * without a request time belongs to that one answer: every other expired
+   * answer writes no info line at all.
+   */
+  async function expiredPageWithoutInfoLine(query: string): Promise<{ status: number; html: string }> {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    try {
+      const res = await GET(getReq(query));
+      const html = await res.text();
+      expect(info).not.toHaveBeenCalled();
+      return { status: res.status, html };
+    } finally {
+      info.mockRestore();
+    }
+  }
+
+  it('an email change with nothing waiting (the change finished or was cancelled): the expired page, with no address and no form, and no info line', async () => {
     getUserById.mockResolvedValueOnce(account('new@example.com', { new_email: '' }));
-    const res = await GET(getReq(linkQuery({ type: 'email_change' })));
-    expect(res.status).toBe(200);
-    const html = await res.text();
+    const { status, html } = await expiredPageWithoutInfoLine(linkQuery({ type: 'email_change' }));
+    expect(status).toBe(200);
     expect(html).toContain('This link has expired or was already used');
     expect(html).not.toContain('new@example.com');
     expect(html).not.toContain('<form');
@@ -534,14 +550,14 @@ describe('GET /auth/confirm names the account the link is for (S25)', () => {
     await expectExpiredWithoutRequestTime('after a password change', {});
   });
 
-  it('an email change whose request time is far later than the link is a newer request: the expired page, and no report', async () => {
+  it('an email change whose request time is far later than the link is a newer request: the expired page, no report and no info line', async () => {
     getUserById.mockResolvedValueOnce(
       account('old@example.com', {
         new_email: 'new@example.com',
         email_change_sent_at: '2126-01-01T00:00:00Z',
       }),
     );
-    const html = await (await GET(getReq(linkQuery({ type: 'email_change' })))).text();
+    const { html } = await expiredPageWithoutInfoLine(linkQuery({ type: 'email_change' }));
     expect(html).toContain('This link has expired or was already used');
     expect(html).not.toContain('new@example.com');
     expect(reportError).not.toHaveBeenCalled();
@@ -559,7 +575,7 @@ describe('GET /auth/confirm names the account the link is for (S25)', () => {
     expect(verifyOtp).not.toHaveBeenCalled();
   });
 
-  it('an email change a newer request replaced: the expired page with neither address, so a link sent to a mistyped address never shows the corrected one', async () => {
+  it('an email change a newer request replaced: the expired page with neither address, so a link sent to a mistyped address never shows the corrected one, and no info line', async () => {
     const issued = nowSeconds() - 600;
     const r = signedRef({ type: 'email_change', tokenHash: HASH_A, userId: USER_A, issued });
     // The person corrected the change a minute later: GoTrue now holds the
@@ -570,9 +586,10 @@ describe('GET /auth/confirm names the account the link is for (S25)', () => {
         email_change_sent_at: new Date((issued + 60) * 1000).toISOString(),
       }),
     );
-    const res = await GET(getReq(linkQuery({ type: 'email_change', r })));
-    expect(res.status).toBe(200);
-    const html = await res.text();
+    const { status, html } = await expiredPageWithoutInfoLine(
+      linkQuery({ type: 'email_change', r }),
+    );
+    expect(status).toBe(200);
     expect(html).toContain('This link has expired or was already used');
     expect(html).not.toContain('corrected@example.com');
     expect(html).not.toContain('old@example.com');

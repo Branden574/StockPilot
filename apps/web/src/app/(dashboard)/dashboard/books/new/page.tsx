@@ -6,6 +6,7 @@ import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-heade
 import { forcedWarehouseId } from '@/lib/auth/warehouse';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { moduleAnswer } from '@/lib/modules/module-state';
 import { createClient } from '@/lib/supabase/server';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { CategoriesService } from '@/server/services/categories';
@@ -116,7 +117,9 @@ export default async function NewBookPage({
     customFieldsSvc.listDefinitions('item'),
   ]);
 
-  const { enabled: lotSerialEnabled } = await checkModuleAccess('lot_serial');
+  // moduleAnswer: a state that could not be read is this page's error state
+  // with Try again, never a form drawn as if the module were off.
+  const lotSerialEnabled = moduleAnswer(await checkModuleAccess('lot_serial'));
 
   // Same defaults resolution as /dashboard/inventory/new — see that
   // file for the precedence rationale.

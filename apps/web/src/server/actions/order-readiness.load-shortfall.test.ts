@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type ModuleId, type Role } from '@stockpilot/core';
 
 import { reportError } from '@/lib/error-reporter';
+import { UnreadableModuleSet } from '@/lib/modules/module-state';
 import { orderReadinessFacts, visibleItemFacts } from '@/test/order-readiness-facts';
 import { makeServiceContext, makeSupabaseStub, type QueryResult } from '@/test/supabase-mock';
 
@@ -159,6 +160,21 @@ describe('loadShortfallPoAction', () => {
     expect(reportError).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ tag: 'actions.orders.shortfall_po_suppliers', level: 'warning' }),
+    );
+  });
+
+  it('a module state the context could not read: nothing is read, it does not throw, and the failed check is reported', async () => {
+    const stub = setup();
+    (holder.ctx as { enabledModules: Set<ModuleId> }).enabledModules = new UnreadableModuleSet([]);
+    await expect(loadShortfallPoAction({ orderId: ORDER, supplierIds: [SUP] })).resolves.toEqual({
+      view: null,
+      supplierNames: null,
+    });
+    expect(stub.rpcCalls).toEqual([]);
+    expect(stub.fromCalls).toEqual([]);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'ModulesUnavailableError' }),
+      expect.objectContaining({ tag: 'actions.orders.shortfall_po_modules', level: 'warning' }),
     );
   });
 

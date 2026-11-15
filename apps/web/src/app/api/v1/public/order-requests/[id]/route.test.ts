@@ -46,6 +46,8 @@ function world(opts: {
   linkState?: { active: boolean; expires_at: string | null };
   /** The order's status (the map is for an order out for delivery). */
   status?: string;
+  /** What the returns module read resolves to; by default the enabled row. */
+  returnsModule?: { data: unknown; error: unknown };
 }) {
   const order = {
     id: ORDER_ID,
@@ -99,7 +101,10 @@ function world(opts: {
       error: null,
     },
     'warehouses.select': { data: { name: 'DC4' }, error: null },
-    'organization_modules.select': { data: { module_id: 'returns' }, error: null },
+    'organization_modules.select': (opts.returnsModule ?? {
+      data: { module_id: 'returns' },
+      error: null,
+    }) as never,
   });
   adminHolder.client = stub.client;
   return stub;
@@ -198,6 +203,56 @@ describe("public tracker: the requester's return link, side table first", () => 
     // The request's own track token still gets it.
     expect((await track(SIDE_TRACK)).json.returnPath).toBe(`/returns/request/${SIDE_RETURN}`);
     expect(JSON.stringify(byCatalog.json)).not.toContain(SIDE_RETURN);
+  });
+});
+
+describe("public tracker: the return link and the organization's returns module", () => {
+  it('the module on: the return link, and no "could not check" mark', async () => {
+    world({ sideTrack: SIDE_TRACK, sideReturn: SIDE_RETURN });
+    const res = await track(SIDE_TRACK);
+    expect(res.json.returnPath).toBe(`/returns/request/${SIDE_RETURN}`);
+    expect(res.json).not.toHaveProperty('returnPathUnavailable');
+  });
+
+  it('the module off (a read that answered with no enabled row): no return link, and no "could not check" mark', async () => {
+    world({
+      sideTrack: SIDE_TRACK,
+      sideReturn: SIDE_RETURN,
+      returnsModule: { data: null, error: null },
+    });
+    const res = await track(SIDE_TRACK);
+    expect(res.status).toBe(200);
+    expect(res.json.returnPath).toBeNull();
+    expect(res.json).not.toHaveProperty('returnPathUnavailable');
+  });
+
+  it('the module state could not be read: the order is still shown, no link is handed out, and the answer says the link could not be checked', async () => {
+    world({
+      sideTrack: SIDE_TRACK,
+      sideReturn: SIDE_RETURN,
+      returnsModule: { data: null, error: { message: 'upstream timeout', code: '57014' } },
+    });
+    const res = await track(SIDE_TRACK);
+    expect(res.status).toBe(200);
+    expect(res.json.id).toBe(ORDER_ID);
+    expect(res.json.returnPath).toBeNull();
+    expect(res.json.returnPathUnavailable).toBe(true);
+    expect(JSON.stringify(res.json)).not.toContain(SIDE_RETURN);
+  });
+
+  it('a caller who would get no return link anyway is told nothing about the module read', async () => {
+    const CATALOG = 'c'.repeat(64);
+    const stub = world({
+      sideTrack: SIDE_TRACK,
+      sideReturn: SIDE_RETURN,
+      catalogHash: sha256Hex(CATALOG),
+      returnsModule: { data: null, error: { message: 'upstream timeout', code: '57014' } },
+    });
+    const res = await track(CATALOG);
+    expect(res.status).toBe(200);
+    expect(res.json.returnPath).toBeNull();
+    expect(res.json).not.toHaveProperty('returnPathUnavailable');
+    expect(stub.fromCalls).not.toContain('organization_modules');
   });
 });
 

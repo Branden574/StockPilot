@@ -268,12 +268,15 @@ export async function notifyAutoArchived(
   orgId: string,
   items: Array<{ id: string; name: string }>,
 ): Promise<void> {
+  // Never a support Act-as seat (a real owner membership for its 45 minutes):
+  // the platform admin's own account is not told (docket S36).
   const { data: members } = await admin
     .from('organization_members')
     .select('user_id')
     .eq('organization_id', orgId)
     .in('role', ['owner', 'admin', 'manager'])
-    .not('accepted_at', 'is', null);
+    .not('accepted_at', 'is', null)
+    .is('impersonation_expires_at', null);
   const userIds = ((members ?? []) as Array<{ user_id: string }>).map((m) => m.user_id);
   if (userIds.length === 0) return;
 

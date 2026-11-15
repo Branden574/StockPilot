@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError } from '@/lib/error-reporter';
-import { actionErrorResult } from '@/server/lib/action-error-result';
+import { actionErrorResult, uncheckedAccessResult } from '@/server/lib/action-error-result';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError, withContext } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
@@ -88,6 +88,14 @@ function orderSubmissionActionError(
   // session was read), so a tab left in another workspace drops it (core
   // orderCallResultForOrganization; review round 1).
   const answeredBy = organizationId ? { organizationId } : {};
+  // A check of the caller's access that could not be read: its own sentence,
+  // with what this page reads on its other failures (the reason, and the
+  // organization that answered).
+  const unchecked = uncheckedAccessResult(e, tag, {
+    organizationId,
+    details: { reason: 'failed', ...answeredBy },
+  });
+  if (unchecked) return unchecked;
   if (e instanceof ServiceError && e.code !== 'internal_error') {
     return err(e.code, e.message, { ...(e.details ?? {}), ...answeredBy });
   }
@@ -231,6 +239,11 @@ const expectedNeededBySchema = z.string().datetime({ offset: true }).nullable();
  */
 function neededByActionError(e: unknown): ActionResult<never> {
   rethrowControlFlow(e);
+  // A check of the caller's access that could not be read: its own sentence.
+  const unchecked = uncheckedAccessResult(e, 'actions.orders.needed_by', {
+    details: { reason: 'failed' },
+  });
+  if (unchecked) return unchecked;
   if (e instanceof ServiceError && e.code !== 'internal_error') {
     return err(e.code, e.message, e.details);
   }

@@ -33,14 +33,23 @@ export async function switchOrganizationAction(input: {
     const session = await requireOrgContext();
     const supabase = await createClient();
 
-    // Membership check before we touch the profile row.
-    const { data: member } = await supabase
+    // Membership check before we touch the profile row. A read that fails is
+    // not "no membership": it answers internal_error (try again), never the
+    // forbidden sentence below, and switches nothing. The code only: the
+    // message can quote request details.
+    const { data: member, error: memberError } = await supabase
       .from('organization_members')
       .select('organization_id')
       .eq('user_id', session.userId)
       .eq('organization_id', parsed.data.organizationId)
       .not('accepted_at', 'is', null)
       .maybeSingle();
+    if (memberError) {
+      throw new ServiceError(
+        'internal_error',
+        `membership read failed: ${memberError.code || 'unknown'}`,
+      );
+    }
     if (!member) {
       return err('forbidden', "You don't have an accepted membership in that organization.");
     }

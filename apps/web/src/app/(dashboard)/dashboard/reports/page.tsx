@@ -24,6 +24,7 @@ import { ReportsHubGlass } from '@/components/reports/reports-hub-glass';
 import { IntentLink } from '@/components/ui/intent-link';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { moduleAnswer } from '@/lib/modules/module-state';
 import { reportModules, type ReportSlug } from '@/lib/reports/report-access';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { REPORTS_TOUR } from '@/lib/onboarding/tours';
@@ -118,7 +119,9 @@ export default async function ReportsPage() {
   // data path check again.
   const optional = ['lot_serial', 'orders', 'books', 'bundles', 'purchase_orders'] as const;
   const access = await Promise.all(optional.map((m) => checkModuleAccess(m)));
-  const enabled = new Set<string>(optional.filter((_, i) => access[i]!.enabled));
+  // moduleAnswer: a state that could not be read is this page's error state
+  // with Try again, never a hub that leaves cards out as if modules were off.
+  const enabled = new Set<string>(optional.filter((_, i) => moduleAnswer(access[i]!)));
   const all: Report[] = [
     ...REPORTS,
     {

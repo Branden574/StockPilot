@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { classifyMfaCodeError } from '@/server/actions/auth-error-classify';
-import { unexpectedActionError } from '@/server/lib/action-error-result';
+import { uncheckedAccessResult, unexpectedActionError } from '@/server/lib/action-error-result';
 import { audit } from '@/server/services/audit';
 import { assertCurrentAal2, ServiceError, withContext } from '@/server/services/context';
 import { dispatchEvent } from '@/server/services/integration-events';
@@ -150,6 +150,9 @@ export async function enrollFactorAction(): Promise<
     });
   } catch (e) {
     rethrowControlFlow(e);
+    // A check of the caller's access that could not be read: its own sentence.
+    const unchecked = uncheckedAccessResult(e, 'mfa.action');
+    if (unchecked) return unchecked;
     if (e instanceof ServiceError) return err(e.code, e.message);
     // Don't console.error raw exception — Supabase auth errors can
     // include factor IDs and challenge tokens. Funnel through the
@@ -285,6 +288,9 @@ export async function verifyEnrollmentAction(input: {
     return ok(undefined);
   } catch (e) {
     rethrowControlFlow(e);
+    // A check of the caller's access that could not be read: its own sentence.
+    const unchecked = uncheckedAccessResult(e, 'mfa.action');
+    if (unchecked) return unchecked;
     if (e instanceof ServiceError) return err(e.code, e.message);
     // Don't console.error raw exception — Supabase auth errors can
     // include factor IDs and challenge tokens. Funnel through the
@@ -364,6 +370,9 @@ export async function unenrollFactorAction(input: {
     return ok(undefined);
   } catch (e) {
     rethrowControlFlow(e);
+    // A check of the caller's access that could not be read: its own sentence.
+    const unchecked = uncheckedAccessResult(e, 'mfa.action');
+    if (unchecked) return unchecked;
     if (e instanceof ServiceError) return err(e.code, e.message);
     // Don't console.error raw exception — Supabase auth errors can
     // include factor IDs and challenge tokens. Funnel through the
@@ -488,6 +497,9 @@ export async function challengeFactorAction(input: {
     return err('internal_error', MFA_CODE_NOT_CHECKED);
   } catch (e) {
     rethrowControlFlow(e);
+    // A check of the caller's access that could not be read: its own sentence.
+    const unchecked = uncheckedAccessResult(e, 'mfa.action');
+    if (unchecked) return unchecked;
     if (e instanceof ServiceError) return err(e.code, e.message);
     // Don't console.error raw exception — Supabase auth errors can
     // include factor IDs and challenge tokens. Funnel through the
@@ -524,6 +536,13 @@ export async function setOrgMfaPolicyAction(input: {
       .select('mfa_policy')
       .eq('id', ctx.organizationId)
       .maybeSingle();
+    // A save of the policy the organization already has changes nothing: no
+    // update, no audit row, no security event, no refresh. Only a policy that
+    // was read counts as the same one; when the read gave no row the update
+    // below runs.
+    if (prev && prev.mfa_policy === parsed.data.policy) {
+      return ok(undefined);
+    }
     const { data: updated, error } = await supabase
       .from('organizations')
       .update({ mfa_policy: parsed.data.policy })
@@ -561,6 +580,9 @@ export async function setOrgMfaPolicyAction(input: {
     return ok(undefined);
   } catch (e) {
     rethrowControlFlow(e);
+    // A check of the caller's access that could not be read: its own sentence.
+    const unchecked = uncheckedAccessResult(e, 'mfa.action');
+    if (unchecked) return unchecked;
     if (e instanceof ServiceError) return err(e.code, e.message);
     // Don't console.error raw exception — Supabase auth errors can
     // include factor IDs and challenge tokens. Funnel through the

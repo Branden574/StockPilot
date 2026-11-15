@@ -14,6 +14,7 @@ import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
 import { StatePanel } from '@/components/patterns/state-panel';
 import { StatStrip, StatStripItem } from '@/components/patterns/stat-strip';
 import { PoApprovalPanel } from '@/components/settings/po-approval-panel';
+import { SettingsReadFailed } from '@/components/settings/settings-read-failed';
 import { Button } from '@/components/ui/button';
 import { PoInstantTable, PoListTable, type PoInstantRow } from '@/components/po/po-instant-table';
 import { PoSearch } from '@/components/po/po-search';
@@ -120,18 +121,32 @@ export default async function PurchaseOrdersPage({
       return resolveOrgTimezone(null);
     });
 
-  // Approval-threshold panel (owner/admin only). Read fails SOFT to "panel
-  // shows 0" — the enforcement read in the service is the fail-closed one.
+  // Approval-threshold panel (owner/admin only). The enforcement read in the
+  // service is the fail-closed one; this read only seeds the panel. The
+  // panel's Save writes the amount shown, and 0 turns approval off, so a
+  // failed read must not seed it with 0: the panel's place shows the settings
+  // failed-read state with Try again instead, and the list still renders. No
+  // row is not a failed read: approval off, never configured.
   const isAdmin = orgCtx.role === 'owner' || orgCtx.role === 'admin';
   let approvalThreshold = 0;
+  let approvalReadFailed = false;
   if (isAdmin) {
     const supabase = await createClient();
-    const { data: moduleRow } = await supabase
+    const { data: moduleRow, error: moduleError } = await supabase
       .from('organization_modules')
       .select('settings')
       .eq('organization_id', orgCtx.organizationId)
       .eq('module_id', 'purchase_orders')
       .maybeSingle();
+    if (moduleError) {
+      approvalReadFailed = true;
+      void reportError(new Error('purchase order approval threshold read failed'), {
+        tag: 'purchase_orders.approval_threshold.read_failed',
+        level: 'warning',
+        organizationId: orgCtx.organizationId,
+        extra: { code: moduleError.code || 'unknown' },
+      });
+    }
     const raw = Number(
       ((moduleRow as { settings?: Record<string, unknown> } | null)?.settings ?? {})
         .approvalThresholdAmount,
@@ -550,7 +565,15 @@ export default async function PurchaseOrdersPage({
 
       {list}
 
-      {isAdmin && <PoApprovalPanel initialAmount={approvalThreshold} />}
+      {isAdmin &&
+        (approvalReadFailed ? (
+          <SettingsReadFailed
+            title="We couldn't load the approval threshold"
+            description="Something went wrong reading it. This is usually temporary, so try again in a moment."
+          />
+        ) : (
+          <PoApprovalPanel initialAmount={approvalThreshold} />
+        ))}
     </div>
   );
 }

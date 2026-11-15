@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache';
 import { compareSizeValues, err, ok, uuidSchema, type ActionResult } from '@stockpilot/core';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
+import { uncheckedAccessResult } from '@/server/lib/action-error-result';
 import { assertPermission, ServiceError, withContext } from '@/server/services/context';
 import { ProductGroupsService } from '@/server/services/product-groups';
 
@@ -80,6 +81,9 @@ export async function loadGroupVariantsAction(
     });
   } catch (e) {
     rethrowControlFlow(e);
+    // A check of the caller's access that could not be read: its own sentence.
+    const unchecked = uncheckedAccessResult(e, 'actions.product_groups');
+    if (unchecked) return unchecked;
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);
     return err('internal_error', 'Something went wrong. Please try again.');
@@ -116,6 +120,9 @@ export async function archiveProductGroupAction(
     return ok({ id: parsed.data });
   } catch (e) {
     rethrowControlFlow(e);
+    // A check of the caller's access that could not be read: its own sentence.
+    const unchecked = uncheckedAccessResult(e, 'actions.product_groups');
+    if (unchecked) return unchecked;
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);
     return err('internal_error', 'Something went wrong. Please try again.');
@@ -135,6 +142,9 @@ export async function restoreProductGroupAction(
     return ok({ id: parsed.data });
   } catch (e) {
     rethrowControlFlow(e);
+    // A check of the caller's access that could not be read: its own sentence.
+    const unchecked = uncheckedAccessResult(e, 'actions.product_groups');
+    if (unchecked) return unchecked;
     if (e instanceof ServiceError) return err(e.code, e.message);
     console.error(e);
     return err('internal_error', 'Something went wrong. Please try again.');

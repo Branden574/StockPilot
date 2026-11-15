@@ -384,7 +384,13 @@ beforeEach(() => {
   h.failingDefaultMemberRead = false;
   h.inserts.length = 0;
   h.updates.length = 0;
-  getUserById.mockResolvedValue(authUser());
+  // Once both links of a request are minted the account holds the change with
+  // the time the auth server recorded for it (mintEmailChangeLinks reads it back).
+  getUserById.mockImplementation(async () =>
+    generateLink.mock.calls.length >= 2
+      ? authUser({ new_email: NEW, email_change_sent_at: new Date().toISOString() })
+      : authUser(),
+  );
   sendEmail.mockResolvedValue({ ok: true, id: 'msg' });
   rpc.mockImplementation(async (name: string) => {
     if (name === 'auth_user_exists_by_email') return { data: false, error: null };
