@@ -40,6 +40,10 @@ import { RELEASES } from './registry';
  * Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15): the
  * settings and module check releases are published later, directly above this
  * release and below the Liquid Glass draft. Each changed line has its own note.
+ *
+ * Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15): the
+ * navigation release is published later still, directly below the draft and
+ * above the settings release. Each changed line has its own note.
  */
 const ID = 'count-read-rule-2026-11';
 const LIST_ID = 'count-list-shows-readable-warehouses';
@@ -49,7 +53,10 @@ const PHONE_SCREENS_ID = 'phone-screens-by-access-2026-11';
 // Added by docs/whats-new-unreadable-access-and-settings (2026-11-15): the settings release (whoever can open the settings pages and panels it names) and the module check release (every member), published later, directly above this one.
 const SETTINGS_ID = 'settings-not-loaded-2026-11';
 const MODULE_CHECK_ID = 'module-check-try-again-2026-11';
-const newerRead = [SETTINGS_ID, MODULE_CHECK_ID].map((releaseId) => ({
+// Added by docs/whats-new-navigation-keeps-choices (2026-11-15): the navigation release (owners and admins who can open Settings, Navigation), published later, directly above the settings release.
+const NAVIGATION_ID = 'navigation-keeps-choices-2026-11';
+// Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: without it): the navigation release is published later, at the top, so it is read with the newer releases.
+const newerRead = [NAVIGATION_ID, SETTINGS_ID, MODULE_CHECK_ID].map((releaseId) => ({
   release_id: releaseId,
   revision: 1,
   dismissed_at: null,
@@ -100,14 +107,17 @@ function readerText(r: Release): string[] {
 
 describe('the count read rule release: order, status and date', () => {
   // Renamed by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: "is published once, as revision 1, directly below the Liquid Glass draft and above the email change release of the same minute, the newest published release"): the settings and module check releases are published later, directly below the draft and above this one, and the settings release is the newest published. Claim kept: published once, as revision 1, directly above the email change release of the same minute.
-  it('is published once, as revision 1, directly below the settings and module check releases (published later, below the Liquid Glass draft at the top) and above the email change release of the same minute', () => {
+  // Renamed by docs/whats-new-navigation-keeps-choices (2026-11-15; was: "is published once, as revision 1, directly below the settings and module check releases (published later, below the Liquid Glass draft at the top) and above the email change release of the same minute"): the navigation release is published later still, above the settings release. Claim kept: published once, as revision 1, directly above the email change release of the same minute.
+  it('is published once, as revision 1, directly below the navigation, settings and module check releases (published later, below the Liquid Glass draft at the top) and above the email change release of the same minute', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: RELEASES.slice(0, 4), without them): the settings and module check releases are published later, at the top, directly below the Liquid Glass draft, so every position below them moves down by two.
-    expect(RELEASES.slice(0, 6).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: RELEASES.slice(0, 6), without it): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES.slice(0, 7).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      [NAVIGATION_ID, 'published'],
       [SETTINGS_ID, 'published'],
       [MODULE_CHECK_ID, 'published'],
       [ID, 'published'],
@@ -116,7 +126,8 @@ describe('the count read rule release: order, status and date', () => {
     ]);
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
       // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: ID): the settings release is published after it, at the top, the newest published release.
-      SETTINGS_ID,
+      // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: SETTINGS_ID): the navigation release is published after it, at the top, the newest published release.
+      NAVIGATION_ID,
     );
   });
 
@@ -127,10 +138,12 @@ describe('the count read rule release: order, status and date', () => {
     expect(at).toBeGreaterThan(Date.parse('2026-11-15T00:02:00Z'));
     expect(at).toBeLessThanOrEqual(Date.now());
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    expect(RELEASES[4]!.publishedAt).toBe(release().publishedAt);
+    // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[5]!.publishedAt).toBe(release().publishedAt);
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    for (const r of RELEASES.slice(5)) {
+    // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(6)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
