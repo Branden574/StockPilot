@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CatalogGrid } from './catalog-grid';
 import { CartProvider, initialCartState } from './cart-context';
@@ -33,6 +33,19 @@ function item(over: Partial<CatalogItem>): CatalogItem {
     ...over,
   };
 }
+
+// Every test starts from an empty cart. The cart saves a draft in
+// localStorage 250 ms after a change, on real time, under the one warehouse
+// every card here uses. Unmounting cancels a save still waiting; clearing
+// localStorage removes one that already ran (a slow machine can take 250 ms
+// between Add and the unmount). Without this, the next card restores that
+// draft and draws a stepper where the test expects Add.
+function freshPage() {
+  cleanup();
+  localStorage.clear();
+}
+beforeEach(freshPage);
+afterEach(freshPage);
 
 function renderCard(it: CatalogItem) {
   return render(
