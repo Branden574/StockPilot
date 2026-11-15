@@ -21,26 +21,26 @@ import { buildReleaseList, visibleReleases } from './logic';
 import { RELEASES } from './registry';
 
 /**
- * Added by docs/whats-new-count-read-rule (2026-11-15): the release for #558
- * (squash 29cb97190, web only, no phone update, no migration), published at
- * the top, directly below the Liquid Glass draft and above the phone screens
- * by access release. Three entries:
+ * Added by docs/whats-new-count-read-rule (2026-11-15): the cycle counts
+ * release for #558 (squash 29cb97190, web only, no phone update, no
+ * migration), published at the top, directly below the Liquid Glass draft.
+ * Two entries, for organizations with Cycle counts on:
  *
  *  - a viewer who can open Cycle counts sees their warehouses' counts in the
  *    count list (whoever can open Cycle counts);
  *  - a count with no warehouse of its own shows to the person it is assigned
- *    to (whoever assigns counts);
- *  - an email change still waiting when the password is changed shows as
- *    Expired in Settings, Profile (every member of an organization the
- *    release reaches).
+ *    to (whoever can open Cycle counts or assigns counts).
  *
- * The release is addressed to organizations with Cycle counts on. Its own
+ * The other change of #558, the Email card in Settings, Profile, is its own
+ * release for every organization (email-change-expired-2026-11,
+ * registry.email-change-expired.test.ts). Both share one minute; this one is
+ * the newer of the two, so it is the notice for a reader both reach. Its own
  * file, so the release tests other open branches edit stay as they are.
  */
 const ID = 'count-read-rule-2026-11';
 const LIST_ID = 'count-list-shows-readable-warehouses';
 const ASSIGNEE_ID = 'count-without-warehouse-follows-assignee';
-const EMAIL_ID = 'email-change-expired-after-password-change';
+const EMAIL_RELEASE_ID = 'email-change-expired-2026-11';
 const PHONE_SCREENS_ID = 'phone-screens-by-access-2026-11';
 
 const release = () => RELEASES.find((r) => r.id === ID)!;
@@ -52,7 +52,11 @@ const viewer = (
   enabledModules: ReleaseViewer['enabledModules'],
 ): ReleaseViewer => ({ role, permissions, enabledModules });
 const EVERY_MODULE = Object.keys(MODULE_REGISTRY) as ModuleId[];
+const NO_CYCLE_COUNTS = EVERY_MODULE.filter((m) => m !== 'cycle_counts');
 const owner = viewer('owner', [...PERMISSIONS], EVERY_MODULE);
+const admin = viewer('admin', ROLE_PERMISSIONS.admin, EVERY_MODULE);
+const staff = viewer('staff', ROLE_PERMISSIONS.staff, ['cycle_counts']);
+const defaultViewer = viewer('viewer', ROLE_PERMISSIONS.viewer, ['cycle_counts']);
 const member = viewer('viewer', [], []);
 const entriesFor = (v: ReleaseViewer) =>
   visibleReleases(RELEASES, v)
@@ -81,39 +85,41 @@ function readerText(r: Release): string[] {
 }
 
 describe('the count read rule release: order, status and date', () => {
-  it('is published once, as revision 1, directly below the Liquid Glass draft, the newest published release', () => {
+  it('is published once, as revision 1, directly below the Liquid Glass draft and above the email change release of the same minute, the newest published release', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
-    expect(RELEASES.slice(0, 3).map((r) => [r.id, r.status])).toEqual([
+    expect(RELEASES.slice(0, 4).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
       [ID, 'published'],
+      [EMAIL_RELEASE_ID, 'published'],
       [PHONE_SCREENS_ID, 'published'],
     ]);
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
   });
 
-  it('is dated the whole minute after #558 went live, in the past, with the draft placeholder at that minute and no later release below', () => {
+  it('is dated the whole minute after #558 went live, in the past, the minute of the email change release, with the draft placeholder at or after it and no later release below', () => {
     // #558 is live in production since 2026-11-15 00:02Z.
     expect(release().publishedAt).toBe('2026-11-15T00:03:00Z');
     const at = Date.parse(release().publishedAt);
     expect(at).toBeGreaterThan(Date.parse('2026-11-15T00:02:00Z'));
     expect(at).toBeLessThanOrEqual(Date.now());
-    expect(RELEASES[0]!.publishedAt).toBe(release().publishedAt);
-    for (const r of RELEASES.slice(2)) {
+    expect(RELEASES[2]!.publishedAt).toBe(release().publishedAt);
+    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
+    for (const r of RELEASES.slice(3)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
 
-  it('parses under the shared schema, in plain text, with its three entries in order', () => {
+  it('parses under the shared schema, in plain text, with its two entries in order and no email entry', () => {
     expect(releaseSchema.safeParse(release()).success).toBe(true);
     for (const text of readerText(release())) expect(text).not.toMatch(/[<>]/);
     expect(release().entries.map((e) => [e.id, e.category, e.area])).toEqual([
       [LIST_ID, 'fixed', 'Cycle counts'],
       [ASSIGNEE_ID, 'improved', 'Cycle counts'],
-      [EMAIL_ID, 'fixed', 'Account'],
     ]);
+    expect(readerText(release()).join(' ')).not.toMatch(/email|password/i);
   });
 });
 
@@ -125,7 +131,7 @@ describe('the count read rule release: the words', () => {
     );
   });
 
-  it("says a viewer sees their warehouses' counts in the list", () => {
+  it("says a viewer sees their warehouses' counts in the list, and that the web list is unchanged for everyone else", () => {
     const e = entry(LIST_ID);
     expect(e.title).toBe("Viewers see their warehouses' counts in the count list");
     expect(e.whatChanged).toBe(
@@ -134,13 +140,14 @@ describe('the count read rule release: the words', () => {
     expect(e.whyItMatters).toBe(
       "The list showed only counts in warehouses a member can change, so a viewer's list was empty, although each of those counts opened from a link.",
     );
+    // Only the web list: the mobile app's downloaded list follows the second entry.
     expect(e.howItAffectsYou).toBe(
-      'Staff, managers and admins see the same counts in the list as before. Who can enter numbers in a count is unchanged.',
+      'Staff, managers and admins see the same counts in the web list as before. Who can enter numbers in a count is unchanged.',
     );
     expect(e.whatToDo).toBe('No action needed.');
   });
 
-  it('says a count with no warehouse of its own shows to the person it is assigned to, and what to do', () => {
+  it('says a count with no warehouse of its own shows to the person it is assigned to, and what the assigner and the counter do', () => {
     const e = entry(ASSIGNEE_ID);
     expect(e.title).toBe(
       'A count with no warehouse of its own shows to the person it is assigned to',
@@ -152,34 +159,16 @@ describe('the count read rule release: the words', () => {
       "The count list, the count's page and the mobile app each decided this in their own way, so the same count could show in one place and not in another.",
     );
     expect(e.howItAffectsYou).toBe(
-      'A count of this kind that is not assigned no longer shows to members limited to some warehouses, and its link opens Page not found for them. A member with no warehouse sees no counts, including one assigned to them. A count in one warehouse shows to members who can see that warehouse, assigned or not.',
+      'A count of this kind that is not assigned shows only to owners, admins, managers and members with access to every warehouse. For anyone else it is not in the list and its link opens Page not found. A member with no warehouse sees no counts, including one assigned to them. A count in one warehouse shows to members who can see that warehouse, assigned or not.',
     );
     expect(e.whatToDo).toBe(
-      'Assign such a count to the person who will count it: open the count and choose them under Assigned to.',
+      'If you assign counts, assign such a count to the person who will count it: open the count and choose them under Assigned to. If a count you were asked to do is missing from your list or opens Page not found, ask a manager to assign it to you.',
     );
   });
 
-  it('says a waiting email change shows as Expired after a password change, with the three buttons by name', () => {
-    const e = entry(EMAIL_ID);
-    expect(e.title).toBe(
-      'An email change still waiting when you change your password now shows as Expired',
-    );
-    expect(e.whatChanged).toBe(
-      'If you change your password while an email change is still waiting to be confirmed, Settings, Profile on the web now shows that change under Email as Expired, with Resend verification, Use a different address and Cancel change.',
-    );
-    expect(e.whyItMatters).toBe(
-      'A password change ends the verification links that were sent, and the Email card then showed no pending change, so there was nothing to resend or cancel.',
-    );
-    expect(e.howItAffectsYou).toBe(
-      'Your account keeps using your current address until both addresses are confirmed. Resend verification sends new links to both addresses, and Cancel change drops the change.',
-    );
-    expect(e.whatToDo).toBe(
-      'If you changed your password while an email change was waiting, open Settings, Profile and resend or cancel it. Otherwise no action is needed.',
-    );
-  });
-
-  it('never calls a recorded quantity a book, and keeps to what people see', () => {
+  it('says what such a count shows to now, never who it showed to before', () => {
     const text = readerText(release()).join(' ');
+    expect(text).not.toMatch(/no longer/i);
     expect(text).not.toMatch(/\bbook(s|ed)?\b/i);
     expect(text).not.toMatch(/secur|vulnerab|exploit|leak|expos|attack|breach|unauthori/i);
     expect(text).not.toMatch(/[!\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u);
@@ -194,69 +183,50 @@ describe('the count read rule release: who is told', () => {
       anyPermission: ['cycle_counts:read', 'stock:adjust'],
       modules: ['cycle_counts'],
     });
-    expect(entry(LIST_ID).link).toEqual({
-      href: '/dashboard/cycle-counts',
-      label: 'Open Cycle counts',
-    });
-    // Whoever assigns counts.
+    // Whoever can open Cycle counts (the counter) and whoever assigns counts.
     expect(entry(ASSIGNEE_ID).audience).toEqual({
-      anyPermission: ['cycle_counts:assign'],
+      anyPermission: ['cycle_counts:read', 'stock:adjust', 'cycle_counts:assign'],
       modules: ['cycle_counts'],
     });
-    expect(entry(ASSIGNEE_ID).link).toEqual({
-      href: '/dashboard/cycle-counts',
-      label: 'Open Cycle counts',
-    });
-    // Every member the release reaches; the page is open to every member.
-    expect(entry(EMAIL_ID).audience).toBeUndefined();
-    expect(entry(EMAIL_ID).link).toEqual({
-      href: '/dashboard/settings/profile',
-      label: 'Open Profile settings',
-    });
+    for (const e of release().entries) {
+      expect(e.link, e.id).toEqual({ href: '/dashboard/cycle-counts', label: 'Open Cycle counts' });
+    }
   });
 
   it('reaches each reader with the entries that are theirs, and nobody where Cycle counts is off', () => {
-    expect(entriesFor(owner)).toEqual([LIST_ID, ASSIGNEE_ID, EMAIL_ID]);
+    expect(entriesFor(owner)).toEqual([LIST_ID, ASSIGNEE_ID]);
+    expect(entriesFor(admin)).toEqual([LIST_ID, ASSIGNEE_ID]);
     expect(entriesFor(viewer('manager', ROLE_PERMISSIONS.manager, ['cycle_counts']))).toEqual([
       LIST_ID,
       ASSIGNEE_ID,
-      EMAIL_ID,
     ]);
-    expect(entriesFor(viewer('staff', ROLE_PERMISSIONS.staff, ['cycle_counts']))).toEqual([
-      LIST_ID,
-      EMAIL_ID,
-    ]);
+    // Staff count: the second entry tells them what to do when a count is missing.
+    expect(entriesFor(staff)).toEqual([LIST_ID, ASSIGNEE_ID]);
     // A viewer given "View cycle counts" is the reader the first entry is about.
     expect(entriesFor(viewer('viewer', ['cycle_counts:read'], ['cycle_counts']))).toEqual([
       LIST_ID,
-      EMAIL_ID,
+      ASSIGNEE_ID,
     ]);
-    expect(entriesFor(viewer('viewer', ROLE_PERMISSIONS.viewer, ['cycle_counts']))).toEqual([
-      EMAIL_ID,
+    // Someone who assigns counts and cannot open the list is told the second entry.
+    expect(entriesFor(viewer('manager', ['cycle_counts:assign'], ['cycle_counts']))).toEqual([
+      ASSIGNEE_ID,
     ]);
-    expect(
-      entriesFor(
-        viewer(
-          'owner',
-          [...PERMISSIONS],
-          EVERY_MODULE.filter((m) => m !== 'cycle_counts'),
-        ),
-      ),
-    ).toEqual([]);
+    // A viewer by default cannot open Cycle counts: nothing of this release.
+    expect(entriesFor(defaultViewer)).toEqual([]);
+    expect(entriesFor(viewer('owner', [...PERMISSIONS], NO_CYCLE_COUNTS))).toEqual([]);
+    expect(entriesFor(viewer('admin', ROLE_PERMISSIONS.admin, NO_CYCLE_COUNTS))).toEqual([]);
     expect(entriesFor(member)).toEqual([]);
   });
 
-  it('is the newest notice for a reader it reaches, and changes nothing for a reader it does not', () => {
-    expect(buildReleaseList(RELEASES, owner, [], null).latestUnread?.id).toBe(ID);
-    expect(
-      buildReleaseList(
-        RELEASES,
-        viewer('staff', ROLE_PERMISSIONS.staff, ['cycle_counts']),
-        [],
-        null,
-      ).latestUnread?.id,
-    ).toBe(ID);
-    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(PHONE_SCREENS_ID);
+  it('is the newest notice for a reader it reaches, and a reader it does not reach is told the email change release', () => {
+    for (const v of [owner, admin, staff]) {
+      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
+    }
+    for (const v of [defaultViewer, member, viewer('owner', [...PERMISSIONS], NO_CYCLE_COUNTS)]) {
+      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(
+        EMAIL_RELEASE_ID,
+      );
+    }
   });
 });
 
@@ -285,7 +255,7 @@ describe('the count read rule release: the code the words rest on', () => {
     expect(mayReadCount(none, { warehouse_id: null, assigned_to: 'u1' })).toBe(false);
   });
 
-  it('the list, the count page and the phone sync all ask that rule, by the warehouses a member can read', () => {
+  it('the web list, the phone list, the count page and the phone sync all ask that rule, by the warehouses a member can read', () => {
     const service = source('server/services/cycle-counts.ts');
     expect(service).toContain('const scope = await readCountScope(this.ctx);');
     expect(service.split('await this.assertMayRead(h);').length - 1).toBe(2);
@@ -293,10 +263,16 @@ describe('the count read rule release: the code the words rest on', () => {
     expect(source('server/services/lib/count-read-scope.ts')).toContain(
       'return countReadScope(access, ctx.userId);',
     );
+    // The mobile app's online list is the same list read.
+    expect(source('app/api/v1/cycle-counts/route.ts')).toContain(
+      'const result = await svc.listPage(',
+    );
+    // Its downloaded list is what the sync is sent.
     expect(source('app/api/v1/mobile/snapshot/route.ts')).toContain(
       'const countScope = countReadScope(access, ctx.userId);',
     );
-    // A viewer reads their assigned warehouses and can change none.
+    // A viewer reads their assigned warehouses and can change none; for staff
+    // the two sets are the same, so the web list is unchanged for them.
     expect(source('lib/auth/warehouse.ts')).toContain(
       "const writableIds = c.role === 'viewer' ? [] : readableIds;",
     );
@@ -321,20 +297,5 @@ describe('the count read rule release: the code the words rest on', () => {
     // Assigning is a manager's default permission, and staff do not hold it.
     expect(hasPermission('manager', 'cycle_counts:assign')).toBe(true);
     expect(hasPermission('staff', 'cycle_counts:assign')).toBe(false);
-  });
-
-  it('the Email card shows a change held without a request time as Expired, with the three buttons', () => {
-    const card = source('components/settings/email-settings-card.tsx');
-    expect(card).toContain('if (!props.pendingEmail) return null;');
-    expect(card).toContain('pending.expiresAt === null ||');
-    expect(card).toContain("{expired ? 'Expired' : 'Pending'}");
-    for (const label of ['Resend verification', 'Use a different address', 'Cancel change']) {
-      expect(card, label).toContain(label);
-      expect(entry(EMAIL_ID).whatChanged, label).toContain(label);
-    }
-    expect(card).toContain('Your account keeps using ${props.email} until both are confirmed.');
-    const page = source('app/(dashboard)/dashboard/settings/profile/page.tsx');
-    expect(page).toContain('title="Email"');
-    expect(page).toContain('<EmailSettingsCard');
   });
 });

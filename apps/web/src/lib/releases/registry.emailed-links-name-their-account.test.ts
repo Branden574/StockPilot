@@ -69,15 +69,16 @@ describe('the emailed links release', () => {
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: every pinned position one place higher): the order request alerts release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: every pinned position one place higher): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: every pinned position one place higher): the count read rule release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[6]?.id).toBe(ID);
-    expect(RELEASES[7]?.id).toBe('cycle-count-already-released-2026-11');
+    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: every pinned position two places higher): the count read rule and email change releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    expect(RELEASES[7]?.id).toBe(ID);
+    expect(RELEASES[8]?.id).toBe('cycle-count-already-released-2026-11');
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: this release, the newest published): the phone authenticator code and access check releases are published later, directly above it.
     // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: RELEASES.slice(1, 3), without it, and the phone authenticator code release the newest published): the order request alerts release is published later, directly above the phone authenticator code release.
     // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: RELEASES.slice(1, 4), the order request alerts release and the two phone releases of 2026-11-13): the phone screens by access release is published later, at the top, directly above them.
-    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: RELEASES.slice(1, 5), without it): the count read rule release is published later, at the top, directly above the phone screens by access release.
-    expect(RELEASES.slice(1, 6).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: RELEASES.slice(1, 5), without them): the count read rule and email change releases are published later, at the top, directly above the phone screens by access release.
+    expect(RELEASES.slice(1, 7).map((r) => [r.id, r.status])).toEqual([
       ['count-read-rule-2026-11', 'published'],
+      ['email-change-expired-2026-11', 'published'],
       ['phone-screens-by-access-2026-11', 'published'],
       ['order-request-alerts-follow-approve-2026-11', 'published'],
       ['phone-authenticator-code-2026-11', 'published'],
@@ -98,8 +99,8 @@ describe('the emailed links release', () => {
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: every pinned position one place higher): the order request alerts release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: every pinned position one place higher): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: every pinned position one place higher): the count read rule release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(7)) {
+    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: every pinned position two places higher): the count read rule and email change releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    for (const r of RELEASES.slice(8)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThanOrEqual(
         Date.parse(r.publishedAt),
       );
@@ -142,9 +143,10 @@ describe('the emailed links release', () => {
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: nothing read or seen): the phone authenticator code release (every member) and the access check release (the owner here) are published later, at the top, so each reader reads and sees them first, and the notice this test checks is the one it checked before.
     // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: without it): the order request alerts release (the owner here) is published later, at the top, so the owner reads and sees it first too, and the notice this test checks is the one it checked before. A read of it by a reader it does not reach changes nothing.
     // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: without it): the phone screens by access release is published later, at the top, and reaches every member (two of its three entries have no audience), so each reader reads and sees it first too, and the notice this test checks is the one it checked before.
-    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: without it): the count read rule release is published later, at the top, and reaches the owner and the staff member here (every member of an organization with Cycle counts on), so they read and see it first too, and the notice this test checks is the one it checked before. A read of it by a reader it does not reach changes nothing.
+    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: without them): the count read rule and email change releases are published later, at the top; the email change release reaches every member and the count read rule release reaches the owner here, so each reader reads and sees them first too, and the notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
     const newerIds = [
       'count-read-rule-2026-11',
+      'email-change-expired-2026-11',
       'phone-screens-by-access-2026-11',
       'order-request-alerts-follow-approve-2026-11',
       'phone-authenticator-code-2026-11',
@@ -179,8 +181,8 @@ describe('the emailed links release', () => {
       // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
       // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: every pinned position one place higher): the order request alerts release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
       // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: every pinned position one place higher): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-      // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: every pinned position one place higher): the count read rule release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-      source.indexOf(`id: '${RELEASES[7]!.id}'`),
+      // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: every pinned position two places higher): the count read rule and email change releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+      source.indexOf(`id: '${RELEASES[8]!.id}'`),
     );
     expect(block).toContain(`It supersedes the howItAffectsYou sentence of the published entry`);
     expect(block).toContain(OLDER_ENTRY);

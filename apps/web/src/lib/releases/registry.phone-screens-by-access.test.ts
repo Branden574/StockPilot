@@ -39,13 +39,14 @@ import { RELEASES } from './registry';
  * and its order. Its own file, so the release tests other open branches edit
  * stay as they are.
  *
- * Re-pinned by docs/whats-new-count-read-rule (2026-11-15): the count read rule release is
- * published later, directly above this release and below the Liquid Glass
- * draft. Each changed line has its own note.
+ * Re-pinned by docs/whats-new-count-read-rule (2026-11-15): the count read rule and
+ * email change releases are published later, directly above this release and
+ * below the Liquid Glass draft. Each changed line has its own note.
  */
 const ID = 'phone-screens-by-access-2026-11';
-// Added by docs/whats-new-count-read-rule (2026-11-15): the count read rule release, published later, directly above this one. It reaches every member of an organization with Cycle counts on.
+// Added by docs/whats-new-count-read-rule (2026-11-15): the count read rule release (whoever can open Cycle counts or assigns counts, where Cycle counts is on) and the email change release (every member), published later, directly above this one.
 const COUNT_READ_RULE_ID = 'count-read-rule-2026-11';
+const EMAIL_EXPIRED_ID = 'email-change-expired-2026-11';
 const byId = (id: string) => RELEASES.find((r) => r.id === id)!;
 const release = () => byId(ID);
 const entry = (entryId: string) => release().entries.find((e) => e.id === entryId)!;
@@ -85,16 +86,17 @@ function readerText(r: Release): string[] {
 }
 
 describe('the phone screens by access release of 2026-11-14: order, status and date', () => {
-  it('is published once, as revision 1, directly below the count read rule release (published later, below the Liquid Glass draft at the top) and above the order request alerts release', () => {
+  it('is published once, as revision 1, directly below the count read rule and email change releases (published later, below the Liquid Glass draft at the top) and above the order request alerts release', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
     // The order request alerts release, published earlier the same day (17:58Z), sits directly below.
-    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: RELEASES.slice(0, 4), without it): the count read rule release is published later, at the top, directly below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES.slice(0, 5).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: RELEASES.slice(0, 4), without them): the count read rule and email change releases are published later, at the top, directly below the Liquid Glass draft, so every position below them moves down by two.
+    expect(RELEASES.slice(0, 6).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
       [COUNT_READ_RULE_ID, 'published'],
+      [EMAIL_EXPIRED_ID, 'published'],
       [ID, 'published'],
       ['order-request-alerts-follow-approve-2026-11', 'published'],
       ['phone-authenticator-code-2026-11', 'published'],
@@ -110,12 +112,12 @@ describe('the phone screens by access release of 2026-11-14: order, status and d
     expect(at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
     // Set at merge: the first iOS launch of the update showed between the reads of 18:34:04Z and 18:44:07Z.
     expect(at).toBe('2026-11-14T18:44:00Z');
-    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: the draft placeholder at this minute): the placeholder moved to the minute of the count read rule release, published later, so it is at or after this one.
+    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: the draft placeholder at this minute): the placeholder moved to the minute of the count read rule and email change releases, published later, so it is at or after this one.
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(Date.parse(at));
     // The phone update (group 8c30f488) was published at 2026-11-14T05:39:05Z.
     expect(Date.parse(at)).toBeGreaterThan(Date.parse('2026-11-14T05:39:05Z'));
-    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: RELEASES.slice(2)): the count read rule release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(3)) {
+    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: RELEASES.slice(2)): the count read rule and email change releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    for (const r of RELEASES.slice(4)) {
       expect(Date.parse(at), r.id).toBeGreaterThanOrEqual(Date.parse(r.publishedAt));
     }
   });
@@ -240,10 +242,17 @@ describe('the phone screens by access release: the words', () => {
       'phone-workspace-switch-own-lists',
       'phone-count-not-saved-line-gone',
     ]);
-    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: nothing read): the count read rule release is published later, at the top, and reaches the owner here (every member of an organization with Cycle counts on), so the owner reads it first, and the notice this test checks is the one it checked before. A read of it by a reader it does not reach changes nothing.
+    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: nothing read): the count read rule and email change releases are published later, at the top; the email change release reaches every member and the count read rule release reaches the owner here, so each reader reads them first, and the notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
     const newerRead = [
       {
         release_id: COUNT_READ_RULE_ID,
+        revision: 1,
+        dismissed_at: null,
+        opened_at: '2026-11-15T00:30:00Z',
+        read_at: '2026-11-15T00:30:00Z',
+      },
+      {
+        release_id: EMAIL_EXPIRED_ID,
         revision: 1,
         dismissed_at: null,
         opened_at: '2026-11-15T00:30:00Z',
