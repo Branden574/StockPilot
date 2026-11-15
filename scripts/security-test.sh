@@ -902,6 +902,11 @@ PGTAP_TESTS=(
   # Each body is production's with its added lines removed. The lock
   # footprint is scripts/db-concurrency/0464_migration_lock_footprint.sh.
   supabase/tests/0464_retry_keys_match_their_record.test.sql
+  # Connection records (0465): a mapping and a sync log entry name a
+  # connection and a queued event of their own organization (connection_in_org,
+  # outbox_event_in_org), a connection names only the Vault secret stored for
+  # it and only the server sets it, and the Vault reads check the row.
+  supabase/tests/0465_connection_records_in_their_organization.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -1174,6 +1179,12 @@ WEB_TESTS=(
   src/server/services/portal.step-up.test.ts
   src/test/action-step-up.guard.test.ts
   src/test/page-step-up.guard.test.ts
+  # Under a policy that requires an authenticator, every Server Action, every
+  # write handler under app/api/v1 and every writing service method gives the
+  # authenticator answer before its first write, or is on a reviewed list with
+  # a kind, a reason and the writes it makes (a sweep on the syntax tree, with
+  # a mutation table that takes each gate out and expects it reported).
+  src/test/authenticator-write.guard.test.ts
   # The phone's sign-in and sign-out notes (S5a), the other two routes on the
   # AAL1 allowlist: an aal1 session of an account with an authenticator writes
   # the sign-in row (code owed) and the device note, and its sign-out revokes

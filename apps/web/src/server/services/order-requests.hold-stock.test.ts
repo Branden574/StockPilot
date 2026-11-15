@@ -388,18 +388,14 @@ describe('addLines holds what an approver adds at a hold status (D15)', () => {
     expect(reportError).toHaveBeenCalledTimes(1);
   });
 
-  it('an approver who has not done the MFA step-up: the add stands, the hold says why (forbidden, the step-up sentence)', async () => {
+  it('an approver whose session has not satisfied the authenticator policy: the add is refused with the authenticator answer, nothing added or held', async () => {
     const stub = addStub('approved', { data: HELD, error: null });
-    const res = await svc(stub, { mfaRequired: true, mfaSatisfied: false }).addLines(ORDER, [
-      { itemId: 'item-1', quantity: 3 },
-    ]);
-    expect(res.added).toBe(1);
-    expect(res.hold).toEqual({
-      ok: false,
-      reason: 'forbidden',
-      message: 'Multi-factor authentication required. Enroll in MFA before performing this action.',
-    });
-    expect(stub.rpcCalls.filter((c) => c.name === 'hold_order_stock')).toEqual([]);
+    await expect(
+      svc(stub, { mfaRequired: true, mfaSatisfied: false }).addLines(ORDER, [
+        { itemId: 'item-1', quantity: 3 },
+      ]),
+    ).rejects.toMatchObject({ code: 'forbidden', details: { reason: 'mfa_required' } });
+    expect(stub.rpcCalls).toEqual([]);
   });
 
   it('the top-up uses the header it already read: one order read, no second one for the warehouse', async () => {

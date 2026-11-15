@@ -445,3 +445,44 @@ describe('addLines is all or nothing', () => {
     expect(body).not.toMatch(/createAdminClient|from\('order_request_lines'\)/);
   });
 });
+
+describe('addLines gives the authenticator answer first', () => {
+  function svcWith(
+    stub: ReturnType<typeof makeSupabaseStub>,
+    mfaSatisfied: boolean,
+    userId = 'approver-1',
+  ) {
+    adminHandle.client = stub.client;
+    return new (OrderRequestsService as unknown as new (ctx: unknown) => OrderRequestsService)(
+      makeServiceContext(stub.client, {
+        role: 'admin',
+        userId,
+        enabledModules: new Set<ModuleId>(['orders']),
+        mfaRequired: true,
+        mfaSatisfied,
+      }),
+    );
+  }
+
+  it.each([
+    ['an approver', 'approver-1'],
+    ['the requester of the order', 'requester-1'],
+  ])(
+    '%s, required and not satisfied: mfa_required, nothing read or written',
+    async (_who, userId) => {
+      const stub = stubFor(OPEN_HEADER);
+      await expect(
+        svcWith(stub, false, userId).addLines('order-1', [{ itemId: 'item-1', quantity: 3 }]),
+      ).rejects.toMatchObject({ code: 'forbidden', details: { reason: 'mfa_required' } });
+      expect(stub.fromCalls).toEqual([]);
+      expect(stub.rpcCalls).toEqual([]);
+    },
+  );
+
+  it('required and satisfied: the lines are added', async () => {
+    const stub = stubFor(OPEN_HEADER);
+    const res = await svcWith(stub, true).addLines('order-1', [{ itemId: 'item-1', quantity: 3 }]);
+    expect(res.added).toBe(1);
+    expect(stub.rpcCalls.map((c) => c.name)).toContain('add_order_request_lines');
+  });
+});

@@ -446,3 +446,40 @@ describe('CycleCountsService.forceReassign', () => {
     await expect(svc.forceReassign('cc-1', 'ghost', 'reason')).rejects.toMatchObject({ code: 'validation_error' });
   });
 });
+
+describe('CycleCountsService.forceReassign gives the authenticator answer first', () => {
+  it('a manager, required and not satisfied: mfa_required, nothing read or called', async () => {
+    const stub = rpcStub({ data: { id: 'cc-1', assigned_to: 'user-b' }, error: null });
+    const svc = new CycleCountsService(
+      makeServiceContext(stub.client, {
+        role: 'manager',
+        userId: 'mgr',
+        mfaRequired: true,
+        mfaSatisfied: false,
+      }),
+    );
+    await expect(svc.forceReassign('cc-1', 'user-b', 'staff A went home')).rejects.toMatchObject({
+      code: 'forbidden',
+      details: { reason: 'mfa_required' },
+    });
+    expect(stub.fromCalls).toEqual([]);
+    expect(
+      (stub.client as unknown as { rpc: ReturnType<typeof vi.fn> }).rpc,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('a manager, required and satisfied: the count is reassigned', async () => {
+    const stub = rpcStub({ data: { id: 'cc-1', assigned_to: 'user-b' }, error: null });
+    const svc = new CycleCountsService(
+      makeServiceContext(stub.client, {
+        role: 'manager',
+        userId: 'mgr',
+        mfaRequired: true,
+        mfaSatisfied: true,
+      }),
+    );
+    await expect(svc.forceReassign('cc-1', 'user-b', 'staff A went home')).resolves.toMatchObject({
+      assigned_to: 'user-b',
+    });
+  });
+});

@@ -260,11 +260,6 @@ const REVIEWED: Record<string, Reviewed> = {
   },
 
   // ── best effort ──
-  'server/actions/delivery-request.ts#recordDeliveryRequestDraftedAction': {
-    kind: 'best-effort',
-    reason:
-      "Writes one audit row through audit()'s own context, which is requireOrgContext(): for a session that owes its code no row is written, and nothing is returned.",
-  },
   'server/actions/revalidate-inventory-view.ts#revalidateInventoryViewAction': {
     kind: 'best-effort',
     reason:

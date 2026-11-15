@@ -171,6 +171,7 @@ describe('SavedViewsService.remove: proves the view was deleted', () => {
         ['id', 'v-own'],
         ['user_id', ME],
         ['organization_id', ORG],
+        ['is_shared', false],
       ]),
     );
     expect(callArgs(calls[0]!, 'select')?.[0]).toBe('id');
@@ -185,8 +186,9 @@ describe('SavedViewsService.remove: proves the view was deleted', () => {
       },
     });
     await expect(svc.remove('v-teammate-shared')).rejects.toMatchObject({ code: 'not_found' });
-    // A manager is never offered the orphan path.
-    expect(calls).toHaveLength(1);
+    // The caller's own private view, then their own shared one; a manager is
+    // never offered the orphan path.
+    expect(calls).toHaveLength(2);
   });
 
   it('an admin removes a shared view whose owner deleted their account, in this organization only', async () => {
@@ -194,15 +196,15 @@ describe('SavedViewsService.remove: proves the view was deleted', () => {
     const { svc } = svcFor('admin', {
       'saved_views.delete': (call) => {
         calls.push(call);
-        // Not theirs; the orphan delete finds it.
-        return calls.length === 1
+        // Not theirs (neither private nor shared); the orphan delete finds it.
+        return calls.length <= 2
           ? { data: [], error: null }
           : { data: [{ id: 'v-orphan-shared' }], error: null };
       },
     });
     await expect(svc.remove('v-orphan-shared')).resolves.toBeUndefined();
-    expect(calls).toHaveLength(2);
-    const orphan = calls[1]!;
+    expect(calls).toHaveLength(3);
+    const orphan = calls[2]!;
     expect(eqs(orphan)).toEqual(
       expect.arrayContaining([
         ['id', 'v-orphan-shared'],

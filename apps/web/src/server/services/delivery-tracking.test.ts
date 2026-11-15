@@ -55,3 +55,52 @@ describe('DeliveryTrackingService.shareLocation gating', () => {
     expect(stub.fromCalls).toContain('delivery_locations');
   });
 });
+
+describe('DeliveryTrackingService.shareLocation gives the authenticator answer first', () => {
+  const IN_TRANSIT = {
+    'order_requests.select': {
+      data: {
+        id: 'order-1',
+        organization_id: 'org-test',
+        fulfillment_type: 'delivery',
+        status: 'in_transit',
+        assigned_delivery_user_id: 'driver-1',
+      },
+      error: null,
+    },
+    'delivery_locations.upsert': { data: null, error: null },
+  };
+
+  it('the assigned driver, required and not satisfied: mfa_required, nothing read or written', async () => {
+    const stub = makeSupabaseStub(IN_TRANSIT);
+    const svc = new DeliveryTrackingService(
+      makeServiceContext(stub.client, {
+        enabledModules: withLT(),
+        userId: 'driver-1',
+        role: 'staff',
+        mfaRequired: true,
+        mfaSatisfied: false,
+      }),
+    );
+    await expect(svc.shareLocation('order-1', { lat: 1, lng: 2 })).rejects.toMatchObject({
+      code: 'forbidden',
+      details: { reason: 'mfa_required' },
+    });
+    expect(stub.fromCalls).toEqual([]);
+  });
+
+  it('the assigned driver, required and satisfied: the point is written', async () => {
+    const stub = makeSupabaseStub(IN_TRANSIT);
+    const svc = new DeliveryTrackingService(
+      makeServiceContext(stub.client, {
+        enabledModules: withLT(),
+        userId: 'driver-1',
+        role: 'staff',
+        mfaRequired: true,
+        mfaSatisfied: true,
+      }),
+    );
+    await svc.shareLocation('order-1', { lat: 36.7, lng: -119.7 });
+    expect(stub.fromCalls).toContain('delivery_locations');
+  });
+});

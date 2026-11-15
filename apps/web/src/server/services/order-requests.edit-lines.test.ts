@@ -718,3 +718,45 @@ describe('updateLineQuantity and the 10,000-unit line ceiling', () => {
     expect(res.quantity).toBe(15_000);
   });
 });
+
+describe('updateLineQuantity and removeLine give the authenticator answer first', () => {
+  function svcWith(stub: ReturnType<typeof makeSupabaseStub>, mfaSatisfied: boolean) {
+    adminHandle.client = stub.client;
+    return new (OrderRequestsService as unknown as new (ctx: unknown) => OrderRequestsService)(
+      makeServiceContext(stub.client, {
+        role: 'admin',
+        userId: 'approver-1',
+        enabledModules: new Set<ModuleId>(['orders']),
+        mfaRequired: true,
+        mfaSatisfied,
+      }),
+    );
+  }
+  const calls: Array<[string, (svc: OrderRequestsService) => Promise<unknown>, string]> = [
+    [
+      'updateLineQuantity',
+      (svc) => svc.updateLineQuantity('order-1', 'line-1', 4),
+      'order_request_lines.update',
+    ],
+    ['removeLine', (svc) => svc.removeLine('order-1', 'line-1'), 'order_request_lines.delete'],
+  ];
+
+  it.each(calls)(
+    '%s, required and not satisfied: mfa_required, nothing read or written',
+    async (_name, run) => {
+      const stub = stubFor();
+      await expect(run(svcWith(stub, false))).rejects.toMatchObject({
+        code: 'forbidden',
+        details: { reason: 'mfa_required' },
+      });
+      expect(stub.fromCalls).toEqual([]);
+      expect(stub.rpcCalls).toEqual([]);
+    },
+  );
+
+  it.each(calls)('%s, required and satisfied: the line is changed', async (_name, run, write) => {
+    const stub = stubFor();
+    await run(svcWith(stub, true));
+    expect(stub.chains.get(write)).toBeDefined();
+  });
+});

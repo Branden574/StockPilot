@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const sessionState = {
   role: 'manager' as 'owner' | 'admin' | 'manager' | 'staff' | 'viewer',
   userId: 'user-1',
+  mfaRequired: false,
+  mfaSatisfied: true,
 };
 
 // One mutable response per table verb; each test sets what the "db" returns.
@@ -86,8 +88,8 @@ vi.mock('@/server/services/context', async () => {
       role: sessionState.role,
       permissions: new Set(ROLE_PERMISSIONS[sessionState.role]),
       supabase: makeClient(),
-      mfaRequired: false,
-      mfaSatisfied: true,
+      mfaRequired: sessionState.mfaRequired,
+      mfaSatisfied: sessionState.mfaSatisfied,
     })),
   };
 });
@@ -107,6 +109,8 @@ const GOOD_CONFIG = {
 beforeEach(() => {
   sessionState.role = 'manager';
   sessionState.userId = 'user-1';
+  sessionState.mfaRequired = false;
+  sessionState.mfaSatisfied = true;
   dbState.listRows = [];
   dbState.listError = null;
   dbState.insertRow = null;
@@ -333,5 +337,61 @@ describe('deleteSharedExportPresetAction', () => {
     if (res.ok) return;
     expect(res.error.code).toBe('forbidden');
     expect(deleteEqSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('saving and deleting a shared preset give the authenticator answer first', () => {
+  const savedRow = {
+    id: 'p9',
+    name: 'Morning walk',
+    config: GOOD_CONFIG,
+    created_by: 'user-1',
+    created_at: '2026-11-01T00:00:00Z',
+  };
+
+  it('save, required and not satisfied: mfa_required, nothing written', async () => {
+    sessionState.mfaRequired = true;
+    sessionState.mfaSatisfied = false;
+    dbState.insertRow = savedRow;
+    const res = await saveSharedExportPresetAction({ name: 'Morning walk', config: GOOD_CONFIG });
+    expect(res).toMatchObject({
+      ok: false,
+      error: { code: 'forbidden', details: { reason: 'mfa_required' } },
+    });
+    expect(insertSpy).not.toHaveBeenCalled();
+    expect(auditSpy).not.toHaveBeenCalled();
+  });
+
+  it('delete, required and not satisfied: mfa_required, nothing deleted', async () => {
+    sessionState.mfaRequired = true;
+    sessionState.mfaSatisfied = false;
+    dbState.deleteRow = savedRow;
+    const res = await deleteSharedExportPresetAction({ id: 'p9' });
+    expect(res).toMatchObject({
+      ok: false,
+      error: { code: 'forbidden', details: { reason: 'mfa_required' } },
+    });
+    expect(deleteEqSpy).not.toHaveBeenCalled();
+    expect(auditSpy).not.toHaveBeenCalled();
+  });
+
+  it('save and delete, required and satisfied: written as asked', async () => {
+    sessionState.mfaRequired = true;
+    sessionState.mfaSatisfied = true;
+    dbState.insertRow = savedRow;
+    dbState.deleteRow = savedRow;
+    expect(
+      (await saveSharedExportPresetAction({ name: 'Morning walk', config: GOOD_CONFIG })).ok,
+    ).toBe(true);
+    expect((await deleteSharedExportPresetAction({ id: 'p9' })).ok).toBe(true);
+    expect(insertSpy).toHaveBeenCalledTimes(1);
+    expect(deleteEqSpy).toHaveBeenCalled();
+  });
+
+  it('the list stays readable: listing is a read', async () => {
+    sessionState.mfaRequired = true;
+    sessionState.mfaSatisfied = false;
+    const res = await listSharedExportPresetsAction();
+    expect(res.ok).toBe(true);
   });
 });

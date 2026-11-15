@@ -280,7 +280,9 @@ select is(pg_temp.each(pg_temp.who('admin'), pg_temp.move_sql('charters')),
 -- ══ U. Upsert proposing organization B ════════════════════════════════════
 -- By the owner of both (bothPerm for public request links is covered by M7).
 -- connection_sync_log has no insert rule for members, so its upsert is
--- refused at the insert check.
+-- refused at the insert check. The mapping's proposed row names B's
+-- connection, so it passes the insert check (a mapping names a connection of
+-- its own organization) and reaches the update of A's row.
 select is(
   pg_temp.attempt('authenticated', :both, format($q$insert into public.customers (id, organization_id, name) values (%L, %L, 'B463 Customer A')
      on conflict (id) do update set organization_id = excluded.organization_id$q$, pg_temp.fx('customers', 'A'), :orgB))
@@ -292,7 +294,7 @@ select is(
      on conflict (id) do update set organization_id = excluded.organization_id$q$, pg_temp.fx('org_connections', 'A'), :orgB))
   || ' / ' || pg_temp.attempt('authenticated', :both, format($q$insert into public.connection_mappings (id, connection_id, organization_id, entity_type, external_id)
      values (%L, %L, %L, 'item', 'B463-EXT-A')
-     on conflict (id) do update set organization_id = excluded.organization_id$q$, pg_temp.fx('connection_mappings', 'A'), pg_temp.fx('org_connections', 'A'), :orgB))
+     on conflict (id) do update set organization_id = excluded.organization_id$q$, pg_temp.fx('connection_mappings', 'A'), pg_temp.fx('org_connections', 'B'), :orgB))
   || ' / ' || pg_temp.attempt('authenticated', :both, format($q$insert into public.connection_sync_log (id, connection_id, organization_id, outbox_event_id, topic, status)
      values (%L, %L, %L, %L, 'item.created', 'pending')
      on conflict (id) do update set organization_id = excluded.organization_id$q$, pg_temp.fx('connection_sync_log', 'A'), pg_temp.fx('org_connections', 'A'), :orgB, pg_temp.fx('outbox_events', 'A')))

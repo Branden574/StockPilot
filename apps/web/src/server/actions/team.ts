@@ -4,7 +4,12 @@ import { revalidatePath } from 'next/cache';
 
 import { INVITE_ACCOUNT_EXISTS_COPY } from '@/app/invite/[token]/invite-copy';
 import { rethrowControlFlow } from '@/lib/control-flow';
-import { assertCurrentAal2, assertPermission, withContext } from '@/server/services/context';
+import {
+  assertCurrentAal2,
+  assertPermission,
+  mfaGateError,
+  withContext,
+} from '@/server/services/context';
 import { audit } from '@/server/services/audit';
 import { TeamService, acceptInviteWithToken } from '@/server/services/team';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
@@ -351,6 +356,9 @@ function transferRefusal(error: { code?: string; message?: string }): ActionResu
  * from an admin or even a non-bypassing definer function).
  *
  * Defense-in-depth gates the action layer enforces BEFORE the swap:
+ *   0. Under a policy that requires an authenticator, a session that has
+ *      not satisfied it gets the answer assertPermission gives
+ *      (mfaGateError), before anything else is checked.
  *   1. Caller must currently hold the `owner` role in the request's org.
  *   2. Caller's session MUST satisfy AAL2 (proven MFA this session) if
  *      they have any verified MFA factor. Stripping/handing off the
@@ -376,6 +384,10 @@ export async function transferOwnershipAction(input: {
 
   try {
     const ctx = await withContext();
+    // The authenticator answer first, as assertPermission gives it: under a
+    // policy that requires an authenticator, a session that has not satisfied
+    // it is refused before the role, the rate limit and the password check.
+    if (ctx.mfaRequired && !ctx.mfaSatisfied) throw mfaGateError(ctx);
     if (ctx.role !== 'owner') {
       return err('forbidden', TRANSFER_NOT_OWNER);
     }
