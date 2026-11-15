@@ -18,7 +18,7 @@ import { postReceiptSchema } from './receipts';
 const PO = '0d4b8a52-6f1e-4c3a-9b7d-2e5f8a1c3d4e';
 const WH = '7a9c1e3f-5b2d-4e6a-8c0f-1d3b5e7a9c2f';
 const LINE = '3c5e7a9b-1d2f-4a6c-8e0b-2f4a6c8e0b1d';
-const KEY = '5b7d9f1a-3c5e-4b7d-9f1a-3c5e7a9b1d2f';
+const RECEIPT_RETRY_ID = '5b7d9f1a-3c5e-4b7d-9f1a-3c5e7a9b1d2f';
 
 describe('exceedsEntryBudget', () => {
   it('is 200,000 entries', () => {
@@ -130,7 +130,7 @@ describe('postReceiptSchema sits behind the budget', () => {
     return {
       purchaseOrderId: PO,
       warehouseId: WH,
-      idempotencyKey: KEY,
+      idempotencyKey: RECEIPT_RETRY_ID,
       lines: Array.from({ length: lines }, (_, i) => ({
         poLineId: LINE,
         qtyReceived: serials,
