@@ -1058,6 +1058,13 @@ WEB_TESTS=(
   # policy still requires AAL2, so a stolen password alone cannot pass the gates.
   # context.mfa.test.ts below is the web twin — keep the pair together.
   src/lib/auth/api-context.mfa.test.ts
+  # An organization authenticator policy that cannot be read (the read errors
+  # or throws) is held to the strictest policy, as a hidden row is: a session
+  # at aal2 with an authenticator passes, any other is stopped exactly as
+  # all_required stops it, and nothing passes that a readable policy refuses.
+  # Both API paths and the page path (withContext).
+  src/lib/auth/api-context.policy-unreadable.test.ts
+  src/server/services/context.policy-unreadable.test.ts
   # A password alone reads nothing through the API (docket S43a): withApiContext
   # refuses an account with a verified authenticator factor whose session is
   # not aal2, on both paths, right after the identity check and before any
