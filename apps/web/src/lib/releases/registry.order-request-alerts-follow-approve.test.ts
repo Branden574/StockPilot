@@ -42,6 +42,11 @@ import { RELEASES } from './registry';
  * email change releases are published later still, at the top, directly
  * above the phone screens by access release and below the Liquid Glass
  * draft. Each changed line has its own note.
+ *
+ * Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15): the
+ * settings and module check releases are published later still, at the top,
+ * directly above the count read rule release and below the Liquid Glass
+ * draft. Each changed line has its own note.
  */
 const ID = 'order-request-alerts-follow-approve-2026-11';
 const REMOVED_ID = 'order-request-alert-removed-approvers';
@@ -52,6 +57,9 @@ const PHONE_SCREENS_ID = 'phone-screens-by-access-2026-11';
 // Added by docs/whats-new-count-read-rule (2026-11-15): the count read rule release (whoever can open Cycle counts or assigns counts, where Cycle counts is on) and the email change release (every member), published later still, directly above the phone screens by access release.
 const COUNT_READ_RULE_ID = 'count-read-rule-2026-11';
 const EMAIL_EXPIRED_ID = 'email-change-expired-2026-11';
+// Added by docs/whats-new-unreadable-access-and-settings (2026-11-15): the settings release (whoever can open the settings pages and panels it names) and the module check release (every member), published later still, directly above the count read rule release.
+const SETTINGS_ID = 'settings-not-loaded-2026-11';
+const MODULE_CHECK_ID = 'module-check-try-again-2026-11';
 
 const release = () => RELEASES.find((r) => r.id === ID)!;
 const entry = (entryId: string) => release().entries.find((e) => e.id === entryId)!;
@@ -98,8 +106,11 @@ describe('the order request alerts release: order, status and date', () => {
     expect(release().withdrawnNote).toBeUndefined();
     // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: RELEASES.slice(0, 3), without it): the phone screens by access release is published later, at the top, directly below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: RELEASES.slice(0, 4), without them): the count read rule and email change releases are published later, at the top, directly below the Liquid Glass draft, so every position below them moves down by two.
-    expect(RELEASES.slice(0, 6).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: RELEASES.slice(0, 6), without them): the settings and module check releases are published later, at the top, directly below the Liquid Glass draft, so every position below them moves down by two.
+    expect(RELEASES.slice(0, 8).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      [SETTINGS_ID, 'published'],
+      [MODULE_CHECK_ID, 'published'],
       [COUNT_READ_RULE_ID, 'published'],
       [EMAIL_EXPIRED_ID, 'published'],
       [PHONE_SCREENS_ID, 'published'],
@@ -109,7 +120,8 @@ describe('the order request alerts release: order, status and date', () => {
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
       // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: ID): the phone screens by access release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: the phone screens by access release): the count read rule release is published after it, at the top, the newest published release.
-      COUNT_READ_RULE_ID,
+      // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: the count read rule release): the settings release is published after it, at the top, the newest published release.
+      SETTINGS_ID,
     );
   });
 
@@ -124,7 +136,8 @@ describe('the order request alerts release: order, status and date', () => {
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
     // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: RELEASES.slice(2)): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: RELEASES.slice(3)): the count read rule and email change releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    for (const r of RELEASES.slice(5)) {
+    // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    for (const r of RELEASES.slice(7)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -254,6 +267,21 @@ describe('the order request alerts release: who is told', () => {
     // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: nothing read): the phone screens by access release is published later, at the top, and reaches every member (two of its three entries have no audience), so each reader reads it first, and the notice this test checks is the one it checked before.
     // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: the read of the phone screens by access release alone): the count read rule and email change releases are published later, at the top; the email change release reaches every member and the count read rule release reaches the owner here, so each reader reads them first, and the notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
     const newerRead = [
+      // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: without them): the settings and module check releases are published later, at the top; the module check release reaches every member and the settings release reaches the owner here, so each reader reads them first, and the notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+      {
+        release_id: SETTINGS_ID,
+        revision: 1,
+        dismissed_at: null,
+        opened_at: '2026-11-15T04:30:00Z',
+        read_at: '2026-11-15T04:30:00Z',
+      },
+      {
+        release_id: MODULE_CHECK_ID,
+        revision: 1,
+        dismissed_at: null,
+        opened_at: '2026-11-15T04:30:00Z',
+        read_at: '2026-11-15T04:30:00Z',
+      },
       {
         release_id: COUNT_READ_RULE_ID,
         revision: 1,

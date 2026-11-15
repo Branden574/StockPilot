@@ -218,7 +218,8 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
     // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: every pinned position one place higher): the order request alerts release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: every pinned position one place higher): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: every pinned position two places higher): the count read rule and email change releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    expect(RELEASES.slice(16, 21).map((r) => r.id)).toEqual([...NEW_IDS, WEB_FIXES_ID]);
+    // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    expect(RELEASES.slice(18, 23).map((r) => r.id)).toEqual([...NEW_IDS, WEB_FIXES_ID]);
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: EXPORT_ID): the S2 release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: S2_ID): the count sheet release is published after it, at the top, the newest published release.
     // Re-pinned by feat/order-add-all (2026-11-10; was: COUNT_SHEET_ID): the Add all release is published after it, at the top, the newest published release.
@@ -231,7 +232,8 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
       // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: the phone authenticator code release): the order request alerts release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: the order request alerts release): the phone screens by access release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: the phone screens by access release): the count read rule release is published after it, at the top, the newest published release.
-      'count-read-rule-2026-11',
+      // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: the count read rule release): the settings release is published after it, at the top, the newest published release.
+      'settings-not-loaded-2026-11',
     );
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
       'liquid-glass-2026-11',
@@ -266,7 +268,8 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
       // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: i + 13): the order request alerts release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
       // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: i + 14): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
       // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: i + 15): the count read rule and email change releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-      for (const r of RELEASES.slice(i + 17)) {
+      // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: i + 17): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+      for (const r of RELEASES.slice(i + 19)) {
         expect(at(NEW_IDS[i]!), `${NEW_IDS[i]} after ${r.id}`).toBeGreaterThan(
           Date.parse(r.publishedAt),
         );
@@ -308,6 +311,9 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: without it): the order request alerts release is published later, at the top, and reaches owners, admins and managers where Orders is on and, where the AI module is on too, whoever can open Today's briefing, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: without it): the phone screens by access release is published later, at the top, and reaches every member (two of its three entries have no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: without them): the count read rule and email change releases are published later, at the top; the email change release reaches every member and the count read rule release reaches whoever can open Cycle counts or assigns counts where Cycle counts is on, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: without them): the settings and module check releases are published later, at the top; the module check release reaches every member and the settings release reaches whoever can open the settings pages and panels it names, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          read('settings-not-loaded-2026-11'),
+          read('module-check-try-again-2026-11'),
           read('count-read-rule-2026-11'),
           read('email-change-expired-2026-11'),
           read('phone-screens-by-access-2026-11'),
@@ -339,6 +345,9 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: without it): the order request alerts release is published later, at the top, and reaches owners, admins and managers where Orders is on and, where the AI module is on too, whoever can open Today's briefing, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: without it): the phone screens by access release is published later, at the top, and reaches every member (two of its three entries have no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: without them): the count read rule and email change releases are published later, at the top; the email change release reaches every member and the count read rule release reaches whoever can open Cycle counts or assigns counts where Cycle counts is on, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: without them): the settings and module check releases are published later, at the top; the module check release reaches every member and the settings release reaches whoever can open the settings pages and panels it names, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          read('settings-not-loaded-2026-11'),
+          read('module-check-try-again-2026-11'),
           read('count-read-rule-2026-11'),
           read('email-change-expired-2026-11'),
           read('phone-screens-by-access-2026-11'),
@@ -371,6 +380,9 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: without it): the order request alerts release is published later, at the top, and reaches owners, admins and managers where Orders is on and, where the AI module is on too, whoever can open Today's briefing, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: without it): the phone screens by access release is published later, at the top, and reaches every member (two of its three entries have no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: without them): the count read rule and email change releases are published later, at the top; the email change release reaches every member and the count read rule release reaches whoever can open Cycle counts or assigns counts where Cycle counts is on, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: without them): the settings and module check releases are published later, at the top; the module check release reaches every member and the settings release reaches whoever can open the settings pages and panels it names, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          read('settings-not-loaded-2026-11'),
+          read('module-check-try-again-2026-11'),
           read('count-read-rule-2026-11'),
           read('email-change-expired-2026-11'),
           read('phone-screens-by-access-2026-11'),
@@ -404,6 +416,9 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: without it): the order request alerts release is published later, at the top, and reaches owners, admins and managers where Orders is on and, where the AI module is on too, whoever can open Today's briefing, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: without it): the phone screens by access release is published later, at the top, and reaches every member (two of its three entries have no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: without them): the count read rule and email change releases are published later, at the top; the email change release reaches every member and the count read rule release reaches whoever can open Cycle counts or assigns counts where Cycle counts is on, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: without them): the settings and module check releases are published later, at the top; the module check release reaches every member and the settings release reaches whoever can open the settings pages and panels it names, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          read('settings-not-loaded-2026-11'),
+          read('module-check-try-again-2026-11'),
           read('count-read-rule-2026-11'),
           read('email-change-expired-2026-11'),
           read('phone-screens-by-access-2026-11'),
@@ -438,6 +453,9 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: without it): the order request alerts release is published later, at the top, and reaches owners, admins and managers where Orders is on and, where the AI module is on too, whoever can open Today's briefing, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: without it): the phone screens by access release is published later, at the top, and reaches every member (two of its three entries have no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: without them): the count read rule and email change releases are published later, at the top; the email change release reaches every member and the count read rule release reaches whoever can open Cycle counts or assigns counts where Cycle counts is on, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: without them): the settings and module check releases are published later, at the top; the module check release reaches every member and the settings release reaches whoever can open the settings pages and panels it names, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          'settings-not-loaded-2026-11',
+          'module-check-try-again-2026-11',
           'count-read-rule-2026-11',
           'email-change-expired-2026-11',
           'phone-screens-by-access-2026-11',
@@ -464,7 +482,8 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
       // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: the emailed links release): the phone authenticator code release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: the phone authenticator code release): the phone screens by access release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: the phone screens by access release): the email change release is published after it and reaches every member, so a member is told it first (the count read rule release, the newest published, does not reach this member).
-      'email-change-expired-2026-11',
+      // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: the email change release): the module check release is published after it and reaches every member, so a member is told it first (the settings release, the newest published, does not reach this member).
+      'module-check-try-again-2026-11',
     );
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: the emailed links release read alone): the phone authenticator code release reaches every member and is read first too (the access check release does not reach this member).
     expect(
@@ -474,6 +493,9 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
         [
           // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: without it): the phone screens by access release is published later, at the top, and reaches every member (two of its three entries have no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: without them): the count read rule and email change releases are published later, at the top; the email change release reaches every member and the count read rule release reaches whoever can open Cycle counts or assigns counts where Cycle counts is on, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: without them): the settings and module check releases are published later, at the top; the module check release reaches every member and the settings release reaches whoever can open the settings pages and panels it names, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          read('settings-not-loaded-2026-11'),
+          read('module-check-try-again-2026-11'),
           read('count-read-rule-2026-11'),
           read('email-change-expired-2026-11'),
           read('phone-screens-by-access-2026-11'),
@@ -490,6 +512,9 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
         [
           // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: without it): the phone screens by access release is published later, at the top, and reaches every member (two of its three entries have no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: without them): the count read rule and email change releases are published later, at the top; the email change release reaches every member and the count read rule release reaches whoever can open Cycle counts or assigns counts where Cycle counts is on, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: without them): the settings and module check releases are published later, at the top; the module check release reaches every member and the settings release reaches whoever can open the settings pages and panels it names, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          read('settings-not-loaded-2026-11'),
+          read('module-check-try-again-2026-11'),
           read('count-read-rule-2026-11'),
           read('email-change-expired-2026-11'),
           read('phone-screens-by-access-2026-11'),

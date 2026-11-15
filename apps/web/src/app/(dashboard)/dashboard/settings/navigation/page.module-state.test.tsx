@@ -80,6 +80,8 @@ describe('Settings > Navigation', () => {
     render(await NavigationSettingsPage());
     expect(screen.queryByTestId('editor')).toBeNull();
     expect(state.editor).toBeNull();
+    // Nothing on the page saves the menu.
+    expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull();
     expect(
       screen.getByRole('heading', { name: "We couldn't check which modules are on" }),
     ).toBeInTheDocument();

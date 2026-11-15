@@ -28,11 +28,27 @@ import { RELEASES } from './registry';
  * newer of the two and sits directly above it, so a reader both reach is
  * offered that one first. Its own file, so the release tests other open
  * branches edit stay as they are.
+ *
+ * Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15): the
+ * settings and module check releases are published later, above the count
+ * read rule release and below the Liquid Glass draft. Each changed line has
+ * its own note.
  */
 const ID = 'email-change-expired-2026-11';
 const ENTRY_ID = 'email-change-expired-after-password-change';
 const COUNT_RELEASE_ID = 'count-read-rule-2026-11';
 const PHONE_SCREENS_ID = 'phone-screens-by-access-2026-11';
+// Added by docs/whats-new-unreadable-access-and-settings (2026-11-15): the settings release (whoever can open the settings pages and panels it names) and the module check release (every member), published later, above the count read rule release.
+const SETTINGS_ID = 'settings-not-loaded-2026-11';
+const MODULE_CHECK_ID = 'module-check-try-again-2026-11';
+const newerRead = [SETTINGS_ID, MODULE_CHECK_ID].map((releaseId) => ({
+  release_id: releaseId,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-15T04:30:00Z',
+  read_at: '2026-11-15T04:30:00Z',
+}));
+const newerSeen = { [SETTINGS_ID]: true, [MODULE_CHECK_ID]: true };
 
 const release = () => RELEASES.find((r) => r.id === ID)!;
 const entry = () => release().entries.find((e) => e.id === ENTRY_ID)!;
@@ -84,8 +100,11 @@ describe('the email change release: order, status and date', () => {
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
-    expect(RELEASES.slice(0, 4).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: RELEASES.slice(0, 4), without them): the settings and module check releases are published later, at the top, directly below the Liquid Glass draft, so every position below them moves down by two.
+    expect(RELEASES.slice(0, 6).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      [SETTINGS_ID, 'published'],
+      [MODULE_CHECK_ID, 'published'],
       [COUNT_RELEASE_ID, 'published'],
       [ID, 'published'],
       [PHONE_SCREENS_ID, 'published'],
@@ -98,9 +117,11 @@ describe('the email change release: order, status and date', () => {
     const at = Date.parse(release().publishedAt);
     expect(at).toBeGreaterThan(Date.parse('2026-11-15T00:02:00Z'));
     expect(at).toBeLessThanOrEqual(Date.now());
-    expect(RELEASES[1]!.publishedAt).toBe(release().publishedAt);
+    // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    expect(RELEASES[3]!.publishedAt).toBe(release().publishedAt);
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
-    for (const r of RELEASES.slice(3)) {
+    // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    for (const r of RELEASES.slice(5)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -191,9 +212,10 @@ describe('the email change release: who is told', () => {
       const ids = visibleReleases(RELEASES, v).map((r) => r.id);
       expect(ids, v.role).toContain(ID);
       expect(ids, v.role).not.toContain(COUNT_RELEASE_ID);
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
+      // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: nothing read, nothing seen): the settings and module check releases are published later, at the top; the module check release reaches every member and the settings release reaches the owner, admin and staff here, so each reader reads and sees them first, and the notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+      expect(buildReleaseList(RELEASES, v, newerRead, null).latestUnread?.id, v.role).toBe(ID);
       // An older phone build shows the newest one it has not seen: this title and summary.
-      expect(legacyAnnouncementsFor(RELEASES, v, {})[0], v.role).toEqual({
+      expect(legacyAnnouncementsFor(RELEASES, v, newerSeen)[0], v.role).toEqual({
         id: ID,
         date: '2026-11-15',
         title: release().title,
@@ -212,10 +234,14 @@ describe('the email change release: who is told', () => {
       read_at: '2026-11-15T00:30:00Z',
     };
     for (const v of [owner, admin, staff]) {
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(
+      // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: nothing read, then the count read rule release read): the settings and module check releases are published later, at the top, and reach each reader here, so each reads them first, and the notices this test checks are the ones it checked before.
+      expect(buildReleaseList(RELEASES, v, newerRead, null).latestUnread?.id, v.role).toBe(
         COUNT_RELEASE_ID,
       );
-      expect(buildReleaseList(RELEASES, v, [countRead], null).latestUnread?.id, v.role).toBe(ID);
+      expect(
+        buildReleaseList(RELEASES, v, [...newerRead, countRead], null).latestUnread?.id,
+        v.role,
+      ).toBe(ID);
     }
   });
 });
