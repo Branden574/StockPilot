@@ -315,3 +315,32 @@ describe('submitPortalOrderAction: the outcome the portal shop reads', () => {
     expect(portalSubmitOrder).not.toHaveBeenCalled();
   });
 });
+
+// The order exists once the service answers it: nothing after that may turn
+// the answer into a refusal (a refusal would free the cart, and a changed
+// cart would be a second order).
+describe('submitPortalOrderAction: a placed order is the answer, whatever follows', () => {
+  const INPUT = {
+    lines: [{ itemId: ORDER_ID, quantity: 1 }],
+    idempotencyKey: 'a7e19000-0000-4000-8000-0000000000e4',
+    notes: 'Room 12, side door',
+  };
+
+  it('a page-cache refresh that throws is reported (the error only) and the order is still answered', async () => {
+    vi.mocked(portalSubmitOrder).mockResolvedValueOnce({ id: ORDER_ID, replay: false });
+    const boom = new Error('revalidate failed');
+    revalidatePath.mockImplementationOnce(() => {
+      throw boom;
+    });
+    expect(await submitPortalOrderAction(INPUT)).toEqual({
+      ok: true,
+      data: { id: ORDER_ID, replay: false },
+    });
+    expect(reportError).toHaveBeenCalledWith(boom, {
+      tag: 'actions.portal.submit_portal_order.revalidate',
+      organizationId: 'org-1',
+    });
+    // No order content goes to the report.
+    expect(JSON.stringify(vi.mocked(reportError).mock.calls)).not.toMatch(/Room 12|e4"|quantity/);
+  });
+});

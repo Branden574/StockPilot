@@ -85,10 +85,9 @@ export async function submitPortalOrderAction(
       : r;
   }
   const { ctx } = resolved;
+  let created: Awaited<ReturnType<typeof portalSubmitOrder>>;
   try {
-    const created = await portalSubmitOrder(ctx, input);
-    revalidatePath('/portal');
-    return ok(created);
+    created = await portalSubmitOrder(ctx, input);
   } catch (e) {
     // The service's refusals are ServiceErrors with their words (an item no
     // longer orderable, a line too large); anything else is the fixed
@@ -97,6 +96,19 @@ export async function submitPortalOrderAction(
       organizationId: ctx.organizationId,
     });
   }
+  // The order exists from here on: nothing after this line may answer
+  // anything but the order. A refresh of the page's cache that fails is
+  // reported (the error only, never the order) and the order is still the
+  // answer; the shop reads the list again itself after a confirmed order.
+  try {
+    revalidatePath('/portal');
+  } catch (e) {
+    void reportError(e, {
+      tag: 'actions.portal.submit_portal_order.revalidate',
+      organizationId: ctx.organizationId,
+    });
+  }
+  return ok(created);
 }
 
 // ── Request a return (portal customer) ──────────────────────────────────────

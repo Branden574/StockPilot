@@ -34,6 +34,7 @@ import {
   PORTAL_ORDER_CONFLICT_COPY,
   PORTAL_ORDER_KEY_COPY,
   PORTAL_ORDER_UNCONFIRMED_COPY,
+  PORTAL_ORDER_UNRECOGNISED_COPY,
   portalSubmitOrder,
   type PortalContext,
 } from './portal';
@@ -496,6 +497,31 @@ describe('Place order failures, class by class', () => {
     expect(reportError).toHaveBeenCalledTimes(reported ? 1 : 0);
     expect(dispatchEvent).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['a foreign-key violation (23503)', { message: 'fk', code: '23503' }],
+    ['a permission refusal with no mapped hint (42501)', { message: 'denied', code: '42501' }],
+    [
+      'a raised refusal with a hint this map does not name (P0001)',
+      {
+        message: 'portal_order_submission_invalid',
+        code: 'P0001',
+        hint: 'portal_order_submission_invalid',
+      },
+    ],
+    ['a check violation (23514)', { message: 'check', code: '23514' }],
+  ])(
+    'the write answers %s, a database code the service does not recognise: unknown, with the reload-and-check words',
+    async (_label, error) => {
+      admin = makeAdmin(db, { place_portal_order_request: [error as RpcError] });
+      adminRef.current = admin.client;
+      const e = await failure(send);
+      expect(e).toMatchObject({ code: 'conflict', message: PORTAL_ORDER_UNRECOGNISED_COPY });
+      expect(e.message).not.toMatch(/finish it/);
+      expect(e.details).toEqual({ outcome: 'unknown', retryable: true });
+      expect(reportError).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('the write answers no order: unknown', async () => {
     writeAnswers(async () => ({ data: { outcome: 'placed' }, error: null }));

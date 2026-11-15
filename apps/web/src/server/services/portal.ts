@@ -426,6 +426,14 @@ export const PORTAL_ORDER_CONFLICT_COPY =
  */
 export const PORTAL_ORDER_UNCONFIRMED_COPY =
   "We couldn't confirm your order went through. Press Place order again to finish it. It won't be placed twice.";
+/**
+ * The keyed write answered a database error code this service does not
+ * recognise. Still unknown (the cart stays as sent, and Place order sends it
+ * again under the same key), but a press may not settle it, so the customer
+ * is sent to their orders rather than promised a finish.
+ */
+export const PORTAL_ORDER_UNRECOGNISED_COPY =
+  "We couldn't confirm this order. Reload the page and check your orders before placing it again.";
 /** The generic sentence for a read that failed before anything was written. */
 const PORTAL_ORDER_FAILED_COPY = 'Order could not be submitted. Please try again.';
 
@@ -517,12 +525,15 @@ function portalKeyReadError(error: RpcFailure): ServiceError {
  * and is answered as unknown, never as "nothing placed":
  *   - no SQLSTATE at all (the fetch to the database failed or was cut off);
  *   - a connection error (08xxx), a server or gateway error (PGRST*, 5xx,
- *     XX000), or any code this map does not name;
+ *     XX000);
  *   - 55P03 (the key's lock is held: an earlier send of this key is still
  *     being placed), 57014 (a timeout), 40P01 (a deadlock): reported as busy,
  *     not as faults;
  *   - an answer that names no order.
- * The same cart under the same key settles it: the first order, or one order.
+ * The same cart under the same key settles these: the first order, or one
+ * order. A database code this map does not name is unknown too, but a press
+ * may answer it again, so its words send the customer to their orders
+ * (PORTAL_ORDER_UNRECOGNISED_COPY) instead of promising a finish.
  */
 function portalWriteError(error: RpcFailure): ServiceError {
   const definite = definiteRefusal(error, 'portal.submit.write');
@@ -532,12 +543,30 @@ function portalWriteError(error: RpcFailure): ServiceError {
       tag: 'portal.submit.write',
     });
   }
-  return unknownWriteOutcome();
+  return unknownWriteOutcome(
+    isUnrecognisedSqlState(error.code)
+      ? PORTAL_ORDER_UNRECOGNISED_COPY
+      : PORTAL_ORDER_UNCONFIRMED_COPY,
+  );
+}
+
+/**
+ * A database error code (a 5-character SQLSTATE) this service has no class
+ * for: not a connection error (08xxx), the key's lock (55P03), a timeout
+ * (57014), a deadlock (40P01) or an internal error (XX000), and not one of
+ * the raised refusals mapped above. No code (a lost answer) and PostgREST's
+ * own codes (PGRST...) are not database codes, and keep the finish sentence.
+ */
+function isUnrecognisedSqlState(code: string | null | undefined): boolean {
+  const c = (code ?? '').toUpperCase();
+  if (!/^[0-9A-Z]{5}$/.test(c)) return false;
+  if (c.startsWith('08')) return false;
+  return !['55P03', '57014', '40P01', 'XX000'].includes(c);
 }
 
 /** The answer for a keyed write that may have committed (see portalWriteError). */
-function unknownWriteOutcome(): ServiceError {
-  return new ServiceError('conflict', PORTAL_ORDER_UNCONFIRMED_COPY, {
+function unknownWriteOutcome(message: string = PORTAL_ORDER_UNCONFIRMED_COPY): ServiceError {
+  return new ServiceError('conflict', message, {
     outcome: 'unknown',
     retryable: true,
   });

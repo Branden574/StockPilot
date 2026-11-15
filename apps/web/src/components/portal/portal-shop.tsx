@@ -40,6 +40,13 @@ const RETURNABLE_ORDER_STATUSES = new Set(['completed', 'delivered']);
 const ORDER_UNCONFIRMED_MESSAGE =
   "We couldn't confirm your order went through. Press Place order again to finish it. It won't be placed twice.";
 
+/**
+ * Added to a definite refusal that follows a send whose outcome was not
+ * known: the refusal is true for this send, but an earlier send may still
+ * have gone through, so the customer looks before ordering again.
+ */
+const CHECK_ORDERS_FIRST_MESSAGE = 'Check your orders before placing it again.';
+
 type PortalOrderBody = { lines: Array<{ itemId: string; quantity: number }>; notes?: string };
 
 /** The cart as the server reads it: lines in item order, and the note. */
@@ -131,6 +138,11 @@ export function PortalShop({
   // once. A reload clears it (the state does not survive one) and reads the
   // customer's orders again.
   const [unconfirmed, setUnconfirmed] = React.useState(false);
+  // A definite refusal followed a send whose outcome was not known: the cart
+  // is the customer's again, and Reload stays offered with a sentence to
+  // check their orders first, until an order is confirmed or the page loads
+  // again.
+  const [checkOrdersFirst, setCheckOrdersFirst] = React.useState(false);
   // One submission key per cart (the staff New order page's rule): minted on
   // the first press of a cart, kept with that cart for every retry, and
   // renewed for a changed cart or once an order is confirmed. A refusal keeps
@@ -187,12 +199,14 @@ export function PortalShop({
   /**
    * An unknown outcome: the cart and the note go back to what was sent and
    * are held read-only with its key, and the next press sends exactly them.
+   * The words are the server's when it answered (they differ for a database
+   * code the service does not recognise), else the page's own.
    */
-  function holdAsSent(sent: PortalOrderBody) {
+  function holdAsSent(sent: PortalOrderBody, message: string = ORDER_UNCONFIRMED_MESSAGE) {
     setCart(Object.fromEntries(sent.lines.map((l) => [l.itemId, l.quantity])));
     setNotes(sent.notes ?? '');
     setUnconfirmed(true);
-    setError(ORDER_UNCONFIRMED_MESSAGE);
+    setError(message);
   }
 
   async function submit() {
@@ -236,8 +250,8 @@ export function PortalShop({
         case 'unknown':
           // The server's answer from the database was lost, or the key is
           // still held by an earlier send: the order may have been placed.
-          // Exactly as a call that did not come back.
-          holdAsSent(sending.body);
+          // Exactly as a call that did not come back, in the server's words.
+          holdAsSent(sending.body, res.error.message || ORDER_UNCONFIRMED_MESSAGE);
           return;
         case 'refused':
           // Definite: nothing was placed by this send, and this cart as sent
@@ -245,9 +259,20 @@ export function PortalShop({
           // after an unknown send: a resend that the key answered would have
           // come back as the first order, so the refusal is shown and the
           // customer decides. The key stays with this cart; a changed cart
-          // gets a new one.
+          // gets a new one. After an unknown send, an earlier send may still
+          // have gone through: Reload stays, and the words say to check the
+          // orders first (unless they already do).
+          if (unconfirmed || checkOrdersFirst) {
+            setCheckOrdersFirst(true);
+            setError(
+              /check your orders/i.test(res.error.message)
+                ? res.error.message
+                : `${res.error.message} ${CHECK_ORDERS_FIRST_MESSAGE}`,
+            );
+          } else {
+            setError(res.error.message);
+          }
           setUnconfirmed(false);
-          setError(res.error.message);
           return;
         default:
           // A read failed before anything was written, or the access check
@@ -260,6 +285,7 @@ export function PortalShop({
     // Placed, now or by the first press (a replay names the same order).
     pending.current = null;
     setUnconfirmed(false);
+    setCheckOrdersFirst(false);
     setCart({});
     setNotes('');
     setPlacedId(res.data.id);
@@ -518,10 +544,11 @@ export function PortalShop({
                 {error}
               </p>
             )}
-            {/* Only after a call whose outcome is not known: a full page load,
-                which reads the customer's orders again and clears the cart
-                (Place order, pressed again, finishes the same order instead). */}
-            {unconfirmed && (
+            {/* Only after a call whose outcome is not known, and after a
+                definite refusal that followed one: a full page load, which
+                reads the customer's orders again and clears the cart (Place
+                order, pressed again, finishes the same order instead). */}
+            {(unconfirmed || checkOrdersFirst) && (
               <div>
                 <Button
                   type="button"

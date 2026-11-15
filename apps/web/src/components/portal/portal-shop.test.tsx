@@ -598,7 +598,7 @@ describe('PortalShop: what each answer does to the cart', () => {
     expect(screen.queryByRole('button', { name: 'Reload' })).toBeNull();
   });
 
-  it('refused (definite) on the resend after an unknown outcome: the cart is released, the refusal shows, and a changed cart gets a new key', async () => {
+  it('refused (definite) on the resend after an unknown outcome: the cart is released, the refusal says to check the orders first, Reload stays, and a changed cart gets a new key', async () => {
     actions.submitPortalOrderAction.mockRejectedValueOnce(new Error('Failed to fetch'));
     const user = await shop();
     await user.click(screen.getByRole('button', { name: 'Place order' }));
@@ -608,15 +608,19 @@ describe('PortalShop: what each answer does to the cart', () => {
     actions.submitPortalOrderAction.mockResolvedValueOnce(REFUSED);
     await user.click(screen.getByRole('button', { name: 'Place order' }));
     expect(
-      await screen.findByText('One of the items is no longer available to order.'),
+      await screen.findByText(
+        'One of the items is no longer available to order. Check your orders before placing it again.',
+      ),
     ).toBeInTheDocument();
     expect(sent()[1]).toEqual(sent()[0]);
-    // Released: the cart and the note can change again, and Reload is gone.
+    // Released: the cart and the note can change again; an earlier send may
+    // still have gone through, so Reload stays.
     expect(addOne()).toBeEnabled();
     expect(note()).not.toHaveAttribute('readonly');
-    expect(screen.queryByRole('button', { name: 'Reload' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeInTheDocument();
 
-    // The customer changes the cart: a new submission, a new key.
+    // The customer changes the cart: a new submission, a new key. Once an
+    // order is confirmed, Reload is no longer offered.
     actions.submitPortalOrderAction.mockResolvedValueOnce({
       ok: true,
       data: { id: 'order-2', replay: false },
@@ -625,6 +629,53 @@ describe('PortalShop: what each answer does to the cart', () => {
     await user.click(screen.getByRole('button', { name: 'Place order' }));
     await waitFor(() => expect(sent()).toHaveLength(3));
     expect(sent()[2]!.idempotencyKey).not.toBe(sent()[0]!.idempotencyKey);
+    expect(await screen.findByRole('status')).toHaveTextContent('Order submitted');
+    expect(screen.queryByRole('button', { name: 'Reload' })).toBeNull();
+  });
+
+  it('a refusal after an unknown outcome that already says to check the orders is not repeated', async () => {
+    actions.submitPortalOrderAction.mockResolvedValueOnce(UNKNOWN);
+    const user = await shop();
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    await screen.findByRole('alert');
+    const conflict =
+      "This order can't be placed as it was sent. Reload the page and check your orders before placing it again.";
+    actions.submitPortalOrderAction.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'conflict', message: conflict, details: { outcome: 'refused' } },
+    });
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(conflict);
+    expect(screen.getByRole('alert').textContent).toBe(conflict);
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeInTheDocument();
+  });
+
+  it("unknown with the server's reload-and-check words (a database code it does not recognise): those words, the cart held, Reload, and Place order with the same key", async () => {
+    const unrecognised =
+      "We couldn't confirm this order. Reload the page and check your orders before placing it again.";
+    actions.submitPortalOrderAction.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: unrecognised,
+        details: { outcome: 'unknown', retryable: true },
+      },
+    });
+    const user = await shop();
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(unrecognised);
+    expect(screen.queryByText(/Press Place order again to finish it/)).toBeNull();
+    expect(addOne()).toBeDisabled();
+    expect(note()).toHaveAttribute('readonly');
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Place order' })).toBeEnabled();
+    actions.submitPortalOrderAction.mockResolvedValueOnce({
+      ok: true,
+      data: { id: 'fedcba98-7654-4321-8abc-def012345678', replay: true },
+    });
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    await waitFor(() => expect(sent()).toHaveLength(2));
+    expect(sent()[1]).toEqual(sent()[0]);
   });
 
   it('no outcome (a read failed before anything was written) after an unknown outcome: the cart stays as sent with Reload', async () => {

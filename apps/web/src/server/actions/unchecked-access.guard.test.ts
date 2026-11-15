@@ -350,6 +350,10 @@ const REVIEWED: Record<string, { count: number; why: string }> = {
     count: 2,
     why: 'around creating the service client, and one account of a clean-up loop (counted and reported): the platform console, no organization context',
   },
+  'portal.ts#submitPortalOrderAction': {
+    count: 1,
+    why: 'around the page-cache refresh after the order is placed: it reports the error and still answers the order (a refusal there would free the cart and invite a second order); the service call is in a try that reaches the shared mapping',
+  },
   'profile.ts#resolveSessionMfaPosture': {
     count: 1,
     why: "around the read of the account's own factor list alone: an unreadable list is held as MFA required",
