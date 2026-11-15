@@ -6,9 +6,10 @@ import { z } from 'zod';
  * so no body may make that validation throw: a throw escapes the handler and
  * the route answers 500. This schema coerces nothing (`quantity` is a plain
  * z.number() and `exchange` is passed through untouched for the service to
- * check), so bodies nested 500,000 levels deep (about 1 MB, the depth a 1 MB
- * body can reach) get the one malformed-body 400. If a later change makes the
- * check throw anyway, the body gets the same 400.
+ * check), so bodies nested 120,000 levels deep (about 240 KB, near the
+ * route's 256 KB body limit) get the one malformed-body 400; a deeper body is
+ * over that limit and answered 413 unread. If a later change makes the check
+ * throw anyway, the body gets the same 400.
  */
 
 const checkRateLimit = vi.fn(async (..._a: unknown[]) => ({
@@ -38,7 +39,7 @@ const MALFORMED = {
   error: 'validation_error',
   message: 'Check the items and quantities, then try again.',
 };
-const DEPTH = 500_000;
+const DEPTH = 120_000;
 
 /** Raw JSON text, sent as is: JSON.stringify itself overflows on these depths. */
 function req(json: string) {
@@ -73,11 +74,20 @@ describe('POST /api/v1/public/returns: nesting anywhere in the body never answer
       (n: string) => `{"token":${n},"lines":[{"orderRequestLineId":"${LINE}","quantity":1}]}`,
     ],
     ['the whole body', (n: string) => n],
-  ])('%s nested 500,000 levels deep is the malformed-body 400', async (_where, build) => {
+  ])('%s nested 120,000 levels deep is the malformed-body 400', async (_where, build) => {
     const res = await POST(req(build(nest(DEPTH))));
 
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual(MALFORMED);
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(checkRateLimit).not.toHaveBeenCalled();
+    expect(createRequesterReturn).not.toHaveBeenCalled();
+  });
+
+  it('a body nested 500,000 levels deep (about 1 MB) is a 413, unread', async () => {
+    const res = await POST(req(nest(500_000)));
+
+    expect(res.status).toBe(413);
     expect(res.headers.get('cache-control')).toBe('no-store');
     expect(checkRateLimit).not.toHaveBeenCalled();
     expect(createRequesterReturn).not.toHaveBeenCalled();

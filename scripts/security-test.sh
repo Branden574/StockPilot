@@ -1409,6 +1409,16 @@ WEB_TESTS=(
   src/test/ingest-proxy.guard.test.ts
   'src/app/ingest/[...path]/route.test.ts'
   'src/app/ingest/[...path]/route.census.test.ts'
+  # Request lists and bodies have upper limits. Every zod list in source has a
+  # .max() or .length() and every keyed object goes through boundedRecord
+  # (a short allowlist names the schemas that never see a request); the guard
+  # also fails when the zod patch that stops at the first over-long list is
+  # not applied. The three public form posts (order requests, return requests,
+  # return options) take at most 256 KB and answer 413 before parsing a larger
+  # body. Each file carries the "Security invariant" marker.
+  src/test/zod-array-bounds.guard.test.ts
+  src/lib/http/read-json-limited.test.ts
+  src/app/api/v1/public/body-limit.test.ts
 
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts
@@ -2177,6 +2187,11 @@ MOBILE_TESTS=(
 # ═══════════════════════════════════════════════════════════════════════════
 CORE_TESTS=(
   src/constants/permissions.test.ts
+  # zod stops at the first over-long list (patches/zod@3.25.76.patch, ESM and
+  # CommonJS builds), and a keyed object over its bound is refused before any
+  # key is validated (boundedRecord).
+  src/zod-array-early-stop.test.ts
+  src/schemas/bounded-record.test.ts
   # 0395: the database refusals' hints and words, shared by web and phone.
   src/guards/db-guard-copy.test.ts
   src/auth/account-status.test.ts

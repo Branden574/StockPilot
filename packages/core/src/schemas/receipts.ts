@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { formatLimit, MAX_PO_LINES, MAX_UNITS_PER_LINE } from './request-limits';
+
 export const lotEntrySchema = z.object({
   lotNumber: z.string().min(1).max(120).trim(),
   expirationDate: z
@@ -20,7 +22,13 @@ export const postReceiptLineSchema = z
     unitCost: z.number().nonnegative().optional(),
     notes: z.string().max(2000).optional(),
     /** Required when item.tracking_type='lot' and qtyAccepted > 0. */
-    lots: z.array(lotEntrySchema).optional(),
+    lots: z
+      .array(lotEntrySchema)
+      .max(
+        MAX_UNITS_PER_LINE,
+        `A received line can have at most ${formatLimit(MAX_UNITS_PER_LINE)} lots.`,
+      )
+      .optional(),
     /**
      * Required when item.tracking_type='serial' and qtyAccepted > 0 — exactly
      * one serial per accepted unit. OPTIONAL when tracking_type is
@@ -33,7 +41,13 @@ export const postReceiptLineSchema = z
      * post_receipt_v2 and landed in serial_registry as a blank identifier — a
      * placeholder by another name, and one no scan can ever match again.
      */
-    serials: z.array(z.string().trim().min(1).max(120)).optional(),
+    serials: z
+      .array(z.string().trim().min(1).max(120))
+      .max(
+        MAX_UNITS_PER_LINE,
+        `A received line can have at most ${formatLimit(MAX_UNITS_PER_LINE)} serial numbers.`,
+      )
+      .optional(),
   })
   .refine(
     (v) => v.qtyAccepted + v.qtyRejected <= v.qtyReceived + 0.0001,
@@ -44,7 +58,10 @@ export type PostReceiptLineInput = z.infer<typeof postReceiptLineSchema>;
 export const postReceiptSchema = z.object({
   purchaseOrderId: z.string().uuid(),
   warehouseId: z.string().uuid(),
-  lines: z.array(postReceiptLineSchema).min(1),
+  lines: z
+    .array(postReceiptLineSchema)
+    .min(1)
+    .max(MAX_PO_LINES, `A receipt can have at most ${formatLimit(MAX_PO_LINES)} lines.`),
   notes: z.string().max(2000).optional(),
   /** Required from the client. UUID v4 generated once per receive form session. */
   idempotencyKey: z.string().uuid(),

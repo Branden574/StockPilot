@@ -3,6 +3,11 @@ import { z } from 'zod';
 
 import { clientIpFromRequest } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
+import {
+  PAYLOAD_TOO_LARGE,
+  PUBLIC_FORM_BODY_LIMIT,
+  readJsonLimited,
+} from '@/lib/http/read-json-limited';
 import { hasArrayLongerThan } from '@/lib/oversized-array';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { returnTokenBucketKey } from '@/lib/returns/public-limits';
@@ -92,17 +97,19 @@ function answer(body: unknown, init: { status?: number; headers?: Record<string,
 }
 
 export async function POST(req: NextRequest) {
-  let raw: unknown;
-  try {
-    raw = await req.json();
-  } catch {
-    return answer({ error: 'invalid_json', message: 'Check the form and try again.' }, { status: 400 });
+  // A body over PUBLIC_FORM_BODY_LIMIT is refused before it is parsed.
+  const read = await readJsonLimited(req, PUBLIC_FORM_BODY_LIMIT);
+  if (!read.ok) {
+    return read.reason === 'too_large'
+      ? answer(PAYLOAD_TOO_LARGE, { status: 413 })
+      : answer({ error: 'invalid_json', message: 'Check the form and try again.' }, { status: 400 });
   }
-  // GHSA-mrhx-c7xc-m3w5: zod 3 still parses every element of an over-long
-  // array, one issue per bad element (lib/oversized-array.ts), so a body with
-  // any array longer than MAX_LINES, at any depth, is refused before
-  // safeParse, with the same 400 as any other malformed body. The return
-  // form (requester-return-form.tsx) sends no array but `lines`.
+  const raw = read.value;
+  // GHSA-mrhx-c7xc-m3w5, a second layer behind the zod patch
+  // (lib/oversized-array.ts): a body with any array longer than MAX_LINES, at
+  // any depth, is refused before safeParse, with the same 400 as any other
+  // malformed body. The return form (requester-return-form.tsx) sends no array
+  // but `lines`.
   //
   // Checking a body must never answer 500: this runs before the rate limiter,
   // for anyone. The check walks without recursion and the schema converts

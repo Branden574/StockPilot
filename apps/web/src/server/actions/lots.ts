@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { err, ok, type ActionResult } from '@stockpilot/core';
+import { err, formatLimit, MAX_UNITS_PER_LINE, ok, type ActionResult } from '@stockpilot/core';
 import { LotsService } from '@/server/services/lots';
 import { actionErrorResult } from '@/server/lib/action-error-result';
 
@@ -19,7 +19,8 @@ const schema = z.object({
         expirationDate: z.string().nullable(),
       }),
     )
-    .min(1),
+    .min(1)
+    .max(MAX_UNITS_PER_LINE, `Record at most ${formatLimit(MAX_UNITS_PER_LINE)} lots at a time.`),
 });
 
 export async function recordLotPicksAction(

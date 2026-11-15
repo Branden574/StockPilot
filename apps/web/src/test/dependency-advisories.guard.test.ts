@@ -76,8 +76,11 @@ import { describe, expect, it } from 'vitest';
  * alert, which a dismissal never does by itself).
  *
  * NOT COVERED: zod 3 (GHSA-mrhx-c7xc-m3w5, Dependabot #120, #121, #123 and
- * #134) needs zod 4, a change of its own (docket C12; #381 refuses over-long
- * lists on the two public routes until then). A withdrawn advisory
+ * #134) is fixed by zod 4, a change of its own. Until then it is mitigated:
+ * patches/zod@3.25.76.patch makes zod 3 stop at the first over-long list, as
+ * zod 4.6.6 does, and zod-array-bounds.guard.test.ts fails on a request list
+ * with no bound or on a missing patch. The alerts stay open, because the
+ * version they name is still installed. A withdrawn advisory
  * (sprintf-js, GHSA-hp3w-g68c-fv3c) is not a defect.
  *
  * IF THIS FAILS: a lockfile change resolved a vulnerable version, or gave a
