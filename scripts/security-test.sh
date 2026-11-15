@@ -1419,6 +1419,12 @@ WEB_TESTS=(
   src/test/zod-array-bounds.guard.test.ts
   src/lib/http/read-json-limited.test.ts
   src/app/api/v1/public/body-limit.test.ts
+  # A request holds a total number of list entries (withEntryBudget, core):
+  # a schema with a list inside a list sits behind it (the guard above), and
+  # the receipt route and action refuse lines times serial numbers past it
+  # before the receipt schema parses anything.
+  'src/app/api/v1/po/[id]/receipts/route.entry-budget.test.ts'
+  src/server/actions/receiving.entry-budget.test.ts
 
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts
@@ -2192,6 +2198,9 @@ CORE_TESTS=(
   # key is validated (boundedRecord).
   src/zod-array-early-stop.test.ts
   src/schemas/bounded-record.test.ts
+  # The request entry budget: every list entry at any depth counted without
+  # recursion, refused before the schema runs.
+  src/schemas/entry-budget.test.ts
   # 0395: the database refusals' hints and words, shared by web and phone.
   src/guards/db-guard-copy.test.ts
   src/auth/account-status.test.ts

@@ -15,3 +15,4 @@ export * from './sports';
 export * from './releases';
 export * from './request-limits';
 export * from './bounded-record';
+export * from './entry-budget';

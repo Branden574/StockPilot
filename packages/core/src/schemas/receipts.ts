@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { withEntryBudget } from './entry-budget';
 import { formatLimit, MAX_PO_LINES, MAX_UNITS_PER_LINE } from './request-limits';
 
 export const lotEntrySchema = z.object({
@@ -55,7 +56,12 @@ export const postReceiptLineSchema = z
   );
 export type PostReceiptLineInput = z.infer<typeof postReceiptLineSchema>;
 
-export const postReceiptSchema = z.object({
+/**
+ * The receipt's fields. Lines hold lists of their own (lots, serials), so
+ * parse it only behind the request entry budget: postReceiptSchema below, or
+ * withEntryBudget() around a schema derived from it.
+ */
+export const postReceiptFields = z.object({
   purchaseOrderId: z.string().uuid(),
   warehouseId: z.string().uuid(),
   lines: z
@@ -66,6 +72,7 @@ export const postReceiptSchema = z.object({
   /** Required from the client. UUID v4 generated once per receive form session. */
   idempotencyKey: z.string().uuid(),
 });
+export const postReceiptSchema = withEntryBudget(postReceiptFields);
 export type PostReceiptInput = z.infer<typeof postReceiptSchema>;
 
 export const reverseReceiptSchema = z.object({

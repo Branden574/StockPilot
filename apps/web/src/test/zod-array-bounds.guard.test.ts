@@ -26,9 +26,16 @@ import { z } from 'zod';
  *     unless no key and no value can fail (a plain `z.string()` key and a
  *     `z.unknown()` or `z.any()` value): such a record can never produce an
  *     issue, however many keys it has.
- *   - ALLOWLIST names the few schemas that never see a request (our own static
- *     registry and our own responses), each with why. An entry that matches
- *     nothing fails, so the list cannot go stale.
+ *   - A list inside a list multiplies their bounds, so a list whose element
+ *     schema holds another list, at any depth and through keyed objects
+ *     (followed through the consts it names), must
+ *     sit behind the request entry budget (withEntryBudget,
+ *     packages/core/src/schemas/entry-budget.ts): inside a withEntryBudget(...)
+ *     call, or in a const that is only ever used inside one (every use in
+ *     source; a type position such as `typeof x` is not a use).
+ *   - ALLOWLIST and NESTED_ALLOWLIST name the few schemas that never see a
+ *     request (our own static registry and our own responses), each with why.
+ *     An entry that matches nothing fails, so the lists cannot go stale.
  *   - The patch itself is checked at run time: an over-long list of failing
  *     elements must give exactly one issue.
  *
@@ -37,6 +44,8 @@ import { z } from 'zod';
  *     the product's own screens, imports and phone app send for that field,
  *     and say where that number comes from next to it.
  *   - "keyed object with no bound": use `boundedRecord(key, value, maxKeys)`.
+ *   - "list inside a list outside the entry budget": wrap the schema (or the
+ *     schema derived from it, at the place named) in `withEntryBudget(...)`.
  *   - "allowlist entry matches nothing": remove the entry.
  *   - "the zod patch is not applied": run `pnpm install` and read its output.
  *     A zod version change must carry the patch over (or move to zod 4).
@@ -66,6 +75,15 @@ const ALLOWLIST: Readonly<Record<string, string>> = {
   'packages/core/src/schemas/releases.ts#releases':
     "parses our own server's release answer on the client, never a request",
 };
+
+/** Lists inside lists that never hold request input, as `file#key`. */
+const NESTED_ALLOWLIST: Readonly<Record<string, string>> = {
+  'packages/core/src/schemas/releases.ts#entries':
+    'validates the release registry compiled into the app, never a request',
+};
+
+/** The wrapper that puts a schema behind the request entry budget. */
+const BUDGET_WRAPPER = 'withEntryBudget';
 
 interface BoundFinding {
   file: string;
@@ -197,6 +215,189 @@ function scanRepo(): BoundFinding[] {
   );
 }
 
+interface SourceText {
+  file: string;
+  source: string;
+}
+
+interface NestedFinding {
+  file: string;
+  line: number;
+  key: string;
+  /** Where the list escapes the budget: the list itself, or a use of its const. */
+  at: string;
+}
+
+function parse(file: string, source: string): ts.SourceFile {
+  return ts.createSourceFile(
+    file,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    file.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+}
+
+const lineOf = (sf: ts.SourceFile, node: ts.Node) =>
+  sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+
+/** A list or keyed-object schema call: z.array, <schema>.array(), z.record, boundedRecord. */
+function isListCall(node: ts.Node): node is ts.CallExpression {
+  if (!ts.isCallExpression(node)) return false;
+  if (ts.isIdentifier(node.expression)) return node.expression.text === 'boundedRecord';
+  if (!ts.isPropertyAccessExpression(node.expression)) return false;
+  const method = node.expression.name.text;
+  const onZ =
+    ts.isIdentifier(node.expression.expression) && node.expression.expression.text === 'z';
+  if (method === 'record') return onZ;
+  return method === 'array' && (onZ || node.arguments.length === 0);
+}
+
+/** A list schema call: z.array(...) or <schema>.array(). */
+function isArrayCall(node: ts.Node): boolean {
+  return isListCall(node) && listElement(node) !== undefined;
+}
+
+/** The element schema of a list call: z.array(<element>) or <element>.array(). */
+function listElement(node: ts.CallExpression): ts.Expression | undefined {
+  if (!ts.isPropertyAccessExpression(node.expression) || node.expression.name.text !== 'array') {
+    return undefined;
+  }
+  return node.arguments.length === 0 ? node.expression.expression : node.arguments[0];
+}
+
+function isInsideBudget(node: ts.Node): boolean {
+  for (let p: ts.Node | undefined = node.parent; p; p = p.parent) {
+    if (
+      ts.isCallExpression(p) &&
+      ts.isIdentifier(p.expression) &&
+      p.expression.text === BUDGET_WRAPPER
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isInTypePosition(node: ts.Node): boolean {
+  for (let p: ts.Node | undefined = node.parent; p; p = p.parent) {
+    if (ts.isTypeNode(p)) return true;
+    if (ts.isStatement(p)) return false;
+  }
+  return false;
+}
+
+/**
+ * Every list whose element schema holds another list and that can be parsed
+ * outside withEntryBudget, over a set of source files.
+ */
+function findNestedListsOutsideBudget(texts: readonly SourceText[]): NestedFinding[] {
+  const files = texts.map((t) => ({ file: t.file, sf: parse(t.file, t.source) }));
+  // Every const by name, in the file that declares it.
+  const consts = new Map<string, Array<{ file: string; decl: ts.VariableDeclaration }>>();
+  for (const { file, sf } of files) {
+    const visit = (n: ts.Node) => {
+      if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) {
+        const list = consts.get(n.name.text) ?? [];
+        list.push({ file, decl: n });
+        consts.set(n.name.text, list);
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+  }
+
+  const holdsList = (node: ts.Node, file: string, seen: Set<string>): boolean => {
+    let found = false;
+    const visit = (n: ts.Node) => {
+      if (found) return;
+      // A keyed object's keys are not list entries: only a list counts here
+      // (a list inside a keyed object inside a list is still found below).
+      if (isArrayCall(n)) {
+        found = true;
+        return;
+      }
+      const isReference =
+        ts.isIdentifier(n) &&
+        !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n) &&
+        !(ts.isPropertyAssignment(n.parent) && n.parent.name === n);
+      if (isReference && !seen.has(n.text)) {
+        seen.add(n.text);
+        const candidates = consts.get(n.text) ?? [];
+        const sameFile = candidates.filter((c) => c.file === file);
+        const pick = sameFile.length > 0 ? sameFile : candidates.length === 1 ? candidates : [];
+        if (pick.some((c) => holdsList(c.decl.initializer!, c.file, seen))) {
+          found = true;
+          return;
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(node);
+    return found;
+  };
+
+  /** Uses of a const outside withEntryBudget: its own file, and files that import it by name. */
+  const usesOutsideBudget = (name: string, declFile: string, decl: ts.VariableDeclaration) => {
+    const out: string[] = [];
+    for (const { file, sf } of files) {
+      if (file !== declFile) {
+        let imports = false;
+        const findImport = (n: ts.Node) => {
+          if (ts.isImportSpecifier(n) && (n.propertyName ?? n.name).text === name) imports = true;
+          ts.forEachChild(n, findImport);
+        };
+        findImport(sf);
+        if (!imports) continue;
+      }
+      const visit = (n: ts.Node) => {
+        if (
+          ts.isIdentifier(n) &&
+          n.text === name &&
+          n !== decl.name &&
+          !ts.isImportSpecifier(n.parent) &&
+          !ts.isExportSpecifier(n.parent) &&
+          !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n) &&
+          !(ts.isPropertyAssignment(n.parent) && n.parent.name === n) &&
+          !isInTypePosition(n) &&
+          !isInsideBudget(n)
+        ) {
+          out.push(`${file}:${lineOf(sf, n)}`);
+        }
+        ts.forEachChild(n, visit);
+      };
+      visit(sf);
+    }
+    return out;
+  };
+
+  const found: NestedFinding[] = [];
+  for (const { file, sf } of files) {
+    const visit = (n: ts.Node) => {
+      if (isListCall(n)) {
+        const element = listElement(n);
+        if (element && holdsList(element, file, new Set()) && !isInsideBudget(n)) {
+          const key = assignedKey(n, sf);
+          const line = lineOf(sf, n);
+          let decl: ts.Node | undefined = n.parent;
+          while (decl && !ts.isVariableDeclaration(decl) && !ts.isSourceFile(decl))
+            decl = decl.parent;
+          if (decl && ts.isVariableDeclaration(decl) && ts.isIdentifier(decl.name)) {
+            for (const at of usesOutsideBudget(decl.name.text, file, decl)) {
+              found.push({ file, line, key, at });
+            }
+          } else {
+            found.push({ file, line, key, at: `${file}:${line}` });
+          }
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+  }
+  return found;
+}
+
 const describeFinding = (f: BoundFinding) => `${f.file}:${f.line} ${f.key || '(unnamed)'}`;
 
 describe('zod schemas bound every list and keyed object', () => {
@@ -229,6 +430,47 @@ describe('zod schemas bound every list and keyed object', () => {
     for (const [entry, reason] of Object.entries(ALLOWLIST)) {
       expect(reason.trim().length, `${entry} has no reason`).toBeGreaterThan(10);
     }
+  });
+});
+
+describe('a list inside a list sits behind the request entry budget', () => {
+  const texts = listSourceFiles()
+    .map((file) => ({ file, source: readFileSync(path.join(ROOT, file), 'utf8') }))
+    .filter(
+      (t) =>
+        /from\s+['"](zod|@stockpilot\/core)['"]/.test(t.source) ||
+        t.file.startsWith('packages/core/'),
+    );
+  const nested = findNestedListsOutsideBudget(texts);
+  const allowlisted = (f: NestedFinding) =>
+    Object.prototype.hasOwnProperty.call(NESTED_ALLOWLIST, `${f.file}#${f.key}`);
+
+  it('finds the receipt lines behind the budget (a scan that finds nothing cannot pass)', () => {
+    const receipts = texts.find((t) => t.file === 'packages/core/src/schemas/receipts.ts');
+    expect(receipts?.source).toContain(`${BUDGET_WRAPPER}(postReceiptFields)`);
+    // Unwrapped, the same receipt schema is reported.
+    const unwrapped = texts.map((t) =>
+      t.file === receipts?.file
+        ? {
+            ...t,
+            source: t.source.replace(`${BUDGET_WRAPPER}(postReceiptFields)`, 'postReceiptFields'),
+          }
+        : t,
+    );
+    expect(findNestedListsOutsideBudget(unwrapped).map((f) => f.key)).toContain('lines');
+  });
+
+  it('finds no list inside a list outside the budget', () => {
+    const outside = nested.filter((f) => !allowlisted(f));
+    expect(
+      outside.map((f) => `${f.file}:${f.line} ${f.key || '(unnamed)'} used at ${f.at}`),
+      'list inside a list outside the entry budget',
+    ).toEqual([]);
+  });
+
+  it('has no nested allowlist entry that matches nothing', () => {
+    const matched = new Set(nested.filter(allowlisted).map((f) => `${f.file}#${f.key}`));
+    expect(Object.keys(NESTED_ALLOWLIST).filter((k) => !matched.has(k))).toEqual([]);
   });
 });
 
@@ -285,6 +527,62 @@ describe('self-test: the scan catches what it is meant to', () => {
     expect(scan('// z.array(z.string())\nconst s = "z.record(z.string(), z.number())";')).toEqual(
       [],
     );
+  });
+
+  it('flags a list inside a list outside the budget, and passes one inside it', () => {
+    const nestedScan = (...texts: SourceText[]) =>
+      findNestedListsOutsideBudget(texts).map((f) => `${f.key}@${f.at}`);
+    const head = "import { z } from 'zod';\n";
+    const line = 'const line = z.object({ serials: z.array(z.string()).max(5) });\n';
+    expect(
+      nestedScan({
+        file: 'a.ts',
+        source: `${head}${line}export const r = z.object({ lines: z.array(line).max(9) });\nr.parse(1);`,
+      }),
+    ).toEqual(['lines@a.ts:4']);
+    expect(
+      nestedScan({
+        file: 'a.ts',
+        source: `${head}${line}const r = withEntryBudget(z.object({ lines: z.array(line).max(9) }));`,
+      }),
+    ).toEqual([]);
+    // Wrapped where it is used, and `typeof` is not a use.
+    expect(
+      nestedScan({
+        file: 'a.ts',
+        source: `${head}${line}export const f = z.object({ lines: z.array(line).max(9) });\nexport const s = withEntryBudget(f);\ntype T = z.infer<typeof f>;`,
+      }),
+    ).toEqual([]);
+    // A schema derived from it in another file, outside the budget.
+    expect(
+      nestedScan(
+        {
+          file: 'a.ts',
+          source: `${head}${line}export const f = z.object({ lines: z.array(line).max(9) });\nexport const s = withEntryBudget(f);`,
+        },
+        { file: 'b.ts', source: "import { f } from './a';\nconst body = f.omit({});" },
+      ),
+    ).toEqual(['lines@b.ts:2']);
+    // A list of keyed objects of lists is nested; a list of keyed objects of strings is not.
+    expect(
+      nestedScan({
+        file: 'a.ts',
+        source: `${head}const r = z.array(boundedRecord(z.string(), z.array(z.number()).max(2), 3)).max(9);\nr.parse(1);`,
+      }),
+    ).toEqual(['r@a.ts:3']);
+    expect(
+      nestedScan({
+        file: 'a.ts',
+        source: `${head}const r = z.array(boundedRecord(z.string(), z.string(), 3)).max(9);\nr.parse(1);`,
+      }),
+    ).toEqual([]);
+    // A list of plain objects is not nested.
+    expect(
+      nestedScan({
+        file: 'a.ts',
+        source: `${head}const r = z.array(z.object({ id: z.string() })).max(9);\nr.parse(1);`,
+      }),
+    ).toEqual([]);
   });
 
   it('skips test files and test helpers', () => {
