@@ -589,7 +589,7 @@ const REVIEWED_SEATS: ReviewedSeat[] = [
     role: 'unknown',
     verb: 'update',
     receiver: 'this.ctx.supabase',
-    why: "The Team page's role change refuses 'owner' before it writes, and writes through the caller's own client (TeamService is only made from withContext), where the owner guard (0393) refuses any promotion to owner by a signed-in caller.",
+    why: "The Team page's role change refuses 'owner' before it writes, and writes through the caller's own client (TeamService is made from withContext, and from withApiContext in the member role route: the caller's own session either way), where the owner guard (0393) refuses any promotion to owner by a signed-in caller.",
   },
 ];
 

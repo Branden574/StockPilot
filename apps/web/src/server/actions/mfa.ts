@@ -536,6 +536,13 @@ export async function setOrgMfaPolicyAction(input: {
       .select('mfa_policy')
       .eq('id', ctx.organizationId)
       .maybeSingle();
+    // A save of the policy the organization already has changes nothing: no
+    // update, no audit row, no security event, no refresh. Only a policy that
+    // was read counts as the same one; when the read gave no row the update
+    // below runs.
+    if (prev && prev.mfa_policy === parsed.data.policy) {
+      return ok(undefined);
+    }
     const { data: updated, error } = await supabase
       .from('organizations')
       .update({ mfa_policy: parsed.data.policy })
