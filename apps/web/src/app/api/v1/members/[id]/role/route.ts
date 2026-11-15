@@ -43,9 +43,15 @@ const bodySchema = z.object({
  *   200 `{ ok: true, role }`;
  *   400 `validation_error`: an id that is not a uuid, a body that is not
  *       JSON, or a role that is not one of the four ('owner' included);
- *   401 `unauthenticated`;
- *   403 `forbidden` (`details.reason` aal2_required or mfa_required when the
- *       authenticator rule refused);
+ *   401 `unauthenticated`: no session, or a session that still owes its
+ *       authenticator code (an account with an authenticator, signed in with
+ *       the password alone). withApiContext refuses that session before
+ *       anything is read, and the phone answers the 401 by asking for the
+ *       code;
+ *   403 `forbidden`, with the service's words: `details.reason` mfa_required
+ *       when the organization requires an authenticator the caller has not
+ *       set up (aal2_required only when the organization's rule could not be
+ *       read, which is held to the strictest);
  *   404 `not_found`: no such member in the caller's organization;
  *   409 `conflict`: the member was removed or changed meanwhile;
  *   429 `rate_limited`, with Retry-After (30 changes a minute per account);
