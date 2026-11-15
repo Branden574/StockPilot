@@ -1835,6 +1835,125 @@ describe("an AI chat tool's refusal is the tool's own words (S30)", () => {
     expect(scope().map((file) => path.relative(SRC, file))).toContain('lib/ai/tool-errors.ts');
   });
 
+  /**
+   * The module-level `const NAME = '...'` declarations of a file: the names
+   * that are fixed words, each with its declaration.
+   */
+  function fixedConsts(sf: ts.SourceFile): Map<string, ts.VariableDeclaration> {
+    const fixedNames = new Map<string, ts.VariableDeclaration>();
+    for (const statement of sf.statements) {
+      if (!ts.isVariableStatement(statement)) continue;
+      if (!(statement.declarationList.flags & ts.NodeFlags.Const)) continue;
+      for (const decl of statement.declarationList.declarations) {
+        if (
+          ts.isIdentifier(decl.name) &&
+          decl.initializer &&
+          (ts.isStringLiteral(decl.initializer) ||
+            ts.isNoSubstitutionTemplateLiteral(decl.initializer))
+        ) {
+          fixedNames.set(decl.name.text, decl);
+        }
+      }
+    }
+    return fixedNames;
+  }
+
+  /** Every name a binding (a plain name, or a destructuring pattern) declares. */
+  function boundNames(name: ts.BindingName, out: string[] = []): string[] {
+    if (ts.isIdentifier(name)) out.push(name.text);
+    else for (const el of name.elements) if (!ts.isOmittedExpression(el)) boundNames(el.name, out);
+    return out;
+  }
+
+  /**
+   * Whether `scope` (a function, a block, a loop, a catch clause or a class
+   * between a use and the module) declares `name` anywhere inside it, nested
+   * functions left out: a parameter, a variable, a function, a class, a catch
+   * variable or a loop variable. Read widely on purpose: a declaration in a
+   * sibling block does not shadow the use, and is still counted, so a name
+   * that is redeclared anywhere on the way up is not taken for the module's.
+   */
+  function declaresName(scope: ts.Node, name: string): boolean {
+    if (ts.isFunctionLike(scope)) {
+      if (scope.parameters.some((p) => boundNames(p.name).includes(name))) return true;
+      if (
+        (ts.isFunctionExpression(scope) || ts.isFunctionDeclaration(scope)) &&
+        scope.name?.text === name
+      ) {
+        return true;
+      }
+    }
+    if (ts.isCatchClause(scope) && scope.variableDeclaration) {
+      if (boundNames(scope.variableDeclaration.name).includes(name)) return true;
+    }
+    if (ts.isClassLike(scope) && scope.name?.text === name) return true;
+    let found = false;
+    const visit = (node: ts.Node) => {
+      if (found) return;
+      if (ts.isVariableDeclaration(node) && boundNames(node.name).includes(name)) found = true;
+      else if (
+        (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) &&
+        node.name?.text === name
+      ) {
+        found = true;
+      }
+      // A nested function's own parameters and variables are its own scope.
+      if (!found && !(node !== scope && ts.isFunctionLike(node))) ts.forEachChild(node, visit);
+    };
+    ts.forEachChild(scope, visit);
+    return found;
+  }
+
+  /**
+   * Whether the identifier `use` is the module-level fixed const of its name:
+   * that const exists, and no scope between the use and the module declares
+   * the name again. Resolved by declaration, not by the name alone, so a
+   * local variable that shadows a module constant is not fixed words.
+   */
+  function isModuleFixedConst(use: ts.Identifier, sf: ts.SourceFile): boolean {
+    const decl = fixedConsts(sf).get(use.text);
+    if (!decl) return false;
+    for (let scope: ts.Node = use.parent; scope && scope !== sf; scope = scope.parent) {
+      const isScope =
+        ts.isFunctionLike(scope) ||
+        ts.isBlock(scope) ||
+        ts.isCatchClause(scope) ||
+        ts.isClassLike(scope) ||
+        ts.isForStatement(scope) ||
+        ts.isForOfStatement(scope) ||
+        ts.isForInStatement(scope) ||
+        ts.isCaseBlock(scope) ||
+        ts.isModuleBlock(scope);
+      if (isScope && declaresName(scope, use.text)) return false;
+    }
+    return true;
+  }
+
+  /** The words of every `new ToolRefusal(...)` in a file that are not fixed, as written. */
+  function builtRefusalWords(file: string, source: string): string[] {
+    const sf = parse(file, source);
+    const fixed = (arg: ts.Expression) =>
+      ts.isStringLiteral(arg) ||
+      ts.isNoSubstitutionTemplateLiteral(arg) ||
+      (ts.isIdentifier(arg) && isModuleFixedConst(arg, sf));
+    const built: string[] = [];
+    const visit = (node: ts.Node) => {
+      if (
+        ts.isNewExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === 'ToolRefusal'
+      ) {
+        const first = node.arguments?.[0];
+        if (!first || !fixed(first)) {
+          built.push(first ? first.getText(sf).replace(/\s+/g, ' ') : '(none)');
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    return built;
+  }
+
   it('every ToolRefusal is built with fixed words, except two that name what the model sent', () => {
     // The model reads a ToolRefusal's words (at most 200 characters). These
     // two are the only ones not written out in full: the stock adjustment's
@@ -1849,44 +1968,51 @@ describe("an AI chat tool's refusal is the tool's own words (S30)", () => {
     for (const file of files(AI)) {
       const source = readFileSync(file, 'utf8');
       if (!source.includes('ToolRefusal(')) continue;
-      const sf = parse(file, source);
-      // A module-level `const NAME = '...'` counts as fixed words.
-      const fixedNames = new Set<string>();
-      for (const statement of sf.statements) {
-        if (!ts.isVariableStatement(statement)) continue;
-        if (!(statement.declarationList.flags & ts.NodeFlags.Const)) continue;
-        for (const decl of statement.declarationList.declarations) {
-          if (
-            ts.isIdentifier(decl.name) &&
-            decl.initializer &&
-            (ts.isStringLiteral(decl.initializer) ||
-              ts.isNoSubstitutionTemplateLiteral(decl.initializer))
-          ) {
-            fixedNames.add(decl.name.text);
-          }
-        }
+      for (const words of builtRefusalWords(file, source)) {
+        built.push(`${path.relative(SRC, file)}: ${words}`);
       }
-      const fixed = (arg: ts.Expression) =>
-        ts.isStringLiteral(arg) ||
-        ts.isNoSubstitutionTemplateLiteral(arg) ||
-        (ts.isIdentifier(arg) && fixedNames.has(arg.text));
-      const visit = (node: ts.Node) => {
-        if (
-          ts.isNewExpression(node) &&
-          ts.isIdentifier(node.expression) &&
-          node.expression.text === 'ToolRefusal'
-        ) {
-          const first = node.arguments?.[0];
-          if (!first || !fixed(first)) {
-            const words = first ? first.getText(sf).replace(/\s+/g, ' ') : '(none)';
-            built.push(`${path.relative(SRC, file)}: ${words}`);
-          }
-        }
-        ts.forEachChild(node, visit);
-      };
-      visit(sf);
     }
     expect(built).toEqual(BUILT);
+  });
+
+  it('fixed words are a literal or the module constant itself, found by its declaration (control: one per line)', () => {
+    const sample = (lines: string[]) =>
+      builtRefusalWords(
+        'sample.ts',
+        ["const WORDS = 'That address did not return an image.';", ...lines].join('\n'),
+      );
+    // A literal, a plain template and the module constant are fixed words.
+    expect(
+      sample([
+        "export function a() { throw new ToolRefusal('Fixed words.'); }",
+        'export function b() { throw new ToolRefusal(`Fixed words.`); }',
+        'export function c() { throw new ToolRefusal(WORDS); }',
+        'export function d(e: unknown) { try { work(); } catch (cause) { throw new ToolRefusal(WORDS, { cause }); } }',
+        'export const f = () => { if (x) { throw new ToolRefusal(WORDS); } };',
+      ]),
+    ).toEqual([]);
+    // The same name declared again on the way up is not the module's constant.
+    expect(
+      sample([
+        'export function a(WORDS: string) { throw new ToolRefusal(WORDS); }',
+        'export function b(e: Error) { const WORDS = e.message; throw new ToolRefusal(WORDS); }',
+        'export function c(e: Error) { let WORDS = e.message; if (x) { throw new ToolRefusal(WORDS); } }',
+        'export function d() { try { work(); } catch (WORDS) { throw new ToolRefusal(WORDS); } }',
+        'export function f(e: { WORDS: string }) { const { WORDS } = e; return () => new ToolRefusal(WORDS); }',
+        'export function g(list: string[]) { for (const WORDS of list) throw new ToolRefusal(WORDS); }',
+        'export const h = (WORDS: string) => new ToolRefusal(WORDS);',
+      ]),
+    ).toEqual(['WORDS', 'WORDS', 'WORDS', 'WORDS', 'WORDS', 'WORDS', 'WORDS']);
+    // Built words, a name that is no module constant, and no words at all.
+    expect(
+      sample([
+        'export function a(e: Error) { throw new ToolRefusal(e.message); }',
+        'export function b(e: Error) { throw new ToolRefusal(`Failed: ${e.message}`); }',
+        'export function c() { throw new ToolRefusal(OTHER); }',
+        'export function d() { throw new ToolRefusal(); }',
+        "let LOOSE = 'x'; export function g() { throw new ToolRefusal(LOOSE); }",
+      ]),
+    ).toEqual(['e.message', '`Failed: ${e.message}`', 'OTHER', '(none)', 'LOOSE']);
   });
 
   it('every fixed tool failure sentence is a string literal', () => {
@@ -2679,28 +2805,91 @@ describe("what the model can read from a service's refusal is listed (S30 review
     ]);
   });
 
-  it('no class extends ServiceError or ForbiddenError, so every construction is one the walk reads', () => {
-    const subclasses = files(SRC).filter((file) => {
-      const source = readFileSync(file, 'utf8');
-      if (!/extends\s+(?:ServiceError|ForbiddenError)\b/.test(source)) return false;
-      let found = false;
-      const visit = (node: ts.Node) => {
-        if (
-          ts.isClassLike(node) &&
-          node.heritageClauses?.some((clause) =>
-            clause.types.some((type) =>
-              /^(?:ServiceError|ForbiddenError)$/.test(type.expression.getText()),
-            ),
-          )
-        ) {
-          found = true;
+  /**
+   * The error classes whose words or sentences the guards above account for
+   * construction by construction: a subclass would be built under another
+   * name, with words nothing here reads. An alias on import would do the
+   * same.
+   */
+  const SEALED_ERRORS = ['ServiceError', 'ForbiddenError', 'ToolRefusal', 'ToolUnavailableError'];
+
+  /** What in a file extends one of the sealed errors, or imports one under another name. */
+  function sealedErrorEscapes(file: string, source: string): string[] {
+    const sealed = new Set(SEALED_ERRORS);
+    const found: string[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isClassLike(node)) {
+        for (const clause of node.heritageClauses ?? []) {
+          if (clause.token !== ts.SyntaxKind.ExtendsKeyword) continue;
+          for (const type of clause.types) {
+            const base = type.expression.getText();
+            if (sealed.has(base)) found.push(`class ${node.name?.text ?? '(anonymous)'} extends ${base}`);
+          }
         }
-        if (!found) ts.forEachChild(node, visit);
-      };
-      visit(parse(file, source));
-      return found;
-    });
-    expect(subclasses.map((file) => path.relative(SRC, file))).toEqual([]);
+      }
+      if (
+        (ts.isImportSpecifier(node) || ts.isExportSpecifier(node)) &&
+        node.propertyName &&
+        sealed.has(node.propertyName.text) &&
+        node.name.text !== node.propertyName.text
+      ) {
+        found.push(`${node.propertyName.text} as ${node.name.text}`);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(parse(file, source));
+    return found;
+  }
+
+  it('no class extends ServiceError, ForbiddenError, ToolRefusal or ToolUnavailableError, and none is imported under another name, so every construction is one the walk reads', () => {
+    const escapes: string[] = [];
+    for (const file of files(SRC)) {
+      const source = readFileSync(file, 'utf8');
+      if (!SEALED_ERRORS.some((name) => source.includes(name))) continue;
+      for (const escape of sealedErrorEscapes(file, source)) {
+        escapes.push(`${path.relative(SRC, file)}: ${escape}`);
+      }
+    }
+    expect(escapes).toEqual([]);
+  });
+
+  it('a subclass or an import under another name of each of the four is named (control: one per line)', () => {
+    expect(
+      sealedErrorEscapes(
+        'sample.ts',
+        [
+          "import { ToolRefusal as Refusal, ToolUnavailableError } from '@/lib/ai/tool-errors';",
+          "import { ServiceError as AppError } from '@/server/services/context';",
+          'export class QuietRefusal extends ToolRefusal {}',
+          'export class Down extends ToolUnavailableError {}',
+          'export class Mine extends ServiceError {}',
+          'export const Local = class extends ForbiddenError {};',
+          "export { ForbiddenError as Denied } from '@/lib/auth/warehouse';",
+        ].join('\n'),
+      ),
+    ).toEqual([
+      'ToolRefusal as Refusal',
+      'ServiceError as AppError',
+      'class QuietRefusal extends ToolRefusal',
+      'class Down extends ToolUnavailableError',
+      'class Mine extends ServiceError',
+      'class (anonymous) extends ForbiddenError',
+      'ForbiddenError as Denied',
+    ]);
+    // The classes themselves, another error, an implemented interface and a plain import are left alone.
+    expect(
+      sealedErrorEscapes(
+        'sample.ts',
+        [
+          "import { ToolRefusal, ToolUnavailableError } from '@/lib/ai/tool-errors';",
+          'export class ToolRefusal extends Error {}',
+          'export class ServiceError extends Error {}',
+          'export class Other extends TypeError {}',
+          'export class Shape implements ServiceError {}',
+          "export { ForbiddenError } from '@/lib/auth/warehouse';",
+        ].join('\n'),
+      ),
+    ).toEqual([]);
   });
 
   it(

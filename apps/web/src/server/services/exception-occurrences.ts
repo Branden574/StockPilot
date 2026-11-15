@@ -41,6 +41,7 @@ import {
   type VarianceDestination,
 } from '@stockpilot/core';
 
+import { mayReadCount } from '@/lib/auth/count-read-scope';
 import { assertWarehouseAccess, ForbiddenError, getWarehouseAccess } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -51,6 +52,7 @@ import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { escalateBlock } from './exception-escalation';
 import { ExceptionsService } from './exceptions';
+import { readCountScope } from './lib/count-read-scope';
 import { countStartBlock } from './lib/count-start-preflight';
 import { fetchAllRowsByIds, rawErrorText, reportDegradedRead } from './lib/fetch-by-ids';
 import { scheduleExceptionSync, type ExceptionSyncReason } from './lib/exception-sync-schedule';
@@ -1334,19 +1336,26 @@ export class ExceptionOccurrencesService {
    * decides which links they see. The counted location is read for these
    * lines only (the count's line page is unchanged). A failed read THROWS:
    * the caller shows "unavailable", never "no linked exceptions".
+   *
+   * THE COUNT ITSELF is read by the one count read rule
+   * (lib/auth/count-read-scope.ts), as the count list, the count page and the
+   * phone's sync read it: a count the caller does not read answers "Cycle
+   * count not found.", the words of a count that does not exist, before any
+   * linked exception or line of it is read.
    */
   async listForCount(cycleCountId: string): Promise<CountLinkedExceptions> {
     assertPermission(this.ctx, 'items:read');
     if (!UUID.test(cycleCountId)) throw new ServiceError('not_found', 'Cycle count not found.');
     const orgId = this.ctx.organizationId;
 
-    const [header, links, syncState, gate, timeZone] = await Promise.all([
+    const [header, scope, links, syncState, gate, timeZone] = await Promise.all([
       this.ctx.supabase
         .from('cycle_counts')
-        .select('id, count_number, status')
+        .select('id, count_number, status, warehouse_id, assigned_to')
         .eq('organization_id', orgId)
         .eq('id', cycleCountId)
         .maybeSingle(),
+      readCountScope(this.ctx),
       fetchAllRows<{ occurrence_id: string }>(
         (from, to) =>
           this.ctx.supabase
@@ -1364,8 +1373,16 @@ export class ExceptionOccurrencesService {
       this.readOrgTimeZone(),
     ]);
     if (header.error) throw new ServiceError('internal_error', postgrestErrorText(header.error));
-    const count = header.data as { id: string; count_number: number | string | null; status: string } | null;
-    if (!count) throw new ServiceError('not_found', 'Cycle count not found.');
+    const count = header.data as {
+      id: string;
+      count_number: number | string | null;
+      status: string;
+      warehouse_id: string | null;
+      assigned_to: string | null;
+    } | null;
+    if (!count || !mayReadCount(scope, count)) {
+      throw new ServiceError('not_found', 'Cycle count not found.');
+    }
 
     const occurrenceIds = [...new Set(links.map((l) => l.occurrence_id))];
     const ctx = this.ctx;

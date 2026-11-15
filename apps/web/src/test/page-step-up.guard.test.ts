@@ -738,6 +738,144 @@ describe('self-test: a planted violation of each rule is reported', () => {
     expect(staleEntries(t, {}, ALLOWED)).toEqual([]);
   });
 
+  /**
+   * The body of an excused function is read strictly: it is one plain
+   * function (or one wrapped by React's cache and nothing else); the call that
+   * asks is a statement of the body itself, so everything after it is behind
+   * it on every path; its redirect gets out; and before it the function calls
+   * only the request's own cookies or headers and plain methods of its own
+   * values, handed nothing that runs.
+   */
+  const SHAPES = `
+    import { cookies } from 'next/headers';
+    import { cache } from 'react';
+    import { requireOrgContext } from '@/lib/auth/session';
+    import { store } from '@/lib/store';
+    import { createAdminClient } from '@/lib/supabase/admin';
+    export const cachedFilter = cache(async () => {
+      const jar = await cookies();
+      const raw = jar.get('filter')?.value;
+      if (!raw) return null;
+      const ctx = await requireOrgContext();
+      return ctx ? raw : null;
+    });
+    export async function keepsRedirectInTry() {
+      const jar = await cookies();
+      try {
+        await requireOrgContext();
+      } catch {
+        return null;
+      }
+      return jar;
+    }
+    export async function keepsRedirectInHandler() {
+      const jar = await cookies();
+      await requireOrgContext().catch(() => null);
+      return jar;
+    }
+    export async function importedValueMethod() {
+      const jar = await cookies();
+      store.note(jar);
+      await requireOrgContext();
+      return jar;
+    }
+    export async function asksOnOneBranch() {
+      const jar = await cookies();
+      const raw = jar.get('filter')?.value;
+      if (raw) {
+        await requireOrgContext();
+        return raw;
+      }
+      return createAdminClient().from('items').select('*');
+    }
+    export async function asksInACondition() {
+      const jar = await cookies();
+      const raw = jar.get('filter')?.value;
+      const ctx = raw ? await requireOrgContext() : null;
+      return ctx ?? createAdminClient().from('items').select('*');
+    }
+    export async function callbackToOwnMethod() {
+      const jar = await cookies();
+      const all = jar.getAll();
+      all.forEach(() => {
+        void createAdminClient().from('audit').insert({ seen: true });
+      });
+      await requireOrgContext();
+      return all;
+    }
+    export async function namedCallbackToOwnMethod() {
+      const jar = await cookies();
+      const all = jar.getAll();
+      const note = () => createAdminClient().from('audit').insert({ seen: true });
+      all.forEach(note);
+      await requireOrgContext();
+      return all;
+    }
+    export async function callInOwnMethodArgument() {
+      const jar = await cookies();
+      jar.get(String(createAdminClient().from('items').select('*')));
+      await requireOrgContext();
+      return jar;
+    }
+    function remember<T>(fn: () => Promise<T>) {
+      void createAdminClient().from('audit').insert({ seen: true });
+      return fn;
+    }
+    export const locallyWrapped = remember(async () => {
+      const jar = await cookies();
+      await requireOrgContext();
+      return jar;
+    });
+    export const doublyWrapped = cache(remember(async () => {
+      const jar = await cookies();
+      await requireOrgContext();
+      return jar;
+    }));`;
+  const SHAPE_NAMES = [
+    'cachedFilter',
+    'keepsRedirectInTry',
+    'keepsRedirectInHandler',
+    'importedValueMethod',
+    'asksOnOneBranch',
+    'asksInACondition',
+    'callbackToOwnMethod',
+    'namedCallbackToOwnMethod',
+    'callInOwnMethodArgument',
+    'locallyWrapped',
+    'doublyWrapped',
+  ];
+  const shapePage = (name: string) => `
+    import { ${name} } from '@/lib/shapes';
+    import { requireOrgContext } from '@/lib/auth/session';
+    export default async function Page() {
+      const [ctx, filter] = await Promise.all([requireOrgContext(), ${name}()]);
+      return <p>{String(ctx)}{String(filter)}</p>;
+    }`;
+
+  it('2. an excused function is read strictly: asking on one branch only, a kept redirect, a method of a value that is not its own, anything that runs handed to a method, or a wrapper of its own is reported', () => {
+    const t = tree({
+      'lib/shapes.ts': SHAPES,
+      'lib/store.ts': `export const store = { note(value: unknown) { return value; } };`,
+      ...Object.fromEntries(SHAPE_NAMES.map((n) => [`${D}/${n}/page.tsx`, shapePage(n)])),
+    });
+    const DOES_MORE =
+      "does more than read the request's own cookies or headers before it asks for the context";
+    expect(
+      staleEntries(t, {}, Object.fromEntries(SHAPE_NAMES.map((n) => [`lib/shapes.ts#${n}`, reason]))),
+    ).toEqual(
+      SHAPE_NAMES.filter((n) => n !== 'cachedFilter')
+        .map((n) =>
+          // A wrapper around a wrapper holds no function this reading can find.
+          n === 'doublyWrapped'
+            ? `lib/shapes.ts#${n}: no such function`
+            : `lib/shapes.ts#${n}: ${DOES_MORE}`,
+        )
+        .sort(),
+    );
+    // The one shape the real function has, wrapped by React's cache, is accepted.
+    expect(staleEntries(t, {}, { 'lib/shapes.ts#cachedFilter': reason })).toEqual([]);
+  });
+
   it('1. a layout is held to the same rule, and so is a generateMetadata that reads', () => {
     const t = tree({
       [`${D}/area/layout.tsx`]: `
