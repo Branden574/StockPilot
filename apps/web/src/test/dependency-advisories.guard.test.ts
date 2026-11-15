@@ -381,10 +381,10 @@ type Dismissal = Floor & { alert: number; dependents: string[] };
  *     (firstPhasePreProcess) runs only at optimizationLevel 2 or higher; of
  *     these only glob asks for it, and glob 13's published entry points
  *     (index.min.js) carry their own bundled copy of minimatch, which no
- *     override reaches. The fix is 11.x, which no parent accepts: its parsed
- *     pattern parts are matcher objects, not RegExps, and glob 13's unbundled
- *     build (glob/raw) then matches nothing for a pattern like `*.ts`.
- *     3.1.5 (ESLint and its plugins) is outside the advisory's range.
+ *     override reaches. The fix is 11.x, which no parent's declared range
+ *     accepts (they ask for ^5.1.0 or ^10.2.2). 3.1.5 (ESLint and its
+ *     plugins, and glob 7.2.3 under archiver-utils and rimraf) is outside
+ *     the advisory's range.
  *   - deepmerge 4.3.1: @expo/config, merging our own app config. No release
  *     is fixed; @expo/config 58 (Expo SDK 58) no longer depends on it.
  *
@@ -846,14 +846,18 @@ describe('the alerts dismissed instead of fixed keep their reasons', () => {
     expect(unnamedDependents(graph(web, today), DISMISSAL_CHAINS)).toEqual([]);
   });
 
-  it('starts the minimatch range at 7.0.0: ESLint on 3.1.5 passes, ESLint on 10.2.6 does not', () => {
-    // eslint is not named in the minimatch dismissal, so it passes above only
-    // because 3.1.5 is below the range.
-    const lock = graph(web, {
-      ...today,
-      'eslint@9.39.5': { dependencies: ['minimatch: 10.2.6'] },
-    });
-    expect(undismissed(lock)).toEqual(['minimatch@10.2.6 <- eslint']);
+  it('starts the minimatch range at 7.0.0: 6.x is outside it, 7.0.0 is inside', () => {
+    // eslint is not named in the minimatch dismissal, so a copy it depends on
+    // passes only when that copy is below the range.
+    const on = (version: string): string =>
+      graph(web, {
+        ...today,
+        'eslint@9.39.5': { dependencies: [`minimatch: ${version}`] },
+        [`minimatch@${version}`]: {},
+      });
+    expect(undismissed(on('6.2.3'))).toEqual([]);
+    expect(undismissed(on('7.0.0'))).toEqual(['minimatch@7.0.0 <- eslint']);
+    expect(undismissed(on('10.2.6'))).toEqual(['minimatch@10.2.6 <- eslint']);
   });
 
   it('flags a dependent the dismissal does not name, however it is listed', () => {
