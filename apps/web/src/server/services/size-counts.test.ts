@@ -479,3 +479,48 @@ describe('SizeCountsService.listTrainingSamples — signing the photos', () => {
     });
   });
 });
+
+describe('SizeCountsService.deleteTrainingSample gives the authenticator answer first', () => {
+  const SAMPLE = {
+    'size_count_training_samples.select': {
+      data: { image_storage_path: 'org-test/s1.jpg' },
+      error: null,
+    },
+    'size_count_training_samples.delete': { data: { id: 's1' }, error: null },
+  };
+
+  it('a manager, required and not satisfied: mfa_required, nothing read, deleted or removed', async () => {
+    const stub = makeSupabaseStub(SAMPLE);
+    adminHolder.client = stub.client;
+    const svc = new SizeCountsService(
+      makeServiceContext(stub.client, {
+        enabledModules: withIsc,
+        role: 'manager',
+        mfaRequired: true,
+        mfaSatisfied: false,
+      }),
+    );
+    await expect(svc.deleteTrainingSample('s1')).rejects.toMatchObject({
+      code: 'forbidden',
+      details: { reason: 'mfa_required' },
+    });
+    expect(stub.fromCalls).toEqual([]);
+    expect(stub.client.storage.from).not.toHaveBeenCalled();
+  });
+
+  it('a manager, required and satisfied: the sample and its photo are removed', async () => {
+    const stub = makeSupabaseStub(SAMPLE);
+    adminHolder.client = stub.client;
+    const svc = new SizeCountsService(
+      makeServiceContext(stub.client, {
+        enabledModules: withIsc,
+        role: 'manager',
+        mfaRequired: true,
+        mfaSatisfied: true,
+      }),
+    );
+    await svc.deleteTrainingSample('s1');
+    expect(stub.chains.get('size_count_training_samples.delete')).toBeDefined();
+    expect(stub.client.storage.from).toHaveBeenCalledWith('size-count-training');
+  });
+});

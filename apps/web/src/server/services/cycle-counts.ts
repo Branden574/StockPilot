@@ -31,6 +31,7 @@ import { fetchAllRows } from './lib/paginate';
 import {
   assertModuleEnabled,
   assertPermission,
+  mfaGateError,
   ServiceError,
   withContext,
   type ServiceContext,
@@ -814,9 +815,11 @@ export class CycleCountsService {
     reason: string,
   ): Promise<CycleCountRow> {
     assertModuleEnabled(this.ctx, 'cycle_counts');
-    // Authorization (manager+) is enforced inside the RPC; the module gate is
-    // kept here. A blanket permission assert would wrongly block a manager who
-    // is manager-by-role but lacks a specific granular grant.
+    // The authenticator answer first (mfaGateError, as assertPermission gives
+    // it). Authorization (manager+) is enforced inside the RPC; the module gate
+    // is kept here. A permission assert would block a manager who is
+    // manager-by-role but lacks a specific granular grant.
+    if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) throw mfaGateError(this.ctx);
     if (!reason || reason.trim() === '') {
       throw new ServiceError(
         'validation_error',

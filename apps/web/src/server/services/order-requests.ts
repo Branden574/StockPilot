@@ -94,6 +94,7 @@ import {
   assertModuleEnabled,
   assertPermission,
   isModuleEnabled,
+  mfaGateError,
   ServiceError,
   withContext,
   type ServiceContext,
@@ -2141,6 +2142,9 @@ export class OrderRequestsService {
     lines: Array<{ itemId: string; quantity: number }>,
   ): Promise<{ added: number; merged: number; pickSlipStale: boolean; hold: HoldOutcome | null }> {
     assertModuleEnabled(this.ctx, 'orders');
+    // The authenticator answer first (mfaGateError, as assertPermission gives
+    // it), for the requester and for an approver alike.
+    if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) throw mfaGateError(this.ctx);
     if (lines.length === 0) {
       throw new ServiceError('validation_error', 'Pick at least one item to add.');
     }
@@ -2763,6 +2767,8 @@ export class OrderRequestsService {
     quantity: number,
   ): Promise<{ pickSlipStale: boolean; quantity: number; hold: HoldOutcome | null }> {
     assertModuleEnabled(this.ctx, 'orders');
+    // The authenticator answer first, as in addLines.
+    if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) throw mfaGateError(this.ctx);
     if (!Number.isFinite(quantity) || quantity <= 0) {
       throw new ServiceError(
         'validation_error',
@@ -2959,6 +2965,8 @@ export class OrderRequestsService {
     lineId: string,
   ): Promise<{ pickSlipStale: boolean; removedItemId: string }> {
     assertModuleEnabled(this.ctx, 'orders');
+    // The authenticator answer first, as in addLines.
+    if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) throw mfaGateError(this.ctx);
 
     const h = await this.loadEditableOrderHeader(orderId, {
       inTransit:
@@ -4261,8 +4269,11 @@ export class OrderRequestsService {
    */
   async confirmPhysicalSignature(id: string, signerName: string): Promise<OrderRequestRow> {
     assertModuleEnabled(this.ctx, 'orders');
-    // No blanket permission assert: the RPC's own gate admits the assigned
-    // delivery driver, who may legitimately lack orders:approve.
+    // The authenticator answer first (mfaGateError, as assertPermission gives
+    // it), for a manager and for the assigned driver alike. No permission is
+    // asserted here: the RPC's own gate admits the assigned delivery driver,
+    // who may legitimately lack orders:approve.
+    if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) throw mfaGateError(this.ctx);
     const trimmed = signerName.trim();
     if (!trimmed) throw new ServiceError('validation_error', 'Signer name is required.');
 
@@ -4480,10 +4491,10 @@ export class OrderRequestsService {
    */
   async assignPicking(id: string, pickerUserId: string): Promise<OrderRequestRow> {
     assertModuleEnabled(this.ctx, 'orders');
-    // Authorization (orders:approve, has_permission alone since 0390) is
-    // enforced inside the RPC; keep the module and warehouse gates here. No
-    // assertPermission: it would add the MFA step-up, which this action has
-    // never had.
+    // The authenticator answer first (mfaGateError, as assertPermission gives
+    // it). Authorization (orders:approve, has_permission alone since 0390) is
+    // enforced inside the RPC; the module and warehouse gates stay here.
+    if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) throw mfaGateError(this.ctx);
     await this.requireWarehouseAccess(id, 'write');
     const { data, error } = await this.ctx.supabase.rpc('assign_picking', {
       p_order_id: id,
@@ -4841,8 +4852,8 @@ export class OrderRequestsService {
     // gone that is orders:approve, which assign_order_delivery now asks too.
     // A manager whose orders:approve was revoked therefore cannot make
     // themself the driver and hand the order over as the driver. Both web and
-    // phone already offered Assign delivery to approvers only. can(), not
-    // assertPermission: no new MFA step-up on an action that never had one.
+    // phone already offered Assign delivery to approvers only. can() here:
+    // the assertPermission above has already given the authenticator answer.
     if (!can(this.ctx, 'orders:approve')) {
       throw new ServiceError('forbidden', 'Missing permission: orders:approve');
     }
@@ -4927,6 +4938,8 @@ export class OrderRequestsService {
 
   async markInTransit(id: string): Promise<OrderRequestRow> {
     assertModuleEnabled(this.ctx, 'orders');
+    // The authenticator answer first (mfaGateError, as assertPermission gives it).
+    if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) throw mfaGateError(this.ctx);
     // Authorization: orders:approve (the effective permission), checked below
     // after the row loads so the validation messages come first, and again by
     // mark_order_in_transit. This used to read "the assigned driver OR a

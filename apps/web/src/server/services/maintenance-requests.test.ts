@@ -2614,3 +2614,50 @@ describe('create: an insert whose answer never came (F1-5)', () => {
     expect((e as ServiceError).details).toBeUndefined();
   });
 });
+
+/**
+ * The authenticator answer on every change: when the organization's policy
+ * requires an authenticator and the session has not satisfied it, update,
+ * cancel and recordDraftOpened refuse with the answer assertPermission gives
+ * (mfaGateError), before they read or write anything. A session that has
+ * satisfied it writes the change.
+ */
+describe('update, cancel and recordDraftOpened give the authenticator answer first', () => {
+  const OWN = {
+    'maintenance_requests.select': { data: BASE_ROW, error: null },
+    'maintenance_requests.update': { data: { id: 'r1' }, error: null },
+  };
+  const calls: Array<[string, (svc: MaintenanceRequestsService) => Promise<unknown>]> = [
+    ['update', (svc) => svc.update('r1', { subject: 'Broken chair leg, second note' })],
+    ['cancel', (svc) => svc.cancel('r1')],
+    ['recordDraftOpened', (svc) => svc.recordDraftOpened('r1')],
+  ];
+
+  it.each(calls)(
+    '%s: required and not satisfied is refused with mfa_required, and nothing is read or written',
+    async (_name, run) => {
+      const { stub, ctx } = build(OWN, {
+        permissions: new Set(['maintenance_requests:submit', 'maintenance_requests:manage']),
+        mfaRequired: true,
+        mfaSatisfied: false,
+      });
+      await expect(run(new MaintenanceRequestsService(ctx))).rejects.toMatchObject({
+        code: 'forbidden',
+        details: { reason: 'mfa_required' },
+      });
+      expect(stub.fromCalls).toEqual([]);
+      expect(stub.rpcCalls).toEqual([]);
+      expect(createAdminClientMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(calls)('%s: required and satisfied writes the change', async (_name, run) => {
+    const { stub, ctx } = build(OWN, {
+      permissions: new Set(['maintenance_requests:submit']),
+      mfaRequired: true,
+      mfaSatisfied: true,
+    });
+    await run(new MaintenanceRequestsService(ctx));
+    expect(stub.chainArgs.get('maintenance_requests.update')).toContainEqual(['id', 'r1']);
+  });
+});

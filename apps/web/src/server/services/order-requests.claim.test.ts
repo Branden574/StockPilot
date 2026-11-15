@@ -92,3 +92,43 @@ describe('OrderRequestsService — picking claim / assign / release', () => {
     expect((err as { code: string }).code).toBe('forbidden');
   });
 });
+
+describe('assignPicking gives the authenticator answer first', () => {
+  function svcWith(stub: ReturnType<typeof makeSupabaseStub>, mfaSatisfied: boolean) {
+    return new (OrderRequestsService as unknown as new (ctx: unknown) => OrderRequestsService)(
+      makeServiceContext(stub.client, {
+        role: 'admin',
+        enabledModules: new Set<ModuleId>(['orders']),
+        mfaRequired: true,
+        mfaSatisfied,
+      }),
+    );
+  }
+  const assigned = () =>
+    makeSupabaseStub({
+      ...WH,
+      'rpc:assign_picking': {
+        data: { id: 'order-1', assigned_picker_id: 'picker-9' },
+        error: null,
+      },
+    });
+
+  it('required and not satisfied: mfa_required, nothing read or called', async () => {
+    const stub = assigned();
+    await expect(svcWith(stub, false).assignPicking('order-1', 'picker-9')).rejects.toMatchObject({
+      code: 'forbidden',
+      details: { reason: 'mfa_required' },
+    });
+    expect(stub.fromCalls).toEqual([]);
+    expect(stub.rpcCalls).toEqual([]);
+  });
+
+  it('required and satisfied: the picker is assigned', async () => {
+    const stub = assigned();
+    await svcWith(stub, true).assignPicking('order-1', 'picker-9');
+    expect(stub.rpcCalls[0]).toEqual({
+      name: 'assign_picking',
+      args: { p_order_id: 'order-1', p_user_id: 'picker-9' },
+    });
+  });
+});
