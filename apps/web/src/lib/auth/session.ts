@@ -13,6 +13,7 @@ import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
 import { safeRedirectPath } from '@/lib/auth/safe-redirect';
 import {
   bundleMembership,
+  heldMembership,
   holdMembership,
   resolveRequestContext,
   type RequestContextBundle,
@@ -22,7 +23,16 @@ import {
   resolveAccountStatus,
   type AccountStatusRow,
 } from '@/lib/auth/account-status';
-import { startStepUpReads, stepUpIsOwed } from '@/lib/auth/step-up-gate';
+import {
+  authenticatorSetUpIsOwed,
+  startStepUpReads,
+  stepUpIsOwed,
+  type StepUpReads,
+} from '@/lib/auth/step-up-gate';
+import {
+  AUTHENTICATOR_SET_UP_URL,
+  openBeforeAuthenticatorSetUp,
+} from '@/lib/auth/authenticator-set-up';
 
 import { effectivePermissions, type Permission, type Role } from '@stockpilot/core';
 
@@ -428,6 +438,14 @@ export const requireSession = cache(async (): Promise<ServerSession> => {
  * rule the dashboard layout applies to a page load, here for every caller, so
  * a Server Action and a request for one page segment are held to it too.
  *
+ * And once the organization and the role are resolved, a member whose
+ * organization's policy requires an authenticator of their role, and who has
+ * none verified, goes to the security settings page to set one up
+ * (sendToSetUpWhenOwed below). Only the security page and the profile page
+ * are open to them (lib/auth/authenticator-set-up), together with every Server
+ * Action made from those pages: setting up an authenticator, switching
+ * organization, the profile's own actions and deleting the account.
+ *
  * requireSession() above does NOT ask for the code, on purpose: the code page
  * itself, the recovery code, enrolling a first authenticator and signing out
  * all run on a session that has not entered one.
@@ -439,6 +457,7 @@ export const requireOrgContext = cache(async (orgId?: string): Promise<OrgContex
   const stepUp = (await headers()).get(SESSION_HEADER_USER_ID) ? startStepUpReads() : null;
   const { session, orgRole, orgId: defaultOrgId, orgName, bundle } = await loadSessionAndContext();
   if (!session) redirect(await signInPath());
+  const reads = stepUp ?? startStepUpReads();
 
   // ═══ THE AUTHENTICATOR CODE COMES FIRST ═══
   //
@@ -448,7 +467,7 @@ export const requireOrgContext = cache(async (orgId?: string): Promise<OrgContex
   // above, and a client that sends the header itself gets here only as its
   // own verified session, so it redirects only its own request. The /api
   // routes answer such a session themselves (lib/auth/api-context).
-  if (await stepUpIsOwed(stepUp ?? startStepUpReads(), session.userId)) {
+  if (await stepUpIsOwed(reads, session.userId)) {
     redirect(await codePagePath());
   }
 
@@ -479,15 +498,18 @@ export const requireOrgContext = cache(async (orgId?: string): Promise<OrgContex
       if (!held) redirect('/onboarding');
       // Carried on the context so withContext() takes the org row and modules
       // from this same membership instead of asking again (see holdMembership).
-      return holdMembership(
-        {
-          ...session,
-          organizationId: orgId,
-          organizationName: held.organization?.name ?? 'Workspace',
-          role: held.role,
-          permissions: await resolvePermissions(bundle, orgId, session.userId, held.role),
-        },
-        held,
+      return sendToSetUpWhenOwed(
+        reads,
+        holdMembership(
+          {
+            ...session,
+            organizationId: orgId,
+            organizationName: held.organization?.name ?? 'Workspace',
+            role: held.role,
+            permissions: await resolvePermissions(bundle, orgId, session.userId, held.role),
+          },
+          held,
+        ),
       );
     }
     const supabase = await createClient();
@@ -502,30 +524,60 @@ export const requireOrgContext = cache(async (orgId?: string): Promise<OrgContex
     const orgs = (member as { organizations: { name: string } | { name: string }[] | null })
       .organizations;
     const role = (member as { role: Role }).role;
-    return {
+    return sendToSetUpWhenOwed(reads, {
       ...session,
       organizationId: orgId,
       organizationName: pickOrgName(orgs) ?? 'Workspace',
       role,
       permissions: await loadEffectivePermissions(supabase, orgId, session.userId, role),
-    };
+    });
   }
 
   if (!orgRole) redirect('/onboarding');
 
   // Legacy reads (no bundle) attach nothing, and withContext() then reads the
   // org row and modules the way it always has.
-  return holdMembership(
-    {
-      ...session,
-      organizationId: targetOrgId,
-      organizationName: orgName ?? 'Workspace',
-      role: orgRole,
-      permissions: await resolvePermissions(bundle, targetOrgId, session.userId, orgRole),
-    },
-    bundleMembership(bundle, targetOrgId),
+  return sendToSetUpWhenOwed(
+    reads,
+    holdMembership(
+      {
+        ...session,
+        organizationId: targetOrgId,
+        organizationName: orgName ?? 'Workspace',
+        role: orgRole,
+        permissions: await resolvePermissions(bundle, targetOrgId, session.userId, orgRole),
+      },
+      bundleMembership(bundle, targetOrgId),
+    ),
   );
 });
+
+/**
+ * ═══ AUTHENTICATOR SET-UP COMES BEFORE EVERY OTHER PAGE ═══
+ *
+ * `ctx` when the member owes no set-up, or the request is for a page open to
+ * them before set-up; otherwise a redirect to the security settings page with
+ * its "Enroll to continue" callout.
+ *
+ * The page is the proxy-set `x-pathname` (lib/supabase/middleware sets it on
+ * every request it handles, replacing any value the client sent): for a Server
+ * Action it is the page the action was made from. With no path the member is
+ * sent to set-up; the security page and the profile page do not redirect, and
+ * the sign-in pages never ask requireOrgContext() (page-step-up.guard.test.ts),
+ * so the redirect is one hop for every request the proxy handled.
+ *
+ * Checked on the page first, so an open page reads nothing for it. The answer
+ * itself (authenticatorSetUpIsOwed, lib/auth/step-up-gate) reads nothing at
+ * aal2, and otherwise only the gate's own factor list and the membership (or,
+ * without one, the request-cached organization row the layout reads too).
+ */
+async function sendToSetUpWhenOwed<T extends OrgContext>(reads: StepUpReads, ctx: T): Promise<T> {
+  if (openBeforeAuthenticatorSetUp((await headers()).get('x-pathname'))) return ctx;
+  if (await authenticatorSetUpIsOwed(reads, ctx, heldMembership(ctx))) {
+    redirect(AUTHENTICATOR_SET_UP_URL);
+  }
+  return ctx;
+}
 
 /**
  * Effective permissions = static role defaults + the organization's overrides

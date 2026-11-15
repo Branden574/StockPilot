@@ -27,8 +27,10 @@ import { can, PERMISSIONS } from '@stockpilot/core';
  * placeholder, and the page never waits for the nav. A redirect stub such as
  * `settings/audit` redirects exactly as before.
  *
- * The `?mfa=required` hard gate and its exemption for the security page live in
- * the dashboard layout; nothing here redirects.
+ * Nothing here redirects. A member who must set up an authenticator first is
+ * sent to the security page by requireOrgContext() (which the settings
+ * navigation asks too) and by the dashboard layout; the security and profile
+ * pages are open to them (lib/auth/authenticator-set-up).
  *
  * A MODULE SET THAT COULD NOT BE READ is not "off": Maintenance requests is
  * still not offered as a link (an unknown answer never shows it), but someone

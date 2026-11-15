@@ -27,13 +27,17 @@ import {
 import { factorsOf } from '@/lib/auth/mfa-factors';
 import { moduleSetUnreadable } from '@/lib/modules/module-state';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
+import {
+  AUTHENTICATOR_SET_UP_URL,
+  openBeforeAuthenticatorSetUp,
+} from '@/lib/auth/authenticator-set-up';
 import { orSessionEnded } from '@/lib/auth/session-ended';
 import { getVerifiedSessionClaimsForRequest } from '@/lib/auth/verified-claims';
 import { userMenuRoleLabel } from '@/lib/auth/user-menu-role';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 
-import { resolveTerminology } from '@stockpilot/core';
+import { authenticatorSetUpOwed, resolveTerminology } from '@stockpilot/core';
 import { ActivityBeacon } from '@/components/activity-beacon';
 
 // Override the root layout's marketing title for everything under
@@ -172,13 +176,9 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     .sort((a, b) => a.name.localeCompare(b.name));
 
   // ── MFA enforcement ────────────────────────────────────────────────
-  // A member the policy requires an authenticator of, with none verified, is
-  // sent to set-up (below). The set-up page itself renders with the banner.
   // An org row this member cannot read is held to the strictest policy, not
   // 'optional' (lib/auth/mfa-policy.ts).
   const policy = enforcedMfaPolicy(orgRow);
-  const isAdmin = ctx.role === 'owner' || ctx.role === 'admin';
-  const mfaRequired = policy === 'all_required' || (policy === 'admins_required' && isAdmin);
   // Whether this member has an authenticator comes from THEIR factor list only
   // (S43a, review round s43ar). The list is a read of the cookie session, like
   // the claims the gate below reads, so a load of the session can refresh it
@@ -189,29 +189,26 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const ownFactors = factorsOf(mfaFactors, ctx.userId);
   if (!ownFactors) redirect(await mfaChallengePath());
   const hasVerifiedFactor = ownFactors.some((f) => f.status === 'verified');
-  const showMfaBanner = mfaRequired && !hasVerifiedFactor;
+  // The policy requires an authenticator of this member's role and they have
+  // none verified (@stockpilot/core). They see the banner on the pages open to
+  // them before set-up.
+  const setUpOwed = authenticatorSetUpOwed(policy, ctx.role, ownFactors);
 
-  // Set-up first: a member the policy requires an authenticator of (everyone
-  // under all_required; owners and admins under admins_required) who has no
-  // verified factor sees only the security settings page until they set one
-  // up. Every other dashboard page sends them there. assertPermission in
-  // services already blocks changes at AAL1; this keeps the rest of the
-  // dashboard's reads behind set-up too.
+  // Set-up first, on a full page load. requireOrgContext() above applies the
+  // same rule to every page by itself and to every Server Action (a navigation
+  // inside the dashboard renders only the page, not this layout); here it
+  // also covers a session whose token still says aal2 after its last factor
+  // was removed, which requireOrgContext() answers from the token alone.
   //
-  // The security page is exempt, and neither it nor the settings layout
-  // redirects, so the redirect lands on a page this gate lets through: one
-  // hop, never a loop. Chrome stops a page that keeps navigating in a loop
+  // Only the security page and the profile page are open before set-up
+  // (lib/auth/authenticator-set-up: the exact path or a path below it).
+  // Neither redirects, nor does the settings layout, so the redirect is one
+  // hop and never a loop. Chrome stops a page that keeps navigating in a loop
   // ("Throttling navigation to prevent the browser from hanging", a blank
   // screen), which is why the target must never send the member on again
   // (layout.authenticator-set-up.test.tsx follows the redirect to prove it).
-  // Sign-out and organization switching are Server Actions on that page's
-  // shell, so they stay available.
-  if (mfaRequired && !hasVerifiedFactor) {
-    const h = await headers();
-    const pathname = h.get('x-pathname') ?? '';
-    if (!pathname.startsWith('/dashboard/settings/security')) {
-      redirect('/dashboard/settings/security?mfa=required');
-    }
+  if (setUpOwed && !openBeforeAuthenticatorSetUp((await headers()).get('x-pathname'))) {
+    redirect(AUTHENTICATOR_SET_UP_URL);
   }
 
   // Hard gate for ENROLLED users (HI-6): a verified TOTP factor must be
@@ -288,7 +285,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         warehouseFilter={warehouseFilter}
       >
         <ImpersonationBanner />
-        {showMfaBanner && <MfaRequiredBanner />}
+        {setUpOwed && <MfaRequiredBanner />}
         {moduleStateUnknown && <ModulesUnreadBanner />}
         {children}
         {/* "Last seen" for the platform console (mig 0352). Scope keeps one account or

@@ -5,15 +5,17 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { factorsOf, type MfaFactorList } from '@/lib/auth/mfa-factors';
+import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
+import { orgRowFromMembership, type BundleMembership } from '@/lib/auth/request-context-bundle';
 import { orSessionEnded } from '@/lib/auth/session-ended';
 import {
   getVerifiedSessionClaimsForRequest,
   readVerifiedSessionClaimsOf,
   type VerifiedSessionClaims,
 } from '@/lib/auth/verified-claims';
-import { getMfaFactorsForRequest } from '@/lib/dashboard/request-cache';
+import { getMfaFactorsForRequest, getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 
-import { stepUpOwed } from '@stockpilot/core';
+import { authenticatorSetUpOwed, stepUpOwed, type Role } from '@stockpilot/core';
 
 /**
  * Does the signed-in member's session still owe its authenticator code?
@@ -25,8 +27,8 @@ import { stepUpOwed } from '@stockpilot/core';
  * /signin/mfa until the session is at aal2. The rule itself is the one copy in
  * @stockpilot/core (stepUpOwed), which the API context and the phone read too.
  * Whether an organization's policy requires a factor from a member who has
- * none is not asked here: the dashboard layout and assertPermission answer
- * that, as before.
+ * none is the second question, authenticatorSetUpIsOwed below, which
+ * requireOrgContext() asks once the organization and the role are resolved.
  *
  * WHAT IT READS, AND WHAT THAT COSTS.
  *   1. The session's verified claims (lib/auth/verified-claims): a local
@@ -124,6 +126,42 @@ export async function stepUpIsOwed(reads: StepUpReads, userId: string): Promise<
   if (aal === 'aal2') return false;
   const own = factorsOf(await orSessionEnded(reads.factors()), userId);
   return own ? stepUpOwed(own, aal) : true;
+}
+
+/**
+ * Does the member the context resolved owe authenticator SET-UP: does their
+ * organization's policy require an authenticator of their role while they have
+ * no verified one (authenticatorSetUpOwed in @stockpilot/core)? Asked by
+ * requireOrgContext() after stepUpIsOwed() above, on the same reads.
+ *
+ * WHAT IT READS. Nothing new for the sessions that matter:
+ *   - at aal2 (this member's own claims) the answer is no, from the claims
+ *     alone. Such a session entered a code, so it had a factor; one removed
+ *     since is answered by the dashboard layout, which reads the list on every
+ *     full page load;
+ *   - otherwise the factor list is the one stepUpIsOwed() already awaited
+ *     (the same promise), and a verified factor there means the code was owed
+ *     and the member never got this far;
+ *   - the policy comes from the membership that resolved the context
+ *     (`held`), and only without one from the request-cached organization
+ *     row the dashboard layout reads too. A row that came back empty is held
+ *     to the strictest policy (enforcedMfaPolicy); a read that FAILED throws,
+ *     the "could not check your access" state, as it does in the layout.
+ */
+export async function authenticatorSetUpIsOwed(
+  reads: StepUpReads,
+  member: { userId: string; organizationId: string; role: Role },
+  held: BundleMembership | null,
+): Promise<boolean> {
+  const claims = await reads.claims;
+  if (claims?.userId === member.userId && claims.aal === 'aal2') return false;
+  const own = factorsOf(await orSessionEnded(reads.factors()), member.userId);
+  // Another account's list: stepUpIsOwed() already sent this session to the
+  // code page, so this is never reached with one; no answer, no set-up.
+  if (!own) return false;
+  if (own.some((f) => f.status === 'verified')) return false;
+  const orgRow = orgRowFromMembership(held) ?? (await getOrgRowForRequest(member.organizationId));
+  return authenticatorSetUpOwed(enforcedMfaPolicy(orgRow), member.role, own);
 }
 
 /**

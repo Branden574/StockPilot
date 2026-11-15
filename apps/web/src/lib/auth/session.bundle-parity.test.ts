@@ -37,6 +37,7 @@ vi.mock('@/lib/error-reporter', () => ({ reportError }));
 vi.mock('@/lib/auth/step-up-gate', () => ({
   startStepUpReads: () => ({}),
   stepUpIsOwed: async () => false,
+  authenticatorSetUpIsOwed: async () => false,
 }));
 
 interface Fixture {

@@ -11,18 +11,24 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * optional. An organization row that came back empty is held to the strictest
  * policy (lib/auth/mfa-policy.ts).
  *
- * The set-up page is exempt, so the redirect lands on a page the layout lets
+ * This is the full-page-load half of the rule; requireOrgContext() applies it
+ * to each page by itself and to Server Actions
+ * (lib/auth/session.authenticator-set-up.test.ts).
+ *
+ * The security page and the profile page are open before set-up (exactly, or
+ * below them after a slash), so the redirect lands on a page the layout lets
  * through: one redirect, never a second one from the page it sends to. That is
  * what keeps the browser out of a redirect loop (Chrome stops a page that
  * navigates in a loop with "Throttling navigation to prevent the browser from
- * hanging").
+ * hanging"). The proxy sets the path header on every request it handles; with
+ * no header the layout sends the member to set-up on every request.
  */
 
 type Role = 'owner' | 'admin' | 'manager' | 'staff' | 'viewer';
 type Policy = 'optional' | 'admins_required' | 'all_required';
 
 const MEMBER = 'u-1';
-const SET_UP = '/dashboard/settings/security?mfa=required';
+const SET_UP = '/dashboard/settings/security?enroll=1';
 
 const state = vi.hoisted(() => ({
   pathname: '/dashboard' as string | null,
@@ -158,7 +164,8 @@ async function loadAndFollow(): Promise<string[]> {
 }
 
 const DEEP_PAGES = ['/dashboard/team', '/dashboard/settings/integrations', '/dashboard/inventory'];
-const SET_UP_PAGES = ['/dashboard/settings/security'];
+const SET_UP_PAGES = ['/dashboard/settings/security', '/dashboard/settings/profile'];
+const NOT_OPEN = ['/dashboard/settings/security-keys', '/dashboard/settings/profile-old'];
 const ALL_ROLES: Role[] = ['owner', 'admin', 'manager', 'staff', 'viewer'];
 
 beforeEach(() => {
@@ -207,9 +214,17 @@ describe('admins_required: an owner or admin with no verified authenticator', ()
     },
   );
 
-  it('a request with no path header is sent to set-up once, and the set-up page then loads', async () => {
-    as('admin', 'admins_required', { path: null });
-    expect(await loadAndFollow()).toEqual([SET_UP]);
+  it.each(NOT_OPEN)('%s is not open before set-up: an admin is sent to set-up', async (path) => {
+    as('admin', 'admins_required', { path });
+    expect(await load()).toEqual({ kind: 'redirect', to: SET_UP });
+  });
+
+  it('with no path header on any request, the admin is sent to set-up every time: it fails closed', async () => {
+    for (let i = 0; i < 3; i++) {
+      as('admin', 'admins_required', { path: null });
+      expect(await load()).toEqual({ kind: 'redirect', to: SET_UP });
+    }
+    expect(redirect).toHaveBeenCalledTimes(3);
   });
 });
 

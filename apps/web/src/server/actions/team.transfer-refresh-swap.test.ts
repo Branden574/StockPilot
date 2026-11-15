@@ -47,6 +47,8 @@ vi.mock('@/lib/auth/step-up-gate', async (importOriginal) => {
         : real.startStepUpReads(),
     stepUpIsOwed: async (...args: Parameters<typeof real.stepUpIsOwed>) =>
       state.codeGateOut ? false : real.stepUpIsOwed(...args),
+    authenticatorSetUpIsOwed: async (...args: Parameters<typeof real.authenticatorSetUpIsOwed>) =>
+      state.codeGateOut ? false : real.authenticatorSetUpIsOwed(...args),
   };
 });
 

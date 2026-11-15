@@ -11,10 +11,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * that works for an organization (directly, or through withContext()).
  *
  * Pinned with it:
- *   - what it does NOT ask: a member with no verified factor passes whatever
- *     the organization's policy says (the layout and assertPermission answer
- *     the policy, as before), and requireSession() never asks for the code
- *     (the code page, the recovery code and enrolling run on it);
+ *   - what it does NOT ask: a member with no verified factor owes no code
+ *     (whether their organization requires them to set one up is the set-up
+ *     rule, session.authenticator-set-up.test.ts), and requireSession() never
+ *     asks for the code (the code page, the recovery code and enrolling run
+ *     on it);
  *   - what it costs: nothing but a local check at aal2, one Auth read
  *     otherwise;
  *   - that it fails closed: an unreadable factor list is an error, never
@@ -325,17 +326,29 @@ describe('organizations whose policy does not require a code', () => {
 });
 
 describe('organizations whose policy requires a factor from a member who has none', () => {
-  // Not this gate's question: the member has no code to enter. The dashboard
-  // layout sends them to set one up (all_required) or shows its banner, and
-  // assertPermission refuses their actions, as before.
+  // The member has no code to enter, so not the code page: the security
+  // settings page, to set one up (session.authenticator-set-up.test.ts).
+  it.each<[Policy, Role]>([
+    ['all_required', 'staff'],
+    ['admins_required', 'admin'],
+  ])('%s, a %s with no factor: sent to set-up, not to the code page', async (policy, role) => {
+    world.policy = policy;
+    world.role = role;
+    expect(await redirectOf(() => requireOrgContext())).toBe(
+      '/dashboard/settings/security?enroll=1',
+    );
+    expect(await redirectOf(() => withContext())).toBe('/dashboard/settings/security?enroll=1');
+  });
+
   it.each<[Policy, Role]>([
     ['all_required', 'staff'],
     ['admins_required', 'admin'],
   ])(
-    '%s, a %s with no factor: still a context, labelled required and not satisfied',
+    '%s, a %s with no factor, on the security page: a context, labelled required and not satisfied',
     async (policy, role) => {
       world.policy = policy;
       world.role = role;
+      world.pathname = '/dashboard/settings/security';
       expect((await requireOrgContext()).organizationId).toBe(ORG);
       const ctx = await withContext();
       expect(ctx).toMatchObject({ mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false });
