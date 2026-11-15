@@ -11,6 +11,7 @@ import {
   type MaintenanceAttachmentKind,
 } from '@stockpilot/core';
 
+import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
@@ -247,21 +248,32 @@ async function fetchValidAttachments(
  * fires). `organization_modules.settings` is an unconstrained jsonb blob
  * (0144), so an absent key or a missing row both mean "never configured"
  * and default ON, matching every other module settings reader in this
- * codebase (packages/core/src/b2b/pricing-mode.ts's own precedent). A plain
- * read, not a permission check — the real authorization for MINTING a link
- * still lives entirely in `issueLink` (requester+submit, or manage);
+ * codebase (packages/core/src/b2b/pricing-mode.ts's own precedent). A read
+ * that returns an error is not "never configured": it is reported and
+ * answers OFF, so no link is created or shown while the setting is unknown.
+ * A plain read, not a permission check — the real authorization for
+ * MINTING a link still lives entirely in `issueLink` (requester+submit, or manage);
  * this only decides whether a caller even asks. Reads via `ctx.supabase`
  * (RLS-scoped, user-authed) — same client every existing call site already
  * used, never the admin client, since any org member can read their own
  * org's module settings.
  */
 export async function maintenanceShareLinksEnabled(ctx: ServiceContext): Promise<boolean> {
-  const { data } = await ctx.supabase
+  const { data, error } = await ctx.supabase
     .from('organization_modules')
     .select('settings')
     .eq('organization_id', ctx.organizationId)
     .eq('module_id', 'maintenance_requests')
     .maybeSingle();
+  if (error) {
+    void reportError(new Error('Share-link setting read failed; treated as off'), {
+      tag: 'maintenance.share_links.setting_read',
+      level: 'warning',
+      organizationId: ctx.organizationId,
+      extra: { code: error.code ?? null },
+    });
+    return false;
+  }
   const settings = (data as { settings?: unknown } | null)?.settings as
     | { includeShareLinksInEmail?: boolean }
     | null
