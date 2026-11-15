@@ -24,7 +24,9 @@
 /**
  * A check of the caller's access could not be made (an organization's module
  * state that could not be read: lib/modules/module-state
- * ModulesUnavailableError). Not a crash, and nothing the person did.
+ * ModulesUnavailableError; the organization row that could not be read:
+ * lib/auth/organization-row-unavailable OrganizationRowUnavailableError). Not
+ * a crash, and nothing the person did.
  */
 export const ACCESS_UNCHECKED_DIGEST = 'STOCKPILOT_ACCESS_UNCHECKED';
 

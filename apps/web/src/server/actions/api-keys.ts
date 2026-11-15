@@ -8,7 +8,7 @@ import { rethrowControlFlow } from '@/lib/control-flow';
 import { actionErrorResult } from '@/server/lib/action-error-result';
 import { ApiKeysService } from '@/server/services/api-keys';
 
-import { err, ok, type ActionResult } from '@stockpilot/core';
+import { err, maxChoices, ok, type ActionResult } from '@stockpilot/core';
 
 const REVALIDATE = '/dashboard/settings/integrations';
 
@@ -19,7 +19,7 @@ function fail(e: unknown): ActionResult<never> {
 
 const createSchema = z.object({
   name: z.string().min(1).max(80),
-  scopes: z.array(z.enum(API_SCOPES)).min(1),
+  scopes: z.array(z.enum(API_SCOPES)).min(1).max(maxChoices(API_SCOPES), 'Too many scopes.'),
 });
 
 export async function createApiKeyAction(

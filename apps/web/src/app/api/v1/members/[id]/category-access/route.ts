@@ -54,9 +54,15 @@ const bodySchema = z
  *       not restricted to categories;
  *   400 `validation_error`: an id that is not a uuid, a body that is not
  *       JSON, or a body that is not exactly `{ categoryId, granted }`;
- *   401 `unauthenticated`;
- *   403 `forbidden` (`details.reason` aal2_required or mfa_required when the
- *       authenticator rule refused);
+ *   401 `unauthenticated`: no session, or a session that still owes its
+ *       authenticator code (an account with an authenticator, signed in with
+ *       the password alone). withApiContext refuses that session before
+ *       anything is read, and the phone answers the 401 by asking for the
+ *       code;
+ *   403 `forbidden`, with the service's words: `details.reason` mfa_required
+ *       for a caller with no authenticator when the organization requires
+ *       one, or when its rule could not be read and is held to the strictest
+ *       (a session at aal2 with an authenticator still passes);
  *   404 `not_found`: no such member, or no such category, in the caller's
  *       organization;
  *   409 `conflict`: the grant changed meanwhile; reload and try again;

@@ -10,7 +10,7 @@ import {
   INTEGRATION_EVENT_TYPES,
 } from '@/server/services/integration-events';
 
-import { err, ok, type ActionResult } from '@stockpilot/core';
+import { err, maxChoices, ok, type ActionResult } from '@stockpilot/core';
 
 const REVALIDATE = '/dashboard/settings/integrations';
 
@@ -22,7 +22,10 @@ function fail(e: unknown): ActionResult<never> {
 const createSchema = z.object({
   type: z.enum(['webhook', 'slack', 'teams']),
   url: z.string().url().max(2000),
-  eventTypes: z.array(z.enum(INTEGRATION_EVENT_TYPES)).min(1),
+  eventTypes: z
+    .array(z.enum(INTEGRATION_EVENT_TYPES))
+    .min(1)
+    .max(maxChoices(INTEGRATION_EVENT_TYPES), 'Too many event types.'),
   description: z.string().max(200).optional(),
 });
 

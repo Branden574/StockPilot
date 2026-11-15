@@ -5,6 +5,11 @@ import { RETURNS_COPY } from '@stockpilot/core';
 
 import { clientIpFromRequest } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
+import {
+  PAYLOAD_TOO_LARGE,
+  PUBLIC_FORM_BODY_LIMIT,
+  readJsonLimited,
+} from '@/lib/http/read-json-limited';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
   RETURN_OPTIONS_PER_IP_PER_HOUR,
@@ -58,16 +63,17 @@ const CLOSED_DOOR = {
 const bodySchema = z.object({ token: z.string().uuid() });
 
 export async function POST(req: NextRequest) {
-  let raw: unknown;
-  try {
-    raw = await req.json();
-  } catch {
-    return NextResponse.json(
-      { error: 'invalid_json', message: 'Check the form and try again.' },
-      { status: 400, headers: NO_STORE },
-    );
+  // A body over PUBLIC_FORM_BODY_LIMIT is refused before it is parsed.
+  const read = await readJsonLimited(req, PUBLIC_FORM_BODY_LIMIT);
+  if (!read.ok) {
+    return read.reason === 'too_large'
+      ? NextResponse.json(PAYLOAD_TOO_LARGE, { status: 413, headers: NO_STORE })
+      : NextResponse.json(
+          { error: 'invalid_json', message: 'Check the form and try again.' },
+          { status: 400, headers: NO_STORE },
+        );
   }
-  const parsed = bodySchema.safeParse(raw);
+  const parsed = bodySchema.safeParse(read.value);
   // A missing or malformed token is an unknown token: the same 404.
   if (!parsed.success) return NextResponse.json(CLOSED_DOOR, { status: 404, headers: NO_STORE });
   const token = parsed.data.token;

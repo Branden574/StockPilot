@@ -16,6 +16,7 @@ import { actionErrorResult, RowFailures } from '@/server/lib/action-error-result
 import {
   AMBIGUOUS_COLUMN_MEANINGS,
   applyItemCsvHeaderDecisions,
+  boundedRecord,
   emptyToUndefined,
   err,
   itemCsvHeaderDecisionsOutstanding,
@@ -92,23 +93,33 @@ const csvRowSchema = z.object({
   asset_tag: z.string().max(128).optional(),
 });
 
+/** The most columns an import file has (its header row). */
+const MAX_HEADERS = 200;
+const TOO_MANY_COLUMNS = `An import file can have at most ${MAX_HEADERS} columns.`;
+
 /**
  * The header-mapping answers, keyed by the header EXACTLY as the file printed
  * it. Bounded to Task 14's vocabulary so a client cannot post an arbitrary
  * string and have it treated as an answer.
  */
-const headerDecisionsSchema = z
-  .record(z.string().max(200), z.enum(AMBIGUOUS_COLUMN_MEANINGS))
-  .optional();
+const headerDecisionsSchema = boundedRecord(
+  z.string().max(200),
+  z.enum(AMBIGUOUS_COLUMN_MEANINGS),
+  MAX_HEADERS * 10,
+  TOO_MANY_COLUMNS,
+).optional();
 
 const reviewInputSchema = z.object({
-  rows: z.array(z.record(z.string(), z.string())).min(1).max(5000),
+  rows: z
+    .array(boundedRecord(z.string(), z.string(), MAX_HEADERS * 10, TOO_MANY_COLUMNS))
+    .min(1)
+    .max(5000),
   /**
    * The file's header row, in order. Optional: derived from the union of row
    * keys when absent, which keeps every pre-existing caller (and a hand-built
    * payload) working exactly as it did.
    */
-  headers: z.array(z.string().max(200)).max(200).optional(),
+  headers: z.array(z.string().max(200)).max(MAX_HEADERS).optional(),
   headerDecisions: headerDecisionsSchema,
   fileName: z.string().max(255).optional(),
 });
