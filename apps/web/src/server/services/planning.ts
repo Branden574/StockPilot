@@ -85,6 +85,21 @@ export class PlanningService {
    * back to defaults for any unset/garbage value (never throws on bad JSON).
    */
   async readParams(): Promise<PlanningParams> {
+    return (await this.readParamsWithStatus()).params;
+  }
+
+  /**
+   * The same read, saying whether it failed. The suggestions maths and the
+   * auto-draft run use the defaults on a failed read (readParams); the
+   * planning settings panel cannot, because its Save sends all three values
+   * and would write those defaults over the stored ones. So the page reads
+   * through here and shows no panel when `readError` is set. No row is not an
+   * error: the defaults, never configured.
+   */
+  async readParamsWithStatus(): Promise<{
+    params: PlanningParams;
+    readError: { code: string } | null;
+  }> {
     const { data, error } = await this.ctx.supabase
       .from('organization_modules')
       .select('settings')
@@ -96,16 +111,28 @@ export class PlanningService {
     // would take down the whole planning page (and the auto-draft PO run) over a
     // params read, when sensible defaults exist. Log so it's not silent.
     if (error) {
-      console.error('[PlanningService.readParams] settings read failed, using defaults:', error.message);
-      return { ...DEFAULT_PLANNING_PARAMS };
+      console.error(
+        '[PlanningService.readParams] settings read failed, using defaults:',
+        error.message,
+      );
+      return {
+        params: { ...DEFAULT_PLANNING_PARAMS },
+        readError: { code: error.code || 'unknown' },
+      };
     }
 
     const settings = (data as { settings?: unknown } | null)?.settings;
     const s = settings && typeof settings === 'object' ? (settings as Record<string, unknown>) : {};
     return {
-      leadTimeDays: posNumber(s.leadTimeDays, DEFAULT_PLANNING_PARAMS.leadTimeDays),
-      safetyMultiplier: posNumber(s.safetyMultiplier, DEFAULT_PLANNING_PARAMS.safetyMultiplier),
-      velocityWindowDays: posNumber(s.velocityWindowDays, DEFAULT_PLANNING_PARAMS.velocityWindowDays),
+      params: {
+        leadTimeDays: posNumber(s.leadTimeDays, DEFAULT_PLANNING_PARAMS.leadTimeDays),
+        safetyMultiplier: posNumber(s.safetyMultiplier, DEFAULT_PLANNING_PARAMS.safetyMultiplier),
+        velocityWindowDays: posNumber(
+          s.velocityWindowDays,
+          DEFAULT_PLANNING_PARAMS.velocityWindowDays,
+        ),
+      },
+      readError: null,
     };
   }
 

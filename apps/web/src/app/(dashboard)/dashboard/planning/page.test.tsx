@@ -39,7 +39,7 @@ vi.mock('@/lib/supabase/server', () => ({
 }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
 vi.mock('@/server/services/auto-reorder', () => ({
-  readAutoReorderSettings: vi.fn(async () => ({})),
+  readAutoReorderSettings: vi.fn(async () => ({ settings: {}, readError: null })),
 }));
 vi.mock('@/server/actions/purchase-orders', () => ({
   createDraftPosFromReorderForecastAction: vi.fn(),
@@ -51,10 +51,9 @@ vi.mock('@/server/services/planning', () => ({
   PlanningService: {
     forCurrentUser: vi.fn(async () => ({
       getReorderSuggestions,
-      readParams: vi.fn(async () => ({
-        leadTimeDays: 14,
-        safetyMultiplier: 1.5,
-        velocityWindowDays: 90,
+      readParamsWithStatus: vi.fn(async () => ({
+        params: { leadTimeDays: 14, safetyMultiplier: 1.5, velocityWindowDays: 90 },
+        readError: null,
       })),
       itemIdsOnOpenPurchaseOrders: vi.fn(async () => new Set<string>()),
     })),

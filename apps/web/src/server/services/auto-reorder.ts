@@ -136,13 +136,17 @@ export function shouldAutoSend(
 type DbLike = { from: (t: string) => any };
 
 /**
- * Reads an org's auto-reorder settings from the purchase_orders module row.
- * Fail-closed to defaults on any error or missing row.
+ * Reads an org's auto-reorder settings from the purchase_orders module row,
+ * for the settings panel on the Planning page. Fail-closed to defaults on any
+ * error or missing row, and `readError` says which of the two it was: the
+ * panel's Save sends the whole setting, so the page shows no panel when the
+ * read failed (saving the defaults would replace the stored setting). No row
+ * is not an error: the defaults, never configured.
  */
 export async function readAutoReorderSettings(
   db: DbLike,
   organizationId: string,
-): Promise<AutoReorderSettings> {
+): Promise<{ settings: AutoReorderSettings; readError: { code: string } | null }> {
   try {
     const { data, error } = await db
       .from('organization_modules')
@@ -150,14 +154,20 @@ export async function readAutoReorderSettings(
       .eq('organization_id', organizationId)
       .eq('module_id', 'purchase_orders')
       .maybeSingle();
-    if (error || !data) return AUTO_REORDER_DEFAULTS;
+    if (error) {
+      return {
+        settings: AUTO_REORDER_DEFAULTS,
+        readError: { code: (error as { code?: string }).code || 'unknown' },
+      };
+    }
+    if (!data) return { settings: AUTO_REORDER_DEFAULTS, readError: null };
     const settings = (data as { settings?: unknown }).settings;
     const bucket =
       settings && typeof settings === 'object'
         ? (settings as Record<string, unknown>).autoReorder
         : undefined;
-    return parseAutoReorderSettings(bucket);
+    return { settings: parseAutoReorderSettings(bucket), readError: null };
   } catch {
-    return AUTO_REORDER_DEFAULTS;
+    return { settings: AUTO_REORDER_DEFAULTS, readError: { code: 'unknown' } };
   }
 }
