@@ -15,8 +15,9 @@ import { makeSupabaseStub } from '@/test/supabase-mock';
  * on an object whose valueOf and toString are not functions throws a TypeError.
  * The schema now hands the coercion only a number or a short string. These
  * tests watch the coercing ZodNumber and Array.prototype.toString (what
- * Number() calls on an array) to prove it, and send bodies nested 500,000
- * levels deep (about 1 MB) into each kind of field.
+ * Number() calls on an array) to prove it, and send bodies nested 120,000
+ * levels deep (about 240 KB, near the route's 256 KB body limit) into each
+ * kind of field. A deeper body is over that limit and answered 413 unread.
  */
 
 const checkRateLimitMock = vi.fn(async (_key: string, _limit: number, windowMs: number) => ({
@@ -41,8 +42,8 @@ import { POST } from './route';
 const TOKEN = 'pub_token_abcdef0123456789';
 const WAREHOUSE_ID = '11111111-1111-1111-1111-111111111111';
 const ITEM_ID = '22222222-2222-2222-2222-222222222222';
-/** About 1 MB of brackets: the depth a 1 MB body can reach. */
-const DEPTH = 500_000;
+/** About 240 KB of brackets: near the deepest a body within the 256 KB limit can reach. */
+const DEPTH = 120_000;
 
 /** A body whose one line has `quantityJson` (raw JSON text) as its quantity. */
 function bodyWithQuantity(quantityJson: string): string {
@@ -145,7 +146,7 @@ function nestedArraysStringified(): number {
 
 describe('POST /api/v1/public/order-requests: a quantity that is not a number or a short string', () => {
   it('a deep nest of short arrays is refused with a 400 and never reaches Number()', async () => {
-    const res = await POST(post(bodyWithQuantity(nestOfShortArrays(2_000))));
+    const res = await POST(post(bodyWithQuantity(nestOfShortArrays(1_000))));
 
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'Invalid input' });
@@ -155,7 +156,7 @@ describe('POST /api/v1/public/order-requests: a quantity that is not a number or
     expect(createAdminClientMock).not.toHaveBeenCalled();
   });
 
-  it('an array as deep as a 1 MB body allows is a 400, not a stack overflow', async () => {
+  it('an array as deep as a body within the limit allows is a 400, not a stack overflow', async () => {
     const res = await POST(post(bodyWithQuantity(plainNest(DEPTH))));
 
     expect(res.status).toBe(400);
@@ -197,10 +198,19 @@ describe('POST /api/v1/public/order-requests: nesting anywhere in the body never
       'a line',
       (nest: string) => bodyWithQuantity('1').replace(/"lines":\[.*\]/, `"lines":[${nest}]`),
     ],
-  ])('%s nested 500,000 levels deep is a 400', async (_where, build) => {
+  ])('%s nested 120,000 levels deep is a 400', async (_where, build) => {
     const res = await POST(post(build(plainNest(DEPTH))));
 
     expect(res.status).toBe(400);
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+    expect(createAdminClientMock).not.toHaveBeenCalled();
+  });
+
+  it('a body nested 500,000 levels deep (about 1 MB) is a 413, unread', async () => {
+    const res = await POST(post(bodyWithQuantity(plainNest(500_000))));
+
+    expect(res.status).toBe(413);
+    expect(coerced).toEqual([]);
     expect(checkRateLimitMock).not.toHaveBeenCalled();
     expect(createAdminClientMock).not.toHaveBeenCalled();
   });

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { normalizeTrainingSizeLabel } from '../sports/size-count-labels';
 import { COUNTING_UNITS, SPORTS_ATTRIBUTES, TRACKING_MODES } from '../sports/tracking-modes';
 import { emptyToUndefined, uuidSchema } from './common';
+import { maxChoices } from './request-limits';
 
 /**
  * The ground-truth label on one Instant Size Count training photo: an apparel
@@ -117,9 +118,16 @@ export const trackingProfileSchema = z.object({
   key: z.string().min(1).max(64),
   label: z.string().min(1).max(120),
   defaultMode: trackingModeSchema,
-  allowedModes: z.array(trackingModeSchema).min(1),
-  supportedAttributes: z.array(z.enum(SPORTS_ATTRIBUTES)),
-  requiredAttributes: z.array(z.enum(SPORTS_ATTRIBUTES)),
+  allowedModes: z
+    .array(trackingModeSchema)
+    .min(1)
+    .max(maxChoices(TRACKING_MODES), 'Too many tracking modes.'),
+  supportedAttributes: z
+    .array(z.enum(SPORTS_ATTRIBUTES))
+    .max(maxChoices(SPORTS_ATTRIBUTES), 'Too many attributes.'),
+  requiredAttributes: z
+    .array(z.enum(SPORTS_ATTRIBUTES))
+    .max(maxChoices(SPORTS_ATTRIBUTES), 'Too many attributes.'),
   defaultCountingUnit: countingUnitSchema,
   supportsNumbers: z.boolean(),
   supportsSizes: z.boolean(),

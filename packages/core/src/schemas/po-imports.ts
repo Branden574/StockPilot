@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
 import { AMBIGUOUS_COLUMN_MEANINGS } from '../sports/import-results';
+import { boundedRecord } from './bounded-record';
+import { formatLimit, MAX_PO_LINES } from './request-limits';
+
+const TOO_MANY_IMPORT_LINES = `An import can have at most ${formatLimit(MAX_PO_LINES)} lines.`;
 
 export const poImportLineTypeSchema = z.enum([
   'inventory',
@@ -229,7 +233,7 @@ export const canonicalPoSchema = z.object({
   contactName: z.string().max(120).nullable(),
   contactPhone: z.string().max(40).nullable(),
   totalAmount: z.number().nullable(),
-  lines: z.array(canonicalPoLineSchema),
+  lines: z.array(canonicalPoLineSchema).max(MAX_PO_LINES, TOO_MANY_IMPORT_LINES),
 });
 export type CanonicalPo = z.infer<typeof canonicalPoSchema>;
 
@@ -300,6 +304,7 @@ export const approvePoImportSchema = z.object({
         skip: z.boolean().optional(),
       }),
     )
+    .max(MAX_PO_LINES, TOO_MANY_IMPORT_LINES)
     .default([]),
 });
 export type ApprovePoImportInput = z.infer<typeof approvePoImportSchema>;
@@ -317,8 +322,11 @@ export type ApprovePoImportInput = z.infer<typeof approvePoImportSchema>;
  */
 export const confirmLineMappingsSchema = z.object({
   poImportId: z.string().uuid(),
-  decisions: z
-    .record(z.string().uuid(), z.enum(AMBIGUOUS_COLUMN_MEANINGS))
-    .refine((d) => Object.keys(d).length > 0, 'Confirm at least one column mapping.'),
+  decisions: boundedRecord(
+    z.string().uuid(),
+    z.enum(AMBIGUOUS_COLUMN_MEANINGS),
+    MAX_PO_LINES,
+    TOO_MANY_IMPORT_LINES,
+  ).refine((d) => Object.keys(d).length > 0, 'Confirm at least one column mapping.'),
 });
 export type ConfirmLineMappingsInput = z.infer<typeof confirmLineMappingsSchema>;

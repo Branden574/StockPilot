@@ -34,7 +34,12 @@ import { audit, auditMany } from './audit';
 import { dispatchEvent } from './integration-events';
 import { ItemImagesService } from './item-images';
 import { InventoryService } from './inventory';
-import { createItemSchema, pastExpectedDayCutoff } from '@stockpilot/core';
+import {
+  createItemSchema,
+  formatLimit,
+  MAX_PO_LINES,
+  pastExpectedDayCutoff,
+} from '@stockpilot/core';
 
 /** Notifications created at once by one fan-out (maintenance-notify.ts uses
  *  the same number for the same reason). */
@@ -181,6 +186,8 @@ function saveDraftRpcError(err: { message?: string; code?: string; hint?: string
   return new ServiceError('internal_error', message || 'Could not save the purchase order.');
 }
 
+const TOO_MANY_PO_LINES = `A purchase order can have at most ${formatLimit(MAX_PO_LINES)} lines.`;
+
 const lineInputSchema = z
   .object({
     itemId: z.string().uuid().optional(),
@@ -203,7 +210,10 @@ export const createPoSchema = z.object({
   expectedAt: z.string().datetime().nullable().optional(),
   notes: z.string().max(2000).optional(),
   poNumber: z.string().trim().min(1).max(64).optional(),
-  lines: z.array(lineInputSchema).min(1, 'Add at least one line item'),
+  lines: z
+    .array(lineInputSchema)
+    .min(1, 'Add at least one line item')
+    .max(MAX_PO_LINES, TOO_MANY_PO_LINES),
 });
 export type CreatePoInput = z.infer<typeof createPoSchema>;
 
@@ -214,7 +224,8 @@ export const updatePoStatusSchema = z.object({
 export const receivePoSchema = z.object({
   lines: z
     .array(z.object({ lineId: z.string().uuid(), quantity: z.coerce.number().nonnegative() }))
-    .min(1),
+    .min(1)
+    .max(MAX_PO_LINES, TOO_MANY_PO_LINES),
   notes: z.string().max(2000).optional(),
 });
 export type ReceivePoInput = z.infer<typeof receivePoSchema>;

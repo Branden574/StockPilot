@@ -3,7 +3,10 @@ import 'server-only';
 import { z } from 'zod';
 
 import {
+  boundedRecord,
+  formatLimit,
   lineResultBlocksApproval,
+  MAX_PO_LINES,
   type CountingUnit,
   type CreateProductGroupInput,
 } from '@stockpilot/core';
@@ -69,6 +72,8 @@ export interface CreateItemsFromPoLinesDeps extends PoImportLinesDeps {
   ctx: ServiceContext;
 }
 
+const TOO_MANY_LINES = `An import can have at most ${formatLimit(MAX_PO_LINES)} lines.`;
+
 const lineDecisionSchema = z.object({
   mode: z.enum(['create', 'use_existing', 'skip']),
   /** Required when mode === 'use_existing'. */
@@ -115,13 +120,23 @@ export const createItemsFromPoLinesSchema = z.object({
    * use the user's edited name; when missing/empty we fall back to the
    * cleaned PO line description.
    */
-  nameOverrides: z.record(z.string().uuid(), z.string().min(1).max(200)).optional(),
+  nameOverrides: boundedRecord(
+    z.string().uuid(),
+    z.string().min(1).max(200),
+    MAX_PO_LINES,
+    TOO_MANY_LINES,
+  ).optional(),
   /**
    * Per-line decision: create a new item (default), link the PO line to
    * an existing item (no creation), or skip the line entirely. Modal
    * uses these when a duplicate match is detected.
    */
-  decisions: z.record(z.string().uuid(), lineDecisionSchema).optional(),
+  decisions: boundedRecord(
+    z.string().uuid(),
+    lineDecisionSchema,
+    MAX_PO_LINES,
+    TOO_MANY_LINES,
+  ).optional(),
   /**
    * Category the new items are filed under. This is what decides the tracking
    * profile, and therefore whether a line resolves to a sports group/variant
@@ -133,7 +148,12 @@ export const createItemsFromPoLinesSchema = z.object({
    * verdict. Keyed by line id. A blocking line with no answer here is REFUSED,
    * never auto-resolved.
    */
-  groupDecisions: z.record(z.string().uuid(), groupDecisionSchema).optional(),
+  groupDecisions: boundedRecord(
+    z.string().uuid(),
+    groupDecisionSchema,
+    MAX_PO_LINES,
+    TOO_MANY_LINES,
+  ).optional(),
   /**
    * Per-line variant attributes the reviewer supplied on the spot, so a
    * missing required attribute can be fixed without leaving the screen. These
@@ -141,16 +161,16 @@ export const createItemsFromPoLinesSchema = z.object({
    * item being created and to the identity key, and the document's own text
    * stays in `variant_size_original`.
    */
-  variantOverrides: z
-    .record(
-      z.string().uuid(),
-      z.object({
-        size: z.string().max(40).nullable().optional(),
-        sizeSystem: z.string().max(40).nullable().optional(),
-        jerseyNumber: z.string().max(4).nullable().optional(),
-      }),
-    )
-    .optional(),
+  variantOverrides: boundedRecord(
+    z.string().uuid(),
+    z.object({
+      size: z.string().max(40).nullable().optional(),
+      sizeSystem: z.string().max(40).nullable().optional(),
+      jerseyNumber: z.string().max(4).nullable().optional(),
+    }),
+    MAX_PO_LINES,
+    TOO_MANY_LINES,
+  ).optional(),
 });
 export type CreateItemsFromPoLinesInput = z.infer<typeof createItemsFromPoLinesSchema>;
 

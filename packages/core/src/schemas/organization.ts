@@ -3,6 +3,9 @@ import { z } from 'zod';
 import { ROLES } from '../constants/roles';
 
 import { emailSchema, slugSchema } from './common';
+import { formatLimit, MAX_PICKED_IDS } from './request-limits';
+
+const TOO_MANY_CHARTERS = `Choose at most ${formatLimit(MAX_PICKED_IDS)} charters.`;
 
 /**
  * The zone names the app and the database both use as an organization's zone
@@ -97,7 +100,7 @@ export const inviteMemberSchema = z.object({
   // Single charter (back-compat). `charterIds` takes precedence when set.
   charterId: z.string().uuid().nullable().optional(),
   // Multi-charter invite: charters this user will oversee for the warehouse.
-  charterIds: z.array(z.string().uuid()).optional(),
+  charterIds: z.array(z.string().uuid()).max(MAX_PICKED_IDS, TOO_MANY_CHARTERS).optional(),
   warehouseId: z.string().uuid().nullable().optional(),
   // All-warehouse access: the invitee gets organization_members.all_warehouses
   // plus one assignment row per current warehouse on accept (future warehouses
@@ -112,7 +115,7 @@ export const setMemberChartersSchema = z.object({
   userId: z.string().uuid(),
   warehouseId: z.string().uuid(),
   // Empty array = "all charters" (a single null-charter assignment row).
-  charterIds: z.array(z.string().uuid()),
+  charterIds: z.array(z.string().uuid()).max(MAX_PICKED_IDS, TOO_MANY_CHARTERS),
 });
 export type SetMemberChartersInput = z.infer<typeof setMemberChartersSchema>;
 

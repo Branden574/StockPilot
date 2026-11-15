@@ -2,13 +2,11 @@
  * True when `value` holds an array longer than `max` anywhere in it: at the
  * top level, inside an object, or inside an element of another array.
  *
- * WHY: a stopgap for GHSA-mrhx-c7xc-m3w5. zod below 4.6.6 builds one
- * validation issue for every failing array element, with no cap, and this app
- * runs zod 3.25.76, for which there is no fix. In zod 3, `.max()` does not stop
- * it: ZodArray._parse (node_modules/zod/v3/types.js) records the too_big issue,
- * marks the result dirty and then still parses every element. Measured on
- * 3.25.76, a 1 MB body whose `lines` is 500,000 numbers makes about 145 MB of
- * issue objects before the route can answer 400.
+ * WHY: a second layer for GHSA-mrhx-c7xc-m3w5. zod below 4.6.6 builds one
+ * validation issue for every failing array element, with no cap. This app runs
+ * zod 3.25.76 with patches/zod@3.25.76.patch, which makes ZodArray answer at
+ * its `.max()` without parsing any element, as 4.6.6 does; this walk also
+ * covers arrays under keys a schema strips, which zod never looks at.
  *
  * So a route that parses an unauthenticated body calls this on the decoded
  * JSON BEFORE safeParse, with `max` set to the longest array its schema

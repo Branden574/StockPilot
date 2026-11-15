@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { TRACKING_TYPE_VALUES } from '../sports/tracking-modes';
+import { boundedRecord } from './bounded-record';
 import { emptyToUndefined, uuidSchema } from './common';
 import { createProductGroupSchema, trackingModeSchema, variantAttributesSchema } from './sports';
 
@@ -124,8 +125,14 @@ export const createItemSchema = z
     // single string value over 10k chars. Keys without an active field definition
     // are ignored by validateCustomFields, but the raw payload still lands in the
     // column, so the gate belongs here at the schema boundary.
-    customFields: z
-      .record(z.string().max(64), z.unknown())
+    // The key gate (ten times the 50 below) stops a body with many keys before
+    // any key is checked.
+    customFields: boundedRecord(
+      z.string().max(64),
+      z.unknown(),
+      500,
+      'Too many custom fields (max 50).',
+    )
       .refine((v) => Object.keys(v).length <= 50, 'Too many custom fields (max 50).')
       .refine(
         (v) => Object.values(v).every((x) => typeof x !== 'string' || x.length <= 10_000),
