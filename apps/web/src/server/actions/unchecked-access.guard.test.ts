@@ -38,8 +38,12 @@ import { describe, expect, it } from 'vitest';
  * WHAT THIS IS NOT. It reads that the call is there, not what the mapping
  * does with it; the behaviour is held by module-state-unread.actions.test.ts
  * (real actions over an unknown module state) and by the shared module's own
- * suite. The second rule reads the bound answer only: an answer rebuilt from
- * its parts into a new object is not seen. A REVIEWED entry is a person's
+ * suite. The second rule reads the bound name only, so it does not see: a
+ * fresh object returned in place of the bound answer (for example under a
+ * condition on the caught error), an answer rebuilt from its parts, a write
+ * through another name that holds the answer or its `error`, or an answer
+ * bound only inside a condition. Those shapes are held by the behaviour
+ * suites named above, not by this file. A REVIEWED entry is a person's
  * judgement, checked only for being current (the function still has that
  * many such catches).
  */
