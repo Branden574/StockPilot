@@ -98,12 +98,12 @@ export const getOrgRowForRequest = cache(async (organizationId: string): Promise
   // (OrganizationRowUnavailableError, the digest a module state that could not
   // be read carries): a page shows the plain state with Try again, and a
   // Server Action answers its try-again sentence, instead of "Something went
-  // wrong". The read's own words go to the server log only.
+  // wrong". The server log gets the error code only, never the message, which
+  // can quote request details (as the sibling access reads do).
   if (error) {
     console.error(
       '[getOrgRowForRequest] organizations read failed:',
       error.code || 'unknown',
-      error.message,
     );
     throw new OrganizationRowUnavailableError();
   }

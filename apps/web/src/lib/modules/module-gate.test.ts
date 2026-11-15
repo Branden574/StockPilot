@@ -389,11 +389,10 @@ describe('fails closed', () => {
         canManage: false,
       });
     }
-    // The read's own words are logged where it failed; the gate logs the
-    // could-not-check error it caught.
+    // The read's error code (never its message) is logged where it failed;
+    // the gate logs the could-not-check error it caught.
     expect(consoleError).toHaveBeenCalledWith(
       '[getOrgRowForRequest] organizations read failed:',
-      expect.anything(),
       expect.anything(),
     );
     expect(consoleError).toHaveBeenCalledWith(
