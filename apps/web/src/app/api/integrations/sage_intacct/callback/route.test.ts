@@ -53,6 +53,8 @@ function userClient(
       error: null,
     },
     'organization_modules.select': { data: [{ module_id: 'integrations', enabled: true }], error: null },
+    // The comp flag, read beside the row. Not comped by default.
+    'organizations.select': { data: [{ all_modules_comp: false }], error: null },
     'organization_members.select': { data: [{ role: 'admin' }], error: null },
     // Permission overrides, read by the real loader (docket S19). None by
     // default, so the admin holds integrations:manage at its role default.
@@ -229,6 +231,55 @@ describe('GET /api/integrations/sage_intacct/callback', () => {
     expect(exchangeCode).not.toHaveBeenCalled();
     expect(putConnectionSecret).not.toHaveBeenCalled();
   });
+
+  // ── The integrations module ────────────────────────────────────────────────
+  it('a module that is off is refused with module_disabled, before any exchange', async () => {
+    vi.mocked(createClient).mockResolvedValueOnce(
+      userClient({
+        'organization_modules.select': {
+          data: [{ module_id: 'integrations', enabled: false }],
+          error: null,
+        },
+      }).client as never,
+    );
+
+    const res = await GET(callbackUrl({ code: 'auth-code', state: STATE }));
+
+    expect(location(res).searchParams.get('error')).toBe('module_disabled');
+    expect(exchangeCode).not.toHaveBeenCalled();
+    expect(putConnectionSecret).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'the module row',
+      { 'organization_modules.select': { data: null, error: { message: 'timeout', code: '57014' } } },
+    ],
+    [
+      'the comp flag, beside a row that says off',
+      {
+        'organization_modules.select': {
+          data: [{ module_id: 'integrations', enabled: false }],
+          error: null,
+        },
+        'organizations.select': { data: null, error: { message: 'timeout', code: '57014' } },
+      },
+    ],
+  ] as Array<[string, Record<string, QueryResult>]>)(
+    'a module state that could not be read (%s): the transient error code, never module_disabled, and nothing is exchanged or stored',
+    async (_name, overrides) => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      vi.mocked(createClient).mockResolvedValueOnce(userClient(overrides).client as never);
+
+      const res = await GET(callbackUrl({ code: 'auth-code', state: STATE }));
+
+      expect(res.status).toBe(302);
+      expect(location(res).searchParams.get('error')).toBe('internal_error');
+      expect(exchangeCode).not.toHaveBeenCalled();
+      expect(putConnectionSecret).not.toHaveBeenCalled();
+      expect(createAdminClient).not.toHaveBeenCalled();
+    },
+  );
 
   // ── Effective permissions (docket S19) ─────────────────────────────────────
   // The same gate as the QuickBooks callback: the member's EFFECTIVE set, the

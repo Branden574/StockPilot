@@ -1076,6 +1076,39 @@ WEB_TESTS=(
   src/lib/auth/api-context.membership-answer-shapes.test.ts
   src/lib/auth/api-context.membership-unreadable.test.ts
   src/app/api/v1/membership-unreadable.routes.test.ts
+  # An organization's module state on the web: a state that could not be read
+  # is neither on nor off. withContext() holds it as unknown, so a Server
+  # Action answers its try-again sentence and a page says it could not check;
+  # the single-module check behind the public API key, the webhook
+  # subscriptions and the accounting connect callbacks throws for it (a 503
+  # with Retry-After, or the connect page's transient code); the public
+  # catalog's photo map never caches an answer built on a failed read; the
+  # public link resolver keeps a failed read only as "unread", reads again
+  # directly, and never serves an entry past its window or from before a link
+  # change (driven through the real unstable_cache); the public tracker says
+  # when the return link could not be checked; the customer portal does not
+  # take a failed read for "not a portal user", and its actions answer that
+  # as a result the page can show. The guard lists every file that reads the
+  # module table with what an unread answer becomes, so a new reader has to
+  # be listed. Nothing is granted on a read that failed.
+  src/lib/modules/module-state-readers.guard.test.ts
+  # Every catch in the Server Action modules reaches the shared mapping of a
+  # check that could not be read (or is listed with its reason), so a module
+  # with its own error mapping answers "Your access could not be checked.
+  # Please try again." and not its generic sentence.
+  src/server/actions/unchecked-access.guard.test.ts
+  src/lib/modules/module-state.test.ts
+  src/lib/modules/org-may-use-module.test.ts
+  src/lib/dashboard/request-cache.modules.test.ts
+  src/server/services/context.module-state.test.ts
+  src/server/actions/module-state-unread.actions.test.ts
+  src/lib/auth/api-key.module-gate.test.ts
+  src/lib/auth/public-api.module-state.test.ts
+  src/app/api/public/v1/hooks/route.test.ts
+  src/server/services/public-catalog.token-resolution.test.ts
+  src/server/services/portal.module-state.test.ts
+  src/server/actions/portal.module-state.test.ts
+  'src/app/(dashboard)/layout.module-state.test.tsx'
   src/app/api/v1/mobile/snapshot/route.step-up.test.ts
   src/app/api/client-error/route.test.ts
   # A session that still owes its authenticator code gets no organization

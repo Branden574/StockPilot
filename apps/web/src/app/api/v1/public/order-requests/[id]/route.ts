@@ -243,21 +243,41 @@ export async function GET(
   // are known to every member. A read by a catalog or link token still shows
   // the order, with no return link; the requester also gets the link by email
   // (the return prompt). Review finding 4 (0389 had kept 0330's rule).
+  //
+  // A module state that could not be read is not "off". supabase-js resolves
+  // a failed read as `{ data: null, error }`, the shape of "no enabled row",
+  // so the read's error is checked. On a failed read the link is not handed
+  // out (nothing was confirmed), the order is still shown, and
+  // `returnPathUnavailable` tells the page to say the link could not be
+  // checked and to offer another try. Set only for the caller who would
+  // otherwise get the link.
   let returnPath: string | null = null;
+  let returnPathUnavailable = false;
   if (
     byOwnTrackToken &&
     (h.status === 'completed' || h.status === 'delivered') &&
     returnToken &&
     lines.some((l) => l.quantityFulfilled > 0)
   ) {
-    const { data: returnsMod } = await admin
+    const { data: returnsMod, error: returnsModError } = await admin
       .from('organization_modules')
       .select('module_id')
       .eq('organization_id', orgId)
       .eq('module_id', 'returns')
       .eq('enabled', true)
       .maybeSingle();
-    if (returnsMod) returnPath = `/returns/request/${returnToken}`;
+    if (returnsModError) {
+      returnPathUnavailable = true;
+      void reportError(new Error('public order-read: returns module state unreadable'), {
+        tag: 'public.order-read.returns-module',
+        level: 'warning',
+        organizationId: orgId,
+        // The code only: a message can quote request details.
+        extra: { code: returnsModError.code ?? null },
+      });
+    } else if (returnsMod) {
+      returnPath = `/returns/request/${returnToken}`;
+    }
   }
 
   // Same reasoning as denied_reason: the `notes` field is a
@@ -286,5 +306,6 @@ export async function GET(
     deniedReason: sanitizedDeniedReason,
     notes: null,
     returnPath,
+    ...(returnPathUnavailable ? { returnPathUnavailable: true } : {}),
   });
 }

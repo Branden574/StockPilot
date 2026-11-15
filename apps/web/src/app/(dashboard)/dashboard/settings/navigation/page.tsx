@@ -1,11 +1,14 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 
+import { TryAgainButton } from '@/components/dashboard/try-again-button';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { StatePanel } from '@/components/patterns/state-panel';
 import { SettingsPage } from '@/components/settings/settings-nav';
 import { NavCustomizer } from '@/components/settings/nav-customizer';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getModulesForRequest, getOrgRowForRequest } from '@/lib/dashboard/request-cache';
+import { moduleSetUnreadable } from '@/lib/modules/module-state';
 
 import { can, resolveSurface, type NavOverrides, type NavSectionKey } from '@stockpilot/core';
 import { PageTour } from '@/components/onboarding/page-tour';
@@ -40,6 +43,30 @@ export default async function NavigationSettingsPage() {
     getModulesForRequest(ctx.organizationId),
     getOrgRowForRequest(ctx.organizationId),
   ]);
+
+  // The editor lists the items of the modules that are on. With the module
+  // state unread that list is not known, and a core-only list would be saved
+  // over as if it were the organization's menu: say so and offer Try again
+  // (getModulesForRequest holds the state as unknown, never as "off").
+  if (moduleSetUnreadable(enabledModules)) {
+    return (
+      <SettingsPage>
+        <PageHeader
+          title="Navigation"
+          back={
+            <PageHeaderBackLink href="/dashboard/settings">← Back to settings</PageHeaderBackLink>
+          }
+        />
+        <StatePanel
+          kind="failed"
+          headingLevel={2}
+          title="We couldn't check which modules are on"
+          description="The menu can't be edited until they are read. This is usually temporary. Try again in a moment."
+          action={<TryAgainButton />}
+        />
+      </SettingsPage>
+    );
+  }
 
   const resolved = resolveSurface('web_sidebar', { role: 'admin', enabledModules });
   const baseSections = resolved.map((sec) => ({

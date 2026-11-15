@@ -160,11 +160,90 @@ describe('GET /api/v1/public/catalog-thumbnails', () => {
     expect(signed.ids).toEqual([]);
   });
 
+  // The warehouse id is compared with a uuid column: anything else can name
+  // no warehouse, and the database would refuse the comparison itself.
+  it.each(['abc', '123', `${WH}x`, 'not a uuid'])(
+    'a warehouseId that is not a uuid (%s) is a 400, before the bucket and before any read',
+    async (bad) => {
+      const stub = openLink();
+      const res = await get(`token=${LINK_REF}&warehouseId=${encodeURIComponent(bad)}`);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid warehouseId' });
+      expect(checkRateLimit).not.toHaveBeenCalled();
+      expect(stub.fromCalls).toEqual([]);
+      expect(stub.rpcCalls).toEqual([]);
+    },
+  );
+
   it('a request without a token or a warehouse is refused before it spends the bucket', async () => {
     openLink();
     expect((await get(`warehouseId=${WH}`)).status).toBe(400);
     expect((await get(`token=${LINK_REF}`)).status).toBe(400);
     expect(checkRateLimit).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/v1/public/catalog-thumbnails: an answer is cached only when its reads answered', () => {
+  const FAILED = { data: null, error: { message: 'upstream timeout', code: '57014' } };
+  const CDN = 'public, s-maxage=60, stale-while-revalidate=300';
+
+  /** An open link, with one read replaced. */
+  function openLinkWith(overrides: Record<string, unknown>) {
+    const stub = makeSupabaseStub({
+      'public_request_links.select': {
+        data: {
+          id: LINK,
+          organization_id: ORG,
+          active: true,
+          expires_at: null,
+          available_from: null,
+          available_until: null,
+        },
+        error: null,
+      },
+      'organization_modules.select': { data: { module_id: 'public_requests' }, error: null },
+      'warehouses.select': { data: { id: WH }, error: null },
+      'rpc:public_link_eligible_items': {
+        data: ITEMS.map((item_id) => ({ item_id })),
+        error: null,
+      },
+      ...overrides,
+    } as never);
+    admin.current = stub.client;
+    return stub;
+  }
+
+  it('a module that is off answers the empty map, cached at the CDN as before', async () => {
+    openLinkWith({ 'organization_modules.select': { data: null, error: null } });
+    const res = await get(QUERY);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ urls: {} });
+    expect(res.headers.get('cache-control')).toBe(CDN);
+  });
+
+  it.each([
+    ['the module state', 'organization_modules.select'],
+    ['the link', 'public_request_links.select'],
+    ['the warehouse', 'warehouses.select'],
+    ['the eligible items', 'rpc:public_link_eligible_items'],
+  ])(
+    '%s could not be read: 503, no-store, retry-after, and no empty map for the CDN to keep',
+    async (_name, key) => {
+      openLinkWith({ [key]: FAILED });
+      const res = await get(QUERY);
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({ error: 'unavailable' });
+      expect(res.headers.get('cache-control')).toBe('no-store');
+      expect(res.headers.get('retry-after')).toBe('5');
+      expect(signed.ids).toEqual([]);
+    },
+  );
+
+  it('the module state could not be read: nothing past it is read', async () => {
+    const stub = openLinkWith({ 'organization_modules.select': FAILED });
+    await get(QUERY);
+    expect(stub.fromCalls).toEqual(['public_request_links', 'organization_modules']);
+    expect(stub.rpcCalls).toEqual([]);
   });
 });
 

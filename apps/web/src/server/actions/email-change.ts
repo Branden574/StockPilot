@@ -12,6 +12,7 @@ import {
 import { loadAccountStatus, noteDisabledAccountBlocked } from '@/lib/auth/account-status';
 import { readVerifiedSessionClaimsOf } from '@/lib/auth/verified-claims';
 import { createClient } from '@/lib/supabase/server';
+import { uncheckedAccessResult } from '@/server/lib/action-error-result';
 import { ServiceError } from '@/server/services/context';
 import {
   cancelEmailChange,
@@ -77,6 +78,9 @@ async function resolvePrincipal(
 }
 
 function fromServiceError(e: unknown): ActionResult<never> {
+  // A check of the caller's access that could not be read: its own sentence.
+  const unchecked = uncheckedAccessResult(e, 'actions.email_change');
+  if (unchecked) return unchecked;
   if (e instanceof ServiceError) {
     const reason = (e.details as { reason?: string } | undefined)?.reason;
     if (reason === 'rate_limited') return err('rate_limited', e.message);
