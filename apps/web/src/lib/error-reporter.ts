@@ -7,7 +7,8 @@ import { reportError as sendReport, type ErrorContext } from './error-reporter-c
 export { isNextControlFlowError, type ErrorContext } from './error-reporter-core';
 
 /**
- * Reports an error from server code: console.error always, and a POST to
+ * Reports an error from server code: one console line at the report's level
+ * always (console.error, console.warn or console.info), and a POST to
  * ERROR_WEBHOOK_URL when one is set (error-reporter-core.ts). Never throws.
  *
  * KEPT ALIVE PAST THE RESPONSE. Most callers do not wait (`void
