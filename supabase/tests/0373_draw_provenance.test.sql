@@ -878,8 +878,10 @@ select is(
               -- tagged -- 0404 (kit checks, docket S4; the file was numbered 0404
               -- when it was written and reviewed, and its content is unchanged),
               -- each an added line only, so stripping them too leaves the
-              -- expected values unchanged.
-              md5(regexp_replace(p.prosrc, '\n[^\n]*-- (0373|RX-1|0404)[^\n]*', '', 'g')) as stripped,
+              -- expected values unchanged. 0464 added lines tagged -- 0464 to
+              -- distribute_bundle (retry key match and flag; 0464 P4), each an
+              -- added line only, stripped here the same way.
+              md5(regexp_replace(p.prosrc, '\n[^\n]*-- (0373|RX-1|0404|0464)[^\n]*', '', 'g')) as stripped,
               (select bool_and(btrim(m[1]) ~ '^(v_prov\s+public\.stock_draw;|v_prov := ledger\.apply_level_delta_for\([^;]+, true, v_user\);|draw,|v_prov,)\s+-- 0373$'
                                or btrim(m[1]) = '-- 0373: drawn before the insert (0197 drew after it), so this row carries its own draw.')
                  from regexp_matches(p.prosrc, '\n([^\n]*-- 0373[^\n]*)', 'g') m) as shapes_ok
