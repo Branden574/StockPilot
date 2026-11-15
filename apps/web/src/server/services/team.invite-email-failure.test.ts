@@ -15,7 +15,8 @@ import { audit } from './audit';
  * resendInvite() discarded that value, so an admin saw a success toast, the
  * audit log recorded 'user.invited', and the person was never contacted. The
  * 2026-07-02 mailer incident is exactly this failure mode reaching production
- * silently, which is why the result is now checked BEFORE the audit row.
+ * silently, which is why resendInvite() checks the result BEFORE its audit
+ * row, and invite()'s row records whether the email went out (email_sent).
  */
 
 vi.mock('@/lib/email/resend', () => ({

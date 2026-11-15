@@ -3059,7 +3059,9 @@ describe('every table write in apps/web/src stays in the active organization and
           ? withoutGate(tree, file, member, 'readInActiveOrg')
           : withMemberChanged(tree, file, member, remove, (body) =>
               remove === 'rows'
-                ? body.replace(".select('id')", '')
+                ? // The row asked back: `.select('id')`, or `.select('id, …')`
+                  // when the member also records columns of it.
+                  body.replace(/\.select\('id(?:, [a-z_, ]+)?'\)/, '')
                 : remove === 'test'
                   ? body.replace(/if \(!(row|data)\)/, 'if ($1)')
                   : body.replace(/\.eq\('organization_id', this\.ctx\.organizationId\)/, ''),

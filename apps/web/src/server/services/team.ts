@@ -326,6 +326,19 @@ export class TeamService {
       text: message.text,
       from: message.from,
     });
+    // The invite row exists whether or not the email went out (its link can
+    // be copied from Pending invites), so it is recorded either way.
+    // email_sent says which, so the row never claims a message that was not
+    // sent. Same entity and address as the resend row below.
+    await audit(
+      {
+        event: 'user.invited',
+        entityType: 'org_invite',
+        entityId: invite.id as string,
+        after: { email: normalizedEmail, role: params.role, email_sent: sent.ok },
+      },
+      this.ctx,
+    );
     if (!sent.ok) {
       void reportError(new Error(String(sent.error)), {
         tag: 'team.invite.email',
@@ -349,16 +362,29 @@ export class TeamService {
     assertPermission(this.ctx, 'members:invite');
     // The deleted row is asked back (S41): a filtered delete that matches no
     // row is not an error, so only the returned row proves an invite of this
-    // organization was revoked.
+    // organization was revoked. Its address and role go into the audit row,
+    // since the invite itself is gone once this returns.
     const { data: row, error } = await this.ctx.supabase
       .from('organization_invites')
       .delete()
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', inviteId)
-      .select('id')
+      .select('id, email, role')
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
     if (!row) throw new ServiceError('not_found', 'Invite not found');
+    await audit(
+      {
+        event: 'user.invite.revoked',
+        entityType: 'org_invite',
+        entityId: row.id as string,
+        before: {
+          email: (row.email as string | null) ?? null,
+          role: (row.role as string | null) ?? null,
+        },
+      },
+      this.ctx,
+    );
   }
 
   /**
