@@ -5,7 +5,9 @@
  * The rule itself (who owes set-up) is `authenticatorSetUpOwed` in
  * @stockpilot/core. requireOrgContext() (lib/auth/session.ts) applies it for
  * every dashboard page and every Server Action that builds on the member's
- * context, and the dashboard layout applies it to a full page load.
+ * context. No layout redirects for it: the dashboard layout only shows the
+ * banner, and a set-up panel in place of the page for a session the pages'
+ * check cannot see (see the layout).
  */
 
 /** The security settings page, where an authenticator is set up. */
@@ -21,8 +23,9 @@ export const AUTHENTICATOR_SET_UP_URL = `${AUTHENTICATOR_SET_UP_PAGE}?enroll=1`;
  * The pages a member who owes set-up may still open, each a personal page:
  *   - the security settings page: set up and verify an authenticator, and
  *     everything on its shell (sign out, switch organization);
- *   - the profile page: name, avatar, sign-in email, and deleting the account,
- *     which every member can do whatever their organization requires.
+ *   - the profile page: it opens and its appearance setting works; its own
+ *     actions (name, avatar, sign-in email, deleting the account) reach their
+ *     own authenticator check, which answers that one is required.
  */
 export const OPEN_BEFORE_AUTHENTICATOR_SET_UP: readonly string[] = [
   AUTHENTICATOR_SET_UP_PAGE,

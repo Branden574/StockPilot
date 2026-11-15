@@ -47,6 +47,52 @@ describe('GET /api/search', () => {
     expect(await res.json()).toEqual({ error: 'unauthorized' });
   });
 
+  it('a member who must set up an authenticator first is refused, and nothing is searched', async () => {
+    const stub = makeSupabaseStub({});
+    vi.mocked(withApiContext).mockResolvedValueOnce({
+      ...buildCtx(stub.client),
+      mfaRequired: true,
+      mfaSatisfied: false,
+      mfaEnrolled: false,
+    });
+
+    const res = await GET(new Request('https://test.local/api/search?q=kettle'));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'mfa_required' });
+    expect(stub.fromCalls).toEqual([]);
+    expect(getWarehouseAccess).not.toHaveBeenCalled();
+  });
+
+  it('a session that owes its code is refused with the code reason, and nothing is searched', async () => {
+    const stub = makeSupabaseStub({});
+    vi.mocked(withApiContext).mockResolvedValueOnce({
+      ...buildCtx(stub.client),
+      mfaRequired: true,
+      mfaSatisfied: false,
+      mfaEnrolled: true,
+    });
+
+    const res = await GET(new Request('https://test.local/api/search?q=kettle'));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'aal2_required' });
+    expect(stub.fromCalls).toEqual([]);
+  });
+
+  it('a requirement that is met searches as usual', async () => {
+    const stub = makeSupabaseStub({});
+    vi.mocked(withApiContext).mockResolvedValueOnce({
+      ...buildCtx(stub.client),
+      mfaRequired: true,
+      mfaSatisfied: true,
+      mfaEnrolled: true,
+    });
+    vi.mocked(getWarehouseAccess).mockResolvedValueOnce(ALL_ACCESS);
+
+    const res = await GET(new Request('https://test.local/api/search?q=kettle'));
+    expect(res.status).toBe(200);
+    expect(stub.fromCalls.length).toBeGreaterThan(0);
+  });
+
   it('returns empty arrays when q is shorter than 2 chars', async () => {
     const stub = makeSupabaseStub({});
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub.client));
@@ -77,7 +123,9 @@ describe('GET /api/search', () => {
     expect(res.status).toBe(200);
 
     const itemsArgs = stub.chainArgs.get('inventory_items.select') ?? [];
-    const orCall = itemsArgs.find((args) => typeof args[0] === 'string' && (args[0] as string).startsWith('name.ilike'));
+    const orCall = itemsArgs.find(
+      (args) => typeof args[0] === 'string' && (args[0] as string).startsWith('name.ilike'),
+    );
     expect(orCall?.[0]).toBe('name.ilike.%foo%,sku.ilike.%foo%,barcode.ilike.%foo%');
 
     const body = await res.json();
@@ -91,7 +139,15 @@ describe('GET /api/search', () => {
     const stub = makeSupabaseStub({
       'inventory_items.select': { data: [], error: null },
       'purchase_orders.select': {
-        data: [{ id: 'po-1', po_number: 'PO-FOO-1', status: 'open', supplier_id: 's-1', warehouse_id: 'wh-1' }],
+        data: [
+          {
+            id: 'po-1',
+            po_number: 'PO-FOO-1',
+            status: 'open',
+            supplier_id: 's-1',
+            warehouse_id: 'wh-1',
+          },
+        ],
         error: null,
       },
       'suppliers.select': {
@@ -148,10 +204,15 @@ describe('GET /api/search', () => {
     // It used to DROP the filter here and lean on row level security alone.
     const stub = makeSupabaseStub({
       'inventory_items.select': {
-        data: [{ id: 'i-1', name: 'Widget', sku: 'W-1', quantity_on_hand: 1, warehouse_id: 'wh-1' }],
+        data: [
+          { id: 'i-1', name: 'Widget', sku: 'W-1', quantity_on_hand: 1, warehouse_id: 'wh-1' },
+        ],
         error: null,
       },
-      'purchase_orders.select': { data: [{ id: 'po-1', po_number: 'PO-FOO-1', status: 'open' }], error: null },
+      'purchase_orders.select': {
+        data: [{ id: 'po-1', po_number: 'PO-FOO-1', status: 'open' }],
+        error: null,
+      },
       'suppliers.select': { data: [], error: null },
     });
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub.client));
@@ -208,7 +269,10 @@ describe('GET /api/search', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const stub = makeSupabaseStub({
       'inventory_items.select': { data: [], error: null },
-      'purchase_orders.select': { data: null, error: { code: '42703', message: 'column does not exist' } },
+      'purchase_orders.select': {
+        data: null,
+        error: { code: '42703', message: 'column does not exist' },
+      },
       'suppliers.select': { data: [], error: null },
     });
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(stub.client));
@@ -233,7 +297,9 @@ describe('GET /api/search', () => {
     expect(res.status).toBe(200);
 
     const itemsArgs = stub.chainArgs.get('inventory_items.select') ?? [];
-    const orCall = itemsArgs.find((args) => typeof args[0] === 'string' && (args[0] as string).startsWith('name.ilike'));
+    const orCall = itemsArgs.find(
+      (args) => typeof args[0] === 'string' && (args[0] as string).startsWith('name.ilike'),
+    );
     // URL decode -> "%foo,(bar)", then strip [%,()] -> "foobar".
     expect(orCall?.[0]).toBe('name.ilike.%foobar%,sku.ilike.%foobar%,barcode.ilike.%foobar%');
   });

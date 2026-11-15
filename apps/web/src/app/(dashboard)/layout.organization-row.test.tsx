@@ -47,7 +47,7 @@ vi.mock('@/lib/auth/platform-admin', () => ({
   currentUserIsPlatformAdminFromRequestHeader: async () => false,
 }));
 vi.mock('@/lib/auth/session', () => ({
-  requireOrgContext: async () => ({
+  requireOrgContextForLayout: async () => ({
     organizationId: 'org-1',
     organizationName: 'Org One',
     userId: 'u1',
@@ -77,9 +77,9 @@ vi.mock('@/lib/auth/verified-claims', () => ({
   getVerifiedSessionClaimsForRequest: async () => ({ userId: 'u1', aal: 'aal1' }),
 }));
 vi.mock('@/lib/auth/warehouse', () => ({
-  getWarehouseAccess: async () => ({ hasAllAccess: true, readableIds: ['wh-1'] }),
+  getWarehouseAccessFor: async () => ({ hasAllAccess: true, readableIds: ['wh-1'] }),
 }));
-vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilter: async () => null }));
+vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilterFor: async () => null }));
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(async () => holder.stub!.client),
 }));

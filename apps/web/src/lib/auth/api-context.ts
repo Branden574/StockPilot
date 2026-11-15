@@ -21,7 +21,7 @@ import {
 } from '@/lib/auth/request-context-bundle';
 
 import type { Role, Database, ModuleId, Permission } from '@stockpilot/core';
-import { effectivePermissions, isAdminRole, stepUpOwed } from '@stockpilot/core';
+import { effectivePermissions, policyRequiresAuthenticator, stepUpOwed } from '@stockpilot/core';
 
 import {
   enforcedMfaPolicy,
@@ -139,8 +139,9 @@ async function mfaFromPolicy(
   let mfaRequired = false;
   let mfaSatisfied = false;
   try {
-    const policyRequired =
-      policy === 'all_required' || (policy === 'admins_required' && isAdminRole(role));
+    // The one rule (@stockpilot/core): everyone under all_required, owners
+    // and admins under admins_required.
+    const policyRequired = policyRequiresAuthenticator(policy, role);
     // ENROLLMENT ESCALATES (HI-6): mirrors resolveMfaState() in
     // services/context.ts — a verified factor must be satisfied even under
     // an 'optional' policy, or a stolen password alone reaches the API at

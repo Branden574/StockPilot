@@ -61,6 +61,17 @@ import { buildCallGraph, shippedSourceFiles, type CallGraph } from './gate-reach
 const WEB_SRC = path.resolve(__dirname, '..');
 
 const GATE = 'lib/auth/session.ts#requireOrgContext';
+/**
+ * What a dashboard LAYOUT asks instead: the same context and every rule of
+ * requireOrgContext() but the set-up redirect, which no layout may throw (a
+ * layout that redirects to a page under itself is replayed by the browser;
+ * lib/auth/authenticator-set-up.guard.test.ts keeps it to layouts). The
+ * authenticator-code rule this guard is about is in both.
+ */
+const LAYOUT_GATE = 'lib/auth/session.ts#requireOrgContextForLayout';
+/** The gate an entry file asks: a layout asks either, a page requireOrgContext(). */
+const gateFor = (file: string): string[] =>
+  /(^|\/)layout\.tsx$/.test(file) ? [GATE, LAYOUT_GATE] : [GATE];
 const PLATFORM_GATE = 'lib/auth/platform-admin.ts#requirePlatformAdmin';
 const PORTAL_GATE = 'server/services/portal.ts#resolvePortalContext';
 const DASHBOARD = 'app/(dashboard)/';
@@ -154,16 +165,19 @@ const unreadEntriesUnder = (tree: Tree, dir: string) =>
   );
 
 /** What reaches `gate`, with the calls in `allowed` excused beside it. */
-const reachOf = (tree: Tree, gate: string, allowed: Record<string, string> = {}) =>
-  tree.graph.reach([targetOf(tree, gate)], {
-    besideAllowed: Object.keys(allowed).map((key) => targetOf(tree, key)),
-  });
+const reachOf = (tree: Tree, gate: string | string[], allowed: Record<string, string> = {}) =>
+  tree.graph.reach(
+    (Array.isArray(gate) ? gate : [gate]).map((g) => targetOf(tree, g)),
+    {
+      besideAllowed: Object.keys(allowed).map((key) => targetOf(tree, key)),
+    },
+  );
 
 /** Why a page does not ask `gate` first by its own calls, or null when it does. */
 function notGateFirst(
   tree: Tree,
   page: string,
-  gate: string,
+  gate: string | string[],
   name = 'default',
   allowed: Record<string, string> = {},
 ): string | null {
@@ -185,7 +199,7 @@ function notGateFirst(
 function metadataReadsFirst(
   tree: Tree,
   page: string,
-  gate: string,
+  gate: string | string[],
   allowed: Record<string, string> = {},
 ): string | null {
   const file = tree.abs(page);
@@ -205,9 +219,9 @@ function openPages(
 ): string[] {
   return entriesUnder(tree, DASHBOARD).flatMap((page) => {
     const problems: string[] = [];
-    const why = reviewed[page] ? null : notGateFirst(tree, page, GATE, 'default', allowed);
+    const why = reviewed[page] ? null : notGateFirst(tree, page, gateFor(page), 'default', allowed);
     if (why) problems.push(`${page}: ${why}`);
-    const metadata = metadataReadsFirst(tree, page, GATE, allowed);
+    const metadata = metadataReadsFirst(tree, page, gateFor(page), allowed);
     if (metadata) problems.push(`${page}: ${metadata}`);
     return problems;
   });
@@ -220,7 +234,12 @@ function staleEntries(
   allowed: Record<string, string> = {},
 ): string[] {
   const calls = tree.graph.reach([targetOf(tree, GATE)]);
-  const rendered = tree.graph.reach([targetOf(tree, GATE)], { jsx: true });
+  const rendered = tree.graph.reach(
+    [GATE, LAYOUT_GATE]
+      .filter((g) => tree.graph.hasExport(tree.abs(g.split('#')[0]!), g.split('#')[1]!))
+      .map((g) => targetOf(tree, g)),
+    { jsx: true },
+  );
   const problems: string[] = [];
   for (const f of unreadEntriesUnder(tree, DASHBOARD)) {
     problems.push(`${f}: a server entry file this guard does not read`);
@@ -251,7 +270,7 @@ function staleEntries(
       problems.push(`${page}: no such dashboard page or layout`);
       continue;
     }
-    if (notGateFirst(tree, page, GATE, 'default', allowed) === null) {
+    if (notGateFirst(tree, page, gateFor(page), 'default', allowed) === null) {
       problems.push(`${page}: asks for the context first, so it leaves the list`);
       continue;
     }
@@ -861,7 +880,11 @@ describe('self-test: a planted violation of each rule is reported', () => {
     const DOES_MORE =
       "does more than read the request's own cookies or headers before it asks for the context";
     expect(
-      staleEntries(t, {}, Object.fromEntries(SHAPE_NAMES.map((n) => [`lib/shapes.ts#${n}`, reason]))),
+      staleEntries(
+        t,
+        {},
+        Object.fromEntries(SHAPE_NAMES.map((n) => [`lib/shapes.ts#${n}`, reason])),
+      ),
     ).toEqual(
       SHAPE_NAMES.filter((n) => n !== 'cachedFilter')
         .map((n) =>

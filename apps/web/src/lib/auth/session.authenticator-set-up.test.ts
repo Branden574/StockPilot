@@ -33,6 +33,8 @@ vi.mock('next/headers', async () => {
 
 /** The organization row as the legacy read answers it, when the bundle does not carry it. */
 const legacy = vi.hoisted(() => ({
+  /** get_request_context() does not answer: the session loader takes its own reads. */
+  noBundle: false,
   hideOrganization: false,
   orgRow: { data: null as unknown, error: null as unknown },
 }));
@@ -46,6 +48,10 @@ vi.mock('@/lib/supabase/server', async () => {
         ...client,
         // The bundle with the organization row hidden from this member.
         rpc: async (fn: string) => {
+          if (legacy.noBundle) {
+            f.world.calls.push(`rpc:${fn}`);
+            return { data: null, error: { code: 'PGRST202', message: 'not found' } };
+          }
           const answer = await rpc(fn);
           if (!legacy.hideOrganization) return answer;
           const data = answer.data as { memberships: Array<Record<string, unknown>> };
@@ -58,11 +64,58 @@ vi.mock('@/lib/supabase/server', async () => {
           };
         },
         from: (table: string) => {
-          if (table !== 'organizations') return client.from(table);
-          f.world.calls.push('from:organizations');
+          if (table === 'organizations' && !legacy.noBundle) {
+            f.world.calls.push('from:organizations');
+            const builder: Record<string, unknown> = {};
+            for (const m of ['select', 'eq']) builder[m] = () => builder;
+            builder.maybeSingle = async () => legacy.orgRow;
+            return builder;
+          }
+          if (!legacy.noBundle) return client.from(table);
+          // The session loader's own reads, for the made-up member of world.
+          f.world.calls.push(`from:${table}`);
+          const filters: Record<string, unknown> = {};
+          const answer = () => {
+            const orgId = filters.organization_id as string | undefined;
+            switch (table) {
+              case 'user_profiles':
+                return {
+                  id: f.USER,
+                  email: f.EMAIL,
+                  full_name: 'Example Person',
+                  avatar_url: null,
+                  default_organization_id: f.world.orgs[0] ?? null,
+                  disabled_at: null,
+                  deleted_at: null,
+                };
+              case 'organization_members':
+                if (orgId) {
+                  return f.world.orgs.includes(orgId)
+                    ? { role: f.world.role, organizations: { name: `Org ${orgId.slice(0, 1)}` } }
+                    : null;
+                }
+                return f.world.orgs.map((id) => ({
+                  organization_id: id,
+                  role: f.world.role,
+                  organizations: { id, name: `Org ${id.slice(0, 1)}`, logo_url: null },
+                }));
+              case 'role_permission_overrides':
+              case 'user_permission_overrides':
+                return [];
+              case 'organizations':
+                return { mfa_policy: f.world.policy };
+              default:
+                throw new Error(`unexpected table read: ${table}`);
+            }
+          };
           const builder: Record<string, unknown> = {};
-          for (const m of ['select', 'eq']) builder[m] = () => builder;
-          builder.maybeSingle = async () => legacy.orgRow;
+          for (const m of ['select', 'not', 'is', 'limit', 'neq', 'in', 'order']) {
+            builder[m] = () => builder;
+          }
+          builder.eq = (col: string, val: unknown) => ((filters[col] = val), builder);
+          builder.maybeSingle = async () => ({ data: answer(), error: null });
+          builder.single = async () => ({ data: answer(), error: null });
+          builder.then = (res: (v: unknown) => unknown) => res({ data: answer(), error: null });
           return builder;
         },
       };
@@ -121,6 +174,7 @@ function as(policy: Policy, role: Role, pathname: string | null = '/dashboard/in
 beforeEach(() => {
   redirect.mockClear();
   resetWorld();
+  legacy.noBundle = false;
   legacy.hideOrganization = false;
   legacy.orgRow = { data: null, error: null };
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -286,6 +340,36 @@ describe('an organization row the member cannot read: held to the strictest poli
   it('a row read by the legacy path that says optional: the context', async () => {
     as('admins_required', 'owner');
     legacy.orgRow = { data: { mfa_policy: 'optional' }, error: null };
+    expect((await requireOrgContext()).organizationId).toBe(ORG);
+  });
+});
+
+describe('without the one-round-trip context read (the session loader takes its own reads)', () => {
+  beforeEach(() => {
+    legacy.noBundle = true;
+    world.orgs = [ORG, ORG_2];
+  });
+
+  it('an explicit organization: an owner who must set up is sent there; a manager gets the context', async () => {
+    as('admins_required', 'owner');
+    expect(await redirectOf(() => requireOrgContext(ORG_2))).toBe(SET_UP);
+    expect(count('rpc:get_request_context')).toBeGreaterThanOrEqual(1);
+    as('admins_required', 'manager');
+    expect((await requireOrgContext(ORG_2)).organizationId).toBe(ORG_2);
+    // The legacy membership read for that organization, and its policy row.
+    expect(world.calls).toContain('from:organization_members');
+    expect(world.calls).toContain('from:organizations');
+  });
+
+  it('an explicit organization on the security page: the context', async () => {
+    as('all_required', 'staff', '/dashboard/settings/security');
+    expect((await requireOrgContext(ORG_2)).organizationId).toBe(ORG_2);
+  });
+
+  it('the default organization: the same rule', async () => {
+    as('all_required', 'viewer');
+    expect(await redirectOf(() => requireOrgContext())).toBe(SET_UP);
+    as('optional', 'viewer');
     expect((await requireOrgContext()).organizationId).toBe(ORG);
   });
 });

@@ -3,7 +3,7 @@ import 'server-only';
 import { cookies } from 'next/headers';
 import { cache } from 'react';
 
-import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import { getWarehouseAccess, getWarehouseAccessFor } from '@/lib/auth/warehouse';
 
 const COOKIE_NAME = 'sp_warehouse_filter';
 
@@ -42,7 +42,8 @@ export const getActiveWarehouseFilter = cache(async (): Promise<string | null> =
 });
 
 /**
- * Route-handler variant. `getActiveWarehouseFilter()` resolves auth via the
+ * For a caller that holds its context: route handlers, and the dashboard
+ * layout (which must not ask requireOrgContext()). `getActiveWarehouseFilter()` resolves auth via the
  * zero-arg `getWarehouseAccess()`, whose `requireOrgContext()` fallback
  * throws NEXT_REDIRECT outside a page render (no x-pathname header) — a
  * route handler that calls it 500s. API routes already hold a ctx from
@@ -54,7 +55,7 @@ export async function getActiveWarehouseFilterFor(ctx: {
   userId: string;
   role: string;
 }): Promise<string | null> {
-  const access = await getWarehouseAccess(ctx as Parameters<typeof getWarehouseAccess>[0]);
+  const access = await getWarehouseAccessFor(ctx as Parameters<typeof getWarehouseAccessFor>[0]);
   if (!access.hasAllAccess) return null;
 
   const c = await cookies();

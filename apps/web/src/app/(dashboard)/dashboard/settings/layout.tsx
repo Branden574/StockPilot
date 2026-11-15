@@ -6,8 +6,8 @@ import {
   SettingsSubNavPlaceholder,
   type SettingsNavAccess,
 } from '@/components/settings/settings-nav';
-import { requireOrgContext } from '@/lib/auth/session';
-import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { requireOrgContextForLayout } from '@/lib/auth/session';
+import { checkModuleAccessFor } from '@/lib/modules/module-gate';
 
 import { can, PERMISSIONS } from '@stockpilot/core';
 
@@ -16,9 +16,9 @@ import { can, PERMISSIONS } from '@stockpilot/core';
  * settings page except the hub (the hub IS the grouped index).
  *
  * NO READS OF ITS OWN. The sub-nav's gates come from the React-cached
- * `requireOrgContext()` (the membership bundle the dashboard layout and every
- * settings page resolve anyway) and `checkModuleAccess`, which reads the
- * module set that bundle already carries. layout.test.tsx pins that no
+ * `requireOrgContextForLayout()` (the membership bundle the dashboard layout
+ * and every settings page resolve anyway) and `checkModuleAccessFor`, which reads
+ * the module set that bundle already carries. layout.test.tsx pins that no
  * Supabase client is created here.
  *
  * NOTHING WAITS FOR IT. The layout itself is synchronous and the sub-nav sits
@@ -28,9 +28,12 @@ import { can, PERMISSIONS } from '@stockpilot/core';
  * `settings/audit` redirects exactly as before.
  *
  * Nothing here redirects. A member who must set up an authenticator first is
- * sent to the security page by requireOrgContext() (which the settings
- * navigation asks too) and by the dashboard layout; the security and profile
- * pages are open to them (lib/auth/authenticator-set-up).
+ * sent to the security page by the page they asked for (requireOrgContext()).
+ * The navigation takes the layout's context (requireOrgContextForLayout, no
+ * set-up redirect): this layout is shared by the security page, and a layout
+ * that redirects to a page under itself is kept by the browser and replayed on
+ * the way there. The security and profile pages are open to them
+ * (lib/auth/authenticator-set-up).
  *
  * A MODULE SET THAT COULD NOT BE READ is not "off": Maintenance requests is
  * still not offered as a link (an unknown answer never shows it), but someone
@@ -52,8 +55,8 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
 }
 
 async function SettingsNavSlot() {
-  const ctx = await requireOrgContext();
-  const maintenance = await checkModuleAccess('maintenance_requests');
+  const ctx = await requireOrgContextForLayout();
+  const maintenance = await checkModuleAccessFor('maintenance_requests', ctx);
   const access: SettingsNavAccess = {
     permissions: PERMISSIONS.filter((permission) => can(ctx, permission)),
     modules: maintenance.enabled ? ['maintenance_requests'] : [],

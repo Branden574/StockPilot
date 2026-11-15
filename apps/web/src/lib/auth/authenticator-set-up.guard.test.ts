@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { buildCallGraph, shippedSourceFiles } from '@/test/gate-reach';
+import { buildCallGraph, shippedSourceFiles, type CallGraph } from '@/test/gate-reach';
 
 import {
   AUTHENTICATOR_SET_UP_PAGE,
@@ -15,56 +15,225 @@ import {
 /**
  * Security invariant: a member who must set up an authenticator first is held
  * to it on every dashboard page and every Server Action that builds on their
- * context, with one list of the pages open to them before set-up.
+ * context, with one list of the pages open to them before set-up, and NO
+ * LAYOUT EVER REDIRECTS TO A PAGE UNDER ITSELF.
  *
- *   1. requireOrgContext() asks the set-up question (authenticatorSetUpIsOwed
- *      in lib/auth/step-up-gate). Every dashboard page and layout asks
- *      requireOrgContext() before anything else it reads
- *      (test/page-step-up.guard.test.ts), so each page carries the rule by
- *      itself, whether or not the dashboard layout ran for the request.
- *   2. The dashboard layout uses the same rule (authenticatorSetUpOwed from
- *      @stockpilot/core) and the same list of open pages.
- *   3. Nothing else decides which pages are open: no file writes its own
- *      prefix test for the security page, which would also let through any
- *      sibling path that starts with the same letters.
- *   4. The open pages are the security page and the profile page, matched
- *      exactly or below them after a slash.
- *   5. Signing out never asks for the member's context, so it works from any
- *      page, set-up owed or not.
+ * That last rule is a browser fact: a layout rendered for a client-side
+ * navigation (the landing after sign-in, an organization switch, accepting an
+ * invitation) that throws a redirect is kept by the browser as that layout's
+ * answer; when the target shares the layout the server does not send the
+ * layout again, so the browser renders the kept redirect again and again (the
+ * address replaced hundreds of times a second, a blank page) until a reload.
+ *
+ *   1. requireOrgContext() has ONE exit: it resolves the context with the
+ *      module-private resolveOrgContext() and hands it out only through
+ *      sendToSetUpWhenOwed(), which asks the set-up question
+ *      (authenticatorSetUpIsOwed, on the core rule). Every dashboard page asks
+ *      requireOrgContext() first (test/page-step-up.guard.test.ts).
+ *   2. requireOrgContextForLayout(), the same context without the set-up
+ *      redirect, is used by layout.tsx files under app/(dashboard) and by
+ *      nothing else, and it still asks the authenticator-code rule.
+ *   3. No layout.tsx under app/ reaches requireOrgContext(), by a call or by
+ *      a component it renders.
+ *   4. No layout.tsx under app/ calls redirect() to a page under itself: a
+ *      literal target must not be a page of that layout's own tree; any other
+ *      target is listed below with where it goes.
+ *   5. The dashboard layout uses the same rule and open pages for its banner
+ *      and its set-up panel, and redirects to nothing for set-up.
+ *   6. Nothing else decides which pages are open: no file writes its own
+ *      prefix test for those pages.
+ *   7. The open pages: the security page and the profile page, exactly or
+ *      below them after a slash.
+ *   8. Signing out never asks for the member's context.
+ *
+ * The self-test at the bottom plants a violation of 2, 3 and 4.
  */
 
 const WEB_SRC = path.resolve(__dirname, '../..');
-const FILES = shippedSourceFiles(WEB_SRC, fs);
-const GRAPH = buildCallGraph(FILES, WEB_SRC);
-const abs = (rel: string) => path.join(WEB_SRC, rel);
-const read = (rel: string) => fs.readFileSync(abs(rel), 'utf8');
 
-describe('authenticator set-up comes first', () => {
-  it('1. requireOrgContext() asks the set-up question', () => {
-    const reach = GRAPH.reach([`${abs('lib/auth/step-up-gate.ts')}#authenticatorSetUpIsOwed`]);
-    expect(reach.exportReaches(abs('lib/auth/session.ts'), 'requireOrgContext')).toBe(true);
-    // And the question is the core rule.
-    expect(read('lib/auth/step-up-gate.ts')).toMatch(/authenticatorSetUpOwed\(/);
+interface Tree {
+  graph: CallGraph;
+  /** Src-relative path -> text. */
+  files: Map<string, string>;
+  abs: (rel: string) => string;
+}
+
+function treeOf(files: Array<{ path: string; text: string }>, root: string): Tree {
+  return {
+    graph: buildCallGraph(files, root),
+    files: new Map(
+      files.map((f) => [path.relative(root, f.path).split(path.sep).join('/'), f.text]),
+    ),
+    abs: (rel) => path.join(root, rel),
+  };
+}
+
+const REAL = treeOf(shippedSourceFiles(WEB_SRC, fs), WEB_SRC);
+const SESSION = 'lib/auth/session.ts';
+const GATE = 'requireOrgContext';
+const LAYOUT_GATE = 'requireOrgContextForLayout';
+
+/** The text without comments, so a mention in prose is not a use. */
+const code = (text: string) =>
+  text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+
+const isLayout = (rel: string) => /^app\/.*(^|\/)layout\.tsx$/.test(rel);
+const dashboardLayout = (rel: string) => rel.startsWith('app/(dashboard)/') && isLayout(rel);
+
+/**
+ * redirect() calls in a layout whose target is not a string literal, with the
+ * target each one has. Reviewed: none of them is a page under that layout.
+ */
+const COMPUTED_LAYOUT_REDIRECTS: Record<string, string> = {
+  'app/(dashboard)/layout.tsx#await mfaChallengePath()':
+    'The authenticator code page, /signin/mfa, carrying the page to come back to: outside the dashboard layout.',
+};
+
+/** Rule 2: files other than dashboard layouts and session.ts that use the layout context. */
+function layoutContextOutsideLayouts(tree: Tree): string[] {
+  return [...tree.files]
+    .filter(([rel]) => rel !== SESSION && !dashboardLayout(rel))
+    .filter(([, text]) => new RegExp(`\\b${LAYOUT_GATE}\\b`).test(code(text)))
+    .map(([rel]) => rel)
+    .sort();
+}
+
+/** Rule 3: layout files that reach requireOrgContext(), with the chain. */
+function layoutsReachingTheGate(tree: Tree): string[] {
+  const rendered = tree.graph.reach([`${tree.abs(SESSION)}#${GATE}`], { jsx: true });
+  return [...tree.files.keys()]
+    .filter(isLayout)
+    .filter((rel) => rendered.exportReaches(tree.abs(rel), 'default'))
+    .map((rel) => `${rel}: ${rendered.pathToTarget(tree.abs(rel), 'default')?.join(' -> ')}`)
+    .sort();
+}
+
+/** The URL patterns of the pages under a layout's directory (route groups dropped). */
+function pagesUnderLayout(tree: Tree, layout: string): string[][] {
+  const dir = path.posix.dirname(layout);
+  return [...tree.files.keys()]
+    .filter((rel) => rel.startsWith(`${dir}/`) && /(^|\/)page\.tsx$/.test(rel))
+    .map((rel) =>
+      path.posix
+        .dirname(rel)
+        .split('/')
+        .slice(1)
+        .filter((seg) => !/^\(.*\)$/.test(seg)),
+    );
+}
+
+const matchesPage = (target: string, page: string[]) => {
+  const segs = target.split('?')[0]!.split('/').filter(Boolean);
+  if (page.some((s) => s.startsWith('[...') || s.startsWith('[[...'))) {
+    const fixed = page.findIndex((s) => s.startsWith('[...') || s.startsWith('[[...'));
+    return page.slice(0, fixed).every((s, i) => s.startsWith('[') || s === segs[i]);
+  }
+  return segs.length === page.length && page.every((s, i) => s.startsWith('[') || s === segs[i]);
+};
+
+/** Rule 4: layout redirects whose target is a page under that layout, or is not reviewed. */
+function layoutRedirectsUnderThemselves(tree: Tree, reviewed: Record<string, string>): string[] {
+  const problems: string[] = [];
+  for (const [rel, text] of tree.files) {
+    if (!isLayout(rel)) continue;
+    const pages = pagesUnderLayout(tree, rel);
+    for (const m of code(text).matchAll(/\bredirect\(\s*(.*?)\s*\);/g)) {
+      const arg = m[1]!;
+      const literal = /^(['"`])([^'"`$]*)\1$/.exec(arg);
+      if (literal) {
+        if (pages.some((p) => matchesPage(literal[2]!, p))) {
+          problems.push(`${rel}: redirect('${literal[2]}') is a page under this layout`);
+        }
+      } else if (!reviewed[`${rel}#${arg}`]) {
+        problems.push(`${rel}: redirect(${arg}) has a target this guard cannot read`);
+      }
+    }
+  }
+  for (const key of Object.keys(reviewed)) {
+    const [rel, arg] = key.split('#') as [string, string];
+    const text = tree.files.get(rel);
+    if (!text || !code(text).includes(`redirect(${arg})`)) {
+      problems.push(`${key}: listed but no longer there`);
+    }
+  }
+  return problems.sort();
+}
+
+/** The body of `export const name = cache(...)` up to the next top-level statement. */
+function constBody(text: string, name: string): string {
+  const start = text.indexOf(`const ${name} = `);
+  expect(start, `${name} exists`).toBeGreaterThanOrEqual(0);
+  const end = text.indexOf('\n});', start);
+  return text.slice(start, end === -1 ? undefined : end + 4);
+}
+
+describe('authenticator set-up comes first, and no layout redirects for it', () => {
+  it('1. requireOrgContext() has one exit, through the set-up question', () => {
+    const session = code(REAL.files.get(SESSION)!);
+    const body = constBody(session, GATE).replace(/\s+/g, ' ');
+    expect(body).toMatch(
+      /const \{ ctx, reads \} = await resolveOrgContext\(orgId\); return sendToSetUpWhenOwed\(reads, ctx\); \}\);$/,
+    );
+    // The resolver is the module's own, and only the two entry points use it.
+    expect(session).not.toMatch(/export\s+(const|async function|function)\s+resolveOrgContext\b/);
+    expect(session.match(/\bresolveOrgContext\(/g)?.length).toBe(2);
+    expect(session).toMatch(/const resolveOrgContext = cache\(/);
+    // The set-up question is asked by the wrapper, on the core rule.
+    const reach = REAL.graph.reach([
+      `${REAL.abs('lib/auth/step-up-gate.ts')}#authenticatorSetUpIsOwed`,
+    ]);
+    expect(reach.exportReaches(REAL.abs(SESSION), GATE)).toBe(true);
+    expect(reach.exportReaches(REAL.abs(SESSION), LAYOUT_GATE)).toBe(false);
+    expect(code(REAL.files.get('lib/auth/step-up-gate.ts')!)).toMatch(/authenticatorSetUpOwed\(/);
   });
 
-  it('2. the dashboard layout uses the same rule and the same list of open pages', () => {
-    const layout = read('app/(dashboard)/layout.tsx');
+  it('2. the layout context is used by dashboard layouts only, and still asks the code rule', () => {
+    expect(layoutContextOutsideLayouts(REAL)).toEqual([]);
+    const users = [...REAL.files.keys()].filter(
+      (rel) => dashboardLayout(rel) && code(REAL.files.get(rel)!).includes(LAYOUT_GATE),
+    );
+    expect(users).toContain('app/(dashboard)/layout.tsx');
+    expect(users).toContain('app/(dashboard)/dashboard/settings/layout.tsx');
+    const code_ = REAL.graph.reach([`${REAL.abs('lib/auth/step-up-gate.ts')}#stepUpIsOwed`]);
+    expect(code_.exportReaches(REAL.abs(SESSION), LAYOUT_GATE)).toBe(true);
+  });
+
+  it('3. no layout reaches requireOrgContext(), by a call or a component it renders', () => {
+    expect([...REAL.files.keys()].filter(isLayout).length).toBeGreaterThanOrEqual(10);
+    expect(layoutsReachingTheGate(REAL)).toEqual([]);
+  });
+
+  it('4. no layout redirects to a page under itself', () => {
+    expect(pagesUnderLayout(REAL, 'app/(dashboard)/layout.tsx')).toContainEqual([
+      'dashboard',
+      'settings',
+      'security',
+    ]);
+    expect(layoutRedirectsUnderThemselves(REAL, COMPUTED_LAYOUT_REDIRECTS)).toEqual([]);
+    for (const why of Object.values(COMPUTED_LAYOUT_REDIRECTS))
+      expect(why.length).toBeGreaterThan(40);
+  });
+
+  it('5. the dashboard layout uses the same rule and open pages, and redirects to nothing for set-up', () => {
+    const layout = code(REAL.files.get('app/(dashboard)/layout.tsx')!);
     expect(layout).toMatch(/authenticatorSetUpOwed\(/);
     expect(layout).toMatch(/openBeforeAuthenticatorSetUp\(/);
-    expect(layout).toMatch(/redirect\(AUTHENTICATOR_SET_UP_URL\)/);
+    expect(layout).toMatch(/<AuthenticatorSetUpPanel \/>/);
+    expect(layout).not.toMatch(/AUTHENTICATOR_SET_UP_URL|settings\/security/);
   });
 
-  it('3. no other file writes its own prefix test for the security page', () => {
+  it('6. no other file writes its own prefix test for the open pages', () => {
     const own = 'lib/auth/authenticator-set-up.ts';
-    const offenders = FILES.map((f) => path.relative(WEB_SRC, f.path).split(path.sep).join('/'))
-      .filter((rel) => rel !== own)
-      .filter((rel) =>
-        /startsWith\(\s*['"`]\/dashboard\/settings\/(security|profile)/.test(read(rel)),
-      );
+    const offenders = [...REAL.files]
+      .filter(([rel]) => rel !== own)
+      .filter(([, text]) =>
+        /startsWith\(\s*['"`]\/dashboard\/settings\/(security|profile)/.test(text),
+      )
+      .map(([rel]) => rel);
     expect(offenders).toEqual([]);
   });
 
-  it('4. the open pages: the security page and the profile page, exactly or below after a slash', () => {
+  it('7. the open pages: the security page and the profile page, exactly or below after a slash', () => {
     expect(OPEN_BEFORE_AUTHENTICATOR_SET_UP).toEqual([
       '/dashboard/settings/security',
       '/dashboard/settings/profile',
@@ -95,13 +264,102 @@ describe('authenticator set-up comes first', () => {
     }
   });
 
-  it('5. signing out never asks for the member context', () => {
-    const reach = GRAPH.reach([`${abs('lib/auth/session.ts')}#requireOrgContext`]);
-    expect(reach.exportReaches(abs('server/actions/auth.ts'), 'signOutAction')).toBe(false);
-    expect(reach.exportReaches(abs('server/actions/mfa.ts'), 'enrollFactorAction')).toBe(false);
+  it('8. signing out never asks for the member context', () => {
+    const reach = REAL.graph.reach([`${REAL.abs(SESSION)}#${GATE}`]);
+    expect(reach.exportReaches(REAL.abs('server/actions/auth.ts'), 'signOutAction')).toBe(false);
+    expect(reach.exportReaches(REAL.abs('server/actions/mfa.ts'), 'enrollFactorAction')).toBe(
+      false,
+    );
     // Control: an action that does ask is seen as asking.
     expect(
-      reach.exportReaches(abs('server/actions/org-switcher.ts'), 'switchOrganizationAction'),
+      reach.exportReaches(REAL.abs('server/actions/org-switcher.ts'), 'switchOrganizationAction'),
     ).toBe(true);
+  });
+});
+
+/* ───────────────────── self-test: each rule can fail ───────────────────── */
+
+describe('self-test: a planted violation is reported', () => {
+  const ROOT = '/planted';
+  const base: Record<string, string> = {
+    [SESSION]: `
+      export const requireOrgContext = cache(async () => ({ organizationId: 'o' }));
+      export const requireOrgContextForLayout = cache(async () => ({ organizationId: 'o' }));`,
+    'app/(dashboard)/dashboard/settings/security/page.tsx': `
+      import { requireOrgContext } from '@/lib/auth/session';
+      export default async function Page() { await requireOrgContext(); return <p>s</p>; }`,
+    'app/(dashboard)/dashboard/items/[id]/page.tsx': `
+      import { requireOrgContext } from '@/lib/auth/session';
+      export default async function Page() { await requireOrgContext(); return <p>i</p>; }`,
+    'components/nav.tsx': `
+      import { requireOrgContext } from '@/lib/auth/session';
+      export async function Nav() { const c = await requireOrgContext(); return <p>{String(c)}</p>; }`,
+  };
+  const tree = (files: Record<string, string>) =>
+    treeOf(
+      Object.entries({ ...base, ...files }).map(([k, text]) => ({ path: `${ROOT}/${k}`, text })),
+      ROOT,
+    );
+
+  it('2. a page or a component that uses the layout context is reported; a layout is not', () => {
+    const t = tree({
+      'app/(dashboard)/layout.tsx': `
+        import { requireOrgContextForLayout } from '@/lib/auth/session';
+        export default async function L({ children }) { await requireOrgContextForLayout(); return children; }`,
+      'app/(dashboard)/dashboard/x/page.tsx': `
+        import { requireOrgContextForLayout } from '@/lib/auth/session';
+        export default async function Page() { await requireOrgContextForLayout(); return <p>x</p>; }`,
+      'components/bar.tsx': `
+        import { requireOrgContextForLayout } from '@/lib/auth/session';
+        export async function Bar() { await requireOrgContextForLayout(); return null; }`,
+    });
+    expect(layoutContextOutsideLayouts(t)).toEqual([
+      'app/(dashboard)/dashboard/x/page.tsx',
+      'components/bar.tsx',
+    ]);
+  });
+
+  it('3. a layout that asks requireOrgContext(), or renders a component that does, is reported', () => {
+    const t = tree({
+      'app/(dashboard)/layout.tsx': `
+        import { requireOrgContext } from '@/lib/auth/session';
+        export default async function L({ children }) { await requireOrgContext(); return children; }`,
+      'app/(dashboard)/dashboard/settings/layout.tsx': `
+        import { Nav } from '@/components/nav';
+        export default function L({ children }) { return <><Nav />{children}</>; }`,
+      'app/(dashboard)/dashboard/reports/layout.tsx': `
+        import { requireOrgContextForLayout } from '@/lib/auth/session';
+        export default async function L({ children }) { await requireOrgContextForLayout(); return children; }`,
+    });
+    expect(layoutsReachingTheGate(t).map((l) => l.split(':')[0])).toEqual([
+      'app/(dashboard)/dashboard/settings/layout.tsx',
+      'app/(dashboard)/layout.tsx',
+    ]);
+  });
+
+  it('4. a layout that redirects to a page under itself, or to a target nobody read, is reported', () => {
+    const t = tree({
+      'app/(dashboard)/layout.tsx': `
+        export default async function L({ children }) {
+          if (a) redirect('/dashboard/settings/security?enroll=1');
+          if (b) redirect('/signin/mfa');
+          if (c) redirect(someTarget());
+          return children;
+        }`,
+      'app/(dashboard)/dashboard/items/layout.tsx': `
+        export default async function L({ children }) {
+          if (a) redirect('/dashboard/items/42');
+          if (b) redirect('/dashboard');
+          return children;
+        }`,
+    });
+    expect(
+      layoutRedirectsUnderThemselves(t, { 'app/(dashboard)/layout.tsx#gone()': 'x'.repeat(41) }),
+    ).toEqual([
+      "app/(dashboard)/dashboard/items/layout.tsx: redirect('/dashboard/items/42') is a page under this layout",
+      'app/(dashboard)/layout.tsx#gone(): listed but no longer there',
+      "app/(dashboard)/layout.tsx: redirect('/dashboard/settings/security?enroll=1') is a page under this layout",
+      'app/(dashboard)/layout.tsx: redirect(someTarget()) has a target this guard cannot read',
+    ]);
   });
 });

@@ -3,32 +3,27 @@ import { redirect } from 'next/navigation';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * The dashboard layout sends a member whose organization requires an
- * authenticator FOR THEM, and who has no verified one, to set-up first.
+ * The dashboard layout and a member who must set up an authenticator first
+ * (their organization's policy requires one of their role and they have none
+ * verified: everyone under all_required, owners and admins under
+ * admins_required; an organization row that came back empty is held to the
+ * strictest policy).
  *
- * Who must have one is the member's own requirement: everyone under
- * all_required, owners and admins under admins_required, no one under
- * optional. An organization row that came back empty is held to the strictest
- * policy (lib/auth/mfa-policy.ts).
- *
- * This is the full-page-load half of the rule; requireOrgContext() applies it
- * to each page by itself and to Server Actions
- * (lib/auth/session.authenticator-set-up.test.ts).
- *
- * The security page and the profile page are open before set-up (exactly, or
- * below them after a slash), so the redirect lands on a page the layout lets
- * through: one redirect, never a second one from the page it sends to. That is
- * what keeps the browser out of a redirect loop (Chrome stops a page that
- * navigates in a loop with "Throttling navigation to prevent the browser from
- * hanging"). The proxy sets the path header on every request it handles; with
- * no header the layout sends the member to set-up on every request.
+ * THE LAYOUT NEVER REDIRECTS FOR IT. A layout that redirects to a page under
+ * itself is kept by the browser after a client-side navigation and replayed
+ * on the way to that page (a blank page, the address replaced again and
+ * again). The page below sends the member to set-up (requireOrgContext(),
+ * lib/auth/session.authenticator-set-up.test.ts). The layout shows the banner
+ * on every page for such a member, and renders the page itself, except for the
+ * one session the pages cannot see: a token that still says aal2 although the
+ * member's own factor list has no verified factor. On a page that is not open
+ * before set-up, that session gets the set-up panel in place of the page.
  */
 
 type Role = 'owner' | 'admin' | 'manager' | 'staff' | 'viewer';
 type Policy = 'optional' | 'admins_required' | 'all_required';
 
 const MEMBER = 'u-1';
-const SET_UP = '/dashboard/settings/security?enroll=1';
 
 const state = vi.hoisted(() => ({
   pathname: '/dashboard' as string | null,
@@ -36,6 +31,7 @@ const state = vi.hoisted(() => ({
   // null: the organization row came back empty (row level security hid it).
   orgRow: { mfa_policy: 'admins_required' } as { mfa_policy: string } | null,
   factors: [] as Array<{ status: string }>,
+  aal: 'aal1' as 'aal1' | 'aal2',
 }));
 
 vi.mock('next/headers', () => ({
@@ -58,6 +54,11 @@ vi.mock('@/components/dashboard/mfa-required-banner', () => ({
     return null;
   },
 }));
+vi.mock('@/components/dashboard/authenticator-set-up-panel', () => ({
+  AuthenticatorSetUpPanel: function AuthenticatorSetUpPanel() {
+    return null;
+  },
+}));
 vi.mock('@/components/dashboard/modules-unread-banner', () => ({
   ModulesUnreadBanner: () => null,
 }));
@@ -69,7 +70,7 @@ vi.mock('@/lib/auth/platform-admin', () => ({
   currentUserIsPlatformAdminFromRequestHeader: async () => false,
 }));
 vi.mock('@/lib/auth/session', () => ({
-  requireOrgContext: async () => ({
+  requireOrgContextForLayout: async () => ({
     organizationId: 'org-1',
     organizationName: 'Example Org',
     userId: MEMBER,
@@ -98,14 +99,13 @@ vi.mock('@/lib/dashboard/request-cache', () => ({
   getWarehousesForRequest: async () => [{ id: 'wh-1', name: 'Main' }],
   getModulesForRequest: async () => new Set<string>(),
 }));
-// A member with a verified factor has shown their code in this session.
 vi.mock('@/lib/auth/verified-claims', () => ({
-  getVerifiedSessionClaimsForRequest: async () => ({ userId: MEMBER, aal: 'aal2' }),
+  getVerifiedSessionClaimsForRequest: async () => ({ userId: MEMBER, aal: state.aal }),
 }));
 vi.mock('@/lib/auth/warehouse', () => ({
-  getWarehouseAccess: async () => ({ hasAllAccess: true, readableIds: ['wh-1'] }),
+  getWarehouseAccessFor: async () => ({ hasAllAccess: true, readableIds: ['wh-1'] }),
 }));
-vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilter: async () => null }));
+vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilterFor: async () => null }));
 
 import DashboardLayout from './layout';
 
@@ -129,21 +129,36 @@ function findByTypeName(node: unknown, name: string): AnyElement | null {
 function as(
   role: Role,
   policy: Policy | 'unreadable',
-  opts: { factors?: Array<{ status: string }>; path?: string | null } = {},
+  opts: { factors?: Array<{ status: string }>; path?: string | null; aal?: 'aal1' | 'aal2' } = {},
 ) {
   state.role = role;
   state.orgRow = policy === 'unreadable' ? null : { mfa_policy: policy };
   state.factors = opts.factors ?? [];
   state.pathname = opts.path === undefined ? '/dashboard' : opts.path;
+  // A verified factor: the code was entered. None: an ordinary aal1 session.
+  state.aal = opts.aal ?? (state.factors.some((f) => f.status === 'verified') ? 'aal2' : 'aal1');
 }
 
-type Outcome = { kind: 'redirect'; to: string } | { kind: 'page'; banner: boolean };
+type Outcome =
+  | { kind: 'redirect'; to: string }
+  | { kind: 'page'; banner: boolean; shows: 'page' | 'set-up panel' };
+
+function PageBelow() {
+  return null;
+}
 
 async function load(): Promise<Outcome> {
   try {
-    const tree = await DashboardLayout({ children: null });
+    const tree = await DashboardLayout({ children: <PageBelow /> });
     expect(findByTypeName(tree, 'DashboardShell')).not.toBeNull();
-    return { kind: 'page', banner: findByTypeName(tree, 'MfaRequiredBanner') !== null };
+    const page = findByTypeName(tree, 'PageBelow') !== null;
+    const panel = findByTypeName(tree, 'AuthenticatorSetUpPanel') !== null;
+    expect(page !== panel, 'the page or the panel, never both').toBe(true);
+    return {
+      kind: 'page',
+      banner: findByTypeName(tree, 'MfaRequiredBanner') !== null,
+      shows: panel ? 'set-up panel' : 'page',
+    };
   } catch (e) {
     const m = /^redirect:(.*)$/.exec(String((e as Error).message));
     if (!m) throw e;
@@ -151,143 +166,87 @@ async function load(): Promise<Outcome> {
   }
 }
 
-/** Load the page, then follow where it sends the member, as a browser does. */
-async function loadAndFollow(): Promise<string[]> {
-  const hops: string[] = [];
-  for (let i = 0; i < 5; i++) {
-    const out = await load();
-    if (out.kind === 'page') return hops;
-    hops.push(out.to);
-    state.pathname = new URL(out.to, 'https://example.test').pathname;
-  }
-  return hops;
-}
+const PAGE = { kind: 'page', banner: false, shows: 'page' } as const;
+const PAGE_WITH_BANNER = { kind: 'page', banner: true, shows: 'page' } as const;
+const PANEL = { kind: 'page', banner: true, shows: 'set-up panel' } as const;
 
-const DEEP_PAGES = ['/dashboard/team', '/dashboard/settings/integrations', '/dashboard/inventory'];
-const SET_UP_PAGES = ['/dashboard/settings/security', '/dashboard/settings/profile'];
-const NOT_OPEN = ['/dashboard/settings/security-keys', '/dashboard/settings/profile-old'];
+const CLOSED = [
+  '/dashboard',
+  '/dashboard/team',
+  '/dashboard/settings/integrations',
+  '/dashboard/inventory',
+];
+const CLOSED_LOOKALIKES = ['/dashboard/settings/security-keys', '/dashboard/settings/profile-old'];
+const OPEN = ['/dashboard/settings/security', '/dashboard/settings/profile'];
 const ALL_ROLES: Role[] = ['owner', 'admin', 'manager', 'staff', 'viewer'];
+const POLICIES: Array<Policy | 'unreadable'> = [
+  'optional',
+  'admins_required',
+  'all_required',
+  'unreadable',
+];
+const owes = (policy: Policy | 'unreadable', role: Role) =>
+  policy === 'all_required' ||
+  policy === 'unreadable' ||
+  (policy === 'admins_required' && (role === 'owner' || role === 'admin'));
+const MATRIX = POLICIES.flatMap((p) => ALL_ROLES.map((r) => [p, r] as const));
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe('admins_required: an owner or admin with no verified authenticator', () => {
-  it.each(['owner', 'admin'] as const)('%s: sent to set-up from /dashboard', async (role) => {
-    as(role, 'admins_required');
-    expect(await load()).toEqual({ kind: 'redirect', to: SET_UP });
-    expect(redirect).toHaveBeenCalledTimes(1);
-  });
-
-  it.each((['owner', 'admin'] as const).flatMap((r) => DEEP_PAGES.map((p) => [r, p] as const)))(
-    '%s: sent to set-up from %s',
-    async (role, path) => {
-      as(role, 'admins_required', { path });
-      expect(await load()).toEqual({ kind: 'redirect', to: SET_UP });
-      expect(redirect).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it.each(['owner', 'admin'] as const)(
-    '%s whose only factor is not verified: sent to set-up',
-    async (role) => {
-      as(role, 'admins_required', { factors: [{ status: 'unverified' }] });
-      expect(await load()).toEqual({ kind: 'redirect', to: SET_UP });
-    },
-  );
-
-  it.each((['owner', 'admin'] as const).flatMap((r) => SET_UP_PAGES.map((p) => [r, p] as const)))(
-    '%s already on %s: gets the page with the banner and is not sent anywhere',
-    async (role, path) => {
-      as(role, 'admins_required', { path });
-      expect(await load()).toEqual({ kind: 'page', banner: true });
+describe('the layout never redirects for set-up', () => {
+  it.each(MATRIX)(
+    '%s, %s with no authenticator: the page, on every path, never a redirect',
+    async (policy, role) => {
+      for (const path of [...CLOSED, ...CLOSED_LOOKALIKES, ...OPEN, null]) {
+        as(role, policy, { path });
+        expect(await load(), String(path)).toEqual(owes(policy, role) ? PAGE_WITH_BANNER : PAGE);
+      }
       expect(redirect).not.toHaveBeenCalled();
     },
   );
 
-  it.each(['owner', 'admin'] as const)(
-    '%s: sent exactly once, the set-up page does not send them on again',
-    async (role) => {
-      as(role, 'admins_required', { path: '/dashboard/team' });
-      expect(await loadAndFollow()).toEqual([SET_UP]);
-      expect(redirect).toHaveBeenCalledTimes(1);
+  it.each(MATRIX)(
+    '%s, %s whose only factor is not verified: the same as none',
+    async (policy, role) => {
+      as(role, policy, { factors: [{ status: 'unverified' }], path: '/dashboard/team' });
+      expect(await load()).toEqual(owes(policy, role) ? PAGE_WITH_BANNER : PAGE);
+      expect(redirect).not.toHaveBeenCalled();
     },
   );
 
-  it.each(NOT_OPEN)('%s is not open before set-up: an admin is sent to set-up', async (path) => {
-    as('admin', 'admins_required', { path });
-    expect(await load()).toEqual({ kind: 'redirect', to: SET_UP });
-  });
+  it.each(MATRIX)(
+    '%s, %s with a verified authenticator at aal2: the page, no banner',
+    async (policy, role) => {
+      as(role, policy, { factors: [{ status: 'verified' }], path: '/dashboard/team' });
+      expect(await load()).toEqual(PAGE);
+    },
+  );
+});
 
-  it('with no path header on any request, the admin is sent to set-up every time: it fails closed', async () => {
-    for (let i = 0; i < 3; i++) {
-      as('admin', 'admins_required', { path: null });
-      expect(await load()).toEqual({ kind: 'redirect', to: SET_UP });
+describe('a token that says aal2 while the member has no verified factor', () => {
+  it.each(MATRIX)(
+    '%s, %s on a page not open before set-up: the set-up panel when set-up is owed',
+    async (policy, role) => {
+      for (const path of [...CLOSED, ...CLOSED_LOOKALIKES]) {
+        as(role, policy, { path, aal: 'aal2' });
+        expect(await load(), path).toEqual(owes(policy, role) ? PANEL : PAGE);
+      }
+      expect(redirect).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(MATRIX)('%s, %s on an open page: the page', async (policy, role) => {
+    for (const path of OPEN) {
+      as(role, policy, { path, aal: 'aal2' });
+      expect(await load(), path).toEqual(owes(policy, role) ? PAGE_WITH_BANNER : PAGE);
     }
-    expect(redirect).toHaveBeenCalledTimes(3);
   });
-});
 
-describe('admins_required: everyone else is not affected', () => {
-  it.each(
-    (['manager', 'staff', 'viewer'] as const).flatMap((r) =>
-      ['/dashboard', ...DEEP_PAGES].map((p) => [r, p] as const),
-    ),
-  )('%s with no authenticator: gets %s as before, with no banner', async (role, path) => {
-    as(role, 'admins_required', { path });
-    expect(await load()).toEqual({ kind: 'page', banner: false });
+  it('with no path header: the panel (fails closed), never a redirect', async () => {
+    as('admin', 'admins_required', { path: null, aal: 'aal2' });
+    expect(await load()).toEqual(PANEL);
     expect(redirect).not.toHaveBeenCalled();
-  });
-
-  it.each(ALL_ROLES)('%s with a verified authenticator: gets the page', async (role) => {
-    as(role, 'admins_required', { factors: [{ status: 'verified' }], path: '/dashboard/team' });
-    expect(await load()).toEqual({ kind: 'page', banner: false });
-    expect(redirect).not.toHaveBeenCalled();
-  });
-});
-
-describe('all_required: unchanged for every role', () => {
-  it.each(ALL_ROLES.flatMap((r) => ['/dashboard', ...DEEP_PAGES].map((p) => [r, p] as const)))(
-    '%s with no authenticator: sent to set-up from %s, once',
-    async (role, path) => {
-      as(role, 'all_required', { path });
-      expect(await loadAndFollow()).toEqual([SET_UP]);
-      expect(redirect).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it.each(ALL_ROLES)(
-    '%s with no authenticator: gets the set-up page with the banner',
-    async (role) => {
-      as(role, 'all_required', { path: '/dashboard/settings/security' });
-      expect(await load()).toEqual({ kind: 'page', banner: true });
-      expect(redirect).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(ALL_ROLES)('%s with a verified authenticator: gets the page', async (role) => {
-    as(role, 'all_required', { factors: [{ status: 'verified' }], path: '/dashboard/team' });
-    expect(await load()).toEqual({ kind: 'page', banner: false });
-  });
-});
-
-describe('optional: unchanged', () => {
-  it.each(ALL_ROLES)('%s with no authenticator: gets the page, with no banner', async (role) => {
-    as(role, 'optional', { path: '/dashboard/team' });
-    expect(await load()).toEqual({ kind: 'page', banner: false });
-    expect(redirect).not.toHaveBeenCalled();
-  });
-});
-
-describe('an organization row that came back empty: unchanged, held to the strictest policy', () => {
-  it.each(ALL_ROLES)('%s with no authenticator: sent to set-up, once', async (role) => {
-    as(role, 'unreadable', { path: '/dashboard/team' });
-    expect(await loadAndFollow()).toEqual([SET_UP]);
-    expect(redirect).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(ALL_ROLES)('%s with no authenticator: gets the set-up page itself', async (role) => {
-    as(role, 'unreadable', { path: '/dashboard/settings/security' });
-    expect(await load()).toEqual({ kind: 'page', banner: true });
   });
 });

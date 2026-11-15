@@ -156,14 +156,14 @@ vi.mock('@/lib/dashboard/request-cache', async (importOriginal) => {
   };
 });
 vi.mock('@/lib/auth/warehouse', () => ({
-  getWarehouseAccess: vi.fn(async () => ({
+  getWarehouseAccessFor: vi.fn(async () => ({
     readableIds: [],
     writableIds: [],
     hasAllAccess: false,
     primaryWarehouseId: null,
   })),
 }));
-vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilter: vi.fn(async () => null) }));
+vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilterFor: vi.fn(async () => null) }));
 // The claims read is REAL; one case starts it later, as another reader would.
 vi.mock('@/lib/auth/verified-claims', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/lib/auth/verified-claims')>();

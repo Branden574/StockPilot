@@ -3,6 +3,7 @@ import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 
+import { AuthenticatorSetUpPanel } from '@/components/dashboard/authenticator-set-up-panel';
 import { DashboardShell } from '@/components/dashboard/dashboard-shell';
 import { MfaRequiredBanner } from '@/components/dashboard/mfa-required-banner';
 import { ModulesUnreadBanner } from '@/components/dashboard/modules-unread-banner';
@@ -17,7 +18,7 @@ import {
 import { ImpersonationBanner } from '@/components/platform/impersonation-banner';
 import { currentUserIsPlatformAdminFromRequestHeader } from '@/lib/auth/platform-admin';
 import { InventoryRealtime } from '@/components/realtime/inventory-realtime';
-import { getSessionMemberships, requireOrgContext } from '@/lib/auth/session';
+import { getSessionMemberships, requireOrgContextForLayout } from '@/lib/auth/session';
 import {
   getMfaFactorsForRequest,
   getModulesForRequest,
@@ -27,15 +28,12 @@ import {
 import { factorsOf } from '@/lib/auth/mfa-factors';
 import { moduleSetUnreadable } from '@/lib/modules/module-state';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
-import {
-  AUTHENTICATOR_SET_UP_URL,
-  openBeforeAuthenticatorSetUp,
-} from '@/lib/auth/authenticator-set-up';
+import { openBeforeAuthenticatorSetUp } from '@/lib/auth/authenticator-set-up';
 import { orSessionEnded } from '@/lib/auth/session-ended';
 import { getVerifiedSessionClaimsForRequest } from '@/lib/auth/verified-claims';
 import { userMenuRoleLabel } from '@/lib/auth/user-menu-role';
-import { getWarehouseAccess } from '@/lib/auth/warehouse';
-import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
+import { getWarehouseAccessFor } from '@/lib/auth/warehouse';
+import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
 
 import { authenticatorSetUpOwed, resolveTerminology } from '@stockpilot/core';
 import { ActivityBeacon } from '@/components/activity-beacon';
@@ -89,7 +87,17 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const claimsRead = getVerifiedSessionClaimsForRequest();
   // Cached: this resolves with the same data the page will use in the
   // same render — zero extra DB round trips beyond the page's own.
-  const ctx = await requireOrgContext();
+  //
+  // The layout's context: every rule of requireOrgContext() except the set-up
+  // redirect (lib/auth/session.ts, requireOrgContextForLayout). NO LAYOUT MAY
+  // REDIRECT TO A PAGE UNDER ITSELF: rendered for a client-side navigation
+  // (the landing after sign-in, an organization switch, an invitation
+  // accepted), a redirect thrown here is kept by the browser as this layout's
+  // answer, and the security page, which shares this layout, renders it again
+  // and again. The page below asks requireOrgContext(), and its redirect to
+  // set-up is caught below this layout. Everything the layout reads below is
+  // handed this same context, so nothing it calls asks requireOrgContext().
+  const ctx = await requireOrgContextForLayout();
   // Gates the "Platform admin" link in the account menu. Header-based on
   // purpose (perf plan 2026-07-02 P1d): the previous
   // `currentUserIsPlatformAdmin()` made a SECOND GoTrue `auth.getUser()`
@@ -131,8 +139,8 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     warehousesList,
     enabledModuleSet,
   ] = await Promise.all([
-    getWarehouseAccess(),
-    getActiveWarehouseFilter(),
+    getWarehouseAccessFor(ctx),
+    getActiveWarehouseFilterFor(ctx),
     getOrgRowForRequest(ctx.organizationId),
     // An ENDED session goes to sign-in; any other failure still fails closed.
     orSessionEnded(mfaFactorsRead),
@@ -191,25 +199,19 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const hasVerifiedFactor = ownFactors.some((f) => f.status === 'verified');
   // The policy requires an authenticator of this member's role and they have
   // none verified (@stockpilot/core). They see the banner on the pages open to
-  // them before set-up.
+  // them before set-up; every other page sends them there itself
+  // (requireOrgContext()), so this layout never redirects for it.
   const setUpOwed = authenticatorSetUpOwed(policy, ctx.role, ownFactors);
-
-  // Set-up first, on a full page load. requireOrgContext() above applies the
-  // same rule to every page by itself and to every Server Action (a navigation
-  // inside the dashboard renders only the page, not this layout); here it
-  // also covers a session whose token still says aal2 after its last factor
-  // was removed, which requireOrgContext() answers from the token alone.
-  //
-  // Only the security page and the profile page are open before set-up
-  // (lib/auth/authenticator-set-up: the exact path or a path below it).
-  // Neither redirects, nor does the settings layout, so the redirect is one
-  // hop and never a loop. Chrome stops a page that keeps navigating in a loop
-  // ("Throttling navigation to prevent the browser from hanging", a blank
-  // screen), which is why the target must never send the member on again
-  // (layout.authenticator-set-up.test.tsx follows the redirect to prove it).
-  if (setUpOwed && !openBeforeAuthenticatorSetUp((await headers()).get('x-pathname'))) {
-    redirect(AUTHENTICATOR_SET_UP_URL);
-  }
+  // The one session those pages cannot see: a token that still says aal2 after
+  // the last verified factor was removed (the pages answer aal2 from the token
+  // alone, with no factor read). This layout has the factor list in hand, so
+  // on a full page load or a refresh it shows the set-up panel in place of the
+  // page. Rendered, never a redirect. The claims are awaited only here, for a
+  // member who owes set-up on a page that is not open to them.
+  const setUpPanel =
+    setUpOwed &&
+    !openBeforeAuthenticatorSetUp((await headers()).get('x-pathname')) &&
+    (await claimsRead.then((c) => c?.userId === ctx.userId && c.aal === 'aal2'));
 
   // Hard gate for ENROLLED users (HI-6): a verified TOTP factor must be
   // satisfied regardless of org policy — otherwise an attacker with only
@@ -287,7 +289,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         <ImpersonationBanner />
         {setUpOwed && <MfaRequiredBanner />}
         {moduleStateUnknown && <ModulesUnreadBanner />}
-        {children}
+        {setUpPanel ? <AuthenticatorSetUpPanel /> : children}
         {/* "Last seen" for the platform console (mig 0352). Scope keeps one account or
             organization from throttling another on a shared device; it never leaves
             the browser, and the server stamps the session's own user and org. */}

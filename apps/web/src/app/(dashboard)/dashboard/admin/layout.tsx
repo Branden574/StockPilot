@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 
-import { requireOrgContext } from '@/lib/auth/session';
+import { requireOrgContextForLayout } from '@/lib/auth/session';
 import { can } from '@stockpilot/core';
 
 /**
@@ -12,7 +12,8 @@ import { can } from '@stockpilot/core';
  * stays a one-line matrix change.
  */
 export default async function AdminLayout({ children }: { children: ReactNode }) {
-  const ctx = await requireOrgContext();
+  // The layout's context: no set-up redirect from a layout (lib/auth/session.ts).
+  const ctx = await requireOrgContextForLayout();
   if (!can(ctx, 'organization:update')) redirect('/dashboard');
   return <>{children}</>;
 }
