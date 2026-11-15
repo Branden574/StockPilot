@@ -5,6 +5,7 @@ import { cookies } from 'next/headers';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { WAREHOUSE_FILTER_COOKIE } from '@/lib/warehouse-filter';
+import { uncheckedAccessResult } from '@/server/lib/action-error-result';
 import {
   SavedViewsService,
   type SavedViewScope,
@@ -25,6 +26,9 @@ export async function createSavedViewAction(input: {
     return { ok: true as const, data: view };
   } catch (e) {
     rethrowControlFlow(e);
+    // A check of the caller's access that could not be read: its own sentence.
+    const unchecked = uncheckedAccessResult(e, 'actions.saved_views');
+    if (unchecked) return unchecked;
     if (e instanceof ServiceError) {
       return { ok: false as const, error: { code: e.code, message: e.message } };
     }
@@ -43,6 +47,9 @@ export async function deleteSavedViewAction(id: string, scope: SavedViewScope) {
     return { ok: true as const, data: { id } };
   } catch (e) {
     rethrowControlFlow(e);
+    // A check of the caller's access that could not be read: its own sentence.
+    const unchecked = uncheckedAccessResult(e, 'actions.saved_views');
+    if (unchecked) return unchecked;
     if (e instanceof ServiceError) {
       return { ok: false as const, error: { code: e.code, message: e.message } };
     }
@@ -72,6 +79,9 @@ export async function toggleSavedViewShareAction(
     return { ok: true as const, data: { id, isShared } };
   } catch (e) {
     rethrowControlFlow(e);
+    // A check of the caller's access that could not be read: its own sentence.
+    const unchecked = uncheckedAccessResult(e, 'actions.saved_views');
+    if (unchecked) return unchecked;
     if (e instanceof ServiceError) {
       return { ok: false as const, error: { code: e.code, message: e.message } };
     }

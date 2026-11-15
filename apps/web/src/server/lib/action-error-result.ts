@@ -71,12 +71,12 @@ export function unexpectedActionError(
  *   - assertWarehouseAccess's ForbiddenError: 'forbidden' with its words; when
  *     the caller's own access could not be read, the order service's
  *     retryable conflict (services/order-requests.ts), reported as a warning;
- *   - a permission or account-status check that could not run: its own fixed
- *     sentence, reported as a warning;
- *   - a module state that could not be read (ModulesUnavailableError, thrown
- *     when the action asks about a module withContext() could not read): its
- *     fixed try-again sentence, reported as a warning, never the
- *     module_disabled a module that is off gets;
+ *   - a check of the caller's access that could not be read (the permission
+ *     set, the account status, or a module state: ModulesUnavailableError,
+ *     thrown when the action asks about a module withContext() could not
+ *     read): its own fixed try-again sentence, reported as a warning, never
+ *     the module_disabled a module that is off gets (uncheckedAccessResult
+ *     below, which an action module with its own mapping calls too);
  *   - anything else: unexpectedActionError.
  *
  * The guard app/api/no-raw-error-text.guard.test.ts fails a Server Action that
@@ -109,15 +109,78 @@ export function actionErrorResult(
     }
     return err('forbidden', e.message);
   }
-  if (
+  const unchecked = uncheckedAccessResult(e, tag, {
+    organizationId: opts.organizationId,
+    extra: opts.extra,
+  });
+  if (unchecked) return unchecked;
+  return unexpectedActionError(e, tag, opts);
+}
+
+/** A check of the caller's access that could not be read: each has one fixed sentence. */
+function isUncheckedAccess(
+  e: unknown,
+): e is PermissionsUnavailableError | AccountStatusUnavailableError | ModulesUnavailableError {
+  return (
     e instanceof PermissionsUnavailableError ||
     e instanceof AccountStatusUnavailableError ||
     e instanceof ModulesUnavailableError
-  ) {
-    void reportError(e, reportContext(tag, { ...opts, level: 'warning' }));
-    return err('internal_error', e.message);
-  }
-  return unexpectedActionError(e, tag, opts);
+  );
+}
+
+/**
+ * The sentence for a check of the caller's access that could not be read, or
+ * null for any other error.
+ *
+ * The three classes: a module state withContext() could not read
+ * (ModulesUnavailableError, thrown when an action asks about that module), a
+ * permission set that could not be read, an account status that could not be
+ * read. None of them is a refusal and none is a fault of the action: each
+ * carries one fixed sentence that says the check could not be made and to try
+ * again, and is reported once, at warning level, under the action's tag.
+ *
+ * FOR AN ACTION MODULE THAT KEEPS ITS OWN ERROR MAPPING (its own result
+ * shape, its own words for a failure). Such a mapping answers anything it
+ * does not know with its generic sentence, which for these classes is the
+ * wrong one: "something went wrong" where the truth is "your access could not
+ * be checked". So every such mapping asks here first, right after it has let
+ * Next control flow out, and answers this sentence in its own shape:
+ *
+ *   rethrowControlFlow(e);
+ *   const unchecked = uncheckedAccessMessage(e, 'actions.example');
+ *   if (unchecked) return { error: { message: unchecked } };
+ *
+ * server/actions/unchecked-access.guard.test.ts holds every catch in
+ * server/actions to it (or to a reviewed reason).
+ */
+export function uncheckedAccessMessage(
+  e: unknown,
+  tag: string,
+  opts: Pick<ActionErrorOptions, 'organizationId' | 'extra'> = {},
+): string | null {
+  if (!isUncheckedAccess(e)) return null;
+  void reportError(e, reportContext(tag, { ...opts, level: 'warning' }));
+  return e.message;
+}
+
+/**
+ * uncheckedAccessMessage as an ActionResult: `internal_error` with the
+ * check's sentence, or null for any other error. `details` are the ones the
+ * module puts on its own failures (a reason its screen reads, the
+ * organization that answered), so the screen treats this answer as it treats
+ * the module's other failures. actionErrorResult answers through this.
+ */
+export function uncheckedAccessResult(
+  e: unknown,
+  tag: string,
+  opts: Pick<ActionErrorOptions, 'organizationId' | 'extra'> & {
+    details?: Record<string, unknown>;
+  } = {},
+): ActionResult<never> | null {
+  const { details, ...reportOpts } = opts;
+  const message = uncheckedAccessMessage(e, tag, reportOpts);
+  if (message === null) return null;
+  return details ? err('internal_error', message, details) : err('internal_error', message);
 }
 
 /**
@@ -127,7 +190,9 @@ export function actionErrorResult(
  * forcedWarehouseId's ForbiddenError: no warehouse assignment, a read-only
  * auditor), else `opts.message` (ROW_NOT_IMPORTED_MESSAGE by default), never
  * the error's own text. A ForbiddenError from a failed read of the caller's
- * own access says the retryable access sentence, as actionErrorResult does.
+ * own access says the retryable access sentence, as actionErrorResult does,
+ * and so does a check of the caller's access that could not be read (a module
+ * state, the permission set, the account status), with its own sentence.
  * The unexpected ones are reported ONCE for the run (recurring pattern 30),
  * with their count and the first of them, by report(); the unreadable-access
  * ones once more, as a warning.
@@ -135,7 +200,7 @@ export function actionErrorResult(
 export class RowFailures {
   private first: unknown;
   private unexpected = 0;
-  private firstUnreadable: ForbiddenError | undefined;
+  private firstUnreadable: unknown;
   private unreadable = 0;
 
   constructor(
@@ -152,6 +217,14 @@ export class RowFailures {
       this.unreadable += 1;
       if (this.unreadable === 1) this.firstUnreadable = e;
       return ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY;
+    }
+    // A check of the caller's access that could not be read (a module state,
+    // the permission set, the account status): its own sentence, counted with
+    // the unreadable-access rows and reported once for the run as a warning.
+    if (isUncheckedAccess(e)) {
+      this.unreadable += 1;
+      if (this.unreadable === 1) this.firstUnreadable = e;
+      return e.message;
     }
     this.unexpected += 1;
     if (this.unexpected === 1) this.first = e;

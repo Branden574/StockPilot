@@ -2,6 +2,7 @@ import 'server-only';
 
 import { revalidateTag, unstable_cache } from 'next/cache';
 
+import { LINK_UNCHECKED_DIGEST } from '@/lib/known-error-states';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
 
@@ -124,10 +125,12 @@ function externalCoverUrl(customFields: Record<string, unknown> | null): string 
  * The link's page cannot be answered right now: a read that decides it (the
  * link, its organization, the organization's public_requests module) did not
  * answer. Neither "open" nor "not found". The page reaches its error state
- * with Try again.
+ * with Try again, and `digest` lets that error card say which state it is
+ * ("We couldn't check this link just now": lib/known-error-states).
  */
 export class PublicLinkUnavailableError extends Error {
   readonly code = 'PUBLIC_LINK_UNAVAILABLE';
+  readonly digest = LINK_UNCHECKED_DIGEST;
 
   constructor() {
     super('This link could not be checked. Please try again.');

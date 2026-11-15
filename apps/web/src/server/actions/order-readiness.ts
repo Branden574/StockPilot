@@ -27,6 +27,7 @@ import {
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError } from '@/lib/error-reporter';
 import type { ShortfallPoLoad } from '@/lib/orders/shortfall-po';
+import { uncheckedAccessResult } from '@/server/lib/action-error-result';
 import { isModuleEnabled, ServiceError, withContext, type ServiceContext } from '@/server/services/context';
 import { OrderReadinessService } from '@/server/services/order-readiness';
 import { SuppliersService } from '@/server/services/suppliers';
@@ -116,6 +117,12 @@ export async function draftShortfallPosAction(
     return ok(result);
   } catch (e) {
     rethrowControlFlow(e);
+    // A check of the caller's access that could not be read: its own
+    // sentence, with the reason this dialog reads on its other failures.
+    const unchecked = uncheckedAccessResult(e, 'actions.orders.shortfall_po', {
+      details: { reason: 'failed' },
+    });
+    if (unchecked) return unchecked;
     if (e instanceof ServiceError && e.code !== 'internal_error') return err(e.code, e.message, e.details);
     if (!(e instanceof ServiceError)) void reportError(e, { tag: 'actions.orders.shortfall_po' });
     return err('internal_error', SHORTFALL_PO_FAILED_COPY, { reason: 'failed' });

@@ -7,7 +7,7 @@ import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { actionErrorResult } from '@/server/lib/action-error-result';
+import { actionErrorResult, uncheckedAccessResult } from '@/server/lib/action-error-result';
 import {
   resolvePortalContext,
   portalSubmitOrder,
@@ -252,6 +252,9 @@ async function portalReadLimited(userId: string): Promise<ActionResult<never> | 
 
 /** A refusal in the customer's words; anything unexpected is reported and generic. */
 function portalReturnRefusal(e: unknown, tag: string, fallback: string): ActionResult<never> {
+  // A check that could not be read: its own sentence (as portalContextFor).
+  const unchecked = uncheckedAccessResult(e, tag);
+  if (unchecked) return unchecked;
   if (e instanceof ServiceError) {
     if (e.code === 'not_found' || e.code === 'module_disabled') {
       return err('not_found', 'This order could not be found.');

@@ -1,5 +1,7 @@
 import { MODULE_REGISTRY, type ModuleId } from '@stockpilot/core';
 
+import { ACCESS_UNCHECKED_DIGEST } from '@/lib/known-error-states';
+
 /**
  * An organization's module state that could not be read, held as a refusal
  * instead of as "off" (docket S81).
@@ -36,9 +38,19 @@ import { MODULE_REGISTRY, type ModuleId } from '@stockpilot/core';
  * like PermissionsUnavailableError.
  */
 
-/** The module state could not be read: a refusal, never "the module is off". */
+/**
+ * The module state could not be read: a refusal, never "the module is off".
+ *
+ * `digest` is fixed so a page's error boundary can name this state. Thrown
+ * while a Server Component renders, the error reaches the browser only as
+ * its digest (Next keeps one an error already carries: lib/known-error-states
+ * has the detail), and the dashboard and root error cards then say "We
+ * couldn't check your access just now" with Try again, instead of the card
+ * for a crash. It changes nothing for a catch: this is not Next control flow.
+ */
 export class ModulesUnavailableError extends Error {
   readonly code = 'MODULES_UNAVAILABLE';
+  readonly digest = ACCESS_UNCHECKED_DIGEST;
 
   constructor() {
     super('Your access could not be checked. Please try again.');

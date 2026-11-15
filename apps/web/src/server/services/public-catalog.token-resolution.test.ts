@@ -307,6 +307,19 @@ describe('a read that did not answer never serves an open link, a cached one inc
  * the 'max' profile the cache would answer that request with the entry from
  * before the change. Read from the source: every call that drops this tag.
  */
+describe('PublicLinkUnavailableError is a state an error boundary can name', () => {
+  it('carries the link-unchecked digest, and is not Next control flow', async () => {
+    const { LINK_UNCHECKED_DIGEST, knownErrorState } = await import('@/lib/known-error-states');
+    const { isControlFlow } = await import('@/lib/control-flow');
+    const error = new PublicLinkUnavailableError();
+    expect(error.digest).toBe(LINK_UNCHECKED_DIGEST);
+    expect(knownErrorState(error)?.body).toBe(
+      "We couldn't check this link just now. This is usually temporary.",
+    );
+    expect(isControlFlow(error)).toBe(false);
+  });
+});
+
 describe('a link change expires the kept resolutions at once', () => {
   it('every revalidateTag of the resolver tag passes { expire: 0 }, never a stale-while-revalidate profile', async () => {
     const { readFileSync } = await import('node:fs');

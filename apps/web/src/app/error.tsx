@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 
 import { AppearanceRecovery } from '@/components/theme/appearance-recovery';
 import { Button } from '@/components/ui/button';
+import { knownErrorState } from '@/lib/known-error-states';
 import { isSharePath } from '@/lib/share-paths';
 
 /**
@@ -14,6 +15,12 @@ import { isSharePath } from '@/lib/share-paths';
  * `retry`, which re-fetches and re-renders the page (a failed server read can
  * then succeed), and falls back to `reset`, which only renders the same
  * answer again, when no `retry` is given.
+ *
+ * It never prints the error's message (in a production build a server
+ * error's message is React's own stand-in text). A digest the app set itself
+ * names a state it knows (lib/known-error-states): the customer portal when
+ * the access check could not be made, a public link that could not be
+ * checked. The card then says that in plain words, with the same Try again.
  */
 export default function GlobalError({
   error,
@@ -53,6 +60,8 @@ export default function GlobalError({
     }
   }, [error]);
 
+  const known = knownErrorState(error);
+
   // A full-screen state (this boundary sits outside every shell): the page
   // colour, a 28px Inter Tight heading, the explanation in ink-3, one action.
   return (
@@ -61,13 +70,15 @@ export default function GlobalError({
     <div
       className="bg-background flex min-h-screen flex-col items-center justify-center gap-3 px-6 text-center"
       data-glass="state-screen"
+      data-error-state={known?.key}
     >
       <h1 className="font-display text-[28px] font-medium leading-tight tracking-[-0.025em]">
-        Something went wrong
+        {known ? known.title : 'Something went wrong'}
       </h1>
       <p className="text-muted-foreground max-w-md text-[13.5px] leading-relaxed">
-        We hit an unexpected error. Try again, or refresh the page. If it keeps happening, contact
-        support.
+        {known
+          ? known.body
+          : 'We hit an unexpected error. Try again, or refresh the page. If it keeps happening, contact support.'}
       </p>
       <Button onClick={() => (retry ?? reset)?.()} className="mt-2">
         Try again

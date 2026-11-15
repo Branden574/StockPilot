@@ -13,6 +13,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * the browser.
  */
 
+import { ACCESS_UNCHECKED_DIGEST, LINK_UNCHECKED_DIGEST } from '@/lib/known-error-states';
+
 import GlobalError from './error';
 
 const fetchMock = vi.fn(() => Promise.resolve({ ok: true } as Response));
@@ -92,6 +94,56 @@ describe('GlobalError: Try again', () => {
     render(<GlobalError error={error} reset={reset} />);
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(reset).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * A digest the app set itself names a state it knows (lib/known-error-states):
+ * the customer portal when the access check could not be made, a public link
+ * when the link could not be checked. The card then says that, in plain
+ * words, with Try again, instead of "Something went wrong". No raw error
+ * message is ever on this card.
+ */
+describe('GlobalError: a state the app knows by its digest', () => {
+  const STAND_IN =
+    'Minified React error #441; visit https://react.dev/errors/441 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.';
+
+  it.each([
+    [
+      'the access check could not be made',
+      ACCESS_UNCHECKED_DIGEST,
+      "We couldn't check your access just now. This is usually temporary.",
+    ],
+    [
+      'the link could not be checked',
+      LINK_UNCHECKED_DIGEST,
+      "We couldn't check this link just now. This is usually temporary.",
+    ],
+  ])('%s: the plain state with Try again', (_name, digest, sentence) => {
+    const retry = vi.fn();
+    const { container } = render(
+      <GlobalError error={Object.assign(new Error(STAND_IN), { digest })} retry={retry} reset={() => {}} />,
+    );
+    expect(
+      screen.getByRole('heading', { level: 1, name: "This page couldn't be loaded" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(sentence)).toBeInTheDocument();
+    expect(container.textContent).not.toContain('Something went wrong');
+    expect(container.textContent).not.toContain('unexpected error');
+    expect(container.textContent).not.toContain('Minified React error');
+    expect(container.textContent).not.toContain('react.dev');
+    expect(container.textContent).not.toContain(digest);
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it('any other error is the card as before, and it never prints the error message', () => {
+    const { container } = render(
+      <GlobalError error={Object.assign(new Error(STAND_IN), { digest: '2416532942' })} reset={() => {}} />,
+    );
+    expect(screen.getByRole('heading', { level: 1, name: 'Something went wrong' })).toBeInTheDocument();
+    expect(container.textContent).not.toContain('Minified React error');
+    expect(container.textContent).not.toContain('react.dev');
   });
 });
 

@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import type { ModuleId } from '@stockpilot/core';
 
+import { isControlFlow } from '@/lib/control-flow';
+import { ACCESS_UNCHECKED_DIGEST, knownErrorState } from '@/lib/known-error-states';
+
 import { NON_CORE_MODULE_IDS } from './effective-modules';
 import {
   ModulesUnavailableError,
@@ -113,3 +116,15 @@ describe('moduleAnswer: a page gate answer for a module that is not the page\'s 
     );
   });
 });
+
+describe('ModulesUnavailableError is a state an error boundary can name', () => {
+  it('carries the access-unchecked digest, which Next passes to the page\'s error boundary in place of a generated one', () => {
+    expect(new ModulesUnavailableError().digest).toBe(ACCESS_UNCHECKED_DIGEST);
+    expect(knownErrorState(new ModulesUnavailableError())?.key).toBe('access-unchecked');
+  });
+
+  it('is not Next control flow: a catch that lets redirects out still handles it', () => {
+    expect(isControlFlow(new ModulesUnavailableError())).toBe(false);
+  });
+});
+

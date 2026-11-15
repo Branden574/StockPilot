@@ -14,6 +14,7 @@ import {
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { uncheckedAccessMessage } from '@/server/lib/action-error-result';
 import { fetchCountAssignees } from '@/server/lib/count-assignees';
 import { ServiceError, withContext, type ServiceContext } from '@/server/services/context';
 import { ExceptionEscalationService } from '@/server/services/exception-escalation';
@@ -86,6 +87,10 @@ function fail(e: unknown, tag: string): Failure {
   // rethrown so the browser goes to sign-in, never reported or worded as
   // "Something went wrong" (the rental and label actions do the same).
   rethrowControlFlow(e);
+  // A check of the caller's access that could not be read: its own sentence
+  // (reported there, as a warning), never "Something went wrong".
+  const unchecked = uncheckedAccessMessage(e, tag);
+  if (unchecked) return { error: { message: unchecked, reason: null } };
   if (!(e instanceof ServiceError) || e.code === 'internal_error') {
     // A bug or a database failure: reported, and answered generically (the
     // /api/v1/exceptions routes report the same way).

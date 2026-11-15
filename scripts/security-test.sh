@@ -1092,6 +1092,11 @@ WEB_TESTS=(
   # module table with what an unread answer becomes, so a new reader has to
   # be listed. Nothing is granted on a read that failed.
   src/lib/modules/module-state-readers.guard.test.ts
+  # Every catch in the Server Action modules reaches the shared mapping of a
+  # check that could not be read (or is listed with its reason), so a module
+  # with its own error mapping answers "Your access could not be checked.
+  # Please try again." and not its generic sentence.
+  src/server/actions/unchecked-access.guard.test.ts
   src/lib/modules/module-state.test.ts
   src/lib/modules/org-may-use-module.test.ts
   src/lib/dashboard/request-cache.modules.test.ts

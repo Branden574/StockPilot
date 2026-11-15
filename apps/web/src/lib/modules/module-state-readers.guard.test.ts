@@ -36,6 +36,11 @@ import { describe, expect, it } from 'vitest';
  *     a `closed` entry's note is not checked against the code at all.
  * The behaviour itself is held by the suites beside each reader (listed in
  * scripts/security-test.sh); this file keeps the list of readers complete.
+ *
+ * Its companion for the answers: server/actions/unchecked-access.guard.test.ts
+ * reads every catch in the Server Action modules and holds each to the shared
+ * mapping of a check that could not be read, so an action module with its own
+ * error mapping cannot answer its generic sentence for this state.
  */
 
 const SRC = path.resolve(__dirname, '../..');
@@ -287,6 +292,15 @@ describe('the request-cached module set cannot be taken for "off"', () => {
   it('a Server Action answers the unknown state with its try-again sentence', () => {
     const src = read('server/lib/action-error-result.ts');
     expect(src).toMatch(/e instanceof ModulesUnavailableError/);
+    // The shared mapper and the helper for modules with their own mapping are one code path.
+    expect(src).toMatch(/const unchecked = uncheckedAccessResult\(e, tag, \{/);
+  });
+
+  it('the unknown state carries a digest the error cards know, and both cards read it', () => {
+    expect(read('lib/modules/module-state.ts')).toMatch(/readonly digest = ACCESS_UNCHECKED_DIGEST;/);
+    for (const card of ['app/(dashboard)/error.tsx', 'app/error.tsx']) {
+      expect(read(card), card).toMatch(/knownErrorState\(error\)/);
+    }
   });
 });
 
