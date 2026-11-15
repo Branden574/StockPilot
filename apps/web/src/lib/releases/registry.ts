@@ -216,7 +216,7 @@ export const RELEASES: Release[] = [
     revision: 1,
     // #579 (squash 01ead76fa), web only: no phone update and no migration.
     // Live in production since 2026-11-15 17:17:30Z; publishedAt is the
-    // minute this release's pull request was opened. It went live after
+    // minute this release was committed. It went live after
     // #564, so it sits above the navigation release and is the newest
     // published release.
     // Claims checked against the code at 01ead76fa (paths under apps/web/src):
@@ -230,7 +230,9 @@ export const RELEASES: Release[] = [
     // - The chip: components/admin/audit-categories.ts, slug user, label
     //   Team, prefix user. (both events start with user.).
     // - The details: app/(dashboard)/dashboard/audit/page.tsx renders
-    //   MetadataDiff under a row that has before or after fields.
+    //   MetadataDiff under a row that has before or after fields, behind
+    //   the row's "Show N field changes" link. Warehouses and charters
+    //   appear as ids.
     // - The phone: apps/mobile/app/(drawer)/admin/audit.tsx shows row.event
     //   as written, with no details.
     // Who is told: whoever can open the page. /dashboard/audit redirects
@@ -240,7 +242,7 @@ export const RELEASES: Release[] = [
     status: 'published',
     title: 'Sending and revoking an invitation now show in the Audit log',
     summary:
-      'The Audit log now records when an invitation to join your organization is sent and when one is revoked, with the invited address and role. Both rows are under the Team chip, for people who can view the audit log. No app update is needed.',
+      'The Audit log now records when an invitation to join your organization is sent and when one is revoked, with the invited address and role. On the web, both rows are under the Team chip. People who can view the audit log see them. No app update is needed.',
     // #579 is live in production since 2026-11-15 17:17:30Z.
     publishedAt: '2026-11-15T17:39:00Z',
     entries: [
@@ -250,11 +252,11 @@ export const RELEASES: Release[] = [
         area: 'Audit log',
         title: 'Sending and revoking an invitation now show in the Audit log',
         whatChanged:
-          'The Audit log now has a User · Invited row for each invitation sent and a User Invite · Revoked row for each invitation revoked. The User · Invited row holds the invited address, the role, the warehouse and charter access the invitation offers, and whether the invitation email went out. The User Invite · Revoked row holds the address and role the invitation had. Resending an invitation was already recorded as User · Invited.',
-        whyItMatters: 'You can see in the Audit log who sent or revoked each invitation, and when.',
+          'The Audit log now has a User · Invited row for each invitation sent and a User Invite · Revoked row for each invitation revoked. The User · Invited row holds the invited address, the role, whether the invitation offers all warehouses, the ids of the warehouse and charters it names, and whether the invitation email went out. The User Invite · Revoked row holds the address and role the invitation had. Resending an invitation was already recorded as User · Invited.',
+        whyItMatters: 'The Audit log shows who sent or revoked an invitation, and when.',
         howItAffectsYou:
-          'Both rows are under the Team chip, with their details shown below the row. People who can view the audit log see them: owners, admins and managers by default, and anyone given View audit log. In the mobile app, the Audit log lists the same rows by event name, without the details. Nothing else about inviting or revoking changes.',
-        whatToDo: 'No action needed. To see them, open the Audit log and choose the Team chip.',
+          'On the web, both rows are under the Team chip, and the link below a row opens its details. People who can view the audit log see them: owners, admins and managers by default, and anyone given View audit log. The Audit log in the mobile app lists them among its recent events as user.invited and user.invite.revoked, without the details.',
+        whatToDo: 'No action needed. To see them on the web, open the Audit log and choose the Team chip.',
         link: { href: '/dashboard/audit?category=user', label: 'Open the Audit log' },
         audience: { anyPermission: ['activity_logs:read'] },
       },

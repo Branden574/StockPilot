@@ -107,20 +107,20 @@ describe('the invitation audit release: the words', () => {
   it('says what the rows hold and where they are, as written', () => {
     expect(release().title).toBe('Sending and revoking an invitation now show in the Audit log');
     expect(release().summary).toBe(
-      'The Audit log now records when an invitation to join your organization is sent and when one is revoked, with the invited address and role. Both rows are under the Team chip, for people who can view the audit log. No app update is needed.',
+      'The Audit log now records when an invitation to join your organization is sent and when one is revoked, with the invited address and role. On the web, both rows are under the Team chip. People who can view the audit log see them. No app update is needed.',
     );
     expect(entry().title).toBe('Sending and revoking an invitation now show in the Audit log');
     expect(entry().whatChanged).toBe(
-      'The Audit log now has a User · Invited row for each invitation sent and a User Invite · Revoked row for each invitation revoked. The User · Invited row holds the invited address, the role, the warehouse and charter access the invitation offers, and whether the invitation email went out. The User Invite · Revoked row holds the address and role the invitation had. Resending an invitation was already recorded as User · Invited.',
+      'The Audit log now has a User · Invited row for each invitation sent and a User Invite · Revoked row for each invitation revoked. The User · Invited row holds the invited address, the role, whether the invitation offers all warehouses, the ids of the warehouse and charters it names, and whether the invitation email went out. The User Invite · Revoked row holds the address and role the invitation had. Resending an invitation was already recorded as User · Invited.',
     );
     expect(entry().whyItMatters).toBe(
-      'You can see in the Audit log who sent or revoked each invitation, and when.',
+      'The Audit log shows who sent or revoked an invitation, and when.',
     );
     expect(entry().howItAffectsYou).toBe(
-      'Both rows are under the Team chip, with their details shown below the row. People who can view the audit log see them: owners, admins and managers by default, and anyone given View audit log. In the mobile app, the Audit log lists the same rows by event name, without the details. Nothing else about inviting or revoking changes.',
+      'On the web, both rows are under the Team chip, and the link below a row opens its details. People who can view the audit log see them: owners, admins and managers by default, and anyone given View audit log. The Audit log in the mobile app lists them among its recent events as user.invited and user.invite.revoked, without the details.',
     );
     expect(entry().whatToDo).toBe(
-      'No action needed. To see them, open the Audit log and choose the Team chip.',
+      'No action needed. To see them on the web, open the Audit log and choose the Team chip.',
     );
     expect(entry().link).toEqual({
       href: '/dashboard/audit?category=user',
