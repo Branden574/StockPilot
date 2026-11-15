@@ -381,6 +381,37 @@ export async function cookieSessionOwesStepUp(
   return owesStepUp(user.factors, () => cookieSessionLevel(supabase, user.id));
 }
 
+/** The authenticator state a ServiceContext carries (mfaRequired, mfaSatisfied, mfaEnrolled). */
+export type SessionMfaState = Awaited<ReturnType<typeof resolveApiMfaState>>;
+
+/**
+ * The authenticator state of a COOKIE session in one organization, for the
+ * routes that build their own principal instead of calling withApiContext (the
+ * QuickBooks and Sage Intacct OAuth callbacks). The same decision
+ * withApiContext makes on its cookie path (resolveApiMfaState, the
+ * organization's policy through enforcedMfaPolicy, an unreadable or hidden
+ * policy held to the strictest one) and the one pages and Server Actions get
+ * from resolveMfaState in services/context.ts
+ * (api-context.page-parity.test.ts pins all three to one answer).
+ *
+ * A route refuses when `mfaRequired && !mfaSatisfied`, as assertPermission
+ * does, and hands the three values to any context it builds (the one it passes
+ * to audit() included), so that context describes the session as it was.
+ * src/test/api-step-up.guard.test.ts holds the listed routes to both. Call it
+ * with the user getUser() returned on the same client and the member's role in
+ * `organizationId`.
+ */
+export async function cookieSessionMfaState(
+  supabase: any,
+  user: { id: string; factors?: Array<{ status?: string }> | null },
+  organizationId: string,
+  role: Role,
+): Promise<SessionMfaState> {
+  return resolveApiMfaState(supabase, organizationId, role, userHasVerifiedFactor(user), () =>
+    cookieSessionLevel(supabase, user.id),
+  );
+}
+
 /**
  * Mirror of the enabled-module query in withContext() (services/context.ts),
  * parameterized over an arbitrary Supabase client so both the cookie and
