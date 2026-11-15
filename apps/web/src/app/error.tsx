@@ -4,14 +4,34 @@ import { useEffect } from 'react';
 
 import { AppearanceRecovery } from '@/components/theme/appearance-recovery';
 import { Button } from '@/components/ui/button';
+import { knownErrorState } from '@/lib/known-error-states';
 import { isSharePath } from '@/lib/share-paths';
 
+/**
+ * The error card for everything outside a shell with its own (the public
+ * link pages, the customer portal, the sign-in pages).
+ *
+ * "Try again" asks the server for the page again: it calls the boundary's
+ * `retry`, which re-fetches and re-renders the page (a failed server read can
+ * then succeed), and falls back to `reset`, which only renders the same
+ * answer again, when no `retry` is given.
+ *
+ * It never prints the error's message (in a production build a server
+ * error's message is React's own stand-in text). A digest the app set itself
+ * names a state it knows (lib/known-error-states): the customer portal when
+ * the access check could not be made, a public link that could not be
+ * checked. The card then says that in plain words, with the same Try again.
+ */
 export default function GlobalError({
   error,
+  retry,
   reset,
 }: {
   error: Error & { digest?: string };
-  reset: () => void;
+  /** Asks the server for the page again and renders what comes back. */
+  retry?: () => void;
+  /** Clears the error and renders the same answer again, with no new read. */
+  reset?: () => void;
 }) {
   useEffect(() => {
     console.error(error);
@@ -40,6 +60,8 @@ export default function GlobalError({
     }
   }, [error]);
 
+  const known = knownErrorState(error);
+
   // A full-screen state (this boundary sits outside every shell): the page
   // colour, a 28px Inter Tight heading, the explanation in ink-3, one action.
   return (
@@ -48,15 +70,17 @@ export default function GlobalError({
     <div
       className="bg-background flex min-h-screen flex-col items-center justify-center gap-3 px-6 text-center"
       data-glass="state-screen"
+      data-error-state={known?.key}
     >
       <h1 className="font-display text-[28px] font-medium leading-tight tracking-[-0.025em]">
-        Something went wrong
+        {known ? known.title : 'Something went wrong'}
       </h1>
       <p className="text-muted-foreground max-w-md text-[13.5px] leading-relaxed">
-        We hit an unexpected error. Try again, or refresh the page. If it keeps happening, contact
-        support.
+        {known
+          ? known.body
+          : 'We hit an unexpected error. Try again, or refresh the page. If it keeps happening, contact support.'}
       </p>
-      <Button onClick={reset} className="mt-2">
+      <Button onClick={() => (retry ?? reset)?.()} className="mt-2">
         Try again
       </Button>
       {/* "Use classic design", only while Liquid Glass is shown; nothing in classic. */}

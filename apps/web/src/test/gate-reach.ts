@@ -64,8 +64,20 @@ import ts from 'typescript';
  * not ask first itself. Only the bare call is excused, only as an entry beside
  * an entry that asks, and nothing else in the same Promise.all or anywhere
  * else in the function. The caller vouches for each one and checks it with
- * asksFirstAfterInert(): before it asks, it awaits only bare INERT_ENTRIES
- * calls and calls nothing but methods of its own local values.
+ * asksFirstAfterInert(): it is one plain function (or one wrapped by React's
+ * `cache` and nothing else); the call that asks is a statement of its body
+ * itself (not inside an `if`, a loop, a `try` or a conditional), so everything
+ * after it is behind it on every path; that call's redirect gets out; and
+ * before it the function awaits only bare INERT_ENTRIES calls and calls
+ * nothing but methods of its own local values, handed nothing that runs (no
+ * function, no name of one, no argument that starts a call).
+ *
+ * WHAT THAT CHECK DOES NOT JUDGE. Three things, none of them in the tree
+ * today, are outside this reading and stay with review: work a helper starts
+ * without awaiting it before its own first await; a function that takes a
+ * context as an argument and is handed one that was not resolved by the gate;
+ * and a name declared inside a function that is spelled like a module-level
+ * import (names are resolved at module level throughout).
  *
  * EVERY RUNTIME EXPORT IS LISTED, READABLE OR NOT. runtimeExports() names all
  * a module exports at run time; an export this reading cannot resolve to a
@@ -137,8 +149,12 @@ export interface Reach {
    * does anything else, apart from awaiting bare INERT_ENTRIES calls (the
    * request's own cookie jar and headers) and calling methods of values it
    * holds in its own local variables? Its first other awaited call must ask
-   * first, by the same rule as a first step, and nothing else may be called
-   * before that one. Null when there is no such function.
+   * first, by the same rule as a first step, be a statement of the body
+   * itself, and let its redirect out; nothing else may be called before that
+   * one, and no method may be handed anything that runs. The function is one
+   * plain function, or one wrapped by React's `cache` alone (see "EXCUSED
+   * BESIDE THE TARGET" at the top of this file). Null when there is no such
+   * function.
    */
   asksFirstAfterInert(file: string, name: string): boolean | null;
   /** Server Actions declared inside modules that are not 'use server' modules. */
@@ -819,6 +835,105 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
     return out;
   }
 
+  /** Names the function body binds to a function: a nested declaration, or a variable holding one. */
+  function localFunctionNames(body: ts.Node): Set<string> {
+    const out = new Set<string>();
+    const visit = (n: ts.Node) => {
+      if (ts.isFunctionDeclaration(n) && n.name) out.add(n.name.text);
+      if (
+        ts.isVariableDeclaration(n) &&
+        ts.isIdentifier(n.name) &&
+        n.initializer &&
+        isFunctionNode(unwrap(n.initializer))
+      ) {
+        out.add(n.name.text);
+      }
+      if (isFunctionNode(n)) return;
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(body, visit);
+    return out;
+  }
+
+  /**
+   * Does an argument hand the callee something that runs: a function written
+   * in it (at any depth), a name of a function (one of the body's own, or one
+   * this reading resolves to a function or a class), or a call it starts?
+   */
+  function handsOverCode(info: ModuleInfo, arg: ts.Expression, ownFunctions: ReadonlySet<string>): boolean {
+    let found = false;
+    const visit = (n: ts.Node) => {
+      if (found) return;
+      if (isFunctionNode(n) || ts.isCallExpression(n) || ts.isNewExpression(n)) {
+        found = true;
+        return;
+      }
+      if (ts.isIdentifier(n)) {
+        const t = ownFunctions.has(n.text) ? null : resolveExpression(info, n);
+        if (ownFunctions.has(n.text) || t?.kind === 'fn' || t?.kind === 'class') found = true;
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(arg);
+    return found;
+  }
+
+  /**
+   * Is the function `key` names written as one plain function, or as one
+   * function wrapped by React's `cache` and by nothing else?
+   */
+  function isPlainOrReactCached(key: string): boolean {
+    const [file, name] = [key.slice(0, key.lastIndexOf('#')), key.slice(key.lastIndexOf('#') + 1)];
+    const info = modules.get(file);
+    const decl = info?.locals.get(name);
+    if (!info || !decl || decl.bodies.length !== 1) return false;
+    if (decl.wrappers.length === 0) return true;
+    const [wrapper] = decl.wrappers;
+    return (
+      decl.wrappers.length === 1 &&
+      wrapper !== undefined &&
+      ts.isIdentifier(wrapper) &&
+      !info.declared.has(wrapper.text) &&
+      info.importSpecs.get(wrapper.text) === 'react#cache'
+    );
+  }
+
+  /**
+   * Is `step` (an awaited call) a statement of `body` itself: the whole of an
+   * expression statement or a `return`, or the initializer of a variable the
+   * body declares at its top level, with nothing around it but parentheses,
+   * a type assertion or a property read? Inside an `if`, a loop, a `try`, a
+   * `switch`, a conditional or a logical expression it is not: a path through
+   * the function could then pass it by.
+   */
+  function isStatementOfBody(step: ts.Node, body: ts.Node): boolean {
+    if (!ts.isBlock(body)) return unwrap(body as ts.Expression) === unwrap(step as ts.Expression);
+    let child: ts.Node = step;
+    for (let n = step.parent; n; child = n, n = n.parent) {
+      if (n === body) {
+        return (
+          ts.isExpressionStatement(child) ||
+          ts.isReturnStatement(child) ||
+          ts.isVariableStatement(child)
+        );
+      }
+      const passesThrough =
+        ts.isParenthesizedExpression(n) ||
+        ts.isAsExpression(n) ||
+        ts.isNonNullExpression(n) ||
+        ts.isSatisfiesExpression(n) ||
+        ts.isTypeAssertionExpression(n) ||
+        (ts.isPropertyAccessExpression(n) && n.expression === child) ||
+        (ts.isVariableDeclaration(n) && n.initializer === child) ||
+        ts.isVariableDeclarationList(n) ||
+        ts.isExpressionStatement(n) ||
+        ts.isReturnStatement(n) ||
+        ts.isVariableStatement(n);
+      if (!passesThrough) return false;
+    }
+    return false;
+  }
+
   /** The calls under `body` that start before `before` does, outside it and outside nested functions. */
   function callsBefore(body: ts.Node, before: ts.Node): ts.CallExpression[] {
     const out: ts.CallExpression[] = [];
@@ -1037,23 +1152,36 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
       },
       asksFirstAfterInert(file, name) {
         const t = exportedNames(file).get(name);
-        const found = t?.kind === 'fn' ? bodyOf(t.key) : null;
-        if (!found) return null;
+        const key = t?.kind === 'fn' ? t.key : null;
+        const found = key ? bodyOf(key) : null;
+        if (!key || !found) return null;
         const { info, body } = found;
+        // One plain function, or one wrapped by React's cache and nothing else:
+        // any other wrapper runs code of its own around the body read here.
+        if (!isPlainOrReactCached(key)) return false;
         const asking = awaitsOfCall(ts.isBlock(body) ? body.statements : [body]).find(
           (a) => !isInertEntry(info, a.expression),
         );
-        if (!asking || redirectIsKept(info, asking, body)) return false;
+        if (!asking) return false;
+        // The call that asks is a statement of the body itself, so every
+        // statement after it is behind it on every path through the function.
+        // That also rules out a `try` around it, whose catch could keep its
+        // redirect; a handler attached to the call itself is read by stepAsks.
+        if (!isStatementOfBody(asking, body)) return false;
         if (!stepAsks(stepAt(info, asking))) return false;
         const own = localNames(body);
+        const ownFunctions = localFunctionNames(body);
         return callsBefore(body, asking).every((call) => {
           if (isInertEntry(info, call)) return true;
-          // A method of a value the function holds itself: `jar.get(name)`.
+          // A method of a value the function holds itself: `jar.get(name)`,
+          // handed nothing that runs: no function (written there, or named),
+          // and no argument that starts a call.
           const callee = call.expression;
           return (
             ts.isPropertyAccessExpression(callee) &&
             ts.isIdentifier(callee.expression) &&
-            own.has(callee.expression.text)
+            own.has(callee.expression.text) &&
+            call.arguments.every((arg) => !handsOverCode(info, arg, ownFunctions))
           );
         });
       },

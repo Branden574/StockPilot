@@ -9,9 +9,14 @@ import { MODULE_REGISTRY, type ModuleId } from '@stockpilot/core';
  * checkModuleAccess decides from this read, and it must be able to tell a
  * module that is off from rows that could not be read: supabase-js resolves a
  * failed query as `{ data: null, error }`, which the set alone turns into "no
- * rows". The set stays the fail-closed one either way, and
- * getModulesForRequest, which the layout's sidebar, withContext() and the
- * pages' own reads use, answers exactly as before.
+ * rows". readModulesForRequest's own set stays the fail-closed one either
+ * way, with the outcome beside it.
+ *
+ * getModulesForRequest, which withContext() and the pages' own reads use,
+ * holds a state that was not read as unknown (lib/modules/module-state): a
+ * core module and a module known to be on answer, and asking about any other
+ * module, or listing the set, throws ModulesUnavailableError. A set that was
+ * read answers exactly as before.
  */
 
 const holder = vi.hoisted(() => ({
@@ -25,6 +30,12 @@ vi.mock('@/lib/auth/request-context-bundle', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/auth/request-context-bundle')>()),
   loadRequestContextBundle: vi.fn(async () => holder.bundle),
 }));
+
+import {
+  ModulesUnavailableError,
+  moduleSetUnreadable,
+  UnreadableModuleSet,
+} from '@/lib/modules/module-state';
 
 import { getModulesForRequest, readModulesForRequest } from './request-cache';
 
@@ -133,17 +144,69 @@ describe('readModulesForRequest', () => {
   });
 });
 
-describe('getModulesForRequest (unchanged for its callers)', () => {
-  it('returns the set on success', async () => {
+describe('readModulesForRequest: only a list of module rows is an answer', () => {
+  it('an empty body with no error is not "no rows": unreadable', async () => {
+    legacy({ data: null, error: null }, { data: [ORG_ROW(false)], error: null });
+    await expect(readModulesForRequest(ORG)).resolves.toEqual({
+      modules: new Set(),
+      rowsUnreadable: true,
+    });
+  });
+
+  it('a row that names no module is not an answer: unreadable, and nothing in it is read as on', async () => {
+    legacy(
+      { data: [{ module_id: 'rentals' }, { enabled: true }], error: null },
+      { data: [ORG_ROW(false)], error: null },
+    );
+    await expect(readModulesForRequest(ORG)).resolves.toEqual({
+      modules: new Set(),
+      rowsUnreadable: true,
+    });
+  });
+});
+
+describe('getModulesForRequest', () => {
+  it('returns the plain set when the rows were read', async () => {
     legacy(
       { data: [{ module_id: 'rentals' }], error: null },
       { data: [ORG_ROW(false)], error: null },
     );
-    await expect(getModulesForRequest(ORG)).resolves.toEqual(new Set(['rentals']));
+    const set = await getModulesForRequest(ORG);
+    expect(set).toEqual(new Set(['rentals']));
+    expect(moduleSetUnreadable(set)).toBe(false);
+    // Read, so "off" is an answer.
+    expect(set.has('po_imports')).toBe(false);
   });
 
-  it('returns the empty, fail-closed set when the rows could not be read, as it always did', async () => {
+  it('an organization with every module off is the plain empty set: every module answers off', async () => {
+    legacy({ data: [], error: null }, { data: [ORG_ROW(false)], error: null });
+    const set = await getModulesForRequest(ORG);
+    expect(moduleSetUnreadable(set)).toBe(false);
+    for (const id of NON_CORE) expect(set.has(id)).toBe(false);
+  });
+
+  it('holds rows that could not be read as unknown: a core module answers, any other module and the list refuse', async () => {
     legacy(UNREADABLE, { data: [ORG_ROW(false)], error: null });
-    await expect(getModulesForRequest(ORG)).resolves.toEqual(new Set());
+    const set = await getModulesForRequest(ORG);
+    expect(set).toBeInstanceOf(UnreadableModuleSet);
+    expect(moduleSetUnreadable(set)).toBe(true);
+    expect(set.has('inventory')).toBe(true);
+    for (const id of NON_CORE) {
+      expect(() => set.has(id)).toThrow(ModulesUnavailableError);
+    }
+    expect(() => Array.from(set)).toThrow(ModulesUnavailableError);
+    expect(() => set.size).toThrow(ModulesUnavailableError);
+  });
+
+  it('rows that could not be read under a comp that was read: the plain set of every non-core module', async () => {
+    legacy(UNREADABLE, { data: [ORG_ROW(true)], error: null });
+    const set = await getModulesForRequest(ORG);
+    expect(moduleSetUnreadable(set)).toBe(false);
+    expect([...set].sort()).toEqual([...NON_CORE].sort());
+  });
+
+  it('an unreadable organization row still rejects', async () => {
+    legacy({ data: [{ module_id: 'rentals' }], error: null }, UNREADABLE);
+    await expect(getModulesForRequest(ORG)).rejects.toThrow('getOrgRowForRequest');
   });
 });

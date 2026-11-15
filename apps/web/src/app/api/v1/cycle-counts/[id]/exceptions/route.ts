@@ -22,8 +22,10 @@ export const dynamic = 'force-dynamic';
  * varianceDestination). `active` is true while this count is the exception's
  * current recount.
  *
- * 404 when the count does not exist or is not visible. A failed read is a
- * 500, never an empty list: the screen must say "unavailable", not "none".
+ * 404 when the count does not exist or is not one the caller reads (the one
+ * count read rule, lib/auth/count-read-scope.ts: the same answer for both).
+ * A failed read is a 500, never an empty list: the screen must say
+ * "unavailable", not "none".
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const ctx = await withApiContext(req);

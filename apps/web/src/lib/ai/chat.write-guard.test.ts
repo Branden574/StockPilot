@@ -875,6 +875,34 @@ describe('a failed tool call: what the model reads, at every layer between the f
         SENTENCE_BY_CODE[code],
       ],
     ),
+    // The usual shape in the services: a refusal built with its code and its
+    // words and no details at all. Its words are marked like any other field
+    // the model may not read (a validation error keeps the words it may).
+    ...(Object.keys(SENTENCE_BY_CODE) as Array<ServiceError['code']>).map(
+      (code): [string, () => unknown, string] => [
+        `a service refusal with code ${code} and no details`,
+        () =>
+          dressed(
+            new ServiceError(
+              code,
+              code === 'validation_error' ? VALIDATION_WORDS : marked(`${code}-bare-message`),
+            ),
+            `${code}-bare`,
+          ),
+        SENTENCE_BY_CODE[code],
+      ],
+    ),
+    [
+      'a forbidden service refusal whose details carry a name and no reason',
+      () =>
+        dressed(
+          new ServiceError('forbidden', marked('forbidden-named-message'), {
+            name: marked('forbidden-named-details-name'),
+          }),
+          'forbidden-named',
+        ),
+      TOOL_PERMISSION_MESSAGE,
+    ],
     [
       'the multi-factor gate for a member with a factor',
       () => gate(true, 'gate-enrolled'),

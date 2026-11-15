@@ -34,7 +34,7 @@ vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefine
  * source tree, each with plants that prove it can fail:
  *   - one emitter: only the gate builds the marker's body;
  *   - first statement: a route that uses the gate calls it before anything
- *     else, and only the three reviewed routes use it.
+ *     else, and only the reviewed routes use it.
  */
 
 function req(init: RequestInit = {}) {
@@ -157,10 +157,17 @@ const GATE_MODULE = 'server/lib/api-context-gate';
 const GATE_FILE = `${GATE_MODULE}.ts`;
 const CORE_MARKER_FILE = 'auth/context-unavailable.ts';
 
-/** The routes reviewed to use the gate (docket S26). A new one is a reviewed addition. */
+/**
+ * The routes reviewed to use the gate (docket S26). A new one is a reviewed
+ * addition. The two member routes (a role, one category grant) call the gate
+ * as their first statement, and each is safe to send again: the same role or
+ * the same grant a second time changes nothing.
+ */
 const GATED_ROUTES = [
   'app/api/v1/exceptions/[id]/escalate/route.ts',
   'app/api/v1/items/[id]/adjust/route.ts',
+  'app/api/v1/members/[id]/category-access/route.ts',
+  'app/api/v1/members/[id]/role/route.ts',
   'app/api/v1/rentals/route.ts',
 ];
 
@@ -483,13 +490,13 @@ describe('the marker has one emitter (guard 2)', () => {
 describe('a route that uses the gate calls it first, and only the reviewed routes use it (guard 3)', () => {
   const WEB = sourceFiles(WEB_SRC, ['test']);
 
-  it('the three routes, each handler starting with the gate on its own request', SCAN, () => {
+  it('the reviewed routes, each handler starting with the gate on its own request', SCAN, () => {
     expect(firstStatementFindings(WEB)).toEqual([]);
     for (const route of GATED_ROUTES) expect(WEB.has(route), route).toBe(true);
   });
 
   it('plant: a route whose first statement is not the gate fails it, and so does an unreviewed importer', () => {
-    // The three real routes beside the plants (the adjust route is replaced).
+    // The reviewed routes beside the plants (the adjust route is replaced).
     const web = new Map(GATED_ROUTES.map((route) => [route, WEB.get(route)!] as [string, string]));
     web.set(
       'app/api/v1/items/[id]/adjust/route.ts',
@@ -516,7 +523,7 @@ describe('a route that uses the gate calls it first, and only the reviewed route
       `export async function later(req: Request) { const { apiContextGate } = await import('@/server/lib/api-context-gate'); return apiContextGate(req); }`,
     );
     expect(firstStatementFindings(web)).toEqual([
-      'the gate is loaded by [app/api/v1/exceptions/[id]/escalate/route.ts, app/api/v1/items/[id]/adjust/route.ts, app/api/v1/other/route.ts, app/api/v1/rentals/route.ts, server/lib/wraps-the-gate.ts], reviewed: [app/api/v1/exceptions/[id]/escalate/route.ts, app/api/v1/items/[id]/adjust/route.ts, app/api/v1/rentals/route.ts]',
+      'the gate is loaded by [app/api/v1/exceptions/[id]/escalate/route.ts, app/api/v1/items/[id]/adjust/route.ts, app/api/v1/members/[id]/category-access/route.ts, app/api/v1/members/[id]/role/route.ts, app/api/v1/other/route.ts, app/api/v1/rentals/route.ts, server/lib/wraps-the-gate.ts], reviewed: [app/api/v1/exceptions/[id]/escalate/route.ts, app/api/v1/items/[id]/adjust/route.ts, app/api/v1/members/[id]/category-access/route.ts, app/api/v1/members/[id]/role/route.ts, app/api/v1/rentals/route.ts]',
       'app/api/v1/items/[id]/adjust/route.ts POST: the first statement is not `const gate = await apiContextGate(<its request>)`',
       'app/api/v1/other/route.ts DELETE: the first statement is not `const gate = await g(<its request>)`',
       'app/api/v1/other/route.ts PUT: the first statement is not `const gate = await g(<its request>)`',

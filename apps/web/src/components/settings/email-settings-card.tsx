@@ -38,6 +38,12 @@ import { changeEmailSchema, type ActionResult, type ChangeEmailInput } from '@st
  *   Pending  current@ (Current) → new@ (Pending) · sent … · [Resend] [Cancel]
  *   Changed  a one-time "Email updated" panel after the second confirmation
  *
+ * Pending is every change the account holds, by its pending address alone. A
+ * change with no request time (GoTrue clears the time and both link tokens
+ * when the password is changed, and keeps the pending address) has no link
+ * that still works, so it shows as Expired, with the same Resend, another
+ * address and Cancel.
+ *
  * The change dialog asks for the new address and the current password. If the
  * account has an authenticator enrolled the action answers `aal2_required`
  * and the shared step-up modal asks for a code in place, then the request is
@@ -55,8 +61,22 @@ export interface EmailSettingsCardProps {
 
 interface PendingState {
   pendingEmail: string;
-  sentAt: string;
-  expiresAt: string;
+  /** Null for a change held without a request time: no live link (expired). */
+  sentAt: string | null;
+  expiresAt: string | null;
+}
+
+/** The change the account holds, from the server page's props: none without a pending address. */
+function pendingFrom(
+  props: Pick<EmailSettingsCardProps, 'pendingEmail' | 'sentAt' | 'expiresAt'>,
+): PendingState | null {
+  if (!props.pendingEmail) return null;
+  const timed = Boolean(props.sentAt && props.expiresAt);
+  return {
+    pendingEmail: props.pendingEmail,
+    sentAt: timed ? props.sentAt : null,
+    expiresAt: timed ? props.expiresAt : null,
+  };
 }
 
 function relativeTime(iso: string, now: number): string {
@@ -85,11 +105,7 @@ async function withStepUp<T>(
 export function EmailSettingsCard(props: EmailSettingsCardProps) {
   const router = useRouter();
   const stepUp = useStepUp();
-  const [pending, setPending] = React.useState<PendingState | null>(
-    props.pendingEmail && props.sentAt && props.expiresAt
-      ? { pendingEmail: props.pendingEmail, sentAt: props.sentAt, expiresAt: props.expiresAt }
-      : null,
-  );
+  const [pending, setPending] = React.useState<PendingState | null>(() => pendingFrom(props));
   const [busy, setBusy] = React.useState<'resend' | 'cancel' | null>(null);
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const [cancelOpen, setCancelOpen] = React.useState(false);
@@ -104,9 +120,11 @@ export function EmailSettingsCard(props: EmailSettingsCardProps) {
     if (busy) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- prop resync (same idiom as ProfileNameEditor): the server page re-reads GoTrue on every render and its answer must win over local optimistic state once a mutation has settled.
     setPending(
-      props.pendingEmail && props.sentAt && props.expiresAt
-        ? { pendingEmail: props.pendingEmail, sentAt: props.sentAt, expiresAt: props.expiresAt }
-        : null,
+      pendingFrom({
+        pendingEmail: props.pendingEmail,
+        sentAt: props.sentAt,
+        expiresAt: props.expiresAt,
+      }),
     );
   }, [props.pendingEmail, props.sentAt, props.expiresAt, busy]);
 
@@ -128,8 +146,11 @@ export function EmailSettingsCard(props: EmailSettingsCardProps) {
     router.replace('/dashboard/settings/profile');
   }, [props.justChanged, router]);
 
-  const expired =
-    pending && now !== null ? now > new Date(pending.expiresAt).getTime() : props.expired;
+  // A change with no expiry (no request time) has no live link: expired.
+  const expired = pending
+    ? pending.expiresAt === null ||
+      (now !== null ? now > new Date(pending.expiresAt).getTime() : props.expired)
+    : props.expired;
 
   const onResend = async () => {
     setBusy('resend');
@@ -213,7 +234,7 @@ export function EmailSettingsCard(props: EmailSettingsCardProps) {
           <p className="text-muted-foreground">
             {expired
               ? 'The verification links have expired. Resend them to continue.'
-              : `Verification links sent${now ? ` ${relativeTime(pending.sentAt, now)}` : ''} to both addresses. Your account keeps using ${props.email} until both are confirmed.`}
+              : `Verification links sent${now && pending.sentAt ? ` ${relativeTime(pending.sentAt, now)}` : ''} to both addresses. Your account keeps using ${props.email} until both are confirmed.`}
           </p>
           <div className="flex flex-wrap gap-2 pt-1">
             <Button

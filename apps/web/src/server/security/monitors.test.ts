@@ -263,6 +263,51 @@ describe('detectPrivilegeEscalations', () => {
     const rows = [roleChange('org-3', 'staff', 'admin'), roleChange('org-3', 'staff', 'owner')];
     expect(detectPrivilegeEscalations(rows, 3)).toEqual([]);
   });
+
+  // A role change recorded with no actor and no address, marked
+  // metadata.source 'database', beside the same before and after role. The
+  // count reads the organization and the two roles only.
+  const databaseRoleChange = (org: string, before: string, after: string) =>
+    auditRow({
+      event: 'user.role.changed',
+      organization_id: org,
+      user_id: null,
+      ip: null,
+      metadata: {
+        entity_type: 'organization_member',
+        entity_id: '5a1b2c3d-0000-4000-8000-00000000000a',
+        before: { role: before },
+        after: { role: after },
+        source: 'database',
+        made_as: 'service_role',
+        aal: null,
+        target_user_id: '5a1b2c3d-0000-4000-8000-00000000000b',
+      },
+    });
+
+  it("counts a row with no actor and source 'database' as one elevation", () => {
+    expect(detectPrivilegeEscalations([databaseRoleChange('org-4', 'admin', 'owner')], 1)).toEqual([
+      { organizationId: 'org-4', count: 1 },
+    ]);
+    // Beside two rows an admin's change wrote, it is the third.
+    const rows = [
+      roleChange('org-4', 'staff', 'admin'),
+      databaseRoleChange('org-4', 'manager', 'admin'),
+      roleChange('org-4', 'viewer', 'admin'),
+    ];
+    expect(detectPrivilegeEscalations(rows)).toEqual([{ organizationId: 'org-4', count: 3 }]);
+  });
+
+  it("two rows with source 'database' for one organization stay under the threshold of three", () => {
+    const rows = [
+      databaseRoleChange('org-5', 'admin', 'owner'),
+      databaseRoleChange('org-5', 'owner', 'admin'), // the other half of a transfer: a demotion
+      databaseRoleChange('org-5', 'staff', 'admin'),
+    ];
+    // Two elevations (to owner, to admin) and one demotion.
+    expect(detectPrivilegeEscalations(rows)).toEqual([]);
+    expect(detectPrivilegeEscalations(rows, 2)).toEqual([{ organizationId: 'org-5', count: 2 }]);
+  });
 });
 
 // ---------------------------------------------------------------------------

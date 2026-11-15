@@ -6,6 +6,7 @@ import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-heade
 import { requireOrgContext } from '@/lib/auth/session';
 import { forcedWarehouseId } from '@/lib/auth/warehouse';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { moduleAnswer } from '@/lib/modules/module-state';
 import { createClient } from '@/lib/supabase/server';
 import { WarehousesService } from '@/server/services/warehouses';
 
@@ -35,8 +36,10 @@ export default async function ImportPage() {
   // one: the screen offered no destination at all, so every row failed on
   // "A warehouse must be selected before creating an item." Same three inputs
   // the bulk-ISBN import already takes.
-  const [{ enabled: sportsEnabled }, warehousesSvc, forced, orgRow] = await Promise.all([
-    checkModuleAccess('sports'),
+  // moduleAnswer: a state that could not be read is this page's error state
+  // with Try again, never a template drawn as if the module were off.
+  const [sportsEnabled, warehousesSvc, forced, orgRow] = await Promise.all([
+    checkModuleAccess('sports').then(moduleAnswer),
     WarehousesService.forCurrentUser(),
     forcedWarehouseId(),
     supabase

@@ -77,6 +77,12 @@ export interface ServiceContext {
   /**
    * Modules enabled for this org; core modules are always treated as
    * enabled even if absent.
+   *
+   * Ask through `isModuleEnabled` / `assertModuleEnabled` (or `has`). When the
+   * organization's module rows could not be read, a request builder holds the
+   * UnreadableModuleSet of lib/modules/module-state here: asking about a
+   * module whose state is unknown, or listing the set, throws
+   * ModulesUnavailableError instead of answering "off".
    */
   enabledModules: Set<ModuleId>;
   /**
@@ -240,8 +246,10 @@ export const withContext = cache(async (): Promise<ServiceContext> => {
   // independent. Run them concurrently instead of sequentially. The modules
   // read, when not held, goes through the request-cached `getModulesForRequest`
   // so the dashboard layout and `withContext` share ONE `organization_modules`
-  // round-trip per render (it also absorbs/logs query errors, returning an
-  // empty set = core-only nav, never a wider entitlement than the org has).
+  // round-trip per render. Rows that could not be read are logged there and
+  // held as UNKNOWN, never as "off" and never as a wider entitlement than the
+  // reads showed: asking about such a module throws ModulesUnavailableError
+  // (lib/modules/module-state), the same state the API context holds.
   const [{ mfaRequired, mfaSatisfied, mfaEnrolled }, enabledModules] = await Promise.all([
     resolveMfaState(
       ctx.role,
@@ -368,7 +376,15 @@ export function assertAnyPermission(ctx: ServiceContext, permissions: readonly P
   throw new ServiceError('forbidden', `Missing permission: ${permissions.join(' or ')}`);
 }
 
-/** Is `moduleId` on for this context? The one rule both helpers below apply. */
+/**
+ * Is `moduleId` on for this context? The one rule both helpers below apply.
+ *
+ * THROWS ModulesUnavailableError when the context could not read that
+ * module's state (see ServiceContext.enabledModules): "could not check" is
+ * never answered as false. A Server Action's catch answers it through
+ * actionErrorResult, a route handler through internalErrorResponse or
+ * answerModuleState, and a page reaches its error state with Try again.
+ */
 export function isModuleEnabled(
   ctx: Pick<ServiceContext, 'enabledModules'>,
   moduleId: ModuleId,

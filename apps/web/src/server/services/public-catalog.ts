@@ -2,6 +2,7 @@ import 'server-only';
 
 import { revalidateTag, unstable_cache } from 'next/cache';
 
+import { LINK_UNCHECKED_DIGEST } from '@/lib/known-error-states';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
 
@@ -121,89 +122,183 @@ function externalCoverUrl(customFields: Record<string, unknown> | null): string 
 // ── Token → link/org resolution ─────────────────────────────────────────────
 
 /**
+ * The link's page cannot be answered right now: a read that decides it (the
+ * link, its organization, the organization's public_requests module) did not
+ * answer. Neither "open" nor "not found". The page reaches its error state
+ * with Try again, and `digest` lets that error card say which state it is
+ * ("We couldn't check this link just now": lib/known-error-states).
+ */
+export class PublicLinkUnavailableError extends Error {
+  readonly code = 'PUBLIC_LINK_UNAVAILABLE';
+  readonly digest = LINK_UNCHECKED_DIGEST;
+
+  constructor() {
+    super('This link could not be checked. Please try again.');
+    this.name = 'PublicLinkUnavailableError';
+  }
+}
+
+/** How long a resolution is kept, in seconds. */
+const TOKEN_RESOLUTION_WINDOW_SECONDS = 60;
+
+/**
+ * What the three reads said, as it is kept between requests.
+ *
+ *   resolved  the token names a link (or, for an older organization token,
+ *             an organization alone) whose module is on;
+ *   none      the reads answered and there is no such page: no row, or the
+ *             module is off;
+ *   unread    a read did not answer. Not a decision, and never treated as
+ *             one: see resolvePublicRequestToken.
+ *
+ * `readAt` is when the reads ran (epoch ms), so an entry that has outlived
+ * its window can be told from a fresh one whatever the cache does with it.
+ */
+type TokenResolution =
+  | { state: 'resolved'; context: PublicRequestContext; readAt: number }
+  | { state: 'none'; readAt: number }
+  | { state: 'unread' };
+
+/**
  * Resolves a /r/<token> token: links-table-FIRST (the migrated "General
  * request link" carries each org's legacy token, so existing URLs land
  * here), then the organizations.public_request_token fallback for any
- * token that predates/escaped the 0261 backfill. Cached 60s — same
- * staleness posture as the old getOrgByPublicToken: renders may lag a
- * rotation by up to 60s but submit validates fresh and fails closed.
+ * token that predates/escaped the 0261 backfill. Null means "no such page":
+ * the page answers its 404 without saying whether the organization exists.
+ *
+ * KEPT FOR 60 SECONDS, as before. With every read working, a second visit
+ * inside the window reads nothing (unstable_cache, keyed by the token).
+ * Submit validates fresh and fails closed either way.
+ *
+ * ONLY AN ANSWER IS TRUSTED. supabase-js resolves a failed read as `{ data:
+ * null, error }`, the shape of "no row", so every read's error is checked,
+ * and a read that did not answer is `unread`, never "not found" and never
+ * "open". Three rules follow, in this function:
+ *
+ *   1. `unread` from the cache is read again here, directly. If that read
+ *      answers, the visitor gets its answer; if not,
+ *      PublicLinkUnavailableError. The cached function RETURNS `unread`
+ *      rather than throwing on purpose: unstable_cache keeps and serves its
+ *      previous entry when the function throws, and the previous entry can
+ *      be an open link.
+ *   2. An entry older than the window is not served. unstable_cache answers
+ *      a request with such an entry while it reads again in the background;
+ *      this function looks at `readAt` and reads directly instead, so a link
+ *      whose module was switched off is not shown from an old entry, whether
+ *      or not the new read answers.
+ *   3. A link change expires the entry at once (the link's own writes call
+ *      revalidateTag with `{ expire: 0 }`, server/services/public-links.ts),
+ *      so the next request is a cache miss that reads, not an old entry.
+ *
+ * What the cache may hold is therefore a decided answer no older than the
+ * window, or `unread`. A value of any other shape is read again.
  */
 export async function resolvePublicRequestToken(
   token: string,
 ): Promise<PublicRequestContext | null> {
-  return resolvePublicRequestTokenCached(token);
+  const kept = await resolvePublicRequestTokenCached(token);
+  if (isTrustedResolution(kept)) return kept.state === 'resolved' ? kept.context : null;
+  const read = await readPublicRequestToken(token);
+  if (read.state === 'unread') throw new PublicLinkUnavailableError();
+  return read.state === 'resolved' ? read.context : null;
 }
 
-const resolvePublicRequestTokenCached = unstable_cache(
-  async (token: string): Promise<PublicRequestContext | null> => {
-    const admin = createAdminClient();
+/** A decided answer, read inside the window. Anything else is read again. */
+function isTrustedResolution(
+  value: unknown,
+): value is Exclude<TokenResolution, { state: 'unread' }> {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as { state?: unknown; readAt?: unknown; context?: unknown };
+  if (v.state !== 'resolved' && v.state !== 'none') return false;
+  if (v.state === 'resolved' && (!v.context || typeof v.context !== 'object')) return false;
+  if (typeof v.readAt !== 'number') return false;
+  const age = Date.now() - v.readAt;
+  return age >= 0 && age <= TOKEN_RESOLUTION_WINDOW_SECONDS * 1000;
+}
 
-    // Module gate for the READ path (review finding 2026-07-12): the submit
-    // route already 404s when `public_requests` is disabled, but without
-    // this check a previously-shared /r/<token> URL kept rendering the full
-    // catalog after an org turned the module off (entitlement boundary
-    // enforced write-only). Same posture as submit: optional module, an
-    // explicit enabled row is required; resolver returns null → the page
-    // 404s without leaking that the org exists. A query error also lands on
-    // null (fail closed). Cached with the resolution (60s TTL bounds a
-    // module toggle; link mutations revalidate the tag).
-    const moduleEnabled = async (orgId: string): Promise<boolean> => {
-      const { data } = await admin
-        .from('organization_modules')
-        .select('module_id')
-        .eq('organization_id', orgId)
-        .eq('module_id', 'public_requests')
-        .eq('enabled', true)
-        .maybeSingle();
-      return Boolean(data);
-    };
+/** The three reads, with no cache. `unread` when any of them did not answer. */
+async function readPublicRequestToken(token: string): Promise<TokenResolution> {
+  const readAt = Date.now();
+  const admin = createAdminClient();
+  /** Logs the read that did not answer (its code only: a message can quote request details). */
+  const unread = (what: string, error: { code?: string }): TokenResolution => {
+    console.error(`[public-catalog] ${what} unreadable:`, error.code || 'unknown');
+    return { state: 'unread' };
+  };
 
-    // Migration 0330: the DB stores sha256(token); hash the presented
-    // plaintext and compare on the hash column. Equality via the btree
-    // index is fine here — see sha256Hex()'s doc comment for why a
-    // timing-safe compare buys nothing on this path.
-    const tokenHash = sha256Hex(token);
-    const { data: linkRow } = await admin
-      .from('public_request_links')
-      .select(
-        'id, organization_id, name, instructions, active, expires_at, available_from, available_until, availability_display, books_enabled, items_enabled, include_public_pool, default_max_qty',
-      )
-      .eq('token_hash', tokenHash)
+  // Module gate for the READ path (review finding 2026-07-12): the submit
+  // route already 404s when `public_requests` is disabled, but without
+  // this check a previously-shared /r/<token> URL kept rendering the full
+  // catalog after an org turned the module off (entitlement boundary
+  // enforced write-only). Same posture as submit: optional module, an
+  // explicit enabled row is required; no row is "no such page". A module
+  // state that could not be read is not that: it is `unread`.
+  const moduleState = async (orgId: string): Promise<'on' | 'off' | TokenResolution> => {
+    const { data, error } = await admin
+      .from('organization_modules')
+      .select('module_id')
+      .eq('organization_id', orgId)
+      .eq('module_id', 'public_requests')
+      .eq('enabled', true)
       .maybeSingle();
+    if (error) return unread('module state', error);
+    return data ? 'on' : 'off';
+  };
 
-    type LinkRow = {
-      id: string;
-      organization_id: string;
-      name: string;
-      instructions: string | null;
-      active: boolean;
-      expires_at: string | null;
-      available_from: string | null;
-      available_until: string | null;
-      availability_display: 'exact' | 'bucket' | 'none';
-      books_enabled: boolean;
-      items_enabled: boolean;
-      include_public_pool: boolean;
-      default_max_qty: number | null;
-    };
+  // Migration 0330: the DB stores sha256(token); hash the presented
+  // plaintext and compare on the hash column. Equality via the btree
+  // index is fine here — see sha256Hex()'s doc comment for why a
+  // timing-safe compare buys nothing on this path.
+  const tokenHash = sha256Hex(token);
+  const { data: linkRow, error: linkError } = await admin
+    .from('public_request_links')
+    .select(
+      'id, organization_id, name, instructions, active, expires_at, available_from, available_until, availability_display, books_enabled, items_enabled, include_public_pool, default_max_qty',
+    )
+    .eq('token_hash', tokenHash)
+    .maybeSingle();
+  if (linkError) return unread('link', linkError);
 
-    const orgSelect = 'id, name, logo_url, public_request_blurb';
-    type OrgRow = {
-      id: string;
-      name: string;
-      logo_url: string | null;
-      public_request_blurb: string | null;
-    };
+  type LinkRow = {
+    id: string;
+    organization_id: string;
+    name: string;
+    instructions: string | null;
+    active: boolean;
+    expires_at: string | null;
+    available_from: string | null;
+    available_until: string | null;
+    availability_display: 'exact' | 'bucket' | 'none';
+    books_enabled: boolean;
+    items_enabled: boolean;
+    include_public_pool: boolean;
+    default_max_qty: number | null;
+  };
 
-    if (linkRow) {
-      const l = linkRow as LinkRow;
-      const { data: orgRow } = await admin
-        .from('organizations')
-        .select(orgSelect)
-        .eq('id', l.organization_id)
-        .maybeSingle();
-      if (!orgRow || !(await moduleEnabled(l.organization_id))) return null;
-      return {
+  const orgSelect = 'id, name, logo_url, public_request_blurb';
+  type OrgRow = {
+    id: string;
+    name: string;
+    logo_url: string | null;
+    public_request_blurb: string | null;
+  };
+
+  if (linkRow) {
+    const l = linkRow as LinkRow;
+    const { data: orgRow, error: orgError } = await admin
+      .from('organizations')
+      .select(orgSelect)
+      .eq('id', l.organization_id)
+      .maybeSingle();
+    if (orgError) return unread('organization', orgError);
+    if (!orgRow) return { state: 'none', readAt };
+    const mod = await moduleState(l.organization_id);
+    if (typeof mod !== 'string') return mod;
+    if (mod === 'off') return { state: 'none', readAt };
+    return {
+      state: 'resolved',
+      readAt,
+      context: {
         org: orgRow as OrgRow,
         link: {
           id: l.id,
@@ -220,22 +315,31 @@ const resolvePublicRequestTokenCached = unstable_cache(
           includePublicPool: l.include_public_pool,
           defaultMaxQty: l.default_max_qty,
         },
-      };
-    }
+      },
+    };
+  }
 
-    // Legacy fallback — org token without a links row. Droppable once
-    // verified unused in prod (plan, locked decision 1).
-    const { data: orgByToken } = await admin
-      .from('organizations')
-      .select(orgSelect)
-      .eq('public_request_token_hash', tokenHash)
-      .maybeSingle();
-    const legacyOrg = orgByToken as OrgRow | null;
-    if (!legacyOrg || !(await moduleEnabled(legacyOrg.id))) return null;
-    return { org: legacyOrg, link: null };
-  },
-  ['public-link-by-token-v1'],
-  { revalidate: 60, tags: ['public-org-by-token'] },
+  // Legacy fallback — org token without a links row. Droppable once
+  // verified unused in prod (plan, locked decision 1).
+  const { data: orgByToken, error: orgByTokenError } = await admin
+    .from('organizations')
+    .select(orgSelect)
+    .eq('public_request_token_hash', tokenHash)
+    .maybeSingle();
+  if (orgByTokenError) return unread('organization', orgByTokenError);
+  const legacyOrg = orgByToken as OrgRow | null;
+  if (!legacyOrg) return { state: 'none', readAt };
+  const mod = await moduleState(legacyOrg.id);
+  if (typeof mod !== 'string') return mod;
+  if (mod === 'off') return { state: 'none', readAt };
+  return { state: 'resolved', readAt, context: { org: legacyOrg, link: null } };
+}
+
+// v2: the kept value is a TokenResolution (v1 kept the context or null).
+const resolvePublicRequestTokenCached = unstable_cache(
+  readPublicRequestToken,
+  ['public-link-by-token-v2'],
+  { revalidate: TOKEN_RESOLUTION_WINDOW_SECONDS, tags: ['public-org-by-token'] },
 );
 
 /** true when the link is enabled AND inside its expiry/date window. */

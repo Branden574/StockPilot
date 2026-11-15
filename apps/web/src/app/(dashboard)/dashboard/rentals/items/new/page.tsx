@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { forcedWarehouseId } from '@/lib/auth/warehouse';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { moduleAnswer } from '@/lib/modules/module-state';
 import { createClient } from '@/lib/supabase/server';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { CategoriesService } from '@/server/services/categories';
@@ -95,8 +96,10 @@ export default async function NewRentalItemPage() {
     supabase.from('size_scales').select('id, size_system'),
   ]);
 
-  const { enabled: lotSerialEnabled } = await checkModuleAccess('lot_serial');
-  const { enabled: sportsEnabled } = await checkModuleAccess('sports');
+  // moduleAnswer: a state that could not be read is this page's error state
+  // with Try again, never a form drawn as if the module were off.
+  const lotSerialEnabled = moduleAnswer(await checkModuleAccess('lot_serial'));
+  const sportsEnabled = moduleAnswer(await checkModuleAccess('sports'));
 
   const sizeScales: Record<string, Array<{ value: string; isHalf: boolean }>> = {};
   for (const row of sizeScaleValueRows.data ?? []) {

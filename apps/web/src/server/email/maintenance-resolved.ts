@@ -104,18 +104,30 @@ function firstNameOf(name: string | null): string | null {
  * `ServiceContext` (it runs fire-and-forget off `resolve()`, admin client
  * only), so it cannot call that ctx-shaped helper. An absent key or a
  * missing settings row both mean "never configured" and default ON, same
- * as every other reader of this setting.
+ * as every other reader of this setting. A read that returns an error is
+ * reported and answers OFF, same as maintenanceShareLinksEnabled: the email
+ * then carries the photo count and no link.
  */
 async function shareLinksEnabledForEmail(
   admin: SupabaseClient,
   organizationId: string,
+  requestId: string,
 ): Promise<boolean> {
-  const { data } = await admin
+  const { data, error } = await admin
     .from('organization_modules')
     .select('settings')
     .eq('organization_id', organizationId)
     .eq('module_id', 'maintenance_requests')
     .maybeSingle();
+  if (error) {
+    void reportError(new Error('Share-link setting read failed; the email carries no link'), {
+      tag: 'maintenance_resolved.email.share_links_setting_read',
+      level: 'warning',
+      organizationId,
+      extra: { requestId, code: error.code ?? null },
+    });
+    return false;
+  }
   const settings = (data as { settings?: unknown } | null)?.settings as
     { includeShareLinksInEmail?: boolean } | null | undefined;
   return settings?.includeShareLinksInEmail !== false;
@@ -240,7 +252,11 @@ export async function maybeSendMaintenanceResolvedEmail(
       // than re-deriving indices here — a locally re-filtered
       // "resolution-only" index would desync from what
       // /m/<token>/photo/<n> actually serves.
-      const shareEnabled = await shareLinksEnabledForEmail(admin, request.organization_id);
+      const shareEnabled = await shareLinksEnabledForEmail(
+        admin,
+        request.organization_id,
+        requestId,
+      );
       const proof = shareEnabled
         ? await listResolutionProofProxyPhotos(
             admin,
@@ -267,7 +283,8 @@ export async function maybeSendMaintenanceResolvedEmail(
         }));
       } else {
         // No usable link (none minted, revoked, expired, or the org has
-        // share links off) — photos may still exist, so count them
+        // share links off or its setting could not be read) — photos may
+        // still exist, so count them
         // directly: the renderer's honest fallback line still needs the
         // real total.
         proofPhotoTotal = await countResolutionPhotos(admin, request.organization_id, requestId);

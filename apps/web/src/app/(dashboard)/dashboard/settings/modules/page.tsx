@@ -3,7 +3,9 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
+import { TryAgainButton } from '@/components/dashboard/try-again-button';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { StatePanel } from '@/components/patterns/state-panel';
 import { ModuleToggles } from '@/components/settings/module-toggles';
 import { SettingsPage } from '@/components/settings/settings-nav';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -30,7 +32,7 @@ export default async function ModulesSettingsPage() {
   // page rendered fine through one before it read the flag at all. Unreadable
   // means "not comped", which is also the safe reading. Both reads in parallel:
   // the row is request-cached on a hard load, but not on a soft navigation.
-  const [{ data: rows }, comped] = await Promise.all([
+  const [{ data: rows, error: rowsError }, comped] = await Promise.all([
     supabase
       .from('organization_modules')
       .select('module_id, enabled')
@@ -43,7 +45,38 @@ export default async function ModulesSettingsPage() {
       }),
   ]);
 
-  const enabledIds: ModuleId[] = ((rows ?? []) as Array<{ module_id: string; enabled: boolean }>)
+  // The switches show what the rows say, and a switch that reads "off" is one
+  // press from being written. supabase-js resolves a failed read as `{ data:
+  // null, error }`, the shape of an organization with no rows, so the read's
+  // outcome is checked: rows that could not be read (an error, or an answer
+  // that is not a list) draw no switches. The page says so and offers Try
+  // again.
+  if (rowsError || !Array.isArray(rows)) {
+    console.error(
+      '[settings/modules] module rows unreadable:',
+      (rowsError as { code?: string } | null)?.code || 'not a list of rows',
+    );
+    return (
+      <SettingsPage>
+        <PageHeader
+          title="Modules"
+          subline="Turn features on or off for your whole organization. Core modules are always on."
+          back={
+            <PageHeaderBackLink href="/dashboard/settings">← Back to settings</PageHeaderBackLink>
+          }
+        />
+        <StatePanel
+          kind="failed"
+          headingLevel={2}
+          title="We couldn't load your modules"
+          description="Nothing was changed. This is usually temporary. Try again in a moment."
+          action={<TryAgainButton />}
+        />
+      </SettingsPage>
+    );
+  }
+
+  const enabledIds: ModuleId[] = (rows as Array<{ module_id: string; enabled: boolean }>)
     .filter((r) => r.enabled)
     .map((r) => r.module_id as ModuleId);
 
