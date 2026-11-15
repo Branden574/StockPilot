@@ -117,15 +117,22 @@ export function actionErrorResult(
   return unexpectedActionError(e, tag, opts);
 }
 
-/** A check of the caller's access that could not be read: each has one fixed sentence. */
-function isUncheckedAccess(
-  e: unknown,
-): e is PermissionsUnavailableError | AccountStatusUnavailableError | ModulesUnavailableError {
-  return (
+/**
+ * A check of the caller's access that could not be read: each class has one
+ * fixed sentence, which is returned; null for any other error. The words are
+ * read only right after the `instanceof` test, in this function, so
+ * app/api/no-raw-error-text.guard.test.ts sees on the syntax tree that they
+ * are words the app wrote (a type-guard helper would hide that from it).
+ */
+function uncheckedAccessSentence(e: unknown): string | null {
+  if (
     e instanceof PermissionsUnavailableError ||
     e instanceof AccountStatusUnavailableError ||
     e instanceof ModulesUnavailableError
-  );
+  ) {
+    return e.message;
+  }
+  return null;
 }
 
 /**
@@ -158,9 +165,10 @@ export function uncheckedAccessMessage(
   tag: string,
   opts: Pick<ActionErrorOptions, 'organizationId' | 'extra'> = {},
 ): string | null {
-  if (!isUncheckedAccess(e)) return null;
+  const sentence = uncheckedAccessSentence(e);
+  if (sentence === null) return null;
   void reportError(e, reportContext(tag, { ...opts, level: 'warning' }));
-  return e.message;
+  return sentence;
 }
 
 /**
@@ -221,10 +229,11 @@ export class RowFailures {
     // A check of the caller's access that could not be read (a module state,
     // the permission set, the account status): its own sentence, counted with
     // the unreadable-access rows and reported once for the run as a warning.
-    if (isUncheckedAccess(e)) {
+    const sentence = uncheckedAccessSentence(e);
+    if (sentence !== null) {
       this.unreadable += 1;
       if (this.unreadable === 1) this.firstUnreadable = e;
-      return e.message;
+      return sentence;
     }
     this.unexpected += 1;
     if (this.unexpected === 1) this.first = e;
