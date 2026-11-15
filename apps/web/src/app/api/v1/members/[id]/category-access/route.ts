@@ -60,9 +60,9 @@ const bodySchema = z
  *       anything is read, and the phone answers the 401 by asking for the
  *       code;
  *   403 `forbidden`, with the service's words: `details.reason` mfa_required
- *       when the organization requires an authenticator the caller has not
- *       set up (aal2_required only when the organization's rule could not be
- *       read, which is held to the strictest);
+ *       for a caller with no authenticator when the organization requires
+ *       one, or when its rule could not be read and is held to the strictest
+ *       (a session at aal2 with an authenticator still passes);
  *   404 `not_found`: no such member, or no such category, in the caller's
  *       organization;
  *   409 `conflict`: the grant changed meanwhile; reload and try again;

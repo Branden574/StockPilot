@@ -614,19 +614,33 @@ describe('an unreadable MFA policy denies, it does not default to optional', () 
   it('fails CLOSED when the policy read errors, on the cookie path', async () => {
     world.memberships = [{ organization_id: ORG_A, role: 'staff' }];
     world.orgReadError = { code: '57014', message: 'canceling statement due to statement timeout' };
+    world.aal = 'aal1';
     const ctx = await legacyOnly(cookie());
     expect(ctx).not.toBeNull();
     expect(ctx?.mfaRequired).toBe(true);
     expect(ctx?.mfaSatisfied).toBe(false);
   });
 
-  it('fails CLOSED on the bearer path too, even with an aal2 token', async () => {
+  it('fails CLOSED on the bearer path too', async () => {
     world.memberships = [{ organization_id: ORG_A, role: 'admin' }];
     world.orgReadError = { code: '500', message: 'bad gateway' };
-    world.aal = 'aal2';
+    world.aal = 'aal1';
     const ctx = await legacyOnly(bearer());
     expect(ctx?.mfaRequired).toBe(true);
     expect(ctx?.mfaSatisfied).toBe(false);
+  });
+
+  it('holds a policy read that errors to the strictest policy, like a hidden row: an AAL2 session with an authenticator passes', async () => {
+    world.memberships = [{ organization_id: ORG_A, role: 'admin' }];
+    world.orgReadError = { code: '57014', message: 'canceling statement due to statement timeout' };
+    world.verifiedFactor = true;
+    world.aal = 'aal2';
+    for (const req of [cookie(), bearer()]) {
+      const ctx = await legacyOnly(req);
+      expect(ctx?.mfaRequired).toBe(true);
+      expect(ctx?.mfaSatisfied).toBe(true);
+      expect(ctx?.mfaEnrolled).toBe(true);
+    }
   });
 
   it('holds a HIDDEN row to the strictest policy, never optional', async () => {

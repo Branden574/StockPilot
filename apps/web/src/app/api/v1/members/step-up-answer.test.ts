@@ -170,10 +170,11 @@ describe.each(ROUTES)('$name: its Answers list', (route) => {
 
     expect(line403).toMatch(/mfa_required/);
     expect(line403).not.toMatch(/aal2_required or mfa_required when the authenticator rule refused/);
-    // aal2_required is named only with the one case that can still give it.
-    if (line403.includes('aal2_required')) {
-      expect(line403).toMatch(/aal2_required[^;]*could not be read/);
-    }
+    // No session gets aal2_required on these routes: one that owes its code is
+    // the 401 above, and an organization rule that could not be read is held
+    // to the strictest, which lets a session at aal2 with an authenticator
+    // through (lib/auth/api-context.policy-unreadable.test.ts).
+    expect(line403).not.toMatch(/aal2_required/);
   });
 });
 
