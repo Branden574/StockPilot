@@ -311,6 +311,7 @@ export class TeamService {
     // thrown while the message is built or sent counts as an unsent email
     // too, so the invitation below is recorded on every path.
     let sent: Awaited<ReturnType<typeof sendEmail>>;
+    let thrown: unknown;
     try {
       const message = renderTeamInviteEmail({
         email: normalizedEmail,
@@ -331,7 +332,10 @@ export class TeamService {
         from: message.from,
       });
     } catch (e) {
-      sent = { ok: false, error: e instanceof Error ? e.message : 'unknown' };
+      // The thrown error goes to the report below as it is; the result keeps
+      // a fixed sentence.
+      thrown = e;
+      sent = { ok: false, error: 'The invitation email could not be built or sent.' };
     }
     // The invite row exists whether or not the email went out (its link can
     // be copied from Pending invites), so it is recorded either way.
@@ -357,7 +361,7 @@ export class TeamService {
       this.ctx,
     );
     if (!sent.ok) {
-      void reportError(new Error(String(sent.error)), {
+      void reportError(thrown ?? new Error(String(sent.error)), {
         tag: 'team.invite.email',
         organizationId: this.ctx.organizationId,
       });
