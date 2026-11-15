@@ -155,6 +155,45 @@ describe('PlanningService.readParams', () => {
   });
 });
 
+/**
+ * The planning settings panel is seeded from this read and saves all three
+ * values, so the page has to tell a failed read (show no form) from no row
+ * (never configured: the defaults).
+ */
+describe('PlanningService.readParamsWithStatus', () => {
+  function svcFor(result: { data: unknown; error: { message: string; code?: string } | null }) {
+    const stub = makeSupabaseStub({ 'organization_modules.select': result });
+    return new PlanningService(makeServiceContext(stub.client, { enabledModules: withPlanning() }));
+  }
+
+  it('says the read failed, with its code, and still hands back the defaults', async () => {
+    const svc = svcFor({ data: null, error: { message: 'connection reset', code: '08006' } });
+    await expect(svc.readParamsWithStatus()).resolves.toEqual({
+      params: DEFAULT_PLANNING_PARAMS,
+      readError: { code: '08006' },
+    });
+  });
+
+  it('treats no row as never configured: the defaults and no read error', async () => {
+    const svc = svcFor({ data: null, error: null });
+    await expect(svc.readParamsWithStatus()).resolves.toEqual({
+      params: DEFAULT_PLANNING_PARAMS,
+      readError: null,
+    });
+  });
+
+  it('hands back a stored row’s values and no read error', async () => {
+    const svc = svcFor({
+      data: { settings: { leadTimeDays: 21, safetyMultiplier: 2, velocityWindowDays: 60 } },
+      error: null,
+    });
+    await expect(svc.readParamsWithStatus()).resolves.toEqual({
+      params: { leadTimeDays: 21, safetyMultiplier: 2, velocityWindowDays: 60 },
+      readError: null,
+    });
+  });
+});
+
 describe('PlanningService.getReorderSuggestions', () => {
   it('composes suggestions from forecasting and sorts by urgency (lowest cover first)', async () => {
     const created = '2020-01-01T00:00:00.000Z';
