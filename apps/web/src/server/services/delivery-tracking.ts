@@ -1,6 +1,12 @@
 import 'server-only';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { assertModuleEnabled, ServiceError, withContext, type ServiceContext } from './context';
+import {
+  assertModuleEnabled,
+  mfaGateError,
+  ServiceError,
+  withContext,
+  type ServiceContext,
+} from './context';
 import { addressToLine, geocodeAddress } from './geocode';
 import { haversineMiles, isStale } from '@stockpilot/core';
 
@@ -22,6 +28,9 @@ export class DeliveryTrackingService {
   /** DRIVER: record the assigned driver's latest point for an in-transit delivery. */
   async shareLocation(orderId: string, p: DriverPoint): Promise<void> {
     assertModuleEnabled(this.ctx, 'live_tracking');
+    // The authenticator answer first (mfaGateError, as assertPermission gives
+    // it), as every other order step gives it to the same driver.
+    if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) throw mfaGateError(this.ctx);
     const { data: order, error } = await this.ctx.supabase
       .from('order_requests')
       .select('id, organization_id, fulfillment_type, status, assigned_delivery_user_id')

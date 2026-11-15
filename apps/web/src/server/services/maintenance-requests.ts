@@ -26,7 +26,13 @@ import { formatOrgDateTime } from '@/lib/timezone';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
-import { assertModuleEnabled, assertPermission, ServiceError, type ServiceContext } from './context';
+import {
+  assertModuleEnabled,
+  assertPermission,
+  mfaGateError,
+  ServiceError,
+  type ServiceContext,
+} from './context';
 import { keepAlive } from './lib/defer';
 import { maintenanceShareLinksEnabled, MaintenanceShareLinksService } from './maintenance-share-links';
 import { notifyMaintenanceEvent } from './maintenance-notify';
@@ -561,6 +567,9 @@ export class MaintenanceRequestsService {
 
   async update(id: string, patch: unknown): Promise<void> {
     assertModuleEnabled(this.ctx, 'maintenance_requests');
+    // The authenticator answer first (mfaGateError, as assertPermission gives
+    // it), for the requester and for a manager alike.
+    if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) throw mfaGateError(this.ctx);
     const detail = await this.get(id);
     const isManager = can(this.ctx, 'maintenance_requests:manage');
     const isRequester = detail.requesterUserId === this.ctx.userId;
@@ -712,6 +721,8 @@ export class MaintenanceRequestsService {
    *  discipline as archive(): status + cancelled_at in one write. */
   async cancel(id: string): Promise<void> {
     assertModuleEnabled(this.ctx, 'maintenance_requests');
+    // The authenticator answer first, as in update().
+    if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) throw mfaGateError(this.ctx);
     const detail = await this.get(id);
     const isManager = can(this.ctx, 'maintenance_requests:manage');
     if (!isManager && detail.requesterUserId !== this.ctx.userId) {
@@ -1082,6 +1093,8 @@ export class MaintenanceRequestsService {
    *  a re-open. */
   async recordDraftOpened(id: string): Promise<{ openCount: number }> {
     assertModuleEnabled(this.ctx, 'maintenance_requests');
+    // The authenticator answer first, as in update().
+    if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) throw mfaGateError(this.ctx);
     const detail = await this.get(id);
 
     // C1: get() only decided whether this caller may VIEW the row (owner OR

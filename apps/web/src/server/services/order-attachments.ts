@@ -7,7 +7,7 @@ import { isManagerOrAbove } from '@stockpilot/core';
 import { isValidStoragePath, orderAttachmentPathShape } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
 
-import { ServiceError, withContext, type ServiceContext } from './context';
+import { mfaGateError, ServiceError, withContext, type ServiceContext } from './context';
 import { withStorageSignSlot } from './lib/storage-sign-limiter';
 import { verifyStoredDocumentOrDelete } from './upload-verification';
 
@@ -184,6 +184,8 @@ export class OrderAttachmentsService {
     sizeBytes: number | null;
     kind: OrderAttachmentKind;
   }): Promise<{ id: string }> {
+    // The authenticator answer first (mfaGateError, as assertPermission gives it).
+    if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) throw mfaGateError(this.ctx);
     if (!isManagerOrAbove(this.ctx.role)) {
       throw new ServiceError('forbidden', 'Only managers and up can add order attachments.');
     }
@@ -255,6 +257,8 @@ export class OrderAttachmentsService {
   }
 
   async remove(attachmentId: string): Promise<void> {
+    // The authenticator answer first, as in add().
+    if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) throw mfaGateError(this.ctx);
     if (!isManagerOrAbove(this.ctx.role)) {
       throw new ServiceError('forbidden', 'Only managers and up can delete order attachments.');
     }

@@ -31,7 +31,26 @@ const state = vi.hoisted(() => ({
   authAs: [] as string[],
   /** Take requireOrgContext()'s own code gate out, leaving the action's decision alone. */
   codeGateOut: true,
+  /**
+   * Take the context's authenticator answer (mfaRequired without mfaSatisfied)
+   * out, so the first block shows the action's own factor-list decision.
+   */
+  contextGateOut: true,
 }));
+// The action gives the context's authenticator answer before any of its own
+// checks. The first block takes that answer out by reporting the context as
+// not requiring the code; the block "the context's authenticator answer"
+// puts it back.
+vi.mock('@/server/services/context', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/server/services/context')>();
+  return {
+    ...real,
+    withContext: async () => {
+      const ctx = await real.withContext();
+      return state.contextGateOut ? { ...ctx, mfaRequired: false } : ctx;
+    },
+  };
+});
 // requireOrgContext() now sends an owner who owes an authenticator code to
 // /signin/mfa before withContext() returns (docket S43c, lib/auth/
 // step-up-gate). The first block takes that gate out, so it still shows the
@@ -233,6 +252,7 @@ function rest(url: URL, subject: string | null): Response {
 
 beforeEach(() => {
   state.codeGateOut = true;
+  state.contextGateOut = true;
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date('2026-11-02T03:00:00.000Z'));
   authCalls = [];
@@ -408,6 +428,62 @@ describe("transferOwnershipAction: the step-up is decided from the owner's own f
     const { thrown } = await run();
     expect(thrown).toBe('REDIRECT:/signin');
     expect(state.adminRpc).toEqual([]);
+  });
+});
+
+describe("transferOwnershipAction gives the context's authenticator answer first", () => {
+  beforeEach(() => {
+    state.contextGateOut = false;
+  });
+
+  it.each([
+    [
+      "beside an insider's refresh token, crossing after the identity reads",
+      INSIDER_REFRESH,
+      CROSSES_AFTER_THE_IDENTITY_READS,
+    ],
+    [
+      "beside an insider's refresh token, crossing before requireSession()",
+      INSIDER_REFRESH,
+      CROSSES_BEFORE_REQUIRE_SESSION,
+    ],
+    ['with no refresh during the action', INSIDER_REFRESH, NEVER],
+  ] as const)(
+    "an enrolled owner's password alone, %s: the authenticator answer, and nothing is transferred",
+    async (_name, refreshToken, crossesInMs) => {
+      await ownerCookie('aal1', refreshToken, crossesInMs);
+      await insiderSession();
+      const { result, thrown } = await run();
+      expect(thrown).toBeUndefined();
+      expect(result).toEqual({
+        ok: false,
+        error: {
+          code: 'forbidden',
+          message: 'Re-authenticate with MFA before performing this action.',
+          details: { reason: 'aal2_required' },
+        },
+      });
+      expect(state.adminRpc).toEqual([]);
+      // Only withContext()'s identity read: the action stops before requireSession().
+      expect(restSubjects).toEqual([OWNER]);
+    },
+  );
+
+  it("control: the owner's own aal2 session refreshing at the same moment transfers ownership", async () => {
+    await ownerCookie('aal2', OWNER_REFRESH, CROSSES_AFTER_THE_IDENTITY_READS);
+    await ownerOwnRefresh('aal2');
+    const { result } = await run();
+    expect(result).toEqual({ ok: true, data: { newOwnerUserId: INSIDER } });
+    expect(state.adminRpc).toHaveLength(1);
+  });
+
+  it('control: an owner with no authenticator transfers with the password alone', async () => {
+    server.unenrolledUsers.add(OWNER);
+    await ownerCookie('aal1', OWNER_REFRESH, CROSSES_AFTER_THE_IDENTITY_READS);
+    await ownerOwnRefresh('aal1', false);
+    const { result } = await run();
+    expect(result).toEqual({ ok: true, data: { newOwnerUserId: INSIDER } });
+    expect(state.adminRpc).toHaveLength(1);
   });
 });
 

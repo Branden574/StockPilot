@@ -189,3 +189,52 @@ describe('stageOrder NULL-picked guard is scoped to lines that predate the pick'
     expect(argsFor(stub, 'order_request_lines.select', 'lte')).toHaveLength(0);
   });
 });
+
+describe('markInTransit gives the authenticator answer first', () => {
+  function svcWith(stub: ReturnType<typeof makeSupabaseStub>, mfaSatisfied: boolean) {
+    return new (OrderRequestsService as unknown as new (ctx: unknown) => OrderRequestsService)(
+      makeServiceContext(stub.client, {
+        role: 'manager',
+        userId: 'mgr-1',
+        enabledModules: new Set<ModuleId>(['orders']),
+        mfaRequired: true,
+        mfaSatisfied,
+      }),
+    );
+  }
+  const staged = () =>
+    makeSupabaseStub({
+      'order_requests.select.maybeSingle': {
+        data: {
+          warehouse_id: 'wh-1',
+          status: 'staged_for_delivery',
+          fulfillment_type: 'delivery',
+          assigned_delivery_user_id: 'mgr-1',
+        },
+        error: null,
+      },
+      'rpc:mark_order_in_transit': {
+        data: { id: 'ord-1', status: 'in_transit', order_number: 7 },
+        error: null,
+      },
+    });
+
+  it('required and not satisfied: mfa_required, nothing read or called', async () => {
+    const stub = staged();
+    await expect(svcWith(stub, false).markInTransit('ord-1')).rejects.toMatchObject({
+      code: 'forbidden',
+      details: { reason: 'mfa_required' },
+    });
+    expect(stub.fromCalls).toEqual([]);
+    expect(stub.rpcCalls).toEqual([]);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('required and satisfied: the order is marked in transit', async () => {
+    const stub = staged();
+    await expect(svcWith(stub, true).markInTransit('ord-1')).resolves.toMatchObject({
+      status: 'in_transit',
+    });
+    expect(stub.rpcCalls).toEqual([{ name: 'mark_order_in_transit', args: { p_id: 'ord-1' } }]);
+  });
+});

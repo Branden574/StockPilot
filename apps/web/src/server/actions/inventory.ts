@@ -18,7 +18,7 @@ import { InventoryService } from '@/server/services/inventory';
 import { LocationsService } from '@/server/services/locations';
 import { ProductGroupsService } from '@/server/services/product-groups';
 import { MAX_BULK_TAGS } from '@/server/services/tags';
-import { ServiceError, withContext } from '@/server/services/context';
+import { mfaGateError, ServiceError, withContext } from '@/server/services/context';
 
 import {
   adjustStockSchema,
@@ -1337,6 +1337,9 @@ export async function bulkPlaceStockAction(
 
   try {
     const ctx = await withContext();
+    // The authenticator answer once for the whole batch (mfaGateError, as
+    // assertPermission gives it), before a destination is read or minted.
+    if (ctx.mfaRequired && !ctx.mfaSatisfied) throw mfaGateError(ctx);
 
     // Resolve + org-verify the destination ONCE — same tenant-isolation guards
     // as placeStockAction (destination location/warehouse must be in the

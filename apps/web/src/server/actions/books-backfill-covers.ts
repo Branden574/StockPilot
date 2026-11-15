@@ -24,6 +24,9 @@ interface BackfillResult {
  * archive.org redirects in their custom_fields.thumbnail_url. Future
  * imports already rehost as part of execute() so this is idempotent
  * and safe to re-run any time.
+ *
+ * BooksImportService.backfillCovers asks for items:create first (with the
+ * authenticator answer before it).
  */
 export async function backfillBookCoversAction(): Promise<ActionResult<BackfillResult>> {
   try {

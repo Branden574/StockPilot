@@ -181,6 +181,79 @@ export interface CallGraph {
   hasExport(file: string, name: string): boolean;
   /** What reaches any of `targets` (each `<absolute file>#<name>`, a top-level function). */
   reach(targets: readonly string[], options?: ReachOptions): Reach;
+  /** Which functions write, and whether a gate answers before their first write (see WRITES below). */
+  writeGate(options: WriteGateOptions): WriteGate;
+}
+
+/*
+ * WRITES AND THE GATE IN FRONT OF THEM. writeGate() reads, for one function,
+ * whether it writes and whether a gate answers on every path before its first
+ * write. Unlike reach(), it follows instance methods: `this.m()`,
+ * `this.field.m()`, `new Service(ctx).m()`, `(await Service.forX()).m()`, and
+ * `svc.m()` where `svc` is a parameter or a local whose type annotation names
+ * a class, or whose initializer is one of those shapes, or a call of a
+ * function (or static method) that is annotated to return the class or
+ * returns `new Class(...)`. A method the class does not declare is looked up
+ * on the class it extends.
+ *
+ * A WRITE is, on the syntax tree:
+ *   - `.insert(`, `.update(`, `.upsert(`, `.delete(` on a chain that starts
+ *     with a `.from(...)` call (the query builder), or on a local whose
+ *     initializer is such a chain;
+ *   - `.upload(`, `.remove(`, `.move(`, `.copy(` on a chain through `.storage`;
+ *   - `.rpc(name, ...)`, unless `name` is a string listed in `readRpcs`;
+ *   - any method under `.auth.admin` whose name does not start with get or list;
+ *   - a call of a function (or method) that writes and does not itself answer
+ *     a gate before its first write, and a function written in place (a
+ *     callback) that does so: a callback is taken to run.
+ * Functions named in `notWrites` are read as writing nothing.
+ *
+ * A GATE is a call of one of `gates`, or of a function that answers a gate on
+ * every path that returns normally (it throws when the gate refuses), or the
+ * statement `if (<x>.mfaRequired && !<x>.mfaSatisfied) <leave>` whose branch
+ * always leaves (throws or returns). It counts only where it is UNCONDITIONAL:
+ * a statement of the function on its way, not inside an `if` branch, a loop,
+ * a `switch`, a conditional or logical expression, an optional call or a
+ * callback, unless both branches of the `if` gate (or one gates and the other
+ * always leaves). A `try` whose block gates gates what follows only when its
+ * catch always leaves. A gate that is seen before the first write but is not
+ * unconditional is reported by name (`conditionalGates`).
+ *
+ * WHAT IT IS NOT. A reading, not a proof: a write through a function held in a
+ * variable or an object, a receiver whose class this reading cannot name, or a
+ * client handed through an untyped value is not seen. A catch that writes is
+ * read as writing before the gate (it may run after the gate refused).
+ */
+
+export interface WriteGateOptions {
+  /** Functions (each `<absolute file>#<name>`) whose call is a gate. */
+  gates: readonly string[];
+  /** RPC names that only read. */
+  readRpcs: ReadonlySet<string>;
+  /** Functions (each `<absolute file>#<name>`) read as writing nothing. */
+  notWrites?: readonly string[];
+}
+
+export interface WriteVerdict {
+  /** Does it write at all (anywhere, gated or not)? */
+  writes: boolean;
+  /** The first write, in its own body, that no gate answers before. Null when every write is behind one. */
+  openWrite: { line: number; text: string } | null;
+  /** Gates met before that write that are not unconditional. */
+  conditionalGates: Array<{ line: number; text: string }>;
+  /** Is it a gate itself: every path that returns normally has passed one? */
+  isGate: boolean;
+  /** How that write is reached: each step as `<src-relative file>:<line> <text>`, down to the write itself. */
+  writeChain: string[];
+}
+
+export interface WriteGate {
+  /** The function exported from `file` as `name`. Null when it is not one readable function. */
+  exportVerdict(file: string, name: string): WriteVerdict | null;
+  /** The method `method` of the class `className` declared in `file`. Null when there is none. */
+  methodVerdict(file: string, className: string, method: string): WriteVerdict | null;
+  /** The methods other modules can call: of every exported class, neither private, protected nor `#`. */
+  publicMethods(file: string): Array<{ className: string; method: string; isStatic: boolean }>;
 }
 
 type FunctionNode =
@@ -214,6 +287,10 @@ interface ModuleInfo {
   typeNames: Set<string>;
   reexports: Array<{ module: string; names: Map<string, string> | null }>;
   imports: Map<string, Binding>;
+  /** Every top-level class declaration, by name (read by writeGate() only). */
+  classDecls: Map<string, ts.ClassDeclaration>;
+  /** Type-only imports (`import type { X }`), for reading a type annotation's class. */
+  typeImports: Map<string, Binding>;
 }
 
 type Target =
@@ -374,6 +451,26 @@ function startsACall(node: ts.Node): boolean {
   return ts.forEachChild(node, (c) => startsACall(c) || undefined) ?? false;
 }
 
+/**
+ * Each file's syntax tree, kept while its text is unchanged: a guard that
+ * reads the tree again with one file changed (a mutation table) parses only
+ * that file again. A tree is never changed by the reading.
+ */
+const parsedFiles = new Map<string, { text: string; sf: ts.SourceFile }>();
+function parseOnce(file: ReachFile): ts.SourceFile {
+  const held = parsedFiles.get(file.path);
+  if (held && held.text === file.text) return held.sf;
+  const sf = ts.createSourceFile(
+    file.path,
+    file.text,
+    ts.ScriptTarget.Latest,
+    true,
+    file.path.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  parsedFiles.set(file.path, { text: file.text, sf });
+  return sf;
+}
+
 /** Parse `files` once; `reach()` then answers for any set of targets. */
 export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
   const byPath = new Map(files.map((f) => [f.path, f]));
@@ -399,13 +496,7 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
 
   const modules = new Map<string, ModuleInfo>();
   for (const file of files) {
-    const sf = ts.createSourceFile(
-      file.path,
-      file.text,
-      ts.ScriptTarget.Latest,
-      true,
-      file.path.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-    );
+    const sf = parseOnce(file);
     const directives = prologue(sf.statements);
     const info: ModuleInfo = {
       file: file.path,
@@ -421,6 +512,8 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
       typeNames: new Set(),
       reexports: [],
       imports: new Map(),
+      classDecls: new Map(),
+      typeImports: new Map(),
     };
     const addLocal = (name: string, bodies: FunctionNode[], wrappers: ts.Expression[] = []) => {
       if (bodies.length) {
@@ -432,6 +525,18 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
       const isDefault = hasModifier(st, ts.SyntaxKind.DefaultKeyword);
       if (ts.isImportDeclaration(st) && ts.isStringLiteral(st.moduleSpecifier)) {
         const clause = st.importClause;
+        if (clause && clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+          const typeModule = resolveSpec(file.path, st.moduleSpecifier.text);
+          for (const el of clause.namedBindings.elements) {
+            if (typeModule && (clause.isTypeOnly || el.isTypeOnly)) {
+              info.typeImports.set(el.name.text, {
+                kind: 'named',
+                module: typeModule,
+                name: (el.propertyName ?? el.name).text,
+              });
+            }
+          }
+        }
         if (!clause || clause.isTypeOnly) continue;
         if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
           for (const el of clause.namedBindings.elements) {
@@ -509,6 +614,7 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
       } else if (ts.isClassDeclaration(st) && st.name) {
         const cls = st.name.text;
         info.classes.add(cls);
+        info.classDecls.set(cls, st);
         info.declared.add(cls);
         if (exported) info.exportsLocal.set(isDefault ? 'default' : cls, cls);
         for (const member of st.members) {
@@ -1190,7 +1296,860 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
     };
   }
 
+  /* ───────────────────────────── writes and the gate ───────────────────────────── */
+
+  const writeGates = new Map<string, WriteGate>();
+  function writeGate(options: WriteGateOptions): WriteGate {
+    const memoKey = [
+      [...options.gates].sort().join('|'),
+      [...options.readRpcs].sort().join('|'),
+      [...(options.notWrites ?? [])].sort().join('|'),
+    ].join(':');
+    let answer = writeGates.get(memoKey);
+    if (!answer) {
+      answer = computeWriteGate(options);
+      writeGates.set(memoKey, answer);
+    }
+    return answer;
+  }
+
+  function computeWriteGate(options: WriteGateOptions): WriteGate {
+    const gateKeys = new Set(options.gates);
+    const quietKeys = new Set(options.notWrites ?? []);
+    const TABLE_WRITES = new Set(['insert', 'update', 'upsert', 'delete']);
+    const STORAGE_WRITES = new Set(['upload', 'remove', 'move', 'copy']);
+    // `.from(` of these is no query builder.
+    const BUILTIN_FROM = new Set([
+      'Array',
+      'Object',
+      'Buffer',
+      'Uint8Array',
+      'Set',
+      'Map',
+      'Promise',
+      'String',
+    ]);
+
+    interface ClassRef {
+      info: ModuleInfo;
+      decl: ts.ClassDeclaration;
+    }
+    /** A function read here: its node, and the key it has when it is a module-level function or a static method. */
+    interface Fn {
+      node: FunctionNode;
+      key: string | null;
+    }
+    /** A function to read, or a call of one of `gates` (and whether that gate is async). */
+    type CallTarget = Fn | { gate: true; async: boolean };
+    interface Verdict {
+      writes: boolean;
+      openWrite: ts.Node | null;
+      conditional: ts.Node[];
+      isGate: boolean;
+    }
+    interface Flow {
+      write: ts.Node | null;
+      /** Every path that falls through has passed this gate. */
+      gate: ts.Node | null;
+      /** No path falls through. */
+      ends: boolean;
+      /** Some path returns normally before any gate. */
+      returnsOpen: boolean;
+    }
+    interface Event {
+      write?: ts.Node;
+      gate?: ts.Node;
+    }
+    const OPEN: Flow = { write: null, gate: null, ends: false, returnsOpen: false };
+
+    const infoOf = (node: ts.Node) => modules.get(node.getSourceFile().fileName);
+
+    function classOfTarget(t: Target | null): ClassRef | null {
+      if (t?.kind !== 'class') return null;
+      const info = modules.get(t.module);
+      const decl = info?.classDecls.get(t.name);
+      return info && decl ? { info, decl } : null;
+    }
+
+    function classByName(info: ModuleInfo, name: string): ClassRef | null {
+      const own = classOfTarget(resolveLocal(info, name));
+      if (own) return own;
+      const typeBinding = info.typeImports.get(name);
+      if (typeBinding?.kind === 'named') {
+        return classOfTarget(resolveExport(typeBinding.module, typeBinding.name));
+      }
+      return null;
+    }
+
+    function classOfType(
+      info: ModuleInfo,
+      type: ts.TypeNode | undefined,
+      depth = 0,
+    ): ClassRef | null {
+      if (!type || depth > 4) return null;
+      if (ts.isParenthesizedTypeNode(type)) return classOfType(info, type.type, depth + 1);
+      if (ts.isUnionTypeNode(type)) {
+        for (const member of type.types) {
+          const found = classOfType(info, member, depth + 1);
+          if (found) return found;
+        }
+        return null;
+      }
+      if (!ts.isTypeReferenceNode(type) || !ts.isIdentifier(type.typeName)) return null;
+      const name = type.typeName.text;
+      if (name === 'Promise' || name === 'Awaited') {
+        return classOfType(info, type.typeArguments?.[0], depth + 1);
+      }
+      return classByName(info, name);
+    }
+
+    function enclosingClass(node: ts.Node): ClassRef | null {
+      for (let n: ts.Node | undefined = node.parent; n; n = n.parent) {
+        if (ts.isClassDeclaration(n)) {
+          const info = infoOf(n);
+          return info ? { info, decl: n } : null;
+        }
+        // `this` inside a function written with `function` is not the class's.
+        if (ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n)) return null;
+      }
+      return null;
+    }
+
+    function baseClass(cls: ClassRef): ClassRef | null {
+      for (const clause of cls.decl.heritageClauses ?? []) {
+        if (clause.token !== ts.SyntaxKind.ExtendsKeyword) continue;
+        const base = clause.types[0]?.expression;
+        if (base && ts.isIdentifier(base)) return classByName(cls.info, base.text);
+      }
+      return null;
+    }
+
+    function memberName(member: ts.ClassElement): string | null {
+      return member.name && ts.isIdentifier(member.name) ? member.name.text : null;
+    }
+
+    /** The method (or function-valued field) `name` of a class, or of the class it extends. */
+    function findMethod(cls: ClassRef | null, name: string, depth = 0): FunctionNode | null {
+      if (!cls || depth > 5) return null;
+      for (const member of cls.decl.members) {
+        if (memberName(member) !== name) continue;
+        if (ts.isMethodDeclaration(member) && member.body) return member;
+        if (ts.isPropertyDeclaration(member) && member.initializer) {
+          const init = unwrap(member.initializer);
+          if (isFunctionNode(init)) return init;
+        }
+      }
+      return findMethod(baseClass(cls), name, depth + 1);
+    }
+
+    /** The class a field of `cls` holds: by its annotation or a `new` initializer, a constructor parameter property included. */
+    function fieldClass(cls: ClassRef | null, name: string, depth = 0): ClassRef | null {
+      if (!cls || depth > 5) return null;
+      for (const member of cls.decl.members) {
+        if (ts.isPropertyDeclaration(member) && memberName(member) === name) {
+          const byType = classOfType(cls.info, member.type);
+          if (byType) return byType;
+          const init = member.initializer && unwrap(member.initializer);
+          if (init && ts.isNewExpression(init)) {
+            return classOfTarget(resolveExpression(cls.info, init.expression));
+          }
+        }
+        if (ts.isConstructorDeclaration(member)) {
+          for (const p of member.parameters) {
+            if (ts.isIdentifier(p.name) && p.name.text === name && ts.canHaveModifiers(p)) {
+              if ((ts.getModifiers(p) ?? []).length > 0) return classOfType(cls.info, p.type);
+            }
+          }
+        }
+      }
+      return fieldClass(baseClass(cls), name, depth + 1);
+    }
+
+    /** Does a function return an instance of `cls`: by its annotation, or a `return new Cls(...)`? */
+    function returnsClass(info: ModuleInfo, fn: FunctionNode): ClassRef | null {
+      const byType = classOfType(info, fn.type);
+      if (byType) return byType;
+      let found: ClassRef | null = null;
+      const visit = (n: ts.Node) => {
+        if (found || isFunctionNode(n)) return;
+        if (ts.isReturnStatement(n) && n.expression) {
+          const e = unwrap(n.expression);
+          if (ts.isNewExpression(e)) found = classOfTarget(resolveExpression(info, e.expression));
+        }
+        ts.forEachChild(n, visit);
+      };
+      if (fn.body && ts.isBlock(fn.body)) fn.body.statements.forEach(visit);
+      else if (fn.body) {
+        const e = unwrap(fn.body as ts.Expression);
+        if (ts.isNewExpression(e)) found = classOfTarget(resolveExpression(info, e.expression));
+      }
+      return found;
+    }
+
+    type LocalDecl =
+      ts.ParameterDeclaration | ts.VariableDeclaration | ts.FunctionDeclaration | ts.BindingElement;
+
+    /** The declaration of `name` in a function around `at` (parameters, and the blocks on the way out). */
+    function localDeclaration(name: string, at: ts.Node): LocalDecl | null {
+      const inList = (list: ts.VariableDeclarationList | undefined): LocalDecl | null => {
+        for (const d of list?.declarations ?? []) {
+          if (ts.isIdentifier(d.name) && d.name.text === name) return d;
+          // `const { svc, error } = await gated()`.
+          if (ts.isObjectBindingPattern(d.name)) {
+            const el = d.name.elements.find((e) => ts.isIdentifier(e.name) && e.name.text === name);
+            if (el) return el;
+          }
+        }
+        return null;
+      };
+      for (let n: ts.Node | undefined = at.parent; n && !ts.isSourceFile(n); n = n.parent) {
+        if (isFunctionNode(n) || ts.isConstructorDeclaration(n)) {
+          const p = n.parameters.find((q) => ts.isIdentifier(q.name) && q.name.text === name);
+          if (p) return p;
+        }
+        if (ts.isBlock(n) || ts.isCaseClause(n) || ts.isDefaultClause(n)) {
+          for (const st of n.statements) {
+            if (ts.isVariableStatement(st)) {
+              const d = inList(st.declarationList);
+              if (d) return d;
+            }
+            if (ts.isFunctionDeclaration(st) && st.name?.text === name) return st;
+          }
+        }
+        if (
+          (ts.isForOfStatement(n) || ts.isForInStatement(n) || ts.isForStatement(n)) &&
+          n.initializer &&
+          ts.isVariableDeclarationList(n.initializer)
+        ) {
+          const d = inList(n.initializer);
+          if (d) return d;
+        }
+      }
+      return null;
+    }
+
+    /** The class an expression's value is an instance of, when this reading can name it. */
+    function classOfExpr(expr: ts.Expression, depth = 0): ClassRef | null {
+      if (depth > 6) return null;
+      const info = infoOf(expr);
+      if (!info) return null;
+      const e = unwrap(expr);
+      if (e.kind === ts.SyntaxKind.ThisKeyword) return enclosingClass(e);
+      if (ts.isNewExpression(e)) return classOfTarget(resolveExpression(info, e.expression));
+      if (ts.isCallExpression(e)) {
+        const callee = e.expression;
+        if (ts.isPropertyAccessExpression(callee)) {
+          // `Service.forCurrentUser()`: a static method that returns its class.
+          const owner = classOfTarget(resolveExpression(info, callee.expression));
+          if (owner) {
+            const m = findMethod(owner, callee.name.text);
+            return m ? (returnsClass(owner.info, m) ?? null) : null;
+          }
+          const ownerClass = classOfExpr(callee.expression, depth + 1);
+          const m = ownerClass ? findMethod(ownerClass, callee.name.text) : null;
+          return m && ownerClass ? returnsClass(ownerClass.info, m) : null;
+        }
+        if (ts.isIdentifier(callee)) {
+          const local = localDeclaration(callee.text, e);
+          if (local && ts.isFunctionDeclaration(local)) return returnsClass(info, local);
+          const t = resolveExpression(info, callee);
+          if (t?.kind === 'fn') {
+            for (const fn of fnsOfKey(t.key)) {
+              const fi = infoOf(fn.node);
+              const found = fi ? returnsClass(fi, fn.node) : null;
+              if (found) return found;
+            }
+          }
+        }
+        return null;
+      }
+      if (ts.isIdentifier(e)) {
+        const decl = localDeclaration(e.text, e);
+        if (!decl || ts.isFunctionDeclaration(decl)) return null;
+        if (ts.isBindingElement(decl)) return classOfBinding(decl, depth + 1);
+        const byType = classOfType(info, decl.type);
+        if (byType) return byType;
+        if (ts.isVariableDeclaration(decl) && decl.initializer) {
+          return classOfExpr(decl.initializer, depth + 1);
+        }
+        return null;
+      }
+      if (ts.isPropertyAccessExpression(e)) {
+        const owner = classOfExpr(e.expression, depth + 1);
+        return owner ? fieldClass(owner, e.name.text) : null;
+      }
+      return null;
+    }
+
+    /** The type a property of an object type has: `{ svc: X | null }`, through Promise<...>. */
+    function memberType(
+      type: ts.TypeNode | undefined,
+      prop: string,
+      depth = 0,
+    ): ts.TypeNode | undefined {
+      if (!type || depth > 4) return undefined;
+      if (ts.isTypeReferenceNode(type) && ts.isIdentifier(type.typeName)) {
+        const n = type.typeName.text;
+        return n === 'Promise' || n === 'Awaited'
+          ? memberType(type.typeArguments?.[0], prop, depth + 1)
+          : undefined;
+      }
+      if (!ts.isTypeLiteralNode(type)) return undefined;
+      for (const m of type.members) {
+        if (ts.isPropertySignature(m) && m.name && ts.isIdentifier(m.name) && m.name.text === prop)
+          return m.type;
+      }
+      return undefined;
+    }
+
+    /** The declared return type of the function a call calls, when it is one this reading names. */
+    function returnTypeOf(expr: ts.Expression): { info: ModuleInfo; type: ts.TypeNode } | null {
+      const e = unwrap(expr);
+      if (!ts.isCallExpression(e) || !ts.isIdentifier(e.expression)) return null;
+      const info = infoOf(e);
+      if (!info) return null;
+      const local = localDeclaration(e.expression.text, e);
+      const fns: FunctionNode[] =
+        local && ts.isFunctionDeclaration(local)
+          ? [local]
+          : (() => {
+              const t = resolveExpression(info, e.expression);
+              return t?.kind === 'fn' ? fnsOfKey(t.key).map((f) => f.node) : [];
+            })();
+      for (const fn of fns) {
+        const fi = infoOf(fn);
+        if (fn.type && fi) return { info: fi, type: fn.type };
+      }
+      return null;
+    }
+
+    /** `const { svc } = <init>`: the class of `svc`, from the annotation or the initializer's declared type. */
+    function classOfBinding(el: ts.BindingElement, depth: number): ClassRef | null {
+      const decl = el.parent.parent;
+      if (!ts.isVariableDeclaration(decl) || !ts.isIdentifier(el.propertyName ?? el.name))
+        return null;
+      const prop = (el.propertyName ?? el.name) as ts.Identifier;
+      const info = infoOf(el);
+      if (decl.type && info) return classOfType(info, memberType(decl.type, prop.text), depth);
+      const typed = decl.initializer ? returnTypeOf(decl.initializer) : null;
+      return typed ? classOfType(typed.info, memberType(typed.type, prop.text), depth) : null;
+    }
+
+    const fnByNode = new Map<ts.Node, Fn>();
+    function fnOf(node: FunctionNode, key: string | null = null): Fn {
+      let fn = fnByNode.get(node);
+      if (!fn) {
+        fn = { node, key };
+        fnByNode.set(node, fn);
+      } else if (key && !fn.key) {
+        fn.key = key;
+      }
+      return fn;
+    }
+
+    function fnsOfKey(key: string): Fn[] {
+      const [file, name] = [
+        key.slice(0, key.lastIndexOf('#')),
+        key.slice(key.lastIndexOf('#') + 1),
+      ];
+      const decl = modules.get(file)?.locals.get(name);
+      return (decl?.bodies ?? []).map((b) => fnOf(b, key));
+    }
+
+    function targetsOfKey(key: string): CallTarget[] {
+      if (gateKeys.has(key)) {
+        return [{ gate: true, async: fnsOfKey(key).some((fn) => isAsync(fn.node)) }];
+      }
+      if (quietKeys.has(key)) return [];
+      return fnsOfKey(key);
+    }
+
+    /** What a call calls, as far as this reading can name it. */
+    function calleeTargets(call: ts.CallExpression): CallTarget[] {
+      const info = infoOf(call);
+      if (!info || info.isClientModule) return [];
+      const callee = call.expression;
+      if (ts.isIdentifier(callee)) {
+        const local = localDeclaration(callee.text, call);
+        if (local) {
+          if (ts.isFunctionDeclaration(local) && local.body) return [fnOf(local)];
+          if (ts.isVariableDeclaration(local) && local.initializer) {
+            const init = unwrap(local.initializer);
+            if (isFunctionNode(init)) return [fnOf(init)];
+          }
+          return [];
+        }
+        const t = resolveExpression(info, callee);
+        return t?.kind === 'fn' ? targetsOfKey(t.key) : [];
+      }
+      if (ts.isPropertyAccessExpression(callee)) {
+        const t = resolveExpression(info, callee);
+        if (t?.kind === 'fn') return targetsOfKey(t.key);
+        if (callee.expression.kind === ts.SyntaxKind.SuperKeyword) {
+          const own = enclosingClass(call);
+          const m = own ? findMethod(baseClass(own), callee.name.text) : null;
+          return m ? [fnOf(m)] : [];
+        }
+        const cls = classOfExpr(callee.expression);
+        const m = cls ? findMethod(cls, callee.name.text) : null;
+        return m ? [fnOf(m)] : [];
+      }
+      return [];
+    }
+
+    /** `.from(...)` somewhere down a receiver chain (or in the initializer of the local it starts from). */
+    function chainHasFrom(expr: ts.Expression, depth = 0): boolean {
+      if (depth > 12) return false;
+      const e = unwrap(expr);
+      if (ts.isCallExpression(e)) {
+        const callee = e.expression;
+        if (
+          ts.isPropertyAccessExpression(callee) &&
+          callee.name.text === 'from' &&
+          !(ts.isIdentifier(callee.expression) && BUILTIN_FROM.has(callee.expression.text))
+        ) {
+          return true;
+        }
+        return chainHasFrom(callee, depth + 1);
+      }
+      if (ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e)) {
+        return chainHasFrom(e.expression, depth + 1);
+      }
+      if (ts.isIdentifier(e)) {
+        const decl = localDeclaration(e.text, e);
+        return (
+          !!decl &&
+          ts.isVariableDeclaration(decl) &&
+          !!decl.initializer &&
+          chainHasFrom(decl.initializer, depth + 1)
+        );
+      }
+      return false;
+    }
+
+    /** A property named `name` somewhere down a receiver chain. */
+    function chainHasProperty(expr: ts.Expression, name: string): boolean {
+      for (let e = unwrap(expr); ;) {
+        if (ts.isPropertyAccessExpression(e)) {
+          if (e.name.text === name) return true;
+          e = unwrap(e.expression);
+        } else if (ts.isCallExpression(e) || ts.isElementAccessExpression(e)) {
+          e = unwrap(e.expression);
+        } else return false;
+      }
+    }
+
+    function underAuthAdmin(expr: ts.Expression): boolean {
+      for (let e = unwrap(expr); ;) {
+        if (ts.isPropertyAccessExpression(e)) {
+          const owner = unwrap(e.expression);
+          if (
+            e.name.text === 'admin' &&
+            ts.isPropertyAccessExpression(owner) &&
+            owner.name.text === 'auth'
+          ) {
+            return true;
+          }
+          e = owner;
+        } else if (ts.isCallExpression(e)) e = unwrap(e.expression);
+        else return false;
+      }
+    }
+
+    function isWritePrimitive(call: ts.CallExpression): boolean {
+      const callee = call.expression;
+      if (!ts.isPropertyAccessExpression(callee)) return false;
+      const m = callee.name.text;
+      if (TABLE_WRITES.has(m) && chainHasFrom(callee.expression)) return true;
+      if (STORAGE_WRITES.has(m) && chainHasProperty(callee.expression, 'storage')) return true;
+      if (m === 'rpc') {
+        const name = call.arguments[0];
+        return !(name && ts.isStringLiteralLike(name) && options.readRpcs.has(name.text));
+      }
+      return underAuthAdmin(callee.expression) && !/^(get|list)/.test(m);
+    }
+
+    /** `<x>.mfaRequired && !<x>.mfaSatisfied`. */
+    function isPolicyTest(expr: ts.Expression): boolean {
+      const e = unwrap(expr);
+      if (
+        !ts.isBinaryExpression(e) ||
+        e.operatorToken.kind !== ts.SyntaxKind.AmpersandAmpersandToken
+      ) {
+        return false;
+      }
+      const left = unwrap(e.left);
+      const right = unwrap(e.right);
+      if (!ts.isPropertyAccessExpression(left) || left.name.text !== 'mfaRequired') return false;
+      if (!ts.isPrefixUnaryExpression(right) || right.operator !== ts.SyntaxKind.ExclamationToken) {
+        return false;
+      }
+      const operand = unwrap(right.operand);
+      return ts.isPropertyAccessExpression(operand) && operand.name.text === 'mfaSatisfied';
+    }
+
+    const isAsync = (fn: FunctionNode) => hasModifier(fn, ts.SyntaxKind.AsyncKeyword);
+    /** Is a call's promise awaited (or returned) where it stands? */
+    function awaitedHere(call: ts.CallExpression): boolean {
+      let n: ts.Node = call;
+      while (ts.isParenthesizedExpression(n.parent) || ts.isAsExpression(n.parent)) n = n.parent;
+      return ts.isAwaitExpression(n.parent) || ts.isReturnStatement(n.parent);
+    }
+
+    const verdicts = new Map<ts.Node, Verdict>();
+    /** A write event that is a call of (or a callback that is) a function with an open write. */
+    const writeVia = new Map<ts.Node, Fn>();
+    const inProgress = new Set<ts.Node>();
+    const NOTHING: Verdict = { writes: false, openWrite: null, conditional: [], isGate: false };
+
+    function verdictOf(fn: Fn): Verdict {
+      const held = verdicts.get(fn.node);
+      if (held) return held;
+      if (inProgress.has(fn.node)) return NOTHING;
+      inProgress.add(fn.node);
+      const conditional: ts.Node[] = [];
+      const body = fn.node.body;
+      let flow: Flow = OPEN;
+      if (body && ts.isBlock(body)) flow = seq(body.statements, conditional);
+      else if (body) {
+        const ev = expr(body, conditional, false);
+        flow = ev?.write
+          ? { ...OPEN, write: ev.write }
+          : { write: null, gate: ev?.gate ?? null, ends: true, returnsOpen: !ev?.gate };
+      }
+      const verdict: Verdict = {
+        writes: flow.write !== null || writesAnywhere(fn.node),
+        openWrite: flow.write,
+        conditional,
+        isGate: flow.gate !== null && !flow.returnsOpen,
+      };
+      inProgress.delete(fn.node);
+      verdicts.set(fn.node, verdict);
+      return verdict;
+    }
+
+    const writesMemo = new Map<ts.Node, boolean>();
+    const writesInProgress = new Set<ts.Node>();
+    function writesAnywhere(node: FunctionNode): boolean {
+      const held = writesMemo.get(node);
+      if (held !== undefined) return held;
+      if (writesInProgress.has(node)) return false;
+      writesInProgress.add(node);
+      let found = false;
+      const visit = (n: ts.Node) => {
+        if (found) return;
+        if (ts.isCallExpression(n)) {
+          if (isWritePrimitive(n)) found = true;
+          else {
+            for (const t of calleeTargets(n)) {
+              if (!('gate' in t) && writesAnywhere(t.node)) found = true;
+            }
+          }
+        }
+        if (!found) ts.forEachChild(n, visit);
+      };
+      if (node.body) visit(node.body);
+      writesInProgress.delete(node);
+      writesMemo.set(node, found);
+      return found;
+    }
+
+    /** The first write or unconditional gate in an expression, in the order it runs; conditional gates are noted. */
+    function expr(n: ts.Node, conditional: ts.Node[], cond: boolean): Event | null {
+      if (isFunctionNode(n)) {
+        // A callback: taken to run. A gate inside it gates nothing here.
+        const callback = fnOf(n);
+        if (!verdictOf(callback).openWrite) return null;
+        writeVia.set(n, callback);
+        return { write: n };
+      }
+      if (ts.isClassExpression(n)) return null;
+      if (ts.isConditionalExpression(n)) {
+        return (
+          expr(n.condition, conditional, cond) ??
+          expr(n.whenTrue, conditional, true) ??
+          expr(n.whenFalse, conditional, true)
+        );
+      }
+      if (ts.isBinaryExpression(n)) {
+        const op = n.operatorToken.kind;
+        if (
+          op === ts.SyntaxKind.AmpersandAmpersandToken ||
+          op === ts.SyntaxKind.BarBarToken ||
+          op === ts.SyntaxKind.QuestionQuestionToken ||
+          op === ts.SyntaxKind.AmpersandAmpersandEqualsToken ||
+          op === ts.SyntaxKind.BarBarEqualsToken ||
+          op === ts.SyntaxKind.QuestionQuestionEqualsToken
+        ) {
+          return expr(n.left, conditional, cond) ?? expr(n.right, conditional, true);
+        }
+      }
+      if (ts.isCallExpression(n) || ts.isNewExpression(n)) {
+        const callee = n.expression;
+        let ev: Event | null = null;
+        if (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) {
+          ev = expr(callee.expression, conditional, cond);
+        } else if (!ts.isIdentifier(callee)) {
+          ev = expr(callee, conditional, cond);
+        }
+        if (ev) return ev;
+        for (const arg of n.arguments ?? []) {
+          ev = expr(arg, conditional, cond);
+          if (ev) return ev;
+        }
+        if (!ts.isCallExpression(n)) return null;
+        if (isWritePrimitive(n)) return { write: n };
+        const optional = !!n.questionDotToken || ts.isOptionalChain(callee);
+        for (const t of calleeTargets(n)) {
+          if ('gate' in t) {
+            if (t.async && !awaitedHere(n)) {
+              conditional.push(n);
+              continue;
+            }
+          } else {
+            const v = verdictOf(t);
+            if (v.openWrite) {
+              writeVia.set(n, t);
+              return { write: n };
+            }
+            if (!v.isGate) continue;
+            if (isAsync(t.node) && !awaitedHere(n)) {
+              conditional.push(n);
+              continue;
+            }
+          }
+          if (cond || optional) conditional.push(n);
+          else return { gate: n };
+        }
+        return null;
+      }
+      let found: Event | null = null;
+      ts.forEachChild(n, (c) => {
+        found = expr(c, conditional, cond);
+        return found ?? undefined;
+      });
+      return found;
+    }
+
+    const fromEvent = (ev: Event | null): Flow =>
+      ev ? { ...OPEN, write: ev.write ?? null, gate: ev.gate ?? null } : OPEN;
+
+    function seq(statements: readonly ts.Statement[], conditional: ts.Node[]): Flow {
+      let returnsOpen = false;
+      for (const st of statements) {
+        const r = stmt(st, conditional);
+        if (r.write) return { ...r, returnsOpen: returnsOpen || r.returnsOpen };
+        returnsOpen ||= r.returnsOpen;
+        if (r.gate) return { write: null, gate: r.gate, ends: r.ends, returnsOpen };
+        if (r.ends) return { write: null, gate: null, ends: true, returnsOpen };
+      }
+      return { ...OPEN, returnsOpen };
+    }
+
+    /** A branch, loop body or clause whose gate does not hold what follows: noted, never counted. */
+    function onlyOnSomePaths(r: Flow, conditional: ts.Node[]): Flow {
+      if (r.write) return r;
+      if (r.gate) conditional.push(r.gate);
+      return { ...OPEN, returnsOpen: r.returnsOpen };
+    }
+
+    function stmt(s: ts.Statement, conditional: ts.Node[]): Flow {
+      if (ts.isBlock(s)) return seq(s.statements, conditional);
+      if (ts.isExpressionStatement(s)) return fromEvent(expr(s.expression, conditional, false));
+      if (ts.isVariableStatement(s)) {
+        for (const d of s.declarationList.declarations) {
+          const ev = d.initializer ? expr(d.initializer, conditional, false) : null;
+          if (ev) return fromEvent(ev);
+        }
+        return OPEN;
+      }
+      if (ts.isReturnStatement(s)) {
+        const ev = s.expression ? expr(s.expression, conditional, false) : null;
+        if (ev?.write) return fromEvent(ev);
+        if (ev?.gate) return { write: null, gate: ev.gate, ends: true, returnsOpen: false };
+        return { write: null, gate: null, ends: true, returnsOpen: true };
+      }
+      if (ts.isThrowStatement(s)) {
+        const ev = expr(s.expression, conditional, false);
+        if (ev?.write) return fromEvent(ev);
+        return { write: null, gate: null, ends: true, returnsOpen: false };
+      }
+      if (ts.isIfStatement(s)) {
+        if (!s.elseStatement && isPolicyTest(s.expression)) {
+          const t = stmt(s.thenStatement, conditional);
+          if (t.write) return t;
+          if (t.ends || t.gate)
+            return { write: null, gate: s, ends: false, returnsOpen: t.returnsOpen };
+        }
+        const c = expr(s.expression, conditional, false);
+        if (c) return fromEvent(c);
+        const t = stmt(s.thenStatement, conditional);
+        if (t.write) return t;
+        const e = s.elseStatement ? stmt(s.elseStatement, conditional) : OPEN;
+        if (e.write) return e;
+        const returnsOpen = t.returnsOpen || e.returnsOpen;
+        if (t.ends && e.ends) return { write: null, gate: null, ends: true, returnsOpen };
+        if ((t.gate || t.ends) && (e.gate || e.ends)) {
+          return { write: null, gate: t.gate ?? e.gate, ends: false, returnsOpen };
+        }
+        for (const g of [t.gate, e.gate]) if (g) conditional.push(g);
+        return { ...OPEN, returnsOpen };
+      }
+      if (ts.isTryStatement(s)) {
+        const t = seq(s.tryBlock.statements, conditional);
+        if (t.write) return t;
+        const c = s.catchClause ? seq(s.catchClause.block.statements, conditional) : null;
+        if (c?.write) return c;
+        const f = s.finallyBlock ? seq(s.finallyBlock.statements, conditional) : null;
+        if (f?.write) return f;
+        const returnsOpen = t.returnsOpen || !!c?.returnsOpen || !!f?.returnsOpen;
+        if (f?.gate) return { write: null, gate: f.gate, ends: false, returnsOpen };
+        if (t.gate) {
+          if (!c || c.ends) return { write: null, gate: t.gate, ends: false, returnsOpen };
+          conditional.push(t.gate);
+          return { ...OPEN, returnsOpen };
+        }
+        if (t.ends && (!c || c.ends)) return { write: null, gate: null, ends: true, returnsOpen };
+        return { ...OPEN, returnsOpen };
+      }
+      if (ts.isDoStatement(s)) {
+        const b = stmt(s.statement, conditional);
+        if (b.write || b.gate || b.ends) return b;
+        return fromEvent(expr(s.expression, conditional, false));
+      }
+      if (ts.isForStatement(s)) {
+        const init = s.initializer;
+        const head =
+          (init && ts.isVariableDeclarationList(init)
+            ? init.declarations.reduce<Event | null>(
+                (ev, d) => ev ?? (d.initializer ? expr(d.initializer, conditional, false) : null),
+                null,
+              )
+            : init
+              ? expr(init, conditional, false)
+              : null) ?? (s.condition ? expr(s.condition, conditional, false) : null);
+        if (head?.write) return fromEvent(head);
+        return onlyOnSomePaths(stmt(s.statement, conditional), conditional);
+      }
+      if (ts.isForOfStatement(s) || ts.isForInStatement(s) || ts.isWhileStatement(s)) {
+        const head = expr(s.expression, conditional, false);
+        if (head?.write) return fromEvent(head);
+        return onlyOnSomePaths(stmt(s.statement, conditional), conditional);
+      }
+      if (ts.isSwitchStatement(s)) {
+        const head = expr(s.expression, conditional, false);
+        if (head?.write) return fromEvent(head);
+        let returnsOpen = false;
+        for (const clause of s.caseBlock.clauses) {
+          const label = ts.isCaseClause(clause) ? expr(clause.expression, conditional, true) : null;
+          if (label?.write) return fromEvent(label);
+          const r = onlyOnSomePaths(seq(clause.statements, conditional), conditional);
+          if (r.write) return r;
+          returnsOpen ||= r.returnsOpen;
+        }
+        return { ...OPEN, returnsOpen };
+      }
+      if (ts.isLabeledStatement(s)) return stmt(s.statement, conditional);
+      if (
+        ts.isFunctionDeclaration(s) ||
+        ts.isClassDeclaration(s) ||
+        ts.isInterfaceDeclaration(s) ||
+        ts.isTypeAliasDeclaration(s) ||
+        ts.isEmptyStatement(s)
+      ) {
+        return OPEN;
+      }
+      return fromEvent(expr(s, conditional, false));
+    }
+
+    const where = (node: ts.Node) => {
+      const sf = node.getSourceFile();
+      return {
+        line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
+        text: squash(node.getText(sf)),
+      };
+    };
+    const chainFrom = (start: ts.Node): string[] => {
+      const out: string[] = [];
+      const seen = new Set<ts.Node>();
+      for (let node: ts.Node | null = start; node && !seen.has(node) && out.length < 12;) {
+        seen.add(node);
+        const at = where(node);
+        out.push(
+          `${path.relative(srcRoot, node.getSourceFile().fileName).split(path.sep).join('/')}:${at.line} ${at.text}`,
+        );
+        const via = writeVia.get(node);
+        node = via ? verdictOf(via).openWrite : null;
+      }
+      return out;
+    };
+    const publicVerdict = (vs: Verdict[]): WriteVerdict => {
+      const open = vs.find((v) => v.openWrite)?.openWrite ?? null;
+      return {
+        writeChain: open ? chainFrom(open) : [],
+        writes: vs.some((v) => v.writes),
+        openWrite: open ? where(open) : null,
+        conditionalGates: open ? vs.flatMap((v) => v.conditional).map(where) : [],
+        isGate: vs.length > 0 && vs.every((v) => v.isGate),
+      };
+    };
+
+    return {
+      exportVerdict(file, name) {
+        const t = exportedNames(file).get(name);
+        if (t?.kind !== 'fn') return null;
+        const fns = fnsOfKey(t.key);
+        if (fns.length === 0) return null;
+        return publicVerdict(fns.map(verdictOf));
+      },
+      methodVerdict(file, className, method) {
+        const info = modules.get(file);
+        const decl = info?.classDecls.get(className);
+        const m = info && decl ? findMethod({ info, decl }, method) : null;
+        return m ? publicVerdict([verdictOf(fnOf(m))]) : null;
+      },
+      publicMethods(file) {
+        const info = modules.get(file);
+        if (!info) return [];
+        const exportedClasses = new Set(
+          [...exportedNames(file).values()].flatMap((t) =>
+            t?.kind === 'class' && t.module === file ? [t.name] : [],
+          ),
+        );
+        const out: Array<{ className: string; method: string; isStatic: boolean }> = [];
+        for (const [className, decl] of info.classDecls) {
+          if (!exportedClasses.has(className)) continue;
+          for (const member of decl.members) {
+            const name = memberName(member);
+            if (!name) continue;
+            const isMethod = ts.isMethodDeclaration(member) && !!member.body;
+            const isField =
+              ts.isPropertyDeclaration(member) &&
+              !!member.initializer &&
+              isFunctionNode(unwrap(member.initializer));
+            if (!isMethod && !isField) continue;
+            if (
+              hasModifier(member, ts.SyntaxKind.PrivateKeyword) ||
+              hasModifier(member, ts.SyntaxKind.ProtectedKeyword)
+            ) {
+              continue;
+            }
+            out.push({
+              className,
+              method: name,
+              isStatic: hasModifier(member, ts.SyntaxKind.StaticKeyword),
+            });
+          }
+        }
+        return out.sort((a, b) =>
+          `${a.className}.${a.method}`.localeCompare(`${b.className}.${b.method}`),
+        );
+      },
+    };
+  }
+
   return {
+    writeGate,
     actionModules: [...modules.values()]
       .filter((m) => m.isActionModule)
       .map((m) => m.file)
