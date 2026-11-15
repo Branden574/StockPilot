@@ -38,8 +38,14 @@ import { RELEASES } from './registry';
  * launch of the update showed, so these tests pin that minute with its shape
  * and its order. Its own file, so the release tests other open branches edit
  * stay as they are.
+ *
+ * Re-pinned by docs/whats-new-count-read-rule (2026-11-15): the count read rule release is
+ * published later, directly above this release and below the Liquid Glass
+ * draft. Each changed line has its own note.
  */
 const ID = 'phone-screens-by-access-2026-11';
+// Added by docs/whats-new-count-read-rule (2026-11-15): the count read rule release, published later, directly above this one. It reaches every member of an organization with Cycle counts on.
+const COUNT_READ_RULE_ID = 'count-read-rule-2026-11';
 const byId = (id: string) => RELEASES.find((r) => r.id === id)!;
 const release = () => byId(ID);
 const entry = (entryId: string) => release().entries.find((e) => e.id === entryId)!;
@@ -79,30 +85,37 @@ function readerText(r: Release): string[] {
 }
 
 describe('the phone screens by access release of 2026-11-14: order, status and date', () => {
-  it('is published once, as revision 1, directly below the Liquid Glass draft, the newest published release', () => {
+  it('is published once, as revision 1, directly below the count read rule release (published later, below the Liquid Glass draft at the top) and above the order request alerts release', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
     // The order request alerts release, published earlier the same day (17:58Z), sits directly below.
-    expect(RELEASES.slice(0, 4).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: RELEASES.slice(0, 4), without it): the count read rule release is published later, at the top, directly below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES.slice(0, 5).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      [COUNT_READ_RULE_ID, 'published'],
       [ID, 'published'],
       ['order-request-alerts-follow-approve-2026-11', 'published'],
       ['phone-authenticator-code-2026-11', 'published'],
     ]);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
+      // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: ID): the count read rule release is published after it, at the top, the newest published release.
+      COUNT_READ_RULE_ID,
+    );
   });
 
-  it('is dated on a whole minute after the phone update was published, with the draft placeholder at that minute and no later release below', () => {
+  it('is dated on a whole minute after the phone update was published, with the draft placeholder at or after that minute and no later release below', () => {
     const at = release().publishedAt;
     expect(at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
     // Set at merge: the first iOS launch of the update showed between the reads of 18:34:04Z and 18:44:07Z.
     expect(at).toBe('2026-11-14T18:44:00Z');
-    expect(RELEASES[0]!.publishedAt).toBe(at);
+    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: the draft placeholder at this minute): the placeholder moved to the minute of the count read rule release, published later, so it is at or after this one.
+    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(Date.parse(at));
     // The phone update (group 8c30f488) was published at 2026-11-14T05:39:05Z.
     expect(Date.parse(at)).toBeGreaterThan(Date.parse('2026-11-14T05:39:05Z'));
-    for (const r of RELEASES.slice(2)) {
+    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: RELEASES.slice(2)): the count read rule release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(3)) {
       expect(Date.parse(at), r.id).toBeGreaterThanOrEqual(Date.parse(r.publishedAt));
     }
   });
@@ -227,8 +240,18 @@ describe('the phone screens by access release: the words', () => {
       'phone-workspace-switch-own-lists',
       'phone-count-not-saved-line-gone',
     ]);
+    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: nothing read): the count read rule release is published later, at the top, and reaches the owner here (every member of an organization with Cycle counts on), so the owner reads it first, and the notice this test checks is the one it checked before. A read of it by a reader it does not reach changes nothing.
+    const newerRead = [
+      {
+        release_id: COUNT_READ_RULE_ID,
+        revision: 1,
+        dismissed_at: null,
+        opened_at: '2026-11-15T00:30:00Z',
+        read_at: '2026-11-15T00:30:00Z',
+      },
+    ];
     for (const v of [owner, member]) {
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
+      expect(buildReleaseList(RELEASES, v, newerRead, null).latestUnread?.id, v.role).toBe(ID);
     }
   });
 });
