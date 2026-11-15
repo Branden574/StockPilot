@@ -41,9 +41,10 @@ import { describe, expect, it } from 'vitest';
  * suite. The second rule reads the bound name only, so it does not see: a
  * fresh object returned in place of the bound answer (for example under a
  * condition on the caught error), an answer rebuilt from its parts, a write
- * through another name that holds the answer or its `error`, or an answer
- * bound only inside a condition. Those shapes are held by the behaviour
- * suites named above, not by this file. A REVIEWED entry is a person's
+ * through another name that holds the answer or its `error`, or a name whose
+ * value does not come straight from the call (a conditional expression, or a
+ * `let` assigned later). Those shapes are left to behaviour tests; this file
+ * does not hold them. A REVIEWED entry is a person's
  * judgement, checked only for being current (the function still has that
  * many such catches).
  */
