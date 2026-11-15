@@ -722,14 +722,39 @@ describe('MFA is decided from the policy that came back with the membership', ()
     expect(legacyCalls).toEqual(['auth:aal']);
   });
 
-  it('asks the client for its assurance level only when MFA is actually required', async () => {
+  it('asks the client for its assurance level only when the level decides the answer', async () => {
     world.calls = [];
     await withApiContext(cookie());
     expect(world.calls).not.toContain('auth:aal');
+    // Required with no authenticator: the answer is "set one up", with no level read.
     world.memberships = [{ organization_id: ORG_A, role: 'staff', mfa_policy: 'all_required' }];
+    world.calls = [];
+    const unenrolled = await withApiContext(cookie());
+    expect(world.calls).not.toContain('auth:aal');
+    expect(unenrolled?.mfaRequired).toBe(true);
+    expect(unenrolled?.mfaSatisfied).toBe(false);
+    expect(unenrolled?.mfaEnrolled).toBe(false);
+    world.verifiedFactor = true;
     world.calls = [];
     await withApiContext(cookie());
     expect(world.calls).toContain('auth:aal');
+  });
+
+  it('a policy that requires an authenticator is met by one at aal2, on both paths', async () => {
+    world.memberships = [{ organization_id: ORG_A, role: 'staff', mfa_policy: 'all_required' }];
+    world.aal = 'aal2';
+    for (const req of [cookie, bearer]) {
+      world.verifiedFactor = false;
+      const without = await both(req());
+      expect(shape(without.fast)).toEqual(shape(without.legacy));
+      expect(without.fast?.mfaSatisfied).toBe(false);
+      expect(without.fast?.mfaEnrolled).toBe(false);
+      world.verifiedFactor = true;
+      const withOne = await both(req());
+      expect(shape(withOne.fast)).toEqual(shape(withOne.legacy));
+      expect(withOne.fast?.mfaSatisfied).toBe(true);
+      expect(withOne.fast?.mfaEnrolled).toBe(true);
+    }
   });
 });
 
@@ -744,12 +769,14 @@ describe('the bearer path gets the same treatment', () => {
 
   it('reads assurance from the TOKEN, never from the client (it has no session)', async () => {
     world.memberships = [{ organization_id: ORG_A, role: 'staff', mfa_policy: 'all_required' }];
+    world.verifiedFactor = true;
     world.aal = 'aal2';
     world.calls = [];
     const satisfied = await withApiContext(bearer());
     expect(satisfied?.mfaSatisfied).toBe(true);
     expect(world.calls).not.toContain('auth:aal');
 
+    world.verifiedFactor = false;
     world.aal = 'aal1';
     const notSatisfied = await withApiContext(bearer());
     expect(notSatisfied?.mfaRequired).toBe(true);

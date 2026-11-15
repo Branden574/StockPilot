@@ -21,9 +21,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *   - a session with an authenticator, at aal1: refused before anything is
  *     read (the route's own 401); on the reviewed allowlist the context is
  *     built and assertPermission asks for the code (`aal2_required`);
- *   - a session with no authenticator, at aal1: `mfa_required`;
- *   - a token at aal2 for an account with no verified factor (the factor was
- *     removed after the code was given): passes, as under every policy.
+ *   - a session with no authenticator, at either level: `mfa_required`, as on
+ *     the pages (services/context.ts resolveMfaState).
  *
  * The readable policies keep their answers: pinned below row by row.
  */
@@ -286,7 +285,7 @@ describe.each(PATHS)('withApiContext (%s): an unreadable policy is the strictest
 });
 
 /**
- * The readable policies, row by row: unchanged. `401` is the step-up refusal
+ * The readable policies, row by row. `401` is the step-up refusal
  * (an authenticator, a session at aal1), which comes before the policy read.
  */
 const READABLE_ROWS: Array<[PolicyRead, Session, Answer]> = [
@@ -297,14 +296,17 @@ const READABLE_ROWS: Array<[PolicyRead, Session, Answer]> = [
   ['optional', { role: 'staff', enrolled: true, aal: 'aal1', allowlisted: true }, 'aal2_required'],
   ['optional', { role: 'staff', enrolled: true, aal: 'aal2' }, 'passes'],
   ['admins_required', { role: 'admin', enrolled: false, aal: 'aal1' }, 'mfa_required'],
-  ['admins_required', { role: 'admin', enrolled: false, aal: 'aal2' }, 'passes'],
+  ['admins_required', { role: 'admin', enrolled: false, aal: 'aal2' }, 'mfa_required'],
   ['admins_required', { role: 'staff', enrolled: false, aal: 'aal1' }, 'passes'],
+  ['admins_required', { role: 'staff', enrolled: false, aal: 'aal2' }, 'passes'],
   ['admins_required', { role: 'admin', enrolled: true, aal: 'aal1' }, '401'],
   ['admins_required', { role: 'admin', enrolled: true, aal: 'aal1', allowlisted: true }, 'aal2_required'],
   ['admins_required', { role: 'admin', enrolled: true, aal: 'aal2' }, 'passes'],
   ['all_required', { role: 'admin', enrolled: false, aal: 'aal1' }, 'mfa_required'],
   ['all_required', { role: 'staff', enrolled: false, aal: 'aal1' }, 'mfa_required'],
-  ['all_required', { role: 'staff', enrolled: false, aal: 'aal2' }, 'passes'],
+  ['all_required', { role: 'admin', enrolled: false, aal: 'aal2' }, 'mfa_required'],
+  ['all_required', { role: 'staff', enrolled: false, aal: 'aal2' }, 'mfa_required'],
+  ['all_required', { role: 'admin', enrolled: true, aal: 'aal2' }, 'passes'],
   ['all_required', { role: 'staff', enrolled: true, aal: 'aal1' }, '401'],
   ['all_required', { role: 'staff', enrolled: true, aal: 'aal1', allowlisted: true }, 'aal2_required'],
   ['all_required', { role: 'staff', enrolled: true, aal: 'aal2' }, 'passes'],
