@@ -507,9 +507,13 @@ const REGISTRY: Record<string, Entry> = {
     'The PO import is read in the organization (get) first.',
   ],
   'server/services/po-imports.ts::next_po_number': ['takes_org', 'Passes the active organization.'],
-  'server/services/portal.ts::insert_order_request_with_lines': [
+  'server/services/portal.ts::place_portal_order_request': [
     'takes_org',
-    "The header carries the portal customer's organization.",
+    "The header carries the portal customer's organization (the key is scoped to it).",
+  ],
+  'server/services/portal.ts::portal_order_submission_status': [
+    'takes_org',
+    "The header carries the portal customer's organization (the key is scoped to it).",
   ],
   'server/services/public-catalog.ts::public_link_eligible_items': RO(),
   'server/services/public-links.ts::public_link_eligible_items': RO(),

@@ -23,6 +23,9 @@ const actions = vi.hoisted(() => ({
 }));
 vi.mock('@/server/actions/portal', () => actions);
 
+/** A submission key: a v4 uuid, as core's mintOrderSubmissionKey makes. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 const ITEM = {
   itemId: 'i-1',
   name: 'Composition Notebook',
@@ -353,7 +356,7 @@ describe('PortalShop: Place order after a refusal or a call that failed', () => 
     expect(await screen.findByRole('status')).toHaveTextContent('Order submitted');
   });
 
-  it('a call that does not come back: the page says to reload and check, offers Reload, and keeps Place order disabled so a second press sends nothing', async () => {
+  it('a call that does not come back: the page says to press Place order again, keeps the cart as sent, and the second press sends the same cart under the same key', async () => {
     actions.submitPortalOrderAction.mockRejectedValueOnce(new Error('Failed to fetch'));
     const reload = vi.spyOn(window.location, 'reload').mockImplementation(() => {});
     const user = await shopWithOneInCart();
@@ -362,16 +365,9 @@ describe('PortalShop: Place order after a refusal or a call that failed', () => 
 
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(
-      "We couldn't confirm your order went through. Reload the page and check your orders before placing it again.",
+      "We couldn't confirm your order went through. Press Place order again to finish it. It won't be placed twice.",
     );
     expect(screen.queryByText('Failed to fetch')).toBeNull();
-
-    // Place order stays disabled, and pressing it sends nothing.
-    const place = screen.getByRole('button', { name: 'Place order' });
-    expect(place).toBeDisabled();
-    await user.click(place);
-    fireEvent.click(place);
-    expect(actions.submitPortalOrderAction).toHaveBeenCalledTimes(1);
 
     // The cart and the note are still on screen, and can no longer be changed.
     expect(screen.getByText('1 units')).toBeInTheDocument();
@@ -386,12 +382,29 @@ describe('PortalShop: Place order after a refusal or a call that failed', () => 
     // The list is not read again behind the customer's back, and nothing claims success.
     expect(refresh).not.toHaveBeenCalled();
     expect(screen.queryByText(/Order submitted/)).toBeNull();
-
-    // Reload is a full page load.
+    // Reload is still offered (a full page load), and not pressed for them.
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeEnabled();
     expect(reload).not.toHaveBeenCalled();
-    await user.click(screen.getByRole('button', { name: 'Reload' }));
-    expect(reload).toHaveBeenCalledTimes(1);
     reload.mockRestore();
+
+    // The second press: the same cart, the same key. The server answers the
+    // order the first press placed.
+    actions.submitPortalOrderAction.mockResolvedValueOnce({
+      ok: true,
+      data: { id: 'fedcba98-7654-4321-8abc-def012345678', replay: true },
+    });
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    await waitFor(() => expect(actions.submitPortalOrderAction).toHaveBeenCalledTimes(2));
+    const [first, second] = actions.submitPortalOrderAction.mock.calls.map((c) => c[0]);
+    expect(second).toEqual(first);
+    expect(first).toEqual({
+      lines: [{ itemId: 'i-1', quantity: 1 }],
+      notes: 'Leave at the desk',
+      idempotencyKey: expect.stringMatching(UUID),
+    });
+    expect(await screen.findByRole('status')).toHaveTextContent('Reference: FEDCBA98');
+    expect(screen.queryByRole('button', { name: 'Place order' })).toBeNull();
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 
   it('Reload is offered only after a call that did not come back, never after a refusal', async () => {
@@ -405,5 +418,295 @@ describe('PortalShop: Place order after a refusal or a call that failed', () => 
     expect(screen.queryByRole('button', { name: 'Reload' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Place order' })).toBeEnabled();
     expect(screen.getByRole('button', { name: /Add one Composition Notebook/i })).toBeEnabled();
+  });
+});
+
+describe('PortalShop: one key per cart submission', () => {
+  const sent = () =>
+    actions.submitPortalOrderAction.mock.calls.map((c) => c[0] as { idempotencyKey: string });
+
+  beforeEach(() => {
+    actions.submitPortalOrderAction.mockReset();
+    refresh.mockReset();
+  });
+
+  async function shop() {
+    const user = userEvent.setup();
+    renderShop({
+      catalog: [
+        { ...ITEM, unitPrice: null, quotable: false },
+        {
+          ...ITEM,
+          itemId: 'i-2',
+          name: 'Pencil box',
+          sku: 'PB-002',
+          unitPrice: null,
+          quotable: false,
+        },
+      ],
+    });
+    await user.click(screen.getByRole('button', { name: /Add one Composition Notebook/i }));
+    return user;
+  }
+  const refusal = {
+    ok: false,
+    error: { code: 'validation_error', message: 'Please check the cart.' },
+  };
+
+  it('the first press mints a key, and a resend of the same cart after a refusal sends the same key', async () => {
+    actions.submitPortalOrderAction.mockResolvedValue(refusal);
+    const user = await shop();
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    await screen.findByText('Please check the cart.');
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    await waitFor(() => expect(sent()).toHaveLength(2));
+    expect(sent()[0]!.idempotencyKey).toMatch(UUID);
+    expect(sent()[1]!.idempotencyKey).toBe(sent()[0]!.idempotencyKey);
+  });
+
+  it('a changed cart or note is a new submission with a new key', async () => {
+    actions.submitPortalOrderAction.mockResolvedValue(refusal);
+    const user = await shop();
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    await screen.findByText('Please check the cart.');
+    await user.click(screen.getByRole('button', { name: /Add one Pencil box/i }));
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    await waitFor(() => expect(sent()).toHaveLength(2));
+    await user.type(screen.getByLabelText('Notes for your supplier (optional)'), 'Room 4');
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    await waitFor(() => expect(sent()).toHaveLength(3));
+    // Back to the second cart and note: its own key again would be fine, but a
+    // new one is too; what matters is no key is shared between two carts.
+    const keys = sent().map((b) => b.idempotencyKey);
+    expect(new Set(keys).size).toBe(3);
+  });
+
+  it('after a confirmed order the next cart, even an identical one, gets a new key', async () => {
+    actions.submitPortalOrderAction.mockResolvedValueOnce({
+      ok: true,
+      data: { id: 'order-1', replay: false },
+    });
+    const user = await shop();
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Order submitted');
+    actions.submitPortalOrderAction.mockResolvedValueOnce({
+      ok: true,
+      data: { id: 'order-2', replay: false },
+    });
+    await user.click(screen.getByRole('button', { name: /Add one Composition Notebook/i }));
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    await waitFor(() => expect(sent()).toHaveLength(2));
+    expect(sent()[1]!.idempotencyKey).toMatch(UUID);
+    expect(sent()[1]!.idempotencyKey).not.toBe(sent()[0]!.idempotencyKey);
+  });
+});
+
+/**
+ * Each class of answer, as the service marks it (`details.outcome`):
+ * unknown keeps the cart as sent with its key; refused frees it; an answer
+ * with no outcome changes nothing else.
+ */
+describe('PortalShop: what each answer does to the cart', () => {
+  const sent = () =>
+    actions.submitPortalOrderAction.mock.calls.map(
+      (c) => c[0] as { idempotencyKey: string; lines: unknown; notes?: string },
+    );
+  const UNKNOWN = {
+    ok: false,
+    error: {
+      code: 'conflict',
+      message:
+        "We couldn't confirm your order went through. Press Place order again to finish it. It won't be placed twice.",
+      details: { outcome: 'unknown', retryable: true },
+    },
+  };
+  const REFUSED = {
+    ok: false,
+    error: {
+      code: 'validation_error',
+      message: 'One of the items is no longer available to order.',
+      details: { outcome: 'refused' },
+    },
+  };
+  const NO_OUTCOME = {
+    ok: false,
+    error: { code: 'validation_error', message: 'Order could not be submitted. Please try again.' },
+  };
+
+  beforeEach(() => {
+    actions.submitPortalOrderAction.mockReset();
+    refresh.mockReset();
+  });
+
+  async function shop() {
+    const user = userEvent.setup();
+    renderShop({
+      catalog: [
+        { ...ITEM, unitPrice: null, quotable: false },
+        {
+          ...ITEM,
+          itemId: 'i-2',
+          name: 'Pencil box',
+          sku: 'PB-002',
+          unitPrice: null,
+          quotable: false,
+        },
+      ],
+    });
+    await user.click(screen.getByRole('button', { name: /Add one Composition Notebook/i }));
+    await user.type(screen.getByLabelText('Notes for your supplier (optional)'), 'Room 4');
+    return user;
+  }
+  const addOne = () => screen.getByRole('button', { name: /Add one Composition Notebook/i });
+  const note = () => screen.getByLabelText('Notes for your supplier (optional)');
+
+  it('unknown (the database answer was lost): the cart is held as sent with its key, Place order and Reload are offered, and the next press sends the same cart and key', async () => {
+    actions.submitPortalOrderAction.mockResolvedValueOnce(UNKNOWN);
+    const user = await shop();
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "We couldn't confirm your order went through. Press Place order again to finish it. It won't be placed twice.",
+    );
+    expect(addOne()).toBeDisabled();
+    expect(note()).toHaveAttribute('readonly');
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Place order' })).toBeEnabled();
+
+    actions.submitPortalOrderAction.mockResolvedValueOnce({
+      ok: true,
+      data: { id: 'fedcba98-7654-4321-8abc-def012345678', replay: true },
+    });
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    await waitFor(() => expect(sent()).toHaveLength(2));
+    expect(sent()[1]).toEqual(sent()[0]);
+    expect(sent()[0]).toMatchObject({
+      notes: 'Room 4',
+      idempotencyKey: expect.stringMatching(UUID),
+    });
+    expect(await screen.findByRole('status')).toHaveTextContent('Reference: FEDCBA98');
+  });
+
+  it("refused (definite) on the first send: the words show and the cart stays the customer's to change", async () => {
+    actions.submitPortalOrderAction.mockResolvedValueOnce(REFUSED);
+    const user = await shop();
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    expect(
+      await screen.findByText('One of the items is no longer available to order.'),
+    ).toBeInTheDocument();
+    expect(addOne()).toBeEnabled();
+    expect(note()).not.toHaveAttribute('readonly');
+    expect(screen.queryByRole('button', { name: 'Reload' })).toBeNull();
+  });
+
+  it('refused (definite) on the resend after an unknown outcome: the cart is released, the refusal says to check the orders first, Reload stays, and a changed cart gets a new key', async () => {
+    actions.submitPortalOrderAction.mockRejectedValueOnce(new Error('Failed to fetch'));
+    const user = await shop();
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    await screen.findByRole('alert');
+    expect(addOne()).toBeDisabled();
+
+    actions.submitPortalOrderAction.mockResolvedValueOnce(REFUSED);
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    expect(
+      await screen.findByText(
+        'One of the items is no longer available to order. Check your orders before placing it again.',
+      ),
+    ).toBeInTheDocument();
+    expect(sent()[1]).toEqual(sent()[0]);
+    // Released: the cart and the note can change again; an earlier send may
+    // still have gone through, so Reload stays.
+    expect(addOne()).toBeEnabled();
+    expect(note()).not.toHaveAttribute('readonly');
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeInTheDocument();
+
+    // The customer changes the cart: a new submission, a new key. Once an
+    // order is confirmed, Reload is no longer offered.
+    actions.submitPortalOrderAction.mockResolvedValueOnce({
+      ok: true,
+      data: { id: 'order-2', replay: false },
+    });
+    await user.click(screen.getByRole('button', { name: /Add one Pencil box/i }));
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    await waitFor(() => expect(sent()).toHaveLength(3));
+    expect(sent()[2]!.idempotencyKey).not.toBe(sent()[0]!.idempotencyKey);
+    expect(await screen.findByRole('status')).toHaveTextContent('Order submitted');
+    expect(screen.queryByRole('button', { name: 'Reload' })).toBeNull();
+  });
+
+  it('a refusal after an unknown outcome that already says to check the orders is not repeated', async () => {
+    actions.submitPortalOrderAction.mockResolvedValueOnce(UNKNOWN);
+    const user = await shop();
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    await screen.findByRole('alert');
+    const conflict =
+      "This order can't be placed as it was sent. Reload the page and check your orders before placing it again.";
+    actions.submitPortalOrderAction.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'conflict', message: conflict, details: { outcome: 'refused' } },
+    });
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(conflict);
+    expect(screen.getByRole('alert').textContent).toBe(conflict);
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeInTheDocument();
+  });
+
+  it("unknown with the server's reload-and-check words (a database code it does not recognise): those words, the cart held, Reload, and Place order with the same key", async () => {
+    const unrecognised =
+      "We couldn't confirm this order. Reload the page and check your orders before placing it again.";
+    actions.submitPortalOrderAction.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: unrecognised,
+        details: { outcome: 'unknown', retryable: true },
+      },
+    });
+    const user = await shop();
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(unrecognised);
+    expect(screen.queryByText(/Press Place order again to finish it/)).toBeNull();
+    expect(addOne()).toBeDisabled();
+    expect(note()).toHaveAttribute('readonly');
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Place order' })).toBeEnabled();
+    actions.submitPortalOrderAction.mockResolvedValueOnce({
+      ok: true,
+      data: { id: 'fedcba98-7654-4321-8abc-def012345678', replay: true },
+    });
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    await waitFor(() => expect(sent()).toHaveLength(2));
+    expect(sent()[1]).toEqual(sent()[0]);
+  });
+
+  it('no outcome (a read failed before anything was written) after an unknown outcome: the cart stays as sent with Reload', async () => {
+    actions.submitPortalOrderAction.mockResolvedValueOnce(UNKNOWN);
+    const user = await shop();
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    await screen.findByRole('alert');
+    actions.submitPortalOrderAction.mockResolvedValueOnce(NO_OUTCOME);
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    expect(
+      await screen.findByText('Order could not be submitted. Please try again.'),
+    ).toBeInTheDocument();
+    expect(addOne()).toBeDisabled();
+    expect(note()).toHaveAttribute('readonly');
+    expect(screen.getByRole('button', { name: 'Reload' })).toBeInTheDocument();
+    // The next press still sends the same cart under the same key.
+    actions.submitPortalOrderAction.mockResolvedValueOnce(NO_OUTCOME);
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    await waitFor(() => expect(sent()).toHaveLength(3));
+    expect(sent()[2]).toEqual(sent()[0]);
+  });
+
+  it("no outcome on the first send: the cart stays the customer's to change, and the same cart keeps its key", async () => {
+    actions.submitPortalOrderAction.mockResolvedValue(NO_OUTCOME);
+    const user = await shop();
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    await screen.findByText('Order could not be submitted. Please try again.');
+    expect(addOne()).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Reload' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+    await waitFor(() => expect(sent()).toHaveLength(2));
+    expect(sent()[1]!.idempotencyKey).toBe(sent()[0]!.idempotencyKey);
   });
 });

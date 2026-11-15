@@ -63,7 +63,21 @@ describe('nothing in product code creates an order but the one path', () => {
     expect(inserters.map((f) => path.relative(REPO, f)).sort()).toEqual([]);
   });
 
-  it('the public link and the portal each write an order in one insert_order_request_with_lines call', () => {
+  it('the portal places an order only through its keyed write, once, after reading the key', () => {
+    const portal = readFileSync(path.join(REPO, 'apps/web/src/server/services/portal.ts'), 'utf8');
+    expect(portal.match(/rpc\(\s*['"`]place_portal_order_request['"`]/g)).toHaveLength(1);
+    expect(portal.match(/rpc\(\s*['"`]portal_order_submission_status['"`]/g)).toHaveLength(1);
+    expect(portal.indexOf("rpc('portal_order_submission_status'")).toBeLessThan(
+      portal.indexOf("rpc('place_portal_order_request'"),
+    );
+    // Nothing else in product code calls the portal's write.
+    const callers = FILES.filter((f) =>
+      /['"`]place_portal_order_request['"`]/.test(readFileSync(f, 'utf8')),
+    ).map((f) => path.relative(REPO, f));
+    expect(callers).toEqual(['apps/web/src/server/services/portal.ts']);
+  });
+
+  it('the public link writes an order in one insert_order_request_with_lines call', () => {
     const callers = FILES.flatMap((f) => {
       const hits = readFileSync(f, 'utf8').match(/rpc\(\s*['"`]insert_order_request_with_lines['"`]/g);
       return hits ? hits.map(() => path.relative(REPO, f)) : [];
@@ -82,9 +96,9 @@ const KNOWN_ONE_WRITE_CALLERS: string[] = [
   // The public order link: source public_link, for a person with no account
   // (its own confirmation flow); the header, track token row and lines.
   'apps/web/src/app/api/v1/public/order-requests/route.ts',
-  // The B2B customer portal: source portal (a customer principal, never an
-  // org member); the header and lines.
-  'apps/web/src/server/services/portal.ts',
+  // The B2B customer portal writes through place_portal_order_request
+  // instead, which calls this function inside the database under the
+  // customer's submission key (one order per key).
 ];
 
 /**

@@ -134,7 +134,14 @@ const FAILED: Answer = { data: null, error: { message: 'upstream timeout', code:
 const OFF: Answer = { data: null, error: null };
 
 const ACTIONS: Array<[string, () => Promise<unknown>]> = [
-  ['place an order', () => submitPortalOrderAction({ lines: [{ itemId: LINE, quantity: 1 }] })],
+  [
+    'place an order',
+    () =>
+      submitPortalOrderAction({
+        lines: [{ itemId: LINE, quantity: 1 }],
+        idempotencyKey: 'a7e19000-0000-4000-8000-0000000000e2',
+      }),
+  ],
   [
     'request a return',
     () =>
@@ -194,10 +201,15 @@ describe('portal Server Actions: the account status could not be read', () => {
 });
 
 describe('portal Server Actions: answers that were read are unchanged', () => {
-  it.each(ACTIONS)('%s: a portal module that is off is "no portal access", unreported', async (_n, run) => {
+  it.each(ACTIONS)('%s: a portal module that is off is "no portal access", unreported', async (n, run) => {
     await expect(run()).resolves.toEqual({
       ok: false,
-      error: { code: 'forbidden', message: 'Your account does not have portal access.' },
+      error: {
+        code: 'forbidden',
+        message: 'Your account does not have portal access.',
+        // Place order also tells the portal shop the refusal is definite.
+        ...(n === 'place an order' ? { details: { outcome: 'refused' } } : {}),
+      },
     });
     expect(spies.reportError).not.toHaveBeenCalled();
     expect(state.writes).toEqual([]);

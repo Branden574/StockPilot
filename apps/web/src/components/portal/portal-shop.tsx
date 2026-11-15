@@ -19,6 +19,7 @@ import type { PortalCatalogItem, PortalOrder } from '@/server/services/portal';
 import {
   ORDER_STATUS_META,
   isOrderStatusKey,
+  mintOrderSubmissionKey,
   requesterEntryLabel,
   RETURNS_COPY,
   type PortalPricingMode,
@@ -29,12 +30,32 @@ import {
 const RETURNABLE_ORDER_STATUSES = new Set(['completed', 'delivered']);
 
 /**
- * Place order did not come back: the page cannot say whether it was placed.
- * The orders on this page were read before the press, so the customer is
- * sent to a reload (which reads them again), not to the list below.
+ * Place order did not come back, or came back saying the database's answer
+ * was lost: the page cannot say whether it was placed. Pressing Place order
+ * again sends the same cart under the same submission key, and the server
+ * answers the order the first press placed if it did, so the second press
+ * finishes the order and never places a second one. The service answers an
+ * unknown outcome in the same words (PORTAL_ORDER_UNCONFIRMED_COPY).
  */
 const ORDER_UNCONFIRMED_MESSAGE =
-  "We couldn't confirm your order went through. Reload the page and check your orders before placing it again.";
+  "We couldn't confirm your order went through. Press Place order again to finish it. It won't be placed twice.";
+
+/**
+ * Added to a definite refusal that follows a send whose outcome was not
+ * known: the refusal is true for this send, but an earlier send may still
+ * have gone through, so the customer looks before ordering again.
+ */
+const CHECK_ORDERS_FIRST_MESSAGE = 'Check your orders before placing it again.';
+
+type PortalOrderBody = { lines: Array<{ itemId: string; quantity: number }>; notes?: string };
+
+/** The cart as the server reads it: lines in item order, and the note. */
+function cartFingerprint(body: PortalOrderBody): string {
+  const lines = [...body.lines].sort((a, b) =>
+    a.itemId < b.itemId ? -1 : a.itemId > b.itemId ? 1 : 0,
+  );
+  return JSON.stringify([lines.map((l) => [l.itemId, l.quantity]), body.notes ?? null]);
+}
 
 /** A section title (the storefront's section heading: Inter Tight 16 / 500). */
 const SECTION_TITLE =
@@ -108,12 +129,27 @@ export function PortalShop({
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   // The last Place order call did not come back, so whether that order was
-  // placed is not known. Until the page is reloaded the cart and the note are
-  // shown as they were sent, read-only, and Place order stays disabled: a
-  // second press would send the same cart again, and nothing on the server
-  // tells the two apart. Only a reload clears it (the state does not survive
-  // one), and the reload reads the customer's orders again.
+  // placed is not known: the call did not come back, or it came back saying
+  // the database's answer was lost. Until a press is answered with the order
+  // or a definite refusal (or the page is reloaded), the cart and the note
+  // are shown as they were sent,
+  // read-only, and Place order sends exactly that cart again under the same
+  // key: the server answers the order the first press placed, or places it
+  // once. A reload clears it (the state does not survive one) and reads the
+  // customer's orders again.
   const [unconfirmed, setUnconfirmed] = React.useState(false);
+  // A definite refusal followed a send whose outcome was not known: the cart
+  // is the customer's again, and Reload stays offered with a sentence to
+  // check their orders first, until an order is confirmed or the page loads
+  // again.
+  const [checkOrdersFirst, setCheckOrdersFirst] = React.useState(false);
+  // One submission key per cart (the staff New order page's rule): minted on
+  // the first press of a cart, kept with that cart for every retry, and
+  // renewed for a changed cart or once an order is confirmed. A refusal keeps
+  // it: nothing was placed under it, and the same cart may be sent again.
+  const pending = React.useRef<{ key: string; fingerprint: string; body: PortalOrderBody } | null>(
+    null,
+  );
   const [placedId, setPlacedId] = React.useState<string | null>(null);
   // Which order's "Return or exchange" sheet is open, and which order just
   // got a request (drives the in-portal confirmation banner).
@@ -160,38 +196,96 @@ export function PortalShop({
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
+  /**
+   * An unknown outcome: the cart and the note go back to what was sent and
+   * are held read-only with its key, and the next press sends exactly them.
+   * The words are the server's when it answered (they differ for a database
+   * code the service does not recognise), else the page's own.
+   */
+  function holdAsSent(sent: PortalOrderBody, message: string = ORDER_UNCONFIRMED_MESSAGE) {
+    setCart(Object.fromEntries(sent.lines.map((l) => [l.itemId, l.quantity])));
+    setNotes(sent.notes ?? '');
+    setUnconfirmed(true);
+    setError(message);
+  }
+
   async function submit() {
-    // Never while a call is out, and never again after one whose outcome is
-    // not known (see `unconfirmed`).
-    if (busy || unconfirmed) return;
+    // Never while a call is out.
+    if (busy) return;
     setError(null);
     setBusy(true);
-    let res: Awaited<ReturnType<typeof submitPortalOrderAction>>;
-    try {
-      res = await submitPortalOrderAction({
+    // After a call whose outcome is not known, exactly what was sent goes
+    // again, under its key. Otherwise this cart: the same key while it is the
+    // same cart, a new key for a new one.
+    let sending = pending.current;
+    if (!unconfirmed || !sending) {
+      const body: PortalOrderBody = {
         lines: cartLines.map(([itemId, quantity]) => ({ itemId, quantity })),
         notes: notes.trim() || undefined,
-      });
+      };
+      const fingerprint = cartFingerprint(body);
+      sending =
+        sending && sending.fingerprint === fingerprint
+          ? sending
+          : { key: mintOrderSubmissionKey(), fingerprint, body };
+      pending.current = sending;
+    }
+    let res: Awaited<ReturnType<typeof submitPortalOrderAction>>;
+    try {
+      res = await submitPortalOrderAction({ ...sending.body, idempotencyKey: sending.key });
     } catch (e) {
       // A redirect the action made (to the code page): Next is already
       // navigating, so nothing is shown on the way.
       if (isControlFlow(e)) return;
       // The call did not come back (the connection dropped, the server could
-      // not answer). The page cannot know whether the order was placed, so it
-      // does not say, and it does not offer the same cart again: the message
-      // sends the customer to a reload, and Place order stays disabled.
-      setUnconfirmed(true);
-      setError(ORDER_UNCONFIRMED_MESSAGE);
+      // not answer): unknown.
+      holdAsSent(sending.body);
       return;
     } finally {
       setBusy(false);
     }
     if (!res.ok) {
-      // A refusal the server answered: nothing was placed. The button comes
-      // back and the cart and the note stay, so the next press sends them.
-      setError(res.error.message);
-      return;
+      // What the refusal means for the cart (services/portal.ts):
+      switch (res.error.details?.outcome) {
+        case 'unknown':
+          // The server's answer from the database was lost, or the key is
+          // still held by an earlier send: the order may have been placed.
+          // Exactly as a call that did not come back, in the server's words.
+          holdAsSent(sending.body, res.error.message || ORDER_UNCONFIRMED_MESSAGE);
+          return;
+        case 'refused':
+          // Definite: nothing was placed by this send, and this cart as sent
+          // will not be. The cart is the customer's to change again, also
+          // after an unknown send: a resend that the key answered would have
+          // come back as the first order, so the refusal is shown and the
+          // customer decides. The key stays with this cart; a changed cart
+          // gets a new one. After an unknown send, an earlier send may still
+          // have gone through: Reload stays, and the words say to check the
+          // orders first (unless they already do).
+          if (unconfirmed || checkOrdersFirst) {
+            setCheckOrdersFirst(true);
+            setError(
+              /check your orders/i.test(res.error.message)
+                ? res.error.message
+                : `${res.error.message} ${CHECK_ORDERS_FIRST_MESSAGE}`,
+            );
+          } else {
+            setError(res.error.message);
+          }
+          setUnconfirmed(false);
+          return;
+        default:
+          // A read failed before anything was written, or the access check
+          // could not be read: nothing was placed by this call, and nothing
+          // else changes (an earlier unknown send stays unknown).
+          setError(res.error.message);
+          return;
+      }
     }
+    // Placed, now or by the first press (a replay names the same order).
+    pending.current = null;
+    setUnconfirmed(false);
+    setCheckOrdersFirst(false);
     setCart({});
     setNotes('');
     setPlacedId(res.data.id);
@@ -450,9 +544,11 @@ export function PortalShop({
                 {error}
               </p>
             )}
-            {/* Only after a call whose outcome is not known: a full page load,
-                which reads the customer's orders again and clears the cart. */}
-            {unconfirmed && (
+            {/* Only after a call whose outcome is not known, and after a
+                definite refusal that followed one: a full page load, which
+                reads the customer's orders again and clears the cart (Place
+                order, pressed again, finishes the same order instead). */}
+            {(unconfirmed || checkOrdersFirst) && (
               <div>
                 <Button
                   type="button"
@@ -488,11 +584,7 @@ export function PortalShop({
                 readOnly={unconfirmed}
                 onChange={(e) => setNotes(e.target.value)}
               />
-              <Button
-                onClick={() => void submit()}
-                disabled={busy || unconfirmed}
-                className="max-sm:h-11"
-              >
+              <Button onClick={() => void submit()} disabled={busy} className="max-sm:h-11">
                 {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
                 Place order
               </Button>
