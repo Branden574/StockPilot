@@ -4,8 +4,9 @@ import { makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supa
 
 /**
  * A saved view shared with the organization is shown to every member, so
- * sharing one (saving it shared, or turning sharing on or off) and an admin's
- * delete of a shared view whose owner deleted their account give the
+ * sharing one (saving it shared, or turning sharing on or off), deleting one's
+ * own shared view, and an admin's delete of a shared view whose owner deleted
+ * their account give the
  * authenticator answer first: under a policy that requires an authenticator, a
  * session that has not satisfied it is refused with mfa_required and nothing is
  * written. A person's own private view stays theirs to save and delete.
@@ -108,13 +109,13 @@ describe('SavedViewsService: changes every member sees give the authenticator an
     expect(updates).toHaveLength(1);
   });
 
-  it('an admin deletes an ownerless shared view, session not satisfied: refused after the own-view try, no second delete', async () => {
+  it('an admin deletes an ownerless shared view, session not satisfied: refused after the own private view try, no second delete', async () => {
     const { svc, deleteCalls } = svcFor(UNSATISFIED, 'admin', [[]]);
     await expect(svc.remove('v-orphan')).rejects.toMatchObject({
       code: 'forbidden',
       details: { reason: 'mfa_required' },
     });
-    // Only the delete scoped to the caller's own views ran, and it matched nothing.
+    // Only the delete scoped to the caller's own private views ran, and it matched nothing.
     expect(deleteCalls).toHaveLength(1);
     await expect(svc.removeOwnerless('v-orphan')).rejects.toMatchObject({
       details: { reason: 'mfa_required' },
@@ -123,15 +124,43 @@ describe('SavedViewsService: changes every member sees give the authenticator an
   });
 
   it('an admin deletes an ownerless shared view, session satisfied: deleted', async () => {
-    const { svc, deleteCalls } = svcFor(SATISFIED, 'admin', [[], [{ id: 'v-orphan' }]]);
+    const { svc, deleteCalls } = svcFor(SATISFIED, 'admin', [[], [], [{ id: 'v-orphan' }]]);
     await expect(svc.remove('v-orphan')).resolves.toBeUndefined();
-    expect(deleteCalls).toHaveLength(2);
+    expect(deleteCalls).toHaveLength(3);
   });
 
-  it("deleting one's own view, session not satisfied: deleted", async () => {
+  it("deleting one's own private view, session not satisfied: deleted", async () => {
     const { svc, deleteCalls } = svcFor(UNSATISFIED, 'staff');
     await expect(svc.remove('v-1')).resolves.toBeUndefined();
     expect(deleteCalls).toHaveLength(1);
+    expect(deleteCalls[0]!.args[deleteCalls[0]!.methods.lastIndexOf('eq')]).toEqual([
+      'is_shared',
+      false,
+    ]);
+  });
+
+  it("deleting one's own shared view, session not satisfied: refused with mfa_required, the shared view stays", async () => {
+    const { svc, deleteCalls } = svcFor(UNSATISFIED, 'staff', [[]]);
+    await expect(svc.remove('v-own-shared')).rejects.toMatchObject({
+      code: 'forbidden',
+      details: { reason: 'mfa_required' },
+    });
+    // The private-view delete matched nothing; no delete of a shared view ran.
+    expect(deleteCalls).toHaveLength(1);
+    await expect(svc.removeOwnShared('v-own-shared')).rejects.toMatchObject({
+      details: { reason: 'mfa_required' },
+    });
+    expect(deleteCalls).toHaveLength(1);
+  });
+
+  it("deleting one's own shared view, session satisfied: deleted", async () => {
+    const { svc, deleteCalls } = svcFor(SATISFIED, 'staff', [[], [{ id: 'v-own-shared' }]]);
+    await expect(svc.remove('v-own-shared')).resolves.toBeUndefined();
+    expect(deleteCalls).toHaveLength(2);
+    expect(deleteCalls[1]!.args[deleteCalls[1]!.methods.lastIndexOf('eq')]).toEqual([
+      'is_shared',
+      true,
+    ]);
   });
 
   it('a member who is not an admin: removeOwnerless deletes nothing', async () => {

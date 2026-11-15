@@ -34,12 +34,13 @@ const schema = z.object({
  * return request draft.
  *
  * Before writing anything, this confirms `orderId` actually names a row the
- * CALLER can see: the context's cookie-bound, user-authed client reads
- * `order_requests` by id. RLS (migration 0044) already scopes that SELECT to
- * the caller's own organization, so one round trip answers both "does it
- * exist" and "can this caller see it." A well-formed but unknown or
- * not-visible id is a silent no-op, same as a failed zod parse — it is not an
- * error, just nothing worth auditing.
+ * CALLER can see in the ACTIVE organization: the context's cookie-bound,
+ * user-authed client reads `order_requests` by id and the context's
+ * organization, under RLS (migration 0044). A member of two organizations
+ * therefore records a draft only for an order of the organization the row is
+ * filed under. A well-formed but unknown, not-visible or other-organization id
+ * is a silent no-op, same as a failed zod parse — it is not an error, just
+ * nothing worth auditing.
  *
  * Best-effort: it is called AFTER window.open, and a logging failure — the
  * existence check included — must never surface as a broken action to an
@@ -60,6 +61,7 @@ export async function recordDeliveryRequestDraftedAction(input: {
     const { data: order } = await ctx.supabase
       .from('order_requests')
       .select('id')
+      .eq('organization_id', ctx.organizationId)
       .eq('id', parsed.data.orderId)
       .maybeSingle();
     if (!order) return;

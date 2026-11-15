@@ -71,6 +71,11 @@ import {
  *   - A listed entry that writes something new ("does not pin"): if the new
  *     write is still the person's own (or the kind's), add it to `writes`;
  *     if it changes organization data, give the answer before it instead.
+ *     When a shared helper (the audit writer, the event dispatcher) changes
+ *     what it writes, every listed entry that reaches it fails at once: run
+ *     this file with AUTHENTICATOR_GUARD_PRINT_PINS=1 to print the current
+ *     `writes` of every listed entry, check the new labels, and copy them in.
+ *     Printing changes no result.
  *   - A new RPC that only reads, reported as a write: declare it STABLE (or
  *     IMMUTABLE) in its migration. A function that writes must not be.
  *   - A new entry that is the person's own (a preference, a session, a sign-in
@@ -470,7 +475,7 @@ const REVIEWED: Record<string, Reviewed> = {
   'server/actions/saved-views.ts#deleteSavedViewAction': {
     kind: 'personal',
     reason:
-      "Deletes the caller's own saved view; an admin's delete of an ownerless shared one goes through removeOwnerless, which gives the answer.",
+      "Deletes the caller's own private saved view; their own shared one goes through removeOwnShared and an admin's ownerless shared one through removeOwnerless, which give the answer.",
     writes: ['saved_views.delete'],
   },
   'server/services/saved-views.ts#SavedViewsService.create': {
@@ -482,7 +487,7 @@ const REVIEWED: Record<string, Reviewed> = {
   'server/services/saved-views.ts#SavedViewsService.remove': {
     kind: 'personal',
     reason:
-      "Deletes the caller's own saved view; an admin's delete of an ownerless shared one goes through removeOwnerless, which gives the answer.",
+      "Deletes the caller's own private saved view; their own shared one goes through removeOwnShared and an admin's ownerless shared one through removeOwnerless, which give the answer.",
     writes: ['saved_views.delete'],
   },
   'server/actions/org-switcher.ts#switchOrganizationAction': {
@@ -1347,6 +1352,7 @@ const MUTATIONS: Mutation[] = [
       `${SAVED_VIEWS}#SavedViewsService.createShared`,
       `${SAVED_VIEWS}#SavedViewsService.setSharing`,
       `${SAVED_VIEWS}#SavedViewsService.removeOwnerless`,
+      `${SAVED_VIEWS}#SavedViewsService.removeOwnShared`,
       'server/actions/saved-views.ts#toggleSavedViewShareAction',
     ],
   },
@@ -1370,6 +1376,12 @@ const MUTATIONS: Mutation[] = [
     anchor: 'async removeOwnerless(',
     remove: 'this.gateOrganizationChange();',
     expect: [`${SAVED_VIEWS}#SavedViewsService.removeOwnerless`],
+  },
+  {
+    file: SAVED_VIEWS,
+    anchor: 'async removeOwnShared(',
+    remove: 'this.gateOrganizationChange();',
+    expect: [`${SAVED_VIEWS}#SavedViewsService.removeOwnShared`],
   },
   {
     file: 'server/actions/delivery-request.ts',
@@ -1625,6 +1637,30 @@ function staleEntries(tree: Tree, entries: Entry[], reviewed: Record<string, Rev
   return problems.sort();
 }
 
+/**
+ * Rule 2 and each mutation row read the whole tree (the first works out every
+ * write set): a busy runner can take longer than the suite's default.
+ */
+const GUARD_TIMEOUT_MS = 60_000;
+
+/** Set to print the current `writes` of every listed entry (see WHEN THIS FAILS). */
+const PRINT_PINS_ENV = 'AUTHENTICATOR_GUARD_PRINT_PINS';
+
+/**
+ * The current write set of every listed entry, as `'<key>': [...]` lines in
+ * REVIEWED's order, to copy into each entry's `writes`. Printing changes no
+ * result: rule 2 still compares the pins as written.
+ */
+function freshPins(entries: Entry[], reviewed: Record<string, Reviewed>): string {
+  const byKey = new Map(entries.map((e) => [e.key, e]));
+  const lines = Object.keys(reviewed).map((key) => {
+    const v = byKey.get(key)?.verdict;
+    const writes = v ? v.writeSet.map((w) => `'${w}'`).join(', ') : '/* no such entry */';
+    return `  '${key}': [${writes}],`;
+  });
+  return [`Current writes of the ${lines.length} listed entries:`, ...lines].join('\n');
+}
+
 /** One mutation: the source with `remove` taken out after `anchor`, close to it. */
 function mutated(files: ReachFile[], srcRoot: string, m: Mutation): ReachFile[] {
   const target = path.join(srcRoot, m.file);
@@ -1686,14 +1722,24 @@ describe('every change to organization data gives the authenticator answer first
     expect(openEntries(REAL_ENTRIES, REVIEWED)).toEqual([]);
   });
 
-  it('1. every entry that calls a collaborator this guard cannot follow is read by a person', () => {
-    expect(unfollowedEntries(REAL_ENTRIES, RESOLVED_BY_READING)).toEqual([]);
-  });
+  it(
+    '1. every entry that calls a collaborator this guard cannot follow is read by a person',
+    () => {
+      expect(unfollowedEntries(REAL_ENTRIES, RESOLVED_BY_READING)).toEqual([]);
+    },
+    GUARD_TIMEOUT_MS,
+  );
 
-  it('2. every listed entry is current, and writes only what it pins', () => {
-    expect(staleEntries(REAL, REAL_ENTRIES, REVIEWED)).toEqual([]);
-    expect(staleResolved(REAL_ENTRIES, RESOLVED_BY_READING)).toEqual([]);
-  });
+  it(
+    '2. every listed entry is current, and writes only what it pins',
+    () => {
+      if (process.env[PRINT_PINS_ENV])
+        process.stdout.write(`${freshPins(REAL_ENTRIES, REVIEWED)}\n`);
+      expect(staleEntries(REAL, REAL_ENTRIES, REVIEWED)).toEqual([]);
+      expect(staleResolved(REAL_ENTRIES, RESOLVED_BY_READING)).toEqual([]);
+    },
+    GUARD_TIMEOUT_MS,
+  );
 
   it('3. the gates are where this guard thinks they are, and the context builders are none', () => {
     const plain = REAL.graph.writeGate({ gates: [], readRpcs: READ_RPCS });
@@ -1749,6 +1795,7 @@ describe('every change to organization data gives the authenticator answer first
           expect(line).toContain(m.conditional);
         }
       },
+      GUARD_TIMEOUT_MS,
     );
   });
 });
@@ -2095,6 +2142,10 @@ describe('self-test: planted shapes are read as written', () => {
       `${key}: pins audit_logs.insert, which it does not write`,
       `${key}: writes orders.update, which its entry does not pin`,
     ]);
+    // The printed table gives the current writes to copy in.
+    expect(freshPins(entries, { [key]: { kind: 'personal', reason, writes: [] } })).toContain(
+      `  '${key}': ['orders.update', 'prefs.upsert', 'rpc:write_things', 'storage:docs.remove'],`,
+    );
   });
 
   it('4. the volatility of the latest definition decides', () => {

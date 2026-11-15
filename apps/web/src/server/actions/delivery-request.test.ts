@@ -140,6 +140,32 @@ describe('recordDeliveryRequestDraftedAction', () => {
     expect(auditSpy).not.toHaveBeenCalled();
   });
 
+  it('reads the order in the active organization only', async () => {
+    await recordDeliveryRequestDraftedAction({ orderId: ORDER, isCondensed: false });
+    const methods = stubHolder.stub!.chains.get('order_requests.select') ?? [];
+    const args = stubHolder.stub!.chainArgs.get('order_requests.select') ?? [];
+    const eqs = methods.flatMap((m, i) => (m === 'eq' ? [args[i]] : []));
+    expect(eqs).toEqual(
+      expect.arrayContaining([
+        ['organization_id', 'org-1'],
+        ['id', ORDER],
+      ]),
+    );
+  });
+
+  it('an order of another organization the caller also belongs to: records nothing', async () => {
+    stubHolder.stub = makeSupabaseStub({
+      'order_requests.select.maybeSingle': (call) => {
+        const eqs = call.methods.flatMap((m, i) => (m === 'eq' ? [call.args[i]] : []));
+        const inActiveOrg = eqs.some((a) => a?.[0] === 'organization_id' && a?.[1] === 'org-1');
+        // The row belongs to org-2: the active organization's filter finds nothing.
+        return { data: inActiveOrg ? null : { id: ORDER }, error: null };
+      },
+    });
+    await recordDeliveryRequestDraftedAction({ orderId: ORDER, isCondensed: false });
+    expect(auditSpy).not.toHaveBeenCalled();
+  });
+
   it('rejects a non-uuid order id without calling audit', async () => {
     await recordDeliveryRequestDraftedAction({ orderId: 'not-a-uuid', isCondensed: false });
     expect(auditSpy).not.toHaveBeenCalled();
