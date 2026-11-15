@@ -889,6 +889,15 @@ PGTAP_TESTS=(
   # sync log entry, a notification endpoint, a public request link, a queued
   # event, a supplier or a charter (tg_organization_id_fixed on each table).
   supabase/tests/0463_organization_fixed_on_connected_records.test.sql
+  # Portal Place order, placed once per key: the B2B portal's write
+  # (place_portal_order_request, service_role only) reads the customer's key
+  # under 0391's key lock and answers the first order to a resend; the key is
+  # (organization, user) scoped on 0391's order_submissions with the customer
+  # in the hash, so another customer or organization never matches or sees
+  # the order (a conflict names nothing); the one row is written only by a
+  # flag-gated recorder (stockpilot.portal_order_submit, raised inline by the
+  # writer alone; 0391's flag census unchanged).
+  supabase/tests/portal_order_submission_key.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

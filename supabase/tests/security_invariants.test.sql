@@ -486,6 +486,7 @@ insert into _sec_inv_flag_setter_allow (flag, fn, why) values
   ('stockpilot.ledger', 'public.transfer_stock',              'ledger wrapper (0359; also 0359 test 17)'),
   ('stockpilot.order_submit', 'public.place_order_request',       'one of the two writers of order_submissions (0391; also 0391 G5)'),
   ('stockpilot.order_submit', 'public.withdraw_order_submission', 'one of the two writers of order_submissions (0391; also 0391 G5)'),
+  ('stockpilot.portal_order_submit', 'public.place_portal_order_request', 'the portal''s keyed Place order: raises the flag around its one call to _record_portal_order_submission and puts the previous value back; service_role only (also portal_order_submission_key G4)'),
   ('stockpilot.return_exchange', 'public._return_exchange_on_cancel',        'no API role may execute it (0396, 0397; also 0397 A1b)'),
   ('stockpilot.return_exchange', 'public._return_replacement_cancel_order',  'no API role may execute it (0396, 0397; also 0397 A1b)'),
   ('stockpilot.return_exchange', 'public._return_replacement_close_partial', 'no API role may execute it (0397; also 0397 A1b)'),
