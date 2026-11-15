@@ -471,8 +471,11 @@ function sessionCallsIn(fileName: string, source: string): string[] {
  *     END of that `if` is on BEFORE_REFUSAL, a 'local' function counting only
  *     when it is declared before the `if`;
  *   - every mfaRequired, mfaSatisfied and mfaEnrolled the file sets (a
- *     property, quoted or not, a shorthand, or an assignment) is
- *     `<answer>.<the same field>` (a spread of the answer is fine).
+ *     property, quoted, in brackets or neither, a shorthand, or an assignment
+ *     with any operator, through a dot or through brackets) is
+ *     `<answer>.<the same field>` (a spread of the answer is fine);
+ *   - a key in brackets is a string written in place, so the guard can read
+ *     it, and the three names are written as strings nowhere else.
  */
 function policyAnswerProblems(fileName: string, source: string): string[] {
   const sf = parse(fileName, source);
@@ -508,10 +511,22 @@ function policyAnswerProblems(fileName: string, source: string): string[] {
   type Call = ts.CallExpression | ts.NewExpression | ts.TaggedTemplateExpression;
   const calls: Call[] = [];
   const fields: Array<{ node: ts.Node; field: string; value?: ts.Expression }> = [];
-  const fieldName = (name: ts.Node): string | null =>
-    (ts.isIdentifier(name) || ts.isStringLiteral(name)) && ANSWER_FIELDS.has(name.text)
+  /** Keys in brackets that are not a string written in place. */
+  const unreadableKeys: ts.Node[] = [];
+  /** The strings that were read as a key; any other string with one of the names is reported. */
+  const readAsKey = new Set<ts.Node>();
+  const fieldName = (name: ts.Node): string | null => {
+    if (ts.isComputedPropertyName(name)) {
+      if (ts.isStringLiteralLike(name.expression)) return fieldName(name.expression);
+      unreadableKeys.push(name);
+      return null;
+    }
+    if (ts.isStringLiteralLike(name)) readAsKey.add(name);
+    return (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) && ANSWER_FIELDS.has(name.text)
       ? name.text
       : null;
+  };
+  const strayNames: ts.StringLiteralLike[] = [];
   const visit = (n: ts.Node): void => {
     if (
       (ts.isVariableDeclaration(n) || ts.isFunctionDeclaration(n)) &&
@@ -550,11 +565,26 @@ function policyAnswerProblems(fileName: string, source: string): string[] {
     }
     if (
       ts.isBinaryExpression(n) &&
-      n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-      ts.isPropertyAccessExpression(n.left)
+      n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      n.operatorToken.kind <= ts.SyntaxKind.LastAssignment
     ) {
-      const field = fieldName(n.left.name);
-      if (field) fields.push({ node: n, field, value: n.right });
+      // Only a plain `=` can carry the answer over; `||=` and the like never do.
+      const value = n.operatorToken.kind === ts.SyntaxKind.EqualsToken ? n.right : undefined;
+      if (ts.isPropertyAccessExpression(n.left)) {
+        const field = fieldName(n.left.name);
+        if (field) fields.push({ node: n, field, value });
+      } else if (ts.isElementAccessExpression(n.left)) {
+        const key = n.left.argumentExpression;
+        if (ts.isStringLiteralLike(key)) {
+          const field = fieldName(key);
+          if (field) fields.push({ node: n, field, value });
+        } else if (!ts.isNumericLiteral(key)) {
+          unreadableKeys.push(key);
+        }
+      }
+    }
+    if (ts.isStringLiteralLike(n) && ANSWER_FIELDS.has(n.text) && !readAsKey.has(n)) {
+      strayNames.push(n);
     }
     ts.forEachChild(n, visit);
   };
@@ -648,6 +678,12 @@ function policyAnswerProblems(fileName: string, source: string): string[] {
   for (const { node, field, value } of fields) {
     const fromAnswer = !!value && [...answers].some((a) => flat(value) === `${a}.${field}`);
     if (!fromAnswer) problems.add(`${at(node)}: sets ${field} to something other than the answer`);
+  }
+  for (const key of unreadableKeys) {
+    problems.add(`${at(key)}: sets a key in brackets that is not a string written in place`);
+  }
+  for (const name of strayNames) {
+    problems.add(`${at(name)}: writes ${name.text} as a string that is not a key`);
   }
   return [...problems];
 }
@@ -1280,6 +1316,57 @@ describe('self-test: a planted violation of each rule is reported', () => {
         ),
       ),
     ).toEqual([]);
+
+    // A key in brackets is a field too, in a property and in an assignment, with any operator.
+    expect(
+      own(
+        good
+          .replace('{ ...mfa, mfaEnrolled: mfa.mfaEnrolled }', "{ ...mfa, ['mfaRequired']: false }")
+          .replace(
+            'return data;',
+            "const ctx = { ...mfa }; ctx['mfaSatisfied'] = true; ctx[`mfaEnrolled`] = true; ctx.mfaSatisfied ||= true; return data;",
+          ),
+      ),
+    ).toEqual(
+      [
+        'OWN_SESSION app/api/cb/route.ts:11: sets mfaRequired to something other than the answer',
+        'OWN_SESSION app/api/cb/route.ts:12: sets mfaSatisfied to something other than the answer',
+        'OWN_SESSION app/api/cb/route.ts:12: sets mfaEnrolled to something other than the answer',
+      ].sort(),
+    );
+    expect(
+      own(
+        good.replace(
+          'return data;',
+          "const ctx = { ...mfa, ['mfaRequired']: mfa.mfaRequired }; ctx['mfaSatisfied'] = mfa.mfaSatisfied; return data;",
+        ),
+      ),
+    ).toEqual([]);
+
+    // A key the guard cannot read, and one of the names as a string that is not a key.
+    expect(
+      own(
+        good.replace(
+          'return data;',
+          "const k = 'mfaSatisfied'; const ctx = { ...mfa, [k]: true }; ctx[k] = true; return data;",
+        ),
+      ),
+    ).toEqual(
+      [
+        'OWN_SESSION app/api/cb/route.ts:12: sets a key in brackets that is not a string written in place',
+        'OWN_SESSION app/api/cb/route.ts:12: writes mfaSatisfied as a string that is not a key',
+      ].sort(),
+    );
+    expect(
+      own(
+        good.replace(
+          'return data;',
+          "const ctx = { ...mfa }; Object.defineProperty(ctx, 'mfaSatisfied', { value: true }); return data;",
+        ),
+      ),
+    ).toEqual([
+      'OWN_SESSION app/api/cb/route.ts:12: writes mfaSatisfied as a string that is not a key',
+    ]);
 
     // A namesake from another module is not the policy answer.
     expect(
