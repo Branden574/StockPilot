@@ -119,7 +119,9 @@ export const RELEASES: Release[] = [
     // that same minute.
     // Moved again by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: '2026-11-15T00:03:00Z'):
     // the settings release below is dated 2026-11-15T04:13:00Z, so the placeholder is that same minute.
-    publishedAt: '2026-11-15T04:13:00Z',
+    // Moved again by docs/whats-new-navigation-keeps-choices (2026-11-15; was: '2026-11-15T04:13:00Z'): the
+    // navigation release below is dated 2026-11-15T04:45:00Z, so the placeholder is that same minute.
+    publishedAt: '2026-11-15T04:45:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -204,6 +206,54 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'navigation-keeps-choices-2026-11',
+    revision: 1,
+    // #564 (squash 87b39194c), web only: no phone update and no migration.
+    // Live in production since 2026-11-15 04:44:13Z; publishedAt is the whole
+    // minute after. It went live after #563, so it sits above the settings
+    // release (settings-not-loaded-2026-11) and is the newest published
+    // release.
+    // Claims checked against the code at 87b39194c (paths under apps/web/src):
+    // - The page: app/(dashboard)/dashboard/settings/navigation/page.tsx
+    //   checks organization:update and lists the links of the modules that
+    //   are on (resolveSurface with the org's modules).
+    // - The save: server/actions/nav-settings.ts, owners and admins only,
+    //   merges into the stored setting (lib/nav-overrides-merge.ts): the
+    //   links the editor listed take the editor's answer; every other link
+    //   keeps its stored hide, rename and place in its section's order. The
+    //   sidebar ignores entries for links it does not draw, so they apply
+    //   again when the module is on.
+    // - components/settings/nav-customizer.tsx: Save changes sends { v: 1 }
+    //   instead of null when nothing is set; Reset to default still sends
+    //   null, which clears everything.
+    // Who is told: whoever can open the page (organization:update) and save
+    // it (owner or admin). The link is the page itself.
+    status: 'published',
+    title: 'Navigation keeps your choices for modules that are off',
+    summary:
+      'When you save Settings, Navigation, the hides, renames and places you set for the links of a module that is turned off are now kept, so they come back as you left them when you turn the module on again. Reset to default still clears everything. No app update is needed.',
+    // #564 is live in production since 2026-11-15 04:44:13Z.
+    publishedAt: '2026-11-15T04:45:00Z',
+    entries: [
+      {
+        id: 'navigation-keeps-choices-of-modules-off',
+        category: 'fixed',
+        area: 'Settings',
+        title: 'Navigation keeps your choices for modules that are off',
+        whatChanged:
+          'When you press Save changes in Settings, Navigation, the hides, renames and places you set for the links of a module that is turned off are now kept. When you turn that module on again, its links come back hidden, renamed or in the place you left them.',
+        whyItMatters:
+          "Navigation lists only the links of modules that are on, and before, saving it while a module was off dropped the choices you had made for that module's links.",
+        howItAffectsYou:
+          'Saving with nothing changed keeps your menu as it is. Reset to default still clears every choice, including those for modules that are off.',
+        whatToDo:
+          "No action needed. If an earlier save lost a module's hides, renames or places, set them again in Settings, Navigation once the module is on.",
+        link: { href: '/dashboard/settings/navigation', label: 'Open Navigation settings' },
+        audience: { roles: ['owner', 'admin'], anyPermission: ['organization:update'] },
       },
     ],
   },

@@ -30,11 +30,17 @@ import { RELEASES } from './registry';
  * (settings-not-loaded-2026-11, registry.settings-not-loaded.test.ts), which
  * went live later, and above the count read rule release. Its own file, so
  * the release tests other open branches edit stay as they are.
+ *
+ * Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15): the
+ * navigation release is published later, directly above the settings release
+ * and below the Liquid Glass draft. Each changed line has its own note.
  */
 const ID = 'module-check-try-again-2026-11';
 const SETTINGS_ID = 'settings-not-loaded-2026-11';
 const COUNT_RELEASE_ID = 'count-read-rule-2026-11';
 const EMAIL_RELEASE_ID = 'email-change-expired-2026-11';
+// Added by docs/whats-new-navigation-keeps-choices (2026-11-15): the navigation release (owners and admins who can open Settings, Navigation), published later, directly above the settings release.
+const NAVIGATION_ID = 'navigation-keeps-choices-2026-11';
 
 const PAGES = 'pages-say-when-modules-not-checked';
 const MODULE_SETTINGS = 'module-settings-say-when-not-checked';
@@ -96,7 +102,8 @@ describe('the module check release: order, status and date', () => {
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
-    expect(RELEASES.slice(1, 5).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: RELEASES.slice(1, 5)): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES.slice(2, 6).map((r) => [r.id, r.status])).toEqual([
       [SETTINGS_ID, 'published'],
       [ID, 'published'],
       [COUNT_RELEASE_ID, 'published'],
@@ -110,9 +117,11 @@ describe('the module check release: order, status and date', () => {
     const at = Date.parse(release().publishedAt);
     expect(at).toBeGreaterThan(Date.parse('2026-11-15T03:45:33Z'));
     expect(at).toBeLessThanOrEqual(Date.now());
-    expect(Date.parse(RELEASES[1]!.publishedAt)).toBeGreaterThan(at);
+    // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(Date.parse(RELEASES[2]!.publishedAt)).toBeGreaterThan(at);
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
-    for (const r of RELEASES.slice(3)) {
+    // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(4)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -261,9 +270,14 @@ describe('the module check release: who is told', () => {
       });
     }
     for (const v of [owner, admin, manager, staff]) {
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(SETTINGS_ID);
+      // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: nothing read, then the settings release read): the navigation release is published later, at the top, and reaches owners and admins, so each reader reads it first, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
       expect(
-        buildReleaseList(RELEASES, v, [readNow(SETTINGS_ID)], null).latestUnread?.id,
+        buildReleaseList(RELEASES, v, [readNow(NAVIGATION_ID)], null).latestUnread?.id,
+        v.role,
+      ).toBe(SETTINGS_ID);
+      expect(
+        buildReleaseList(RELEASES, v, [readNow(NAVIGATION_ID), readNow(SETTINGS_ID)], null)
+          .latestUnread?.id,
         v.role,
       ).toBe(ID);
     }
