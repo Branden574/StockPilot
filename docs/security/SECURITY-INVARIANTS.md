@@ -134,7 +134,16 @@
      applied; the assertion count in section 10 was re-derived from
      `select plan(60)`, and the two file counts beside it were counted from
      the manifests in `scripts/security-test.sh` after main's 0419 and 0420
-     were merged in. -->
+     were merged in.
+
+     AMENDED 2026-11-14: INV-B3 and INV-B4 gained the structure-or-privilege
+     arm of the allowlist audit (controls INV-30f and INV-30g) and the name
+     census INV-30h (control INV-30i). That no allowlist entry runs such a
+     statement, and that no first-party function has a name outside plain
+     lower case, was read by the suite on a local Postgres with migrations
+     0001-0423 applied; the assertion count in section 10 was re-derived
+     from `select plan(64)`. The two file counts beside it were counted
+     again from the manifests in `scripts/security-test.sh`. -->
 
 # Security invariants
 
@@ -519,6 +528,11 @@ null ACL — which is itself `PUBLIC`-executable, and is what a
     setting changed inside a helper stays changed for the rest of the
     caller's transaction, and `request.jwt.claim.sub` is what `auth.uid()`
     reads;
+  - a **statement that changes structure or privileges**, where a statement
+    starts: `ALTER`, `GRANT`, `REVOKE`, `CREATE`, `DROP`, `COMMENT ON`, and
+    with them `REFRESH MATERIALIZED VIEW`, `REINDEX`, `LOCK`, `SECURITY
+    LABEL` and `REASSIGN OWNED`. A read-only predicate runs as its owner for
+    every signed-in member and has no reason to run any of them;
   - a reached function with **no first-party body** (another schema, or an
     extension member anywhere) cannot be read, so it must carry a reasoned row
     in **allowlist K** (`_sec_inv_external_callee_allow`; one row today,
@@ -530,7 +544,16 @@ null ACL — which is itself `PUBLIC`-executable, and is what a
   match, and INV-30d does the same for the side-effect forms. INV-30e plants
   an entry that sets `request.jwt.claim.sub`, one that reaches a notification
   two calls down and one that runs `SET LOCAL`; each must be named, and an
-  entry that only reads the setting must not be.
+  entry that only reads the setting must not be. INV-30f plants one probe per
+  structure-or-privilege form and reads that must not match, and INV-30g
+  plants an entry that alters a table, one that reaches a `GRANT` two calls
+  down and one that runs `CREATE`; each must be named, and an entry that only
+  names the words must not be.
+  The call walk reads a called name as a plain lower-case one, so INV-30h
+  holds every first-party function in `public` and `ledger` to such a name
+  (a function created under a double-quoted name with a capital letter would
+  be a callee the walk does not follow), and INV-30i plants two names it must
+  refuse and one it must accept.
   INV-30c plants entries whose own bodies write nothing and that reach a
   writer one, two and three calls down, a function that runs `EXECUTE`, an
   extension function in another schema, and a bare extension function through
@@ -2412,9 +2435,9 @@ checked.
   reads code only, and `user_can_see_item_category` is no longer one of the
   functions it judges.
 - **A high-assurance baseline is implemented and covered by executable
-  invariants**: 60 class-wide assertions in
-  `supabase/tests/security_invariants.test.sql`, plus the 103 other pgTAP
-  files and the 364 vitest files on the manifests of
+  invariants**: 64 class-wide assertions in
+  `supabase/tests/security_invariants.test.sql`, plus the 107 other pgTAP
+  files and the 390 vitest files on the manifests of
   `scripts/security-test.sh`, gated together as `pnpm security:test` and
   wired into CI.
 - **Two risks are accepted and tracked**, not closed (section 7), each with a
@@ -2432,7 +2455,9 @@ checked.
   INV-35 (0371) follow the same pattern through INV-32, INV-34 and INV-36, and
   so do INV-15 and INV-16 (through INV-18b and INV-18c), INV-27 and INV-27b
   (through INV-28b), the call walk and the side-effect arm of INV-26 and
-  INV-31 (through INV-30c, INV-30d and INV-30e), INV-5, INV-6 and INV-11 on a
+  INV-31 (through INV-30c, INV-30d and INV-30e), their structure-or-privilege
+  arm (through INV-30f and INV-30g), INV-30h (through INV-30i), INV-5, INV-6
+  and INV-11 on a
   partitioned table (through INV-7b and INV-11b), INV-40b (through INV-41b
   and INV-41e), INV-40c (through INV-41c and INV-41e) and INV-40d (through
   INV-41d).

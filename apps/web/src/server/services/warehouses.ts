@@ -2,6 +2,8 @@ import 'server-only';
 
 import { z } from 'zod';
 
+import { formatLimit, MAX_PICKED_IDS } from '@stockpilot/core';
+
 import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { readInActiveOrg } from './lib/in-active-org';
@@ -12,7 +14,10 @@ export const createWarehouseSchema = z.object({
   name: z.string().min(1).max(120).trim(),
   code: z.string().min(1).max(32).trim(),
   /** Charters this warehouse services. Replaces old single charterId. */
-  charterIds: z.array(z.string().uuid()).default([]),
+  charterIds: z
+    .array(z.string().uuid())
+    .max(MAX_PICKED_IDS, `Choose at most ${formatLimit(MAX_PICKED_IDS)} charters.`)
+    .default([]),
   contactName: z.string().max(120).optional(),
   contactEmail: z.string().email().max(254).optional().or(z.literal('')),
   contactPhone: z.string().max(40).optional(),

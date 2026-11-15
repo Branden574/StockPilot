@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
+import { uncheckedAccessResult } from '@/server/lib/action-error-result';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 import {
@@ -39,6 +40,12 @@ import { err, ok, parseReturnBody, type ActionResult, type ExchangeCandidatesAns
 
 function toResult<T>(error: unknown): ActionResult<T> {
   rethrowControlFlow(error);
+  // A check of the caller's access that could not be read: its own sentence,
+  // with the reason these screens read on the other failures.
+  const unchecked = uncheckedAccessResult(error, 'actions.returns', {
+    details: { reason: 'failed' },
+  });
+  if (unchecked) return unchecked;
   if (error instanceof ServiceError) {
     const details = error.code !== 'internal_error' ? error.details : { reason: 'failed' };
     return err(error.code, error.message, details);

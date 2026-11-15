@@ -7,8 +7,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * whether THIS reader can open it (the form opens it only then, and goes
  * back to the exception otherwise), and revalidates the exception pages the
  * person came from; the module-off answer names itself; raw database text
- * never crosses; a success revalidates the exception and the maintenance
- * list.
+ * never crosses; a check of the caller's access that could not be read says
+ * its own try-again sentence, not the words for an unknown outcome; a success
+ * revalidates the exception and the maintenance list.
  */
 
 const { escalate, withContextMock, getRequest, checkRateLimit } = vi.hoisted(() => ({
@@ -39,7 +40,12 @@ vi.mock('@/server/services/context', async (importOriginal) => ({
 
 import { revalidatePath } from 'next/cache';
 
+import { ESCALATE_SERVER_PROBLEM_COPY } from '@stockpilot/core';
+
+import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
+import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { reportError } from '@/lib/error-reporter';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
 
 import { ServiceError } from '@/server/services/context';
 
@@ -174,6 +180,42 @@ describe('escalateExceptionAction', () => {
     expect(await escalateExceptionAction(ID, VALUES)).toMatchObject({
       error: { message: expect.stringContaining('not known whether the request was saved') },
     });
+  });
+
+  // The service asks the caller's access (the permission set, the account
+  // status, the maintenance module) before any read, claim or write, so a
+  // check that could not be read has saved nothing: it says its own
+  // try-again sentence, never "not known whether the request was saved".
+  it.each([
+    ['a module state', () => new ModulesUnavailableError()],
+    ['the permission set', () => new PermissionsUnavailableError()],
+    ['the account status', () => new AccountStatusUnavailableError()],
+  ])(
+    'an access check that could not be read (%s) says its own try-again sentence, reported once as a warning',
+    async (_name, make) => {
+      const thrown = make();
+      escalate.mockRejectedValue(thrown);
+      const res = await escalateExceptionAction(ID, VALUES);
+      expect(res).toEqual({ error: { message: thrown.message, reason: null } });
+      expect(JSON.stringify(res)).not.toMatch(/not known whether|Something went wrong/);
+      expect(reportError).toHaveBeenCalledTimes(1);
+      expect(reportError).toHaveBeenCalledWith(
+        thrown,
+        expect.objectContaining({ tag: 'actions.exceptions.escalate', level: 'warning' }),
+      );
+      expect(getRequest).not.toHaveBeenCalled();
+      expect(revalidatePath).not.toHaveBeenCalled();
+    },
+  );
+
+  it('a server failure is still reported as an error, with the words for an unknown outcome', async () => {
+    const thrown = new ServiceError('internal_error', 'claim failed');
+    escalate.mockRejectedValue(thrown);
+    expect(await escalateExceptionAction(ID, VALUES)).toEqual({
+      error: { message: ESCALATE_SERVER_PROBLEM_COPY, reason: null },
+    });
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(reportError).mock.calls[0]![1]).not.toMatchObject({ level: 'warning' });
   });
 
   it('a refusal after the request was saved passes the service\'s own words (cancelled or not) through', async () => {

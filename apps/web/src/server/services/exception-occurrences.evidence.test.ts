@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+import { RECOUNT_FACTS_NOT_YET } from '@/test/recount-facts';
 
 /**
  * The occurrence read (GET /api/v1/exceptions/[id], the phone's detail, and
@@ -193,6 +194,7 @@ function service(
   } = {},
 ) {
   const stub = makeSupabaseStub({
+    ...RECOUNT_FACTS_NOT_YET,
     'exception_occurrences.select.maybeSingle': { data: opts.occurrence ?? occRow(), error: null },
     'exception_occurrences.select': { data: [opts.occurrence ?? occRow()], error: null },
     'exception_occurrence_events.select': opts.events

@@ -68,7 +68,9 @@
 -- controls for the partitioned-table arm of INV-5, INV-6 and INV-11, the
 -- side-effect arm of the allowlist audit, INV-40b and INV-40c, and for
 -- INV-41d and INV-41e, the controls for INV-40d and for the SET-clause forms
--- INV-40b and INV-40c read.
+-- INV-40b and INV-40c read, and for INV-30f, INV-30g and INV-30i, the
+-- controls for the structure-or-privilege arm of the allowlist audit and for
+-- the name census INV-30h.
 --
 -- Pure catalog introspection — no fixtures, no seeded rows, no roles switched.
 -- `begin`/`rollback` for house consistency and so the temporary allowlist
@@ -77,7 +79,7 @@
 
 begin;
 
-select plan(60);
+select plan(64);
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -173,6 +175,7 @@ insert into _sec_inv_auth_secdef_nogate_allow (proname, why) values
   ('charter_in_org',              'boolean FK-org predicate used by write RLS'),
   ('supplier_in_org',             'boolean FK-org predicate used by write RLS'),
   ('warehouse_in_org',            'boolean FK-org predicate used by write RLS'),
+  ('bin_in_org',                  'boolean FK-org predicate used by write RLS (inventory_stock, putaway_moves); warehouse_in_org''s body for bins'),
   ('purchase_order_in_org',       'boolean FK-org predicate used by write RLS'),
   ('product_group_in_org',        'boolean FK-org predicate used by write RLS (0294+)'),
   ('module_enabled',              'boolean entitlement read (organization_modules row, OR organizations.all_modules_comp answered only to that org''s members, 0354) evaluated inside RLS/RPCs'),
@@ -292,6 +295,20 @@ insert into _sec_inv_unread_re (form, re) values
 create temporary table _sec_inv_side_effect_re (re text not null);
 insert into _sec_inv_side_effect_re (re) values
   ($re$\m(set_config|setval|nextval|pg_notify|pg_(try_)?advisory_[a-z_]+)"?\s*\(|(^|;|\m(then|else|begin|loop))\s*(set|reset|notify)\M$re$);
+
+-- A statement that changes structure or privileges, read from the code
+-- skeleton where a statement starts (as SET, RESET and NOTIFY are above):
+-- ALTER, GRANT, REVOKE, CREATE, DROP and COMMENT ON, and with them the other
+-- utility statements that change what the database holds or who may reach
+-- it: REFRESH MATERIALIZED VIEW, REINDEX, LOCK, SECURITY LABEL and REASSIGN
+-- OWNED. A read-only predicate runs none of them: it is called by every
+-- signed-in member, as its owner. The verb counts when a name follows it (a
+-- letter or a double quote), so a variable such as drop_count, or one
+-- assigned as "v_grant := ...", is not a statement. INV-30f plants a probe
+-- per form.
+create temporary table _sec_inv_structure_re (re text not null);
+insert into _sec_inv_structure_re (re) values
+  ($re$(^|;|\m(then|else|begin|loop))\s*((alter|grant|revoke|create|drop|reindex|lock)\s+["a-z]|comment\s+on\M|refresh\s+materialized\M|security\s+label\M|reassign\s+owned\M)$re$);
 
 -- An identity setting being set (T24). `re` is read from the body with
 -- comments removed and quoted text kept: set_config with the literal name
@@ -1161,9 +1178,11 @@ select is(
 -- its own body writes (the writer forms above, read from the raw text so a
 -- write in a format() string counts, and from the text with comments
 -- removed) or runs EXECUTE, when its own body has a side effect that is not
--- a table write (the side-effect forms above, T24), when a first-party
--- function it reaches through calls does any of these, or when it reaches a
--- function with no first-party body that is not on allowlist K.
+-- a table write (the side-effect forms above, T24), when its own body runs a
+-- statement that changes structure or privileges (the forms of
+-- _sec_inv_structure_re above), when a first-party function it reaches
+-- through calls does any of these, or when it reaches a function with no
+-- first-party body that is not on allowlist K.
 --   * A call is a name followed by "(" in the code skeleton (the body with
 --     comments and quoted text removed). A qualified name resolves to that
 --     schema; a bare name to every schema on the CALLER's own pinned
@@ -1180,6 +1199,9 @@ select is(
 --     EXECUTE.
 --   * The side-effect census (T24) is the non-extension functions whose
 --     code skeleton has a side-effect form.
+--   * The structure census is the non-extension functions whose code
+--     skeleton starts a statement with one of the structure-or-privilege
+--     forms.
 -- This reads text. INV-27b refuses a first-party body that holds a form the
 -- pass does not follow (listed at _sec_inv_unread_re above), so the skeleton
 -- of a body it lets through is split into code, comments and literals the
@@ -1218,6 +1240,22 @@ create temporary view _sec_inv_side_effect_census as
   select f.oid, f.fn from _sec_inv_fn_scope f
    where not f.ext
      and f.s ~* (select re from _sec_inv_side_effect_re);
+
+create temporary view _sec_inv_structure_census as
+  select f.oid, f.fn from _sec_inv_fn_scope f
+   where not f.ext
+     and f.s ~* (select re from _sec_inv_structure_re);
+
+-- The call walk below reads a called name as a plain lower-case one: it takes
+-- [a-z_][a-z0-9_$]* (bare or double-quoted), lower-cases it and looks that up
+-- in pg_proc. A first-party function created under any other name (capital
+-- letters, or a character outside that set, kept by double quotes) would not
+-- be followed. INV-30h holds every first-party function to a name the walk
+-- can read, so the walk reaches every function there is to reach.
+create temporary view _sec_inv_unwalkable_name as
+  select f.oid, f.sig from _sec_inv_fn_scope f
+   where f.nspname in ('public', 'ledger') and not f.ext
+     and f.proname !~ '^[a-z_][a-z0-9_$]*$';
 
 create temporary view _sec_inv_call_edges as
   with calls as (
@@ -1274,6 +1312,14 @@ create temporary view _sec_inv_allowlist_audit as
     select w.list, w.entry, 'allowlist-' || w.list || ' entry ' || w.entry || ' reaches a function with a side effect (a setting, a sequence, a notification or an advisory lock): ' || f.fn
       from reach w join _sec_inv_fn_scope f on f.oid = w.oid
      where w.oid <> w.root and w.oid in (select c.oid from _sec_inv_side_effect_census c)
+    union all
+    select w.list, w.entry, 'allowlist-' || w.list || ' entry changes structure or privileges (ALTER, GRANT, REVOKE, CREATE, DROP, COMMENT or another utility statement): ' || f.fn
+      from reach w join _sec_inv_fn_scope f on f.oid = w.oid
+     where w.oid = w.root and w.oid in (select c.oid from _sec_inv_structure_census c)
+    union all
+    select w.list, w.entry, 'allowlist-' || w.list || ' entry ' || w.entry || ' reaches a function that changes structure or privileges (ALTER, GRANT, REVOKE, CREATE, DROP, COMMENT or another utility statement): ' || f.fn
+      from reach w join _sec_inv_fn_scope f on f.oid = w.oid
+     where w.oid <> w.root and w.oid in (select c.oid from _sec_inv_structure_census c)
     union all
     select o.list, o.entry, 'allowlist-' || o.list || ' entry ' || o.entry || ' reaches a function with no first-party body, not on allowlist K: ' || o.fn
       from outside o
@@ -1997,6 +2043,144 @@ drop function public._sec_inv_probe_reads_claim();
 drop function ledger._sec_inv_probe_runs_set();
 drop function public._sec_inv_probe_notify_relay();
 drop function public._sec_inv_probe_notifier();
+
+-- INV-30f. VACUITY + MUTATION CONTROL for the structure-or-privilege forms,
+-- one probe per form, read the way the census reads a body: comments and
+-- quoted text removed first. Each statement must match where a statement
+-- starts (the start of the body, after ";", THEN, ELSE, BEGIN or LOOP). Eight
+-- must not match: the words in a comment and in a message, names that only
+-- begin with a verb, a verb that is a variable being assigned, column names,
+-- a verb in the middle of a statement, and an UPDATE or a SET (the business
+-- of the writer and side-effect forms).
+select is(
+  (select string_agg(v.form || '=' ||
+                     (regexp_replace(v.src, (select re from _sec_inv_strip_re), (select rep from _sec_inv_strip_re), 'g')
+                        ~* (select re from _sec_inv_structure_re))::text, ', ' order by v.n)
+     from (values
+       (1, 'alter',               $s$begin alter table public.t enable row level security; return true; end;$s$),
+       (2, 'grant',               $s$v := 1; grant select on public.t to anon;$s$),
+       (3, 'revoke',              $s$if v then revoke all on public.t from authenticated; end if;$s$),
+       (4, 'create',              $s$create temporary table _t (id int);$s$),
+       (5, 'drop',                $s$v := 1;
+  drop policy p on public.t;$s$),
+       (6, 'comment on',          $s$v := 1; comment on table public.t is 'x';$s$),
+       (7, 'refresh',             $s$loop refresh materialized view public.m; end loop;$s$),
+       (8, 'reindex',             $s$v := 1; reindex table public.t;$s$),
+       (9, 'lock',                $s$begin lock table public.t in share mode; return true; end;$s$),
+       (10, 'security label',     $s$v := 1; security label on table public.t is 'x';$s$),
+       (11, 'reassign owned',     $s$v := 1; reassign owned by a to b;$s$),
+       (12, 'alter after else',   $s$if v then return true; else alter function public.f() owner to postgres; end if;$s$),
+       (13, 'quoted name',        $s$v := 1; drop table "T";$s$),
+       (14, 'after a comment',    $s$v := 1; -- then
+  grant execute on function public.f() to anon;$s$),
+       (15, 'read: words in a comment and a message', $s$-- ; alter table t; grant all
+  v := 'x; drop table t; create role r';$s$),
+       (16, 'read: names that begin with a verb', $s$drop_count := 1; created_at := now(); grant_id := v; locked := true;$s$),
+       (17, 'read: a verb assigned',  $s$v := 1; comment := 'x'; lock := true;$s$),
+       (18, 'read: column names', $s$select t.created, t."grant", t.lock, t.comment from public.t t;$s$),
+       (19, 'read: a verb inside a statement', $s$select count(*) into v from public.t where t.kind = any (array[create_kind, drop_kind]);$s$),
+       (20, 'not this form: update', $s$update public.t set a = 1;$s$),
+       (21, 'not this form: set', $s$begin set local lock_timeout to '1s'; return true; end;$s$),
+       (22, 'read: on update of a foreign key in a message', $s$v := 1; raise exception 'on update cascade; alter';$s$)) v(n, form, src)),
+  'alter=true, grant=true, revoke=true, create=true, drop=true, comment on=true, refresh=true, reindex=true, '
+  'lock=true, security label=true, reassign owned=true, alter after else=true, quoted name=true, after a comment=true, '
+  'read: words in a comment and a message=false, read: names that begin with a verb=false, read: a verb assigned=false, '
+  'read: column names=false, read: a verb inside a statement=false, not this form: update=false, not this form: set=false, '
+  'read: on update of a foreign key in a message=false',
+  'INV-30f control: the structure detector catches ALTER, GRANT, REVOKE, CREATE, DROP, COMMENT ON, REFRESH MATERIALIZED VIEW, REINDEX, LOCK, SECURITY LABEL and REASSIGN OWNED where a statement starts, and no read'
+);
+
+-- INV-30g. MUTATION CONTROL for the structure arm of the audit. Three planted
+-- entries write no table and have none of the side effects above: one alters
+-- a table in its own body, one reaches a function two calls down that
+-- grants, and an allowlist-F entry creates a temporary table. Each must be
+-- named. A fourth only names the forms in a comment and a message and
+-- assigns variables whose names begin with the verbs; it must not be named.
+-- A plpgsql body is not run when it is created, so nothing here is altered,
+-- granted or created. Everything planted is removed straight after.
+create function public._sec_inv_probe_granter() returns boolean
+  language plpgsql security invoker set search_path = public
+  as $probe$ begin grant select on public.organizations to anon; return true; end; $probe$;
+create function public._sec_inv_probe_grant_relay() returns boolean
+  language plpgsql security invoker set search_path = public
+  as $probe$ begin return public._sec_inv_probe_granter(); end; $probe$;
+create function public._sec_inv_probe_alters() returns boolean
+  language plpgsql security definer set search_path = public
+  as $probe$ begin alter table public.organizations disable row level security; return true; end; $probe$;
+create function public._sec_inv_probe_reaches_grant() returns boolean
+  language plpgsql security definer set search_path = public
+  as $probe$ begin return public._sec_inv_probe_grant_relay(); end; $probe$;
+create function public._sec_inv_probe_names_ddl() returns boolean
+  language plpgsql security definer set search_path = public
+  as $probe$
+  -- alter table public.organizations ...; grant all ... is only named here
+  declare drop_count integer := 0; created boolean;
+  begin drop_count := 1; created := true; return created and drop_count = 1 and 'x; drop table t; grant all' <> ''; end; $probe$;
+create function ledger._sec_inv_probe_creates() returns boolean
+  language plpgsql security definer set search_path = public
+  as $probe$ begin create temporary table _sec_inv_probe_t (id integer); return true; end; $probe$;
+revoke all on function public._sec_inv_probe_granter(), public._sec_inv_probe_grant_relay(),
+  public._sec_inv_probe_alters(), public._sec_inv_probe_reaches_grant(), public._sec_inv_probe_names_ddl(),
+  ledger._sec_inv_probe_creates() from public, anon;
+insert into _sec_inv_auth_secdef_nogate_allow (proname, why) values
+  ('_sec_inv_probe_alters',        'control probe: alters a table in its own body; deleted below'),
+  ('_sec_inv_probe_reaches_grant', 'control probe: reaches a GRANT two calls down; deleted below'),
+  ('_sec_inv_probe_names_ddl',     'control probe: names the forms in a comment and a message only; deleted below');
+insert into _sec_inv_ledger_secdef_nogate_allow (proname, why) values
+  ('_sec_inv_probe_creates', 'control probe: allowlist-F entry running CREATE; deleted below');
+
+select is(
+  (select coalesce(string_agg(v.x, ' | ' order by v.x collate "C"), '')
+     from _sec_inv_allowlist_audit v where v.entry like '%\_sec\_inv\_probe\_%'),
+  'allowlist-E entry _sec_inv_probe_reaches_grant reaches a function that changes structure or privileges (ALTER, GRANT, REVOKE, CREATE, DROP, COMMENT or another utility statement): public._sec_inv_probe_granter | '
+  'allowlist-E entry changes structure or privileges (ALTER, GRANT, REVOKE, CREATE, DROP, COMMENT or another utility statement): public._sec_inv_probe_alters | '
+  'allowlist-F entry changes structure or privileges (ALTER, GRANT, REVOKE, CREATE, DROP, COMMENT or another utility statement): ledger._sec_inv_probe_creates',
+  'INV-30g control: the allowlist audit names an entry that alters, grants or creates in its own body or reaches a function that does, for allowlists E and F, and leaves an entry that only names the words alone'
+);
+
+delete from _sec_inv_auth_secdef_nogate_allow where why like 'control probe:%';
+delete from _sec_inv_ledger_secdef_nogate_allow where why like 'control probe:%';
+drop function public._sec_inv_probe_alters();
+drop function public._sec_inv_probe_reaches_grant();
+drop function public._sec_inv_probe_names_ddl();
+drop function ledger._sec_inv_probe_creates();
+drop function public._sec_inv_probe_grant_relay();
+drop function public._sec_inv_probe_granter();
+
+-- INV-30h. Every first-party function has a name the call walk can read: a
+-- plain lower-case one (_sec_inv_unwalkable_name). The walk lower-cases the
+-- names it reads in a body, so a function created under a double-quoted name
+-- with a capital letter, or with a character a bare name cannot hold, would
+-- be a callee the allowlist audit never follows. Offenders are named; rename
+-- the function, or teach the walk the name before this is relaxed.
+select is(
+  (select coalesce(string_agg(u.sig, ', ' order by u.sig collate "C"), '') from _sec_inv_unwalkable_name u),
+  '',
+  'INV-30h: every first-party function in public and ledger has a plain lower-case name, so the call walk of the allowlist audit can follow a call to it'
+);
+
+-- INV-30i. MUTATION CONTROL for INV-30h. Three planted functions: one with
+-- capital letters in public, one with a dash in ledger, and one plain name
+-- that holds a digit, an underscore and a dollar sign. The first two must be
+-- named and the third must not. Removed straight after.
+create function public."_Sec_Inv_Probe_Mixed"() returns boolean
+  language sql security invoker set search_path = public as $probe$ select true $probe$;
+create function ledger."_sec_inv_probe-dash"() returns boolean
+  language sql security invoker set search_path = public as $probe$ select true $probe$;
+create function public._sec_inv_probe_plain_2$() returns boolean
+  language sql security invoker set search_path = public as $probe$ select true $probe$;
+revoke all on function public."_Sec_Inv_Probe_Mixed"(), ledger."_sec_inv_probe-dash"(),
+  public._sec_inv_probe_plain_2$() from public, anon;
+
+select is(
+  (select coalesce(string_agg(u.sig, ' | ' order by u.sig collate "C"), '') from _sec_inv_unwalkable_name u),
+  'ledger._sec_inv_probe-dash() | public._Sec_Inv_Probe_Mixed()',
+  'INV-30i control: the name census names a first-party function whose name has a capital letter or a character a bare name cannot hold, in public and in ledger, and leaves a plain lower-case name alone'
+);
+
+drop function public."_Sec_Inv_Probe_Mixed"();
+drop function ledger."_sec_inv_probe-dash"();
+drop function public._sec_inv_probe_plain_2$();
 
 
 -- ═══════════════════════════════════════════════════════════════════════════

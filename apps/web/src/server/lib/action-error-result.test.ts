@@ -7,6 +7,8 @@ import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
+import { OrganizationRowUnavailableError } from '@/lib/auth/organization-row-unavailable';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { UNEXPECTED_ERROR_MESSAGE } from '@/server/lib/api-error-response';
 import { ServiceError } from '@/server/services/context';
 
@@ -16,6 +18,8 @@ import {
   RowFailures,
   NOT_SET_UP_MESSAGE,
   ROW_NOT_IMPORTED_MESSAGE,
+  uncheckedAccessMessage,
+  uncheckedAccessResult,
   unexpectedActionError,
 } from './action-error-result';
 
@@ -198,6 +202,57 @@ describe('actionErrorResult', () => {
     expect(reportMock).toHaveBeenCalledWith(permissions, { tag: 'actions.x', level: 'warning' });
     expect(reportMock).toHaveBeenCalledWith(status, { tag: 'actions.y', level: 'warning' });
   });
+
+  it('answers an organization row that could not be read with the access try-again sentence, reported as a warning', () => {
+    const row = new OrganizationRowUnavailableError();
+    const res = actionErrorResult(row, 'actions.team', { organizationId: 'org-1' });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message: 'Your access could not be checked. Please try again.',
+      },
+    });
+    expect(reportMock).toHaveBeenCalledTimes(1);
+    expect(reportMock).toHaveBeenCalledWith(row, {
+      tag: 'actions.team',
+      organizationId: 'org-1',
+      level: 'warning',
+    });
+  });
+
+  it('answers a module state that could not be read with its try-again sentence, reported as a warning, never as module_disabled', () => {
+    const modules = new ModulesUnavailableError();
+    const res = actionErrorResult(modules, 'actions.z', { organizationId: 'org-1' });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message: 'Your access could not be checked. Please try again.',
+      },
+    });
+    expect(reportMock).toHaveBeenCalledTimes(1);
+    expect(reportMock).toHaveBeenCalledWith(modules, {
+      tag: 'actions.z',
+      organizationId: 'org-1',
+      level: 'warning',
+    });
+    // A module that is off keeps its own refusal, unreported.
+    vi.clearAllMocks();
+    expect(
+      actionErrorResult(
+        new ServiceError('module_disabled', 'Module not enabled for this organization: rentals'),
+        'actions.z',
+      ),
+    ).toEqual({
+      ok: false,
+      error: {
+        code: 'module_disabled',
+        message: 'Module not enabled for this organization: rentals',
+      },
+    });
+    expect(reportMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('unexpectedActionError', () => {
@@ -330,3 +385,91 @@ describe('the fixed sentences', () => {
     expect(ROW_NOT_IMPORTED_MESSAGE).toBe('Could not import this row.');
   });
 });
+
+/**
+ * A check of the caller's access that could not be read (the module state,
+ * the permission set, the account status) has one fixed sentence each. An
+ * action module that keeps its own error mapping asks these two helpers
+ * first, so it answers that sentence instead of its generic one; the shared
+ * mapper answers through the same code.
+ */
+describe('uncheckedAccessResult and uncheckedAccessMessage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    [new ModulesUnavailableError(), 'Your access could not be checked. Please try again.'],
+    [new OrganizationRowUnavailableError(), 'Your access could not be checked. Please try again.'],
+    [new PermissionsUnavailableError(), 'Your permissions could not be checked. Please try again.'],
+    [new AccountStatusUnavailableError(), 'Account status could not be verified. Please try again.'],
+  ])('answers the check\'s own sentence as internal_error, reported once as a warning', (e, sentence) => {
+    expect(uncheckedAccessResult(e, 'actions.x', { organizationId: 'org-1' })).toEqual({
+      ok: false,
+      error: { code: 'internal_error', message: sentence },
+    });
+    expect(reportMock).toHaveBeenCalledTimes(1);
+    expect(reportMock).toHaveBeenCalledWith(e, {
+      tag: 'actions.x',
+      organizationId: 'org-1',
+      level: 'warning',
+    });
+    vi.clearAllMocks();
+    expect(uncheckedAccessMessage(e, 'actions.y')).toBe(sentence);
+    expect(reportMock).toHaveBeenCalledWith(e, { tag: 'actions.y', level: 'warning' });
+  });
+
+  it('carries the details a module puts on its own failures', () => {
+    expect(
+      uncheckedAccessResult(new ModulesUnavailableError(), 'actions.x', {
+        details: { reason: 'failed' },
+      }),
+    ).toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message: 'Your access could not be checked. Please try again.',
+        details: { reason: 'failed' },
+      },
+    });
+  });
+
+  it('is null for anything else, and reports nothing: the module\'s own mapping goes on', () => {
+    for (const e of [
+      new Error('relation "public.tags" does not exist'),
+      new ServiceError('module_disabled', 'Module not enabled for this organization: rentals'),
+      new ServiceError('internal_error', 'raw database text'),
+      new ForbiddenError('No access to this warehouse.'),
+      'a thrown string',
+      null,
+    ]) {
+      expect(uncheckedAccessResult(e, 'actions.x')).toBeNull();
+      expect(uncheckedAccessMessage(e, 'actions.x')).toBeNull();
+    }
+    expect(reportMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('RowFailures and a check that could not be read', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('a row that met an unread module state says the try-again sentence, reported once for the run as a warning', () => {
+    const rows = new RowFailures('actions.import.rows', { organizationId: 'org-1' });
+    const e = new ModulesUnavailableError();
+    expect(rows.message(e)).toBe('Your access could not be checked. Please try again.');
+    expect(rows.message(new ModulesUnavailableError())).toBe(
+      'Your access could not be checked. Please try again.',
+    );
+    rows.report();
+    expect(reportMock).toHaveBeenCalledTimes(1);
+    expect(reportMock).toHaveBeenCalledWith(e, {
+      tag: 'actions.import.rows',
+      organizationId: 'org-1',
+      level: 'warning',
+      extra: { failed: 2 },
+    });
+  });
+});
+

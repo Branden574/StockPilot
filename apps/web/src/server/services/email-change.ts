@@ -2,7 +2,7 @@ import 'server-only';
 
 import { createHash } from 'node:crypto';
 
-import { confirmLinkUrl } from '@/lib/auth/confirm-link';
+import { authServerTime, confirmLinkUrl } from '@/lib/auth/confirm-link';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import {
   renderEmailChangeCurrentEmail,
@@ -108,9 +108,19 @@ export interface EmailChangeStatus {
   email: string;
   /** Address awaiting confirmation, or null when nothing is pending. */
   pendingEmail: string | null;
+  /**
+   * When GoTrue recorded the pending change's latest request, and when its
+   * links age out. Both null when nothing is pending, AND when a change is
+   * pending without a readable request time: GoTrue clears the time and both
+   * link tokens when the password is changed and keeps the pending address.
+   */
   sentAt: string | null;
   expiresAt: string | null;
-  /** True when a pending change's links have aged out (resend to continue). */
+  /**
+   * True when a pending change has no link that still works: its links have
+   * aged out, or it has no request time (above). Resend, or a new request,
+   * continues it; Cancel drops it.
+   */
   expired: boolean;
 }
 
@@ -227,6 +237,48 @@ async function writeAudit(
   }
 }
 
+/**
+ * Right after both links are minted GoTrue must hold the request's time
+ * (email_change_sent_at). /auth/confirm tells one request's links from the
+ * next by it and answers a pending change without one as expired
+ * (lib/auth/confirm-link.ts pendingEmailChangeFor), so links minted without it
+ * would be dead on arrival. This is where a GoTrue that stopped recording the
+ * time shows up: nothing but the mint has touched the change yet (a password
+ * change clears the time, and only one landing in the instant between the
+ * mint and this read could do it here; the links are dead then too), so it
+ * is REPORTED, and the request fails before anything is sent.
+ *
+ * The account is read the way the page reads it (admin getUserById, the same
+ * reader of the time). A read that fails checks nothing: it is reported as a
+ * warning and the request goes on, since the page still decides for itself.
+ * Neither report carries the account id, an address or a token.
+ */
+async function assertRequestTimeRecorded(userId: string): Promise<void> {
+  let user: { new_email?: unknown; email_change_sent_at?: unknown } | null = null;
+  try {
+    const { data, error } = await createAdminClient().auth.admin.getUserById(userId);
+    if (!error) user = data?.user ?? null;
+  } catch {
+    user = null;
+  }
+  if (!user) {
+    void reportError(new Error('the email change request time could not be checked after minting'), {
+      tag: 'email_change.request_time_unchecked',
+      level: 'warning',
+    });
+    return;
+  }
+  if (authServerTime(user.email_change_sent_at) === null) {
+    void reportError(new Error('email change links were minted without a readable request time'), {
+      tag: 'email_change.request_time_missing',
+    });
+    throw new ServiceError(
+      'internal_error',
+      'Could not start the email change. Please try again in a moment.',
+    );
+  }
+}
+
 export interface MintedEmailChangeLinks {
   currentUrl: string;
   newUrl: string;
@@ -241,7 +293,8 @@ export interface MintedEmailChangeLinks {
  * change lands), and both name `userId`, the account whose change it is (`r`,
  * docket S25), so the page shows its address and the one waiting to replace
  * it. A link that cannot be signed (no key, or an id that is not a UUID)
- * fails the request before anything is sent.
+ * fails the request before anything is sent, and so does a mint GoTrue
+ * recorded without its request time (assertRequestTimeRecorded).
  */
 export async function mintEmailChangeLinks(
   currentEmail: string,
@@ -272,6 +325,8 @@ export async function mintEmailChangeLinks(
   // GoTrue stores sha224(NEW_email + otp) for the new side but returns the
   // hash computed with the CURRENT email. Compute the stored value ourselves.
   const newHash = sha224Hex(`${newEmail}${otp}`);
+
+  await assertRequestTimeRecorded(userId);
 
   const currentUrl = confirmLinkUrl({ tokenHash: currentHash, type: 'email_change', userId });
   const newUrl = confirmLinkUrl({ tokenHash: newHash, type: 'email_change', userId });
@@ -336,14 +391,21 @@ async function deliverEmailChangeLinks(args: {
 export async function getEmailChangeStatus(userId: string): Promise<EmailChangeStatus> {
   const user = await loadAuthUser(userId);
   const pendingEmail = user.new_email?.trim() ? user.new_email : null;
-  const sentAt = pendingEmail ? (user.email_change_sent_at ?? null) : null;
+  // Read as the confirmation page reads it (authServerTime): a time that is
+  // missing or is not written as a date is no time. The pending address is
+  // reported either way, so the person can see and cancel what the account
+  // holds; without a time no link of that change is live, so it is expired.
+  const sentAt =
+    pendingEmail && authServerTime(user.email_change_sent_at) !== null
+      ? (user.email_change_sent_at as string)
+      : null;
   const expiresAt = sentAt ? isoPlus(sentAt, EMAIL_CHANGE_LINK_TTL_MS) : null;
   return {
     email: user.email ?? '',
     pendingEmail,
     sentAt,
     expiresAt,
-    expired: expiresAt ? Date.now() > new Date(expiresAt).getTime() : false,
+    expired: pendingEmail ? !expiresAt || Date.now() > new Date(expiresAt).getTime() : false,
   };
 }
 

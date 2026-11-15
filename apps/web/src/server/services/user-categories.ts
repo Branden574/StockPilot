@@ -1,3 +1,5 @@
+import { isAtLeast } from '@stockpilot/core';
+
 import { audit } from './audit';
 import { ServiceContext, ServiceError, assertPermission } from './context';
 
@@ -174,5 +176,147 @@ export class UserCategoriesService {
       },
       this.ctx,
     );
+  }
+
+  /**
+   * Grants or revokes ONE category for ONE member of the caller's
+   * organization, named by the membership id (organization_members.id). The
+   * /api/v1/members/[id]/category-access route calls it, once per category.
+   *
+   * ONE ROW, NEVER THE SET. A grant inserts the one row (organization, the
+   * member's account, the category); a revoke deletes that one row. Nothing
+   * here reads a list from the caller or rewrites the member's other grants,
+   * and set_user_category_access (the whole-set replace above) is not called.
+   * So two people changing different categories of one member at once both
+   * land, whatever either screen showed when it was opened. For the same
+   * category, the table's unique (user_id, category_id) lets one of two
+   * grants in, and the other is answered as already granted; a grant and a
+   * revoke land in the order the database commits them. Each is one
+   * statement, atomic on its own: a failure leaves the member's grants as
+   * they were.
+   *
+   * The table's truth is unchanged: a viewer with no rows left sees every
+   * category. A revoke of the last grant does that here as it does through
+   * the whole-set replace with an empty list.
+   *
+   * Checks, in order, all before the write:
+   *   - members:assign_categories (after the authenticator rule), as above;
+   *   - the manager role. The table's write rule and
+   *     set_user_category_access both ask for it. Said here because a delete
+   *     that the rule filters answers "no row" instead of a refusal;
+   *   - the member, read in the caller's organization (not_found otherwise);
+   *   - for a grant, the category, read in the caller's organization.
+   *
+   * A change writes one user.category_access.updated audit row, in the shape
+   * of the whole-set row: the count after the change and the one id granted
+   * or revoked. A request that changes nothing (the grant is already there,
+   * or there is nothing to revoke) writes no row and answers changed false.
+   *
+   * Returns the member's grants as read after the write, for the caller to
+   * show; null when that read failed (the change is saved and audited).
+   */
+  async setMemberCategoryGrant(
+    memberId: string,
+    categoryId: string,
+    granted: boolean,
+  ): Promise<{ changed: boolean; categoryIds: string[] | null }> {
+    assertPermission(this.ctx, 'members:assign_categories');
+    if (!isAtLeast(this.ctx.role, 'manager')) {
+      throw new ServiceError('forbidden', 'Manager role required to assign categories.');
+    }
+
+    const { data: member, error: memberError } = await this.ctx.supabase
+      .from('organization_members')
+      .select('user_id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', memberId)
+      .maybeSingle();
+    if (memberError) throw new ServiceError('internal_error', memberError.message);
+    if (!member) throw new ServiceError('not_found', 'Member not found');
+    const targetUserId = (member as { user_id: string }).user_id;
+
+    let changed: boolean;
+    /** The insert was refused as a duplicate: the grant should already be there. */
+    let duplicate = false;
+    if (granted) {
+      const { data: category, error: categoryError } = await this.ctx.supabase
+        .from('categories')
+        .select('id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', categoryId)
+        .maybeSingle();
+      if (categoryError) throw new ServiceError('internal_error', categoryError.message);
+      if (!category) throw new ServiceError('not_found', 'Category not found');
+
+      const { error } = await this.ctx.supabase.from('user_category_assignments').insert({
+        organization_id: this.ctx.organizationId,
+        user_id: targetUserId,
+        category_id: categoryId,
+        assigned_by: this.ctx.userId,
+      });
+      if (error) {
+        if (error.code === '42501') {
+          throw new ServiceError('forbidden', 'Manager role required to assign categories.');
+        }
+        // The member's account or the category was removed since the reads above.
+        if (error.code === '23503') {
+          throw new ServiceError('not_found', 'Member or category not found');
+        }
+        // 23505: unique (user_id, category_id). The row is already there.
+        if (error.code !== '23505') throw new ServiceError('internal_error', error.message);
+        duplicate = true;
+      }
+      changed = !error;
+    } else {
+      const { data: removed, error } = await this.ctx.supabase
+        .from('user_category_assignments')
+        .delete()
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('user_id', targetUserId)
+        .eq('category_id', categoryId)
+        .select('id');
+      if (error) throw new ServiceError('internal_error', error.message);
+      changed = ((removed ?? []) as Array<{ id: string }>).length > 0;
+    }
+
+    // The member's grants now, in this organization: the count for the audit
+    // row and the list the caller shows.
+    const { data: rows, error: readError } = await this.ctx.supabase
+      .from('user_category_assignments')
+      .select('category_id')
+      .eq('user_id', targetUserId)
+      .eq('organization_id', this.ctx.organizationId);
+    const categoryIds = readError
+      ? null
+      : ((rows ?? []) as Array<{ category_id: string }>).map((r) => r.category_id);
+
+    // Refused as a duplicate, yet the member does not hold the grant when it
+    // is read back: it changed in between. Nothing was changed here; say so
+    // instead of "already granted".
+    if (duplicate && categoryIds && !categoryIds.includes(categoryId)) {
+      throw new ServiceError(
+        'conflict',
+        'That category access changed meanwhile. Reload and try again.',
+      );
+    }
+
+    if (changed) {
+      // Awaited, with the caller's context: a Bearer caller has no cookie
+      // context for audit() to fall back to.
+      await audit(
+        {
+          event: 'user.category_access.updated',
+          entityType: 'user_profile',
+          entityId: targetUserId,
+          extra: {
+            category_count: categoryIds ? categoryIds.length : null,
+            granted_ids: granted ? [categoryId] : [],
+            revoked_ids: granted ? [] : [categoryId],
+          },
+        },
+        this.ctx,
+      );
+    }
+    return { changed, categoryIds };
   }
 }

@@ -77,6 +77,12 @@ export interface ServiceContext {
   /**
    * Modules enabled for this org; core modules are always treated as
    * enabled even if absent.
+   *
+   * Ask through `isModuleEnabled` / `assertModuleEnabled` (or `has`). When the
+   * organization's module rows could not be read, a request builder holds the
+   * UnreadableModuleSet of lib/modules/module-state here: asking about a
+   * module whose state is unknown, or listing the set, throws
+   * ModulesUnavailableError instead of answering "off".
    */
   enabledModules: Set<ModuleId>;
   /**
@@ -105,13 +111,39 @@ export interface ServiceContext {
 }
 
 /**
+ * The organization row for the MFA gate, or null when its read FAILED: the
+ * answer a hidden row gives, which enforcedMfaPolicy holds to the strictest
+ * policy. Logged, as the gate's catch below logs every other failure.
+ *
+ * The strictest policy, not "unsatisfied whatever the session": that would be
+ * stricter than any policy an organization can have, and would answer a
+ * member at aal2, whom every policy lets through, "MFA required" when no code
+ * can help. all_required lets through only a member with an authenticator at
+ * aal2, and every other policy lets that member through too, so nothing passes
+ * here that the unread policy would refuse. The factor list keeps its own
+ * rule: a list that cannot be read still lands in the catch.
+ */
+async function orgRowOrUnreadable(
+  readOrgRow: () => OrgRow | null | Promise<OrgRow | null>,
+): Promise<OrgRow | null> {
+  try {
+    return await readOrgRow();
+  } catch (err) {
+    console.error('[resolveMfaState] failed:', err);
+    return null;
+  }
+}
+
+/**
  * The MFA gate inputs, taken as reads the caller has ALREADY STARTED.
  *
  * `factorsRead` is a promise rather than a call on purpose. React `cache()` does
  * not memoize inside a Server Action or a Route Handler, so calling
  * getMfaFactorsForRequest() here again would be a second GoTrue round trip, not
  * the one withContext() started before the org context resolved. Both reads are
- * awaited inside the try: either one failing lands in the catch and fails closed.
+ * awaited inside the try: a factor list that fails lands in the catch and fails
+ * closed; an organization row that fails is held to the strictest policy
+ * (orgRowOrUnreadable above).
  */
 async function resolveMfaState(
   role: Role,
@@ -126,7 +158,7 @@ async function resolveMfaState(
     // context when it can, else from the request-cached helper the dashboard
     // layout shares. The factor list has been in flight since before the
     // context resolved (see withContext).
-    const [org, factorList] = await Promise.all([readOrgRow(), factorsRead]);
+    const [org, factorList] = await Promise.all([orgRowOrUnreadable(readOrgRow), factorsRead]);
     // Only THIS member's list says whether they have an authenticator (S43a,
     // review round s43ar). The list is a read of the cookie session, and a load
     // can refresh it into another account (see the claims note below): the
@@ -138,8 +170,8 @@ async function resolveMfaState(
     // unreadable one.
     const factors = factorsOf(factorList, userId);
     if (!factors) return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false };
-    // A row this member cannot read is held to the STRICTEST policy, never
-    // 'optional' (see lib/auth/mfa-policy.ts). A read ERROR already threw above.
+    // A row this member cannot read, hidden or failed, is held to the STRICTEST
+    // policy, never 'optional' (see lib/auth/mfa-policy.ts).
     const policy = enforcedMfaPolicy(org);
     const policyRequired =
       policy === 'all_required' ||
@@ -186,7 +218,8 @@ async function resolveMfaState(
     };
   } catch (err) {
     // Fail CLOSED — assume MFA is required and unsatisfied. A flaky
-    // org lookup or factor list must NOT silently let an admin bypass MFA.
+    // factor list must NOT silently let an admin bypass MFA (a flaky org
+    // lookup is held to the strictest policy above, never to a lesser one).
     // The user sees a clear "MFA required" error instead of silent bypass;
     // matches enterprise expectations from the org MFA policy.
     console.error('[resolveMfaState] failed:', err);
@@ -240,8 +273,10 @@ export const withContext = cache(async (): Promise<ServiceContext> => {
   // independent. Run them concurrently instead of sequentially. The modules
   // read, when not held, goes through the request-cached `getModulesForRequest`
   // so the dashboard layout and `withContext` share ONE `organization_modules`
-  // round-trip per render (it also absorbs/logs query errors, returning an
-  // empty set = core-only nav, never a wider entitlement than the org has).
+  // round-trip per render. Rows that could not be read are logged there and
+  // held as UNKNOWN, never as "off" and never as a wider entitlement than the
+  // reads showed: asking about such a module throws ModulesUnavailableError
+  // (lib/modules/module-state), the same state the API context holds.
   const [{ mfaRequired, mfaSatisfied, mfaEnrolled }, enabledModules] = await Promise.all([
     resolveMfaState(
       ctx.role,
@@ -368,7 +403,15 @@ export function assertAnyPermission(ctx: ServiceContext, permissions: readonly P
   throw new ServiceError('forbidden', `Missing permission: ${permissions.join(' or ')}`);
 }
 
-/** Is `moduleId` on for this context? The one rule both helpers below apply. */
+/**
+ * Is `moduleId` on for this context? The one rule both helpers below apply.
+ *
+ * THROWS ModulesUnavailableError when the context could not read that
+ * module's state (see ServiceContext.enabledModules): "could not check" is
+ * never answered as false. A Server Action's catch answers it through
+ * actionErrorResult, a route handler through internalErrorResponse or
+ * answerModuleState, and a page reaches its error state with Try again.
+ */
 export function isModuleEnabled(
   ctx: Pick<ServiceContext, 'enabledModules'>,
   moduleId: ModuleId,

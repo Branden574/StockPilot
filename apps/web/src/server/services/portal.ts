@@ -18,6 +18,7 @@ import { createClient } from '@/lib/supabase/server';
 import { accountIsDisabledOrThrow, loadAccountStatus } from '@/lib/auth/account-status';
 import { stepUpIsOwedByUser } from '@/lib/auth/step-up-gate';
 import { reportError } from '@/lib/error-reporter';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { ServiceError } from '@/server/services/context';
 import { dispatchEvent } from '@/server/services/integration-events';
 import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
@@ -184,8 +185,10 @@ export async function resolvePortalContext(): Promise<PortalContext | null> {
   // session at aal2. The factors are those of the getUser() answer above and
   // the level is this account's own verified claims; an account with no
   // authenticator is not asked and costs no extra Auth call. Every caller
-  // awaits this outside any try, so the redirect gets out (the action-step-up
-  // and page-step-up guards hold that they ask this first).
+  // lets the redirect out: the page awaits this outside any try, and the
+  // portal actions' catch throws control flow again before it answers
+  // anything (the action-step-up, page-step-up and action-catch guards hold
+  // that they ask this first and never keep the redirect).
   if (await stepUpIsOwedByUser(supabase, user)) redirect(PORTAL_CODE_PAGE);
 
   const admin = createAdminClient();
@@ -236,7 +239,16 @@ export async function resolvePortalContext(): Promise<PortalContext | null> {
   // Module + plan gate: disabling b2b_portal OR downgrading below Business
   // shuts the customer portal off, mirroring the org-side gate. On the admin
   // client (portal users have no RLS grants), scoped to the customer's org.
-  const [{ data: moduleRow }, { data: org }] = await Promise.all([
+  //
+  // A module state that could not be read is not "off". supabase-js resolves
+  // a failed read as `{ data: null, error }`, the shape of "no enabled row",
+  // and "not a portal user" is not what happened: the same reasoning as the
+  // unreadable account status above, so this throws too
+  // (ModulesUnavailableError). The portal page reaches its error state with
+  // Try again; a portal action answers the try-again sentence as its result
+  // (server/actions/portal.ts portalContextFor). It opens nothing: no context
+  // is built on a read that failed.
+  const [{ data: moduleRow, error: moduleError }, { data: org }] = await Promise.all([
     admin
       .from('organization_modules')
       .select('module_id, settings')
@@ -252,6 +264,11 @@ export async function resolvePortalContext(): Promise<PortalContext | null> {
       .eq('id', customer.organization_id)
       .maybeSingle(),
   ]);
+  if (moduleError) {
+    // The code only: a message can quote request details.
+    console.error('[portal] module state unreadable:', moduleError.code || 'unknown');
+    throw new ModulesUnavailableError();
+  }
   if (!moduleRow) return null;
   if (
     !planAllowsB2bPortal(((org as OrgBillingState | null) ?? { plan: null }) as OrgBillingState)
@@ -669,15 +686,24 @@ export async function portalOrders(ctx: PortalContext): Promise<PortalOrder[]> {
  * portal's "Request a return" affordance. UI-gating only: the create path
  * re-checks the module server-side (loadPortalReturnContext), so flipping
  * the flag client-side buys nothing.
+ *
+ * A state that could not be read is not "off": it throws
+ * (ModulesUnavailableError), and the portal page reaches its error state with
+ * Try again instead of leaving the button out as if returns were switched off.
  */
 export async function portalReturnsEnabled(ctx: PortalContext): Promise<boolean> {
   const admin = createAdminClient();
-  const { data } = await admin
+  const { data, error } = await admin
     .from('organization_modules')
     .select('module_id')
     .eq('organization_id', ctx.organizationId)
     .eq('module_id', 'returns')
     .eq('enabled', true)
     .maybeSingle();
+  if (error) {
+    // The code only: a message can quote request details.
+    console.error('[portal] returns module state unreadable:', error.code || 'unknown');
+    throw new ModulesUnavailableError();
+  }
   return Boolean(data);
 }

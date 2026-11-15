@@ -82,7 +82,7 @@ const TOGGLE_DEFS: ToggleDef[] = [
   {
     key: 'push_order_request_created',
     label: 'New order requests',
-    hint: "In-app/push alert when anyone submits a new order request (managers and above). Turn off to stop being notified about the whole team's order queue.",
+    hint: 'In-app and push alert when a new order request is waiting in a warehouse where you can approve orders. Turn off to stop these alerts.',
     group: 'push',
   },
   {

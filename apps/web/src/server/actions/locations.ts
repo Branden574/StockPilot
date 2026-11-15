@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
+import { uncheckedAccessResult } from '@/server/lib/action-error-result';
 import {
   createLocationSchema,
   LocationsService,
@@ -26,6 +27,9 @@ import { err, ok, type ActionResult } from '@stockpilot/core';
  */
 function toResult<T>(error: unknown): ActionResult<T> {
   rethrowControlFlow(error);
+  // A check of the caller's access that could not be read: its own sentence.
+  const unchecked = uncheckedAccessResult(error, 'actions.locations');
+  if (unchecked) return unchecked;
   if (error instanceof ServiceError) {
     return err(
       error.code,

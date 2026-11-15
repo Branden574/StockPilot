@@ -14,6 +14,7 @@ import {
 
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { uncheckedAccessResult } from '@/server/lib/action-error-result';
 import { ServiceError, withContext } from '@/server/services/context';
 import {
   ItemGroupingService,
@@ -36,6 +37,9 @@ import {
 
 function toResult(e: unknown): ActionResult<never> {
   rethrowControlFlow(e);
+  // A check of the caller's access that could not be read: its own sentence.
+  const unchecked = uncheckedAccessResult(e, 'actions.item_grouping');
+  if (unchecked) return unchecked;
   if (e instanceof ServiceError && e.code !== 'internal_error') {
     return err(e.code, e.message, e.details);
   }

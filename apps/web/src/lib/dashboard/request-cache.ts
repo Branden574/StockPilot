@@ -8,7 +8,9 @@ import {
   modulesFromMembership,
   orgRowFromMembership,
 } from '@/lib/auth/request-context-bundle';
-import { effectiveModules } from '@/lib/modules/effective-modules';
+import { OrganizationRowUnavailableError } from '@/lib/auth/organization-row-unavailable';
+import { effectiveModules, NON_CORE_MODULE_IDS } from '@/lib/modules/effective-modules';
+import { moduleSetFromReads } from '@/lib/modules/module-state';
 import { readMfaFactorList, type MfaFactor, type MfaFactorList } from '@/lib/auth/mfa-factors';
 import { createClient } from '@/lib/supabase/server';
 
@@ -91,7 +93,20 @@ export const getOrgRowForRequest = cache(async (organizationId: string): Promise
   // transient read error and returning null would resolve the policy to
   // 'optional' → silently disable MFA for the request. Throw so the gate
   // fails closed; a genuine missing row still returns null (no error).
-  if (error) throw new Error(`getOrgRowForRequest: ${error.message}`);
+  //
+  // The error is the "could not check your access" one
+  // (OrganizationRowUnavailableError, the digest a module state that could not
+  // be read carries): a page shows the plain state with Try again, and a
+  // Server Action answers its try-again sentence, instead of "Something went
+  // wrong". The server log gets the error code only, never the message, which
+  // can quote request details (as the sibling access reads do).
+  if (error) {
+    console.error(
+      '[getOrgRowForRequest] organizations read failed:',
+      error.code || 'unknown',
+    );
+    throw new OrganizationRowUnavailableError();
+  }
   return (data as OrgRow | null) ?? null;
 });
 
@@ -167,15 +182,26 @@ export const getMfaFactorsForRequest = cache(async (): Promise<MfaFactorList> =>
  * The org's effective module set AND whether its `organization_modules` rows
  * were read.
  *
- * checkModuleAccess (lib/modules/module-gate) must be able to tell "this
- * module is off" from "the rows could not be read": supabase-js RESOLVES a
- * failed query as `{ data: null, error }`, which the set alone turns into "no
- * rows", the same answer as an organization that switched every module off.
- * The set is still the fail-closed one (`modules` holds only what the comp
- * flag, which WAS read, grants), so nothing reading it is widened; the flag
- * only lets a page say "could not check" instead of "not enabled". The
- * outcome travels with the set here, as readWarehousesForRequest does for
- * warehouses. One cached read serves both helpers.
+ * supabase-js RESOLVES a failed query as `{ data: null, error }`, which a set
+ * alone turns into "no rows", the same answer as an organization that
+ * switched every module off. So the outcome travels with the set here, as
+ * readWarehousesForRequest does for warehouses. One cached read serves every
+ * helper below.
+ *
+ * `modules` is always the fail-closed set: what the reads that WORKED say is
+ * on (the enabled rows that were read, or every non-core module under a comp
+ * flag that was read). Nothing reading it is widened by a failed read.
+ *
+ * Only a list of rows that each name a module is an answer, the rule the API
+ * context applies (lib/auth/api-context.ts): postgrest-js resolves an empty
+ * body with no error and data null, and that is not "no rows" either.
+ *
+ * Who reads which:
+ *   - checkModuleAccess (lib/modules/module-gate) reads this pair, because it
+ *     has its own way to say "could not check" (`checkFailed`);
+ *   - everything else, the dashboard layout included, takes
+ *     getModulesForRequest below, where a state that was not read cannot be
+ *     taken for "off" (the layout asks moduleSetUnreadable before it lists).
  */
 export interface ModulesRead {
   modules: Set<ModuleId>;
@@ -197,8 +223,17 @@ export const readModulesForRequest = cache(async (organizationId: string): Promi
     .select('module_id')
     .eq('organization_id', organizationId)
     .eq('enabled', true);
+  const rowsUnreadable =
+    Boolean(error) ||
+    !Array.isArray(data) ||
+    (data as unknown[]).some(
+      (r) =>
+        !r || typeof r !== 'object' || typeof (r as { module_id?: unknown }).module_id !== 'string',
+    );
   if (error) {
     console.error('[getModulesForRequest] organization_modules query failed:', error);
+  } else if (rowsUnreadable) {
+    console.error('[getModulesForRequest] organization_modules answer is not a list of module rows');
   }
   // Comped "all modules" override: a platform admin granting full access
   // flips on every non-core module. getOrgRowForRequest is request-cached, so
@@ -207,34 +242,46 @@ export const readModulesForRequest = cache(async (organizationId: string): Promi
   // cannot drift from it again.
   const org = await getOrgRowForRequest(organizationId);
   return {
-    modules: effectiveModules(data as Array<{ module_id: string }> | null, org?.all_modules_comp),
-    rowsUnreadable: Boolean(error),
+    modules: effectiveModules(
+      rowsUnreadable ? null : (data as Array<{ module_id: string }>),
+      org?.all_modules_comp,
+    ),
+    rowsUnreadable,
   };
 });
 
 /**
- * Enabled `organization_modules` for the org, as a Set of module ids.
- * Request-cached so the dashboard layout, `withContext()` (in
- * `server/services/context.ts`) AND every page's `checkModuleAccess()` gate
- * (lib/modules/module-gate) share ONE answer per render instead of each
- * issuing its own identical query (the gate used to make a `module_enabled`
- * RPC per call).
+ * The org's module set for everything that ASKS about a module: `withContext()`
+ * (server/services/context.ts, so every Server Action and page service), and
+ * the pages and loaders that take the set themselves. Request-cached, so they
+ * share ONE answer per render with the dashboard layout and the page gate
+ * instead of each issuing its own identical query.
  *
- * Fail behaviour matches both prior call sites: on a query error this
- * returns an EMPTY set (logged). Callers treat an empty set as "core-only"
- * — `assertModuleEnabled` and `checkModuleAccess` still let core modules
- * through via the registry, while optional/premium modules are denied. So an
- * error fails CLOSED for optional modules and never widens entitlements.
- * The page gate relies on this: do not make an unreadable row set come back
- * as anything but "no rows" (the gate reads readModulesForRequest above to
- * learn that the rows were unreadable). NOTE: the rows read itself does not
- * throw (the Supabase client surfaces failures as `{ error }`, not
- * exceptions), but on the legacy path the comp flag comes from
- * getOrgRowForRequest, which THROWS on a read error because it also feeds the
- * MFA gate. That rejection reaches the caller: the layout shows its error
- * screen, and checkModuleAccess catches it and denies.
+ * A STATE THAT WAS NOT READ IS UNKNOWN, NEVER "OFF". When the rows could not
+ * be read and a comp that was read does not already decide every module, this
+ * returns the UnreadableModuleSet of lib/modules/module-state, the same one
+ * the API context holds:
+ *   - `has(id)` answers true for a core module and for a module known to be
+ *     on, and throws ModulesUnavailableError for any other module;
+ *   - listing or copying the set throws it too.
+ * So `assertModuleEnabled` / `isModuleEnabled` cannot answer "not enabled" on
+ * a read that failed. A Server Action answers the error with its try-again
+ * sentence (server/lib/action-error-result.ts); a page that asks reaches its
+ * error state with Try again; a request that asks about no optional module is
+ * served as before. It never widens: nothing is read as on that the reads did
+ * not say is on.
+ *
+ * A set that WAS read is the plain set, answering exactly as before.
+ *
+ * NOTE: the rows read itself does not throw (the Supabase client surfaces
+ * failures as `{ error }`, not exceptions), but on the legacy path the comp
+ * flag comes from getOrgRowForRequest, which THROWS on a read error because
+ * it also feeds the MFA gate. That rejection (OrganizationRowUnavailableError)
+ * reaches the caller: the layout shows the plain "couldn't check your access"
+ * state with Try again, a Server Action answers its try-again sentence, and
+ * checkModuleAccess catches it and denies.
  */
-export const getModulesForRequest = cache(
-  async (organizationId: string): Promise<Set<ModuleId>> =>
-    (await readModulesForRequest(organizationId)).modules,
-);
+export const getModulesForRequest = cache(async (organizationId: string): Promise<Set<ModuleId>> => {
+  const read = await readModulesForRequest(organizationId);
+  return moduleSetFromReads(read.modules, read.rowsUnreadable, NON_CORE_MODULE_IDS);
+});

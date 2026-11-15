@@ -90,6 +90,8 @@ function userClient(
       data: [{ module_id: 'integrations', enabled: true }],
       error: null,
     },
+    // The comp flag, read beside the row. Not comped by default.
+    'organizations.select': { data: [{ all_modules_comp: false }], error: null },
     'organization_members.select': {
       data: [{ role: 'admin' }],
       error: null,
@@ -380,6 +382,36 @@ describe('GET /api/integrations/quickbooks/callback', () => {
     expect(exchangeCode).not.toHaveBeenCalled();
     expect(putConnectionSecret).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [
+      'the module row',
+      { 'organization_modules.select': { data: null, error: { message: 'timeout', code: '57014' } } },
+    ],
+    [
+      'the comp flag, beside a row that says off',
+      {
+        'organization_modules.select': {
+          data: [{ module_id: 'integrations', enabled: false }],
+          error: null,
+        },
+        'organizations.select': { data: null, error: { message: 'timeout', code: '57014' } },
+      },
+    ],
+  ] as Array<[string, Record<string, QueryResult>]>)(
+    'a module state that could not be read (%s): the transient error code, never module_disabled, and nothing is exchanged or stored',
+    async (_name, overrides) => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      vi.mocked(createClient).mockResolvedValueOnce(userClient(overrides).client as never);
+
+      const res = await GET(callbackUrl({ code: 'c', state: STATE, realmId: REALM_ID }));
+
+      expect(res.status).toBe(302);
+      expect(location(res).searchParams.get('error')).toBe('internal_error');
+      expect(exchangeCode).not.toHaveBeenCalled();
+      expect(putConnectionSecret).not.toHaveBeenCalled();
+    },
+  );
 
   it('redirects with error=forbidden (and skips exchangeCode) when the role lacks integrations:manage', async () => {
     // manager does NOT hold integrations:manage (admin-only permission).

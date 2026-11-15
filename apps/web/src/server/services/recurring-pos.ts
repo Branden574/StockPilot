@@ -2,7 +2,7 @@ import 'server-only';
 
 import { z } from 'zod';
 
-import { nextRunAt, type RecurringCadence } from '@stockpilot/core';
+import { formatLimit, MAX_PO_LINES, nextRunAt, type RecurringCadence } from '@stockpilot/core';
 
 import { reportError } from '@/lib/error-reporter';
 
@@ -30,7 +30,10 @@ export const recurringTemplateSchema = z.object({
   customDays: z.number().int().min(1).max(365).nullable().optional(),
   sendMode: z.enum(['draft', 'send']).default('draft'),
   maxAutoSendCents: z.number().nonnegative().nullable().optional(),
-  lineItems: z.array(lineItemSchema).min(1, 'Add at least one line item'),
+  lineItems: z
+    .array(lineItemSchema)
+    .min(1, 'Add at least one line item')
+    .max(MAX_PO_LINES, `A recurring order can have at most ${formatLimit(MAX_PO_LINES)} lines.`),
   notes: z.string().max(2000).nullable().optional(),
   enabled: z.boolean().optional(),
 });

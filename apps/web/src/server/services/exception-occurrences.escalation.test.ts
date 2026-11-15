@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
 
 import { makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
+import { RECOUNT_FACTS_NOT_YET } from '@/test/recount-facts';
 
 /**
  * The occurrence read (the web list and detail, GET /api/v1/exceptions and
@@ -121,6 +122,7 @@ function service(
 ) {
   const row = opts.occurrence ?? occRow(ESCALATED);
   const stub = makeSupabaseStub({
+    ...RECOUNT_FACTS_NOT_YET,
     'exception_occurrences.select.maybeSingle': { data: row, error: null },
     'exception_occurrences.select': { data: [row], error: null },
     'exception_occurrence_events.select': { data: opts.events ?? [event('v1', 'raised', { actor_user_id: null })], error: null },

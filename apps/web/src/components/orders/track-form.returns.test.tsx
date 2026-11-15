@@ -88,3 +88,70 @@ describe('track page lines — returned units beside the shipped figure', () => 
     expect(src).toContain('returnedQuantity: Number(row.returned_quantity) || 0');
   });
 });
+
+/**
+ * The return link on a completed order. The tracker's answer carries
+ * `returnPath` when the organization's returns module is on, null when it is
+ * off or the order has nothing to return, and `returnPathUnavailable` when
+ * that could not be checked: the page then says so and offers Check again,
+ * which asks the tracker again.
+ */
+describe('track page: the return link', () => {
+  const LINE = { itemName: 'Polo', quantityRequested: 1, quantityFulfilled: 1 };
+
+  function answer(extra: Record<string, unknown>) {
+    return vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ...trackResult([LINE]), ...extra }),
+    }));
+  }
+
+  async function open(fetchMock: ReturnType<typeof answer>) {
+    vi.stubGlobal('fetch', fetchMock);
+    const utils = render(
+      <TrackForm initialToken="tok" initialId="11111111-1111-1111-1111-111111111111" initialEmail="l@example.org" />,
+    );
+    fireEvent.submit(utils.container.querySelector('form') as HTMLFormElement);
+    await waitFor(() => expect(utils.container.textContent).toContain('Items'));
+    return utils;
+  }
+
+  it('with a return link: Request a return, and no "could not check" note', async () => {
+    const { container, getByRole } = await open(answer({ returnPath: '/returns/request/abc' }));
+    expect(getByRole('link', { name: 'Request a return' }).getAttribute('href')).toBe(
+      '/returns/request/abc',
+    );
+    expect(container.textContent).not.toContain("couldn't check");
+  });
+
+  it('with no return link and nothing unread: neither the link nor the note', async () => {
+    const { container, queryByRole } = await open(answer({ returnPath: null }));
+    expect(queryByRole('link', { name: 'Request a return' })).toBeNull();
+    expect(container.textContent).not.toContain("couldn't check");
+    expect(queryByRole('button', { name: 'Check again' })).toBeNull();
+  });
+
+  it('when the return link could not be checked: the page says so, and Check again asks the tracker again', async () => {
+    const fetchMock = answer({ returnPath: null, returnPathUnavailable: true });
+    const { container, getByRole, queryByRole } = await open(fetchMock);
+    expect(queryByRole('link', { name: 'Request a return' })).toBeNull();
+    expect(container.textContent).toContain(
+      "We couldn't check whether you can request a return for this order right now.",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // The next answer has the link.
+    fetchMock.mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ...trackResult([LINE]), returnPath: '/returns/request/abc' }),
+    }));
+    fireEvent.click(getByRole('button', { name: 'Check again' }));
+    await waitFor(() =>
+      expect(queryByRole('link', { name: 'Request a return' })).not.toBeNull(),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(container.textContent).not.toContain("couldn't check");
+  });
+});

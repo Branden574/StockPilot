@@ -860,6 +860,35 @@ PGTAP_TESTS=(
   # user_can_see_item_category answers service_role only. The lock footprint
   # is scripts/db-concurrency/0421_migration_lock_footprint.sh.
   supabase/tests/0421_categories_select_category_sets.test.sql
+  # Notice audience (0422, docket S36a): the New order request alert goes to
+  # the members who hold orders:approve and can write in the order's
+  # warehouse, and every notice the database writes goes only to a current
+  # member of the organization (an accepted membership that is not an Act-as
+  # seat, on an account that is not disabled). Both helper functions answer
+  # service_role only. The lock footprint is
+  # scripts/db-concurrency/0422_migration_lock_footprint.sh.
+  supabase/tests/0422_notice_audience_follows_permission.test.sql
+  # Audit rows (S80): the id is the only unique index, a later try with an id
+  # already there writes and changes nothing, and neither a member nor a
+  # signed-out caller can insert an audit row.
+  supabase/tests/audit_logs_row_id_contract.test.sql
+  # References in their own organization (0423): an item's warehouse and
+  # category, a location's parent and an event's warehouse belong to the
+  # row's organization, for every rank (the rules' *_in_org terms; the item
+  # guard asks a member's insert for the warehouse). NULL passes.
+  supabase/tests/0423_item_location_and_event_references_in_own_organization.test.sql
+  # References in their own organization, and a fixed organization (0462): a
+  # stock or put-away row's bins and item, a category's parent and a category
+  # assignment's category belong to the row's organization, for every rank
+  # (bin_in_org, item_in_org, category_in_org; set_user_category_access asks
+  # it too), and an API role cannot change the organization of a warehouse,
+  # a location, a bin or a category.
+  supabase/tests/0462_bin_and_category_references_and_fixed_organization.test.sql
+  # A fixed organization (0463): an API role cannot change the organization
+  # of a customer, a stored API key, a connection, a connection mapping, a
+  # sync log entry, a notification endpoint, a public request link, a queued
+  # event, a supplier or a charter (tg_organization_id_fixed on each table).
+  supabase/tests/0463_organization_fixed_on_connected_records.test.sql
   # Retry keys (0464, docket S96 part one): a receipt post or kit hand-out
   # sent again with its retry key answers only the record that key was
   # written with: the receipt of this organization, purchase order,
@@ -950,6 +979,11 @@ WEB_TESTS=(
   src/server/services/exception-occurrences.confirm.test.ts
   src/app/api/v1/exceptions/confirm-count-route.test.ts
   src/server/actions/exceptions.confirm.test.ts
+  # Exception recount facts (0460): one function read with the active
+  # organization; only "function missing" (PGRST202 or 42883 naming it) takes
+  # the direct read; any other error, or an answer that is not a list, fails
+  # the list and the detail.
+  src/server/services/exception-occurrences.recount-facts.test.ts
   # Maintenance photos (2026-09-27): what finalize stores carries no EXIF,
   # GPS, XMP or ICC (real sharp on GPS-tagged JPEG, PNG and WEBP), the
   # thumbnail is the server's, made from the clean photo at the mint's name,
@@ -1050,6 +1084,19 @@ WEB_TESTS=(
   # policy still requires AAL2, so a stolen password alone cannot pass the gates.
   # context.mfa.test.ts below is the web twin — keep the pair together.
   src/lib/auth/api-context.mfa.test.ts
+  # An organization authenticator policy that cannot be read (the read errors
+  # or throws) is held to the strictest policy, as a hidden row is: a session
+  # at aal2 with an authenticator passes, any other is stopped exactly as
+  # all_required stops it, and nothing passes that a readable policy refuses.
+  # Both API paths and the page path (withContext).
+  src/lib/auth/api-context.policy-unreadable.test.ts
+  src/server/services/context.policy-unreadable.test.ts
+  # The API gives the authenticator answer the pages give: every policy, role,
+  # authenticator and level, on both API paths and through both reads, against
+  # withContext over the same rows. A policy that requires an authenticator is
+  # met only by an account that has one. Setting up a first authenticator, and
+  # the routes allowed before the code, do not pass through the gate.
+  src/lib/auth/api-context.page-parity.test.ts
   # A password alone reads nothing through the API (docket S43a): withApiContext
   # refuses an account with a verified authenticator factor whose session is
   # not aal2, on both paths, right after the identity check and before any
@@ -1073,6 +1120,48 @@ WEB_TESTS=(
   src/lib/auth/api-context.membership-answer-shapes.test.ts
   src/lib/auth/api-context.membership-unreadable.test.ts
   src/app/api/v1/membership-unreadable.routes.test.ts
+  # An organization's module state on the web: a state that could not be read
+  # is neither on nor off. withContext() holds it as unknown, so a Server
+  # Action answers its try-again sentence and a page says it could not check;
+  # the single-module check behind the public API key, the webhook
+  # subscriptions and the accounting connect callbacks throws for it (a 503
+  # with Retry-After, or the connect page's transient code); the public
+  # catalog's photo map never caches an answer built on a failed read; the
+  # public link resolver keeps a failed read only as "unread", reads again
+  # directly, and never serves an entry past its window or from before a link
+  # change (driven through the real unstable_cache); the public tracker says
+  # when the return link could not be checked; the customer portal does not
+  # take a failed read for "not a portal user", and its actions answer that
+  # as a result the page can show. The guard lists every file that reads the
+  # module table with what an unread answer becomes, so a new reader has to
+  # be listed. Nothing is granted on a read that failed.
+  src/lib/modules/module-state-readers.guard.test.ts
+  # Every catch in the Server Action modules reaches the shared mapping of a
+  # check that could not be read (or is listed with its reason), so a module
+  # with its own error mapping answers "Your access could not be checked.
+  # Please try again." and not its generic sentence.
+  src/server/actions/unchecked-access.guard.test.ts
+  src/lib/modules/module-state.test.ts
+  src/lib/modules/org-may-use-module.test.ts
+  src/lib/dashboard/request-cache.modules.test.ts
+  src/server/services/context.module-state.test.ts
+  src/server/actions/module-state-unread.actions.test.ts
+  src/lib/auth/api-key.module-gate.test.ts
+  src/lib/auth/public-api.module-state.test.ts
+  src/app/api/public/v1/hooks/route.test.ts
+  src/server/services/public-catalog.token-resolution.test.ts
+  src/server/services/portal.module-state.test.ts
+  src/server/actions/portal.module-state.test.ts
+  'src/app/(dashboard)/layout.module-state.test.tsx'
+  # The organization row the cookie session reads (its authenticator policy
+  # and settings) is the same kind of check: a read that did not answer is
+  # never a row with default settings. The dashboard layout reaches the plain
+  # "We couldn't check your access just now" state with Try again, and a
+  # Server Action answers "Your access could not be checked. Please try
+  # again.", with nothing written.
+  src/lib/dashboard/request-cache.organization-row.test.ts
+  'src/app/(dashboard)/layout.organization-row.test.tsx'
+  src/server/actions/organization-row-unread.actions.test.ts
   src/app/api/v1/mobile/snapshot/route.step-up.test.ts
   src/app/api/client-error/route.test.ts
   # A session that still owes its authenticator code gets no organization
@@ -1244,6 +1333,14 @@ WEB_TESTS=(
   src/lib/rate-limit.failed.test.ts
   src/server/services/auth-audit.address.test.ts
   src/app/api/v1/auth/password-reset/route.address.test.ts
+  # S80: an audit row's id is chosen by the writer, never by its caller, and a
+  # row that was not written is sent again as an insert that skips a row
+  # already there (no upsert on audit_logs may overwrite one). While the
+  # limiter cannot answer, the phone's sign-in and sign-out notes are bounded
+  # per instance.
+  src/server/services/audit.retry.test.ts
+  src/server/services/audit-writes.guard.test.ts
+  src/lib/auth/session-note.test.ts
 
   # Only a platform admin creates a workspace (S20, owner decision b.9):
   # createOrganizationAction runs checkPlatformAdmin({ requireStepUp: true })
@@ -1360,6 +1457,22 @@ WEB_TESTS=(
   src/test/ingest-proxy.guard.test.ts
   'src/app/ingest/[...path]/route.test.ts'
   'src/app/ingest/[...path]/route.census.test.ts'
+  # Request lists and bodies have upper limits. Every zod list in source has a
+  # .max() or .length() and every keyed object goes through boundedRecord
+  # (a short allowlist names the schemas that never see a request); the guard
+  # also fails when the zod patch that stops at the first over-long list is
+  # not applied. The three public form posts (order requests, return requests,
+  # return options) take at most 256 KB and answer 413 before parsing a larger
+  # body. Each file carries the "Security invariant" marker.
+  src/test/zod-array-bounds.guard.test.ts
+  src/lib/http/read-json-limited.test.ts
+  src/app/api/v1/public/body-limit.test.ts
+  # A request holds a total number of list entries (withEntryBudget, core):
+  # a schema with a list inside a list sits behind it (the guard above), and
+  # the receipt route and action refuse lines times serial numbers past it
+  # before the receipt schema parses anything.
+  'src/app/api/v1/po/[id]/receipts/route.entry-budget.test.ts'
+  src/server/actions/receiving.entry-budget.test.ts
 
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts
@@ -1842,6 +1955,27 @@ WEB_TESTS=(
   src/server/actions/platform/permission-exceptions.test.ts
   src/lib/auth/effective-permissions.test.ts
 
+  # Notice audience (0422, docket S36a; the database half is in MANIFEST 1):
+  # every notice and push the app writes (createNotification), and every
+  # email to a member's own address, goes only to a current member of the
+  # record's organization: an accepted membership that is not an Act-as seat,
+  # on an account that is not disabled. A membership or profile read that
+  # fails, or answers no list, writes nothing and sends nothing, and is
+  # reported. An address the order recorded for an outside person is emailed
+  # whoever placed the order.
+  src/server/lib/current-member.test.ts
+  src/server/services/notifications.requester-paths.test.ts
+  src/server/services/order-requests.member-email.test.ts
+  src/server/email/maintenance-resolved.member.test.ts
+
+  # Maintenance photo share links follow the organization's
+  # includeShareLinksInEmail setting. A setting never written means on; a
+  # settings read that returns an error means off (no link is created, shown
+  # or emailed) and is reported.
+  src/server/services/maintenance-share-links.setting.test.ts
+  src/server/services/maintenance-requests.link-setting.test.ts
+  src/server/email/maintenance-resolved.setting.test.ts
+
   # Connector export events (outbox_events) are recorded only by
   # server/lib/outbox-events.ts, through the service client, after the action
   # that causes them: a member action in the organization of its checked
@@ -1852,6 +1986,52 @@ WEB_TESTS=(
   # anywhere else on the web, the phone and core.
   src/test/outbox-publish-sites.guard.test.ts
   src/server/lib/outbox-events.test.ts
+  # Which cycle counts a member reads: one rule (lib/auth/count-read-scope.ts)
+  # for the count list, the count page and count sheet, a count's linked
+  # exceptions, and the open counts the phone's sync sends. Managers and
+  # above, and members with every warehouse, read every count; anyone else
+  # reads the counts of the warehouses they can read, and a count with no
+  # warehouse only when it is assigned to them; a member with no readable
+  # warehouse reads none.
+  src/lib/auth/count-read-scope.test.ts
+  src/server/services/cycle-counts.read-scope.test.ts
+  src/server/services/cycle-counts.list.test.ts
+  src/app/api/v1/mobile/snapshot/route.count-scope.test.ts
+  'src/app/api/v1/cycle-counts/[id]/exceptions/route.count-read-scope.test.ts'
+  # The email change an account holds: Settings shows it whenever the account
+  # has a pending address (a change with no request time shows as expired,
+  # with Resend and Cancel), and links are minted only once the auth server
+  # has recorded the request's time.
+  src/server/services/email-change.test.ts
+  src/components/settings/email-settings-card.test.tsx
+
+  # Member role and category access over /api/v1 (routes the phone can
+  # call). PATCH /api/v1/members/[id]/role changes a role through
+  # TeamService.updateMemberRole and nothing else, and
+  # POST /api/v1/members/[id]/category-access grants or revokes ONE category
+  # through UserCategoriesService.setMemberCategoryGrant and nothing else:
+  # each builds its context with withApiContext, through the API context gate,
+  # so the service's permission check, the organization's authenticator rule,
+  # its audit row and its security event are the web's own; a context that
+  # could not be read answers the gate's 503 before any work; a refusal keeps
+  # its code, words and reason; a database failure answers a fixed sentence.
+  # The role body is one of admin, manager, staff and viewer. The category
+  # body is exactly one category and one flag (a list is refused), the member and the
+  # category are read in the caller's organization, and the write is the one
+  # row, never the member's set. A save of the role a member already has, or
+  # of the authenticator policy an organization already has, changes nothing:
+  # no update, no audit row, no security event. The two route suites and the
+  # single-grant suite carry the "Security invariant" marker. An account with
+  # an authenticator, on a session signed in with the password alone, reaches
+  # neither service: the real gate and withApiContext refuse it before any
+  # read and both routes answer their 401, and each route's Answers list says
+  # so instead of promising that session a 403 aal2_required.
+  'src/app/api/v1/members/[id]/role/route.test.ts'
+  'src/app/api/v1/members/[id]/category-access/route.test.ts'
+  src/app/api/v1/members/step-up-answer.test.ts
+  src/server/services/user-categories.single-grant.test.ts
+  src/server/services/team.update-member-role.test.ts
+  src/server/actions/mfa.policy-unchanged.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2061,6 +2241,14 @@ MOBILE_TESTS=(
 # ═══════════════════════════════════════════════════════════════════════════
 CORE_TESTS=(
   src/constants/permissions.test.ts
+  # zod stops at the first over-long list (patches/zod@3.25.76.patch, ESM and
+  # CommonJS builds), and a keyed object over its bound is refused before any
+  # key is validated (boundedRecord).
+  src/zod-array-early-stop.test.ts
+  src/schemas/bounded-record.test.ts
+  # The request entry budget: every list entry at any depth counted without
+  # recursion, refused before the schema runs.
+  src/schemas/entry-budget.test.ts
   # 0395: the database refusals' hints and words, shared by web and phone.
   src/guards/db-guard-copy.test.ts
   src/auth/account-status.test.ts

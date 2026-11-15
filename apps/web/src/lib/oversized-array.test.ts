@@ -5,15 +5,15 @@ import { z } from 'zod';
 import { hasArrayLongerThan } from './oversized-array';
 
 describe('hasArrayLongerThan', () => {
-  it('CONTROL: zod 3 still parses every element of an over-long array', () => {
-    // Why the public routes call hasArrayLongerThan before safeParse
-    // (GHSA-mrhx-c7xc-m3w5): `.max(100)` adds its too_big issue and then
-    // zod checks all 1,000 elements anyway, one invalid_type issue each.
-    // When this fails, zod stopped doing it and the stopgap can be reviewed.
+  it('CONTROL: zod stops at an over-long array without parsing its elements', () => {
+    // patches/zod@3.25.76.patch: `.max(100)` adds its too_big issue and
+    // answers, as zod 4.6.6 does. The public routes still call
+    // hasArrayLongerThan before safeParse, as a second layer that also covers
+    // arrays under keys the schema strips.
     const result = z.array(z.string()).max(100).safeParse(new Array(1000).fill(0));
     expect(result.success).toBe(false);
     expect(result.error?.issues[0]?.code).toBe('too_big');
-    expect(result.error?.issues).toHaveLength(1001);
+    expect(result.error?.issues).toHaveLength(1);
   });
 
   it('passes an array at the limit and refuses one past it', () => {
