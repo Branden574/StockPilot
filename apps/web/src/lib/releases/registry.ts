@@ -121,7 +121,9 @@ export const RELEASES: Release[] = [
     // the settings release below is dated 2026-11-15T04:13:00Z, so the placeholder is that same minute.
     // Moved again by docs/whats-new-navigation-keeps-choices (2026-11-15; was: '2026-11-15T04:13:00Z'): the
     // navigation release below is dated 2026-11-15T04:45:00Z, so the placeholder is that same minute.
-    publishedAt: '2026-11-15T04:45:00Z',
+    // Moved again by docs/whats-new-invitation-audit (2026-11-15; was: '2026-11-15T04:45:00Z'): the
+    // invitation audit release below is dated 2026-11-15T17:39:00Z, so the placeholder is that same minute.
+    publishedAt: '2026-11-15T17:39:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -206,6 +208,57 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'invitation-audit-2026-11',
+    revision: 1,
+    // #579 (squash 01ead76fa), web only: no phone update and no migration.
+    // Live in production since 2026-11-15 17:17:30Z; publishedAt is the
+    // minute this release was committed. It went live after
+    // #564, so it sits above the navigation release and is the newest
+    // published release.
+    // Claims checked against the code at 01ead76fa (paths under apps/web/src):
+    // - The rows: server/services/team.ts. Sending an invitation writes
+    //   user.invited once the invite is stored, with after { email, role,
+    //   all_warehouses, warehouse_id, charter_ids, email_sent }; revoking
+    //   writes user.invite.revoked once the invite is deleted, with before
+    //   { email, role }. The resend already wrote user.invited.
+    // - The labels: lib/audit/format.ts formatAuditEvent gives
+    //   "User · Invited" and "User Invite · Revoked".
+    // - The chip: components/admin/audit-categories.ts, slug user, label
+    //   Team, prefix user. (both events start with user.).
+    // - The details: app/(dashboard)/dashboard/audit/page.tsx renders
+    //   MetadataDiff under a row that has before or after fields, behind
+    //   the row's "Show N field changes" link. Warehouses and charters
+    //   appear as ids.
+    // - The phone: apps/mobile/app/(drawer)/admin/audit.tsx shows row.event
+    //   as written, with no details.
+    // Who is told: whoever can open the page. /dashboard/audit redirects
+    // anyone without activity_logs:read ("View audit log"; owner, admin and
+    // manager by default, grantable to others) and checks no module: its
+    // sidebar link belongs to admin_tools, a core module that is always on.
+    status: 'published',
+    title: 'Sending and revoking an invitation now show in the Audit log',
+    summary:
+      'The Audit log now records when an invitation to join your organization is sent and when one is revoked, with the invited address and role. On the web, both rows are under the Team chip. People who can view the audit log see them. No app update is needed.',
+    // #579 is live in production since 2026-11-15 17:17:30Z.
+    publishedAt: '2026-11-15T17:39:00Z',
+    entries: [
+      {
+        id: 'invitations-in-audit-log',
+        category: 'improved',
+        area: 'Audit log',
+        title: 'Sending and revoking an invitation now show in the Audit log',
+        whatChanged:
+          'The Audit log now has a User · Invited row for each invitation sent and a User Invite · Revoked row for each invitation revoked. The User · Invited row holds the invited address, the role, whether the invitation offers all warehouses, the ids of the warehouse and charters it names, and whether the invitation email went out. The User Invite · Revoked row holds the address and role the invitation had. Resending an invitation was already recorded as User · Invited.',
+        whyItMatters: 'The Audit log shows who sent or revoked an invitation, and when.',
+        howItAffectsYou:
+          'On the web, both rows are under the Team chip, and the link below a row opens its details. People who can view the audit log see them: owners, admins and managers by default, and anyone given View audit log. The Audit log in the mobile app lists them among its recent events as user.invited and user.invite.revoked, without the details.',
+        whatToDo: 'No action needed. To see them on the web, open the Audit log and choose the Team chip.',
+        link: { href: '/dashboard/audit?category=user', label: 'Open the Audit log' },
+        audience: { anyPermission: ['activity_logs:read'] },
       },
     ],
   },
