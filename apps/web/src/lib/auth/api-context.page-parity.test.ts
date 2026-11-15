@@ -59,7 +59,7 @@ import {
 } from '@/server/services/context';
 import { verifiedSessionAuth } from '@/test/verified-session-stub';
 
-import { withApiContext } from './api-context';
+import { cookieSessionMfaState, withApiContext } from './api-context';
 
 import type { Permission, Role } from '@stockpilot/core';
 
@@ -319,6 +319,30 @@ describe.each(PATHS)('withApiContext (%s): sessions at aal2', (path) => {
       expect((await apiAnswer(path, read, s)).answer, read).toBe(expected);
     }
     expect((await pageAnswer(s)).answer).toBe(expected);
+  });
+});
+
+/**
+ * The routes that build their own principal from the cookie session (the
+ * accounting connection returns) take the authenticator state from
+ * cookieSessionMfaState. For every session shape it is the state the pages
+ * resolve from the same rows, so the gate gives them the same answer.
+ */
+describe('cookieSessionMfaState answers as the pages do', () => {
+  it.each(SESSIONS.map((s) => [label(s), s] as const))('%s', async (_name, s) => {
+    const page = await pageAnswer(s);
+    arrange(s, 'separate reads');
+    const client = makeClient();
+    const {
+      data: { user },
+    } = await client.auth.getUser();
+    const own = await cookieSessionMfaState(client, user, ORG_ID, s.role);
+    expect(own).toEqual({
+      mfaRequired: page.ctx.mfaRequired,
+      mfaSatisfied: page.ctx.mfaSatisfied,
+      mfaEnrolled: page.ctx.mfaEnrolled,
+    });
+    expect(gate({ ...page.ctx, ...own })).toBe(page.answer);
   });
 });
 
