@@ -303,39 +303,54 @@ export class TeamService {
     // Short alias /i/<token> redirects to /invite/<token>; keeps the URL
     // on one line in chat clients so the entire link stays clickable.
     const acceptUrl = `${env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')}/i/${token}`;
-    const message = renderTeamInviteEmail({
-      email: normalizedEmail,
-      org: organizationName,
-      inviterName,
-      inviterEmail: params.inviterEmail ?? null,
-      role: params.role,
-      acceptUrl,
-      expiresOn: formatInviteExpiry(expiresAt),
-      window: '7 days',
-      appUrl: env.NEXT_PUBLIC_APP_URL,
-    });
-    // sendEmail NEVER throws — it returns { ok: false, error } on a non-2xx
-    // Resend response or a network failure (lib/email/resend.ts). Discarding
+    // sendEmail returns its failures ({ ok: false, error } on a non-2xx
+    // Resend response or a network failure, lib/email/resend.ts). Discarding
     // that made "Invite sent" a lie: the row existed, the admin was told it
     // was delivered, and the person was never contacted. The invite is real,
-    // so the row stays and the message hands the admin the link.
-    const sent = await sendEmail({
-      to: normalizedEmail,
-      subject: message.subject,
-      html: message.html,
-      text: message.text,
-      from: message.from,
-    });
+    // so the row stays and the message hands the admin the link. Anything
+    // thrown while the message is built or sent counts as an unsent email
+    // too, so the invitation below is recorded on every path.
+    let sent: Awaited<ReturnType<typeof sendEmail>>;
+    try {
+      const message = renderTeamInviteEmail({
+        email: normalizedEmail,
+        org: organizationName,
+        inviterName,
+        inviterEmail: params.inviterEmail ?? null,
+        role: params.role,
+        acceptUrl,
+        expiresOn: formatInviteExpiry(expiresAt),
+        window: '7 days',
+        appUrl: env.NEXT_PUBLIC_APP_URL,
+      });
+      sent = await sendEmail({
+        to: normalizedEmail,
+        subject: message.subject,
+        html: message.html,
+        text: message.text,
+        from: message.from,
+      });
+    } catch (e) {
+      sent = { ok: false, error: e instanceof Error ? e.message : 'unknown' };
+    }
     // The invite row exists whether or not the email went out (its link can
     // be copied from Pending invites), so it is recorded either way.
     // email_sent says which, so the row never claims a message that was not
-    // sent. Same entity and address as the resend row below.
+    // sent. Same entity and address as the resend row below; the access the
+    // invite offers is recorded as the acceptance row records it.
     await audit(
       {
         event: 'user.invited',
         entityType: 'org_invite',
         entityId: invite.id as string,
-        after: { email: normalizedEmail, role: params.role, email_sent: sent.ok },
+        after: {
+          email: normalizedEmail,
+          role: params.role,
+          all_warehouses: allWarehouses,
+          warehouse_id: warehouseId,
+          charter_ids: charterIds,
+          email_sent: sent.ok,
+        },
       },
       this.ctx,
     );

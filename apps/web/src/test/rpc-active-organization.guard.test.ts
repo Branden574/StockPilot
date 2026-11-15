@@ -1294,7 +1294,8 @@ const S41_ROW_PROOFS: ReadonlyArray<{ file: string; member: string; write: strin
 
 /**
  * The table writes S41 changed, for the mutation proof below: what is taken
- * out of the member (`rows`: the `.select('id')` that asks the row back;
+ * out of the member (`rows`: the `.select('id')` or `.select('id, ...')` that
+ * asks the row back;
  * `test`: the miss test on the row that came back, turned into a test for a
  * hit; `read`: the readInActiveOrg call; `filter`: the organization filter)
  * and the words the guard must then say about `write`.

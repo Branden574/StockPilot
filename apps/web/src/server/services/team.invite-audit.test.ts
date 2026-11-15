@@ -20,6 +20,8 @@ vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined) }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 
 const INVITE_ID = '00000000-0000-4000-8000-0000000000a1';
+const WAREHOUSE_ID = '00000000-0000-4000-8000-0000000000b1';
+const CHARTER_ID = '00000000-0000-4000-8000-0000000000c1';
 
 const INVITE_PARAMS = {
   email: '  Wren.Halloway@Example.test ',
@@ -68,7 +70,14 @@ describe('TeamService.invite records the invitation', () => {
         event: 'user.invited',
         entityType: 'org_invite',
         entityId: INVITE_ID,
-        after: { email: 'wren.halloway@example.test', role: 'manager', email_sent: true },
+        after: {
+          email: 'wren.halloway@example.test',
+          role: 'manager',
+          all_warehouses: true,
+          warehouse_id: null,
+          charter_ids: [],
+          email_sent: true,
+        },
       },
       expect.objectContaining({ organizationId: 'org-ex', userId: 'user-test' }),
     );
@@ -82,6 +91,49 @@ describe('TeamService.invite records the invitation', () => {
 
     // The invite row exists and its link can be copied, so it is recorded;
     // email_sent keeps the row from claiming a message went out.
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'user.invited',
+        entityId: INVITE_ID,
+        after: expect.objectContaining({ email_sent: false }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('records the warehouse and charters a scoped invitation offers', async () => {
+    const svc = new TeamService(makeServiceContext(newInviteStub().client, { role: 'admin' }));
+
+    await svc.invite({
+      ...INVITE_PARAMS,
+      role: 'staff',
+      allWarehouses: false,
+      warehouseId: WAREHOUSE_ID,
+      charterIds: [CHARTER_ID],
+    });
+
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'user.invited',
+        after: expect.objectContaining({
+          role: 'staff',
+          all_warehouses: false,
+          warehouse_id: WAREHOUSE_ID,
+          charter_ids: [CHARTER_ID],
+        }),
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('still records the invitation when sending the email throws', async () => {
+    vi.mocked(sendEmail).mockRejectedValue(new Error('socket closed'));
+    const svc = new TeamService(makeServiceContext(newInviteStub().client, { role: 'admin' }));
+
+    await expect(svc.invite(INVITE_PARAMS)).rejects.toMatchObject({ code: 'conflict' });
+
     expect(audit).toHaveBeenCalledTimes(1);
     expect(audit).toHaveBeenCalledWith(
       expect.objectContaining({

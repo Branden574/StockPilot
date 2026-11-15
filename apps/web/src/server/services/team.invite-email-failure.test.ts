@@ -10,13 +10,11 @@ import { audit } from './audit';
 /**
  * "Invite sent" must never be said when nothing was sent.
  *
- * sendEmail NEVER throws — a non-2xx from Resend or a network failure comes
- * back as `{ ok: false, error }` (lib/email/resend.ts). Both invite() and
- * resendInvite() discarded that value, so an admin saw a success toast, the
- * audit log recorded 'user.invited', and the person was never contacted. The
- * 2026-07-02 mailer incident is exactly this failure mode reaching production
- * silently, which is why resendInvite() checks the result BEFORE its audit
- * row, and invite()'s row records whether the email went out (email_sent).
+ * sendEmail returns its failures: a non-2xx from Resend or a network failure
+ * comes back as `{ ok: false, error }` (lib/email/resend.ts). invite() and
+ * resendInvite() read that value, so the admin is told when nothing was
+ * sent: resendInvite() checks the result before its audit row, and invite()'s
+ * row records whether the email went out (email_sent).
  */
 
 vi.mock('@/lib/email/resend', () => ({
@@ -51,7 +49,7 @@ function existingInviteStub() {
         role: 'staff',
         token: 'tokHvwVujKf',
         accepted_at: null,
-        organizations: { name: 'L4L North Region' },
+        organizations: { name: 'Example Charter Group' },
       },
       error: null,
     },
@@ -76,7 +74,7 @@ describe('TeamService.invite — a failed send is not a success', () => {
       svc.invite({
         email: 'theo@north.example',
         role: 'viewer',
-        organizationName: 'L4L North Region',
+        organizationName: 'Example Charter Group',
         inviterName: 'Carsten',
         allWarehouses: true,
       }),
@@ -90,7 +88,7 @@ describe('TeamService.invite — a failed send is not a success', () => {
       svc.invite({
         email: 'theo@north.example',
         role: 'viewer',
-        organizationName: 'L4L North Region',
+        organizationName: 'Example Charter Group',
         inviterName: 'Carsten',
         allWarehouses: true,
       }),
@@ -104,7 +102,7 @@ describe('TeamService.invite — a failed send is not a success', () => {
     const out = await svc.invite({
       email: 'theo@north.example',
       role: 'viewer',
-      organizationName: 'L4L North Region',
+      organizationName: 'Example Charter Group',
       inviterName: 'Carsten',
       allWarehouses: true,
     });
