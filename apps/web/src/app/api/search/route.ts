@@ -18,16 +18,14 @@ export async function GET(req: Request) {
   const ctx = await withApiContext(req);
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
-  // An authenticator the organization requires and the session has not shown:
-  // above all a member who must set one up first (the API context decides it
-  // with policyRequiresAuthenticator from @stockpilot/core, the rule the pages
-  // ask). Nothing is searched for them: the palette on the pages open before
-  // set-up shows no results. The reason is the one assertPermission gives.
+  // A member who must set up an authenticator first (the API context decides
+  // it with policyRequiresAuthenticator from @stockpilot/core, the rule the
+  // pages ask), including a session whose token says the code was entered but
+  // that has no verified authenticator left. Nothing is searched for them: the
+  // palette on the pages open before set-up shows no results. A session that
+  // owes its code never gets here: withApiContext answers it (401 above).
   if (ctx.mfaRequired && !ctx.mfaSatisfied) {
-    return NextResponse.json(
-      { error: ctx.mfaEnrolled ? 'aal2_required' : 'mfa_required' },
-      { status: 403 },
-    );
+    return NextResponse.json({ error: 'mfa_required' }, { status: 403 });
   }
 
   // Per-user rate limit before the 4-table ilike fan-out (open mode: an authed

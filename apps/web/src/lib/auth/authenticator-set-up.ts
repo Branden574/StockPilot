@@ -6,8 +6,8 @@
  * @stockpilot/core. requireOrgContext() (lib/auth/session.ts) applies it for
  * every dashboard page and every Server Action that builds on the member's
  * context. No layout redirects for it: the dashboard layout only shows the
- * banner, and a set-up panel in place of the page for a session the pages'
- * check cannot see (see the layout).
+ * banner, and a set-up prompt where the page would be for a session the
+ * pages' check cannot see (see the layout; the page below still runs).
  */
 
 /** The security settings page, where an authenticator is set up. */

@@ -1,15 +1,21 @@
-import Link from 'next/link';
-
 import { StatePanel } from '@/components/patterns/state-panel';
-import { Button } from '@/components/ui/button';
+import { buttonVariants } from '@/components/ui/button';
 import { AUTHENTICATOR_SET_UP_URL } from '@/lib/auth/authenticator-set-up';
 
 /**
- * What the dashboard layout shows in place of the page when the member must
- * set up an authenticator first and the page's own check did not send them to
- * set-up (a session whose token still says aal2 after its last verified factor
- * was removed: the pages answer that from the token alone). Rendered, never a
- * redirect: no dashboard layout redirects to a page under itself.
+ * A prompt the dashboard layout shows where the page would be, on a full page
+ * load or a refresh, for a session whose token says the code was entered but
+ * that has no verified authenticator left, on a page that is not open before
+ * set-up. Rendered, never a redirect: no dashboard layout redirects to a page
+ * under itself.
+ *
+ * It is not a data stop: the page below still runs and is in the response
+ * (a layout that leaves out its children does not stop them). That session's
+ * reads and writes are refused where the services ask for an authenticator.
+ *
+ * The button is a plain anchor, so pressing it loads the security page as a
+ * new document and the layout is rendered again for it. A client-side
+ * navigation would keep this layout's output, and the panel with it.
  */
 export function AuthenticatorSetUpPanel() {
   return (
@@ -21,11 +27,9 @@ export function AuthenticatorSetUpPanel() {
         title="Set up an authenticator to continue"
         description="Your organization requires two-factor authentication. Set up your authenticator app in Security settings, then come back."
         action={
-          <Button asChild size="sm">
-            <Link href={AUTHENTICATOR_SET_UP_URL} prefetch={false}>
-              Go to Security settings
-            </Link>
-          </Button>
+          <a href={AUTHENTICATOR_SET_UP_URL} className={buttonVariants({ size: 'sm' })}>
+            Go to Security settings
+          </a>
         }
       />
     </div>

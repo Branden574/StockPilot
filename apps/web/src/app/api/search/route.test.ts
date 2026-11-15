@@ -63,21 +63,6 @@ describe('GET /api/search', () => {
     expect(getWarehouseAccess).not.toHaveBeenCalled();
   });
 
-  it('a session that owes its code is refused with the code reason, and nothing is searched', async () => {
-    const stub = makeSupabaseStub({});
-    vi.mocked(withApiContext).mockResolvedValueOnce({
-      ...buildCtx(stub.client),
-      mfaRequired: true,
-      mfaSatisfied: false,
-      mfaEnrolled: true,
-    });
-
-    const res = await GET(new Request('https://test.local/api/search?q=kettle'));
-    expect(res.status).toBe(403);
-    expect(await res.json()).toEqual({ error: 'aal2_required' });
-    expect(stub.fromCalls).toEqual([]);
-  });
-
   it('a requirement that is met searches as usual', async () => {
     const stub = makeSupabaseStub({});
     vi.mocked(withApiContext).mockResolvedValueOnce({

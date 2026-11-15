@@ -202,12 +202,15 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   // them before set-up; every other page sends them there itself
   // (requireOrgContext()), so this layout never redirects for it.
   const setUpOwed = authenticatorSetUpOwed(policy, ctx.role, ownFactors);
-  // The one session those pages cannot see: a token that still says aal2 after
-  // the last verified factor was removed (the pages answer aal2 from the token
-  // alone, with no factor read). This layout has the factor list in hand, so
-  // on a full page load or a refresh it shows the set-up panel in place of the
-  // page. Rendered, never a redirect. The claims are awaited only here, for a
-  // member who owes set-up on a page that is not open to them.
+  // A session whose token says the code was entered but that has no verified
+  // authenticator left: the pages answer aal2 from the token alone, with no
+  // factor read. This layout has the factor list in hand, so on a full page
+  // load or a refresh it shows that session a set-up prompt where the page
+  // would be (its button loads the security page as a new document). It is a
+  // prompt, not a data stop: the page below still runs and is in the response;
+  // that session's reads and writes are refused where the services ask for an
+  // authenticator. Rendered, never a redirect. The claims are awaited only
+  // here, for a member who owes set-up on a page that is not open to them.
   const setUpPanel =
     setUpOwed &&
     !openBeforeAuthenticatorSetUp((await headers()).get('x-pathname')) &&

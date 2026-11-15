@@ -35,9 +35,15 @@ import {
  *      nothing else, and it still asks the authenticator-code rule.
  *   3. No layout.tsx under app/ reaches requireOrgContext(), by a call or by
  *      a component it renders.
- *   4. No layout.tsx under app/ calls redirect() to a page under itself: a
- *      literal target must not be a page of that layout's own tree; any other
- *      target is listed below with where it goes.
+ *   4. No layout.tsx under app/ calls redirect() or permanentRedirect() to a
+ *      page under itself: a literal target must not be a page of that layout's
+ *      own tree; any other target is listed below with where it goes. Read in
+ *      the layout file itself and, one level down, in the app's own files it
+ *      imports (a helper it calls, a component it renders), where a literal
+ *      target under the layout is reported. NOT checked: a computed target in
+ *      an imported file, files two or more imports away, and the redirects
+ *      inside requireOrgContextForLayout()'s resolver (all outside the
+ *      dashboard layout today: sign-in, the code page, onboarding).
  *   5. The dashboard layout uses the same rule and open pages for its banner
  *      and its set-up panel, and redirects to nothing for set-up.
  *   6. Nothing else decides which pages are open: no file writes its own
@@ -131,28 +137,87 @@ const matchesPage = (target: string, page: string[]) => {
   return segs.length === page.length && page.every((s, i) => s.startsWith('[') || s === segs[i]);
 };
 
+/**
+ * Every redirect() and permanentRedirect() call in the text, with its argument
+ * read to the matching parenthesis (so a call over several lines, or one with
+ * no semicolon after it, is read too) and its white space collapsed. A method
+ * of the same name (`NextResponse.redirect(`) is not one.
+ */
+function redirectCalls(text: string): Array<{ fn: string; arg: string }> {
+  const calls: Array<{ fn: string; arg: string }> = [];
+  for (const m of code(text).matchAll(/(?<![.\w$])(permanentRedirect|redirect)\(/g)) {
+    const src = code(text);
+    let depth = 1;
+    let quote: string | null = null;
+    let i = m.index! + m[0].length;
+    for (; i < src.length && depth > 0; i++) {
+      const ch = src[i]!;
+      if (quote) {
+        if (ch === '\\') i++;
+        else if (ch === quote) quote = null;
+      } else if (ch === "'" || ch === '"' || ch === '`') quote = ch;
+      else if (ch === '(') depth++;
+      else if (ch === ')') depth--;
+    }
+    const arg = src
+      .slice(m.index! + m[0].length, i - 1)
+      .replace(/\s+/g, ' ')
+      .replace(/,\s*$/, '')
+      .trim();
+    calls.push({ fn: m[1]!, arg });
+  }
+  return calls;
+}
+
+/** The literal target of a redirect argument (its first argument), or null. */
+const literalTarget = (arg: string) => /^(['"`])([^'"`$]*)\1(\s*,.*)?$/.exec(arg)?.[2] ?? null;
+
+/** The app's own files a file imports (`@/...` or relative), one level. */
+function localImports(tree: Tree, rel: string, text: string): string[] {
+  const out = new Set<string>();
+  for (const m of text.matchAll(/\bfrom\s+['"]((?:@\/|\.)[^'"]+)['"]/g)) {
+    const spec = m[1]!;
+    const base = spec.startsWith('@/')
+      ? spec.slice(2)
+      : path.posix.normalize(path.posix.join(path.posix.dirname(rel), spec));
+    const hit = ['.ts', '.tsx', '/index.ts', '/index.tsx', '']
+      .map((ext) => `${base}${ext}`)
+      .find((f) => tree.files.has(f));
+    if (hit && hit !== rel) out.add(hit);
+  }
+  return [...out].sort();
+}
+
 /** Rule 4: layout redirects whose target is a page under that layout, or is not reviewed. */
 function layoutRedirectsUnderThemselves(tree: Tree, reviewed: Record<string, string>): string[] {
   const problems: string[] = [];
+  const under = (pages: string[][], target: string) => pages.some((p) => matchesPage(target, p));
   for (const [rel, text] of tree.files) {
     if (!isLayout(rel)) continue;
     const pages = pagesUnderLayout(tree, rel);
-    for (const m of code(text).matchAll(/\bredirect\(\s*(.*?)\s*\);/g)) {
-      const arg = m[1]!;
-      const literal = /^(['"`])([^'"`$]*)\1$/.exec(arg);
-      if (literal) {
-        if (pages.some((p) => matchesPage(literal[2]!, p))) {
-          problems.push(`${rel}: redirect('${literal[2]}') is a page under this layout`);
+    for (const { fn, arg } of redirectCalls(text)) {
+      const target = literalTarget(arg);
+      if (target !== null) {
+        if (under(pages, target)) {
+          problems.push(`${rel}: ${fn}('${target}') is a page under this layout`);
         }
       } else if (!reviewed[`${rel}#${arg}`]) {
-        problems.push(`${rel}: redirect(${arg}) has a target this guard cannot read`);
+        problems.push(`${rel}: ${fn}(${arg}) has a target this guard cannot read`);
+      }
+    }
+    for (const dep of localImports(tree, rel, text)) {
+      for (const { fn, arg } of redirectCalls(tree.files.get(dep)!)) {
+        const target = literalTarget(arg);
+        if (target !== null && under(pages, target)) {
+          problems.push(`${rel} -> ${dep}: ${fn}('${target}') is a page under this layout`);
+        }
       }
     }
   }
   for (const key of Object.keys(reviewed)) {
     const [rel, arg] = key.split('#') as [string, string];
     const text = tree.files.get(rel);
-    if (!text || !code(text).includes(`redirect(${arg})`)) {
+    if (!text || !redirectCalls(text).some((c) => c.arg === arg)) {
       problems.push(`${key}: listed but no longer there`);
     }
   }
@@ -340,12 +405,27 @@ describe('self-test: a planted violation is reported', () => {
   it('4. a layout that redirects to a page under itself, or to a target nobody read, is reported', () => {
     const t = tree({
       'app/(dashboard)/layout.tsx': `
+        import { gate } from '@/lib/gate';
+        import { Guard } from './guard';
         export default async function L({ children }) {
           if (a) redirect('/dashboard/settings/security?enroll=1');
           if (b) redirect('/signin/mfa');
           if (c) redirect(someTarget());
-          return children;
+          if (d) return redirect('/dashboard/settings/profile')
+          if (e) permanentRedirect('/dashboard/items/7');
+          if (f) redirect(
+            '/dashboard/items/8',
+          );
+          if (g) return NextResponse.redirect('/dashboard/items/9');
+          await gate();
+          return <Guard>{children}</Guard>;
         }`,
+      'lib/gate.ts': `
+        export async function gate() { if (x) redirect('/dashboard/items/10'); redirect(elsewhere()); }`,
+      'app/(dashboard)/guard.tsx': `
+        export async function Guard({ children }) { if (y) permanentRedirect('/dashboard'); return children; }`,
+      'app/(dashboard)/dashboard/page.tsx': `export default function P() { return null; }`,
+      'app/(dashboard)/dashboard/settings/profile/page.tsx': `export default function P() { return null; }`,
       'app/(dashboard)/dashboard/items/layout.tsx': `
         export default async function L({ children }) {
           if (a) redirect('/dashboard/items/42');
@@ -357,7 +437,12 @@ describe('self-test: a planted violation is reported', () => {
       layoutRedirectsUnderThemselves(t, { 'app/(dashboard)/layout.tsx#gone()': 'x'.repeat(41) }),
     ).toEqual([
       "app/(dashboard)/dashboard/items/layout.tsx: redirect('/dashboard/items/42') is a page under this layout",
+      "app/(dashboard)/layout.tsx -> app/(dashboard)/guard.tsx: permanentRedirect('/dashboard') is a page under this layout",
+      "app/(dashboard)/layout.tsx -> lib/gate.ts: redirect('/dashboard/items/10') is a page under this layout",
       'app/(dashboard)/layout.tsx#gone(): listed but no longer there',
+      "app/(dashboard)/layout.tsx: permanentRedirect('/dashboard/items/7') is a page under this layout",
+      "app/(dashboard)/layout.tsx: redirect('/dashboard/items/8') is a page under this layout",
+      "app/(dashboard)/layout.tsx: redirect('/dashboard/settings/profile') is a page under this layout",
       "app/(dashboard)/layout.tsx: redirect('/dashboard/settings/security?enroll=1') is a page under this layout",
       'app/(dashboard)/layout.tsx: redirect(someTarget()) has a target this guard cannot read',
     ]);

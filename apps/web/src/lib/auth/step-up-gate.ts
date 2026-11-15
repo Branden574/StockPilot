@@ -138,10 +138,13 @@ export async function stepUpIsOwed(reads: StepUpReads, userId: string): Promise<
  *   - at aal2 (this member's own claims) the answer is no, from the claims
  *     alone. Such a session entered a code, so it had a factor. Reading the
  *     list here too would add an Auth round trip to every page and action of
- *     such a session that does not already have one under way. A factor
- *     removed since is answered by the dashboard layout, which has the list in
- *     hand on every full page load and refresh and shows its set-up panel in
- *     place of the page (it never redirects);
+ *     such a session that does not already have one under way. If its last
+ *     verified factor was removed since, that session's reads and writes are
+ *     refused where the services ask for an authenticator (they read the
+ *     list). The dashboard layout, which has the list in hand on a full page
+ *     load or a refresh, also shows it a set-up prompt where the page would
+ *     be; that is a prompt, not a data stop (the page still runs), and the
+ *     layout never redirects;
  *   - otherwise the factor list is the one stepUpIsOwed() already awaited
  *     (the same promise), and a verified factor there means the code was owed
  *     and the member never got this far;
