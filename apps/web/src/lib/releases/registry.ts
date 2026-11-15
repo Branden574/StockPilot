@@ -114,7 +114,10 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whats-new-phone-screens-by-access (2026-11-14; was: '2026-11-14T17:58:00Z'): the
     // phone screens by access release below is dated 2026-11-14T18:44:00Z, so the placeholder is that same
     // minute. Set at merge (2026-11-14): the same value as that release's publishedAt.
-    publishedAt: '2026-11-14T18:44:00Z',
+    // Moved again by docs/whats-new-count-read-rule (2026-11-15; was: '2026-11-14T18:44:00Z'): the count read
+    // rule and email change releases below share one minute, 2026-11-15T00:03:00Z, so the placeholder is
+    // that same minute.
+    publishedAt: '2026-11-15T00:03:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -199,6 +202,147 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'count-read-rule-2026-11',
+    revision: 1,
+    // The cycle counts half of #558 (squash 29cb97190), web only: no phone
+    // update and no migration. Live in production since 2026-11-15 00:02Z;
+    // publishedAt is the whole minute after. The phone has it through the
+    // server: its online count list is GET /api/v1/cycle-counts and its
+    // downloaded list is what the sync is sent.
+    // The other half of #558, the Email card, is its own release directly
+    // below (email-change-expired-2026-11, the same minute), because it
+    // changed for every organization and this release is addressed to
+    // organizations with Cycle counts on. This one is the newer of the two,
+    // so a reader both reach is offered it first: it is the one with
+    // something to do.
+    // Claims checked against the code at 29cb97190 (paths under apps/web/src):
+    // - The rule: lib/auth/count-read-scope.ts. Managers and above, and a
+    //   member with every warehouse, read every count; anyone else a count in
+    //   a warehouse they can READ, and a count with no warehouse only when it
+    //   is assigned to them; a member with no readable warehouse none. Asked
+    //   by the list (server/services/cycle-counts.ts listPage), the count
+    //   itself (get and getDetailPage: the count page, the count sheet and
+    //   the variance report) and the phone's sync
+    //   (app/api/v1/mobile/snapshot/route.ts).
+    // - Entry 1: the list read the warehouses a member can change, and a
+    //   viewer can change none (lib/auth/warehouse.ts: writableIds is empty
+    //   for a viewer), so a viewer's list was empty while the count page,
+    //   which asked for read access, opened. A viewer opens Cycle counts only
+    //   when given cycle_counts:read (core ROLE_PERMISSIONS). For staff the
+    //   readable and the changeable warehouses are the same, so their web
+    //   list (and the phone's online list, the same read) is unchanged. The
+    //   phone's downloaded list is not the same for them: entry 2.
+    // - Entry 2: a count's header has no warehouse when it is started for
+    //   "All warehouses" (components/cycle-counts/start-cycle-count-form.tsx)
+    //   or is a selection whose items sit in more than one warehouse. The
+    //   list already showed such a count only to its assignee; the count page
+    //   and the phone's sync now do too. A count the rule does not show
+    //   answers not found, which the count page shows as "Page not found"
+    //   (app/not-found.tsx). The assignee is set under "Assigned to:" on the
+    //   count page (components/cycle-counts/cycle-count-detail.tsx) by whoever
+    //   holds cycle_counts:assign, while the count is open. The entry says
+    //   what such a count shows to now, in the present tense.
+    // Who is told: organizations with Cycle counts on. Entry 1 goes to whoever
+    // can open Cycle counts (the pages' gate: cycle_counts:read or
+    // stock:adjust). Entry 2 goes to them too, since the counter is the one a
+    // count stops showing to and needs to know whom to ask, and to whoever
+    // assigns counts (cycle_counts:assign).
+    status: 'published',
+    title: 'Who sees a cycle count is now the same everywhere',
+    summary:
+      "The cycle count list, a count's page and count sheet, and the mobile app's list now follow one rule. A viewer who can open Cycle counts sees the counts of their warehouses, a count with no warehouse of its own shows to the person it is assigned to, and owners, admins, managers and members with access to every warehouse see every count, as before. No app update is needed.",
+    // #558 is live in production since 2026-11-15 00:02Z.
+    publishedAt: '2026-11-15T00:03:00Z',
+    audience: { modules: ['cycle_counts'] },
+    entries: [
+      {
+        id: 'count-list-shows-readable-warehouses',
+        category: 'fixed',
+        area: 'Cycle counts',
+        title: "Viewers see their warehouses' counts in the count list",
+        whatChanged:
+          'A viewer who can open Cycle counts now sees the counts of the warehouses they are assigned to in the count list, on the web and in the mobile app.',
+        whyItMatters:
+          "The list showed only counts in warehouses a member can change, so a viewer's list was empty, although each of those counts opened from a link.",
+        howItAffectsYou:
+          'Staff, managers and admins see the same counts in the web list as before. Who can enter numbers in a count is unchanged.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/cycle-counts', label: 'Open Cycle counts' },
+        audience: {
+          anyPermission: ['cycle_counts:read', 'stock:adjust'],
+          modules: ['cycle_counts'],
+        },
+      },
+      {
+        id: 'count-without-warehouse-follows-assignee',
+        category: 'improved',
+        area: 'Cycle counts',
+        title: 'A count with no warehouse of its own shows to the person it is assigned to',
+        whatChanged:
+          "A count started for All warehouses, or for a selection of items in more than one warehouse, has no warehouse of its own. It now shows only to the person it is assigned to, and to owners, admins, managers and members with access to every warehouse. The count list, the count's page, its count sheet and variance report, and the mobile app's list after its next sync all follow this.",
+        whyItMatters:
+          "The count list, the count's page and the mobile app each decided this in their own way, so the same count could show in one place and not in another.",
+        howItAffectsYou:
+          'A count of this kind that is not assigned shows only to owners, admins, managers and members with access to every warehouse. For anyone else it is not in the list and its link opens Page not found. A member with no warehouse sees no counts, including one assigned to them. A count in one warehouse shows to members who can see that warehouse, assigned or not.',
+        whatToDo:
+          'If you assign counts, assign such a count to the person who will count it: open the count and choose them under Assigned to. If a count you were asked to do is missing from your list or opens Page not found, ask a manager to assign it to you.',
+        link: { href: '/dashboard/cycle-counts', label: 'Open Cycle counts' },
+        audience: {
+          anyPermission: ['cycle_counts:read', 'stock:adjust', 'cycle_counts:assign'],
+          modules: ['cycle_counts'],
+        },
+      },
+    ],
+  },
+  {
+    id: 'email-change-expired-2026-11',
+    revision: 1,
+    // The Email card half of #558 (squash 29cb97190), web only: no phone
+    // update and no migration. Live in production since 2026-11-15 00:02Z;
+    // publishedAt is the whole minute after, the minute of the count read
+    // rule release directly above, which is the newer of the two.
+    // Claims checked against the code at 29cb97190 (paths under apps/web/src):
+    // - components/settings/email-settings-card.tsx (Settings, Profile, the
+    //   Email panel) shows every change the account holds; one held without a
+    //   request time (the auth server clears the time and both link tokens
+    //   when the password is changed, and keeps the pending address) shows the
+    //   Expired badge with Resend verification, Use a different address and
+    //   Cancel change. Before, the card showed a pending change only when it
+    //   had a request time.
+    // - Resend mints and sends both links again for the waiting address;
+    //   Cancel change clears the pending change
+    //   (server/services/email-change.ts).
+    // - The mobile app: #558 changed no phone file. Its Email screen
+    //   (apps/mobile/app/(drawer)/settings/change-email.tsx) decides Expired
+    //   from the link time alone, as before, so the words claim nothing for
+    //   it and say it is unchanged.
+    // Who is told: every member of every organization (no audience). The
+    // link is /dashboard/settings/profile, a page open to every member.
+    status: 'published',
+    title: 'A waiting email change now shows as Expired after a password change',
+    summary:
+      "If you change your password while an email change is still waiting to be confirmed, Settings, Profile on the web now shows that change as Expired, with Resend verification, Use a different address and Cancel change. The mobile app's Email screen is unchanged, and no app update is needed.",
+    // #558 is live in production since 2026-11-15 00:02Z.
+    publishedAt: '2026-11-15T00:03:00Z',
+    entries: [
+      {
+        id: 'email-change-expired-after-password-change',
+        category: 'fixed',
+        area: 'Account',
+        title: 'An email change still waiting when you change your password now shows as Expired',
+        whatChanged:
+          'If you change your password while an email change is still waiting to be confirmed, Settings, Profile on the web now shows that change under Email as Expired, with Resend verification, Use a different address and Cancel change.',
+        whyItMatters:
+          'A password change ends the verification links that were sent, and the Email card then showed no pending change, so there was nothing to resend or cancel.',
+        howItAffectsYou:
+          'Your account keeps using your current address until both addresses are confirmed. Resend verification sends new links to both addresses, and Cancel change drops the change.',
+        whatToDo:
+          'If you changed your password while an email change was waiting, open Settings, Profile and resend or cancel it. Otherwise no action is needed.',
+        link: { href: '/dashboard/settings/profile', label: 'Open Profile settings' },
       },
     ],
   },

@@ -102,7 +102,16 @@ vi.mock('@/lib/supabase/admin', async () => {
       auth: {
         admin: {
           getUserById: async (userId: string) => ({
-            data: { user: { id: userId, email: f.FIXTURE_EMAIL, new_email: PENDING_EMAIL } },
+            // A pending change, with the time the auth server recorded for
+            // its request (mintEmailChangeLinks reads it back after a mint).
+            data: {
+              user: {
+                id: userId,
+                email: f.FIXTURE_EMAIL,
+                new_email: PENDING_EMAIL,
+                email_change_sent_at: new Date().toISOString(),
+              },
+            },
             error: null,
           }),
           generateLink: async (args: { type: string; email: string }) => {
