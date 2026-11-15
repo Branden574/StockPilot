@@ -31,6 +31,7 @@ vi.mock('@/lib/auth/request-context-bundle', async (importOriginal) => ({
   loadRequestContextBundle: vi.fn(async () => holder.bundle),
 }));
 
+import { OrganizationRowUnavailableError } from '@/lib/auth/organization-row-unavailable';
 import {
   ModulesUnavailableError,
   moduleSetUnreadable,
@@ -140,7 +141,9 @@ describe('readModulesForRequest', () => {
 
   it('an unreadable organization row still throws, as getOrgRowForRequest always has', async () => {
     legacy({ data: [{ module_id: 'rentals' }], error: null }, UNREADABLE);
-    await expect(readModulesForRequest(ORG)).rejects.toThrow('getOrgRowForRequest');
+    await expect(readModulesForRequest(ORG)).rejects.toBeInstanceOf(
+      OrganizationRowUnavailableError,
+    );
   });
 });
 
@@ -207,6 +210,6 @@ describe('getModulesForRequest', () => {
 
   it('an unreadable organization row still rejects', async () => {
     legacy({ data: [{ module_id: 'rentals' }], error: null }, UNREADABLE);
-    await expect(getModulesForRequest(ORG)).rejects.toThrow('getOrgRowForRequest');
+    await expect(getModulesForRequest(ORG)).rejects.toBeInstanceOf(OrganizationRowUnavailableError);
   });
 });

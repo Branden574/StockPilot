@@ -7,6 +7,7 @@ import { ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY } from '@stockpilot/core';
 import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { MembershipUnavailableError } from '@/lib/auth/membership-unavailable';
+import { OrganizationRowUnavailableError } from '@/lib/auth/organization-row-unavailable';
 import { ForbiddenError } from '@/lib/auth/warehouse';
 import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { rethrowControlFlow } from '@/lib/control-flow';
@@ -73,7 +74,12 @@ export interface InternalErrorResponseOptions {
  * answering "no membership"). A module state that could not be read
  * (ModulesUnavailableError, thrown when a route asks about a module whose
  * state withApiContext could not read, S81) is answered the same way: a 5xx
- * the phone retries, never the 403 a module that is off gets.
+ * the phone retries, never the 403 a module that is off gets. So is the
+ * cookie session's organization row read that did not answer
+ * (OrganizationRowUnavailableError, lib/dashboard/request-cache.ts); the API
+ * context reads the row its own way and holds a failed read to the strictest
+ * policy and the module state as unknown, so a route meets this class only
+ * through a cookie-session helper.
  *
  * The guard app/api/no-raw-error-text.guard.test.ts fails an API route that
  * answers an error's own text again.
@@ -88,7 +94,8 @@ export function internalErrorResponse(
     e instanceof PermissionsUnavailableError ||
     e instanceof AccountStatusUnavailableError ||
     e instanceof MembershipUnavailableError ||
-    e instanceof ModulesUnavailableError
+    e instanceof ModulesUnavailableError ||
+    e instanceof OrganizationRowUnavailableError
   ) {
     void reportError(e, reportContext(tag, { ...opts, level: 'warning' }));
     return NextResponse.json(
