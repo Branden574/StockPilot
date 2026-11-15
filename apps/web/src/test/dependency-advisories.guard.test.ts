@@ -62,9 +62,18 @@ import { describe, expect, it } from 'vitest';
  *     accepts yet, and deepmerge has no fixed release. Their alerts are
  *     dismissed instead, and DISMISSED below checks why.
  *
+ * On 2026-11-11 Dependabot opened five more (#155 to #159):
+ *
+ *   - node-forge 1.4.2 (four advisories, #156 to #159): the same Expo
+ *     command-line tools. 1.4.3 fixes them, and the override takes it.
+ *   - minimatch 10.2.6 (GHSA-g3hv-75wg-m249, #155): the advisory behind
+ *     #154, whose range GitHub narrowed to >=7.0.0 <11.0.1, so #154 was
+ *     withdrawn and #155 opened in its place. 3.1.5 is outside the range now.
+ *     The fix is still 11.x only, and it stays dismissed (see DISMISSED).
+ *
  * WHAT STOPS IT NOW: root package.json overrides set the floors
  * (compression@1 ^1.8.2, dompurify@3 ^3.4.17, source-map-js@1 ^1.2.2,
- * fast-uri@3 ^3.1.9, vite ^6.4.4, node-forge@1 ^1.4.2,
+ * fast-uri@3 ^3.1.9, vite ^6.4.4, node-forge@1 ^1.4.3,
  * decode-uri-component@<0.5.1 0.5.1), apps/web asks for happy-dom ^21.0.4,
  * and this test reads every version the lockfile resolves and fails when one
  * is inside an advisory's vulnerable range. A lockfile change that brings one
@@ -254,7 +263,10 @@ const FLOORS: Floor[] = [
     // none listed by GitHub, but forge's CHANGELOG (tag v1.4.2, 7928054627d)
     // lists its CVE-2026-85393 in the Security section of 1.4.1. The override
     // asks for ^1.4.2 because 1.4.1's pem.decode() threw a TypeError on Buffer
-    // input, which 1.4.2 fixed.
+    // input, which 1.4.2 fixed. Dependabot #156 to #159: GHSA-j8rw-jp99-435v,
+    // GHSA-w4xr-hqv8-ch44 and GHSA-6889-vf6x-f3g5 <=1.4.2 -> 1.4.3;
+    // GHSA-6cv4-p8m7-4r25 >=0.1.2 <=1.4.2 -> 1.4.3. The override asks for
+    // ^1.4.3.
     advisories: [
       'GHSA-5x38-2vff-x55p',
       'GHSA-hqq3-7jhf-c5jx',
@@ -268,8 +280,12 @@ const FLOORS: Floor[] = [
       'GHSA-6wvx-3r32-xmcg',
       'GHSA-4642-5mcj-2rqw',
       'GHSA-86w9-cpqp-85rv',
+      'GHSA-j8rw-jp99-435v',
+      'GHSA-6cv4-p8m7-4r25',
+      'GHSA-w4xr-hqv8-ch44',
+      'GHSA-6889-vf6x-f3g5',
     ],
-    ranges: [{ fixed: '1.4.1' }],
+    ranges: [{ fixed: '1.4.3' }],
   },
   {
     pkg: 'decode-uri-component',
@@ -359,11 +375,16 @@ type Dismissal = Floor & { alert: number; dependents: string[] };
  *     walks here, and it would only ever walk our own files on a developer
  *     machine. glob 14 changes its API and needs minimatch 11; every Expo
  *     release still asks for ^13.
- *   - minimatch 10.2.6 and 3.1.5: ESLint and its plugins, typescript-eslint,
- *     @expo/fingerprint and glob, on our own patterns, and readdir-glob,
- *     which only archiver uses, inside exceljs, without ever globbing (see
- *     DISMISSAL_CHAINS). 3.1.5 does not hold the flawed code
- *     (firstPhasePreProcess). The fix is 11.x, and no parent accepts it.
+ *   - minimatch 10.2.6: typescript-eslint, @expo/fingerprint and glob, on our
+ *     own patterns, and readdir-glob, which only archiver uses, inside
+ *     exceljs, without ever globbing (see DISMISSAL_CHAINS). The flawed code
+ *     (firstPhasePreProcess) runs only at optimizationLevel 2 or higher; of
+ *     these only glob asks for it, and glob 13's published entry points
+ *     (index.min.js) carry their own bundled copy of minimatch, which no
+ *     override reaches. The fix is 11.x, which no parent's declared range
+ *     accepts (they ask for ^5.1.0 or ^10.2.2). 3.1.5 (ESLint and its
+ *     plugins, and glob 7.2.3 under archiver-utils and rimraf) is outside
+ *     the advisory's range.
  *   - deepmerge 4.3.1: @expo/config, merging our own app config. No release
  *     is fixed; @expo/config 58 (Expo SDK 58) no longer depends on it.
  *
@@ -387,19 +408,14 @@ const DISMISSED: Dismissal[] = [
   },
   {
     pkg: 'minimatch',
-    alert: 154,
-    // GHSA-g3hv-75wg-m249 <11.0.1 -> 11.0.1.
+    alert: 155,
+    // GHSA-g3hv-75wg-m249 >=7.0.0 <11.0.1 -> 11.0.1 (alert #154 had it as
+    // <11.0.1 before GitHub narrowed the range and withdrew that alert).
     advisories: ['GHSA-g3hv-75wg-m249'],
-    ranges: [{ fixed: '11.0.1' }],
+    ranges: [{ from: '7.0.0', fixed: '11.0.1' }],
     dependents: [
-      '@eslint/config-array',
-      '@eslint/eslintrc',
       '@expo/fingerprint',
       '@typescript-eslint/typescript-estree',
-      'eslint',
-      'eslint-plugin-import',
-      'eslint-plugin-jsx-a11y',
-      'eslint-plugin-react',
       'glob',
       'readdir-glob',
     ],
@@ -418,7 +434,7 @@ const DISMISSED: Dismissal[] = [
 /**
  * Packages a dismissal relies on staying where they are, whatever their
  * version: minimatch 10.2.6 reaches the web server through exceljs >
- * archiver > readdir-glob, and #154 stays dismissed because exceljs adds
+ * archiver > readdir-glob, and #155 stays dismissed because exceljs adds
  * entries only with archiver's append() and file(), while only its
  * directory() and glob() call readdir-glob. Any other dependent of either,
  * our own code included, fails the check.
@@ -647,6 +663,7 @@ describe('the check itself', () => {
       'sharp@0.35.4',
       'shell-quote@1.10.0',
       'node-forge@1.4.0',
+      'node-forge@1.4.2',
       'decode-uri-component@0.5.0',
       "'@scope/other@1.0.0'",
     ]);
@@ -662,6 +679,7 @@ describe('the check itself', () => {
       'sharp@0.35.4',
       'shell-quote@1.10.0',
       'node-forge@1.4.0',
+      'node-forge@1.4.2',
       'decode-uri-component@0.5.0',
     ]);
     expect(
@@ -676,7 +694,7 @@ describe('the check itself', () => {
           'happy-dom@21.0.4',
           'sharp@0.35.5',
           'shell-quote@1.11.0',
-          'node-forge@1.4.1',
+          'node-forge@1.4.3',
           'decode-uri-component@0.5.1',
         ]),
       ),
@@ -828,6 +846,20 @@ describe('the alerts dismissed instead of fixed keep their reasons', () => {
     expect(unnamedDependents(graph(web, today), DISMISSAL_CHAINS)).toEqual([]);
   });
 
+  it('starts the minimatch range at 7.0.0: 6.x is outside it, 7.0.0 is inside', () => {
+    // eslint is not named in the minimatch dismissal, so a copy it depends on
+    // passes only when that copy is below the range.
+    const on = (version: string): string =>
+      graph(web, {
+        ...today,
+        'eslint@9.39.5': { dependencies: [`minimatch: ${version}`] },
+        [`minimatch@${version}`]: {},
+      });
+    expect(undismissed(on('6.2.3'))).toEqual([]);
+    expect(undismissed(on('7.0.0'))).toEqual(['minimatch@7.0.0 <- eslint']);
+    expect(undismissed(on('10.2.6'))).toEqual(['minimatch@10.2.6 <- eslint']);
+  });
+
   it('flags a dependent the dismissal does not name, however it is listed', () => {
     // A workspace or a package can list a dependency under an npm alias
     // (`g: glob@13.0.6`), and both checks follow it to the real package.
@@ -880,7 +912,7 @@ describe('the alerts dismissed instead of fixed keep their reasons', () => {
     });
     expect(undismissed(lock)).toEqual([
       'glob: no locked version is inside the dismissed range any more: remove this entry and re-check alert #153',
-      'minimatch: no locked version is inside the dismissed range any more: remove this entry and re-check alert #154',
+      'minimatch: no locked version is inside the dismissed range any more: remove this entry and re-check alert #155',
       'deepmerge: no locked version is inside the dismissed range any more: remove this entry and re-check alert #140',
     ]);
   });
