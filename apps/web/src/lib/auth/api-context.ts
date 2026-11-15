@@ -395,10 +395,11 @@ export type SessionMfaState = Awaited<ReturnType<typeof resolveApiMfaState>>;
  * (api-context.page-parity.test.ts pins all three to one answer).
  *
  * A route refuses when `mfaRequired && !mfaSatisfied`, as assertPermission
- * does, and hands the three values to any context it builds, so an audit row
- * records the session as it was. src/test/api-step-up.guard.test.ts holds the
- * listed routes to both. Call it with the user getUser() returned on the same
- * client and the member's role in `organizationId`.
+ * does, and hands the three values to any context it builds (the one it passes
+ * to audit() included), so that context describes the session as it was.
+ * src/test/api-step-up.guard.test.ts holds the listed routes to both. Call it
+ * with the user getUser() returned on the same client and the member's role in
+ * `organizationId`.
  */
 export async function cookieSessionMfaState(
   supabase: any,

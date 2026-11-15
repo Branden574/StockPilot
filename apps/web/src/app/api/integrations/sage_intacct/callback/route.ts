@@ -153,7 +153,8 @@ export async function GET(req: Request) {
     // of this member and the session has not met it (no verified factor, or
     // not at aal2), this route's `forbidden`, before the code is exchanged or
     // anything is written. Asked before the permission, as assertPermission
-    // asks it. The same three values go to the audit row below.
+    // asks it. The same three values go into the context handed to audit()
+    // below.
     const mfa = await cookieSessionMfaState(supabase, user, organizationId, role);
     if (mfa.mfaRequired && !mfa.mfaSatisfied) return redirectWithError('forbidden');
     let permissions: Set<Permission>;

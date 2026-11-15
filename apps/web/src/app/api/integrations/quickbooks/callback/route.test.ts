@@ -326,7 +326,7 @@ describe('GET /api/integrations/quickbooks/callback', () => {
   // before the code is exchanged or anything is written.
   describe("the organization's authenticator policy", () => {
     type Policy = 'optional' | 'admins_required' | 'all_required';
-    type Shape = 'no authenticator' | 'authenticator, aal2';
+    type Shape = 'no authenticator' | 'authenticator, aal2' | 'factor removed, token at aal2';
 
     function policyClient(
       policy: Policy | QueryResult,
@@ -346,7 +346,10 @@ describe('GET /api/integrations/quickbooks/callback', () => {
       );
       Object.assign(
         stub.client.auth,
-        verifiedSessionAuth(() => ({ sub: USER_ID, aal: enrolled ? 'aal2' : 'aal1' })),
+        verifiedSessionAuth(() => ({
+          sub: USER_ID,
+          aal: shape === 'no authenticator' ? 'aal1' : 'aal2',
+        })),
       );
       vi.mocked(createClient).mockResolvedValueOnce(stub.client as never);
       return stub;
@@ -389,6 +392,23 @@ describe('GET /api/integrations/quickbooks/callback', () => {
       },
     );
 
+    // The account has no verified factor any more, while the session's token
+    // still says aal2: the policy is met only by an account that has one.
+    it.each([
+      ['admins_required', 'admin'],
+      ['admins_required', 'owner'],
+      ['all_required', 'admin'],
+    ] as Array<[Policy, Role]>)(
+      '%s, %s whose factor was removed while the token is still at aal2: forbidden, before any exchange or write',
+      async (policy, role) => {
+        const stub = policyClient(policy, role, 'factor removed, token at aal2');
+
+        const res = await GET(callbackUrl({ code: 'auth-code', state: STATE, realmId: REALM_ID }));
+
+        expectRefusedBeforeAnyExchangeOrWrite(res, stub);
+      },
+    );
+
     it.each([
       ['hidden from the member', { data: [], error: null }],
       ['unreadable', { data: null, error: { message: 'timeout', code: '57014' } }],
@@ -412,7 +432,7 @@ describe('GET /api/integrations/quickbooks/callback', () => {
       ['admins_required', 'owner', 'authenticator, aal2', {}, true, true, true],
       ['all_required', 'admin', 'authenticator, aal2', {}, true, true, true],
     ] as Array<[Policy, Role, Shape, Record<string, QueryResult>, boolean, boolean, boolean]>)(
-      '%s, %s, %s: connects, and the audit row carries the real authenticator state',
+      '%s, %s, %s: connects, and the context handed to audit carries the real authenticator state',
       async (policy, role, shape, overrides, mfaRequired, mfaSatisfied, mfaEnrolled) => {
         const admin = adminClient();
         vi.mocked(createAdminClient).mockReturnValue(admin.client as never);
