@@ -1866,6 +1866,14 @@ WEB_TESTS=(
   src/server/services/order-requests.member-email.test.ts
   src/server/email/maintenance-resolved.member.test.ts
 
+  # Maintenance photo share links follow the organization's
+  # includeShareLinksInEmail setting. A setting never written means on; a
+  # settings read that returns an error means off (no link is created, shown
+  # or emailed) and is reported.
+  src/server/services/maintenance-share-links.setting.test.ts
+  src/server/services/maintenance-requests.link-setting.test.ts
+  src/server/email/maintenance-resolved.setting.test.ts
+
   # Connector export events (outbox_events) are recorded only by
   # server/lib/outbox-events.ts, through the service client, after the action
   # that causes them: a member action in the organization of its checked
