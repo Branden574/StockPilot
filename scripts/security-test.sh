@@ -1185,6 +1185,11 @@ WEB_TESTS=(
   # a kind, a reason and the writes it makes (a sweep on the syntax tree, with
   # a mutation table that takes each gate out and expects it reported).
   src/test/authenticator-write.guard.test.ts
+  # A member who owes authenticator set-up is sent to it by every page and
+  # action through requireOrgContext(); only Security and Profile open; no
+  # layout reaches that check or redirects to a path under itself, and only
+  # dashboard layouts use the resolver without it.
+  src/lib/auth/authenticator-set-up.guard.test.ts
   # The phone's sign-in and sign-out notes (S5a), the other two routes on the
   # AAL1 allowlist: an aal1 session of an account with an authenticator writes
   # the sign-in row (code owed) and the device note, and its sign-out revokes
