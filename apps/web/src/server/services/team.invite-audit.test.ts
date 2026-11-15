@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 import { sendEmail } from '@/lib/email/resend';
+import { reportError } from '@/lib/error-reporter';
 
 import { audit } from './audit';
 import { TeamService } from './team';
@@ -129,7 +130,8 @@ describe('TeamService.invite records the invitation', () => {
   });
 
   it('still records the invitation when sending the email throws', async () => {
-    vi.mocked(sendEmail).mockRejectedValue(new Error('socket closed'));
+    const thrown = new Error('socket closed');
+    vi.mocked(sendEmail).mockRejectedValue(thrown);
     const svc = new TeamService(makeServiceContext(newInviteStub().client, { role: 'admin' }));
 
     await expect(svc.invite(INVITE_PARAMS)).rejects.toMatchObject({ code: 'conflict' });
@@ -143,6 +145,8 @@ describe('TeamService.invite records the invitation', () => {
       }),
       expect.anything(),
     );
+    // The report receives the thrown error itself.
+    expect(reportError).toHaveBeenCalledWith(thrown, expect.anything());
   });
 
   it('writes no row when the caller may not invite', async () => {
