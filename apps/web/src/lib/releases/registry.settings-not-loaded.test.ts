@@ -193,7 +193,7 @@ describe('the settings release: the words', () => {
       'Default values are not your saved settings, and saving that panel would have replaced them.',
     );
     expect(e.howItAffectsYou).toBe(
-      'This is rare and usually passes in a moment. Your saved settings are unchanged. The reorder suggestions and the other panel still show.',
+      'This is rare and usually passes in a moment. Your saved settings are unchanged. The reorder suggestions still show, and so does the other panel when its own settings load.',
     );
     expect(e.whatToDo).toBe(TRY_AGAIN);
   });

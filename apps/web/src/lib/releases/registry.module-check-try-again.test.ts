@@ -141,7 +141,7 @@ describe('the module check release: the words', () => {
       'Clearer messages when StockPilot cannot check which modules are on',
     );
     expect(release().summary).toBe(
-      'If StockPilot cannot check which modules are on, or your access, for a moment, pages, buttons and links on the web now say so and offer Try again, instead of leaving a feature out without saying why. This is usually temporary: try again in a moment. No app update is needed.',
+      'If StockPilot cannot check which modules are on, or your access, for a moment, pages, buttons and links on the web now say so, instead of leaving a feature out without saying why. This is usually temporary: try again in a moment. No app update is needed.',
     );
   });
 
@@ -149,7 +149,7 @@ describe('the module check release: the words', () => {
     const e = entry(PAGES);
     expect(e.title).toBe('Pages say so when StockPilot cannot check which modules are on');
     expect(e.whatChanged).toBe(
-      "If StockPilot cannot check which modules are on for your organization, a strip above the page now says We couldn't check which modules are on, with Try again. A page that needs that check says This page couldn't be loaded, with Try again, and a button that saves or changes something says Your access could not be checked. Please try again.",
+      "If StockPilot cannot check which modules are on for your organization, a strip above the page now says We couldn't check which modules are on, with Try again. A page that needs that check says This page couldn't be loaded (a settings page says We couldn't load this settings page), with Try again, and a button that saves or changes something says Your access could not be checked. Please try again.",
     );
     expect(e.whyItMatters).toBe(
       'Before, a page could leave out a menu item or a feature without saying why.',

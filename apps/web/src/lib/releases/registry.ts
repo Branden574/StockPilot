@@ -296,7 +296,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Default values are not your saved settings, and saving that panel would have replaced them.',
         howItAffectsYou:
-          'This is rare and usually passes in a moment. Your saved settings are unchanged. The reorder suggestions and the other panel still show.',
+          'This is rare and usually passes in a moment. Your saved settings are unchanged. The reorder suggestions still show, and so does the other panel when its own settings load.',
         whatToDo: 'If you see this, press Try again after a moment.',
         audience: { roles: ['owner', 'admin'], modules: ['planning'] },
       },
@@ -354,7 +354,7 @@ export const RELEASES: Release[] = [
     status: 'published',
     title: 'Clearer messages when StockPilot cannot check which modules are on',
     summary:
-      'If StockPilot cannot check which modules are on, or your access, for a moment, pages, buttons and links on the web now say so and offer Try again, instead of leaving a feature out without saying why. This is usually temporary: try again in a moment. No app update is needed.',
+      'If StockPilot cannot check which modules are on, or your access, for a moment, pages, buttons and links on the web now say so, instead of leaving a feature out without saying why. This is usually temporary: try again in a moment. No app update is needed.',
     // #557 is live in production since 2026-11-15 03:45:33Z.
     publishedAt: '2026-11-15T03:46:00Z',
     entries: [
@@ -364,7 +364,7 @@ export const RELEASES: Release[] = [
         area: 'Web app',
         title: 'Pages say so when StockPilot cannot check which modules are on',
         whatChanged:
-          "If StockPilot cannot check which modules are on for your organization, a strip above the page now says We couldn't check which modules are on, with Try again. A page that needs that check says This page couldn't be loaded, with Try again, and a button that saves or changes something says Your access could not be checked. Please try again.",
+          "If StockPilot cannot check which modules are on for your organization, a strip above the page now says We couldn't check which modules are on, with Try again. A page that needs that check says This page couldn't be loaded (a settings page says We couldn't load this settings page), with Try again, and a button that saves or changes something says Your access could not be checked. Please try again.",
         whyItMatters: 'Before, a page could leave out a menu item or a feature without saying why.',
         howItAffectsYou:
           'This is rare and usually passes in a moment. When a button says your access could not be checked, nothing was changed.',
