@@ -5,7 +5,7 @@ import { redirect } from 'next/navigation';
 import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { ReportMfaCard } from '@/components/reports/report-mfa-state';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
-import { isModuleEnabled, withContext } from '@/server/services/context';
+import { withContext } from '@/server/services/context';
 
 import { can } from '@stockpilot/core';
 
@@ -36,14 +36,14 @@ export const REPORT_MFA_VERIFY = 'Verify with your authenticator app to open thi
 export async function reportPageGate(report: ReportSlug): Promise<React.ReactElement | null> {
   const ctx = await withContext();
   if (!can(ctx, 'reports:read')) redirect('/dashboard');
-  const canManage = ctx.role === 'owner' || ctx.role === 'admin';
   for (const moduleId of reportModules(report)) {
-    if (!isModuleEnabled(ctx, moduleId)) {
-      // Off, or unknown: still closed either way. Only whether the read
-      // failed is taken from the page gate.
-      const { checkFailed } = await checkModuleAccess(moduleId);
-      return <ModuleUnavailable moduleId={moduleId} access={{ canManage, checkFailed }} />;
-    }
+    // The page gate answers from the same request-cached read the context's
+    // set is built from, and it has all three answers: on, off, and "could
+    // not check" (checkFailed). Asking the context instead would throw for a
+    // state that was not read (ModulesUnavailableError), and this page has a
+    // state for that.
+    const access = await checkModuleAccess(moduleId);
+    if (!access.enabled) return <ModuleUnavailable moduleId={moduleId} access={access} />;
   }
   if (ctx.mfaRequired && !ctx.mfaSatisfied) {
     return <ReportMfaState enrolled={ctx.mfaEnrolled === true} report={report} />;

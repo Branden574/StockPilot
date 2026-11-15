@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
+import { uncheckedAccessResult } from '@/server/lib/action-error-result';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
@@ -47,6 +48,9 @@ export async function duplicateItemAction(input: DuplicateItemInput): Promise<
     });
   } catch (error) {
     rethrowControlFlow(error);
+    // A check of the caller's access that could not be read: its own sentence.
+    const unchecked = uncheckedAccessResult(error, 'actions.duplicate_item');
+    if (unchecked) return unchecked;
     if (error instanceof ServiceError) {
       // `details` is app-authored and forwarded: the new-rack question rides
       // it ("Create new rack 1-B?", 2026-10-24), and without it the dialog

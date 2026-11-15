@@ -14,6 +14,7 @@ import {
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { uncheckedAccessMessage } from '@/server/lib/action-error-result';
 import { fetchCountAssignees } from '@/server/lib/count-assignees';
 import { ServiceError, withContext, type ServiceContext } from '@/server/services/context';
 import { ExceptionEscalationService } from '@/server/services/exception-escalation';
@@ -81,15 +82,26 @@ import type {
  *  the same idempotency key) is safe. */
 type Failure = { error: { message: string; reason: string | null; retryable?: boolean } };
 
-function fail(e: unknown, tag: string): Failure {
+/**
+ * `serverProblem`: the action's own words for a bug or a database failure,
+ * in place of "Something went wrong. Please try again." A check of the
+ * caller's access that could not be read keeps its own sentence either way:
+ * that check comes before the action's work, so nothing was saved.
+ */
+function fail(e: unknown, tag: string, opts: { serverProblem?: string } = {}): Failure {
   // A redirect from the auth context (a signed-out session) is not a failure:
   // rethrown so the browser goes to sign-in, never reported or worded as
   // "Something went wrong" (the rental and label actions do the same).
   rethrowControlFlow(e);
+  // A check of the caller's access that could not be read: its own sentence
+  // (reported there, as a warning), never "Something went wrong".
+  const unchecked = uncheckedAccessMessage(e, tag);
+  if (unchecked) return { error: { message: unchecked, reason: null } };
   if (!(e instanceof ServiceError) || e.code === 'internal_error') {
     // A bug or a database failure: reported, and answered generically (the
     // /api/v1/exceptions routes report the same way).
     void reportError(e, { tag });
+    if (opts.serverProblem) return { error: { message: opts.serverProblem, reason: null } };
   }
   if (e instanceof ServiceError) {
     // Only app-authored reasons are forwarded (never an internal_error's raw
@@ -432,12 +444,13 @@ export async function escalateExceptionAction(
     revalidatePath('/dashboard/maintenance');
     return { ok: true, ...request };
   } catch (e) {
-    const failure = fail(e, 'actions.exceptions.escalate');
-    if (!(e instanceof ServiceError) || e.code === 'internal_error') {
-      // A failure that may have left a request saved (or linked): the phone's
-      // words for a 5xx, never a bare "try again" that could save a second.
-      failure.error.message = ESCALATE_SERVER_PROBLEM_COPY;
-    }
+    // A server failure may have left a request saved (or linked): the phone's
+    // words for a 5xx, never a bare "try again" that could save a second. A
+    // check of the caller's access that could not be read keeps its own
+    // sentence: the service asks it before any read, claim or write.
+    const failure = fail(e, 'actions.exceptions.escalate', {
+      serverProblem: ESCALATE_SERVER_PROBLEM_COPY,
+    });
     if (e instanceof ServiceError && e.code === 'module_disabled' && failure.error.reason === null) {
       failure.error.reason = 'module_disabled';
     }

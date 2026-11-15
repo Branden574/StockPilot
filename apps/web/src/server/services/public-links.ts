@@ -135,6 +135,17 @@ export function publicCatalogTag(linkId: string): string {
  */
 export const PUBLIC_TOKEN_RESOLVE_TAG = 'public-org-by-token';
 
+/**
+ * How a link change drops the kept resolutions: expired at once
+ * (`{ expire: 0 }`), never the 'max' profile. With 'max' the next request is
+ * answered with the entry from before the change while a new read runs
+ * behind it, and that entry can be an open link that was just switched off.
+ * Expired, the next request is a cache miss that reads the link as it now is
+ * (resolvePublicRequestToken, rule 3). The organization logo action expires
+ * the same tag the same way (server/actions/profile.ts).
+ */
+const TOKEN_RESOLUTION_GONE = { expire: 0 } as const;
+
 // Deliberately NO token/token_hash column: since migration 0330 the DB holds
 // only sha256(token), and even the hash never leaves the service — list/get
 // feed client components, and echoing the hash there would put a stable
@@ -385,7 +396,7 @@ export class PublicLinksService {
       this.ctx,
     );
     revalidateTag(publicCatalogTag(id), 'max');
-    revalidateTag(PUBLIC_TOKEN_RESOLVE_TAG, 'max');
+    revalidateTag(PUBLIC_TOKEN_RESOLVE_TAG, TOKEN_RESOLUTION_GONE);
   }
 
   async setActive(id: string, active: boolean): Promise<void> {
@@ -412,7 +423,7 @@ export class PublicLinksService {
       this.ctx,
     );
     revalidateTag(publicCatalogTag(id), 'max');
-    revalidateTag(PUBLIC_TOKEN_RESOLVE_TAG, 'max');
+    revalidateTag(PUBLIC_TOKEN_RESOLVE_TAG, TOKEN_RESOLUTION_GONE);
   }
 
   /**
@@ -472,7 +483,7 @@ export class PublicLinksService {
       this.ctx,
     );
     revalidateTag(publicCatalogTag(id), 'max');
-    revalidateTag(PUBLIC_TOKEN_RESOLVE_TAG, 'max');
+    revalidateTag(PUBLIC_TOKEN_RESOLVE_TAG, TOKEN_RESOLUTION_GONE);
     return { token };
   }
 
@@ -501,7 +512,7 @@ export class PublicLinksService {
       this.ctx,
     );
     revalidateTag(publicCatalogTag(id), 'max');
-    revalidateTag(PUBLIC_TOKEN_RESOLVE_TAG, 'max');
+    revalidateTag(PUBLIC_TOKEN_RESOLVE_TAG, TOKEN_RESOLUTION_GONE);
   }
 
   // ── Catalog entries ───────────────────────────────────────────────────────

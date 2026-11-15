@@ -6,6 +6,7 @@ import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-heade
 import { forcedWarehouseId } from '@/lib/auth/warehouse';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { moduleAnswer } from '@/lib/modules/module-state';
 import { safeReturnPath } from '@/lib/safe-return-path';
 import { createClient } from '@/lib/supabase/server';
 import { notFoundUnlessUuid } from '@/server/lib/path-id';
@@ -138,7 +139,9 @@ export default async function EditItemPage({
         ).then((rows) => rows[0] ?? null)
       : Promise.resolve(null);
 
-  const { enabled: lotSerialEnabled } = await checkModuleAccess('lot_serial');
+  // moduleAnswer: a state that could not be read is this page's error state
+  // with Try again, never a form drawn as if the module were off.
+  const lotSerialEnabled = moduleAnswer(await checkModuleAccess('lot_serial'));
   const skuSiblings = await skuSiblingsRead;
   const recordCharter = await recordCharterRead;
 
