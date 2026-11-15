@@ -108,8 +108,11 @@ describe('the phone screens by access release of 2026-11-14: order, status and d
     // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: RELEASES.slice(0, 4), without them): the count read rule and email change releases are published later, at the top, directly below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: RELEASES.slice(0, 6), without them): the settings and module check releases are published later, at the top, directly below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: RELEASES.slice(0, 8), without it): the navigation release is published later, at the top, directly below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES.slice(0, 9).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: RELEASES.slice(0, 9), without it): the invitation audit release is published later, at the top, directly below the Liquid Glass draft.
+    expect(RELEASES.slice(0, 10).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: without it): the invitation audit release is published later, at the top, directly below the Liquid Glass draft.
+      ['invitation-audit-2026-11', 'published'],
       // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: without it): the navigation release is published later, at the top, directly below the Liquid Glass draft.
       ['navigation-keeps-choices-2026-11', 'published'],
       [SETTINGS_ID, 'published'],
@@ -124,7 +127,8 @@ describe('the phone screens by access release of 2026-11-14: order, status and d
       // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: ID): the count read rule release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: the count read rule release): the settings release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: the settings release): the navigation release is published after it, at the top, the newest published release.
-      'navigation-keeps-choices-2026-11',
+      // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: the navigation release): the invitation audit release is published after it, at the top, the newest published release.
+      'invitation-audit-2026-11',
     );
   });
 
@@ -140,7 +144,8 @@ describe('the phone screens by access release of 2026-11-14: order, status and d
     // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: RELEASES.slice(2)): the count read rule and email change releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(7)) {
+    // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(8)) {
       expect(Date.parse(at), r.id).toBeGreaterThanOrEqual(Date.parse(r.publishedAt));
     }
   });
@@ -269,6 +274,14 @@ describe('the phone screens by access release: the words', () => {
     const newerRead = [
       // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: without them): the settings and module check releases are published later, at the top; the module check release reaches every member and the settings release reaches the owner here, so each reader reads them first, and the notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
       // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: without it): the navigation release is published later, at the top, and reaches owners and admins who can open Settings, Navigation, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+      // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: without it): the invitation audit release is published later, at the top, and reaches whoever can view the audit log (owners, admins and managers by default), so it is read or seen with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+      {
+        release_id: 'invitation-audit-2026-11',
+        revision: 1,
+        dismissed_at: null,
+        opened_at: '2026-11-15T05:00:00Z',
+        read_at: '2026-11-15T05:00:00Z',
+      },
       {
         release_id: 'navigation-keeps-choices-2026-11',
         revision: 1,
