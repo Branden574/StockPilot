@@ -4,6 +4,7 @@ import { err, ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY, type ActionResult } from '
 
 import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
+import { OrganizationRowUnavailableError } from '@/lib/auth/organization-row-unavailable';
 import { ForbiddenError } from '@/lib/auth/warehouse';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError, type ErrorContext } from '@/lib/error-reporter';
@@ -72,11 +73,13 @@ export function unexpectedActionError(
  *     the caller's own access could not be read, the order service's
  *     retryable conflict (services/order-requests.ts), reported as a warning;
  *   - a check of the caller's access that could not be read (the permission
- *     set, the account status, or a module state: ModulesUnavailableError,
+ *     set, the account status, a module state: ModulesUnavailableError,
  *     thrown when the action asks about a module withContext() could not
- *     read): its own fixed try-again sentence, reported as a warning, never
- *     the module_disabled a module that is off gets (uncheckedAccessResult
- *     below, which an action module with its own mapping calls too);
+ *     read, or the organization row: OrganizationRowUnavailableError, which
+ *     withContext() rejects with): its own fixed try-again sentence, reported
+ *     as a warning, never the module_disabled a module that is off gets
+ *     (uncheckedAccessResult below, which an action module with its own
+ *     mapping calls too);
  *   - anything else: unexpectedActionError.
  *
  * The guard app/api/no-raw-error-text.guard.test.ts fails a Server Action that
@@ -128,7 +131,8 @@ function uncheckedAccessSentence(e: unknown): string | null {
   if (
     e instanceof PermissionsUnavailableError ||
     e instanceof AccountStatusUnavailableError ||
-    e instanceof ModulesUnavailableError
+    e instanceof ModulesUnavailableError ||
+    e instanceof OrganizationRowUnavailableError
   ) {
     return e.message;
   }
@@ -139,12 +143,15 @@ function uncheckedAccessSentence(e: unknown): string | null {
  * The sentence for a check of the caller's access that could not be read, or
  * null for any other error.
  *
- * The three classes: a module state withContext() could not read
- * (ModulesUnavailableError, thrown when an action asks about that module), a
- * permission set that could not be read, an account status that could not be
- * read. None of them is a refusal and none is a fault of the action: each
- * carries one fixed sentence that says the check could not be made and to try
- * again, and is reported once, at warning level, under the action's tag.
+ * The four classes: a module state withContext() could not read
+ * (ModulesUnavailableError, thrown when an action asks about that module), an
+ * organization row that could not be read (OrganizationRowUnavailableError:
+ * withContext() rejects with it, since the module set takes its comp flag from
+ * that row), a permission set that could not be read, an account status that
+ * could not be read. None of them is a refusal and none is a fault of the
+ * action: each carries one fixed sentence that says the check could not be
+ * made and to try again, and is reported once, at warning level, under the
+ * action's tag.
  *
  * FOR AN ACTION MODULE THAT KEEPS ITS OWN ERROR MAPPING (its own result
  * shape, its own words for a failure). Such a mapping answers anything it
