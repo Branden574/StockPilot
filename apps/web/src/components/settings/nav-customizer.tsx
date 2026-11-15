@@ -269,9 +269,14 @@ export function NavCustomizer({ baseSections, initialOverrides }: NavCustomizerP
   }
 
   function save() {
-    const overrides = buildOverrides();
+    // An empty setting, never null: null is Reset to default, which also
+    // clears the stored entries of links this editor does not list. The
+    // listed hrefs tell the server which links this save answers for; it
+    // keeps the stored entries of every other link (a module that is off).
+    const overrides = buildOverrides() ?? { v: 1 };
+    const listed = baseSections.flatMap((s) => s.items.map((it) => it.href));
     startTransition(async () => {
-      const res = await setNavOverridesAction(overrides);
+      const res = await setNavOverridesAction(overrides, listed);
       if (res.ok) {
         toast.success('Navigation saved.');
       } else {
