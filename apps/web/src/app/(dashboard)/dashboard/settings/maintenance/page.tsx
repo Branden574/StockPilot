@@ -4,6 +4,8 @@ import { redirect } from 'next/navigation';
 import { MaintenanceSettingsPanel } from '@/components/maintenance/maintenance-settings-panel';
 import { PageHeader } from '@/components/patterns/page-header';
 import { SettingsPage } from '@/components/settings/settings-nav';
+import { SettingsReadFailed } from '@/components/settings/settings-read-failed';
+import { reportError } from '@/lib/error-reporter';
 import { withContext } from '@/server/services/context';
 
 import { can, MAINTENANCE_CATEGORIES } from '@stockpilot/core';
@@ -47,19 +49,49 @@ export default async function MaintenanceSettingsPage() {
 
   const supabase = ctx.supabase;
 
-  const [{ data: mod }, { data: memberRows }] = await Promise.all([
-    supabase
-      .from('organization_modules')
-      .select('settings')
-      .eq('organization_id', ctx.organizationId)
-      .eq('module_id', 'maintenance_requests')
-      .maybeSingle(),
-    supabase
-      .from('organization_members')
-      .select('user_id, user:user_id (full_name, email)')
-      .eq('organization_id', ctx.organizationId)
-      .not('accepted_at', 'is', null),
-  ]);
+  const [{ data: mod, error: modError }, { data: memberRows, error: membersError }] =
+    await Promise.all([
+      supabase
+        .from('organization_modules')
+        .select('settings')
+        .eq('organization_id', ctx.organizationId)
+        .eq('module_id', 'maintenance_requests')
+        .maybeSingle(),
+      supabase
+        .from('organization_members')
+        .select('user_id, user:user_id (full_name, email)')
+        .eq('organization_id', ctx.organizationId)
+        .not('accepted_at', 'is', null),
+    ]);
+
+  const header = (
+    <PageHeader
+      title="Maintenance requests"
+      subline="Categories, notification audiences, and photo link settings."
+    />
+  );
+
+  // A failed read is not "never configured". The panel's Save sends every key
+  // in one patch, so a form seeded from defaults here would write them over
+  // the stored settings once reads work again. Say the page could not be read
+  // and offer Try again instead; no row at all still means defaults (below).
+  // An unreadable member list would show no audience rows at all, so it gets
+  // the same state.
+  const readError = modError ?? membersError;
+  if (readError) {
+    void reportError(new Error('maintenance settings page read failed'), {
+      tag: 'settings.maintenance.read_failed',
+      level: 'warning',
+      organizationId: ctx.organizationId,
+      extra: { code: readError.code || 'unknown', read: modError ? 'settings' : 'members' },
+    });
+    return (
+      <SettingsPage>
+        {header}
+        <SettingsReadFailed />
+      </SettingsPage>
+    );
+  }
 
   const settings = ((mod as { settings?: RawSettings } | null)?.settings ?? {}) as RawSettings;
 
@@ -95,10 +127,7 @@ export default async function MaintenanceSettingsPage() {
 
   return (
     <SettingsPage>
-      <PageHeader
-        title="Maintenance requests"
-        subline="Categories, notification audiences, and photo link settings."
-      />
+      {header}
       <MaintenanceSettingsPanel
         initialCategories={initialCategories}
         initialIncludeShareLinksInEmail={initialIncludeShareLinksInEmail}

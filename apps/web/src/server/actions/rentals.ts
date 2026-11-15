@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
+import { uncheckedAccessResult } from '@/server/lib/action-error-result';
 import { ServiceError, withContext } from '@/server/services/context';
 import { RentalsService } from '@/server/services/rentals';
 
@@ -26,6 +27,9 @@ import {
  */
 function toActionError<T>(e: unknown): ActionResult<T> {
   rethrowControlFlow(e);
+  // A check of the caller's access that could not be read: its own sentence.
+  const unchecked = uncheckedAccessResult(e, 'actions.rentals');
+  if (unchecked) return unchecked;
   if (e instanceof ServiceError) {
     if (e.code === 'internal_error') {
       console.error('[rentals] action failed', e.internalDetail ?? e.message);

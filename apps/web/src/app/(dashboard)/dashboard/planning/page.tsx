@@ -1,6 +1,7 @@
 import { DraftPosFromReorderButton } from '@/components/reports/draft-pos-from-reorder-button';
 import { AutoReorderPanel } from '@/components/settings/auto-reorder-panel';
 import { PlanningParamsPanel } from '@/components/settings/planning-params-panel';
+import { SettingsReadFailed } from '@/components/settings/settings-read-failed';
 import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
@@ -51,9 +52,9 @@ export default async function PlanningPage() {
   const ctx = await requireOrgContext();
   const supabase = await createClient();
   const svc = await PlanningService.forCurrentUser();
-  const [plan, params, autoReorder, orgBillingRes, openPoItems] = await Promise.all([
+  const [plan, paramsRead, autoReorderRead, orgBillingRes, openPoItems] = await Promise.all([
     svc.getReorderSuggestions(),
-    svc.readParams(),
+    svc.readParamsWithStatus(),
     readAutoReorderSettings(supabase, ctx.organizationId),
     supabase
       .from('organizations')
@@ -77,6 +78,30 @@ export default async function PlanningPage() {
     }),
   ]);
   const { suggestions, truncated } = plan;
+
+  // The two settings panels below are seeded from these reads, and each Save
+  // sends its whole setting. A failed read hands back the defaults (which the
+  // suggestions maths uses), so a panel seeded from it would show values that
+  // are not stored, and its Save would write them over the stored ones. That
+  // panel shows the settings failed-read state with Try again instead; the
+  // other panel and the suggestions do not depend on it and stay. No row is
+  // not a failed read: the panel shows the defaults.
+  if (moduleAccess.canManage && paramsRead.readError) {
+    void reportError(new Error('planning settings read failed'), {
+      tag: 'planning.settings.read_failed',
+      level: 'warning',
+      organizationId: ctx.organizationId,
+      extra: { code: paramsRead.readError.code },
+    });
+  }
+  if (moduleAccess.canManage && autoReorderRead.readError) {
+    void reportError(new Error('automatic reordering settings read failed'), {
+      tag: 'planning.auto_reorder.read_failed',
+      level: 'warning',
+      organizationId: ctx.organizationId,
+      extra: { code: autoReorderRead.readError.code },
+    });
+  }
   const autoReorderEntitled = planAllowsAutoReorder(
     ((orgBillingRes.data as OrgBillingState | null) ?? { plan: null }) as OrgBillingState,
   );
@@ -218,8 +243,22 @@ export default async function PlanningPage() {
 
       {moduleAccess.canManage && (
         <div data-slot="planning-settings" className="flex flex-col gap-4">
-          <PlanningParamsPanel initial={params} />
-          <AutoReorderPanel initial={autoReorder} entitled={autoReorderEntitled} />
+          {paramsRead.readError ? (
+            <SettingsReadFailed
+              title="We couldn't load the planning settings"
+              description="Something went wrong reading them. This is usually temporary, so try again in a moment."
+            />
+          ) : (
+            <PlanningParamsPanel initial={paramsRead.params} />
+          )}
+          {autoReorderRead.readError ? (
+            <SettingsReadFailed
+              title="We couldn't load the automatic reordering settings"
+              description="Something went wrong reading them. This is usually temporary, so try again in a moment."
+            />
+          ) : (
+            <AutoReorderPanel initial={autoReorderRead.settings} entitled={autoReorderEntitled} />
+          )}
         </div>
       )}
     </div>

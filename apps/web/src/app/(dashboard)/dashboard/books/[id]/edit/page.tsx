@@ -7,6 +7,7 @@ import { forcedWarehouseId } from '@/lib/auth/warehouse';
 import { safeReturnPath } from '@/lib/safe-return-path';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { moduleAnswer } from '@/lib/modules/module-state';
 import { createClient } from '@/lib/supabase/server';
 import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { CategoriesService } from '@/server/services/categories';
@@ -145,7 +146,9 @@ export default async function EditBookPage({
         ).then((rows) => rows[0] ?? null)
       : Promise.resolve(null);
 
-  const { enabled: lotSerialEnabled } = await checkModuleAccess('lot_serial');
+  // moduleAnswer: a state that could not be read is this page's error state
+  // with Try again, never a form drawn as if the module were off.
+  const lotSerialEnabled = moduleAnswer(await checkModuleAccess('lot_serial'));
   const skuSiblings = await skuSiblingsRead;
   const recordCharter = await recordCharterRead;
 

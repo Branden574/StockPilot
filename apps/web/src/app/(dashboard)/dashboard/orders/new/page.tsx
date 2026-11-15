@@ -8,6 +8,7 @@ import { can, deliveryRecipientsForRouting, STOREFRONT_TITLE_COPY } from '@stock
 import { requireOrgContext } from '@/lib/auth/session';
 import { getCachedOrgTimezone, getOrgEmailRouting } from '@/lib/dashboard/cached-org';
 import { getModulesForRequest, getWarehousesForRequest } from '@/lib/dashboard/request-cache';
+import { moduleSetUnreadable } from '@/lib/modules/module-state';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { loadFrequentlyOrdered } from '@/server/loaders/orders-frequently-ordered';
 import { loadOrderKits } from '@/server/loaders/orders-kits';
@@ -76,9 +77,10 @@ export default async function NewOrderPage({
     getOrgEmailRouting(ctx.organizationId, 'delivery_request'),
     // A failed module read keeps no place for the Kits row (the kits loader
     // makes the same read and then says the kits could not be loaded) and
-    // offers no Manage order items: fail closed.
+    // offers no Manage order items: fail closed. A state held as unknown
+    // (lib/modules/module-state) is that same failed read.
     getModulesForRequest(ctx.organizationId).then(
-      (set) => set,
+      (set) => (moduleSetUnreadable(set) ? null : set),
       () => null,
     ),
   ]);

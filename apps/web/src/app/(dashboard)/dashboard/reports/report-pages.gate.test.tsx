@@ -17,9 +17,10 @@ import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
  */
 
 const ctxBox = vi.hoisted(() => ({ ctx: null as unknown }));
-// What the page gate says of a module the context does not hold: off, or
-// (checkFailed) its state could not be read. Read from the same
-// request-cached module set as the context, so it costs no read here.
+// The page gate, which the report pages ask about each module their report
+// reads. It answers from the same request-cached module set as the context:
+// a module that set holds is on; of any other it says `gateBox.access`: off,
+// or (checkFailed) its state could not be read.
 const gateBox = vi.hoisted(() => ({
   access: { enabled: false, canManage: false } as {
     enabled: boolean;
@@ -28,7 +29,12 @@ const gateBox = vi.hoisted(() => ({
   },
 }));
 vi.mock('@/lib/modules/module-gate', () => ({
-  checkModuleAccess: vi.fn(async () => gateBox.access),
+  checkModuleAccess: vi.fn(async (moduleId: string) => {
+    const held = (ctxBox.ctx as { enabledModules: Set<string> }).enabledModules;
+    return held.has(moduleId)
+      ? { enabled: true, canManage: gateBox.access.canManage }
+      : gateBox.access;
+  }),
 }));
 vi.mock('@/server/services/context', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/server/services/context')>();

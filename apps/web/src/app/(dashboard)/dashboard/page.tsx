@@ -39,6 +39,7 @@ import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import { ReportsService } from '@/server/services/reports';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { moduleAnswer } from '@/lib/modules/module-state';
 import { movementTypeLabel } from '@/lib/movements/movement-type';
 import { ORDERS_AWAITING_SIGNATURE_HREF } from '@/lib/orders/export';
 import { OVERDUE_PO_ATTENTION_DETAIL } from '@/lib/purchase-orders/tabs';
@@ -229,7 +230,10 @@ async function DashboardBody({
   // count is read, while the module is off (B72). Request-cached: the module
   // set came with the membership, so this adds no round trip, and it starts
   // with the fan-out below rather than ahead of it.
-  const ordersModuleOn = checkModuleAccess('orders').then((access) => access.enabled);
+  // A state that could not be read is not "off" (moduleAnswer throws
+  // ModulesUnavailableError): the page reaches its error state with Try again
+  // rather than leaving both cards out as if Orders were switched off.
+  const ordersModuleOn = checkModuleAccess('orders').then(moduleAnswer);
 
   // Single parallel fan-out — was two serial Promise.all blocks (15
   // queries total, the second waiting on the first to complete). With

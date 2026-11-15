@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 
 import { DashboardShell } from '@/components/dashboard/dashboard-shell';
 import { MfaRequiredBanner } from '@/components/dashboard/mfa-required-banner';
+import { ModulesUnreadBanner } from '@/components/dashboard/modules-unread-banner';
 import {
   DENSITY_COOKIE,
   NAV_COLLAPSED_COOKIE,
@@ -24,6 +25,7 @@ import {
   getWarehousesForRequest,
 } from '@/lib/dashboard/request-cache';
 import { factorsOf } from '@/lib/auth/mfa-factors';
+import { moduleSetUnreadable } from '@/lib/modules/module-state';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { orSessionEnded } from '@/lib/auth/session-ended';
 import { getVerifiedSessionClaimsForRequest } from '@/lib/auth/verified-claims';
@@ -138,9 +140,8 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     getSessionMemberships(),
     getWarehousesForRequest(ctx.organizationId),
     // Request-cached: shares ONE organization_modules round-trip with
-    // withContext() in the same render. The helper logs + fails closed
-    // (empty set = core-only nav) on a query error, same as the prior
-    // inline query did.
+    // withContext() in the same render. Rows that could not be read come
+    // back as a set that cannot be listed (see below), never as "no rows".
     getModulesForRequest(ctx.organizationId),
   ]);
 
@@ -150,11 +151,16 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   // regardless of this list, so a grandfathered org with no rows still gets
   // the full core nav.
   //
-  // Fail CLOSED on a query error: `getModulesForRequest` logs the failure and
-  // returns an empty set → core-only nav (optional modules hidden), never a
-  // fuller nav than the org is entitled to (mirrors resolveMfaState /
-  // resolveApiEnabledModules).
-  const enabledModules = Array.from(enabledModuleSet);
+  // A module state that could not be read is UNKNOWN, not "off"
+  // (`getModulesForRequest` logs the failed read and holds the state in a set
+  // that refuses to be listed: lib/modules/module-state). The menu then shows
+  // only what is known to be on, which is the core sections (a comp that was
+  // read decides every module and comes back as a plain set), and the strip
+  // below says the modules could not be checked and offers Try again. Never a
+  // fuller nav than the reads showed, and never a core-only nav passed off as
+  // the organization's own.
+  const moduleStateUnknown = moduleSetUnreadable(enabledModuleSet);
+  const enabledModules = moduleStateUnknown ? [] : Array.from(enabledModuleSet);
 
   const memberships = sessionMemberships
     .map((m) => ({
@@ -280,6 +286,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
       >
         <ImpersonationBanner />
         {showMfaBanner && <MfaRequiredBanner />}
+        {moduleStateUnknown && <ModulesUnreadBanner />}
         {children}
         {/* "Last seen" for the platform console (mig 0352). Scope keeps one account or
             organization from throttling another on a shared device; it never leaves

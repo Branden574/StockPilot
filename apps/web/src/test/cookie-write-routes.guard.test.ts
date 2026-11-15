@@ -372,7 +372,7 @@ describe('every withApiContext call is handed the request it judges', () => {
     }
     expect(bad).toEqual([]);
     // The returns routes call their two shared gates (18 calls on 2026-10-24),
-    // and three routes call the API context gate (docket S26): 21.
+    // and five routes call the API context gate (docket S26): 23.
     expect(sharedGateCalls).toBeGreaterThan(15);
   });
 
@@ -464,7 +464,7 @@ describe('self-test: the reading reports what it should', () => {
     ).toEqual(['POST:-']);
   });
 
-  // Docket S26: the three routes whose refusal before any work is marked for
+  // Docket S26: the routes whose refusal before any work is marked for
   // the phone reach withApiContext through server/lib/api-context-gate.
   it('the API context gate counts only from its own module; a namesake is not a gate', () => {
     const file = 'app/api/v1/items/[id]/adjust/route.ts';
