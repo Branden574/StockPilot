@@ -96,10 +96,10 @@ async function resolveApiMfaState(
     // 'admins_required', so that fallback was more permissive than any real
     // organization's policy.
     //
-    // An unreadable authorization input must deny. This is what the page path
-    // already does (lib/dashboard/request-cache.ts throws on `error`, and
-    // resolveMfaState's catch fails closed) and what the sibling read in this
-    // same file already does ("an unreadable flag grants NOTHING").
+    // An unreadable policy never yields a lesser policy: the error is thrown
+    // here and the catch below holds the session to the strictest policy, as
+    // the page path does for a failed organization read (resolveMfaState in
+    // services/context.ts).
     //
     // Zero rows is not an error: `maybeSingle()` reports it as
     // `{ data: null, error: null }`. It means row level security hid the row
@@ -155,10 +155,9 @@ async function mfaFromPolicy(
       mfaSatisfied = true;
     }
   } catch (err) {
-    // Fail CLOSED — assume MFA is required and unsatisfied. A flaky
-    // org lookup must NOT silently let an admin bypass MFA on the
-    // bearer/API path either. Mirrors resolveMfaState() in
-    // services/context.ts for parity between cookie and bearer flows.
+    // Fail CLOSED — the session's level could not be read, so MFA is
+    // required and unsatisfied. The policy is already known here; this
+    // catch covers the level read only.
     console.error('[resolveApiMfaState] failed:', err);
     return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: hasVerifiedFactor };
   }
