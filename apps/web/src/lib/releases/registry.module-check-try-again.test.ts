@@ -42,6 +42,8 @@ const EMAIL_RELEASE_ID = 'email-change-expired-2026-11';
 // Added by docs/whats-new-navigation-keeps-choices (2026-11-15): the navigation release (owners and admins who can open Settings, Navigation), published later, directly above the settings release.
 const NAVIGATION_ID = 'navigation-keeps-choices-2026-11';
 // Added by docs/whats-new-invitation-audit (2026-11-15): the invitation audit release (whoever can view the audit log), published later, directly above the navigation release.
+// Added by docs/whats-new-api-key-audit (2026-11-15): the API key audit release (whoever can view the audit log), published later, directly above the invitation audit release.
+const API_KEY_AUDIT_ID = 'api-key-audit-2026-11';
 const INVITATION_AUDIT_ID = 'invitation-audit-2026-11';
 
 const PAGES = 'pages-say-when-modules-not-checked';
@@ -106,7 +108,8 @@ describe('the module check release: order, status and date', () => {
     expect(release().withdrawnNote).toBeUndefined();
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: RELEASES.slice(1, 5)): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES.slice(3, 7).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES.slice(4, 8).map((r) => [r.id, r.status])).toEqual([
       [SETTINGS_ID, 'published'],
       [ID, 'published'],
       [COUNT_RELEASE_ID, 'published'],
@@ -122,11 +125,13 @@ describe('the module check release: order, status and date', () => {
     expect(at).toBeLessThanOrEqual(Date.now());
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(Date.parse(RELEASES[3]!.publishedAt)).toBeGreaterThan(at);
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(Date.parse(RELEASES[4]!.publishedAt)).toBeGreaterThan(at);
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(5)) {
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(6)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -278,8 +283,13 @@ describe('the module check release: who is told', () => {
       // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: nothing read, then the settings release read): the navigation release is published later, at the top, and reaches owners and admins, so each reader reads it first, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
       expect(
         // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: without it): the invitation audit release is published later, at the top, and reaches whoever can view the audit log (owners, admins and managers by default), so it is read or seen with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
-        buildReleaseList(RELEASES, v, [readNow(INVITATION_AUDIT_ID), readNow(NAVIGATION_ID)], null)
-          .latestUnread?.id,
+        // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, and reaches the same readers as the invitation audit release, so it is read or seen with it, and the notice this test checks is the one it checked before.
+        buildReleaseList(
+          RELEASES,
+          v,
+          [readNow(API_KEY_AUDIT_ID), readNow(INVITATION_AUDIT_ID), readNow(NAVIGATION_ID)],
+          null,
+        ).latestUnread?.id,
         v.role,
       ).toBe(SETTINGS_ID);
       expect(
@@ -287,7 +297,13 @@ describe('the module check release: who is told', () => {
         buildReleaseList(
           RELEASES,
           v,
-          [readNow(INVITATION_AUDIT_ID), readNow(NAVIGATION_ID), readNow(SETTINGS_ID)],
+          // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, and reaches the same readers as the invitation audit release, so it is read or seen with it, and the notice this test checks is the one it checked before.
+          [
+            readNow(API_KEY_AUDIT_ID),
+            readNow(INVITATION_AUDIT_ID),
+            readNow(NAVIGATION_ID),
+            readNow(SETTINGS_ID),
+          ],
           null,
         ).latestUnread?.id,
         v.role,

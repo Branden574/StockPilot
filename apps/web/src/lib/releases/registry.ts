@@ -123,7 +123,9 @@ export const RELEASES: Release[] = [
     // navigation release below is dated 2026-11-15T04:45:00Z, so the placeholder is that same minute.
     // Moved again by docs/whats-new-invitation-audit (2026-11-15; was: '2026-11-15T04:45:00Z'): the
     // invitation audit release below is dated 2026-11-15T17:39:00Z, so the placeholder is that same minute.
-    publishedAt: '2026-11-15T17:39:00Z',
+    // Moved again by docs/whats-new-api-key-audit (2026-11-15; was: '2026-11-15T17:39:00Z'): the API key
+    // audit release below is dated 2026-11-15T21:37:00Z, so the placeholder is that same minute.
+    publishedAt: '2026-11-15T21:37:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -208,6 +210,64 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'api-key-audit-2026-11',
+    revision: 1,
+    // #580 (squash 4712b6918), web only: no phone update and no migration.
+    // Live in production since 2026-11-15 21:18:47Z; publishedAt is the
+    // minute this release was committed. It went live after #579, so it
+    // sits above the invitation audit release and is the newest published
+    // release.
+    // Claims checked against the code at 4712b6918 (paths under apps/web/src):
+    // - The rows: server/services/api-keys.ts. Creating a key writes
+    //   api_key.created once the key is stored, entity api_key (the key's
+    //   id), extra { name, scopes }; revoking writes api_key.revoked once
+    //   the key is marked revoked, entity api_key, extra { name }. Neither
+    //   row is given the key, its prefix or its hash.
+    // - Where keys are made: app/(dashboard)/dashboard/settings/integrations
+    //   page.tsx, the API keys panel (components/settings/api-keys-panel.tsx),
+    //   shown with the api_access module on and an owner or admin role.
+    // - The labels: lib/audit/format.ts formatAuditEvent gives
+    //   "Api Key · Created" and "Api Key · Revoked" (no subject override for
+    //   api_key), and formatEntityType gives "Api Key" for the Entity column,
+    //   above the first 8 characters of the key's id (shortId).
+    // - The chip: components/admin/audit-categories.ts has no chip whose
+    //   prefix matches api_key., so the rows are under All events only.
+    // - The details: app/(dashboard)/dashboard/audit/page.tsx renders a
+    //   details row only when before/after differ or changed_keys is set;
+    //   these rows have neither (audit() writes before and after as null),
+    //   so no details show and the name and scopes are not on the page.
+    // - The Event filter: an exact match on the event (audit-log.ts eq).
+    // - The phone: apps/mobile/app/(drawer)/admin/audit.tsx shows row.event
+    //   as written, with no details.
+    // Who is told: whoever can open the page. /dashboard/audit redirects
+    // anyone without activity_logs:read ("View audit log"; owner, admin and
+    // manager by default, grantable to others) and checks no module: its
+    // sidebar link belongs to admin_tools, a core module that is always on.
+    status: 'published',
+    title: 'Creating and revoking an API key now show in the Audit log',
+    summary:
+      'The Audit log now has a row when an API key is created and when one is revoked, with who did it and when. People who can view the audit log see them. No app update is needed.',
+    // #580 is live in production since 2026-11-15 21:18:47Z.
+    publishedAt: '2026-11-15T21:37:00Z',
+    entries: [
+      {
+        id: 'api-keys-in-audit-log',
+        category: 'improved',
+        area: 'Audit log',
+        title: 'Creating and revoking an API key now show in the Audit log',
+        whatChanged:
+          'The Audit log now has an Api Key · Created row each time an API key is created and an Api Key · Revoked row each time one is revoked, under API keys in Settings, Integrations.',
+        whyItMatters: 'The Audit log shows who created or revoked an API key, and when.',
+        howItAffectsYou:
+          'On the web, both rows are under All events, with Api Key and a short record id in the Entity column. That id is not part of the key, and the page does not show the key name. People who can view the audit log see them: owners, admins and managers by default, and anyone given View audit log. The Audit log in the mobile app lists them among its recent events as api_key.created and api_key.revoked.',
+        whatToDo:
+          'No action needed. To see only one kind on the web, open the Audit log, type api_key.created or api_key.revoked in the Event filter and choose Apply.',
+        link: { href: '/dashboard/audit', label: 'Open the Audit log' },
+        audience: { anyPermission: ['activity_logs:read'] },
       },
     ],
   },

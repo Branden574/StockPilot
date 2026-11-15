@@ -78,7 +78,8 @@ describe('the Liquid Glass release is a draft at the top, and never leaves the s
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    const block = text.slice(0, text.indexOf(`id: '${RELEASES[15]!.id}'`));
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    const block = text.slice(0, text.indexOf(`id: '${RELEASES[16]!.id}'`));
     const lines = block.split('\n').filter((l) => l.includes('RECHECK'));
     expect(lines.length).toBeGreaterThan(0);
     for (const line of lines) expect(line.trim().startsWith('//'), line).toBe(true);
