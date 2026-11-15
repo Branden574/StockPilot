@@ -75,7 +75,7 @@ describe('TeamService.invite records the invitation', () => {
           role: 'manager',
           all_warehouses: true,
           warehouse_id: null,
-          charter_ids: [],
+          charter_ids: null,
           email_sent: true,
         },
       },

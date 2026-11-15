@@ -348,7 +348,9 @@ export class TeamService {
           role: params.role,
           all_warehouses: allWarehouses,
           warehouse_id: warehouseId,
-          charter_ids: charterIds,
+          // null when the invite names no charter (all charters), as the
+          // invite row stores it.
+          charter_ids: charterIds.length > 0 ? charterIds : null,
           email_sent: sent.ok,
         },
       },
