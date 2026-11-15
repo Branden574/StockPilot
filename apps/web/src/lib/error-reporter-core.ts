@@ -1,7 +1,7 @@
 /**
  * Minimal vendor-agnostic error reporter. Posts a structured payload to
  * ERROR_WEBHOOK_URL (Slack incoming webhook, a custom endpoint, etc.) when
- * configured; otherwise falls back to console.error. Drop-in compatible
+ * configured, and always logs one line at the report's level. Drop-in compatible
  * with future Sentry adoption — wherever Sentry.captureException would
  * go, call reportError() and replace the implementation later.
  *
@@ -106,8 +106,9 @@ export function isNextControlFlowError(err: unknown): boolean {
 }
 
 /**
- * Reports an error. Always console.errors; additionally posts to the
- * webhook if configured. Best-effort — never throws to the caller.
+ * Reports an error. Always logs one line through the console method that
+ * matches its level; additionally posts to the webhook if configured.
+ * Best-effort — never throws to the caller.
  */
 export async function reportError(err: unknown, context: ErrorContext): Promise<void> {
   if (isNextControlFlowError(err)) {
@@ -140,7 +141,18 @@ export async function reportError(err: unknown, context: ErrorContext): Promise<
   // Always log so we don't lose the trace even when the webhook fails.
   // The redacted message + stack, never the raw Error: console.error(err)
   // prints `err.stack`, which is exactly where a signed URL hides.
-  console.error(`[error] ${context.tag}`, payload.message, payload.stack ?? '', payload.extra);
+  //
+  // The console method and the prefix follow the level: the hosting log viewer
+  // files a console.error line as an error, so only error-level reports use
+  // it: warning -> console.warn, info -> console.info, anything else ->
+  // console.error, each prefixed with its own level.
+  const log =
+    payload.level === 'warning'
+      ? console.warn
+      : payload.level === 'info'
+        ? console.info
+        : console.error;
+  log(`[${payload.level}] ${context.tag}`, payload.message, payload.stack ?? '', payload.extra);
 
   const url = getWebhookUrl();
   if (!url) return;

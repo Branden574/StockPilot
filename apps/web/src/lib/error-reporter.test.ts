@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 
 import { json, realSupabaseClient } from '@/test/postgrest-answers';
 
@@ -173,6 +173,92 @@ describe('reportError with a value that is not an Error', () => {
     const body = JSON.parse(postedBody()) as { message: string; stack: string };
     expect(body.message).toBe('canceling statement due to statement timeout');
     expect(body.stack).toContain('An internal error occurred');
+  });
+});
+
+/**
+ * The server log line follows the report's level. The hosting log viewer files
+ * a console.error line as an error, so only error-level reports use it: a
+ * warning goes to console.warn, an info report to console.info, and anything
+ * else to console.error, each with its own level as the prefix. The message,
+ * stack and extra that follow it, and the webhook body, stay the same.
+ */
+describe('reportError log line by level', () => {
+  const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+  let spies: Record<'error' | 'warn' | 'info', MockInstance<typeof console.error>>;
+
+  beforeEach(() => {
+    fetchSpy.mockClear();
+    vi.stubGlobal('fetch', fetchSpy);
+    spies = {
+      error: vi.spyOn(console, 'error').mockImplementation(() => {}),
+      warn: vi.spyOn(console, 'warn').mockImplementation(() => {}),
+      info: vi.spyOn(console, 'info').mockImplementation(() => {}),
+    };
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    delete process.env.ERROR_WEBHOOK_URL;
+  });
+
+  // 'fatal' is not in ErrorContext's level type; an untyped caller could still
+  // pass it, and it stays an error line under its own name.
+  it.each([
+    [undefined, 'error', '[error]'],
+    ['error', 'error', '[error]'],
+    ['fatal', 'error', '[fatal]'],
+    ['warning', 'warn', '[warning]'],
+    ['info', 'info', '[info]'],
+  ] as const)(
+    'level %s logs through console.%s with the %s prefix',
+    async (level, method, prefix) => {
+      const context = {
+        tag: 'shelf.recount',
+        extra: { shelf: 'B-7' },
+        ...(level ? { level: level as 'error' | 'warning' | 'info' } : {}),
+      };
+      await reportError(new Error('count did not save'), context);
+
+      expect(spies[method]).toHaveBeenCalledTimes(1);
+      const [line, message, stack, extra] = spies[method].mock.calls[0]!;
+      expect(line).toBe(`${prefix} shelf.recount`);
+      expect(message).toBe('count did not save');
+      expect(String(stack)).toMatch(/^Error: count did not save/);
+      expect(extra).toEqual({ organizationId: null, userIdHash: null, shelf: 'B-7' });
+      for (const other of ['error', 'warn', 'info'] as const) {
+        if (other !== method) expect(spies[other]).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it('a warning still reaches the webhook, and its Slack header names the level', async () => {
+    process.env.ERROR_WEBHOOK_URL = 'https://hooks.slack.com/services/T/B/x';
+    await reportError(new Error('count did not save'), { tag: 'shelf.recount', level: 'warning' });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as { text: string };
+    expect(body.text.split('\n')[0]).toMatch(/^\*WARNING — shelf\.recount\* \(\w+\)$/);
+    expect(body.text).toContain('count did not save');
+  });
+
+  it('an info report sends the same structured payload to a generic endpoint', async () => {
+    process.env.ERROR_WEBHOOK_URL = 'https://errors.internal.example/ingest';
+    await reportError(new Error('count did not save'), { tag: 'shelf.recount', level: 'info' });
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body.level).toBe('info');
+    expect(body.tag).toBe('shelf.recount');
+    expect(body.message).toBe('count did not save');
+  });
+
+  it('a webhook post that fails is still logged through console.error', async () => {
+    process.env.ERROR_WEBHOOK_URL = 'https://errors.internal.example/ingest';
+    fetchSpy.mockRejectedValueOnce(new Error('offline'));
+    await reportError(new Error('count did not save'), { tag: 'shelf.recount', level: 'warning' });
+    expect(spies.warn).toHaveBeenCalledTimes(1);
+    expect(spies.error).toHaveBeenCalledTimes(1);
+    expect(spies.error.mock.calls[0]![0]).toBe('[error-reporter] webhook post failed');
   });
 });
 
