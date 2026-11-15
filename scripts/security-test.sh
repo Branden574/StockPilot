@@ -902,6 +902,11 @@ PGTAP_TESTS=(
   # Each body is production's with its added lines removed. The lock
   # footprint is scripts/db-concurrency/0464_migration_lock_footprint.sh.
   supabase/tests/0464_retry_keys_match_their_record.test.sql
+  # Connection records (0465): a mapping and a sync log entry name a
+  # connection and a queued event of their own organization (connection_in_org,
+  # outbox_event_in_org), a connection names only the Vault secret stored for
+  # it and only the server sets it, and the Vault reads check the row.
+  supabase/tests/0465_connection_records_in_their_organization.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
