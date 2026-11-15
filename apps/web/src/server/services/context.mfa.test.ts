@@ -14,7 +14,8 @@
  *  (d5) UNENROLLED under 'optional'          -> required=false, satisfied=true
  *      (the unattended-login path — e.g. the demo QA account has no factors
  *      and MUST keep signing in untouched)
- *  (e) org lookup throws                      -> required=true,  satisfied=false (fail-closed)
+ *  (e) org lookup throws                      -> the strictest policy, as a hidden row:
+ *      required=true; satisfied only for an enrolled AAL2 session
  *  (i) factor list of ANOTHER account         -> required=true,  satisfied=false (fail-closed)
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -323,11 +324,19 @@ describe('withContext / resolveMfaState — fail-closed MFA gate', () => {
     expect(aalCalls).toBe(0);
   });
 
-  it('(e) org lookup throws -> required=true, satisfied=false (fail CLOSED)', async () => {
-    arrange({ policy: 'all_required', verifiedFactor: true, aal: 'aal2', orgRowThrows: true });
+  it('(e) org lookup throws + unenrolled staff -> required=true, satisfied=false (fail CLOSED, strictest)', async () => {
+    arrange({ policy: 'optional', verifiedFactor: false, aal: 'aal1', role: 'staff', orgRowThrows: true });
     const ctx = await withContext();
     expect(ctx.mfaRequired).toBe(true);
     expect(ctx.mfaSatisfied).toBe(false);
+  });
+
+  it('(e2) org lookup throws + enrolled + AAL2 -> required=true, satisfied=true (strictest, as a hidden row)', async () => {
+    arrange({ policy: 'optional', verifiedFactor: true, aal: 'aal2', role: 'staff', orgRowThrows: true });
+    const ctx = await withContext();
+    expect(ctx.mfaRequired).toBe(true);
+    expect(ctx.mfaSatisfied).toBe(true);
+    expect(ctx.mfaEnrolled).toBe(true);
   });
 });
 

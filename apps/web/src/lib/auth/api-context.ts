@@ -23,7 +23,11 @@ import {
 import type { Role, Database, ModuleId, Permission } from '@stockpilot/core';
 import { effectivePermissions, isAdminRole, stepUpOwed } from '@stockpilot/core';
 
-import { enforcedMfaPolicy, type MfaPolicy } from '@/lib/auth/mfa-policy';
+import {
+  enforcedMfaPolicy,
+  UNREADABLE_ORG_MFA_POLICY,
+  type MfaPolicy,
+} from '@/lib/auth/mfa-policy';
 
 /**
  * Mirror of resolveMfaState() in context.ts but parameterized over an
@@ -104,12 +108,19 @@ async function resolveApiMfaState(
     if (error) throw new Error(`mfa_policy unreadable: ${error.code || 'unknown'}`);
     policy = enforcedMfaPolicy(org);
   } catch (err) {
-    // Fail CLOSED — assume MFA is required and unsatisfied. A flaky
-    // org lookup must NOT silently let an admin bypass MFA on the
-    // bearer/API path either. Mirrors resolveMfaState() in
-    // services/context.ts for parity between cookie and bearer flows.
+    // Fail CLOSED: a read that errors is held to the STRICTEST policy, exactly
+    // like a hidden row, never to a lesser one. A flaky org lookup must NOT
+    // let an admin bypass MFA on the bearer/API path.
+    //
+    // The strictest policy, not "unsatisfied whatever the session": that would
+    // be stricter than any policy an organization can have, and would answer
+    // a session at aal2, which every policy lets through, "Re-authenticate
+    // with MFA" when no code can help. all_required lets through only a
+    // session at aal2, and every other policy lets that session through too,
+    // so nothing passes here that the unread policy would refuse. Mirrors
+    // resolveMfaState() in services/context.ts.
     console.error('[resolveApiMfaState] failed:', err);
-    return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: hasVerifiedFactor };
+    policy = UNREADABLE_ORG_MFA_POLICY;
   }
   return mfaFromPolicy(policy, role, hasVerifiedFactor, level);
 }
