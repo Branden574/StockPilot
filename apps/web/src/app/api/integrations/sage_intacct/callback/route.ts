@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { loadAccountStatus, noteDisabledAccountBlocked } from '@/lib/auth/account-status';
-import { cookieSessionOwesStepUp } from '@/lib/auth/api-context';
+import { cookieSessionMfaState, cookieSessionOwesStepUp } from '@/lib/auth/api-context';
 import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -23,8 +23,9 @@ const SETTINGS_PATH = '/dashboard/settings/integrations';
 
 /**
  * Sage Intacct OAuth callback. Mirrors the QuickBooks callback's lifecycle
- * one-for-one (state verify under RLS → module + permission gates → code
- * exchange → Vault write via service role → activate → audit → 302). The only
+ * one-for-one (state verify under RLS → module, authenticator policy and
+ * permission gates → code exchange → Vault write via service role → activate
+ * → audit → 302). The only
  * provider differences: Intacct has no `realmId` query param (the company
  * context rides the token; `external_account_id` stores the company id when
  * the token response carries one), and consent denial arrives as a standard
@@ -146,6 +147,15 @@ export async function GET(req: Request) {
       .maybeSingle();
     const role = (member as { role: Role } | null)?.role;
     if (!role) return redirectWithError('forbidden');
+
+    // The organization's authenticator policy, the answer pages and the API
+    // give (cookieSessionMfaState): when the policy requires an authenticator
+    // of this member and the session has not met it (no verified factor, or
+    // not at aal2), this route's `forbidden`, before the code is exchanged or
+    // anything is written. Asked before the permission, as assertPermission
+    // asks it. The same three values go to the audit row below.
+    const mfa = await cookieSessionMfaState(supabase, user, organizationId, role);
+    if (mfa.mfaRequired && !mfa.mfaSatisfied) return redirectWithError('forbidden');
     let permissions: Set<Permission>;
     try {
       permissions = await loadEffectivePermissions(supabase, organizationId, user.id, role);
@@ -198,8 +208,9 @@ export async function GET(req: Request) {
         userId: user.id,
         role,
         supabase,
-        mfaRequired: false,
-        mfaSatisfied: true,
+        mfaRequired: mfa.mfaRequired,
+        mfaSatisfied: mfa.mfaSatisfied,
+        mfaEnrolled: mfa.mfaEnrolled,
         enabledModules: new Set(['integrations']),
       },
     );

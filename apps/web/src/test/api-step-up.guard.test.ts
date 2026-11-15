@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   gateCalls,
   readRouteHandlers,
+  resolveModule,
   ROUTE_METHODS,
   sessionReadersIn,
   type RouteHandler,
@@ -38,7 +39,13 @@ import {
  *        OWN_SESSION  builds its own principal from the cookie session: the
  *                     two OAuth callbacks. Checked: every listed handler calls
  *                     cookieSessionOwesStepUp (the same rule, exported from
- *                     lib/auth/api-context) and acts on its answer;
+ *                     lib/auth/api-context) and acts on its answer. An entry
+ *                     that acts in an organization also calls
+ *                     cookieSessionMfaState (the organization's policy, the
+ *                     answer pages and the API give), keeps its answer,
+ *                     returns on `<answer>.mfaSatisfied` before any exchange or
+ *                     write, and writes no fixed mfaRequired / mfaSatisfied
+ *                     label;
  *        AAL1_AUTH    an auth flow that must work before the code, because it
  *                     creates or ends the session. Checked: the cookie client
  *                     is the only session reader it imports;
@@ -67,6 +74,30 @@ const OPT_OUT = 'allowStepUpPending';
 const STEP_UP_CHECK: Readonly<Record<string, string>> = {
   cookieSessionOwesStepUp: 'lib/auth/api-context',
 };
+
+/** The policy answer a route that acts in an organization asks, by the module it comes from. */
+const POLICY_CHECK: Readonly<Record<string, string>> = {
+  cookieSessionMfaState: 'lib/auth/api-context',
+};
+
+/**
+ * Calls an OWN_SESSION route that acts in an organization may make only after
+ * the policy answer: the provider's code exchange, the service client, the
+ * secret store, the audit row (by name), and any table write (by method).
+ */
+const EXCHANGE_OR_WRITE_CALLS: ReadonlySet<string> = new Set([
+  'exchangeCode',
+  'createAdminClient',
+  'putConnectionSecret',
+  'audit',
+]);
+const WRITE_METHOD_CALLS: ReadonlySet<string> = new Set([
+  'insert',
+  'update',
+  'upsert',
+  'delete',
+  'rpc',
+]);
 
 /** Calls that read or make a session, by method name, on any object. */
 const SESSION_CALLS: ReadonlySet<string> = new Set([
@@ -101,9 +132,14 @@ interface NonSession extends Listed {
   auth: NonSessionAuth;
 }
 
+interface OwnSession extends Listed {
+  /** It acts in an organization, so the organization's policy applies (POLICY_CHECK). */
+  actsInAnOrganization: boolean;
+}
+
 interface Lists {
   nonSession: Readonly<Record<string, NonSession>>;
-  ownSession: Readonly<Record<string, Listed>>;
+  ownSession: Readonly<Record<string, OwnSession>>;
   aal1Auth: Readonly<Record<string, Listed>>;
   aal1Routes: Readonly<Record<string, { reason: string }>>;
 }
@@ -267,21 +303,24 @@ const NON_SESSION: Record<string, NonSession> = {
 };
 
 /** Routes that build their own principal from the cookie session. Reviewed 2026-11-01. */
-const OWN_SESSION: Record<string, Listed> = {
+const OWN_SESSION: Record<string, OwnSession> = {
   'api/appearance/account/route.ts': {
     methods: ['POST'],
+    actsInAnOrganization: false,
     reason:
       "Liquid Glass (reviewed 2026-11-11): reads the signed-in person's own Design and Theme row. It builds no organization context (a portal customer has none), so it validates the cookie session with getUser and asks cookieSessionOwesStepUp right after, answering 'unauthenticated' before the row is read.",
   },
   'api/integrations/quickbooks/callback/route.ts': {
     methods: ['GET'],
+    actsInAnOrganization: true,
     reason:
-      "QuickBooks' OAuth return: it validates the cookie session with getUser and writes the connection's tokens, so it asks cookieSessionOwesStepUp right after getUser and refuses with its 'forbidden' redirect before reading or exchanging anything.",
+      "QuickBooks' OAuth return: it validates the cookie session with getUser and writes the connection's tokens, so it asks cookieSessionOwesStepUp right after getUser and refuses with its 'forbidden' redirect before reading or exchanging anything. Once the member's role is known it asks cookieSessionMfaState and gives the same 'forbidden' when the organization's policy is not met, before the exchange, and hands that state to the audit row.",
   },
   'api/integrations/sage_intacct/callback/route.ts': {
     methods: ['GET'],
+    actsInAnOrganization: true,
     reason:
-      "Sage Intacct's OAuth return, the QuickBooks callback's twin: the same check right after getUser, the same 'forbidden' redirect, before reading or exchanging anything.",
+      "Sage Intacct's OAuth return, the QuickBooks callback's twin: the same check right after getUser, the same 'forbidden' redirect, before reading or exchanging anything, and the same policy answer from cookieSessionMfaState before the exchange.",
   },
 };
 
@@ -396,6 +435,111 @@ function sessionCallsIn(fileName: string, source: string): string[] {
   return found;
 }
 
+/**
+ * How an OWN_SESSION route that acts in an organization uses the policy answer
+ * (POLICY_CHECK, followed through an import alias): each call's answer is kept
+ * in a const, an `if` on `<answer>.mfaSatisfied` returns, and that `if` comes
+ * before every exchange or write (EXCHANGE_OR_WRITE_CALLS, WRITE_METHOD_CALLS)
+ * in the file. And no object in the file sets mfaRequired or mfaSatisfied to a
+ * fixed true or false: a context it builds carries the answer.
+ */
+function policyAnswerProblems(fileName: string, source: string): string[] {
+  const sf = parse(fileName, source);
+  const at = (n: ts.Node) =>
+    `${fileName}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1}`;
+  const local = new Set<string>();
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
+    const bindings = st.importClause?.namedBindings;
+    if (!bindings || !ts.isNamedImports(bindings)) continue;
+    const from = resolveModule(fileName, st.moduleSpecifier.text);
+    for (const el of bindings.elements) {
+      const imported = (el.propertyName ?? el.name).text;
+      if (POLICY_CHECK[imported] !== undefined && POLICY_CHECK[imported] === from) {
+        local.add(el.name.text);
+      }
+    }
+  }
+
+  const policyCalls: ts.CallExpression[] = [];
+  const writes: Array<{ name: string; node: ts.Node }> = [];
+  const labels: ts.PropertyAssignment[] = [];
+  const visit = (n: ts.Node): void => {
+    if (ts.isCallExpression(n)) {
+      const callee = n.expression;
+      if (ts.isIdentifier(callee)) {
+        if (local.has(callee.text)) policyCalls.push(n);
+        if (EXCHANGE_OR_WRITE_CALLS.has(callee.text)) writes.push({ name: callee.text, node: n });
+      } else if (
+        ts.isPropertyAccessExpression(callee) &&
+        WRITE_METHOD_CALLS.has(callee.name.text)
+      ) {
+        writes.push({ name: callee.name.text, node: n });
+      }
+    }
+    if (
+      ts.isPropertyAssignment(n) &&
+      ts.isIdentifier(n.name) &&
+      (n.name.text === 'mfaRequired' || n.name.text === 'mfaSatisfied') &&
+      (n.initializer.kind === ts.SyntaxKind.TrueKeyword ||
+        n.initializer.kind === ts.SyntaxKind.FalseKeyword)
+    ) {
+      labels.push(n);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+
+  const problems: string[] = [];
+  for (const call of policyCalls) {
+    let n: ts.Node = call;
+    while (ts.isAwaitExpression(n.parent) || ts.isParenthesizedExpression(n.parent)) n = n.parent;
+    const decl = n.parent;
+    if (!ts.isVariableDeclaration(decl) || decl.initializer !== n || !ts.isIdentifier(decl.name)) {
+      problems.push(`${at(call)}: does not keep the authenticator answer in a const`);
+      continue;
+    }
+    const answer = decl.name.text;
+    const readsSatisfied = (e: ts.Node): boolean =>
+      (ts.isPropertyAccessExpression(e) &&
+        ts.isIdentifier(e.expression) &&
+        e.expression.text === answer &&
+        e.name.text === 'mfaSatisfied') ||
+      (ts.forEachChild(e, (c) => (readsSatisfied(c) ? true : undefined)) ?? false);
+    const returns = (s: ts.Node): boolean =>
+      ts.isReturnStatement(s) ||
+      (ts.forEachChild(s, (c) => (returns(c) ? true : undefined)) ?? false);
+    let refusal: ts.IfStatement | undefined;
+    const findIf = (e: ts.Node): void => {
+      if (refusal) return;
+      if (
+        ts.isIfStatement(e) &&
+        e.pos > call.pos &&
+        readsSatisfied(e.expression) &&
+        returns(e.thenStatement)
+      ) {
+        refusal = e;
+        return;
+      }
+      ts.forEachChild(e, findIf);
+    };
+    findIf(sf);
+    if (!refusal) {
+      problems.push(`${at(call)}: does not return on ${answer}.mfaSatisfied`);
+      continue;
+    }
+    for (const w of writes) {
+      if (w.node.pos < refusal.pos) {
+        problems.push(`${at(w.node)}: ${w.name} runs before the authenticator answer`);
+      }
+    }
+  }
+  for (const label of labels) {
+    problems.push(`${at(label)}: sets a fixed ${label.name.getText(sf)} instead of the answer`);
+  }
+  return problems;
+}
+
 /** Where the opt-out is written as code (an identifier or a string), not in a comment. */
 function optOutsIn(fileName: string, source: string): number[] {
   if (!source.includes(OPT_OUT)) return [];
@@ -498,6 +642,15 @@ function staleEntries(sources: ReadonlyMap<string, string>, lists: Lists): strin
           if (!call.resultKept && !call.resultTested) {
             problems.push(`${kind} ${file}:${call.line}: drops the step-up answer`);
           }
+        }
+        if (lists.ownSession[key]?.actsInAnOrganization) {
+          const asked = readRouteHandlers(file, source, POLICY_CHECK).handlers;
+          for (const method of entry.methods) {
+            if (!asked.find((x) => x.method === method)?.gates.includes('cookieSessionMfaState')) {
+              problems.push(`${kind} ${key} ${method}: does not call cookieSessionMfaState`);
+            }
+          }
+          problems.push(...policyAnswerProblems(file, source).map((p) => `${kind} ${p}`));
         }
       }
       if (kind === 'AAL1_AUTH') {
@@ -749,7 +902,9 @@ describe('self-test: a planted violation of each rule is reported', () => {
     const own = (src: string) =>
       staleEntries(tree({ 'api/cb/route.ts': src }), {
         ...EMPTY,
-        ownSession: { 'api/cb/route.ts': { methods: ['GET'], reason } },
+        ownSession: {
+          'api/cb/route.ts': { methods: ['GET'], actsInAnOrganization: false, reason },
+        },
       });
     const prelude = `import { createClient } from '@/lib/supabase/server';`;
     expect(
@@ -784,6 +939,98 @@ describe('self-test: a planted violation of each rule is reported', () => {
           return data;
         }`),
     ).toEqual(['OWN_SESSION api/cb/route.ts GET: does not call cookieSessionOwesStepUp']);
+  });
+
+  it('2. an OWN_SESSION route that acts in an organization must ask the policy, keep and act on its answer before any exchange or write, and label no fixed state', () => {
+    const reason = 'x'.repeat(41);
+    const own = (src: string, actsInAnOrganization = true) =>
+      staleEntries(tree({ 'api/cb/route.ts': src }), {
+        ...EMPTY,
+        ownSession: { 'api/cb/route.ts': { methods: ['GET'], actsInAnOrganization, reason } },
+      });
+    const prelude = `import { createClient } from '@/lib/supabase/server';
+      import { cookieSessionOwesStepUp, cookieSessionMfaState as policy } from '@/lib/auth/api-context';
+      import { exchangeCode } from '@/server/connectors/x/oauth';
+      import { audit } from '@/server/services/audit';`;
+    const signedIn = `const s = await createClient(); const { data } = await s.auth.getUser();
+      if (await cookieSessionOwesStepUp(s, data.user)) return 'forbidden';`;
+    const good = `${prelude}
+      export async function GET() {
+        ${signedIn}
+        const mfa = await policy(s, data.user, 'org', 'admin');
+        if (mfa.mfaRequired && !mfa.mfaSatisfied) return 'forbidden';
+        await exchangeCode('c');
+        audit({ event: 'x' }, { ...mfa });
+        return data;
+      }`;
+    expect(own(good)).toEqual([]);
+
+    // No policy question at all; the same file is fine for a route that acts in no organization.
+    const unasked = `${prelude}
+      export async function GET() { ${signedIn} await exchangeCode('c'); return data; }`;
+    expect(own(unasked)).toEqual([
+      'OWN_SESSION api/cb/route.ts GET: does not call cookieSessionMfaState',
+    ]);
+    expect(own(unasked, false)).toEqual([]);
+
+    // The answer dropped.
+    expect(
+      own(`${prelude}
+        export async function GET() {
+          ${signedIn}
+          await policy(s, data.user, 'org', 'admin');
+          await exchangeCode('c');
+          return data;
+        }`),
+    ).toEqual([
+      'OWN_SESSION app/api/cb/route.ts:8: does not keep the authenticator answer in a const',
+    ]);
+
+    // Kept, never acted on.
+    expect(
+      own(`${prelude}
+        export async function GET() {
+          ${signedIn}
+          const mfa = await policy(s, data.user, 'org', 'admin');
+          await exchangeCode('c');
+          audit({ event: 'x' }, { ...mfa });
+          return data;
+        }`),
+    ).toEqual(['OWN_SESSION app/api/cb/route.ts:8: does not return on mfa.mfaSatisfied']);
+
+    // Acted on only after the exchange and a table write.
+    expect(
+      own(`${prelude}
+        export async function GET() {
+          ${signedIn}
+          const mfa = await policy(s, data.user, 'org', 'admin');
+          await exchangeCode('c');
+          await s.from('t').update({ a: 1 });
+          if (!mfa.mfaSatisfied) return 'forbidden';
+          return data;
+        }`),
+    ).toEqual(
+      [
+        'OWN_SESSION app/api/cb/route.ts:9: exchangeCode runs before the authenticator answer',
+        'OWN_SESSION app/api/cb/route.ts:10: update runs before the authenticator answer',
+      ].sort(),
+    );
+
+    // A fixed label handed to the audit row.
+    expect(own(good.replace('{ ...mfa }', '{ mfaRequired: false, mfaSatisfied: true }'))).toEqual([
+      'OWN_SESSION app/api/cb/route.ts:11: sets a fixed mfaRequired instead of the answer',
+      'OWN_SESSION app/api/cb/route.ts:11: sets a fixed mfaSatisfied instead of the answer',
+    ]);
+
+    // A namesake from another module is not the policy answer.
+    expect(
+      own(
+        good.replace(
+          "cookieSessionMfaState as policy } from '@/lib/auth/api-context'",
+          "} from '@/lib/auth/api-context';\n      import { cookieSessionMfaState as policy } from '@/lib/auth/not-the-rule'",
+        ),
+      ),
+    ).toEqual(['OWN_SESSION api/cb/route.ts GET: does not call cookieSessionMfaState']);
   });
 
   it('2. an AAL1_AUTH route that reads the session another way is reported', () => {

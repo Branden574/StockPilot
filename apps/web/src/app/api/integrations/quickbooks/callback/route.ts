@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { loadAccountStatus, noteDisabledAccountBlocked } from '@/lib/auth/account-status';
-import { cookieSessionOwesStepUp } from '@/lib/auth/api-context';
+import { cookieSessionMfaState, cookieSessionOwesStepUp } from '@/lib/auth/api-context';
 import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -28,9 +28,10 @@ const SETTINGS_PATH = '/dashboard/settings/integrations';
  *  1. Verify the returned `state` against the PENDING org_connections row. The
  *     lookup uses the RLS-scoped user client, so a match proves both that the
  *     state is genuine AND that the user is a member of the owning org.
- *  2. Enforce the integrations module is enabled + the user holds
- *     `integrations:manage` for that org (their effective set, overrides
- *     applied).
+ *  2. Enforce the integrations module is enabled, the session meets the
+ *     organization's authenticator policy (cookieSessionMfaState), and the
+ *     user holds `integrations:manage` for that org (their effective set,
+ *     overrides applied).
  *  3. Exchange the auth `code` for tokens (capturing `realmId`).
  *  4. Write the token blob to Supabase Vault via the SERVICE-ROLE admin client
  *     (connector_secret_* are revoked from `authenticated`).
@@ -178,6 +179,15 @@ export async function GET(req: Request) {
       .maybeSingle();
     const role = (member as { role: Role } | null)?.role;
     if (!role) return redirectWithError('forbidden');
+
+    // The organization's authenticator policy, the answer pages and the API
+    // give (cookieSessionMfaState): when the policy requires an authenticator
+    // of this member and the session has not met it (no verified factor, or
+    // not at aal2), this route's `forbidden`, before the code is exchanged or
+    // anything is written. Asked before the permission, as assertPermission
+    // asks it. The same three values go to the audit row below.
+    const mfa = await cookieSessionMfaState(supabase, user, organizationId, role);
+    if (mfa.mfaRequired && !mfa.mfaSatisfied) return redirectWithError('forbidden');
     let permissions: Set<Permission>;
     try {
       permissions = await loadEffectivePermissions(supabase, organizationId, user.id, role);
@@ -234,8 +244,9 @@ export async function GET(req: Request) {
         userId: user.id,
         role,
         supabase,
-        mfaRequired: false,
-        mfaSatisfied: true,
+        mfaRequired: mfa.mfaRequired,
+        mfaSatisfied: mfa.mfaSatisfied,
+        mfaEnrolled: mfa.mfaEnrolled,
         enabledModules: new Set(['integrations']),
       },
     );
