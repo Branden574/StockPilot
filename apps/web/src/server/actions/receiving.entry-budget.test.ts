@@ -26,14 +26,14 @@ import { postReceiptAction } from './receiving';
 const PO = '11111111-1111-4111-8111-111111111111';
 const WH = '33333333-3333-4333-8333-333333333333';
 const LINE = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-const KEY = '44444444-4444-4444-8444-444444444444';
+const RECEIPT_RETRY_ID = '44444444-4444-4444-8444-444444444444';
 
 /** A receipt of `lines` lines with `serials` serial numbers on each. */
 function input(lines: number, serials: number): PostReceiptInput {
   return {
     purchaseOrderId: PO,
     warehouseId: WH,
-    idempotencyKey: KEY,
+    idempotencyKey: RECEIPT_RETRY_ID,
     lines: Array.from({ length: lines }, () => ({
       poLineId: LINE,
       qtyReceived: serials,
