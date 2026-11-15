@@ -6,8 +6,10 @@ import { OrgNameEditor } from '@/components/settings/org-name-editor';
 import { OrgTimezoneEditor } from '@/components/settings/org-timezone-editor';
 import { PoTermsEditor } from '@/components/settings/po-terms-editor';
 import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
+import { SettingsReadFailed } from '@/components/settings/settings-read-failed';
 import { TerminologyEditor } from '@/components/settings/terminology-editor';
 import { requireOrgContext } from '@/lib/auth/session';
+import { reportError } from '@/lib/error-reporter';
 import { createClient } from '@/lib/supabase/server';
 
 import { DEFAULT_TERMINOLOGY, resolveTerminology } from '@stockpilot/core';
@@ -24,11 +26,35 @@ export default async function OrganizationSettingsPage() {
   }
 
   const supabase = await createClient();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('organizations')
     .select('terminology, name, logo_url, po_terms, timezone')
     .eq('id', ctx.organizationId)
     .maybeSingle();
+
+  // A failed read is not "nothing set". The labels editor saves the whole
+  // terminology object and the PO terms editor the whole text, so editors
+  // seeded from defaults here would write them over the stored values once
+  // reads work again. Say the page could not be read and offer Try again.
+  if (error) {
+    void reportError(new Error('organization settings page read failed'), {
+      tag: 'settings.organization.read_failed',
+      level: 'warning',
+      organizationId: ctx.organizationId,
+      extra: { code: error.code || 'unknown' },
+    });
+    return (
+      <SettingsPage>
+        <PageHeader
+          title="Organization"
+          back={
+            <PageHeaderBackLink href="/dashboard/settings">← Back to settings</PageHeaderBackLink>
+          }
+        />
+        <SettingsReadFailed />
+      </SettingsPage>
+    );
+  }
 
   const current = resolveTerminology(
     (data?.terminology as Partial<typeof DEFAULT_TERMINOLOGY>) ?? null,

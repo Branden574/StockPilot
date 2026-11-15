@@ -5,6 +5,8 @@ import { PageHeader } from '@/components/patterns/page-header';
 import { ArchiveCleanupPanel } from '@/components/settings/archive-cleanup-panel';
 import { AutoArchivePanel } from '@/components/settings/auto-archive-panel';
 import { SettingsPage } from '@/components/settings/settings-nav';
+import { SettingsReadFailed } from '@/components/settings/settings-read-failed';
+import { reportError } from '@/lib/error-reporter';
 import { parseAutoDeleteArchivedSettings } from '@/server/services/archive-cleanup';
 import {
   countEligibleForAutoArchive,
@@ -38,12 +40,39 @@ export default async function InventoryCleanupSettingsPage() {
 
   const supabase = ctx.supabase;
 
-  const { data: mod } = await supabase
+  const { data: mod, error: modError } = await supabase
     .from('organization_modules')
     .select('settings')
     .eq('organization_id', ctx.organizationId)
     .eq('module_id', 'inventory')
     .maybeSingle();
+
+  const header = (
+    <PageHeader
+      title="Inventory cleanup"
+      subline="Automate what happens to inactive inventory: archive items that stay out of stock, and (for admins) remove items that have been archived for a long time. Archiving is reversible; deletion only ever soft-deletes, so nothing is lost permanently."
+    />
+  );
+
+  // A failed read is not "never configured". Each panel saves its whole
+  // setting (on or off and its days), so panels seeded from the OFF defaults
+  // here would write them over the stored settings once reads work again. Say
+  // the page could not be read and offer Try again; no row still means OFF.
+  if (modError) {
+    void reportError(new Error('inventory cleanup settings page read failed'), {
+      tag: 'settings.inventory_cleanup.read_failed',
+      level: 'warning',
+      organizationId: ctx.organizationId,
+      extra: { code: modError.code || 'unknown' },
+    });
+    return (
+      <SettingsPage>
+        {header}
+        <SettingsReadFailed />
+      </SettingsPage>
+    );
+  }
+
   const autoArchiveBucket = (mod?.settings as Record<string, unknown> | null | undefined)
     ?.autoArchiveOnZeroStock;
   const autoArchiveSettings = parseAutoArchiveSettings(autoArchiveBucket);
@@ -97,10 +126,7 @@ export default async function InventoryCleanupSettingsPage() {
 
   return (
     <SettingsPage>
-      <PageHeader
-        title="Inventory cleanup"
-        subline="Automate what happens to inactive inventory: archive items that stay out of stock, and (for admins) remove items that have been archived for a long time. Archiving is reversible; deletion only ever soft-deletes, so nothing is lost permanently."
-      />
+      {header}
       {canDelete && settings ? (
         <ArchiveCleanupPanel
           initial={settings}
