@@ -31,6 +31,8 @@ const ENTRY_ID = 'navigation-keeps-choices-of-modules-off';
 const SETTINGS_ID = 'settings-not-loaded-2026-11';
 const MODULE_CHECK_ID = 'module-check-try-again-2026-11';
 // Added by docs/whats-new-invitation-audit (2026-11-15): the invitation audit release (whoever can view the audit log), published later, directly above this one.
+// Added by docs/whats-new-api-key-audit (2026-11-15): the API key audit release (whoever can view the audit log), published later, directly above the invitation audit release.
+const API_KEY_AUDIT_ID = 'api-key-audit-2026-11';
 const INVITATION_AUDIT_ID = 'invitation-audit-2026-11';
 const invitationAuditRead = {
   release_id: INVITATION_AUDIT_ID,
@@ -38,6 +40,14 @@ const invitationAuditRead = {
   dismissed_at: null,
   opened_at: '2026-11-15T18:00:00Z',
   read_at: '2026-11-15T18:00:00Z',
+};
+// Added by docs/whats-new-api-key-audit (2026-11-15): the API key audit release (whoever can view the audit log), published later, directly above the invitation audit release.
+const apiKeyAuditRead = {
+  release_id: API_KEY_AUDIT_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-15T21:30:00Z',
+  read_at: '2026-11-15T21:30:00Z',
 };
 
 const release = () => RELEASES.find((r) => r.id === ID)!;
@@ -84,16 +94,20 @@ describe('the navigation release: order, status and date', () => {
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: RELEASES.slice(0, 4), without it): the invitation audit release is published later, at the top, directly below the Liquid Glass draft.
-    expect(RELEASES.slice(0, 5).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: RELEASES.slice(0, 5), without it): the API key audit release is published later, at the top, directly below the Liquid Glass draft.
+    expect(RELEASES.slice(0, 6).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
       // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: without it): the invitation audit release is published later, at the top, directly below the Liquid Glass draft.
+      // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, directly below the Liquid Glass draft.
+      ['api-key-audit-2026-11', 'published'],
       ['invitation-audit-2026-11', 'published'],
       [ID, 'published'],
       [SETTINGS_ID, 'published'],
       [MODULE_CHECK_ID, 'published'],
     ]);
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: ID): the invitation audit release is published after it, at the top, the newest published release.
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(INVITATION_AUDIT_ID);
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: INVITATION_AUDIT_ID): the API key audit release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(API_KEY_AUDIT_ID);
   });
 
   // Renamed by docs/whats-new-invitation-audit (2026-11-15; was: "is dated the whole minute after #564 went live, in the past, with the draft placeholder at the same minute and every release below it older"): the invitation audit release above is dated later, and the draft placeholder moved to its minute. Claim kept: the whole minute after #564 went live, in the past, every release below it older.
@@ -106,7 +120,8 @@ describe('the navigation release: order, status and date', () => {
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: RELEASES[0]!.publishedAt toBe this minute): the draft placeholder moved to the minute of the invitation audit release, published later, directly above this one.
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(3)) {
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(4)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -190,11 +205,14 @@ describe('the navigation release: who is told', () => {
   });
 
   // Renamed by docs/whats-new-invitation-audit (2026-11-15; was: "is the first notice for owners and admins, and the settings release is next; other roles are told the settings release first, as before"): the invitation audit release is published later and reaches owners, admins and managers, who read it first. Claim kept: the notice for owners and admins, the settings release next, and other roles told the settings release first.
-  it('is the notice for owners and admins once the invitation audit release is read, and the settings release is next; other roles are told the settings release first, as before', () => {
+  // Renamed by docs/whats-new-api-key-audit (2026-11-15; was: "is the notice for owners and admins once the invitation audit release is read, and the settings release is next; other roles are told the settings release first, as before"): the API key audit release is published later and reaches the same readers as the invitation audit release, who read both first. Claim kept: the notice for owners and admins, the settings release next, and other roles told the settings release first.
+  it('is the notice for owners and admins once the API key and invitation audit releases are read, and the settings release is next; other roles are told the settings release first, as before', () => {
     for (const v of [owner, admin]) {
       // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: nothing read): the invitation audit release is published later, at the top, and reaches owners and admins, so each reads it first, and the notice this test checks is the one it checked before.
       expect(
-        buildReleaseList(RELEASES, v, [invitationAuditRead], null).latestUnread?.id,
+        // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, and reaches the same readers as the invitation audit release, so it is read or seen with it, and the notice this test checks is the one it checked before.
+        buildReleaseList(RELEASES, v, [apiKeyAuditRead, invitationAuditRead], null).latestUnread
+          ?.id,
         v.role,
       ).toBe(ID);
       const read = {
@@ -206,21 +224,31 @@ describe('the navigation release: who is told', () => {
       };
       // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: [read]): the invitation audit release is read too, as above.
       expect(
-        buildReleaseList(RELEASES, v, [invitationAuditRead, read], null).latestUnread?.id,
+        // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, and reaches the same readers as the invitation audit release, so it is read or seen with it, and the notice this test checks is the one it checked before.
+        buildReleaseList(RELEASES, v, [apiKeyAuditRead, invitationAuditRead, read], null)
+          .latestUnread?.id,
         v.role,
       ).toBe(SETTINGS_ID);
     }
     for (const v of [manager, staff]) {
       // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: nothing read): the invitation audit release reaches managers, so they read it first; a read of it by staff, who it does not reach, changes nothing.
       expect(
-        buildReleaseList(RELEASES, v, [invitationAuditRead], null).latestUnread?.id,
+        // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, and reaches the same readers as the invitation audit release, so it is read or seen with it, and the notice this test checks is the one it checked before.
+        buildReleaseList(RELEASES, v, [apiKeyAuditRead, invitationAuditRead], null).latestUnread
+          ?.id,
         v.role,
       ).toBe(SETTINGS_ID);
     }
     // An older phone build shows the newest one it has not seen: this title and summary, with
     // the link to the page.
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: nothing seen): the invitation audit release is published later and reaches admins, so the phone has seen it first.
-    expect(legacyAnnouncementsFor(RELEASES, admin, { [INVITATION_AUDIT_ID]: true })[0]).toEqual({
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, and reaches the same readers as the invitation audit release, so it is read or seen with it, and the notice this test checks is the one it checked before.
+    expect(
+      legacyAnnouncementsFor(RELEASES, admin, {
+        [API_KEY_AUDIT_ID]: true,
+        [INVITATION_AUDIT_ID]: true,
+      })[0],
+    ).toEqual({
       id: ID,
       date: '2026-11-15',
       title: release().title,
