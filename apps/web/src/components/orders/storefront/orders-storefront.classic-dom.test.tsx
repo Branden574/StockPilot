@@ -75,15 +75,31 @@ function settled<T>(value: T): Promise<T> {
   return p;
 }
 
-// The review's needed-by field has a min of "now": a fixed clock.
+// The review's needed-by field has a min of "now": a fixed clock. Only Date
+// is faked, so the cart's draft save (250 ms after each change, in
+// localStorage, under this viewer and warehouse) runs on real time.
 const NOW = new Date('2026-11-02T18:00:00Z');
+
+/**
+ * Every render starts from an empty cart. Unmounting cancels a draft save
+ * still waiting; clearing localStorage removes one that already ran (a slow
+ * machine can take 250 ms between Add to cart and the unmount). Without
+ * this, the next mount restores that draft: the catalog draws a cart that
+ * holds three lines.
+ */
+function freshPage() {
+  cleanup();
+  localStorage.clear();
+}
+
 beforeEach(() => {
+  freshPage();
   vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
 });
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
-  cleanup();
+  freshPage();
 });
 
 interface States {
@@ -97,7 +113,8 @@ interface States {
 
 async function renderUnder(rollout: 'off' | 'default'): Promise<States> {
   // One tree on the page at a time: the review is read from document.body.
-  cleanup();
+  // The second render (under `default`) starts from an empty cart too.
+  freshPage();
   vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', rollout);
   let view!: ReturnType<typeof render>;
   await act(async () => {
@@ -180,7 +197,7 @@ describe('Liquid Glass phone: one-line setup and steps, the cart bar', () => {
   const declared = (el: Element, prop: string) => declaredFor(el, rules, prop, phone);
 
   it('lays the setup and the steps on one line and builds the bar from the cart button and Review order', async () => {
-    cleanup();
+    freshPage();
     vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
     document.documentElement.setAttribute('data-appearance', 'liquid-glass');
     try {

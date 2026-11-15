@@ -61,6 +61,8 @@ const NEWER_IDS_1113 = [
   // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: without it): the phone screens by access release is published later, at the top, and reaches every member (two of its three entries have no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
   // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: without them): the count read rule and email change releases are published later, at the top; the email change release reaches every member and the count read rule release reaches whoever can open Cycle counts or assigns counts where Cycle counts is on, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
   // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: without them): the settings and module check releases are published later, at the top; the module check release reaches every member and the settings release reaches whoever can open the settings pages and panels it names, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+  // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: without it): the navigation release is published later, at the top, and reaches owners and admins who can open Settings, Navigation, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+  'navigation-keeps-choices-2026-11',
   'settings-not-loaded-2026-11',
   'module-check-try-again-2026-11',
   'count-read-rule-2026-11',
@@ -163,8 +165,9 @@ describe('the phone appearance and returns release: order, status and date', () 
     // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: every pinned position one place higher): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: every pinned position two places higher): the count read rule and email change releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    expect(RELEASES[13]?.id).toBe(ID);
-    expect(RELEASES[14]?.id).toBe(RETURNS_REQUEST_ID);
+    // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[14]?.id).toBe(ID);
+    expect(RELEASES[15]?.id).toBe(RETURNS_REQUEST_ID);
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: this release, the newest published): the Release count, AI Assistant and not found releases are published later, directly above it.
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: RELEASES.slice(1, 4), without it): the emailed links release is published later, directly above the Release count release.
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: RELEASES.slice(1, 5), without them): the phone authenticator code and access check releases are published later, directly above the emailed links release.
@@ -172,8 +175,11 @@ describe('the phone appearance and returns release: order, status and date', () 
     // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: RELEASES.slice(1, 8), without it): the phone screens by access release is published later, directly above the order request alerts release.
     // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: RELEASES.slice(1, 9), without them): the count read rule and email change releases are published later, directly above the phone screens by access release.
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: RELEASES.slice(1, 11), without them): the settings and module check releases are published later, directly above the count read rule release.
-    expect(RELEASES.slice(1, 13).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: RELEASES.slice(1, 13), without it): the navigation release is published later, at the top, directly below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES.slice(1, 14).map((r) => [r.id, r.status])).toEqual([
       // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: without them): the settings and module check releases are published later, at the top, directly below the Liquid Glass draft.
+      // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: without it): the navigation release is published later, at the top, directly below the Liquid Glass draft.
+      ['navigation-keeps-choices-2026-11', 'published'],
       ['settings-not-loaded-2026-11', 'published'],
       ['module-check-try-again-2026-11', 'published'],
       ['count-read-rule-2026-11', 'published'],
@@ -194,7 +200,8 @@ describe('the phone appearance and returns release: order, status and date', () 
       // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: the order request alerts release): the phone screens by access release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: the phone screens by access release): the count read rule release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: the count read rule release): the settings release is published after it, at the top, the newest published release.
-      'settings-not-loaded-2026-11',
+      // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: the settings release): the navigation release is published after it, at the top, the newest published release.
+      'navigation-keeps-choices-2026-11',
     );
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
       'liquid-glass-2026-11',
@@ -233,7 +240,8 @@ describe('the phone appearance and returns release: order, status and date', () 
     // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: every pinned position one place higher): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: every pinned position two places higher): the count read rule and email change releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    for (const r of RELEASES.slice(14)) {
+    // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(15)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });

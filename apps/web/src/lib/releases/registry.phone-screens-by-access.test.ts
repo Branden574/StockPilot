@@ -47,6 +47,11 @@ import { RELEASES } from './registry';
  * settings and module check releases are published later still, at the top,
  * directly above the count read rule release and below the Liquid Glass
  * draft. Each changed line has its own note.
+ *
+ * Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15): the
+ * navigation release is published later still, at the top, directly above
+ * the settings release and below the Liquid Glass draft. Each changed line
+ * has its own note.
  */
 const ID = 'phone-screens-by-access-2026-11';
 // Added by docs/whats-new-count-read-rule (2026-11-15): the count read rule release (whoever can open Cycle counts or assigns counts, where Cycle counts is on) and the email change release (every member), published later, directly above this one.
@@ -102,8 +107,11 @@ describe('the phone screens by access release of 2026-11-14: order, status and d
     // The order request alerts release, published earlier the same day (17:58Z), sits directly below.
     // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: RELEASES.slice(0, 4), without them): the count read rule and email change releases are published later, at the top, directly below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: RELEASES.slice(0, 6), without them): the settings and module check releases are published later, at the top, directly below the Liquid Glass draft, so every position below them moves down by two.
-    expect(RELEASES.slice(0, 8).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: RELEASES.slice(0, 8), without it): the navigation release is published later, at the top, directly below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES.slice(0, 9).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: without it): the navigation release is published later, at the top, directly below the Liquid Glass draft.
+      ['navigation-keeps-choices-2026-11', 'published'],
       [SETTINGS_ID, 'published'],
       [MODULE_CHECK_ID, 'published'],
       [COUNT_READ_RULE_ID, 'published'],
@@ -115,7 +123,8 @@ describe('the phone screens by access release of 2026-11-14: order, status and d
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
       // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: ID): the count read rule release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: the count read rule release): the settings release is published after it, at the top, the newest published release.
-      SETTINGS_ID,
+      // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: the settings release): the navigation release is published after it, at the top, the newest published release.
+      'navigation-keeps-choices-2026-11',
     );
   });
 
@@ -130,7 +139,8 @@ describe('the phone screens by access release of 2026-11-14: order, status and d
     expect(Date.parse(at)).toBeGreaterThan(Date.parse('2026-11-14T05:39:05Z'));
     // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: RELEASES.slice(2)): the count read rule and email change releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    for (const r of RELEASES.slice(6)) {
+    // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(7)) {
       expect(Date.parse(at), r.id).toBeGreaterThanOrEqual(Date.parse(r.publishedAt));
     }
   });
@@ -258,6 +268,14 @@ describe('the phone screens by access release: the words', () => {
     // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: nothing read): the count read rule and email change releases are published later, at the top; the email change release reaches every member and the count read rule release reaches the owner here, so each reader reads them first, and the notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
     const newerRead = [
       // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: without them): the settings and module check releases are published later, at the top; the module check release reaches every member and the settings release reaches the owner here, so each reader reads them first, and the notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+      // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: without it): the navigation release is published later, at the top, and reaches owners and admins who can open Settings, Navigation, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+      {
+        release_id: 'navigation-keeps-choices-2026-11',
+        revision: 1,
+        dismissed_at: null,
+        opened_at: '2026-11-15T05:00:00Z',
+        read_at: '2026-11-15T05:00:00Z',
+      },
       {
         release_id: SETTINGS_ID,
         revision: 1,

@@ -28,10 +28,23 @@ import { RELEASES } from './registry';
  * (module-check-try-again-2026-11, registry.module-check-try-again.test.ts).
  * Its own file, so the release tests other open branches edit stay as they
  * are.
+ *
+ * Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15): the
+ * navigation release is published later, directly above this release and
+ * below the Liquid Glass draft. Each changed line has its own note.
  */
 const ID = 'settings-not-loaded-2026-11';
 const MODULE_CHECK_ID = 'module-check-try-again-2026-11';
 const COUNT_RELEASE_ID = 'count-read-rule-2026-11';
+// Added by docs/whats-new-navigation-keeps-choices (2026-11-15): the navigation release (owners and admins who can open Settings, Navigation), published later, directly above this one.
+const NAVIGATION_ID = 'navigation-keeps-choices-2026-11';
+const navigationRead = {
+  release_id: NAVIGATION_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-15T05:00:00Z',
+  read_at: '2026-11-15T05:00:00Z',
+};
 
 const ORGANIZATION = 'organization-settings-not-loaded';
 const CLEANUP = 'inventory-cleanup-settings-not-loaded';
@@ -83,27 +96,33 @@ function readerText(r: Release): string[] {
 const TRY_AGAIN = 'If you see this, press Try again after a moment.';
 
 describe('the settings release: order, status and date', () => {
-  it('is published once, as revision 1, directly below the Liquid Glass draft and above the module check release', () => {
+  // Renamed by docs/whats-new-navigation-keeps-choices (2026-11-15; was: "is published once, as revision 1, directly below the Liquid Glass draft and above the module check release"): the navigation release is published later, directly below the draft and above this one. Claim kept: published once, as revision 1, directly above the module check release.
+  it('is published once, as revision 1, directly below the navigation release (published later, below the Liquid Glass draft at the top) and above the module check release', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
-    expect(RELEASES.slice(0, 4).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: RELEASES.slice(0, 4), without it): the navigation release is published later, at the top, directly below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES.slice(0, 5).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      [NAVIGATION_ID, 'published'],
       [ID, 'published'],
       [MODULE_CHECK_ID, 'published'],
       [COUNT_RELEASE_ID, 'published'],
     ]);
   });
 
-  it('is dated the whole minute after #563 went live, in the past, with the draft placeholder at the same minute and every release below it older', () => {
+  // Renamed by docs/whats-new-navigation-keeps-choices (2026-11-15; was: "is dated the whole minute after #563 went live, in the past, with the draft placeholder at the same minute and every release below it older"): the navigation release above is dated later, and the draft placeholder moved to its minute. Claim kept: the whole minute after #563 went live, in the past, every release below it older.
+  it('is dated the whole minute after #563 went live, in the past, with the draft placeholder at or after it and every release below it older', () => {
     // #563 is live in production since 2026-11-15 04:12:00Z.
     expect(release().publishedAt).toBe('2026-11-15T04:13:00Z');
     const at = Date.parse(release().publishedAt);
     expect(at).toBeGreaterThan(Date.parse('2026-11-15T04:12:00Z'));
     expect(at).toBeLessThanOrEqual(Date.now());
-    expect(RELEASES[0]!.publishedAt).toBe(release().publishedAt);
-    for (const r of RELEASES.slice(2)) {
+    // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: RELEASES[0]!.publishedAt toBe this minute): the draft placeholder moved to the minute of the navigation release, published later, directly above this one.
+    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
+    // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: RELEASES.slice(2)): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(3)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -268,9 +287,13 @@ describe('the settings release: who is told', () => {
     ).toEqual([ORGANIZATION, CLEANUP, MAINTENANCE]);
   });
 
-  it('is the first notice for the readers it reaches, and the module check release is next', () => {
+  // Renamed by docs/whats-new-navigation-keeps-choices (2026-11-15; was: "is the first notice for the readers it reaches, and the module check release is next"): the navigation release is published later and reaches owners and admins, who read it first. Claim kept: the notice for the readers it reaches, and the module check release next.
+  it('is the notice for the readers it reaches once the navigation release is read, and the module check release is next', () => {
     for (const v of [owner, admin, manager, staff]) {
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
+      // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: nothing read): the navigation release is published later, at the top, and reaches owners and admins, so each reader reads it first, and the notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+      expect(buildReleaseList(RELEASES, v, [navigationRead], null).latestUnread?.id, v.role).toBe(
+        ID,
+      );
       const read = {
         release_id: ID,
         revision: 1,
@@ -278,9 +301,11 @@ describe('the settings release: who is told', () => {
         opened_at: '2026-11-15T04:30:00Z',
         read_at: '2026-11-15T04:30:00Z',
       };
-      expect(buildReleaseList(RELEASES, v, [read], null).latestUnread?.id, v.role).toBe(
-        MODULE_CHECK_ID,
-      );
+      // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: [read]): the navigation release is read too, as above.
+      expect(
+        buildReleaseList(RELEASES, v, [navigationRead, read], null).latestUnread?.id,
+        v.role,
+      ).toBe(MODULE_CHECK_ID);
     }
     // An older phone build shows the newest one it has not seen: this title and summary.
     expect(legacyAnnouncementsFor(RELEASES, staff, {})[0]).toEqual({

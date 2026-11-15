@@ -8,7 +8,9 @@ import { ServiceError, withContext } from '@/server/services/context';
 import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import {
+  boundedRecord,
   err,
+  maxChoices,
   ok,
   ORDER_STATUS_COLORS,
   ORDER_STATUS_KEYS,
@@ -50,12 +52,15 @@ const statusEntrySchema = z
 
 // A record keyed by KNOWN status keys only. Unknown keys are rejected (not
 // silently dropped) so an admin sees why a save was refused.
-const configSchema = z
-  .record(statusKeySchema, statusEntrySchema)
-  .refine(
-    (rec) => Object.keys(rec).length <= ORDER_STATUS_KEYS.length,
-    'Too many status overrides.',
-  );
+const configSchema = boundedRecord(
+  statusKeySchema,
+  statusEntrySchema,
+  maxChoices(ORDER_STATUS_KEYS),
+  'Too many status overrides.',
+).refine(
+  (rec) => Object.keys(rec).length <= ORDER_STATUS_KEYS.length,
+  'Too many status overrides.',
+);
 
 /**
  * Persist (or clear) the org's order status presentation config. Mirrors the

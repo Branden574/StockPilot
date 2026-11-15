@@ -1071,6 +1071,19 @@ WEB_TESTS=(
   # policy still requires AAL2, so a stolen password alone cannot pass the gates.
   # context.mfa.test.ts below is the web twin — keep the pair together.
   src/lib/auth/api-context.mfa.test.ts
+  # An organization authenticator policy that cannot be read (the read errors
+  # or throws) is held to the strictest policy, as a hidden row is: a session
+  # at aal2 with an authenticator passes, any other is stopped exactly as
+  # all_required stops it, and nothing passes that a readable policy refuses.
+  # Both API paths and the page path (withContext).
+  src/lib/auth/api-context.policy-unreadable.test.ts
+  src/server/services/context.policy-unreadable.test.ts
+  # The API gives the authenticator answer the pages give: every policy, role,
+  # authenticator and level, on both API paths and through both reads, against
+  # withContext over the same rows. A policy that requires an authenticator is
+  # met only by an account that has one. Setting up a first authenticator, and
+  # the routes allowed before the code, do not pass through the gate.
+  src/lib/auth/api-context.page-parity.test.ts
   # A password alone reads nothing through the API (docket S43a): withApiContext
   # refuses an account with a verified authenticator factor whose session is
   # not aal2, on both paths, right after the identity check and before any
@@ -1127,6 +1140,15 @@ WEB_TESTS=(
   src/server/services/portal.module-state.test.ts
   src/server/actions/portal.module-state.test.ts
   'src/app/(dashboard)/layout.module-state.test.tsx'
+  # The organization row the cookie session reads (its authenticator policy
+  # and settings) is the same kind of check: a read that did not answer is
+  # never a row with default settings. The dashboard layout reaches the plain
+  # "We couldn't check your access just now" state with Try again, and a
+  # Server Action answers "Your access could not be checked. Please try
+  # again.", with nothing written.
+  src/lib/dashboard/request-cache.organization-row.test.ts
+  'src/app/(dashboard)/layout.organization-row.test.tsx'
+  src/server/actions/organization-row-unread.actions.test.ts
   src/app/api/v1/mobile/snapshot/route.step-up.test.ts
   src/app/api/client-error/route.test.ts
   # A session that still owes its authenticator code gets no organization
@@ -1422,6 +1444,22 @@ WEB_TESTS=(
   src/test/ingest-proxy.guard.test.ts
   'src/app/ingest/[...path]/route.test.ts'
   'src/app/ingest/[...path]/route.census.test.ts'
+  # Request lists and bodies have upper limits. Every zod list in source has a
+  # .max() or .length() and every keyed object goes through boundedRecord
+  # (a short allowlist names the schemas that never see a request); the guard
+  # also fails when the zod patch that stops at the first over-long list is
+  # not applied. The three public form posts (order requests, return requests,
+  # return options) take at most 256 KB and answer 413 before parsing a larger
+  # body. Each file carries the "Security invariant" marker.
+  src/test/zod-array-bounds.guard.test.ts
+  src/lib/http/read-json-limited.test.ts
+  src/app/api/v1/public/body-limit.test.ts
+  # A request holds a total number of list entries (withEntryBudget, core):
+  # a schema with a list inside a list sits behind it (the guard above), and
+  # the receipt route and action refuse lines times serial numbers past it
+  # before the receipt schema parses anything.
+  'src/app/api/v1/po/[id]/receipts/route.entry-budget.test.ts'
+  src/server/actions/receiving.entry-budget.test.ts
 
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts
@@ -1970,9 +2008,14 @@ WEB_TESTS=(
   # row, never the member's set. A save of the role a member already has, or
   # of the authenticator policy an organization already has, changes nothing:
   # no update, no audit row, no security event. The two route suites and the
-  # single-grant suite carry the "Security invariant" marker.
+  # single-grant suite carry the "Security invariant" marker. An account with
+  # an authenticator, on a session signed in with the password alone, reaches
+  # neither service: the real gate and withApiContext refuse it before any
+  # read and both routes answer their 401, and each route's Answers list says
+  # so instead of promising that session a 403 aal2_required.
   'src/app/api/v1/members/[id]/role/route.test.ts'
   'src/app/api/v1/members/[id]/category-access/route.test.ts'
+  src/app/api/v1/members/step-up-answer.test.ts
   src/server/services/user-categories.single-grant.test.ts
   src/server/services/team.update-member-role.test.ts
   src/server/actions/mfa.policy-unchanged.test.ts
@@ -2185,6 +2228,14 @@ MOBILE_TESTS=(
 # ═══════════════════════════════════════════════════════════════════════════
 CORE_TESTS=(
   src/constants/permissions.test.ts
+  # zod stops at the first over-long list (patches/zod@3.25.76.patch, ESM and
+  # CommonJS builds), and a keyed object over its bound is refused before any
+  # key is validated (boundedRecord).
+  src/zod-array-early-stop.test.ts
+  src/schemas/bounded-record.test.ts
+  # The request entry budget: every list entry at any depth counted without
+  # recursion, refused before the schema runs.
+  src/schemas/entry-budget.test.ts
   # 0395: the database refusals' hints and words, shared by web and phone.
   src/guards/db-guard-copy.test.ts
   src/auth/account-status.test.ts

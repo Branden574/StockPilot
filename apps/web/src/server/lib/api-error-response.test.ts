@@ -6,6 +6,7 @@ import { ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY } from '@stockpilot/core';
 import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { MembershipUnavailableError } from '@/lib/auth/membership-unavailable';
+import { OrganizationRowUnavailableError } from '@/lib/auth/organization-row-unavailable';
 import { ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { ModulesUnavailableError } from '@/lib/modules/module-state';
@@ -101,6 +102,19 @@ describe('internalErrorResponse', () => {
     const res = internalErrorResponse(e, 'api.test.route');
     // A 5xx: the phone's outbox sends it again. Never the 403 an off module gets.
     expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      error: 'internal_error',
+      message: 'Your access could not be checked. Please try again.',
+    });
+    expect(reportError).toHaveBeenCalledWith(e, { tag: 'api.test.route', level: 'warning' });
+  });
+
+  it('answers an organization row that could not be read with the access sentence and the route status, as a warning', async () => {
+    const e = new OrganizationRowUnavailableError();
+    const res = internalErrorResponse(e, 'api.test.route', { status: 503 });
+    // A 5xx the phone retries, with the sentence a module state that could
+    // not be read gets: never "Something went wrong".
+    expect(res.status).toBe(503);
     expect(await res.json()).toEqual({
       error: 'internal_error',
       message: 'Your access could not be checked. Please try again.',

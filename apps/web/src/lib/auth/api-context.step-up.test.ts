@@ -317,22 +317,33 @@ describe("the cookie level is the validated user's own (review round 1)", () => 
   });
 
   it.each([['fast'], ['legacy']] as const)(
-    "an admin with no factor under admins_required: another account's aal2 cannot satisfy the policy (%s)",
+    "an admin with no factor under admins_required: the policy asks for an authenticator, whoever's session the cookie holds (%s)",
     async (path) => {
       if (path === 'legacy') process.env.REQUEST_CONTEXT_RPC = 'off';
       world.policy = 'admins_required';
       world.role = 'admin';
       world.factors = [];
-      world.cookieSub = OTHER;
       world.cookieAal = 'aal2';
-      const ctx = await withApiContext(cookie());
-      expect(ctx?.mfaRequired).toBe(true);
-      expect(ctx?.mfaSatisfied).toBe(false);
-      // The same admin's own aal2 session does satisfy it.
-      world.cookieSub = USER;
-      expect((await withApiContext(cookie()))?.mfaSatisfied).toBe(true);
+      for (const sub of [OTHER, USER]) {
+        world.cookieSub = sub;
+        const ctx = await withApiContext(cookie());
+        expect(ctx?.mfaRequired, sub).toBe(true);
+        expect(ctx?.mfaSatisfied, sub).toBe(false);
+        expect(ctx?.mfaEnrolled, sub).toBe(false);
+      }
     },
   );
+
+  it("an admin with a factor under admins_required: only the admin's own aal2 session satisfies it", async () => {
+    world.policy = 'admins_required';
+    world.role = 'admin';
+    world.factors = VERIFIED;
+    world.cookieAal = 'aal2';
+    world.cookieSub = OTHER;
+    expect(await withApiContext(cookie())).toBeNull();
+    world.cookieSub = USER;
+    expect((await withApiContext(cookie()))?.mfaSatisfied).toBe(true);
+  });
 
   it('the refusal and the label share one level read', async () => {
     world.factors = VERIFIED;

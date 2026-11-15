@@ -389,10 +389,16 @@ describe('fails closed', () => {
         canManage: false,
       });
     }
+    // The read's error code (never its message) is logged where it failed;
+    // the gate logs the could-not-check error it caught.
+    expect(consoleError).toHaveBeenCalledWith(
+      '[getOrgRowForRequest] organizations read failed:',
+      expect.anything(),
+    );
     expect(consoleError).toHaveBeenCalledWith(
       '[module-gate] module set unreadable, denying access',
       NON_CORE[0],
-      expect.stringContaining('getOrgRowForRequest'),
+      'Your access could not be checked. Please try again.',
     );
   });
 

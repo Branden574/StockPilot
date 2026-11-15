@@ -7,7 +7,7 @@ import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { ReceivingService } from '@/server/services/receiving';
 import { ServiceError } from '@/server/services/context';
 
-import { postReceiptSchema } from '@stockpilot/core';
+import { postReceiptFields, withEntryBudget } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,7 +42,8 @@ export const dynamic = 'force-dynamic';
  */
 
 /**
- * The body is the shared `postReceiptSchema` with two deliberate deltas:
+ * The body is the shared receipt schema (`postReceiptFields`, behind the
+ * request entry budget like `postReceiptSchema`) with two deliberate deltas:
  *
  *  1. `purchaseOrderId` comes from the PATH, not the body, so a caller can
  *     never receive against a different PO than the URL it posted to.
@@ -56,9 +57,11 @@ export const dynamic = 'force-dynamic';
  * Everything else (the per-line refine, the serial `.trim()` landmine, lots)
  * is inherited so the two clients cannot drift.
  */
-const bodySchema = postReceiptSchema
-  .omit({ purchaseOrderId: true, idempotencyKey: true })
-  .extend({ idempotencyKey: z.string().trim().min(8).max(200) });
+const bodySchema = withEntryBudget(
+  postReceiptFields
+    .omit({ purchaseOrderId: true, idempotencyKey: true })
+    .extend({ idempotencyKey: z.string().trim().min(8).max(200) }),
+);
 
 /**
  * The mobile screen's recovery policy differs for exactly ONE of the three
