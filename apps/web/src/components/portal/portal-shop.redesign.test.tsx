@@ -193,6 +193,8 @@ describe('the portal keeps its words', () => {
     expect(actions.submitPortalOrderAction).toHaveBeenCalledWith({
       lines: [{ itemId: 'i-1', quantity: 2 }],
       notes: 'Leave at the front desk',
+      // One key per cart submission: a resend of this cart sends it again.
+      idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
     });
     expect(screen.getByRole('status')).toHaveTextContent(
       'Order submitted — your supplier will review and confirm it. Reference: FEDCBA98',

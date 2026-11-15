@@ -27,6 +27,9 @@ import {
   type RequesterReturnSheet,
 } from '@stockpilot/core';
 
+/** The signed-in account is not a portal customer (or the portal is off). */
+const NO_PORTAL_ACCESS_COPY = 'Your account does not have portal access.';
+
 /**
  * The portal context for an action, or the answer when there is none.
  *
@@ -54,20 +57,33 @@ async function portalContextFor(
     rethrowControlFlow(e);
     return { refusal: actionErrorResult(e, tag) };
   }
-  if (!ctx) return { refusal: err('forbidden', 'Your account does not have portal access.') };
+  if (!ctx) return { refusal: err('forbidden', NO_PORTAL_ACCESS_COPY) };
   return { ctx };
 }
 
 /**
  * Portal checkout. Re-resolves the portal context server-side on every call —
  * the CLIENT is never trusted for customer identity; the signed-in auth user
- * either maps to an active customer or the action refuses.
+ * either maps to an active customer or the action refuses. The input's
+ * submission key goes to the service as sent: a resend of the same cart under
+ * the same key answers the order the first send placed (`replay: true`).
+ * A refusal's details say what it means for the cart (`outcome`, see
+ * services/portal.ts): 'refused' (definite), 'unknown' (the order may have
+ * been placed) or none (a read failed before anything was written).
  */
 export async function submitPortalOrderAction(
   input: PortalSubmitInput,
-): Promise<ActionResult<{ id: string }>> {
+): Promise<ActionResult<{ id: string; replay: boolean }>> {
   const resolved = await portalContextFor('actions.portal.submit_portal_order');
-  if ('refusal' in resolved) return resolved.refusal;
+  if ('refusal' in resolved) {
+    // No portal access is definite (the shop frees the cart, outcome
+    // 'refused'); an access check that could not be read is a try-again
+    // with no outcome, so an earlier unknown send stays unknown.
+    const r = resolved.refusal;
+    return !r.ok && r.error.code === 'forbidden' && r.error.message === NO_PORTAL_ACCESS_COPY
+      ? err('forbidden', NO_PORTAL_ACCESS_COPY, { outcome: 'refused' })
+      : r;
+  }
   const { ctx } = resolved;
   try {
     const created = await portalSubmitOrder(ctx, input);

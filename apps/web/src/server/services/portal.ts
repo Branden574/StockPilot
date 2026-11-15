@@ -22,6 +22,7 @@ import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { ServiceError } from '@/server/services/context';
 import { dispatchEvent } from '@/server/services/integration-events';
 import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
+import { isOrderBusyError } from '@/server/services/lib/order-busy';
 import { pendingReturnQuantitiesByLine } from '@/server/services/returns';
 import { trackingRowsForOrders } from '@/server/services/returns-requester';
 
@@ -408,47 +409,173 @@ export async function portalCatalog(ctx: PortalContext): Promise<PortalCatalogIt
 /** A portal line above the one line ceiling (10,000 units of one item). */
 const PORTAL_LINE_TOO_LARGE_COPY = 'A line can have at most 10,000 units.';
 
+/** A Place order with no submission key, or one that is not a key. */
+export const PORTAL_ORDER_KEY_COPY = 'Order could not be submitted. Reload the page and try again.';
+/**
+ * The key is already held by another submission: another cart, or this
+ * account's order under another customer of the organization. It names no
+ * order and does not guess which of the two it was.
+ */
+export const PORTAL_ORDER_CONFLICT_COPY =
+  "This order can't be placed as it was sent. Reload the page and check your orders before placing it again.";
+/**
+ * The keyed write's answer was lost or was not an answer (a dropped
+ * connection, a timeout, a 5xx, a lock still held by an earlier send): the
+ * order may have been placed. The same cart under the same key finishes it.
+ * The portal shop shows the same words.
+ */
+export const PORTAL_ORDER_UNCONFIRMED_COPY =
+  "We couldn't confirm your order went through. Press Place order again to finish it. It won't be placed twice.";
+/** The generic sentence for a read that failed before anything was written. */
+const PORTAL_ORDER_FAILED_COPY = 'Order could not be submitted. Please try again.';
+
+/**
+ * What a Place order refusal means for the cart, in the refusal's details
+ * (`outcome`), which the action passes to the portal shop:
+ *   - 'refused': definite. Nothing was placed and this cart, as sent, will not
+ *     be: the schema, the line ceiling, an item no longer orderable, kit
+ *     stock, the warehouses, a key conflict, a missing key, or the account's
+ *     portal access. The shop frees the cart so it can be changed.
+ *   - 'unknown': the keyed write may have committed. The shop keeps the cart
+ *     as sent, read-only, and the key, and Place order sends it again.
+ *   - none: a read failed before anything was written (the key, the catalog,
+ *     the items). Nothing was placed by this call; the shop changes nothing
+ *     else, so an earlier unknown stays unknown.
+ */
+function refused(code: ServiceError['code'], message: string): ServiceError {
+  return new ServiceError(code, message, { outcome: 'refused' });
+}
+
 const submitSchema = z.object({
   lines: z
     .array(z.object({ itemId: z.string().uuid(), quantity: z.number().int().min(1).max(100000) }))
     .min(1)
     .max(100),
   notes: z.string().max(2000).optional(),
+  // One key per cart submission, minted by the portal shop on the first press
+  // and sent again with the same cart on every retry: the database places one
+  // order per key (portal_order_submission_status, place_portal_order_request).
+  idempotencyKey: z
+    .string({ required_error: PORTAL_ORDER_KEY_COPY, invalid_type_error: PORTAL_ORDER_KEY_COPY })
+    .uuid(PORTAL_ORDER_KEY_COPY),
 });
 export type PortalSubmitInput = z.infer<typeof submitSchema>;
+
+/** What a key read or the keyed write answered, read defensively. */
+function placedOrderOf(data: unknown): { id: string; replay: boolean } | null {
+  const d = data as { outcome?: unknown; replay?: unknown; order_id?: unknown } | null;
+  if (d?.outcome !== 'placed' || typeof d.order_id !== 'string') return null;
+  return { id: d.order_id, replay: d.replay === true };
+}
+
+type RpcFailure = { message?: string | null; code?: string | null; hint?: string | null };
+
+/**
+ * A refusal the database RAISED with its own hint: the call's transaction
+ * rolled back whole, so nothing was placed by it. Null for any other error.
+ * The conflict names no order: a key that answers another cart or another
+ * customer is refused, never resolved to that order.
+ */
+function definiteRefusal(error: RpcFailure, tag: string): ServiceError | null {
+  switch (error.hint) {
+    case 'order_item_hidden':
+      // The ordering-visibility gate (0413): an item hidden after the catalog
+      // read. The customer hears what the pre-check says, never why.
+      return refused('validation_error', 'One of the items is no longer available to order.');
+    case 'order_lines_invalid':
+      return refused('validation_error', PORTAL_LINE_TOO_LARGE_COPY);
+    case 'idempotency_conflict':
+      return refused('conflict', PORTAL_ORDER_CONFLICT_COPY);
+    case 'idempotency_key_required':
+    case 'idempotency_key_invalid':
+      return refused('validation_error', PORTAL_ORDER_KEY_COPY);
+    case 'order_request_invalid':
+      // A header or lines the service built wrong: a fault here, reported,
+      // but refused before anything was written.
+      void reportError(new Error(error.message ?? 'order_request_invalid'), { tag });
+      return refused('validation_error', PORTAL_ORDER_FAILED_COPY);
+    default:
+      return null;
+  }
+}
+
+/**
+ * The key READ failed. It writes nothing, so nothing was placed by this call:
+ * a raised refusal is definite; anything else is a read to try again, with
+ * no outcome (an earlier unknown send stays unknown).
+ */
+function portalKeyReadError(error: RpcFailure): ServiceError {
+  const definite = definiteRefusal(error, 'portal.submit.key');
+  if (definite) return definite;
+  void reportError(new Error(error.message ?? 'key read failed'), { tag: 'portal.submit.key' });
+  return new ServiceError('validation_error', PORTAL_ORDER_FAILED_COPY);
+}
+
+/**
+ * The keyed WRITE did not answer an order. A refusal the database raised is
+ * definite. Everything else may have committed before the answer was lost,
+ * and is answered as unknown, never as "nothing placed":
+ *   - no SQLSTATE at all (the fetch to the database failed or was cut off);
+ *   - a connection error (08xxx), a server or gateway error (PGRST*, 5xx,
+ *     XX000), or any code this map does not name;
+ *   - 55P03 (the key's lock is held: an earlier send of this key is still
+ *     being placed), 57014 (a timeout), 40P01 (a deadlock): reported as busy,
+ *     not as faults;
+ *   - an answer that names no order.
+ * The same cart under the same key settles it: the first order, or one order.
+ */
+function portalWriteError(error: RpcFailure): ServiceError {
+  const definite = definiteRefusal(error, 'portal.submit.write');
+  if (definite) return definite;
+  if (!isOrderBusyError(error)) {
+    void reportError(new Error(error.message ?? 'order write answered no order'), {
+      tag: 'portal.submit.write',
+    });
+  }
+  return unknownWriteOutcome();
+}
+
+/** The answer for a keyed write that may have committed (see portalWriteError). */
+function unknownWriteOutcome(): ServiceError {
+  return new ServiceError('conflict', PORTAL_ORDER_UNCONFIRMED_COPY, {
+    outcome: 'unknown',
+    retryable: true,
+  });
+}
 
 /**
  * Checkout: validates every line against the catalog set above — the
  * customer's own allowlist, org-scoped and orderable — then
  * creates ONE normal order_requests row (source 'portal', pending_approval —
  * the same approval pipeline internal requests use; decided default) with the
- * customer's prices recorded per line. Returns the new order id.
+ * customer's prices recorded per line. Returns the order id.
+ *
+ * ONE ORDER PER KEY. The input carries the cart's submission key. Before
+ * anything that changes over time (the catalog, the items), the key is read:
+ * a key that already placed this cart answers that order (`replay: true`)
+ * and nothing else runs, so a resend after a lost answer never orders twice,
+ * even when the catalog changed in between. The write itself
+ * (place_portal_order_request) reads the key again under its lock, so two
+ * sends that cross are decided once. The organization, the customer and the
+ * requester come from the context, never from the input, and the key is
+ * scoped to them in the database: another customer's key never finds this
+ * order.
  */
 export async function portalSubmitOrder(
   ctx: PortalContext,
   input: PortalSubmitInput,
-): Promise<{ id: string }> {
+): Promise<{ id: string; replay: boolean }> {
   // A cart the schema refuses is the customer's to fix: its first issue's
   // words, as a refusal (the action answers a ServiceError's words and the
   // fixed sentence for anything else, S31).
   const result = submitSchema.safeParse(input);
   if (!result.success) {
-    throw new ServiceError(
+    throw refused(
       'validation_error',
       result.error.issues[0]?.message ?? 'Order could not be submitted. Please try again.',
     );
   }
   const parsed = result.data;
-  const catalog = await portalCatalog(ctx);
-  const byId = new Map(catalog.map((c) => [c.itemId, c]));
-  for (const line of parsed.lines) {
-    if (!byId.has(line.itemId)) {
-      throw new ServiceError(
-        'validation_error',
-        'One of the items is no longer available to order.',
-      );
-    }
-  }
 
   // One line per item: a cart that names an item twice is summed into one
   // line, the same collapse internal and public orders apply. Two lines for
@@ -468,10 +595,40 @@ export async function portalSubmitOrder(
   // D2): placement's per-item cap, after the per-item sum. The database
   // refuses the same line (order_lines_invalid), mapped below.
   if (mergedLines.some((l) => l.quantity > ORDER_MAX_UNITS_PER_LINE)) {
-    throw new ServiceError('validation_error', PORTAL_LINE_TOO_LARGE_COPY);
+    throw refused('validation_error', PORTAL_LINE_TOO_LARGE_COPY);
   }
 
   const admin = createAdminClient();
+
+  // ── The key first, before anything that changes over time ──────────────
+  // The cart as the database hashes it: the context's organization, customer
+  // and requester, the notes and the summed lines. The keyed write below
+  // sends the same values, so a placed key answers here.
+  const { data: seen, error: seenErr } = await admin.rpc('portal_order_submission_status', {
+    p_header: {
+      organization_id: ctx.organizationId,
+      customer_id: ctx.customerId,
+      requester_user_id: ctx.userId,
+      source: 'portal',
+      notes: parsed.notes ?? null,
+    },
+    p_lines: mergedLines.map((l) => ({ item_id: l.itemId, quantity_requested: l.quantity })),
+    p_key: parsed.idempotencyKey,
+  });
+  if (seenErr) throw portalKeyReadError(seenErr);
+  const replayed = placedOrderOf(seen);
+  if (replayed) return { id: replayed.id, replay: true };
+  if ((seen as { outcome?: unknown } | null)?.outcome !== 'none') {
+    throw portalKeyReadError({ message: 'key read answered an unknown outcome' });
+  }
+
+  const catalog = await portalCatalog(ctx);
+  const byId = new Map(catalog.map((c) => [c.itemId, c]));
+  for (const line of parsed.lines) {
+    if (!byId.has(line.itemId)) {
+      throw refused('validation_error', 'One of the items is no longer available to order.');
+    }
+  }
 
   // Resolve item cost + warehouse for every line (org-scoped). The order header
   // needs ONE warehouse and the approve pipeline rejects mixed-warehouse lines
@@ -508,7 +665,7 @@ export async function portalSubmitOrder(
   for (const id of itemIds) {
     const row = itemMeta.get(id);
     if (row?.is_bundle === true) {
-      throw new ServiceError(
+      throw refused(
         'validation_error',
         `${row.name?.trim() || 'One of the items'} is a pre-assembled kit and can't be put on an order. Order the kit's items instead.`,
       );
@@ -520,9 +677,9 @@ export async function portalSubmitOrder(
     if (wh) warehouses.add(wh);
   }
   if (warehouses.size === 0)
-    throw new ServiceError('validation_error', 'Could not resolve a warehouse for this order.');
+    throw refused('validation_error', 'Could not resolve a warehouse for this order.');
   if (warehouses.size > 1) {
-    throw new ServiceError(
+    throw refused(
       'validation_error',
       'These items ship from different warehouses — please place a separate order per warehouse.',
     );
@@ -545,12 +702,17 @@ export async function portalSubmitOrder(
     unit_price_at_request: byId.get(l.itemId)?.unitPrice ?? null,
   }));
 
-  // The header and its lines in ONE transaction (0413 review fix round). They
-  // used to be two calls with a compensating delete; a hide that won the race
-  // refused the lines after the header's notify trigger had already written a
-  // "New order request" notification, and a failed delete left the header.
-  // Now any refusal rolls all of it back, so there is nothing to clean up.
-  const { data: header, error: writeErr } = await admin.rpc('insert_order_request_with_lines', {
+  // The header and its lines in ONE transaction (0413 review fix round), and
+  // the key's placed row with them. They used to be two calls with a
+  // compensating delete; a hide that won the race refused the lines after the
+  // header's notify trigger had already written a "New order request"
+  // notification, and a failed delete left the header. Now any refusal rolls
+  // all of it back, so there is nothing to clean up.
+  //
+  // A call that throws instead of answering (the client gave up on the
+  // connection) may have committed too: it is answered as unknown, like an
+  // error with no SQLSTATE.
+  const write = admin.rpc('place_portal_order_request', {
     p_header: {
       organization_id: ctx.organizationId,
       warehouse_id: warehouseId,
@@ -564,35 +726,32 @@ export async function portalSubmitOrder(
       fulfillment_type: 'pickup',
     },
     p_lines: linePayload,
+    p_key: parsed.idempotencyKey,
   });
-  const headerId = (header as { id?: unknown } | null)?.id;
-  if (writeErr || typeof headerId !== 'string') {
-    // The ordering-visibility gate (0413): an item hidden after the catalog
-    // read above. The customer hears what the pre-check says, never why.
-    if ((writeErr as { hint?: string | null } | null)?.hint === 'order_item_hidden') {
-      throw new ServiceError(
-        'validation_error',
-        'One of the items is no longer available to order.',
-      );
-    }
-    if ((writeErr as { hint?: string | null } | null)?.hint === 'order_lines_invalid') {
-      throw new ServiceError('validation_error', PORTAL_LINE_TOO_LARGE_COPY);
-    }
-    void reportError(new Error(writeErr?.message ?? 'order write answered no row'), {
-      tag: 'portal.submit.write',
-    });
-    throw new ServiceError('validation_error', 'Order could not be submitted. Please try again.');
+  let answer: Awaited<typeof write>;
+  try {
+    answer = await write;
+  } catch (e) {
+    void reportError(e, { tag: 'portal.submit.write' });
+    throw unknownWriteOutcome();
   }
+  const { data: placedData, error: writeErr } = answer;
+  if (writeErr) throw portalWriteError(writeErr);
+  const placed = placedOrderOf(placedData);
+  if (!placed) throw portalWriteError({ message: 'order write answered no order' });
+  // Another send of this key placed it while this one waited for the key's
+  // lock: the same order, already announced by that send.
+  if (placed.replay) return placed;
 
   // Feed the org's integration/audit surfaces like any other new order.
   void dispatchEvent(ctx.organizationId, 'order.created', {
-    id: headerId,
-    orderNumber: headerId.slice(0, 8).toUpperCase(),
+    id: placed.id,
+    orderNumber: placed.id.slice(0, 8).toUpperCase(),
     source: 'portal',
     customerId: ctx.customerId,
   });
 
-  return { id: headerId };
+  return placed;
 }
 
 /** The customer's order history (this customer only, newest first). */

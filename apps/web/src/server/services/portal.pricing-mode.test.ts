@@ -56,10 +56,18 @@ vi.mock('@/server/services/returns', () => ({
 import { ServiceError } from './context';
 import {
   portalCatalog,
+  PORTAL_ORDER_UNCONFIRMED_COPY,
   portalSubmitOrder,
   resolvePortalContext,
   type PortalContext,
+  type PortalSubmitInput,
 } from './portal';
+
+/** Every Place order carries its cart's submission key. */
+const SUBMIT_KEY = 'a7e19000-0000-4000-8000-0000000000f1';
+function submitWithKey(ctx: PortalContext, input: Omit<PortalSubmitInput, 'idempotencyKey'>) {
+  return portalSubmitOrder(ctx, { ...input, idempotencyKey: SUBMIT_KEY });
+}
 
 const ORG = '00000000-0000-4000-8000-000000000001';
 const OTHER_ORG = '00000000-0000-4000-8000-000000000002';
@@ -244,12 +252,18 @@ function makeAdmin(
         fromCalls.push(table);
         return chain(table);
       },
-      // insert_order_request_with_lines (0413 review fix round): the header
-      // and its lines in ONE transaction. A refusal writes nothing at all; a
-      // success records both inserts the way the database would.
+      // The submission key's read answers "nothing under this key yet", and
+      // place_portal_order_request writes the header and its lines in ONE
+      // transaction (insert_order_request_with_lines inside it, 0413 review
+      // fix round). A refusal writes nothing at all; a success records both
+      // inserts the way the database would. The key's own rules are proved in
+      // portal.submission-key.test.ts and the pgTAP suite.
       rpc: async (fn: string, args: Row) => {
         rpcCalls.push({ fn, args });
-        if (fn !== 'insert_order_request_with_lines') {
+        if (fn === 'portal_order_submission_status') {
+          return { data: { outcome: 'none' }, error: null };
+        }
+        if (fn !== 'place_portal_order_request') {
           return { data: null, error: { message: `no such function ${fn}` } };
         }
         if (rpcErrors[fn]) return { data: null, error: rpcErrors[fn]! };
@@ -263,7 +277,7 @@ function makeAdmin(
         inserts.push({ table: 'order_request_lines', rows: lines });
         (db.order_requests ??= []).push(header);
         (db.order_request_lines ??= []).push(...lines);
-        return { data: header, error: null };
+        return { data: { outcome: 'placed', replay: false, order_id: header.id }, error: null };
       },
     },
     fromCalls,
@@ -375,7 +389,7 @@ describe('portalCatalog — a failed read fails the catalog, it never fakes one'
     adminRef.current = admin.client;
 
     await expect(
-      portalSubmitOrder(ctxPriced, { lines: [{ itemId: ITEM_A, quantity: 3 }] }),
+      submitWithKey(ctxPriced, { lines: [{ itemId: ITEM_A, quantity: 3 }] }),
     ).rejects.toThrow(/could not be loaded/i);
     expect(admin.inserts.find((i) => i.table === 'order_request_lines')).toBeUndefined();
     expect(admin.inserts.find((i) => i.table === 'order_requests')).toBeUndefined();
@@ -455,26 +469,26 @@ describe('portalSubmitOrder — checkout tracks the catalog exactly', () => {
   it('checkout accepts exactly what the catalog showed, in no_charge mode', async () => {
     const rows = await portalCatalog(ctxNoCharge);
     await expect(
-      portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: rows[0]!.itemId, quantity: 1 }] }),
+      submitWithKey(ctxNoCharge, { lines: [{ itemId: rows[0]!.itemId, quantity: 1 }] }),
     ).resolves.toBeTruthy();
   });
 
   it('checkout still rejects an item that is not on the allowlist', async () => {
     await expect(
-      portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_NOT_ALLOWED, quantity: 1 }] }),
+      submitWithKey(ctxNoCharge, { lines: [{ itemId: ITEM_NOT_ALLOWED, quantity: 1 }] }),
     ).rejects.toThrow(/no longer available/);
   });
 
   it('checkout still rejects an inactive / expected / cross-org allowlisted item', async () => {
     for (const id of [ITEM_INACTIVE, ITEM_EXPECTED, ITEM_DELETED, ITEM_OTHER_ORG]) {
       await expect(
-        portalSubmitOrder(ctxPriced, { lines: [{ itemId: id, quantity: 1 }] }),
+        submitWithKey(ctxPriced, { lines: [{ itemId: id, quantity: 1 }] }),
       ).rejects.toThrow(/no longer available/);
     }
   });
 
   it('records NO price for a no-charge line, and the cost snapshot as always', async () => {
-    await portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 2 }] });
+    await submitWithKey(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 2 }] });
     const lines = admin.inserts.find((i) => i.table === 'order_request_lines')!.rows;
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatchObject({
@@ -487,7 +501,7 @@ describe('portalSubmitOrder — checkout tracks the catalog exactly', () => {
   });
 
   it('records the customer price in priced mode, and NO price for a quotable line', async () => {
-    await portalSubmitOrder(ctxPriced, {
+    await submitWithKey(ctxPriced, {
       lines: [
         { itemId: ITEM_A, quantity: 1 },
         { itemId: ITEM_B, quantity: 1 },
@@ -500,7 +514,7 @@ describe('portalSubmitOrder — checkout tracks the catalog exactly', () => {
   });
 
   it('merges a cart that names the same item twice into ONE summed line', async () => {
-    await portalSubmitOrder(ctxPriced, {
+    await submitWithKey(ctxPriced, {
       lines: [
         { itemId: ITEM_A, quantity: 5 },
         { itemId: ITEM_B, quantity: 1 },
@@ -595,7 +609,7 @@ describe('portalSubmitOrder — a kit’s pre-assembled stock is refused', () =>
   it('refuses the order by the kit’s name and writes nothing', async () => {
     withKitStock();
     await expect(
-      portalSubmitOrder(ctxNoCharge, {
+      submitWithKey(ctxNoCharge, {
         lines: [
           { itemId: ITEM_A, quantity: 1 },
           { itemId: KIT_STOCK, quantity: 2 },
@@ -611,7 +625,7 @@ describe('portalSubmitOrder — a kit’s pre-assembled stock is refused', () =>
   it('an order of ordinary items still goes through', async () => {
     withKitStock();
     await expect(
-      portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 1 }] }),
+      submitWithKey(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 1 }] }),
     ).resolves.toBeTruthy();
   });
 });
@@ -635,14 +649,14 @@ describe('portal and items hidden from new ordering', () => {
 
   it('checkout refuses it before anything is written', async () => {
     await expect(
-      portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_HIDDEN, quantity: 1 }] }),
+      submitWithKey(ctxNoCharge, { lines: [{ itemId: ITEM_HIDDEN, quantity: 1 }] }),
     ).rejects.toThrow('One of the items is no longer available to order.');
     expect(admin.inserts.find((i) => i.table === 'order_requests')).toBeUndefined();
   });
 
   it('a gate refusal inside the one write says the same sentence and leaves nothing to clean up', async () => {
     admin = makeAdmin(makeDb(), {}, {}, {
-      insert_order_request_with_lines: {
+      place_portal_order_request: {
         message: 'This item is no longer available for new orders.',
         code: 'P0001',
         hint: 'order_item_hidden',
@@ -651,7 +665,7 @@ describe('portal and items hidden from new ordering', () => {
     });
     adminRef.current = admin.client;
     await expect(
-      portalSubmitOrder(ctxNoCharge, {
+      submitWithKey(ctxNoCharge, {
         lines: [
           { itemId: ITEM_B, quantity: 1 },
           { itemId: ITEM_A, quantity: 2 },
@@ -665,17 +679,20 @@ describe('portal and items hidden from new ordering', () => {
     expect(admin.deletes).toEqual([]);
   });
 
-  it('writes the header and its lines in ONE insert_order_request_with_lines call', async () => {
-    await portalSubmitOrder(ctxPriced, {
+  it('writes the header and its lines in ONE place_portal_order_request call, after the key is read', async () => {
+    await submitWithKey(ctxPriced, {
       lines: [
         { itemId: ITEM_B, quantity: 1 },
         { itemId: ITEM_A, quantity: 2 },
       ],
       notes: 'Dock 2',
     });
-    expect(admin.rpcCalls).toHaveLength(1);
-    const call = admin.rpcCalls[0]!;
-    expect(call.fn).toBe('insert_order_request_with_lines');
+    expect(admin.rpcCalls.map((c) => c.fn)).toEqual([
+      'portal_order_submission_status',
+      'place_portal_order_request',
+    ]);
+    const call = admin.rpcCalls[1]!;
+    expect(call.args.p_key).toBe(SUBMIT_KEY);
     expect(call.args.p_header).toEqual({
       organization_id: ORG,
       warehouse_id: WAREHOUSE,
@@ -693,6 +710,7 @@ describe('portal and items hidden from new ordering', () => {
       { item_id: ITEM_B, quantity_requested: 1, unit_cost_at_request: 4.25, unit_price_at_request: null },
     ]);
     expect(call.args.p_track_token).toBeUndefined();
+    expect(admin.rpcCalls.map((c) => c.fn)).not.toContain('insert_order_request_with_lines');
     // No client write of an order row or line: only reads went through from().
     expect(admin.fromCalls).not.toContain('order_requests');
     expect(admin.fromCalls).not.toContain('order_request_lines');
@@ -703,7 +721,7 @@ describe('portal and items hidden from new ordering', () => {
   // first, so two entries of one item count together.
   it('a line above 10,000 units, summed per item, is refused in words before anything is written', async () => {
     await expect(
-      portalSubmitOrder(ctxNoCharge, {
+      submitWithKey(ctxNoCharge, {
         lines: [
           { itemId: ITEM_A, quantity: 6_000 },
           { itemId: ITEM_A, quantity: 4_001 },
@@ -715,7 +733,7 @@ describe('portal and items hidden from new ordering', () => {
   });
 
   it('exactly 10,000 units of one item go through', async () => {
-    await portalSubmitOrder(ctxNoCharge, {
+    await submitWithKey(ctxNoCharge, {
       lines: [
         { itemId: ITEM_A, quantity: 6_000 },
         { itemId: ITEM_A, quantity: 4_000 },
@@ -727,7 +745,7 @@ describe('portal and items hidden from new ordering', () => {
 
   it("the database's own line-ceiling refusal reads the same, not as a fault", async () => {
     admin = makeAdmin(makeDb(), {}, {}, {
-      insert_order_request_with_lines: {
+      place_portal_order_request: {
         message: 'order_lines_invalid',
         code: '22023',
         hint: 'order_lines_invalid',
@@ -736,23 +754,23 @@ describe('portal and items hidden from new ordering', () => {
     });
     adminRef.current = admin.client;
     await expect(
-      portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 1 }] }),
+      submitWithKey(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 1 }] }),
     ).rejects.toThrow('A line can have at most 10,000 units.');
   });
 
-  it('any other refusal of the one write is the generic sentence, reported', async () => {
+  it('any other failure of the one write may have committed: the unconfirmed sentence, never "nothing placed"', async () => {
     admin = makeAdmin(makeDb(), {}, {}, {
-      insert_order_request_with_lines: { message: 'connection reset', code: '08006' },
+      place_portal_order_request: { message: 'connection reset', code: '08006' },
     });
     adminRef.current = admin.client;
     await expect(
-      portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 1 }] }),
-    ).rejects.toThrow('Order could not be submitted. Please try again.');
+      submitWithKey(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 1 }] }),
+    ).rejects.toThrow(PORTAL_ORDER_UNCONFIRMED_COPY);
     expect(admin.inserts).toEqual([]);
   });
 
   it('inserts the lines in item-id order (the lock order every gated writer uses)', async () => {
-    await portalSubmitOrder(ctxNoCharge, {
+    await submitWithKey(ctxNoCharge, {
       lines: [
         { itemId: ITEM_B, quantity: 1 },
         { itemId: ITEM_A, quantity: 2 },
@@ -780,7 +798,7 @@ describe("portalSubmitOrder: checkout's refusals are ServiceErrors with their wo
 
   it('a quantity over the schema limit is a validation error with the schema message', async () => {
     const e = await refusal(() =>
-      portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 100_001 }] }),
+      submitWithKey(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 100_001 }] }),
     );
     expect(e.code).toBe('validation_error');
     expect(e.message).toMatch(/100000/);
@@ -791,12 +809,12 @@ describe("portalSubmitOrder: checkout's refusals are ServiceErrors with their wo
   it.each([
     [
       'an item off the allowlist',
-      () => portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_NOT_ALLOWED, quantity: 1 }] }),
+      () => submitWithKey(ctxNoCharge, { lines: [{ itemId: ITEM_NOT_ALLOWED, quantity: 1 }] }),
       'One of the items is no longer available to order.',
     ],
     [
       'a line over 10,000 units',
-      () => portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 10_001 }] }),
+      () => submitWithKey(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 10_001 }] }),
       'A line can have at most 10,000 units.',
     ],
   ])('%s', async (_label, run, words) => {
@@ -805,15 +823,16 @@ describe("portalSubmitOrder: checkout's refusals are ServiceErrors with their wo
     expect(e.message).toBe(words);
   });
 
-  it('a write that fails for another reason: the generic sentence, as a ServiceError', async () => {
+  it('a write that fails for another reason: the unconfirmed sentence (it may have committed), as a ServiceError', async () => {
     admin = makeAdmin(makeDb(), {}, {}, {
-      insert_order_request_with_lines: { message: 'connection reset', code: '08006' },
+      place_portal_order_request: { message: 'connection reset', code: '08006' },
     });
     adminRef.current = admin.client;
     const e = await refusal(() =>
-      portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 1 }] }),
+      submitWithKey(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 1 }] }),
     );
-    expect(e.message).toBe('Order could not be submitted. Please try again.');
+    expect(e.message).toBe(PORTAL_ORDER_UNCONFIRMED_COPY);
+    expect(e.details).toEqual({ outcome: 'unknown', retryable: true });
   });
 
   it('a catalog that could not be read: its sentence, as a ServiceError', async () => {

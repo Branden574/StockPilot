@@ -234,7 +234,10 @@ describe('portal exchange (returns RX-3)', () => {
 // ServiceErrors with their words; anything else is the fixed sentence,
 // reported.
 describe('submitPortalOrderAction: what a failed checkout says (S31)', () => {
-  const INPUT = { lines: [{ itemId: ORDER_ID, quantity: 1 }] };
+  const INPUT = {
+    lines: [{ itemId: ORDER_ID, quantity: 1 }],
+    idempotencyKey: 'a7e19000-0000-4000-8000-0000000000e1',
+  };
 
   it("keeps a refusal's code and words", async () => {
     vi.mocked(portalSubmitOrder).mockRejectedValueOnce(
@@ -263,5 +266,52 @@ describe('submitPortalOrderAction: what a failed checkout says (S31)', () => {
       tag: 'actions.portal.submit_portal_order',
       organizationId: 'org-1',
     });
+  });
+});
+
+// What each answer means for the portal shop's cart (`details.outcome`):
+// the action passes the service's mark through, and marks the one refusal of
+// its own that is definite (no portal access).
+describe('submitPortalOrderAction: the outcome the portal shop reads', () => {
+  const INPUT = {
+    lines: [{ itemId: ORDER_ID, quantity: 1 }],
+    idempotencyKey: 'a7e19000-0000-4000-8000-0000000000e3',
+  };
+
+  it('passes an unknown outcome through with its words', async () => {
+    vi.mocked(portalSubmitOrder).mockRejectedValueOnce(
+      new ServiceError('conflict', 'We could not confirm it.', { outcome: 'unknown', retryable: true }),
+    );
+    expect(await submitPortalOrderAction(INPUT)).toEqual({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: 'We could not confirm it.',
+        details: { outcome: 'unknown', retryable: true },
+      },
+    });
+  });
+
+  it('passes a definite refusal through', async () => {
+    vi.mocked(portalSubmitOrder).mockRejectedValueOnce(
+      new ServiceError('validation_error', 'One of the items is no longer available to order.', {
+        outcome: 'refused',
+      }),
+    );
+    const res = await submitPortalOrderAction(INPUT);
+    expect(res).toMatchObject({ ok: false, error: { details: { outcome: 'refused' } } });
+  });
+
+  it('no portal access is a definite refusal, and nothing is sent to the service', async () => {
+    resolvePortalContext.mockResolvedValueOnce(null);
+    expect(await submitPortalOrderAction(INPUT)).toEqual({
+      ok: false,
+      error: {
+        code: 'forbidden',
+        message: 'Your account does not have portal access.',
+        details: { outcome: 'refused' },
+      },
+    });
+    expect(portalSubmitOrder).not.toHaveBeenCalled();
   });
 });

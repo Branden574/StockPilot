@@ -1648,6 +1648,15 @@ WEB_TESTS=(
   src/components/orders/storefront/orders-storefront.submit-once.test.tsx
   src/components/orders/v2/cart-context.drafts.test.tsx
   src/server/actions/platform-admin.remove-org.test.ts
+  # Portal Place order, placed once per key: the service reads the key before
+  # the catalog checks (a resend after a change still answers the first
+  # order), takes the organization, customer and requester from the portal
+  # context only, and its conflict answer names no order; a write whose answer
+  # was lost is answered as unknown (never "nothing placed"), class by class;
+  # the portal shop sends one key per cart, the same key on every retry of
+  # that cart, and holds the cart as sent until a definite answer
+  # (portal-shop.test.tsx, listed below).
+  src/server/services/portal.submission-key.test.ts
   # Approval follows the permission (0390): the app asks the effective
   # orders:approve where the database does. Delivery assignment and the
   # in-transit mark write through their SECURITY DEFINER functions (no
