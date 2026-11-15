@@ -172,13 +172,8 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     .sort((a, b) => a.name.localeCompare(b.name));
 
   // ── MFA enforcement ────────────────────────────────────────────────
-  // Banner instead of redirect: the previous redirect-on-every-page-load
-  // approach raced with Chrome's prefetch behavior and triggered the
-  // "Throttling navigation to prevent the browser from hanging" warning,
-  // which renders as a black/blank screen on certain sections (a manager
-  // on Chrome, no MFA enrolled). The banner is always visible above the
-  // page content until the user enrolls; can't loop, can't throttle,
-  // and behaves the same across browsers.
+  // A member the policy requires an authenticator of, with none verified, is
+  // sent to set-up (below). The set-up page itself renders with the banner.
   // An org row this member cannot read is held to the strictest policy, not
   // 'optional' (lib/auth/mfa-policy.ts).
   const policy = enforcedMfaPolicy(orgRow);
@@ -196,14 +191,22 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const hasVerifiedFactor = ownFactors.some((f) => f.status === 'verified');
   const showMfaBanner = mfaRequired && !hasVerifiedFactor;
 
-  // Hard gate for the strictest policy: when policy === 'all_required'
-  // and the user has no verified factor, the banner alone isn't enough
-  // — they can still navigate. Redirect to security settings (which is
-  // exempt from the gate so enrollment still works) instead of showing
-  // the full dashboard. assertPermission in services already blocks
-  // mutating actions at AAL1, but this prevents read-only data leakage
-  // across the rest of the dashboard until they enroll.
-  if (policy === 'all_required' && !hasVerifiedFactor) {
+  // Set-up first: a member the policy requires an authenticator of (everyone
+  // under all_required; owners and admins under admins_required) who has no
+  // verified factor sees only the security settings page until they set one
+  // up. Every other dashboard page sends them there. assertPermission in
+  // services already blocks changes at AAL1; this keeps the rest of the
+  // dashboard's reads behind set-up too.
+  //
+  // The security page is exempt, and neither it nor the settings layout
+  // redirects, so the redirect lands on a page this gate lets through: one
+  // hop, never a loop. Chrome stops a page that keeps navigating in a loop
+  // ("Throttling navigation to prevent the browser from hanging", a blank
+  // screen), which is why the target must never send the member on again
+  // (layout.authenticator-set-up.test.tsx follows the redirect to prove it).
+  // Sign-out and organization switching are Server Actions on that page's
+  // shell, so they stay available.
+  if (mfaRequired && !hasVerifiedFactor) {
     const h = await headers();
     const pathname = h.get('x-pathname') ?? '';
     if (!pathname.startsWith('/dashboard/settings/security')) {
