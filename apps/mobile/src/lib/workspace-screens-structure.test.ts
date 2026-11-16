@@ -1049,15 +1049,22 @@ describe('Team and Accounts (M-WS-07, 08)', () => {
 
   // P2.5 hand-off: no visible label sits with the switch, so VoiceOver said
   // "switch, on" with no name.
-  it('Accounts: each switch is named for its row; the busy gate and the unconfirmed write stay', () => {
+  // The change and every answer's words are in lib/customer-status.ts
+  // (customer-status.test.ts runs setStatus against each outcome).
+  it('Accounts: each switch is named for its row; the busy gate and the awaited route change stay', () => {
     const { sf, els } = elements(ACCOUNTS, (el, s) => tagOf(el, s) === 'Toggle');
     expect(els).toHaveLength(1);
     expect(attrText(els[0]!.el, 'accessibilityLabel', sf)).toBe('row.name');
     expect(attrText(els[0]!.el, 'onValueChange', sf)).toBe('busy ? undefined : onToggle');
     const setStatus = functionBody(ACCOUNTS, 'setStatus');
     expect(setStatus).not.toContain("Alert.alert('Archive");
-    expect(setStatus).toMatch(/\.select\('id'\)\s*\.maybeSingle\(\);/);
-    expect(setStatus).toContain("'You need manager access to change accounts.'");
+    expect(setStatus).toMatch(
+      /setBusyId\(row\.id\);\s*const outcome = await changeCustomerStatus\([^;]*\);\s*setBusyId\(null\);/,
+    );
+    expect(setStatus).toContain('Alert.alert(outcome.title, outcome.message);');
+    expect(sourceOf('src/lib/customer-status.ts')).toContain(
+      "notAllowed: 'You need manager access to change accounts.'",
+    );
   });
 });
 

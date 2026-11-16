@@ -2322,6 +2322,15 @@ MOBILE_TESTS=(
   # shown; the select bar offers a size family only with sports:manage and
   # the sports module on.
   src/lib/ungroup-selected.test.ts
+  # Accounts: archive and restore a customer account go through PATCH
+  # /api/v1/customers/[id]/status with the bearer and the workspace on
+  # screen (the server checks the module, customers:manage and the
+  # authenticator rule, and records the change); the screen writes no
+  # customer row itself; every answer is plain words, never a permission,
+  # module id or code word; the row keeps its status after a refusal and the
+  # list is read again where the answer leaves it unknown.
+  src/lib/customer-status.test.ts
+  src/lib/customer-status.wire.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

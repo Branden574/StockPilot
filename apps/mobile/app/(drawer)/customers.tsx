@@ -8,6 +8,7 @@ import { Pill } from '@/components/ui/pill';
 import { Toggle } from '@/components/ui/toggle';
 import { Body, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
+import { changeCustomerStatus } from '@/lib/customer-status';
 import { createSequenceGuard } from '@/lib/debounced-list-load';
 import { supabase } from '@/lib/supabase';
 import { retryWorkspace, useWorkspace } from '@/lib/use-workspace';
@@ -38,8 +39,11 @@ const ACCOUNTS_LOAD_FAILED = {
 /**
  * B2B customers — mobile twin of /dashboard/customers (read + activate/archive;
  * price lists, catalogs, and invites stay web-side where the editors live).
- * Direct Supabase under the 0250 RLS floor (member read, manager-or-
- * customers:manage write); the drawer entry is gated to customers:manage.
+ * The list is read directly under the 0250 RLS floor (member read). Archive
+ * and restore go through PATCH /api/v1/customers/[id]/status
+ * (lib/customer-status.ts), which checks the module, customers:manage and the
+ * authenticator rule and records the change. The drawer entry is gated to
+ * customers:manage.
  */
 export default function CustomersScreen() {
   const { user } = useAuth();
@@ -109,32 +113,28 @@ export default function CustomersScreen() {
   }
 
   async function setStatus(row: CustomerRow, active: boolean) {
+    // The workspace whose list is on screen: the change is sent under it, and
+    // its answer goes only into that list.
+    const changedIn = activeOrgId;
+    if (!changedIn) return;
     setBusyId(row.id);
-    // Await the builder + row-hit check (bug patterns #22 + fail-open update).
-    const { error, data } = await supabase
-      .from('customers')
-      .update({ status: active ? 'active' : 'archived' })
-      .eq('id', row.id)
-      .eq('organization_id', activeOrgId ?? '')
-      .select('id')
-      .maybeSingle();
+    const outcome = await changeCustomerStatus(row.id, active ? 'active' : 'archived', changedIn);
     setBusyId(null);
-    if (error || !data) {
-      Alert.alert(
-        'Could not update',
-        error?.message ?? 'You need manager access to change accounts.',
-      );
+    if (outcome.kind === 'refused') {
+      // The row keeps the status it had. Where the answer leaves the account
+      // unknown (removed, changed meanwhile, no clear answer), the list is
+      // read again.
+      Alert.alert(outcome.title, outcome.message);
+      if (outcome.reload) void load();
       return;
     }
-    // Only into the list of the workspace the change was made in.
-    const changedIn = activeOrgId;
+    // The status the server answered: the one asked for, or the one the
+    // account already had when nothing changed.
     setList((prev) =>
       prev !== null && prev.orgId === changedIn && prev.userId === userId
         ? {
             ...prev,
-            rows: prev.rows.map((r) =>
-              r.id === row.id ? { ...r, status: active ? 'active' : 'archived' } : r,
-            ),
+            rows: prev.rows.map((r) => (r.id === row.id ? { ...r, status: outcome.status } : r)),
           }
         : prev,
     );
