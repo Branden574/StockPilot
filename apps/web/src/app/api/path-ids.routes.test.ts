@@ -20,7 +20,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * as the submission routes do (`limiterFirst`).
  *
  * The two member routes (a role, a category grant) are held to the same
- * answers: 401 first, then the strict check, before their limiter.
+ * answers: 401 first, then the strict check, before their limiter. So are the
+ * phone's serial number routes (add, change, remove) and its customer status
+ * route.
  *
  * The static half (every dynamic route, the first use of each id) is
  * app/path-ids.guard.test.ts.
@@ -72,6 +74,9 @@ const PO_IMPORT = { error: 'validation_error', message: 'That PO import id is no
 const CYCLE_COUNT = { error: 'validation_error', message: 'That cycle count id is not valid.' };
 const INVALID_ID = { error: 'invalid_id' };
 const MEMBER = { error: 'validation_error', message: 'That member id is not valid.' };
+const ITEM = { error: 'validation_error', message: 'That item id is not valid.' };
+const SERIAL = { error: 'validation_error', message: 'That serial number id is not valid.' };
+const CUSTOMER = { error: 'validation_error', message: 'That account id is not valid.' };
 
 interface Row {
   name: string;
@@ -446,6 +451,50 @@ const MEMBER_ROUTES: Row[] = [
   },
 ];
 
+/** The phone's serial number and customer status routes: the path id, by the
+ *  strict check. */
+const PHONE_CHANGE_ROUTES: Row[] = [
+  {
+    name: 'add serial numbers to an item (v1/items/[id]/serials)',
+    load: () => import('./v1/items/[id]/serials/route'),
+    method: 'POST',
+    params: { id: GOOD },
+    bad: 'id',
+    path: (p) => `/api/v1/items/${p.id}/serials`,
+    body: { warehouseId: GOOD, serials: ['SN-1'] },
+    json: ITEM,
+  },
+  {
+    name: 'change a serial number (v1/serials/[id])',
+    load: () => import('./v1/serials/[id]/route'),
+    method: 'PATCH',
+    params: { id: GOOD },
+    bad: 'id',
+    path: (p) => `/api/v1/serials/${p.id}`,
+    body: { status: 'damaged' },
+    json: SERIAL,
+  },
+  {
+    name: 'remove a serial number (v1/serials/[id])',
+    load: () => import('./v1/serials/[id]/route'),
+    method: 'DELETE',
+    params: { id: GOOD },
+    bad: 'id',
+    path: (p) => `/api/v1/serials/${p.id}`,
+    json: SERIAL,
+  },
+  {
+    name: 'archive or restore a customer account (v1/customers/[id]/status)',
+    load: () => import('./v1/customers/[id]/status/route'),
+    method: 'PATCH',
+    params: { id: GOOD },
+    bad: 'id',
+    path: (p) => `/api/v1/customers/${p.id}/status`,
+    body: { status: 'archived' },
+    json: CUSTOMER,
+  },
+];
+
 /** Every property read of the database client: none is expected. */
 const clientReads: string[] = [];
 const untouchableClient = new Proxy(
@@ -495,7 +544,7 @@ beforeEach(() => {
   process.env.NEXT_PUBLIC_APP_URL = 'https://test.local';
 });
 
-const ALL = [...UNCHECKED, ...LOOSE, ...MEMBER_ROUTES];
+const ALL = [...UNCHECKED, ...LOOSE, ...MEMBER_ROUTES, ...PHONE_CHANGE_ROUTES];
 
 describe('a malformed record id in an API path answers 400 before anything is read (B63)', () => {
   it('covers the 18 route files that used the id unchecked and the 14 with the loose pattern', async () => {
@@ -506,6 +555,11 @@ describe('a malformed record id in an API path answers 400 before anything is re
     expect([...files(MEMBER_ROUTES)]).toEqual([
       'v1/members/[id]/role',
       'v1/members/[id]/category-access',
+    ]);
+    expect([...files(PHONE_CHANGE_ROUTES)]).toEqual([
+      'v1/items/[id]/serials',
+      'v1/serials/[id]',
+      'v1/customers/[id]/status',
     ]);
     // The routes that check a permission themselves, after the 401.
     expect([...files(ALL.filter((r) => r.permission !== undefined))]).toEqual([

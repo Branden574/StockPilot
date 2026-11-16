@@ -2067,6 +2067,26 @@ WEB_TESTS=(
   src/server/services/user-categories.single-grant.test.ts
   src/server/services/team.update-member-role.test.ts
   src/server/actions/mfa.policy-unchanged.test.ts
+
+  # Schedule events, serial numbers and customer status over /api/v1 (routes
+  # the phone can call). POST /api/v1/schedule, POST
+  # /api/v1/items/[id]/serials, PATCH and DELETE /api/v1/serials/[id] and
+  # PATCH /api/v1/customers/[id]/status each build their context with
+  # withApiContext, through the API context gate, and call the service the
+  # website calls (ScheduleService.create, SerialsService.add, updateSerial and
+  # remove, CustomersService.setStatus), so the module, the permission, the
+  # organization's authenticator rule and the reads in the caller's
+  # organization are the website's own, and the service writes the one audit
+  # row with the caller's organization and account. A refused request writes
+  # nothing and no audit row. The parity suite runs the real audit writer: the
+  # phone's row and the website's row for the same change are the same but
+  # for the user agent, and a row the database refuses never undoes or
+  # refuses the change. All five files carry the "Security invariant" marker.
+  src/app/api/v1/schedule/route.test.ts
+  'src/app/api/v1/items/[id]/serials/route.test.ts'
+  'src/app/api/v1/serials/[id]/route.test.ts'
+  'src/app/api/v1/customers/[id]/status/route.test.ts'
+  src/app/api/v1/phone-changes.audit-rows.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
