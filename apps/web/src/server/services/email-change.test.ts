@@ -9,8 +9,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *     STORES — and never the hashed_token generateLink returns for that side;
  *   * the current address is still canonical after a request: nothing writes
  *     user_profiles, and the unverified address gets exactly one message;
- *   * the refusal order: same-address → rate limit → MFA step-up → password
- *     → duplicate, each stopping before the next spends anything;
+ *   * the refusal order: authenticator set-up owed → same-address → rate
+ *     limit → MFA step-up → password → duplicate, each stopping before the
+ *     next spends anything;
  *   * reconcile is idempotent and complete() tells the OLD address once;
  *   * (docket S25) both links carry `r`, signed for the account whose change
  *     it is, and a link that cannot be signed stops the request before
@@ -165,7 +166,7 @@ const REQUEST = {
   userId: USER_ID,
   newEmail: NEW,
   currentPassword: 'test-only-current-password',
-  mfa: { enrolled: false, aal2: false },
+  mfa: { enrolled: false, aal2: false, setUpOwed: false },
   source: 'web' as const,
 };
 
@@ -281,7 +282,7 @@ describe('mintEmailChangeLinks: the auth server recorded the request (its time i
   it('a resend refused that way sends nothing either', async () => {
     getUserById.mockResolvedValue(authUser({ new_email: NEW }));
     await expect(
-      resendEmailChange({ userId: USER_ID, mfa: { enrolled: false, aal2: false }, source: 'web' }),
+      resendEmailChange({ userId: USER_ID, mfa: { enrolled: false, aal2: false, setUpOwed: false }, source: 'web' }),
     ).rejects.toMatchObject({ code: 'internal_error' });
     expect(sendEmail).not.toHaveBeenCalled();
   });
@@ -351,6 +352,55 @@ describe('requestEmailChange — the happy path leaves the current address canon
   });
 });
 
+describe('a member who must set up an authenticator first', () => {
+  const OWES = { enrolled: false, aal2: false, setUpOwed: true };
+  const SET_UP_ANSWER = {
+    code: 'forbidden',
+    message: 'Multi-factor authentication required. Enroll in MFA before performing this action.',
+    details: { reason: 'mfa_required' },
+  };
+
+  it('request: the name and avatar answer, before the account is read, a limit is spent, the password is tried or anything is sent', async () => {
+    await expect(requestEmailChange({ ...REQUEST, mfa: OWES })).rejects.toMatchObject(SET_UP_ANSWER);
+    expect(getUserById).not.toHaveBeenCalled();
+    expect(checkRateLimit).not.toHaveBeenCalled();
+    expect(verifyPasswordSideChannel).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
+    expect(generateLink).not.toHaveBeenCalled();
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(inserts).toEqual([]);
+  });
+
+  it('resend: the same, with a change pending', async () => {
+    getUserById.mockResolvedValue(authUser({ new_email: NEW, email_change_sent_at: new Date().toISOString() }));
+    await expect(
+      resendEmailChange({ userId: USER_ID, mfa: OWES, source: 'mobile' }),
+    ).rejects.toMatchObject(SET_UP_ANSWER);
+    expect(checkRateLimit).not.toHaveBeenCalled();
+    expect(generateLink).not.toHaveBeenCalled();
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(inserts).toEqual([]);
+  });
+
+  it('the answer is mfaGateError for an account with no authenticator, the one the profile actions give', async () => {
+    const { mfaGateError } = await import('./context');
+    const expected = mfaGateError({ mfaEnrolled: false });
+    const got = await requestEmailChange({ ...REQUEST, mfa: OWES }).catch((e: unknown) => e);
+    expect(got).toMatchObject({ code: expected.code, message: expected.message, details: expected.details });
+  });
+
+  it('cancel takes no posture and still removes the pending change', async () => {
+    getUserById.mockResolvedValue(authUser({ new_email: NEW, email_change_sent_at: new Date().toISOString() }));
+    await expect(cancelEmailChange({ userId: USER_ID, source: 'web' })).resolves.toEqual({ cancelled: true });
+  });
+
+  it('owing nothing changes nothing: the request goes on to the limits and the password', async () => {
+    await expect(requestEmailChange(REQUEST)).resolves.toMatchObject({ pendingEmail: NEW });
+    expect(checkRateLimit).toHaveBeenCalled();
+    expect(verifyPasswordSideChannel).toHaveBeenCalled();
+  });
+});
+
 describe('requestEmailChange — refusal order (each stops before the next spends anything)', () => {
   it('same address (any case) is a validation error that spends NO rate-limit budget', async () => {
     await expect(requestEmailChange({ ...REQUEST, newEmail: 'OLD@example.com' })).rejects.toMatchObject({
@@ -375,14 +425,14 @@ describe('requestEmailChange — refusal order (each stops before the next spend
 
   it('an enrolled user at AAL1 gets aal2_required before the password is even tried', async () => {
     await expect(
-      requestEmailChange({ ...REQUEST, mfa: { enrolled: true, aal2: false } }),
+      requestEmailChange({ ...REQUEST, mfa: { enrolled: true, aal2: false, setUpOwed: false } }),
     ).rejects.toMatchObject({ code: 'forbidden', details: { reason: 'aal2_required' } });
     expect(verifyPasswordSideChannel).not.toHaveBeenCalled();
     expect(generateLink).not.toHaveBeenCalled();
   });
 
   it('an enrolled user at AAL2 proceeds', async () => {
-    await expect(requestEmailChange({ ...REQUEST, mfa: { enrolled: true, aal2: true } })).resolves.toMatchObject({
+    await expect(requestEmailChange({ ...REQUEST, mfa: { enrolled: true, aal2: true, setUpOwed: false } })).resolves.toMatchObject({
       pendingEmail: NEW,
     });
   });
@@ -522,7 +572,7 @@ describe('getEmailChangeStatus / resend / cancel', () => {
 
   it('resend re-mints for the address GoTrue holds — never one supplied by the caller', async () => {
     getUserById.mockResolvedValue(authUser({ new_email: NEW, email_change_sent_at: new Date().toISOString() }));
-    const r = await resendEmailChange({ userId: USER_ID, mfa: { enrolled: false, aal2: false }, source: 'web' });
+    const r = await resendEmailChange({ userId: USER_ID, mfa: { enrolled: false, aal2: false, setUpOwed: false }, source: 'web' });
     expect(r.pendingEmail).toBe(NEW);
     // Both re-sent links name this account (S25).
     for (const call of sendEmail.mock.calls) {
@@ -535,7 +585,7 @@ describe('getEmailChangeStatus / resend / cancel', () => {
 
   it('resend with nothing pending is not_found and mints nothing', async () => {
     await expect(
-      resendEmailChange({ userId: USER_ID, mfa: { enrolled: false, aal2: false }, source: 'web' }),
+      resendEmailChange({ userId: USER_ID, mfa: { enrolled: false, aal2: false, setUpOwed: false }, source: 'web' }),
     ).rejects.toMatchObject({ code: 'not_found' });
     expect(generateLink).not.toHaveBeenCalled();
   });

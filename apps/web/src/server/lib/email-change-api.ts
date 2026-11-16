@@ -12,15 +12,29 @@ import type { MfaPosture } from '@/server/services/email-change';
  * caller's context and the service's errors into the mobile contract.
  */
 
-/** MFA posture as withApiContext already resolved it from the verified token. */
+/**
+ * MFA posture as withApiContext already resolved it: the level from the
+ * verified token, and the organization's policy for the member's role
+ * (mfaFromPolicy in lib/auth/api-context.ts, an unreadable or hidden policy
+ * held to the strictest one). A policy that requires an authenticator of a
+ * member who has none verified resolves to required, not satisfied and not
+ * enrolled: that member owes set-up.
+ */
 export function mfaPostureFromContext(ctx: ServiceContext): MfaPosture {
-  return { enrolled: !!ctx.mfaEnrolled, aal2: ctx.mfaSatisfied };
+  const enrolled = !!ctx.mfaEnrolled;
+  return {
+    enrolled,
+    aal2: ctx.mfaSatisfied,
+    setUpOwed: ctx.mfaRequired && !ctx.mfaSatisfied && !enrolled,
+  };
 }
 
 /**
- * Same code → status mapping the rest of /api/v1 uses. Two `forbidden`
+ * Same code → status mapping the rest of /api/v1 uses. Three `forbidden`
  * reasons get their own shape because the mobile client acts on them:
- * `aal2_required` opens the TOTP step-up, `rate_limited` becomes a 429.
+ * `aal2_required` opens the TOTP step-up, `mfa_required` (set up an
+ * authenticator first, the account-delete route's code) shows its sentence,
+ * `rate_limited` becomes a 429.
  */
 export function emailChangeErrorResponse(e: unknown): NextResponse {
   if (e instanceof ServiceError) {
@@ -28,8 +42,8 @@ export function emailChangeErrorResponse(e: unknown): NextResponse {
     if (reason === 'rate_limited') {
       return NextResponse.json({ error: 'rate_limited', message: e.message }, { status: 429 });
     }
-    if (reason === 'aal2_required') {
-      return NextResponse.json({ error: 'aal2_required', message: e.message }, { status: 403 });
+    if (reason === 'aal2_required' || reason === 'mfa_required') {
+      return NextResponse.json({ error: reason, message: e.message }, { status: 403 });
     }
     const status =
       e.code === 'validation_error'

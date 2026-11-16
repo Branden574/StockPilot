@@ -1190,6 +1190,14 @@ WEB_TESTS=(
   # layout reaches that check or redirects to a path under itself, and only
   # dashboard layouts use the resolver without it.
   src/lib/auth/authenticator-set-up.guard.test.ts
+  # The sign-in email change gives such a member the answer the profile's
+  # name and avatar give (set up an authenticator first), on the website
+  # through the real session loader and on the phone's request and resend
+  # routes, before a limit is spent, the password is checked or anything is
+  # sent; cancelling a pending change still runs, and an account with no
+  # organization keeps its rules.
+  src/server/actions/email-change.set-up.actions.test.ts
+  src/app/api/v1/account/email/set-up-first.routes.test.ts
   # The phone's sign-in and sign-out notes (S5a), the other two routes on the
   # AAL1 allowlist: an aal1 session of an account with an authenticator writes
   # the sign-in row (code owed) and the device note, and its sign-out revokes

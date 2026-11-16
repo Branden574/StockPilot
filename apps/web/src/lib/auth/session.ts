@@ -16,6 +16,7 @@ import {
   heldMembership,
   holdMembership,
   resolveRequestContext,
+  type BundleMembership,
   type RequestContextBundle,
 } from '@/lib/auth/request-context-bundle';
 import {
@@ -386,6 +387,45 @@ export const readSessionMemberships = cache(async (): Promise<SessionMemberships
   const { memberships, membershipsUnreadable } = await loadSessionAndContext();
   if (membershipsUnreadable) return { ok: false };
   return { ok: true, memberships };
+});
+
+/** The organization requireOrgContext() resolves for this request, and the member's role in it. */
+export interface SessionOrganization {
+  organizationId: string;
+  role: Role;
+  /** The membership it came from when get_request_context() answered, else null. */
+  held: BundleMembership | null;
+}
+
+export type SessionOrganizationRead =
+  { ok: false } | { ok: true; userId: string; organization: SessionOrganization | null };
+
+/**
+ * Which organization requireOrgContext() resolves for this request, from the
+ * same load and by the same rule (the profile's default organization when it
+ * is an accepted membership, else the oldest), with none of its redirects and
+ * no context. For a funnel that validated its own user and must still work for
+ * an account with no organization: the sign-in email change asks it which
+ * organization's authenticator policy applies (server/actions/email-change.ts).
+ * NOT a context: nothing is read or written for the organization on it.
+ *
+ * `organization` is null for an account with no accepted membership.
+ * `{ ok: false }` when this request has no verified session, or when the
+ * memberships could not be read: the caller cannot tell which organization
+ * applies, so it refuses. The load still sends a disabled account to its own
+ * page, as it does for every caller.
+ */
+export const readSessionOrganization = cache(async (): Promise<SessionOrganizationRead> => {
+  const { session, orgId, orgRole, membershipsUnreadable, bundle } = await loadSessionAndContext();
+  if (!session || membershipsUnreadable) return { ok: false };
+  return {
+    ok: true,
+    userId: session.userId,
+    organization:
+      orgId && orgRole
+        ? { organizationId: orgId, role: orgRole, held: bundleMembership(bundle, orgId) }
+        : null,
+  };
 });
 
 export const getServerSession = cache(async (): Promise<ServerSession | null> => {

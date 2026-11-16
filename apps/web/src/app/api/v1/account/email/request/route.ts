@@ -12,9 +12,11 @@ export const runtime = 'nodejs';
  * POST /api/v1/account/email/request — mobile twin of requestEmailChangeAction.
  *   body: { newEmail, currentPassword }
  *   200: { pendingEmail, sentAt, expiresAt }
- *   400 validation_error · 403 forbidden | aal2_required · 409 conflict · 429 rate_limited
+ *   400 validation_error · 403 forbidden | aal2_required | mfa_required · 409 conflict · 429 rate_limited
  * withApiContext already refused disabled accounts with a 401; the service
- * repeats that check (plus deleted_at) before anything is spent.
+ * repeats that check (plus deleted_at) before anything is spent. A member
+ * whose organization requires an authenticator they have not set up gets
+ * mfa_required, before anything is spent (mfaPostureFromContext).
  */
 export async function POST(req: NextRequest) {
   const ctx = await withApiContext(req);
