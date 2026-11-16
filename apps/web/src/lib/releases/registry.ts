@@ -256,7 +256,7 @@ export const RELEASES: Release[] = [
     // (every member) and is one of the two pages open before set-up, so
     // registry.test.ts lists it as open to every member.
     status: 'published',
-    title: 'When your organization requires an authenticator, the website opens Security first',
+    title: 'The website opens Security first until a required authenticator is set up',
     summary:
       'On the website, a member whose organization requires an authenticator and who has not set one up is taken to Settings, Security right after signing in, and only Security and Profile open until they set one up. In organizations set to Required for admins this applies to owners and Super Admins, and in organizations set to Required for everyone to every member. No app update is needed.',
     // #582 is live in production since 2026-11-15 23:29:54Z.
@@ -268,11 +268,11 @@ export const RELEASES: Release[] = [
         area: 'Account',
         title: 'Setting up a required authenticator comes first on the website',
         whatChanged:
-          'On the website, a member whose organization requires an authenticator and who has not set one up is taken to Settings, Security right after signing in, after switching organization and after accepting an invitation, where the page shows Enroll to continue. Until they set one up, only Settings, Security and Settings, Profile open: every other page takes them to Settings, Security, and the search in the top bar lists nothing.',
+          'On the website, a member whose organization requires an authenticator and who has not set one up is taken to Settings, Security right after signing in, after switching organization and after accepting an invitation, where the page shows Enroll to continue. Until they set one up, only Settings, Security and Settings, Profile open: every other page takes them to Settings, Security, and the search in the top bar finds no items, purchase orders, suppliers or warehouses.',
         whyItMatters:
           'Settings, Security is where an authenticator is set up, so a member who has to set one up starts there, with the reason on the page.',
         howItAffectsYou:
-          'In organizations set to Required for admins, this applies to owners and Super Admins. In organizations set to Required for everyone, it applies to every member. In organizations set to Optional, and for members who already have an authenticator, nothing changes. Once you have set one up, StockPilot opens the dashboard and your pages open as usual. Owners and Super Admins choose the setting under Organization MFA policy in Settings, Security.',
+          'In organizations set to Required for admins, this applies to owners and Super Admins. In organizations set to Required for everyone, it applies to every member. In organizations set to Optional, and for members who already have an authenticator, nothing changes. Until you have set one up, Profile opens but your name, avatar and sign-in email cannot be changed there. Once you have set one up, StockPilot opens the dashboard and your pages open as usual. Owners and Super Admins choose the setting under Organization MFA policy in Settings, Security.',
         whatToDo:
           'If you are an owner or Super Admin in an organization set to Required for admins, or any member in one set to Required for everyone, and you have not set up an authenticator, open Settings, Security, choose Set up authenticator app and follow the steps. Everyone else: no action needed.',
         link: { href: '/dashboard/settings/security', label: 'Open Security settings' },
