@@ -2067,6 +2067,31 @@ WEB_TESTS=(
   src/server/services/user-categories.single-grant.test.ts
   src/server/services/team.update-member-role.test.ts
   src/server/actions/mfa.policy-unchanged.test.ts
+
+  # Schedule events, serial numbers and customer status over /api/v1 (cookie
+  # or Bearer). POST /api/v1/schedule, POST
+  # /api/v1/items/[id]/serials, PATCH and DELETE /api/v1/serials/[id] and
+  # PATCH /api/v1/customers/[id]/status each build their context with
+  # withApiContext, through the API context gate, and call the service the
+  # website calls (ScheduleService.create, SerialsService.add, updateSerial and
+  # remove, CustomersService.setStatus), so the module, the permission, the
+  # organization's authenticator rule and the reads in the caller's
+  # organization are the website's own, and the service writes the one audit
+  # row with the caller's organization and account. A refused request writes
+  # nothing and no audit row. The parity suite runs the real audit writer: a
+  # route's row and the website action's row for the same change are the same
+  # but for the user agent, and a row the database refuses never undoes or
+  # refuses the change. A warehouse check on a new event that could not read
+  # the caller's own access keeps that apart from a real refusal: the web
+  # action answers the shared "could not check" sentence and the route the
+  # retryable 503, where a warehouse outside the scope is forbidden. All six
+  # files carry the "Security invariant" marker.
+  src/app/api/v1/schedule/route.test.ts
+  'src/app/api/v1/items/[id]/serials/route.test.ts'
+  'src/app/api/v1/serials/[id]/route.test.ts'
+  'src/app/api/v1/customers/[id]/status/route.test.ts'
+  src/app/api/v1/change-routes.audit-rows.test.ts
+  src/server/services/schedule.create-warehouse-check.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
