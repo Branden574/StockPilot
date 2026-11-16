@@ -39,6 +39,15 @@ const authSetUpRead = {
   opened_at: '2026-11-15T23:45:00Z',
   read_at: '2026-11-15T23:45:00Z',
 };
+// Added by docs/whats-new-delete-account-confirm (2026-11-16): the delete account release (every member: its entry has no audience), published later, at the top, below the Liquid Glass draft.
+const DELETE_CONFIRM_ID = 'delete-account-confirm-2026-11';
+const deleteConfirmRead = {
+  release_id: DELETE_CONFIRM_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-16T04:05:00Z',
+  read_at: '2026-11-16T04:05:00Z',
+};
 const apiKeyAuditRead = {
   release_id: API_KEY_AUDIT_ID,
   revision: 1,
@@ -93,10 +102,13 @@ describe('the invitation audit release: order, status and date', () => {
     expect(release().withdrawnNote).toBeUndefined();
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: RELEASES.slice(0, 3), without it): the API key audit release is published later, at the top, directly below the Liquid Glass draft.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES.slice(0, 5).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: every pinned position one place higher): the delete account release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES.slice(0, 6).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
       // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, directly below the Liquid Glass draft.
       // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, directly below the Liquid Glass draft.
+      // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: without it): the delete account release is published later, at the top, directly below the Liquid Glass draft.
+      [DELETE_CONFIRM_ID, 'published'],
       [AUTH_SET_UP_ID, 'published'],
       [API_KEY_AUDIT_ID, 'published'],
       [ID, 'published'],
@@ -104,7 +116,8 @@ describe('the invitation audit release: order, status and date', () => {
     ]);
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: ID): the API key audit release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: API_KEY_AUDIT_ID): the authenticator set-up release is published after it, at the top, the newest published release.
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(AUTH_SET_UP_ID);
+    // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: AUTH_SET_UP_ID): the delete account release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(DELETE_CONFIRM_ID);
   });
 
   // Renamed by docs/whats-new-api-key-audit (2026-11-15; was: "is dated on a whole minute after #579 went live, in the past, with the draft placeholder at the same minute and every release below it older"): the API key audit release above is dated later, and the draft placeholder moved to its minute. Claim kept: a whole minute after #579 went live, in the past, every release below it older.
@@ -117,7 +130,8 @@ describe('the invitation audit release: order, status and date', () => {
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(4)) {
+    // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: every pinned position one place higher): the delete account release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(5)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -190,7 +204,8 @@ describe('the invitation audit release: who is told', () => {
 
   // Renamed by docs/whats-new-api-key-audit (2026-11-15; was: "is the first notice for whoever it reaches, and the navigation release is next for owners and admins"): the API key audit release is published later and reaches the same readers, who read it first. Claim kept: the notice for whoever it reaches, and the navigation release next for owners and admins.
   // Renamed by docs/whats-new-authenticator-set-up-first (2026-11-15; was: "is the notice for whoever it reaches once the API key audit release is read, and the navigation release is next for owners and admins"): the authenticator set-up release is published later and reaches every member, who read it first. Claim kept: the notice for whoever it reaches, and the navigation release next for owners and admins.
-  it('is the notice for whoever it reaches once the authenticator set-up and API key audit releases are read, and the navigation release is next for owners and admins', () => {
+  // Renamed by docs/whats-new-delete-account-confirm (2026-11-16; was: "is the notice for whoever it reaches once the authenticator set-up and API key audit releases are read, and the navigation release is next for owners and admins"): the delete account release is published later and reaches every member, who read it first. Claim kept: the notice for whoever it reaches, and the navigation release next for owners and admins.
+  it('is the notice for whoever it reaches once the delete account, authenticator set-up and API key audit releases are read, and the navigation release is next for owners and admins', () => {
     const read = {
       release_id: ID,
       revision: 1,
@@ -201,8 +216,9 @@ describe('the invitation audit release: who is told', () => {
     for (const v of [owner, admin, manager]) {
       // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: nothing read): the API key audit release is published later, at the top, and reaches the same readers, so each reads it first, and the notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
+      // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: without it): the delete account release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
       expect(
-        buildReleaseList(RELEASES, v, [authSetUpRead, apiKeyAuditRead], null).latestUnread?.id,
+        buildReleaseList(RELEASES, v, [deleteConfirmRead, authSetUpRead, apiKeyAuditRead], null).latestUnread?.id,
         v.role,
       ).toBe(ID);
     }
@@ -210,20 +226,24 @@ describe('the invitation audit release: who is told', () => {
       // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: [read]): the API key audit release is read too, as above.
       expect(
         // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
-        buildReleaseList(RELEASES, v, [authSetUpRead, apiKeyAuditRead, read], null).latestUnread
+        // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: without it): the delete account release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
+        buildReleaseList(RELEASES, v, [deleteConfirmRead, authSetUpRead, apiKeyAuditRead, read], null).latestUnread
           ?.id,
         v.role,
       ).toBe(NAVIGATION_ID);
     }
     // A reader it does not reach keeps the notice they had.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
-    expect(buildReleaseList(RELEASES, staff, [authSetUpRead], null).latestUnread?.id).not.toBe(ID);
+    // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: without it): the delete account release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
+    expect(buildReleaseList(RELEASES, staff, [deleteConfirmRead, authSetUpRead], null).latestUnread?.id).not.toBe(ID);
     // An older phone build shows the newest one it has not seen: this title and summary, with
     // the link to the page.
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: nothing seen): the API key audit release is published later and reaches managers, so the phone has seen it first.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
+    // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: without it): the delete account release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
     expect(
       legacyAnnouncementsFor(RELEASES, manager, {
+        [DELETE_CONFIRM_ID]: true,
         [AUTH_SET_UP_ID]: true,
         [API_KEY_AUDIT_ID]: true,
       })[0],
