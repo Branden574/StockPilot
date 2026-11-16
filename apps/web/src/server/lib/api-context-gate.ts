@@ -124,7 +124,10 @@ function policyUnreadForWrite(req: Request, ctx: ServiceContext): boolean {
 
 /** The marker, and one log line that names the class and never a message. */
 function refusedBeforeAnyWork(className: string): { response: NextResponse } {
-  // The class only: the loader that refused has already reported the read.
+  // The class only. The read behind it has logged its own line already: a
+  // loader that threw or a module set that could not be read where the read
+  // was made, and a policy that was not read where the context was marked
+  // (lib/auth/api-context.ts).
   console.warn(
     '[api-context-gate] access could not be checked, refused before any work:',
     className,

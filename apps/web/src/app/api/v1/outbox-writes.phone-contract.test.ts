@@ -11,9 +11,10 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
  *
  * The phone's drain (apps/mobile/src/lib/sync.ts sendOne, cycle-count-sync.ts)
  * sends a queued purchase order line receipt, bundle hand-out, size count
- * batch and count line clear to these routes, and sends a row again after a
- * 5xx (drain-failure.ts). Each route calls the gate as its first statement,
- * so:
+ * batch, count line clear and count line record to these routes, and sends a
+ * row again after a 5xx (drain-failure.ts). Each route calls the gate as its
+ * first statement, and the count line record as its second, after one read of
+ * the clock it places the capture against, so:
  *   - a context that could not be built because the caller's access could
  *     not be checked, and a write by a member whose organization's
  *     authenticator policy could not be read and who has no verified
@@ -49,6 +50,7 @@ import { SizeCountsService } from '@/server/services/size-counts';
 
 import { POST as distribute } from './bundles/[id]/distribute/route';
 import { POST as clearLine } from './cycle-counts/[id]/lines/[lineId]/clear/route';
+import { POST as recordLine } from './cycle-counts/[id]/lines/[lineId]/record/route';
 import { POST as receiveLine } from './po/[id]/receive-line/route';
 import { POST as sizeCountEvents } from './size-counts/[id]/events/route';
 
@@ -150,7 +152,26 @@ const ROUTES: Route[] = [
         params: Promise.resolve({ id: COUNT, lineId: LINE }),
       }),
   },
+  {
+    name: 'a count recorded (record)',
+    service: CycleCountsService,
+    method: 'recordCount',
+    succeeds: undefined,
+    send: () => sendCount(),
+  },
 ];
+
+/** The phone's queued count: taken offline at 14:20, sent at 15:00 by the device's clock. */
+function sendCount() {
+  return recordLine(
+    post(`/api/v1/cycle-counts/${COUNT}/lines/${LINE}/record`, {
+      countedQuantity: 3,
+      capturedAt: '2026-10-24T14:20:00.000Z',
+      clientSentAt: '2026-10-24T15:00:00.000Z',
+    }),
+    { params: Promise.resolve({ id: COUNT, lineId: LINE }) },
+  );
+}
 
 type Mfa = { mfaRequired: boolean; mfaSatisfied: boolean; mfaEnrolled: boolean };
 const OWES_SET_UP: Mfa = { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false };
@@ -281,5 +302,40 @@ describe.each(ROUTES)('$name', (route) => {
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: 'unauthenticated' });
     expect(checkRateLimit).not.toHaveBeenCalled();
+  });
+});
+
+describe('a count recorded (record): the capture time', () => {
+  // The server's clock when the count arrives.
+  const ARRIVAL = Date.parse('2026-10-24T18:00:00.000Z');
+
+  it('is measured against the clock read before the gate, so a slow context step does not move it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(ARRIVAL);
+      const write = spyOnWrite(ROUTES.find((r) => r.method === 'recordCount')!).mockResolvedValue(
+        undefined,
+      );
+      const stub = makeSupabaseStub();
+      const ctx = {
+        ...makeServiceContext(stub.client, { role: 'staff', enabledModules: MODULES_ON }),
+        mfaEnrolled: false,
+      };
+      // Building the context takes five seconds.
+      vi.mocked(withApiContext).mockImplementation(async () => {
+        vi.setSystemTime(ARRIVAL + 5_000);
+        return ctx as never;
+      });
+
+      const res = await sendCount();
+
+      expect(res.status).toBe(200);
+      // Sent 40 minutes after it was taken, so it was taken 40 minutes before it arrived.
+      expect(write).toHaveBeenCalledWith(
+        expect.objectContaining({ countedQuantity: 3, capturedAt: '2026-10-24T17:20:00.000Z' }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -15,7 +15,8 @@ import { contextUnavailableBody, isRefusedBeforeAnyWrite } from '@stockpilot/cor
  * Every session shape (policy x role x authenticator x level), on both sign-in
  * paths and both ways the context is built (one round trip, separate
  * queries), for each organization row state (as stored; hidden; a failed
- * query; a policy value it does not know), for each method:
+ * query; a policy read that rejects; a policy value it does not know), for
+ * each method:
  *   - a session that owes its code: withApiContext's null, so the route's own
  *     401, whatever the state;
  *   - a policy that was not read, a member with no verified authenticator, a
@@ -58,7 +59,7 @@ type Aal = 'aal1' | 'aal2';
 type Path = 'bearer' | 'cookie';
 type Read = 'one round trip' | 'separate queries';
 type Method = 'GET' | 'HEAD' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
-type Org = 'stored' | 'hidden' | 'error' | 'odd';
+type Org = 'stored' | 'hidden' | 'error' | 'rejects' | 'odd';
 
 interface Session {
   policy: Policy;
@@ -69,7 +70,11 @@ interface Session {
 
 const state: Session & {
   rpc: boolean;
-  /** The organization row: as stored, hidden (no row), a failed query, or a policy value it does not know. */
+  /**
+   * The organization row: as stored, hidden (no row), a failed query, a policy
+   * read that rejects (throws instead of answering), or a policy value it does
+   * not know.
+   */
   org: Org;
   calls: string[];
   /** With no verified authenticator: an enrolment started and never confirmed. */
@@ -119,6 +124,24 @@ function table(name: string, single: unknown, list: unknown[] = [], error: unkno
 }
 
 const row = (name: string, r: unknown) => table(name, r, r ? [r] : []);
+
+/** The organization row whose policy read rejects; every other read of it answers as stored. */
+function policyReadRejects(name: string) {
+  const stored = { mfa_policy: state.policy, all_modules_comp: false };
+  const q = row(name, stored);
+  let columns = '';
+  q.select = (cols: string) => {
+    columns = cols;
+    return q;
+  };
+  const answer = q.maybeSingle as () => Promise<unknown>;
+  q.maybeSingle = async () => {
+    if (!columns.includes('mfa_policy')) return answer();
+    state.calls.push(`from:${name}`);
+    throw new Error('fetch failed');
+  };
+  return q;
+}
 
 function bundle() {
   return {
@@ -170,6 +193,7 @@ function makeClient() {
     from: (name: string) => {
       if (name === 'organizations') {
         if (state.org === 'error') return table(name, null, [], { code: '57014' });
+        if (state.org === 'rejects') return policyReadRejects(name);
         if (state.org === 'hidden') return row(name, null);
         return row(name, {
           mfa_policy: state.org === 'odd' ? 'something_else' : state.policy,
@@ -264,12 +288,14 @@ type Expect = 'null' | 'marker' | 'ctx';
 
 /**
  * The organization states, each with the ways of reading the context that
- * reach it as unread (a failed query is reached through the separate queries).
+ * reach it as unread (a failed or rejected query is reached through the
+ * separate queries).
  */
 const ORG_STATES: ReadonlyArray<readonly [Org, readonly Read[]]> = [
   ['stored', READS],
   ['hidden', READS],
   ['error', ['separate queries']],
+  ['rejects', ['separate queries']],
   ['odd', READS],
 ];
 
@@ -331,7 +357,7 @@ describe.each(PATHS)('apiContextGate over withApiContext (%s)', (path) => {
   );
 });
 
-describe('which answers move, and which stay', () => {
+describe("which requests get the marker, and which get the route's answer", () => {
   const owed: Session = {
     policy: 'all_required',
     role: 'staff',
@@ -360,6 +386,27 @@ describe('which answers move, and which stay', () => {
       '[api-context-gate] access could not be checked, refused before any work:',
       'MfaPolicyUnread',
     ]);
+  });
+
+  it('a policy that came back hidden or not a policy leaves one line where the context is marked: a fixed message and a cause code', async () => {
+    const cases = [
+      ['hidden', 'hidden_row'],
+      ['odd', 'not_a_policy'],
+    ] as const;
+    for (const [org, cause] of cases) {
+      for (const read of READS) {
+        vi.mocked(console.warn).mockClear();
+        arrange({ ...owed, policy: 'optional' }, read, org);
+        await withApiContext(request('bearer', 'POST'));
+        const lines = vi
+          .mocked(console.warn)
+          .mock.calls.filter((c) => String(c[0]).startsWith('[api-context] authenticator policy'));
+        // The one-round-trip read hands a hidden row to the separate queries, which log it there.
+        expect(lines, `${org} ${read}`).toEqual([
+          ['[api-context] authenticator policy not read:', cause],
+        ]);
+      }
+    }
   });
 
   it('a verified authenticator at aal2 passes in every state', async () => {

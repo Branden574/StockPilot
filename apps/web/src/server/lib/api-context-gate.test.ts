@@ -173,7 +173,10 @@ const CORE_MARKER_FILE = 'auth/context-unavailable.ts';
  * out, size count events, a count line cleared) call it as their first
  * statement too, and each is safe to send again: the first two carry the
  * queued row's idempotency key, size count events are taken once per event
- * key, and a line cleared a second time stays cleared.
+ * key, and a line cleared a second time stays cleared. The count line record
+ * reads the clock first (isClockRead) and calls the gate as its second
+ * statement; a count sent again writes the same value to the same line, and
+ * the phone sends only the newest queued count for a line.
  */
 const GATED_ROUTES = [
   'app/api/v1/account/email/cancel/route.ts',
@@ -183,6 +186,7 @@ const GATED_ROUTES = [
   'app/api/v1/bundles/[id]/distribute/route.ts',
   'app/api/v1/customers/[id]/status/route.ts',
   'app/api/v1/cycle-counts/[id]/lines/[lineId]/clear/route.ts',
+  'app/api/v1/cycle-counts/[id]/lines/[lineId]/record/route.ts',
   'app/api/v1/exceptions/[id]/escalate/route.ts',
   'app/api/v1/items/[id]/adjust/route.ts',
   'app/api/v1/items/[id]/serials/route.ts',
@@ -359,11 +363,74 @@ function gateLocalName(sf: ts.SourceFile, fileName: string): string | null {
   return null;
 }
 
-/** `const gate = await <gate>(<the handler's first parameter>);` */
+/**
+ * The one statement a handler may make before the gate: a single
+ * `const <name> = Date.now();` (one const declaration, its initializer exactly
+ * the call `Date.now()` with no arguments, in a file that declares and imports
+ * no `Date` of its own). A clock read changes no state, spends nothing and
+ * reads nothing, so the gate's answer still comes before any work. A route
+ * that places a count at the moment it arrived reads the clock first so the
+ * time does not include the context step.
+ */
+function isClockRead(st: ts.Statement, gateVar: string): boolean {
+  if (!ts.isVariableStatement(st) || st.modifiers?.length) return false;
+  const list = st.declarationList;
+  if ((list.flags & ts.NodeFlags.BlockScoped) !== ts.NodeFlags.Const) return false;
+  if (list.declarations.length !== 1) return false;
+  const [decl] = list.declarations;
+  if (!decl || !ts.isIdentifier(decl.name) || decl.name.text === gateVar || decl.type) return false;
+  const init = decl.initializer;
+  if (!init || !ts.isCallExpression(init) || init.arguments.length > 0) return false;
+  if (init.questionDotToken || init.typeArguments) return false;
+  const callee = init.expression;
+  return (
+    ts.isPropertyAccessExpression(callee) &&
+    !callee.questionDotToken &&
+    ts.isIdentifier(callee.expression) &&
+    callee.expression.text === 'Date' &&
+    ts.isIdentifier(callee.name) &&
+    callee.name.text === 'now'
+  );
+}
+
+/** Does the file bind a `Date` of its own (an import, a declaration, a parameter)? */
+function bindsOwnDate(sf: ts.SourceFile): boolean {
+  let found = false;
+  const visit = (n: ts.Node): void => {
+    if (found) return;
+    const name = (n as { name?: ts.Node }).name;
+    if (
+      (ts.isImportSpecifier(n) ||
+        ts.isImportClause(n) ||
+        ts.isNamespaceImport(n) ||
+        ts.isVariableDeclaration(n) ||
+        ts.isParameter(n) ||
+        ts.isFunctionDeclaration(n) ||
+        ts.isClassDeclaration(n)) &&
+      name &&
+      ts.isIdentifier(name) &&
+      name.text === 'Date'
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return found;
+}
+
+/**
+ * `const gate = await <gate>(<the handler's first parameter>);` as the first
+ * statement, or as the second after one clock read (isClockRead).
+ */
 function isGateFirstStatement(fn: ts.FunctionLikeDeclaration, gate: string): boolean {
   const body = fn.body;
   if (!body || !ts.isBlock(body)) return false;
-  const first = body.statements[0];
+  const leading = body.statements[0];
+  const clockFirst =
+    leading !== undefined && isClockRead(leading, 'gate') && !bindsOwnDate(fn.getSourceFile());
+  const first = body.statements[clockFirst ? 1 : 0];
   const param = fn.parameters[0];
   if (!first || !param || !ts.isIdentifier(param.name)) return false;
   if (!ts.isVariableStatement(first)) return false;
@@ -403,7 +470,8 @@ function isModulesOption(arg: ts.Expression): boolean {
  * GUARD 3, FIRST STATEMENT. The marker promises that nothing was written, which
  * holds only while the gate runs before the route does anything. So every
  * handler of a file that imports the gate starts with
- * `const gate = await apiContextGate(<its own request>)`, and the files that
+ * `const gate = await apiContextGate(<its own request>)`, or makes one clock
+ * read (`const <name> = Date.now();`) and then that statement, and the files that
  * load the gate's module are exactly the reviewed routes: a helper that called
  * it after some work would break the promise out of this guard's sight.
  */
@@ -519,6 +587,67 @@ describe('a route that uses the gate calls it first, and only the reviewed route
     for (const route of GATED_ROUTES) expect(WEB.has(route), route).toBe(true);
   });
 
+  it('plant: one clock read before the gate passes, and every other leading shape fails', () => {
+    const imp = `import { apiContextGate } from '@/server/lib/api-context-gate';
+       import { checkRateLimit } from '@/lib/rate-limit';`;
+    const handler = (method: string, lead: string) =>
+      `export async function ${method}(req: Request) { ${lead} const gate = await apiContextGate(req); return gate; }`;
+    const RECORD = 'app/api/v1/cycle-counts/[id]/lines/[lineId]/record/route.ts';
+    const CLEAR = 'app/api/v1/cycle-counts/[id]/lines/[lineId]/clear/route.ts';
+    const EVENTS = 'app/api/v1/size-counts/[id]/events/route.ts';
+    const web = new Map(GATED_ROUTES.map((route) => [route, WEB.get(route)!] as [string, string]));
+    web.set(
+      RECORD,
+      [
+        imp,
+        handler('POST', 'const arrivedAt = Date.now();'),
+        handler('PUT', 'const a = Date.now(); const b = Date.now();'),
+        handler('PATCH', 'let a = Date.now();'),
+        handler('DELETE', 'const a = new Date();'),
+        handler('GET', 'const a = performance.now();'),
+        handler('HEAD', 'const a = Date.now(1);'),
+        handler('OPTIONS', 'const a = await Date.now();'),
+      ].join('\n'),
+    );
+    web.set(
+      CLEAR,
+      [
+        imp,
+        handler('POST', 'const a = 1;'),
+        handler('PUT', 'const a = Date.now(), b = 1;'),
+        `export async function PATCH(req: Request) { const gate = Date.now(); return [gate, req]; }`,
+        handler('DELETE', "const a = Date.now(); await checkRateLimit('x', 1, 1);"),
+        handler('GET', 'const a = Date?.now();'),
+        handler('HEAD', 'const a: number = Date.now();'),
+        handler('OPTIONS', 'const a = Date.now'),
+      ].join('\n'),
+    );
+    web.set(
+      EVENTS,
+      [`import { Date } from '@/lib/clock';`, imp, handler('POST', 'const a = Date.now();')].join(
+        '\n',
+      ),
+    );
+    const not = (file: string, method: string) =>
+      `${file} ${method}: the first statement is not \`const gate = await apiContextGate(<its request>)\``;
+    expect(firstStatementFindings(web)).toEqual([
+      not(CLEAR, 'POST'),
+      not(CLEAR, 'PUT'),
+      not(CLEAR, 'PATCH'),
+      not(CLEAR, 'DELETE'),
+      not(CLEAR, 'GET'),
+      not(CLEAR, 'HEAD'),
+      not(CLEAR, 'OPTIONS'),
+      not(RECORD, 'PUT'),
+      not(RECORD, 'PATCH'),
+      not(RECORD, 'DELETE'),
+      not(RECORD, 'GET'),
+      not(RECORD, 'HEAD'),
+      not(RECORD, 'OPTIONS'),
+      not(EVENTS, 'POST'),
+    ]);
+  });
+
   it('plant: a route whose first statement is not the gate fails it, and so does an unreviewed importer', () => {
     // The reviewed routes beside the plants (the adjust route is replaced).
     const web = new Map(GATED_ROUTES.map((route) => [route, WEB.get(route)!] as [string, string]));
@@ -547,7 +676,7 @@ describe('a route that uses the gate calls it first, and only the reviewed route
       `export async function later(req: Request) { const { apiContextGate } = await import('@/server/lib/api-context-gate'); return apiContextGate(req); }`,
     );
     expect(firstStatementFindings(web)).toEqual([
-      'the gate is loaded by [app/api/v1/account/email/cancel/route.ts, app/api/v1/account/email/request/route.ts, app/api/v1/account/email/resend/route.ts, app/api/v1/account/email/route.ts, app/api/v1/bundles/[id]/distribute/route.ts, app/api/v1/customers/[id]/status/route.ts, app/api/v1/cycle-counts/[id]/lines/[lineId]/clear/route.ts, app/api/v1/exceptions/[id]/escalate/route.ts, app/api/v1/items/[id]/adjust/route.ts, app/api/v1/items/[id]/serials/route.ts, app/api/v1/members/[id]/category-access/route.ts, app/api/v1/members/[id]/role/route.ts, app/api/v1/other/route.ts, app/api/v1/po/[id]/receive-line/route.ts, app/api/v1/rentals/route.ts, app/api/v1/schedule/route.ts, app/api/v1/serials/[id]/route.ts, app/api/v1/size-counts/[id]/events/route.ts, server/lib/wraps-the-gate.ts], reviewed: [app/api/v1/account/email/cancel/route.ts, app/api/v1/account/email/request/route.ts, app/api/v1/account/email/resend/route.ts, app/api/v1/account/email/route.ts, app/api/v1/bundles/[id]/distribute/route.ts, app/api/v1/customers/[id]/status/route.ts, app/api/v1/cycle-counts/[id]/lines/[lineId]/clear/route.ts, app/api/v1/exceptions/[id]/escalate/route.ts, app/api/v1/items/[id]/adjust/route.ts, app/api/v1/items/[id]/serials/route.ts, app/api/v1/members/[id]/category-access/route.ts, app/api/v1/members/[id]/role/route.ts, app/api/v1/po/[id]/receive-line/route.ts, app/api/v1/rentals/route.ts, app/api/v1/schedule/route.ts, app/api/v1/serials/[id]/route.ts, app/api/v1/size-counts/[id]/events/route.ts]',
+      'the gate is loaded by [app/api/v1/account/email/cancel/route.ts, app/api/v1/account/email/request/route.ts, app/api/v1/account/email/resend/route.ts, app/api/v1/account/email/route.ts, app/api/v1/bundles/[id]/distribute/route.ts, app/api/v1/customers/[id]/status/route.ts, app/api/v1/cycle-counts/[id]/lines/[lineId]/clear/route.ts, app/api/v1/cycle-counts/[id]/lines/[lineId]/record/route.ts, app/api/v1/exceptions/[id]/escalate/route.ts, app/api/v1/items/[id]/adjust/route.ts, app/api/v1/items/[id]/serials/route.ts, app/api/v1/members/[id]/category-access/route.ts, app/api/v1/members/[id]/role/route.ts, app/api/v1/other/route.ts, app/api/v1/po/[id]/receive-line/route.ts, app/api/v1/rentals/route.ts, app/api/v1/schedule/route.ts, app/api/v1/serials/[id]/route.ts, app/api/v1/size-counts/[id]/events/route.ts, server/lib/wraps-the-gate.ts], reviewed: [app/api/v1/account/email/cancel/route.ts, app/api/v1/account/email/request/route.ts, app/api/v1/account/email/resend/route.ts, app/api/v1/account/email/route.ts, app/api/v1/bundles/[id]/distribute/route.ts, app/api/v1/customers/[id]/status/route.ts, app/api/v1/cycle-counts/[id]/lines/[lineId]/clear/route.ts, app/api/v1/cycle-counts/[id]/lines/[lineId]/record/route.ts, app/api/v1/exceptions/[id]/escalate/route.ts, app/api/v1/items/[id]/adjust/route.ts, app/api/v1/items/[id]/serials/route.ts, app/api/v1/members/[id]/category-access/route.ts, app/api/v1/members/[id]/role/route.ts, app/api/v1/po/[id]/receive-line/route.ts, app/api/v1/rentals/route.ts, app/api/v1/schedule/route.ts, app/api/v1/serials/[id]/route.ts, app/api/v1/size-counts/[id]/events/route.ts]',
       'app/api/v1/items/[id]/adjust/route.ts POST: the first statement is not `const gate = await apiContextGate(<its request>)`',
       'app/api/v1/other/route.ts DELETE: the first statement is not `const gate = await g(<its request>)`',
       'app/api/v1/other/route.ts PUT: the first statement is not `const gate = await g(<its request>)`',

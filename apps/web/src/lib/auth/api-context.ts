@@ -26,6 +26,7 @@ import {
   effectivePermissions,
   policyRequiresAuthenticator,
   stepUpOwed,
+  unwrapOrganizationEmbed,
 } from '@stockpilot/core';
 
 import {
@@ -44,6 +45,22 @@ import {
  */
 function withPolicyMark<T extends object>(ctx: T, policyUnread: boolean): T {
   return policyUnread ? markMfaPolicyUnread(ctx) : ctx;
+}
+
+/**
+ * Whether the organization row (or embed) that came back carries no policy
+ * this app knows: hidden from this member, or a value that is not a policy.
+ * When it does not, one log line with a fixed message and a cause code,
+ * never a value, id or address from the row. A read that errors logs in its
+ * own catch instead.
+ */
+function policyNotReadFrom(org: Parameters<typeof readOrganizationMfaPolicy>[0]): boolean {
+  if (readOrganizationMfaPolicy(org) !== null) return false;
+  console.warn(
+    '[api-context] authenticator policy not read:',
+    unwrapOrganizationEmbed(org) === null ? 'hidden_row' : 'not_a_policy',
+  );
+  return true;
 }
 
 /**
@@ -133,7 +150,7 @@ async function resolveApiMfaState(
     // policy instead of 'optional' (lib/auth/mfa-policy.ts).
     if (error) throw new Error(`mfa_policy unreadable: ${error.code || 'unknown'}`);
     policy = enforcedMfaPolicy(org);
-    policyUnread = readOrganizationMfaPolicy(org) === null;
+    policyUnread = policyNotReadFrom(org);
   } catch (err) {
     // Fail CLOSED: a read that errors is held to the STRICTEST policy, exactly
     // like a hidden row, never to a lesser one. A flaky org lookup must NOT
@@ -891,7 +908,7 @@ export async function withApiContext(
           },
           fast.held,
         ),
-        readOrganizationMfaPolicy(fast.held.organization) === null,
+        policyNotReadFrom(fast.held.organization),
       );
     }
 
@@ -1008,7 +1025,7 @@ export async function withApiContext(
         },
         fast.held,
       ),
-      readOrganizationMfaPolicy(fast.held.organization) === null,
+      policyNotReadFrom(fast.held.organization),
     );
   }
 
