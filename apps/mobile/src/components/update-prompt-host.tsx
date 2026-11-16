@@ -3,8 +3,8 @@ import { Image, Keyboard, StyleSheet, View } from 'react-native';
 
 import { useAuth } from '@/lib/auth-context';
 import { useColdLaunchGate } from '@/lib/cold-launch-gate';
-import { LAUNCH_SCREEN_GROUND, RESTARTING_LABEL } from '@/lib/ota-update-prompt';
-import { LAUNCH_ICON } from '@/lib/restart-screen';
+import { RESTARTING_LABEL } from '@/lib/ota-update-prompt';
+import { LAUNCH_ICON, RESTART_GROUND, RESTART_SHOWS_ICON } from '@/lib/restart-screen';
 import {
   UPDATE_PROMPT_LOCK_ID,
   useAnyTourVisibleExcept,
@@ -35,10 +35,11 @@ function useKeyboardVisible(): boolean {
  * waits for all of them. The pop-up itself is a native alert the controller
  * shows, above every sheet.
  *
- * While Restart now restarts the app it draws the launch screen over
- * everything (the icon on the launch screen's colour), so the person never
- * works on into a restart; expo-updates' reload screen then shows the same
- * picture, and the new version's own launch animation follows, once.
+ * While Restart now restarts the app it draws the installed binary's launch
+ * screen over everything (restart-screen.ts: the icon on its ground, or the
+ * plain ground alone), so the person never works on into a restart;
+ * expo-updates' reload screen then shows the same picture, and the new
+ * version's own launch animation follows, once.
  */
 export function UpdatePromptHost({ segments }: { segments: string[] }) {
   const { user } = useAuth();
@@ -75,19 +76,21 @@ export function UpdatePromptHost({ segments }: { segments: string[] }) {
       accessibilityViewIsModal
       accessibilityLabel={RESTARTING_LABEL}
     >
-      <Image
-        source={LAUNCH_ICON}
-        resizeMode="contain"
-        style={styles.icon}
-        accessibilityIgnoresInvertColors
-      />
+      {RESTART_SHOWS_ICON ? (
+        <Image
+          source={LAUNCH_ICON}
+          resizeMode="contain"
+          style={styles.icon}
+          accessibilityIgnoresInvertColors
+        />
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   overlay: {
-    backgroundColor: LAUNCH_SCREEN_GROUND,
+    backgroundColor: RESTART_GROUND,
     zIndex: 1000,
     elevation: 1000,
   },

@@ -79,9 +79,6 @@ export const RESTART_RECORD_MAX_AGE_MS = 60_000;
 export const MEMORY_KEY = 'stockpilot.update-prompt.v1';
 export const MEMORY_MAX_ENTRIES = 10;
 
-/** The launch screen's colour (app.config.ts, expo-splash-screen backgroundColor). */
-export const LAUNCH_SCREEN_GROUND = '#0a0f1f';
-
 /**
  * Screens where the pop-up never shows: someone is scanning, counting,
  * creating a record, checking out an order, grouping, typing to support or the
