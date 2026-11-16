@@ -524,7 +524,11 @@ select is(
        ('latest',    'public._latest_count_lines(uuid, uuid[], timestamptz)',              'fbf8501a3022fe84a9209c3ddfe1dd09'),
        ('link',      'public._exc_link_recount(uuid, uuid)',                               'aca3114bc8688ca7f6b2de032bc57d8f'),
        ('rechecks',  'public.cycle_count_line_rechecks(public.cycle_count_lines)',         'd9b450a79b8b516c891fa79db1a021e7'),
-       ('recount',   'public.start_targeted_recount(uuid, uuid[], uuid[], text, text)',    'b22850a25b3b92d9a5f1ed02aa717aad'),
+       -- Re-pinned by 0466 (was b22850a25b3b92d9a5f1ed02aa717aad): lines tagged -- 0466
+       -- raise stockpilot.idempotency_write around the recount's own key writes and
+       -- check the stored answer names the key's count (0466 P1: removing them gives
+       -- the earlier body exactly).
+       ('recount',   'public.start_targeted_recount(uuid, uuid[], uuid[], text, text)',    '5096548529d92d7a7e8aec2b4791e305'),
        ('summaries', 'public.item_verification_summaries(uuid, uuid[])',                   '833809196500b7846ce7999e37e6e144'),
        ('visible',   'public._exc_occurrence_visible(uuid, uuid, uuid)',                   '62662f8300373203ad06b7a64d147c0c')
      ) v(fn, sig, want)

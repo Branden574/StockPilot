@@ -915,7 +915,12 @@ select is(
   -- key lines (header, owner and ACL unchanged); revise_order_needed_by calls
   -- neither. 0464's pgTAP P8 takes both back to their pre-0464 text and gets
   -- cfc03152|18 exactly.
-  'ledger.*|ee07dd0a0c69b01b77f39c5791aea9e4|18\n'
+  -- Re-pinned by 0466 (retry keys; was ee07dd0a0c69b01b77f39c5791aea9e4|18):
+  -- ledger.post_receipt_v2 and ledger.distribute_bundle gained their tagged
+  -- lines refusing a key already on a receipt or distribution (header, owner
+  -- and ACL unchanged); revise_order_needed_by calls neither. 0466's pgTAP P2
+  -- takes both back to their pre-0466 text and gets ee07dd0a|18 exactly.
+  'ledger.*|7e62f415c0fee59d829acffae47f602c|18\n'
   -- Re-pinned by 0384 (was c388801c0cca0196bed7d51dc7df2096): the
   -- schedule_events insert and update WITH CHECK gained
   -- order_request_in_org(order_request_id, organization_id); every earlier
