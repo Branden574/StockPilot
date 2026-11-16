@@ -6,9 +6,10 @@
  * and the code page's own test.
  *
  * A test sets `world` (who the proxy forwarded, the account's factors, the
- * verified token's subject and level, the organization's policy) and reads
- * `world.calls` back. `auth:getUser` is the gate's one Auth round trip (the
- * factor list); `auth:getSession` and `auth:getClaims` are local reads.
+ * verified token's subject and level, the organization's policy, the page's
+ * path) and reads `world.calls` back. `auth:getUser` is the gate's one Auth
+ * round trip (the factor list); `auth:getSession` and `auth:getClaims` are
+ * local reads.
  *
  * Made-up people and organizations only.
  */
@@ -27,6 +28,8 @@ export interface World {
   headerUser: string | null;
   /** `x-stockpilot-return-path`: the page the request was for. */
   returnPath: string | null;
+  /** `x-pathname`: the page's path, which the proxy sets on every request it handles. */
+  pathname: string | null;
   /** GoTrue's factors for the account. */
   factors: Array<{ status: string }>;
   /** Whose list GoTrue answers with (another account after a refresh swap). */
@@ -50,6 +53,7 @@ export interface World {
 const START: Omit<World, 'calls'> = {
   headerUser: USER,
   returnPath: '/dashboard/inventory?view=low',
+  pathname: '/dashboard/inventory',
   factors: [],
   factorsOf: USER,
   factorRead: 'answer',
@@ -72,7 +76,7 @@ export const VERIFIED_FACTOR = [{ status: 'verified' }];
 
 export const countCalls = (call: string) => world.calls.filter((c) => c === call).length;
 
-/** What `headers()` answers: the proxy's identity and return-path headers. */
+/** What `headers()` answers: the proxy's identity, return-path and path headers. */
 export function fixtureHeaders(): Headers {
   const h = new Headers();
   if (world.headerUser) {
@@ -80,6 +84,7 @@ export function fixtureHeaders(): Headers {
     h.set('x-stockpilot-user-email', EMAIL);
   }
   if (world.returnPath !== null) h.set('x-stockpilot-return-path', world.returnPath);
+  if (world.pathname !== null) h.set('x-pathname', world.pathname);
   return h;
 }
 

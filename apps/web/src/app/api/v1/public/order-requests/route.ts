@@ -6,6 +6,11 @@ import { z } from 'zod';
 import { clientIpFromRequest } from '@/lib/client-ip';
 import { sendOrderRequestEmail } from '@/lib/email/order-requests';
 import { reportError } from '@/lib/error-reporter';
+import {
+  PAYLOAD_TOO_LARGE,
+  PUBLIC_FORM_BODY_LIMIT,
+  readJsonLimited,
+} from '@/lib/http/read-json-limited';
 import { hasArrayLongerThan } from '@/lib/oversized-array';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -126,19 +131,21 @@ const ONE_HOUR_MS = 60 * 60 * 1000;
 const MAX_TOTAL_QTY = 10_000;
 
 export async function POST(req: NextRequest) {
-  // 1. Parse + validate body BEFORE touching the admin client.
-  let raw: unknown;
-  try {
-    raw = await req.json();
-  } catch {
-    return NextResponse.json({ error: 'invalid_json' }, { status: 400 });
+  // 1. Parse + validate body BEFORE touching the admin client. A body over
+  // PUBLIC_FORM_BODY_LIMIT is refused before it is parsed.
+  const read = await readJsonLimited(req, PUBLIC_FORM_BODY_LIMIT);
+  if (!read.ok) {
+    return read.reason === 'too_large'
+      ? NextResponse.json(PAYLOAD_TOO_LARGE, { status: 413 })
+      : NextResponse.json({ error: 'invalid_json' }, { status: 400 });
   }
-  // GHSA-mrhx-c7xc-m3w5: zod 3 still parses every element of an over-long
-  // array, one issue per bad element (lib/oversized-array.ts), so a body with
-  // any array longer than MAX_LINES, at any depth, is refused before
-  // safeParse. The form (public-cart-rail.tsx) sends no array but `lines`.
-  // The words are the ones zod gives an over-long `lines`, which is what the
-  // form shows today for a cart of more than 100 items.
+  const raw = read.value;
+  // GHSA-mrhx-c7xc-m3w5, a second layer behind the zod patch
+  // (lib/oversized-array.ts): a body with any array longer than MAX_LINES, at
+  // any depth, is refused before safeParse. The form (public-cart-rail.tsx)
+  // sends no array but `lines`. The words are the ones zod gives an over-long
+  // `lines`, which is what the form shows today for a cart of more than 100
+  // items.
   //
   // Checking a body must never answer 500: this runs before the rate limiter,
   // for anyone. The check walks without recursion and the schema hands

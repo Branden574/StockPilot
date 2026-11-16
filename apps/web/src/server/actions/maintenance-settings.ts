@@ -7,7 +7,16 @@ import { audit } from '@/server/services/audit';
 import { ServiceError, withContext } from '@/server/services/context';
 import { actionErrorResult } from '@/server/lib/action-error-result';
 
-import { can, err, ok, uuidSchema, type ActionResult } from '@stockpilot/core';
+import {
+  boundedRecord,
+  can,
+  err,
+  formatLimit,
+  MAX_PICKED_IDS,
+  ok,
+  uuidSchema,
+  type ActionResult,
+} from '@stockpilot/core';
 
 // ---------------------------------------------------------------------------
 // Per-org maintenance-request module settings, stored in
@@ -63,7 +72,12 @@ const patchSchema = z
       .max(30, 'Keep the category list to 30 or fewer.')
       .optional(),
     includeShareLinksInEmail: z.boolean().optional(),
-    notifyAudience: z.record(uuidSchema, z.enum(['all', 'urgent_only', 'none'])).optional(),
+    notifyAudience: boundedRecord(
+      uuidSchema,
+      z.enum(['all', 'urgent_only', 'none']),
+      MAX_PICKED_IDS,
+      `Choose a notification setting for at most ${formatLimit(MAX_PICKED_IDS)} members.`,
+    ).optional(),
   })
   .strict();
 

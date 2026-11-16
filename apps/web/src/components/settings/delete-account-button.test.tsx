@@ -20,11 +20,19 @@ vi.mock('sonner', () => ({
   },
 }));
 const deleteOwnAccountAction = vi.hoisted(() => vi.fn());
-vi.mock('@/server/actions/profile', () => ({ deleteOwnAccountAction }));
+const requestAccountDeletionCodeAction = vi.hoisted(() => vi.fn());
+vi.mock('@/server/actions/profile', () => ({
+  deleteOwnAccountAction,
+  requestAccountDeletionCodeAction,
+}));
 
 import { APPEARANCE_SIGNED_OUT_EVENT } from '@/components/theme/appearance-cookie';
 
 import { DeleteAccountButton } from './delete-account-button';
+import {
+  DELETE_ACCOUNT_CODE_SEND_PAUSED_COPY,
+  DELETE_ACCOUNT_CONFIRM_COPY,
+} from './delete-account-copy';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -62,7 +70,7 @@ describe('DeleteAccountButton: a refusal', () => {
 
   it('says why inside the dialog, which stays open, with the Team page link beside it and no toast', async () => {
     const user = userEvent.setup();
-    render(<DeleteAccountButton />);
+    render(<DeleteAccountButton confirmWith="authenticator" />);
 
     const dialog = await openAndConfirm(user);
 
@@ -82,7 +90,7 @@ describe('DeleteAccountButton: a refusal', () => {
       error: { code: 'internal', message: 'Your account could not be deleted right now.' },
     });
     const user = userEvent.setup();
-    render(<DeleteAccountButton />);
+    render(<DeleteAccountButton confirmWith="authenticator" />);
 
     const dialog = await openAndConfirm(user);
 
@@ -95,7 +103,7 @@ describe('DeleteAccountButton: a refusal', () => {
 
   it('clears the reason when the dialog is opened again', async () => {
     const user = userEvent.setup();
-    render(<DeleteAccountButton />);
+    render(<DeleteAccountButton confirmWith="authenticator" />);
 
     await openAndConfirm(user);
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
@@ -106,7 +114,7 @@ describe('DeleteAccountButton: a refusal', () => {
 
   it('clears the reason while it tries again', async () => {
     const user = userEvent.setup();
-    render(<DeleteAccountButton />);
+    render(<DeleteAccountButton confirmWith="authenticator" />);
     const dialog = await openAndConfirm(user);
     expect(within(dialog).getByRole('alert')).toBeInTheDocument();
 
@@ -138,7 +146,7 @@ describe('DeleteAccountButton: deleting the account', () => {
       return { ok: true, data: undefined };
     });
     const user = userEvent.setup();
-    render(<DeleteAccountButton />);
+    render(<DeleteAccountButton confirmWith="authenticator" />);
 
     await openAndConfirm(user);
 
@@ -160,7 +168,7 @@ describe('DeleteAccountButton: deleting the account', () => {
       return { ok: true, data: undefined };
     });
     const user = userEvent.setup();
-    render(<DeleteAccountButton />);
+    render(<DeleteAccountButton confirmWith="authenticator" />);
 
     await openAndConfirm(user);
 
@@ -188,7 +196,7 @@ describe('DeleteAccountButton: deleting the account', () => {
     window.addEventListener(APPEARANCE_SIGNED_OUT_EVENT, heard);
     deleteOwnAccountAction.mockResolvedValue({ ok: true, data: undefined });
     const user = userEvent.setup();
-    render(<DeleteAccountButton />);
+    render(<DeleteAccountButton confirmWith="authenticator" />);
 
     await openAndConfirm(user);
 
@@ -214,7 +222,7 @@ describe('DeleteAccountButton: deleting the account', () => {
       error: { code: 'conflict', message: REFUSAL, details: { reason: 'last_owner' } },
     });
     const user = userEvent.setup();
-    render(<DeleteAccountButton />);
+    render(<DeleteAccountButton confirmWith="authenticator" />);
 
     const dialog = await openAndConfirm(user);
 
@@ -228,7 +236,7 @@ describe('DeleteAccountButton: deleting the account', () => {
     sessionStorage.clear();
     seedInterruptedRuns();
     const user = userEvent.setup();
-    render(<DeleteAccountButton />);
+    render(<DeleteAccountButton confirmWith="authenticator" />);
 
     await user.click(screen.getByRole('button', { name: 'Delete my account' }));
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
@@ -236,5 +244,222 @@ describe('DeleteAccountButton: deleting the account', () => {
     expect(deleteOwnAccountAction).not.toHaveBeenCalled();
     expect(interruptedRunKeys()).toHaveLength(2);
     expect(tabs.sent()).toEqual([]);
+  });
+});
+
+/**
+ * An account with no authenticator confirms with its password, or with a code
+ * emailed to it ("Email me a code instead"). The button stays off until the
+ * chosen one is filled in; the server decides.
+ */
+describe('DeleteAccountButton: the password or the emailed code', () => {
+  async function openAndType(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole('button', { name: 'Delete my account' }));
+    const dialog = screen.getByRole('dialog');
+    await user.type(within(dialog).getByRole('textbox'), 'DELETE');
+    return dialog;
+  }
+
+  it('asks for the password: the button stays off until it is typed, and it is sent with the word', async () => {
+    deleteOwnAccountAction.mockResolvedValue({ ok: true, data: undefined });
+    const user = userEvent.setup();
+    render(<DeleteAccountButton confirmWith="password" />);
+    const dialog = await openAndType(user);
+
+    const confirmButton = within(dialog).getByRole('button', { name: 'Delete account' });
+    expect(confirmButton).toBeDisabled();
+    const password = within(dialog).getByLabelText('Your password');
+    expect(password).toHaveAttribute('type', 'password');
+    expect(password).toHaveAttribute('autocomplete', 'current-password');
+    await user.type(password, 'example-password-1');
+    expect(confirmButton).toBeEnabled();
+    await user.click(confirmButton);
+
+    expect(deleteOwnAccountAction).toHaveBeenCalledWith({
+      confirm: 'DELETE',
+      password: 'example-password-1',
+    });
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/signin'));
+  });
+
+  it('a wrong password: the reason shows in the dialog and the field is cleared', async () => {
+    deleteOwnAccountAction.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'forbidden',
+        message: 'That password is not correct. Nothing was deleted.',
+        details: { reason: 'password_refused' },
+      },
+    });
+    const user = userEvent.setup();
+    render(<DeleteAccountButton confirmWith="password" />);
+    const dialog = await openAndType(user);
+    await user.type(within(dialog).getByLabelText('Your password'), 'example-password-1');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete account' }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'That password is not correct.',
+    );
+    expect(within(dialog).getByLabelText('Your password')).toHaveValue('');
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it('"Email me a code instead" sends a code; the six digits and the challenge are sent with the word', async () => {
+    requestAccountDeletionCodeAction.mockResolvedValue({
+      ok: true,
+      data: { challenge: 'example-challenge', expiresAt: 1 },
+    });
+    deleteOwnAccountAction.mockResolvedValue({ ok: true, data: undefined });
+    const user = userEvent.setup();
+    render(<DeleteAccountButton confirmWith="password" />);
+    const dialog = await openAndType(user);
+
+    await user.click(within(dialog).getByRole('button', { name: 'Email me a code instead' }));
+    expect(requestAccountDeletionCodeAction).toHaveBeenCalledTimes(1);
+    expect(
+      await within(dialog).findByText(
+        'We sent a six-digit code to your sign-in email. It works for 10 minutes. If you ask again, only the newest code works.',
+      ),
+    ).toBeInTheDocument();
+
+    const confirmButton = within(dialog).getByRole('button', { name: 'Delete account' });
+    const code = within(dialog).getByLabelText('Code from your email');
+    expect(code).toHaveAttribute('autocomplete', 'one-time-code');
+    await user.type(code, '12a34');
+    expect(code).toHaveValue('1234');
+    expect(confirmButton).toBeDisabled();
+    await user.type(code, '56');
+    expect(confirmButton).toBeEnabled();
+    await user.click(confirmButton);
+
+    expect(deleteOwnAccountAction).toHaveBeenCalledWith({
+      confirm: 'DELETE',
+      code: '123456',
+      challenge: 'example-challenge',
+    });
+  });
+
+  it('a code that cannot be sent: the reason shows, and the password field stays', async () => {
+    requestAccountDeletionCodeAction.mockResolvedValue({
+      ok: false,
+      error: { code: 'rate_limited', message: DELETE_ACCOUNT_CODE_SEND_PAUSED_COPY },
+    });
+    const user = userEvent.setup();
+    render(<DeleteAccountButton confirmWith="password" />);
+    const dialog = await openAndType(user);
+    await user.click(within(dialog).getByRole('button', { name: 'Email me a code instead' }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'Too many codes requested. Try again in a few minutes, or enter your password.',
+    );
+    expect(within(dialog).getByLabelText('Your password')).toBeInTheDocument();
+  });
+
+  it('after a code is sent, keyboard focus is in the code field, which names the sent-code sentence', async () => {
+    requestAccountDeletionCodeAction.mockResolvedValue({
+      ok: true,
+      data: { challenge: 'example-challenge', expiresAt: 1 },
+    });
+    const user = userEvent.setup();
+    render(<DeleteAccountButton confirmWith="password" />);
+    const dialog = await openAndType(user);
+    await user.click(within(dialog).getByRole('button', { name: 'Email me a code instead' }));
+
+    const code = await within(dialog).findByLabelText('Code from your email');
+    await waitFor(() => expect(code).toHaveFocus());
+    expect(code).toHaveAccessibleDescription(DELETE_ACCOUNT_CONFIRM_COPY.codeSent);
+  });
+
+  it('a wrong code: the reason is announced, the code field is cleared and has focus again', async () => {
+    requestAccountDeletionCodeAction.mockResolvedValue({
+      ok: true,
+      data: { challenge: 'example-challenge', expiresAt: 1 },
+    });
+    deleteOwnAccountAction.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'forbidden',
+        message: 'That code is not correct or has expired.',
+        details: { reason: 'code_refused' },
+      },
+    });
+    const user = userEvent.setup();
+    render(<DeleteAccountButton confirmWith="password" />);
+    const dialog = await openAndType(user);
+    await user.click(within(dialog).getByRole('button', { name: 'Email me a code instead' }));
+    const code = await within(dialog).findByLabelText('Code from your email');
+    await user.type(code, '123456');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete account' }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'That code is not correct or has expired.',
+    );
+    expect(code).toHaveValue('');
+    await waitFor(() => expect(code).toHaveFocus());
+  });
+
+  it('a wrong password: the password field has focus again', async () => {
+    deleteOwnAccountAction.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'forbidden',
+        message: 'That password is not correct. Nothing was deleted.',
+        details: { reason: 'password_refused' },
+      },
+    });
+    const user = userEvent.setup();
+    render(<DeleteAccountButton confirmWith="password" />);
+    const dialog = await openAndType(user);
+    const password = within(dialog).getByLabelText('Your password');
+    await user.type(password, 'example-password-1');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete account' }));
+
+    await within(dialog).findByRole('alert');
+    await waitFor(() => expect(password).toHaveFocus());
+    expect(password).toHaveValue('');
+  });
+
+  it('each refusal is a new alert line, so a screen reader hears the second one too', async () => {
+    deleteOwnAccountAction.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'forbidden',
+        message: 'That password is not correct. Nothing was deleted.',
+        details: { reason: 'password_refused' },
+      },
+    });
+    const user = userEvent.setup();
+    render(<DeleteAccountButton confirmWith="password" />);
+    const dialog = await openAndType(user);
+    const password = within(dialog).getByLabelText('Your password');
+    await user.type(password, 'example-password-1');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete account' }));
+    const first = await within(dialog).findByRole('alert');
+
+    await user.type(password, 'example-password-2');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete account' }));
+    await waitFor(() => expect(deleteOwnAccountAction).toHaveBeenCalledTimes(2));
+    const second = await within(dialog).findByRole('alert');
+    expect(second).toHaveTextContent('That password is not correct.');
+    expect(second).not.toBe(first);
+  });
+
+  it('an account with an authenticator is not asked for a password, until the server asks for one', async () => {
+    deleteOwnAccountAction.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'forbidden',
+        message: 'Enter your password, or ask for a code by email, to confirm.',
+        details: { reason: 'credential_required' },
+      },
+    });
+    const user = userEvent.setup();
+    render(<DeleteAccountButton confirmWith="authenticator" />);
+    const dialog = await openAndType(user);
+    expect(within(dialog).queryByLabelText('Your password')).toBeNull();
+    await user.click(within(dialog).getByRole('button', { name: 'Delete account' }));
+    expect(deleteOwnAccountAction).toHaveBeenCalledWith({ confirm: 'DELETE' });
+
+    expect(await within(dialog).findByLabelText('Your password')).toBeInTheDocument();
   });
 });

@@ -7,6 +7,7 @@ import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
+import { OrganizationRowUnavailableError } from '@/lib/auth/organization-row-unavailable';
 import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { UNEXPECTED_ERROR_MESSAGE } from '@/server/lib/api-error-response';
 import { ServiceError } from '@/server/services/context';
@@ -202,6 +203,24 @@ describe('actionErrorResult', () => {
     expect(reportMock).toHaveBeenCalledWith(status, { tag: 'actions.y', level: 'warning' });
   });
 
+  it('answers an organization row that could not be read with the access try-again sentence, reported as a warning', () => {
+    const row = new OrganizationRowUnavailableError();
+    const res = actionErrorResult(row, 'actions.team', { organizationId: 'org-1' });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message: 'Your access could not be checked. Please try again.',
+      },
+    });
+    expect(reportMock).toHaveBeenCalledTimes(1);
+    expect(reportMock).toHaveBeenCalledWith(row, {
+      tag: 'actions.team',
+      organizationId: 'org-1',
+      level: 'warning',
+    });
+  });
+
   it('answers a module state that could not be read with its try-again sentence, reported as a warning, never as module_disabled', () => {
     const modules = new ModulesUnavailableError();
     const res = actionErrorResult(modules, 'actions.z', { organizationId: 'org-1' });
@@ -381,6 +400,7 @@ describe('uncheckedAccessResult and uncheckedAccessMessage', () => {
 
   it.each([
     [new ModulesUnavailableError(), 'Your access could not be checked. Please try again.'],
+    [new OrganizationRowUnavailableError(), 'Your access could not be checked. Please try again.'],
     [new PermissionsUnavailableError(), 'Your permissions could not be checked. Please try again.'],
     [new AccountStatusUnavailableError(), 'Account status could not be verified. Please try again.'],
   ])('answers the check\'s own sentence as internal_error, reported once as a warning', (e, sentence) => {

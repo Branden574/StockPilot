@@ -57,6 +57,13 @@ interface BaseProps {
    * outside it, so an action in a toast cannot be pressed.
    */
   errorAction?: { label: string; onClick: () => void } | null;
+  /**
+   * More fields the action needs (a password, a code), shown after the
+   * type-to-confirm input and before `error`. The caller owns their state.
+   */
+  extra?: React.ReactNode;
+  /** While true the action stays disabled: the fields in `extra` are not complete. */
+  confirmBlocked?: boolean;
 }
 
 interface StandardProps extends BaseProps {
@@ -102,6 +109,8 @@ export function DestructiveConfirm(props: DestructiveConfirmProps) {
     tone = 'destructive',
     error = null,
     errorAction = null,
+    extra = null,
+    confirmBlocked = false,
   } = props;
 
   const severity: Severity = props.severity ?? 'standard';
@@ -135,7 +144,7 @@ export function DestructiveConfirm(props: DestructiveConfirmProps) {
   }, [open, severity]);
 
   const matches = expected == null ? true : typed === expected;
-  const confirmDisabled = pending || !matches;
+  const confirmDisabled = pending || !matches || confirmBlocked;
 
   async function handleConfirm() {
     if (confirmDisabled) return;
@@ -193,6 +202,8 @@ export function DestructiveConfirm(props: DestructiveConfirmProps) {
             />
           </div>
         )}
+
+        {extra}
 
         {error ? (
           <div className="space-y-2">

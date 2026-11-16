@@ -22,8 +22,10 @@
  * fires.
  *
  * READ ERRORS are not handled here. A caller that gets `error` back must throw
- * or deny on its own (see resolveApiMfaState and getOrgRowForRequest); this is
- * for the row that came back empty.
+ * or deny on its own (see getOrgRowForRequest); this is for the row that came
+ * back empty. The two MFA gates (resolveApiMfaState in lib/auth/api-context.ts
+ * and resolveMfaState in server/services/context.ts) hold a failed read to
+ * this same policy: a session at AAL2 passes, any other is stopped.
  */
 
 export type MfaPolicy = 'optional' | 'admins_required' | 'all_required';

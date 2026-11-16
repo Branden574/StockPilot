@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import type { Permission } from '@stockpilot/core';
+import { formatLimit, MAX_PICKED_IDS, type Permission } from '@stockpilot/core';
 
 import {
   defaultFieldKeysFor,
@@ -32,9 +32,18 @@ const filtersSchema = z
     // awaiting their first receipt (matching the visible rows).
     expected: z.boolean().optional(),
     sort: z.string().optional(),
-    categoryIds: z.array(z.string()).optional(),
-    locationIds: z.array(z.string()).optional(),
-    charterIds: z.array(z.string()).optional(),
+    categoryIds: z
+      .array(z.string())
+      .max(MAX_PICKED_IDS, `Choose at most ${formatLimit(MAX_PICKED_IDS)} categories.`)
+      .optional(),
+    locationIds: z
+      .array(z.string())
+      .max(MAX_PICKED_IDS, `Choose at most ${formatLimit(MAX_PICKED_IDS)} sites.`)
+      .optional(),
+    charterIds: z
+      .array(z.string())
+      .max(MAX_PICKED_IDS, `Choose at most ${formatLimit(MAX_PICKED_IDS)} charters.`)
+      .optional(),
   })
   .strict();
 

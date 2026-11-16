@@ -1,4 +1,4 @@
-import { requireOrgContext } from '@/lib/auth/session';
+import { requireOrgContextForLayout } from '@/lib/auth/session';
 import { PoAccessDenied } from '@/components/po/po-access-denied';
 
 import { can } from '@stockpilot/core';
@@ -17,12 +17,9 @@ import { can } from '@stockpilot/core';
  * purchase_orders:read). Manage-only sub-trees (imports, recurring) keep their
  * own purchase_orders:manage gate inside this one.
  */
-export default async function PurchaseOrdersLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  const ctx = await requireOrgContext();
+export default async function PurchaseOrdersLayout({ children }: { children: React.ReactNode }) {
+  // The layout's context: no set-up redirect from a layout (lib/auth/session.ts).
+  const ctx = await requireOrgContextForLayout();
   if (!can(ctx, 'purchase_orders:read')) {
     return <PoAccessDenied />;
   }

@@ -21,9 +21,13 @@ import {
 } from '@/lib/auth/request-context-bundle';
 
 import type { Role, Database, ModuleId, Permission } from '@stockpilot/core';
-import { effectivePermissions, isAdminRole, stepUpOwed } from '@stockpilot/core';
+import { effectivePermissions, policyRequiresAuthenticator, stepUpOwed } from '@stockpilot/core';
 
-import { enforcedMfaPolicy, type MfaPolicy } from '@/lib/auth/mfa-policy';
+import {
+  enforcedMfaPolicy,
+  UNREADABLE_ORG_MFA_POLICY,
+  type MfaPolicy,
+} from '@/lib/auth/mfa-policy';
 
 /**
  * Mirror of resolveMfaState() in context.ts but parameterized over an
@@ -92,10 +96,10 @@ async function resolveApiMfaState(
     // 'admins_required', so that fallback was more permissive than any real
     // organization's policy.
     //
-    // An unreadable authorization input must deny. This is what the page path
-    // already does (lib/dashboard/request-cache.ts throws on `error`, and
-    // resolveMfaState's catch fails closed) and what the sibling read in this
-    // same file already does ("an unreadable flag grants NOTHING").
+    // An unreadable policy never yields a lesser policy: the error is thrown
+    // here and the catch below holds the session to the strictest policy, as
+    // the page path does for a failed organization read (resolveMfaState in
+    // services/context.ts).
     //
     // Zero rows is not an error: `maybeSingle()` reports it as
     // `{ data: null, error: null }`. It means row level security hid the row
@@ -104,12 +108,19 @@ async function resolveApiMfaState(
     if (error) throw new Error(`mfa_policy unreadable: ${error.code || 'unknown'}`);
     policy = enforcedMfaPolicy(org);
   } catch (err) {
-    // Fail CLOSED — assume MFA is required and unsatisfied. A flaky
-    // org lookup must NOT silently let an admin bypass MFA on the
-    // bearer/API path either. Mirrors resolveMfaState() in
-    // services/context.ts for parity between cookie and bearer flows.
+    // Fail CLOSED: a read that errors is held to the STRICTEST policy, exactly
+    // like a hidden row, never to a lesser one. A flaky org lookup must NOT
+    // let an admin bypass MFA on the bearer/API path.
+    //
+    // The strictest policy, not "unsatisfied whatever the session": that would
+    // be stricter than any policy an organization can have, and would answer
+    // a session at aal2, which every policy lets through, "Re-authenticate
+    // with MFA" when no code can help. all_required lets through only a
+    // session at aal2, and every other policy lets that session through too,
+    // so nothing passes here that the unread policy would refuse. Mirrors
+    // resolveMfaState() in services/context.ts.
     console.error('[resolveApiMfaState] failed:', err);
-    return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: hasVerifiedFactor };
+    policy = UNREADABLE_ORG_MFA_POLICY;
   }
   return mfaFromPolicy(policy, role, hasVerifiedFactor, level);
 }
@@ -128,13 +139,21 @@ async function mfaFromPolicy(
   let mfaRequired = false;
   let mfaSatisfied = false;
   try {
-    const policyRequired =
-      policy === 'all_required' || (policy === 'admins_required' && isAdminRole(role));
+    // The one rule (@stockpilot/core): everyone under all_required, owners
+    // and admins under admins_required.
+    const policyRequired = policyRequiresAuthenticator(policy, role);
     // ENROLLMENT ESCALATES (HI-6): mirrors resolveMfaState() in
     // services/context.ts — a verified factor must be satisfied even under
     // an 'optional' policy, or a stolen password alone reaches the API at
     // AAL1 untouched.
     mfaRequired = policyRequired || hasVerifiedFactor;
+    // A policy that requires an authenticator is met only by an account that
+    // has one: the same answer resolveMfaState() in services/context.ts gives
+    // pages and Server Actions ('mfa_required', set one up first), with no
+    // level read.
+    if (policyRequired && !hasVerifiedFactor) {
+      return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false };
+    }
     if (mfaRequired) {
       // The bearer token's own claim, or the validated cookie user's own
       // level: never a level read from a session the request cannot tie to
@@ -144,10 +163,9 @@ async function mfaFromPolicy(
       mfaSatisfied = true;
     }
   } catch (err) {
-    // Fail CLOSED — assume MFA is required and unsatisfied. A flaky
-    // org lookup must NOT silently let an admin bypass MFA on the
-    // bearer/API path either. Mirrors resolveMfaState() in
-    // services/context.ts for parity between cookie and bearer flows.
+    // Fail CLOSED — the session's level could not be read, so MFA is
+    // required and unsatisfied. The policy is already known here; this
+    // catch covers the level read only.
     console.error('[resolveApiMfaState] failed:', err);
     return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: hasVerifiedFactor };
   }
@@ -362,6 +380,37 @@ export async function cookieSessionOwesStepUp(
   user: { id: string; factors?: Array<{ status?: string }> | null },
 ): Promise<boolean> {
   return owesStepUp(user.factors, () => cookieSessionLevel(supabase, user.id));
+}
+
+/** The authenticator state a ServiceContext carries (mfaRequired, mfaSatisfied, mfaEnrolled). */
+export type SessionMfaState = Awaited<ReturnType<typeof resolveApiMfaState>>;
+
+/**
+ * The authenticator state of a COOKIE session in one organization, for the
+ * routes that build their own principal instead of calling withApiContext (the
+ * QuickBooks and Sage Intacct OAuth callbacks). The same decision
+ * withApiContext makes on its cookie path (resolveApiMfaState, the
+ * organization's policy through enforcedMfaPolicy, an unreadable or hidden
+ * policy held to the strictest one) and the one pages and Server Actions get
+ * from resolveMfaState in services/context.ts
+ * (api-context.page-parity.test.ts pins all three to one answer).
+ *
+ * A route refuses when `mfaRequired && !mfaSatisfied`, as assertPermission
+ * does, and hands the three values to any context it builds (the one it passes
+ * to audit() included), so that context describes the session as it was.
+ * src/test/api-step-up.guard.test.ts holds the listed routes to both. Call it
+ * with the user getUser() returned on the same client and the member's role in
+ * `organizationId`.
+ */
+export async function cookieSessionMfaState(
+  supabase: any,
+  user: { id: string; factors?: Array<{ status?: string }> | null },
+  organizationId: string,
+  role: Role,
+): Promise<SessionMfaState> {
+  return resolveApiMfaState(supabase, organizationId, role, userHasVerifiedFactor(user), () =>
+    cookieSessionLevel(supabase, user.id),
+  );
 }
 
 /**

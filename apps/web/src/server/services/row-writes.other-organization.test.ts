@@ -199,6 +199,7 @@ describe('a write that changed no row answers not_found and leaves no audit row'
       write: 'organization_invites.delete',
       run: (stub, org) => new TeamService(ctxFor(stub, org)).revokeInvite(ROW_ID),
       message: 'Invite not found',
+      event: 'user.invite.revoked',
     },
     {
       name: 'revoking an API key',

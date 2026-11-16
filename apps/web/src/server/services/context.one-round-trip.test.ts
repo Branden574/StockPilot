@@ -22,10 +22,18 @@ vi.mock('next/navigation', () => ({
     throw new Error(`REDIRECT:${to}`);
   },
 }));
+// Actions made from the security settings page: there a member who must set
+// up an authenticator still gets a context, labelled required and not
+// satisfied (lib/auth/session.authenticator-set-up.test.ts has the redirect
+// from every other page).
 vi.mock('next/headers', () => ({
   headers: vi.fn(
     async () =>
-      new Headers({ 'x-stockpilot-user-id': 'u1', 'x-stockpilot-user-email': 'u1@example.com' }),
+      new Headers({
+        'x-stockpilot-user-id': 'u1',
+        'x-stockpilot-user-email': 'u1@example.com',
+        'x-pathname': '/dashboard/settings/security',
+      }),
   ),
   cookies: vi.fn(async () => ({ get: () => undefined, getAll: () => [], set: () => {} })),
 }));

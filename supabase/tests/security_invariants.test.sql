@@ -176,6 +176,8 @@ insert into _sec_inv_auth_secdef_nogate_allow (proname, why) values
   ('supplier_in_org',             'boolean FK-org predicate used by write RLS'),
   ('warehouse_in_org',            'boolean FK-org predicate used by write RLS'),
   ('bin_in_org',                  'boolean FK-org predicate used by write RLS (inventory_stock, putaway_moves); warehouse_in_org''s body for bins'),
+  ('connection_in_org',           'boolean FK-org predicate used by write RLS (connection_mappings, connection_sync_log); bin_in_org''s body for connections'),
+  ('outbox_event_in_org',         'boolean FK-org predicate used by write RLS (connection_sync_log); bin_in_org''s body for queued events'),
   ('purchase_order_in_org',       'boolean FK-org predicate used by write RLS'),
   ('product_group_in_org',        'boolean FK-org predicate used by write RLS (0294+)'),
   ('module_enabled',              'boolean entitlement read (organization_modules row, OR organizations.all_modules_comp answered only to that org''s members, 0354) evaluated inside RLS/RPCs'),
@@ -494,7 +496,11 @@ insert into _sec_inv_flag_setter_allow (flag, fn, why) values
   ('stockpilot.add_lines', 'public.add_order_request_lines', 'raises the flag around its own top-ups and new lines, and puts the previous value back; the top-up helper runs only under it (0413)'),
   ('stockpilot.exchange_kept_lines', 'public.change_return_replacement', 'names the exchange lines it keeps, one per item check, and puts the previous value back (0413)'),
   ('stockpilot.derived_write', 'public.set_order_catalog_visibility', 'writes the two order catalog columns without moving updated_at, and puts the previous value back (0413)'),
-  ('stockpilot.derived_write', 'public._backfill_variant_size',       'the 0303 size backfill, which leaves updated_at alone');
+  ('stockpilot.derived_write', 'public._backfill_variant_size',       'the 0303 size backfill, which leaves updated_at alone'),
+  ('stockpilot.idempotency_write', 'ledger.post_receipt_v2',   'raises the flag (the transaction id) around its own retry key insert, and puts the previous value back (0464; also 0464 P6, F1)'),
+  ('stockpilot.idempotency_write', 'ledger.distribute_bundle', 'raises the flag (the transaction id) around its own retry key insert and update, and puts the previous value back (0464; also 0464 P6, F1)'),
+  ('stockpilot.idempotency_write', 'public.start_targeted_recount',    'raises the flag (the transaction id) around its own retry key insert and update, and puts the previous value back; the idempotency_keys guard admits an API role''s write only under it (0466; also 0466 P3)'),
+  ('stockpilot.idempotency_write', 'public.draft_order_shortfall_pos', 'raises the flag (the transaction id) around its own retry key insert and update, and puts the previous value back; the idempotency_keys guard admits an API role''s write only under it (0466; also 0466 P3)');
 
 
 -- ═══════════════════════════════════════════════════════════════════════════

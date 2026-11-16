@@ -116,7 +116,7 @@ import { describe, expect, it } from 'vitest';
  * `while`, the test of `?:`); read after `instanceof ServiceError`,
  * `instanceof ForbiddenError`, `instanceof PermissionsUnavailableError`,
  * `instanceof AccountStatusUnavailableError`, `instanceof ModulesUnavailableError`,
- * `instanceof MembershipUnavailableError` or `instanceof ToolRefusal` (the app wrote those words); or
+ * `instanceof MembershipUnavailableError`, `instanceof OrganizationRowUnavailableError` or `instanceof ToolRefusal` (the app wrote those words); or
  * held in a const (or a destructured name) whose every use is one of these.
  * The left side of `=` is a write, never a read.
  *
@@ -518,7 +518,8 @@ const SERVER_ONLY_PROPERTY = 'internalDetail';
 /**
  * Classes whose message the app wrote (ServiceError: generic for internal_error,
  * S13). PermissionsUnavailableError, AccountStatusUnavailableError,
- * ModulesUnavailableError (S81) and MembershipUnavailableError (S90) pass one
+ * ModulesUnavailableError (S81), MembershipUnavailableError (S90) and
+ * OrganizationRowUnavailableError pass one
  * fixed sentence to super and take no argument (pinned below). ToolRefusal
  * (lib/ai/tool-errors.ts, S30) is an AI chat tool's refusal in the tool's own
  * words, which the model reads: it is built only under lib/ai (pinned below),
@@ -531,6 +532,7 @@ const APP_ERRORS = new Set([
   'AccountStatusUnavailableError',
   'ModulesUnavailableError',
   'MembershipUnavailableError',
+  'OrganizationRowUnavailableError',
   'ToolRefusal',
 ]);
 const BUILTIN_ERRORS = new Set(['Error', 'TypeError', 'RangeError', 'SyntaxError']);
@@ -1741,12 +1743,13 @@ describe("Server Actions and services never answer an error's own text (S31)", (
     expect(unread.map((file) => path.relative(SRC, file))).toEqual([]);
   });
 
-  it('the permission, account-status, module-state and membership errors pass one fixed sentence and take no argument (why APP_ERRORS lists them)', () => {
+  it('the permission, account-status, module-state, membership and organization-row errors pass one fixed sentence and take no argument (why APP_ERRORS lists them)', () => {
     for (const [file, name] of [
       ['lib/auth/effective-permissions.ts', 'PermissionsUnavailableError'],
       ['lib/auth/account-status.ts', 'AccountStatusUnavailableError'],
       ['lib/modules/module-state.ts', 'ModulesUnavailableError'],
       ['lib/auth/membership-unavailable.ts', 'MembershipUnavailableError'],
+      ['lib/auth/organization-row-unavailable.ts', 'OrganizationRowUnavailableError'],
     ] as const) {
       const sf = parse(file, readFileSync(path.join(SRC, file), 'utf8'));
       const cls = sf.statements.find(

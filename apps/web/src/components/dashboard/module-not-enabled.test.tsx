@@ -7,7 +7,7 @@ const session = vi.hoisted(() => ({
   ctx: null as null | { role: Role; permissions: ReadonlySet<Permission> },
 }));
 
-vi.mock('@/lib/auth/session', () => ({ requireOrgContext: async () => session.ctx }));
+vi.mock('@/lib/auth/session', () => ({ requireOrgContextForLayout: async () => session.ctx }));
 vi.mock('next/link', () => ({
   default: ({ href, children, ...rest }: { href: string; children: React.ReactNode }) => (
     <a href={href} {...rest}>

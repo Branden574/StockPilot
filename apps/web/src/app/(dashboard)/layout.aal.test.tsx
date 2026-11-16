@@ -55,7 +55,7 @@ vi.mock('@/lib/auth/platform-admin', () => ({
   currentUserIsPlatformAdminFromRequestHeader: vi.fn(async () => false),
 }));
 vi.mock('@/lib/auth/session', () => ({
-  requireOrgContext: vi.fn(async () => ({
+  requireOrgContextForLayout: vi.fn(async () => ({
     userId: '11111111-1111-4111-8111-111111111111',
     email: 'member@example.com',
     fullName: null,
@@ -88,14 +88,14 @@ vi.mock('@/lib/dashboard/request-cache', () => ({
   getWarehousesForRequest: vi.fn(async () => []),
 }));
 vi.mock('@/lib/auth/warehouse', () => ({
-  getWarehouseAccess: vi.fn(async () => ({
+  getWarehouseAccessFor: vi.fn(async () => ({
     readableIds: [],
     writableIds: [],
     hasAllAccess: false,
     primaryWarehouseId: null,
   })),
 }));
-vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilter: vi.fn(async () => null) }));
+vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilterFor: vi.fn(async () => null) }));
 
 import {
   INSECURE_USER_WARNING,

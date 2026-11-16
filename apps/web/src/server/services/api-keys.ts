@@ -2,9 +2,11 @@ import 'server-only';
 
 import { API_SCOPES, generateApiKey } from '@/lib/auth/api-key';
 
+import { audit } from './audit';
 import { dispatchEvent } from './integration-events';
 import {
   assertModuleEnabled,
+  mfaGateError,
   ServiceError,
   withContext,
   type ServiceContext,
@@ -25,7 +27,9 @@ export interface ApiKeyListRow {
 /**
  * Admin-facing management of public API keys (create / list / revoke). Gated on
  * the `api_access` premium module + admin role (matches the RLS floor and the
- * api_access module's manage surface). The raw key is returned ONLY at creation.
+ * api_access module's manage surface). Creating or revoking a key gives the
+ * authenticator answer first, as assertPermission does, and writes an audit
+ * row; listing is a read. The raw key is returned ONLY at creation.
  */
 export class ApiKeysService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -38,6 +42,17 @@ export class ApiKeysService {
     if (!isAdminRole(this.ctx.role)) {
       throw new ServiceError('forbidden', 'Only admins can manage API keys.');
     }
+  }
+
+  /**
+   * A change to the organization's keys: when the organization's policy
+   * requires an authenticator and this session has not satisfied it, the
+   * answer assertPermission gives (mfaGateError), then the module and role
+   * rule of gate().
+   */
+  private gateChange() {
+    if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) throw mfaGateError(this.ctx);
+    this.gate();
   }
 
   async list(): Promise<ApiKeyListRow[]> {
@@ -64,7 +79,7 @@ export class ApiKeysService {
   }
 
   async create(input: { name: string; scopes: string[] }): Promise<{ id: string; key: string }> {
-    this.gate();
+    this.gateChange();
     const name = input.name.trim();
     if (!name) throw new ServiceError('validation_error', 'Give the key a name.');
     const scopes = input.scopes.filter((s) => (API_SCOPES as readonly string[]).includes(s));
@@ -85,6 +100,13 @@ export class ApiKeysService {
       .select('id')
       .single();
     if (error) throw new ServiceError('internal_error', error.message);
+    const id = (data as { id: string }).id;
+    // The audit row names the key by its id, its name and its scopes: never
+    // the key, its prefix or its hash.
+    await audit(
+      { event: 'api_key.created', entityType: 'api_key', entityId: id, extra: { name, scopes } },
+      this.ctx,
+    );
     // Security feed: a fresh credential with API reach is exactly what a
     // #security channel watches for. Payload carries the PREFIX only — the
     // raw key never leaves this method's return value.
@@ -94,11 +116,11 @@ export class ApiKeysService {
       scopes: scopes.join(', '),
     });
     // Return the raw key exactly once — it's never recoverable after this.
-    return { id: (data as { id: string }).id, key };
+    return { id, key };
   }
 
   async revoke(id: string): Promise<void> {
-    this.gate();
+    this.gateChange();
     const { data, error } = await this.ctx.supabase
       .from('api_keys')
       .update({ revoked_at: new Date().toISOString() })
@@ -132,8 +154,11 @@ export class ApiKeysService {
       }
       return;
     }
-    void dispatchEvent(this.ctx.organizationId, 'security.api_key_revoked', {
-      name: (data as { name: string | null }).name ?? undefined,
-    });
+    const name = (data as { name: string | null }).name ?? undefined;
+    await audit(
+      { event: 'api_key.revoked', entityType: 'api_key', entityId: id, extra: { name } },
+      this.ctx,
+    );
+    void dispatchEvent(this.ctx.organizationId, 'security.api_key_revoked', { name });
   }
 }

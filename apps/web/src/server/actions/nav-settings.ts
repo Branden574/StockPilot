@@ -9,8 +9,10 @@ import { ServiceError, withContext } from '@/server/services/context';
 import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import {
+  boundedRecord,
   err,
   isSafeNavHref,
+  maxChoices,
   ok,
   resolveSurface,
   SECTION_ORDER,
@@ -57,13 +59,20 @@ const customLinkSchema = z.object({
 const overridesSchema = z.object({
   v: z.literal(1),
   hidden: z.array(z.string().min(1).max(HREF_MAX)).max(MAX_HIDDEN).optional(),
-  labels: z
-    .record(z.string().min(1).max(HREF_MAX), z.string().min(1).max(LABEL_MAX))
+  labels: boundedRecord(
+    z.string().min(1).max(HREF_MAX),
+    z.string().min(1).max(LABEL_MAX),
+    MAX_LABEL_OVERRIDES * 10,
+    'Too many label overrides.',
+  )
     .refine((rec) => Object.keys(rec).length <= MAX_LABEL_OVERRIDES, 'Too many label overrides.')
     .optional(),
-  order: z
-    .record(sectionSchema, z.array(z.string().min(1).max(HREF_MAX)).max(MAX_HIDDEN))
-    .optional(),
+  order: boundedRecord(
+    sectionSchema,
+    z.array(z.string().min(1).max(HREF_MAX)).max(MAX_HIDDEN),
+    maxChoices(SECTION_ORDER),
+    'Too many sections.',
+  ).optional(),
   custom: z.array(customLinkSchema).max(MAX_CUSTOM_LINKS).optional(),
 });
 

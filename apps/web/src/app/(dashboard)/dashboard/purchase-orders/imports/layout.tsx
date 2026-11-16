@@ -2,7 +2,7 @@
 // feature (P2) so an admin can grant Read-Only Auditors import access. Until then
 // it shows a clear access message (no longer a silent bounce to home).
 import { StatePanel } from '@/components/patterns/state-panel';
-import { requireOrgContext } from '@/lib/auth/session';
+import { requireOrgContextForLayout } from '@/lib/auth/session';
 
 import { can } from '@stockpilot/core';
 
@@ -19,7 +19,8 @@ import { can } from '@stockpilot/core';
  * inside the page's gutters, as PoAccessDenied draws it.
  */
 export default async function PoImportsLayout({ children }: { children: React.ReactNode }) {
-  const ctx = await requireOrgContext();
+  // The layout's context: no set-up redirect from a layout (lib/auth/session.ts).
+  const ctx = await requireOrgContextForLayout();
   if (!can(ctx, 'purchase_orders:manage')) {
     return (
       <div className="w-full px-4 py-16 sm:px-8 sm:py-24">

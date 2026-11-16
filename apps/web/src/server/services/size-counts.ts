@@ -19,6 +19,7 @@ import { ProductGroupsService } from './product-groups';
 import {
   assertModuleEnabled,
   assertPermission,
+  mfaGateError,
   ServiceError,
   type ServiceContext,
 } from './context';
@@ -410,6 +411,8 @@ export class SizeCountsService {
    *  the 0284 RLS; a non-manager gets a clean forbidden. */
   async deleteTrainingSample(id: string): Promise<void> {
     assertModuleEnabled(this.ctx, 'instant_size_count');
+    // The authenticator answer first (mfaGateError, as assertPermission gives it).
+    if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) throw mfaGateError(this.ctx);
     const { data: row, error } = await this.ctx.supabase
       .from('size_count_training_samples')
       .select('image_storage_path')

@@ -34,10 +34,38 @@ import { RELEASES } from './registry';
  * below the Liquid Glass draft. Each changed line has its own note.
  */
 const ID = 'settings-not-loaded-2026-11';
+// Added by docs/whats-new-authenticator-set-up-first (2026-11-15): the authenticator set-up release (every member: its entry has no audience), published later, at the top, below the Liquid Glass draft.
+const AUTH_SET_UP_ID = 'authenticator-set-up-first-2026-11';
+const authSetUpRead = {
+  release_id: AUTH_SET_UP_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-15T23:45:00Z',
+  read_at: '2026-11-15T23:45:00Z',
+};
 const MODULE_CHECK_ID = 'module-check-try-again-2026-11';
 const COUNT_RELEASE_ID = 'count-read-rule-2026-11';
 // Added by docs/whats-new-navigation-keeps-choices (2026-11-15): the navigation release (owners and admins who can open Settings, Navigation), published later, directly above this one.
 const NAVIGATION_ID = 'navigation-keeps-choices-2026-11';
+// Added by docs/whats-new-invitation-audit (2026-11-15): the invitation audit release (whoever can view the audit log), published later, directly above the navigation release.
+// Added by docs/whats-new-api-key-audit (2026-11-15): the API key audit release (whoever can view the audit log), published later, directly above the invitation audit release.
+const API_KEY_AUDIT_ID = 'api-key-audit-2026-11';
+const INVITATION_AUDIT_ID = 'invitation-audit-2026-11';
+const invitationAuditRead = {
+  release_id: INVITATION_AUDIT_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-15T18:00:00Z',
+  read_at: '2026-11-15T18:00:00Z',
+};
+// Added by docs/whats-new-api-key-audit (2026-11-15): the API key audit release (whoever can view the audit log), published later, directly above the invitation audit release.
+const apiKeyAuditRead = {
+  release_id: API_KEY_AUDIT_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-15T21:30:00Z',
+  read_at: '2026-11-15T21:30:00Z',
+};
 const navigationRead = {
   release_id: NAVIGATION_ID,
   revision: 1,
@@ -103,8 +131,17 @@ describe('the settings release: order, status and date', () => {
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: RELEASES.slice(0, 4), without it): the navigation release is published later, at the top, directly below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES.slice(0, 5).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: RELEASES.slice(0, 5), without it): the invitation audit release is published later, at the top, directly below the Liquid Glass draft.
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: RELEASES.slice(0, 6), without it): the API key audit release is published later, at the top, directly below the Liquid Glass draft.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES.slice(0, 8).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: without it): the invitation audit release is published later, at the top, directly below the Liquid Glass draft.
+      // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, directly below the Liquid Glass draft.
+      // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, directly below the Liquid Glass draft.
+      ['authenticator-set-up-first-2026-11', 'published'],
+      ['api-key-audit-2026-11', 'published'],
+      ['invitation-audit-2026-11', 'published'],
       [NAVIGATION_ID, 'published'],
       [ID, 'published'],
       [MODULE_CHECK_ID, 'published'],
@@ -122,7 +159,10 @@ describe('the settings release: order, status and date', () => {
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: RELEASES[0]!.publishedAt toBe this minute): the draft placeholder moved to the minute of the navigation release, published later, directly above this one.
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: RELEASES.slice(2)): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(3)) {
+    // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(6)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -288,12 +328,22 @@ describe('the settings release: who is told', () => {
   });
 
   // Renamed by docs/whats-new-navigation-keeps-choices (2026-11-15; was: "is the first notice for the readers it reaches, and the module check release is next"): the navigation release is published later and reaches owners and admins, who read it first. Claim kept: the notice for the readers it reaches, and the module check release next.
-  it('is the notice for the readers it reaches once the navigation release is read, and the module check release is next', () => {
+  // Renamed by docs/whats-new-authenticator-set-up-first (2026-11-15; was: "is the notice for the readers it reaches once the navigation release is read, and the module check release is next"): the authenticator set-up release is published later and reaches every member, who read it first. Claim kept: the notice for the readers it reaches, and the module check release next.
+  it('is the notice for the readers it reaches once the authenticator set-up and navigation releases are read, and the module check release is next', () => {
     for (const v of [owner, admin, manager, staff]) {
       // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: nothing read): the navigation release is published later, at the top, and reaches owners and admins, so each reader reads it first, and the notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
-      expect(buildReleaseList(RELEASES, v, [navigationRead], null).latestUnread?.id, v.role).toBe(
-        ID,
-      );
+      // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: without it): the invitation audit release is published later, at the top, and reaches whoever can view the audit log (owners, admins and managers by default), so it is read or seen with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+      expect(
+        // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, and reaches the same readers as the invitation audit release, so it is read or seen with it, and the notice this test checks is the one it checked before.
+        // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
+        buildReleaseList(
+          RELEASES,
+          v,
+          [authSetUpRead, apiKeyAuditRead, invitationAuditRead, navigationRead],
+          null,
+        ).latestUnread?.id,
+        v.role,
+      ).toBe(ID);
       const read = {
         release_id: ID,
         revision: 1,
@@ -303,12 +353,21 @@ describe('the settings release: who is told', () => {
       };
       // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: [read]): the navigation release is read too, as above.
       expect(
-        buildReleaseList(RELEASES, v, [navigationRead, read], null).latestUnread?.id,
+        // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: without it): the invitation audit release is published later, at the top, and reaches whoever can view the audit log (owners, admins and managers by default), so it is read or seen with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+        // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, and reaches the same readers as the invitation audit release, so it is read or seen with it, and the notice this test checks is the one it checked before.
+        buildReleaseList(
+          RELEASES,
+          v,
+          // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member, so it is read first, and the notice this test checks is the one it checked before.
+          [authSetUpRead, apiKeyAuditRead, invitationAuditRead, navigationRead, read],
+          null,
+        ).latestUnread?.id,
         v.role,
       ).toBe(MODULE_CHECK_ID);
     }
     // An older phone build shows the newest one it has not seen: this title and summary.
-    expect(legacyAnnouncementsFor(RELEASES, staff, {})[0]).toEqual({
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
+    expect(legacyAnnouncementsFor(RELEASES, staff, { [AUTH_SET_UP_ID]: true })[0]).toEqual({
       id: ID,
       date: '2026-11-15',
       title: release().title,

@@ -1,7 +1,7 @@
 'use server';
 
 import { audit } from '@/server/services/audit';
-import { ServiceError, withContext } from '@/server/services/context';
+import { mfaGateError, ServiceError, withContext } from '@/server/services/context';
 import {
   parseSharedPresetConfig,
   type SharedExportPresetConfig,
@@ -161,6 +161,8 @@ export async function saveSharedExportPresetAction(
 
   try {
     const ctx = await withContext();
+    // The authenticator answer first (mfaGateError, as assertPermission gives it).
+    if (ctx.mfaRequired && !ctx.mfaSatisfied) throw mfaGateError(ctx);
     // The exact permission the export route checks (items:export), mirrored
     // by the RLS insert policy — one gate, stated twice, drifting never.
     if (!can(ctx, 'items:export')) {
@@ -225,6 +227,8 @@ export async function deleteSharedExportPresetAction(input: {
   }
   try {
     const ctx = await withContext();
+    // The authenticator answer first, as in saving.
+    if (ctx.mfaRequired && !ctx.mfaSatisfied) throw mfaGateError(ctx);
     if (!can(ctx, 'items:export')) {
       return err('forbidden', 'You do not have permission to export items.');
     }
