@@ -28,7 +28,7 @@ import type { AdjustStockBody } from './stock-api';
  *
  *   • ok (2xx): written; the row is deleted.
  *   • REJECTED: the server evaluated it and refused (400, 409, 422, a 403
- *     after the authenticator check, a 404 carrying our JSON code, a 401 on
+ *     judged not about the authenticator, a 404 carrying our JSON code, a 401 on
  *     a disabled account — the rule
  *     drain-failure.ts applies to every kind), or the row is malformed.
  *     Nothing was written. Parked in Settings > Unsent work with the item

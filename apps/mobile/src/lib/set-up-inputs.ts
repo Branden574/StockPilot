@@ -27,14 +27,15 @@ import {
  * Answers:
  *   'owed'    the policy, as read, requires an authenticator of this role and
  *             the server's factor list has no verified one;
- *   'clear'   the policy does not require one of this role, the account has a
- *             verified factor, or a membership read this run answered and the
- *             account is not a member of the workspace (no policy of it
- *             applies to this account);
+ *   'clear'   a membership read returned the workspace, and its policy does
+ *             not require one of this role or the account has a verified
+ *             factor;
  *   'unknown' anything else: nothing read for this account and workspace, a
- *             policy that requires one with no factor list read yet, or a
- *             hidden row (held to the strictest policy) with no verified
- *             factor.
+ *             workspace missing from the read (absence is not evidence that
+ *             nothing is owed: the read may be partial, or not return a
+ *             membership), a policy that requires one with no factor list
+ *             read yet, or a hidden row (held to the strictest policy) with
+ *             no verified factor.
  *
  * A LEAF: core only. AsyncStorage and the reads are handed in by
  * use-workspace.ts (registerSetUpInputsSource), so the drains and the send
@@ -212,9 +213,9 @@ function answer(userId: string | null, orgId: string | null, after: number | nul
   if (!account) return 'unknown';
   if (after !== null && (account.readSeq === null || account.readSeq <= after)) return 'unknown';
   const inputs = account.orgs[orgId];
-  // Not among this account's memberships: from a read this run, no policy of
-  // that workspace applies to this account; from storage, nothing is known.
-  if (!inputs) return account.readSeq !== null ? 'clear' : 'unknown';
+  // Missing from the read: nothing is known of that workspace's policy for
+  // this account, so only a read that returns it can answer 'clear'.
+  if (!inputs) return 'unknown';
   // A row that could not be read is held to the strictest policy, never read
   // as the organization's own (core readOrganizationMfaPolicy).
   const policy = inputs.policy === 'hidden' ? UNREADABLE_ORG_MFA_POLICY : inputs.policy;

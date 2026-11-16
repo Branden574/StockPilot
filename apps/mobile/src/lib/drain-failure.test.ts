@@ -7,7 +7,8 @@ import { ACCOUNT_DISABLED_REJECTION, classifyDrainFailure, keptForSetUpCheck } f
 /**
  * The outbox verdict. Two classes are terminal — see drain-failure.ts:
  * a 401 on a KNOWN-disabled account, and a definitive refusal from our own
- * route (400/403/409/422, or a 404 carrying a JSON error code). Everything
+ * route (400/409/422, a 403 judged not about the authenticator, or a 404
+ * carrying a JSON error code). Everything
  * transient stays retryable so real operator work is never discarded.
  */
 
@@ -85,11 +86,12 @@ describe('classifyDrainFailure — the refusal marked as before any write', () =
 });
 
 /**
- * A 403 on a queued send is final only when it is not the authenticator
- * answer AND a check made after the refusal found that this account owes no
- * authenticator set-up in the row's workspace (set-up-inputs.ts
- * setUpAnswerAfterRefusal). Every other 403 keeps the row: it is sent again
- * once the account has an authenticator, or judged again after the check.
+ * A 403 on a queued send is final only on positive evidence that it is not
+ * about the authenticator: the refusal names another reason, or a check made
+ * after the refusal read the row's workspace and found that this account owes
+ * no authenticator set-up there (set-up-inputs.ts setUpAnswerAfterRefusal).
+ * Every other 403 keeps the row: it is sent again once the account has an
+ * authenticator, or judged again after the next check.
  */
 describe('classifyDrainFailure: a 403 and the authenticator policy', () => {
   const SET_UP_SENTENCE =
@@ -113,6 +115,16 @@ describe('classifyDrainFailure: a 403 and the authenticator policy', () => {
       code: 'forbidden',
       message: SET_UP_SENTENCE,
     },
+    'set-up answer with the reason as the code': {
+      status: 403,
+      code: 'mfa_required',
+      message: SET_UP_SENTENCE,
+    },
+    'code answer with the reason as the code': {
+      status: 403,
+      code: 'aal2_required',
+      message: 'Re-authenticate with MFA before performing this action.',
+    },
     'missing permission': { status: 403, code: 'forbidden', message: 'Missing permission: stock:adjust' },
     'another reason in details': {
       status: 403,
@@ -123,15 +135,27 @@ describe('classifyDrainFailure: a 403 and the authenticator policy', () => {
     'a 403 with no JSON body': { status: 403, message: 'You do not have access to this.' },
   } as const;
 
-  it.each(Object.entries(shapes))('%s: kept while the check is owed or unknown', (_name, err) => {
+  it.each(
+    Object.entries(shapes).filter(([name]) => name !== 'another reason in details'),
+  )('%s: kept while the check is owed or unknown', (_name, err) => {
     for (const setUp of ['owed', 'unknown'] as const) {
       expect(classifyDrainFailure(err, { accountDisabled: false, setUp })).toBe('failed');
+    }
+  });
+
+  it('a refusal that names another reason is final whatever the check says', () => {
+    for (const setUp of ['owed', 'unknown', 'clear'] as const) {
+      expect(classifyDrainFailure(shapes['another reason in details'], { accountDisabled: false, setUp })).toBe(
+        'rejected',
+      );
     }
   });
 
   it.each([
     'set-up answer with details',
     'code answer with details',
+    'set-up answer with the reason as the code',
+    'code answer with the reason as the code',
   ] as const)('%s: kept even when the check says clear', (name) => {
     // The server's own policy read can fail and hold the member to the
     // strictest policy, so its authenticator answer is never final here.
@@ -142,7 +166,6 @@ describe('classifyDrainFailure: a 403 and the authenticator policy', () => {
   it.each([
     'set-up answer from a route that sends no details',
     'missing permission',
-    'another reason in details',
     'a 403 with no JSON body',
   ] as const)('%s: final once the check says clear', (name) => {
     expect(classifyDrainFailure(shapes[name], { accountDisabled: false, setUp: 'clear' })).toBe('rejected');

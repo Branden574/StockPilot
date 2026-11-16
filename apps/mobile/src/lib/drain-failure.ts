@@ -14,8 +14,8 @@
  *      (the original rule): that write must never land when the account is
  *      re-enabled.
  *   2. A DEFINITIVE refusal from our own route — 400, 409, 422, a 404 that
- *      carries a JSON error code, or a 403 after the authenticator check
- *      below. The server evaluated this exact
+ *      carries a JSON error code, or a 403 on evidence that it is not about
+ *      the authenticator (below). The server evaluated this exact
  *      request and said no: the count was posted or reassigned, the bundle
  *      is archived, the quantity is invalid, the permission is gone. Before
  *      this rule those rows stayed 'failed' and were re-sent every 60 s
@@ -37,22 +37,27 @@
  * arrives with no JSON body and stays retryable; a route's own
  * `{ error: 'not_found' }` is a verdict about the resource.
  *
- * A 403 IS FINAL ONLY AFTER A CHECK OF THE AUTHENTICATOR POLICY. While a
- * workspace's policy requires an authenticator the account has not set up,
- * the server refuses every queued change there with a 403 (its answer has
+ * A 403 IS FINAL ONLY ON EVIDENCE THAT IT IS NOT ABOUT THE AUTHENTICATOR,
+ * and it is decided in one place (the 403 branch below). While a workspace's
+ * policy requires an authenticator the account has not set up, the server
+ * refuses every queued change there with a 403 (its answer has
  * `details.reason` 'mfa_required' on the routes that forward details; some
  * send the same sentence without them). That refusal says nothing about the
  * change itself: the same row lands once the account has an authenticator.
- * So a 403 is 'rejected' only when its reason is neither 'mfa_required' nor
- * 'aal2_required' AND the phone, from reads made after that refusal, finds
- * this account owes no set-up in the row's workspace (`setUp` 'clear':
- * set-up-inputs.ts setUpAnswerAfterRefusal). Anything else keeps the row
- * ('failed'): the drain notes the refusal and the inputs are read again
- * (keptForSetUpCheck, set-up-inputs.ts noteKeptRefusal), and while the row's
- * workspace owes set-up the send decision holds it (outbox-scope.ts). The
- * authenticator answer itself is never final, even when the phone's read says
- * nothing is owed: the server holds a member whose policy it could not read
- * to the strictest one.
+ * So a 403 is 'rejected' only when
+ *   - it names a reason, in `details.reason`, that is not the authenticator
+ *     one: the route judged the change itself; or
+ *   - it names no reason, and the phone, from reads made after that refusal
+ *     that returned the row's workspace, finds this account owes no set-up
+ *     there (`setUp` 'clear': set-up-inputs.ts setUpAnswerAfterRefusal; a
+ *     workspace missing from a read answers 'unknown', never 'clear').
+ * Anything else keeps the row ('failed'): the drain notes the refusal and the
+ * inputs are read again (keptForSetUpCheck, set-up-inputs.ts
+ * noteKeptRefusal), and while the row's workspace owes set-up the send
+ * decision holds it (outbox-scope.ts). The authenticator answer itself
+ * ('mfa_required' or 'aal2_required', in `details.reason` or as the code) is
+ * never final, even when the phone's read says nothing is owed: the server
+ * holds a member whose policy it could not read to the strictest one.
  *
  * Note on ordering: the disabled flag is raised asynchronously by the auth
  * probe that `notifyUnauthorized` kicks off, so the FIRST 401 of a drain can
@@ -78,9 +83,9 @@ export const ACCOUNT_DISABLED_REJECTION =
 
 /**
  * Statuses that are a verdict on THIS request, from our own route. A 403 is
- * decided before this set is read: only after the authenticator check below.
+ * not among them: it is decided in its own branch of classifyDrainFailure.
  */
-const DEFINITIVE_REFUSALS: ReadonlySet<number> = new Set([400, 403, 409, 422]);
+const DEFINITIVE_REFUSALS: ReadonlySet<number> = new Set([400, 409, 422]);
 
 /** The reasons a 403 carries when it is the authenticator answer, not one about the change. */
 const AUTHENTICATOR_REASONS: ReadonlySet<string> = new Set(['mfa_required', 'aal2_required']);
@@ -107,6 +112,8 @@ export function classifyDrainFailure(
   if (status === 403) {
     const reason = detailsReason(e?.details);
     if (reason !== null && AUTHENTICATOR_REASONS.has(reason)) return 'failed';
+    if (typeof e?.code === 'string' && AUTHENTICATOR_REASONS.has(e.code)) return 'failed';
+    if (reason !== null) return 'rejected';
     return opts.setUp === 'clear' ? 'rejected' : 'failed';
   }
   if (DEFINITIVE_REFUSALS.has(status)) return 'rejected';
@@ -116,7 +123,7 @@ export function classifyDrainFailure(
 
 /**
  * Whether a failure classifyDrainFailure did NOT reject was a 403 kept for a
- * check of the authenticator policy (every other 403 is rejected). The drain
+ * check of the authenticator policy (a 403 it did not keep is rejected). The drain
  * then notes it and asks for the inputs to be read again
  * (set-up-inputs.ts noteKeptRefusal).
  */

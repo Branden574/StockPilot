@@ -1317,6 +1317,55 @@ describe('drainQueue — a queued change waits while an authenticator is being s
     expect(queueMock.markRejected).not.toHaveBeenCalled();
   });
 
+  it('403 with no details.reason, the row\'s workspace missing from the read: kept on every pass, never parked', async () => {
+    // The check reads this account's memberships, and the row's workspace is
+    // not among them (a partial read, or a membership the read did not
+    // return). That is not evidence that nothing is owed there.
+    delete setUpReads.policies['org-a'];
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      throw setUpRefusal(false);
+    });
+    pending([OWN_RECEIPT]);
+    for (let pass = 0; pass < 2; pass += 1) {
+      calls.log = [];
+      expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+      expect(calls.log).toEqual(['markSending:1', 'api:/api/v1/po/po1/receive-line', 'markFailed:1']);
+      await checkAnswered();
+    }
+    expect(setUpReads.count).toBeGreaterThanOrEqual(2);
+    expect(queueMock.markRejected).not.toHaveBeenCalled();
+  });
+
+  it('a 403 whose code is the authenticator answer, with no details, is kept even when the check says clear', async () => {
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      throw Object.assign(new Error(SET_UP_SENTENCE), { status: 403, code: 'mfa_required' });
+    });
+    pending([OWN_RECEIPT]);
+    for (let pass = 0; pass < 3; pass += 1) {
+      expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+      await checkAnswered();
+    }
+    expect(queueMock.markRejected).not.toHaveBeenCalled();
+  });
+
+  it('a 403 that names another reason is final at once, without a check', async () => {
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      throw Object.assign(new Error('This line is assigned to someone else.'), {
+        status: 403,
+        code: 'forbidden',
+        details: { reason: 'assigned_elsewhere' },
+      });
+    });
+    pending([OWN_RECEIPT]);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 1 });
+    expect(calls.log).toEqual(['markSending:1', 'api:/api/v1/po/po1/receive-line', 'markRejected:1']);
+    await checkAnswered();
+    expect(setUpReads.count).toBe(0);
+  });
+
   it('a policy turned on after a check said clear: the next refusal is kept, never parked', async () => {
     // Read earlier this run: Optional.
     recordMembershipInputs(

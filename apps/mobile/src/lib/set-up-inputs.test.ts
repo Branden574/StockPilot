@@ -133,9 +133,15 @@ describe('setUpOwedIn: the rule, from the inputs', () => {
     expect(setUpOwedIn('u1', 'opt')).toBe('clear');
   });
 
-  it('a workspace this account is not a member of, by a read this run: nothing owed there', () => {
-    readMemberships([row('org', { mfa_policy: 'all_required' })]);
-    expect(setUpOwedIn('u1', 'left')).toBe('clear');
+  it('a workspace missing from a read this run is not known: absence says nothing about what is owed', () => {
+    readMemberships([row('org', { mfa_policy: 'optional' })]);
+    noteServerReadUser({ id: 'u1', factors: [] });
+    expect(setUpOwedIn('u1', 'org')).toBe('clear');
+    expect(setUpOwedIn('u1', 'left')).toBe('unknown');
+    // Nor after a refusal: only a read that returned the workspace can clear it.
+    noteKeptRefusal('u1', 'left');
+    readMemberships([row('org', { mfa_policy: 'optional' })]);
+    expect(setUpAnswerAfterRefusal('u1', 'left')).toBe('unknown');
   });
 
   it('per account: another account on the phone never answers for this one', () => {
