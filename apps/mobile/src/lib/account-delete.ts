@@ -31,7 +31,11 @@ import {
  *    (account-eviction.ts notifyUnauthorized), which decides whether the
  *    session ended or the account was disabled and shows that screen;
  *  - "not offered" (the account has an authenticator after all) asks for the
- *    factors to be read again and ends the flow with its sentence.
+ *    factors to be read again and ends the flow with its sentence; "enter
+ *    your authenticator code first" asks for the same re-read and stays.
+ *
+ * One delete at a time in the whole app: while one, or the sign-out after
+ * it, runs, no other flow sends one and no sheet opens.
  *
  * The password, the code and the challenge stay in memory, in this flow only.
  * Nothing here logs, stores or reports them, and the challenge is never part
@@ -45,6 +49,22 @@ import {
 
 export const ACCOUNT_DELETE_PATH = '/api/v1/account/delete';
 export const ACCOUNT_DELETE_CODE_PATH = '/api/v1/account/delete/code';
+
+/**
+ * How long the delete request may take before it reads as "no answer"
+ * (api()'s `timeoutMs`): the route checks the account, runs the delete and
+ * writes its record. The code request keeps api()'s default.
+ */
+export const ACCOUNT_DELETE_TIMEOUT_MS = 45_000;
+
+// Deletes under way in this app, across every flow: while one runs, no other
+// flow sends one and no sheet opens (createAccountDeleteOpener).
+let deletesInFlight = 0;
+
+/** Whether a delete request, or the sign-out after it, is under way anywhere in the app. */
+export function accountDeleteInFlight(): boolean {
+  return deletesInFlight > 0;
+}
 
 /** The word the person types, and the route requires as `confirm`. */
 export const ACCOUNT_DELETE_WORD = 'DELETE';
@@ -208,7 +228,16 @@ export function createAccountDeleteFlow(opts: {
   }
 
   async function confirm(): Promise<void> {
-    if (!state.ready) return;
+    if (!state.ready || accountDeleteInFlight()) return;
+    deletesInFlight += 1;
+    try {
+      await sendDelete();
+    } finally {
+      deletesInFlight -= 1;
+    }
+  }
+
+  async function sendDelete(): Promise<void> {
     const body = bodyFor(state.method);
     set({ busy: 'delete', notice: null });
 
@@ -228,7 +257,8 @@ export function createAccountDeleteFlow(opts: {
         try {
           await deps.signOutAfterDeleted();
         } catch {
-          // The sign-out keeps its own record of what it could not do.
+          // The sign-out keeps its own record of what it could not do. The
+          // sheet then offers Close (ended 'done', nothing under way).
         }
         set({ busy: null });
         deps.announceDeleted(answer.sentence);
@@ -249,6 +279,9 @@ export function createAccountDeleteFlow(opts: {
         set({ busy: null, method: 'code', code: '', notice: answer.sentence });
         return;
       default:
+        // The account has an authenticator whose code this session has not
+        // entered: the factors are read again, so the code screen can follow.
+        if (input.status === 403 && input.error === 'aal2_required') deps.rereadFactors();
         set({ busy: null, notice: answer.sentence });
     }
   }
@@ -270,7 +303,15 @@ export function createAccountDeleteFlow(opts: {
 
     if (answer.next === 'code' && typeof input.challenge === 'string') {
       challenge = input.challenge;
-      set({ busy: null, method: 'code', code: '', hasChallenge: true, notice: null });
+      // The password typed before the switch is not kept.
+      set({
+        busy: null,
+        method: 'code',
+        code: '',
+        password: '',
+        hasChallenge: true,
+        notice: null,
+      });
       return;
     }
     if (answer.next === 'sign_in') {
@@ -311,7 +352,8 @@ export function createAccountDeleteFlow(opts: {
     sendCode,
     usePassword() {
       if (state.busy !== null || state.ended !== null) return;
-      set({ method: 'password', notice: null });
+      // The code typed before the switch is not kept.
+      set({ method: 'password', code: '', notice: null });
     },
     cancel() {
       if (state.busy === 'delete') return false;
@@ -331,13 +373,25 @@ export function createAccountDeleteFlow(opts: {
  * is imported when first used, so loading this file reads no session.
  */
 export function appAccountDeleteDeps(opts: {
+  /**
+   * The account the sheet was opened for (the session's user). Every request
+   * is sent only under this account's token (api()'s asUserId); with none, or
+   * another session live, nothing is sent and the answer reads as "no answer".
+   */
+  userId: string | null;
   signOut: (o?: { afterAccountDeleted?: boolean }) => Promise<void> | void;
   announceDeleted: (sentence: string) => void;
 }): AccountDeleteDeps {
   return {
     post: async (path, body) => {
       const { api } = await import('./api');
-      return api<unknown>(path, { method: 'POST', ...(body ? { body } : {}) });
+      return api<unknown>(path, {
+        method: 'POST',
+        ...(body ? { body } : {}),
+        // An empty id matches no session, so api() refuses before sending.
+        asUserId: opts.userId ?? '',
+        ...(path === ACCOUNT_DELETE_PATH ? { timeoutMs: ACCOUNT_DELETE_TIMEOUT_MS } : {}),
+      });
     },
     signOutAfterDeleted: () => opts.signOut({ afterAccountDeleted: true }),
     announceDeleted: opts.announceDeleted,
@@ -347,6 +401,49 @@ export function appAccountDeleteDeps(opts: {
           supabase.auth.getUser().then(handOverLiveUser),
         )
         .catch(() => undefined);
+    },
+  };
+}
+
+/**
+ * Whether the delete sheet is open, for a screen that offers "Delete my
+ * account" (the sheet's useDeleteAccountConfirm). One per screen.
+ *  - open() does nothing while the sheet is open or while a delete is under
+ *    way anywhere in the app;
+ *  - closed() is the sheet's own onClose: the sheet calls it only after its
+ *    flow agreed to close (never during a delete), so nothing else can drop
+ *    the sheet while a delete runs and open a second one.
+ */
+export interface AccountDeleteOpener {
+  isOpen: () => boolean;
+  subscribe: (listener: () => void) => () => void;
+  open: () => void;
+  closed: () => void;
+}
+
+export function createAccountDeleteOpener(): AccountDeleteOpener {
+  let isOpen = false;
+  const listeners = new Set<() => void>();
+  const emit = () => {
+    for (const listener of listeners) listener();
+  };
+  return {
+    isOpen: () => isOpen,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    open() {
+      if (isOpen || accountDeleteInFlight()) return;
+      isOpen = true;
+      emit();
+    },
+    closed() {
+      if (!isOpen) return;
+      isOpen = false;
+      emit();
     },
   };
 }

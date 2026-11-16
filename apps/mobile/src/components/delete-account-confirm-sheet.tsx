@@ -1,6 +1,7 @@
 import { DELETE_ACCOUNT_CONFIRM_COPY as CORE_DELETE_CONFIRM_WORDS } from '@stockpilot/core';
 import * as React from 'react';
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
@@ -18,6 +19,7 @@ import { BUTTON_RADIUS, buttonTone } from '@/components/ui/tones';
 import {
   appAccountDeleteDeps,
   createAccountDeleteFlow,
+  createAccountDeleteOpener,
   hasVerifiedAuthenticator,
   type AccountDeleteFlow,
 } from '@/lib/account-delete';
@@ -55,15 +57,49 @@ const MIN_TAP = 44;
  * sheets: the backdrop is a sibling behind the card, a button named Close;
  * the sheet is modal; each field is named; the answer line is an alert.
  *
- * Not wired into Settings here. Mount it with `visible` and `onClose`, inside
- * AuthProvider.
+ * A screen offers it with useDeleteAccountConfirm below (two lines), inside
+ * AuthProvider with a session present. DeleteAccountConfirmSheet is the sheet
+ * itself, for a screen that keeps its own `visible`: it must drop `visible`
+ * only from `onClose`.
  */
+
+/** useAuth().signOut: after a deletion it is called to discard, not to ask. */
+type SignOutFn = (opts?: { afterAccountDeleted?: boolean }) => Promise<void> | void;
+
+/**
+ * "Delete my account" for a screen, in two lines:
+ *
+ *   const deleteAccount = useDeleteAccountConfirm({ signOut });
+ *   ...onPress={deleteAccount.open}...  {deleteAccount.sheet}
+ *
+ * One sheet per screen. `open` does nothing while the sheet is open or while
+ * a delete is under way anywhere in the app. The sheet closes only through
+ * its own Cancel, backdrop, escape scrub and system back, each refused while
+ * a delete is under way, so nothing can drop it mid-delete and open another.
+ */
+export function useDeleteAccountConfirm({ signOut }: { signOut: SignOutFn }): {
+  open: () => void;
+  sheet: React.ReactElement;
+} {
+  const [opener] = React.useState(createAccountDeleteOpener);
+  const visible = React.useSyncExternalStore(opener.subscribe, opener.isOpen);
+  return {
+    open: opener.open,
+    sheet: (
+      <DeleteAccountConfirmSheet visible={visible} onClose={opener.closed} signOut={signOut} />
+    ),
+  };
+}
+
 export function DeleteAccountConfirmSheet({
   visible,
   onClose,
+  signOut,
 }: {
   visible: boolean;
   onClose: () => void;
+  /** Defaults to useAuth().signOut. */
+  signOut?: SignOutFn;
 }) {
   // Set by the open content: Cancel, the backdrop, the escape scrub and the
   // system back all close through it, and it refuses while a delete is under
@@ -79,7 +115,7 @@ export function DeleteAccountConfirmSheet({
     >
       {/* key: a new content, and so a new flow, per open: each open starts
           blank (reset by remount, as the app's other sheets). */}
-      <SheetContent key={String(visible)} onClose={onClose} closeRef={closeRef} />
+      <SheetContent key={String(visible)} onClose={onClose} closeRef={closeRef} signOut={signOut} />
     </Modal>
   );
 }
@@ -87,17 +123,22 @@ export function DeleteAccountConfirmSheet({
 function SheetContent({
   onClose,
   closeRef,
+  signOut,
 }: {
   onClose: () => void;
   closeRef: React.MutableRefObject<(() => void) | null>;
+  signOut?: SignOutFn;
 }) {
-  const { session, signOut } = useAuth();
-  // What is asked first, read when the sheet opens; the server decides.
+  const auth = useAuth();
+  const session = auth.session;
+  // What is asked first, and the account every request is sent as, read
+  // when the sheet opens; the server decides.
   const [flow] = React.useState<AccountDeleteFlow>(() =>
     createAccountDeleteFlow({
       hasAuthenticator: hasVerifiedAuthenticator(session?.user?.factors),
       deps: appAccountDeleteDeps({
-        signOut,
+        userId: session?.user?.id ?? null,
+        signOut: signOut ?? auth.signOut,
         announceDeleted: (sentence) => Alert.alert('Account deleted', sentence),
       }),
     }),
@@ -134,6 +175,12 @@ function SheetContent({
     if (s.method === 'password') passwordRef.current?.focus();
     if (s.method === 'code') codeRef.current?.focus();
   }, [s.busy, s.method, s.ended]);
+
+  // Each answer is spoken when it appears, as the code screen's are
+  // (mfa-challenge-screen.tsx); the line also keeps its alert role.
+  React.useEffect(() => {
+    if (s.notice) AccessibilityInfo.announceForAccessibility(s.notice);
+  }, [s.notice]);
 
   const busy = s.busy !== null;
   const deleting = s.busy === 'delete';
@@ -200,7 +247,6 @@ function SheetContent({
                       onChangeText={flow.setPassword}
                       editable={!busy}
                       accessibilityLabel={CORE_DELETE_CONFIRM_WORDS.passwordLabel}
-                      accessibilityHint={CORE_DELETE_CONFIRM_WORDS.passwordHint}
                       secureTextEntry
                       textContentType="password"
                       autoComplete="current-password"
@@ -240,11 +286,9 @@ function SheetContent({
                       onChangeText={flow.setCode}
                       editable={!busy}
                       accessibilityLabel={CORE_DELETE_CONFIRM_WORDS.codeLabel}
-                      accessibilityHint={CORE_DELETE_CONFIRM_WORDS.codeSent}
                       keyboardType="number-pad"
                       textContentType="oneTimeCode"
                       autoComplete="one-time-code"
-                      maxLength={6}
                       style={[field, { fontFamily: FONT.mono, letterSpacing: 4 }]}
                     />
                     <Text style={[styles.hint, { color: c.ink3 }]}>
@@ -332,7 +376,9 @@ function SheetContent({
                 <Text style={[styles.actionLabel, { color: deleteTone.fg }]}>Delete account</Text>
               </Pressable>
             </View>
-          ) : s.ended !== 'done' ? (
+          ) : !busy ? (
+            // Ended: Close. After a deletion this shows only when the
+            // sign-out did not take the sheet away (it could not finish).
             <View style={styles.actions}>
               <Pressable
                 onPress={close}

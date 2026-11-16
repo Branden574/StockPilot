@@ -69,7 +69,14 @@ describe('the fields', () => {
     expect(a(code, 'keyboardType')).toBe('number-pad');
     expect(a(code, 'textContentType')).toBe('oneTimeCode');
     expect(a(code, 'autoComplete')).toBe('one-time-code');
-    expect(a(code, 'maxLength')).toBe('6');
+    // No maxLength: it would cut a pasted "123 456" before the spaces go;
+    // the flow keeps six digits (account-delete.test.ts).
+    expect(a(code, 'maxLength')).toBeUndefined();
+    expect(moduleSource).toContain(".replace(/[^0-9]/g, '').slice(0, 6)");
+  });
+
+  it('each hint is read once: the visible text, no accessibilityHint repeating it', () => {
+    for (const input of inputs) expect(a(input, 'accessibilityHint')).toBeUndefined();
   });
 
   it('every field is read-only while a request is under way', () => {
@@ -106,6 +113,50 @@ describe("the words are core's", () => {
     // Never an error's own message.
     expect(codeOnly(sheetSource)).not.toMatch(/\.message\b/);
     expect(codeOnly(moduleSource)).not.toMatch(/\.message\b/);
+  });
+
+  it('each answer is also spoken when it appears, as the code screen does', () => {
+    expect(sheetSource).toContain('import {\n  AccessibilityInfo,');
+    expect(codeOnly(sheetSource)).toContain(
+      'if (s.notice) AccessibilityInfo.announceForAccessibility(s.notice);\n  }, [s.notice]);',
+    );
+  });
+});
+
+describe('one flow per open, closed only through the flow', () => {
+  it('a new content, and so a new flow, per open', () => {
+    expect(sheetSource).toContain('key={String(visible)}');
+  });
+
+  it('the content forgets what was typed when it goes', () => {
+    expect(sheetSource).toContain('React.useEffect(() => () => void flow.cancel(), [flow]);');
+  });
+
+  it('the system back goes through the close the flow can refuse', () => {
+    expect(sheetSource).toContain('onRequestClose={() => (closeRef.current ?? onClose)()}');
+    expect(sheetSource).toContain('closeRef.current = close;');
+  });
+
+  it("every request is sent as the session's own account", () => {
+    expect(sheetSource).toContain('userId: session?.user?.id ?? null,');
+    expect(moduleSource).toContain("asUserId: opts.userId ?? '',");
+  });
+
+  it('the hook: one opener, the sheet closes it only through onClose', () => {
+    const hook = sheetSource.slice(
+      sheetSource.indexOf('export function useDeleteAccountConfirm('),
+      sheetSource.indexOf('export function DeleteAccountConfirmSheet('),
+    );
+    expect(hook).toContain('const [opener] = React.useState(createAccountDeleteOpener);');
+    expect(hook).toContain('React.useSyncExternalStore(opener.subscribe, opener.isOpen)');
+    expect(hook).toContain('open: opener.open,');
+    expect(hook).toContain('onClose={opener.closed}');
+    expect(hook.match(/opener\.closed/g)).toHaveLength(1);
+  });
+
+  it('an ended flow offers Close once nothing is under way (also after a deletion whose sign-out could not finish)', () => {
+    expect(sheetSource).toContain(') : !busy ? (');
+    expect(sheetSource).not.toContain("s.ended !== 'done' ? (");
   });
 });
 

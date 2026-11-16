@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  ACCOUNT_DELETE_AAL2_COPY,
   ACCOUNT_DELETE_CODE_NO_ANSWER_COPY,
   ACCOUNT_DELETE_CODE_NOT_OFFERED_COPY,
   ACCOUNT_DELETE_CODE_REFUSED_COPY,
@@ -21,10 +22,13 @@ import {
 import {
   ACCOUNT_DELETE_CODE_PATH,
   ACCOUNT_DELETE_PATH,
+  ACCOUNT_DELETE_TIMEOUT_MS,
+  accountDeleteInFlight,
   answerFromBody,
   answerFromError,
   appAccountDeleteDeps,
   createAccountDeleteFlow,
+  createAccountDeleteOpener,
   hasVerifiedAuthenticator,
   type AccountDeleteDeps,
 } from './account-delete';
@@ -154,6 +158,34 @@ describe('what is asked first', () => {
   });
 });
 
+describe('switching between the password and the code', () => {
+  it('the password typed before "Email me a code instead" is not kept', async () => {
+    const { flow } = harness({ post: answers({ body: { ok: true, challenge: CHALLENGE_1 } }) });
+    typedPassword(flow);
+    await flow.sendCode();
+    expect(flow.getState()).toMatchObject({ method: 'code', password: '' });
+    flow.usePassword();
+    expect(flow.getState().password).toBe('');
+  });
+
+  it('the code typed before "Use my password instead" is not kept', async () => {
+    const { flow } = harness({ post: answers({ body: { ok: true, challenge: CHALLENGE_1 } }) });
+    await flow.sendCode();
+    flow.setCode(CODE);
+    flow.usePassword();
+    expect(flow.getState()).toMatchObject({ method: 'password', code: '' });
+  });
+
+  it('a pasted code with spaces or dashes keeps its six digits', async () => {
+    const { flow } = harness({ post: answers({ body: { ok: true, challenge: CHALLENGE_1 } }) });
+    await flow.sendCode();
+    flow.setCode('123 456');
+    expect(flow.getState().code).toBe('123456');
+    flow.setCode(' 12-34-56 ');
+    expect(flow.getState().code).toBe('123456');
+  });
+});
+
 describe('the request shapes', () => {
   it('password: the word and the password, to the delete route', async () => {
     const { flow, post } = harness();
@@ -189,21 +221,41 @@ describe('the request shapes', () => {
     });
   });
 
-  it("the app's deps POST through api(): with the body, and with none for the code route", async () => {
+  it("the app's deps POST through api() as the sheet's account: the delete with its body and 45 s, the code with neither", async () => {
     mocks.api.mockResolvedValue({ ok: true });
-    const deps = appAccountDeleteDeps({ signOut: vi.fn(), announceDeleted: vi.fn() });
+    const deps = appAccountDeleteDeps({
+      userId: 'u-1',
+      signOut: vi.fn(),
+      announceDeleted: vi.fn(),
+    });
     await deps.post(ACCOUNT_DELETE_PATH, { confirm: 'DELETE', password: PASSWORD });
     await deps.post(ACCOUNT_DELETE_CODE_PATH, undefined);
+    expect(ACCOUNT_DELETE_TIMEOUT_MS).toBe(45_000);
     expect(mocks.api).toHaveBeenNthCalledWith(1, ACCOUNT_DELETE_PATH, {
       method: 'POST',
       body: { confirm: 'DELETE', password: PASSWORD },
+      asUserId: 'u-1',
+      timeoutMs: 45_000,
     });
-    expect(mocks.api).toHaveBeenNthCalledWith(2, ACCOUNT_DELETE_CODE_PATH, { method: 'POST' });
+    expect(mocks.api).toHaveBeenNthCalledWith(2, ACCOUNT_DELETE_CODE_PATH, {
+      method: 'POST',
+      asUserId: 'u-1',
+    });
+  });
+
+  it('with no account, the request names one no session matches (api() sends nothing)', async () => {
+    mocks.api.mockResolvedValue({ ok: true });
+    const deps = appAccountDeleteDeps({ userId: null, signOut: vi.fn(), announceDeleted: vi.fn() });
+    await deps.post(ACCOUNT_DELETE_CODE_PATH, undefined);
+    expect(mocks.api).toHaveBeenCalledWith(ACCOUNT_DELETE_CODE_PATH, {
+      method: 'POST',
+      asUserId: '',
+    });
   });
 
   it("the app's sign-out is the one that discards a deleted account's queued work", async () => {
     const signOut = vi.fn(async () => undefined);
-    const deps = appAccountDeleteDeps({ signOut, announceDeleted: vi.fn() });
+    const deps = appAccountDeleteDeps({ userId: 'u-1', signOut, announceDeleted: vi.fn() });
     await deps.signOutAfterDeleted();
     expect(signOut).toHaveBeenCalledWith({ afterAccountDeleted: true });
   });
@@ -211,7 +263,11 @@ describe('the request shapes', () => {
   it("the app's factor re-read hands the server's user to the code gate's hand-over", async () => {
     const answer = { data: { user: { id: 'u-1', factors: [] } }, error: null };
     mocks.getUser.mockResolvedValue(answer);
-    appAccountDeleteDeps({ signOut: vi.fn(), announceDeleted: vi.fn() }).rereadFactors();
+    appAccountDeleteDeps({
+      userId: 'u-1',
+      signOut: vi.fn(),
+      announceDeleted: vi.fn(),
+    }).rereadFactors();
     await vi.waitFor(() => expect(mocks.handOverLiveUser).toHaveBeenCalledWith(answer));
   });
 });
@@ -283,6 +339,37 @@ describe('the delete route: every answer leads to its state', () => {
     expect(flow.cancel()).toBe(true);
     expect(flow.getState().ended).toBe('done');
     expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it('a sign-out that throws after the deletion leaves the flow ended and idle (the sheet offers Close), announced once', async () => {
+    const { flow, deps } = harness();
+    deps.signOutAfterDeleted.mockRejectedValue(new Error('the sign-out could not finish'));
+    typedPassword(flow);
+    await flow.confirm();
+    expect(flow.getState()).toMatchObject({ ended: 'done', busy: null, ready: false });
+    expect(deps.announceDeleted).toHaveBeenCalledTimes(1);
+    expect(accountDeleteInFlight()).toBe(false);
+    expect(flow.cancel()).toBe(true);
+  });
+
+  it('aal2_required: the factors are read again and the sentence shows', async () => {
+    const { flow, deps } = harness({
+      post: answers({ error: new HttpRefusal(403, 'aal2_required') }),
+    });
+    typedPassword(flow);
+    await flow.confirm();
+    expect(flow.getState()).toMatchObject({ ended: null, notice: ACCOUNT_DELETE_AAL2_COPY });
+    expect(deps.rereadFactors).toHaveBeenCalledTimes(1);
+    expect(deps.signOutAfterDeleted).not.toHaveBeenCalled();
+  });
+
+  it('no other refusal asks for the factors to be read again', async () => {
+    for (const code of ['password_incorrect', 'credential_required', 'last_owner']) {
+      const { flow, deps } = harness({ post: answers({ error: new HttpRefusal(403, code) }) });
+      typedPassword(flow);
+      await flow.confirm();
+      expect(deps.rereadFactors, code).not.toHaveBeenCalled();
+    }
   });
 
   it.each([
@@ -628,6 +715,78 @@ describe('one request at a time', () => {
     await Promise.all([first, second]);
     expect(post).toHaveBeenCalledTimes(1);
     expect(flow.getState().method).toBe('code');
+  });
+});
+
+describe('one delete in the whole app, and the opener', () => {
+  it("while one flow's delete runs, another flow sends none", async () => {
+    let release: (v: unknown) => void = () => undefined;
+    const a = harness({ post: () => new Promise((r) => (release = r)) });
+    const b = harness();
+    typedPassword(a.flow);
+    typedPassword(b.flow);
+    const deleting = a.flow.confirm();
+    expect(accountDeleteInFlight()).toBe(true);
+    await b.flow.confirm();
+    expect(b.post).not.toHaveBeenCalled();
+    release(null);
+    await deleting;
+    expect(accountDeleteInFlight()).toBe(false);
+    await b.flow.confirm();
+    expect(b.post).toHaveBeenCalledTimes(1);
+  });
+
+  it('the in-flight mark lasts through the sign-out after a deletion', async () => {
+    let finish: () => void = () => undefined;
+    const { flow, deps } = harness();
+    deps.signOutAfterDeleted.mockImplementation(
+      () => new Promise<undefined>((r) => (finish = () => r(undefined))),
+    );
+    typedPassword(flow);
+    const deleting = flow.confirm();
+    await vi.waitFor(() => expect(deps.signOutAfterDeleted).toHaveBeenCalledTimes(1));
+    expect(accountDeleteInFlight()).toBe(true);
+    finish();
+    await deleting;
+    expect(accountDeleteInFlight()).toBe(false);
+  });
+
+  it('open shows the sheet once; closed hides it; listeners hear each change', () => {
+    const opener = createAccountDeleteOpener();
+    const listener = vi.fn();
+    opener.subscribe(listener);
+    expect(opener.isOpen()).toBe(false);
+    opener.open();
+    opener.open();
+    expect(opener.isOpen()).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(1);
+    opener.closed();
+    opener.closed();
+    expect(opener.isOpen()).toBe(false);
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it('open does nothing while a delete is under way anywhere in the app', async () => {
+    let release: (v: unknown) => void = () => undefined;
+    const { flow } = harness({ post: () => new Promise((r) => (release = r)) });
+    typedPassword(flow);
+    const deleting = flow.confirm();
+    const opener = createAccountDeleteOpener();
+    opener.open();
+    expect(opener.isOpen()).toBe(false);
+    release(null);
+    await deleting;
+    opener.open();
+    expect(opener.isOpen()).toBe(true);
+  });
+
+  it("the opener has no way to close but the sheet's own onClose", () => {
+    expect(Object.keys(createAccountDeleteOpener()).sort()).toEqual([
+      'closed',
+      'isOpen',
+      'open',
+      'subscribe',
+    ]);
   });
 });
 
