@@ -40,9 +40,16 @@ beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
-async function outcome(): Promise<'passed' | { code: string; message: string; details: unknown }> {
+async function outcome(
+  noFactorRefusal?: ServiceError,
+): Promise<'passed' | { code: string; message: string; details: unknown }> {
   try {
-    await assertStepUpHeld({ supabase: supabase as never, admin: admin as never, userId: USER });
+    await assertStepUpHeld({
+      supabase: supabase as never,
+      admin: admin as never,
+      userId: USER,
+      ...(noFactorRefusal ? { noFactorRefusal } : {}),
+    });
     return 'passed';
   } catch (e) {
     expect(e).toBeInstanceOf(ServiceError);
@@ -148,5 +155,37 @@ describe('assertStepUpHeld', () => {
   it("reads the validated account's factors, by its id", async () => {
     await outcome();
     expect(listFactors).toHaveBeenCalledWith({ userId: USER });
+  });
+
+  describe('with a refusal for an account with no authenticator (account deletion)', () => {
+    const REFUSAL = new ServiceError('forbidden', 'Confirm again.', {
+      reason: 'credential_required',
+    });
+
+    it('no authenticator now, even at aal2: the refusal is thrown', async () => {
+      session = { sub: USER, aal: 'aal2' };
+      expect(await outcome(REFUSAL)).toEqual({
+        code: 'forbidden',
+        message: 'Confirm again.',
+        details: { reason: 'credential_required' },
+      });
+    });
+
+    it('an unverified factor only: the refusal is thrown', async () => {
+      session = { sub: USER, aal: 'aal2' };
+      factorsRead = { data: { factors: [{ ...VERIFIED, status: 'unverified' }] }, error: null };
+      expect(await outcome(REFUSAL)).toMatchObject({ details: { reason: 'credential_required' } });
+    });
+
+    it('an authenticator at aal2: passes', async () => {
+      session = { sub: USER, aal: 'aal2' };
+      factorsRead = { data: { factors: [VERIFIED] }, error: null };
+      expect(await outcome(REFUSAL)).toBe('passed');
+    });
+
+    it('an authenticator at aal1: the code answer comes first', async () => {
+      factorsRead = { data: { factors: [VERIFIED] }, error: null };
+      expect(await outcome(REFUSAL)).toMatchObject({ details: { reason: 'aal2_required' } });
+    });
   });
 });

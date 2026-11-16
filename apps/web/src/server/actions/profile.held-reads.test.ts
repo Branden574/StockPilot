@@ -6,9 +6,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
  * authenticator step-up, the platform-admin refusal and its last check before
  * the delete only for the account the action validated (requireSession()).
  *
- * A member's step-up comes from withContext(), held to the member. A person
- * with no organization is read from their own factor list (readMfaFactorList,
- * factorsOf) and their own verified level (readVerifiedSessionClaimsOf). The
+ * The confirmation reads the account's own factors by its id, with the
+ * service role, and its own verified level (readVerifiedSessionClaimsOf): a
+ * session that no longer verifies as that account is told to sign in again
+ * before any password is checked. The
  * platform-admin check reads the validated account's email by its id, with
  * the service role. Immediately before the delete, assertStepUpHeld checks
  * once more that the verified session is that account's and owes no step-up,
@@ -94,6 +95,14 @@ vi.mock('next/navigation', () => ({
   },
 }));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn(), revalidateTag: vi.fn() }));
+// The password an account with no authenticator confirms with, checked on a
+// separate client that never touches this session: right, in one round trip.
+vi.mock('@/lib/auth/verify-password', () => ({
+  verifyPasswordSideChannel: vi.fn(async () => {
+    await roundTrip();
+    return { ok: true };
+  }),
+}));
 vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: vi.fn(async () => {
     await roundTrip(state.rateLimitMs);
@@ -157,6 +166,8 @@ import {
   type SigningKey,
 } from '@/test/auth-session-fixture';
 
+import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
+
 import { deleteOwnAccountAction } from './profile';
 
 const MEMBER = FIXTURE_USER_ID;
@@ -187,10 +198,11 @@ function accountEmail(userId: string): string | null {
  */
 const CROSSES_AT_THE_MEMBERSHIP_READ = 150;
 /**
- * For a person with no organization the factor list is read at 600 ms, after
- * the two get_request_context() reads: 450 ms renews the session at that read.
+ * The confirmation reads the session's verified level right after
+ * requireSession()'s get_request_context() (0-300 ms): crossing 150 ms in
+ * renews the session at that read.
  */
-const CROSSES_AT_THE_FACTOR_LIST = 450;
+const CROSSES_AT_THE_LEVEL_READ = 150;
 /** Well past the gate: the limiter is made slow enough to cross it (state.rateLimitMs). */
 const CROSSES_DURING_THE_RATE_LIMIT = 60_000;
 const NEVER = 3_600_000;
@@ -414,7 +426,9 @@ async function grant(refreshToken: string, sub: string, aal: 'aal1' | 'aal2', en
 
 async function run() {
   try {
-    return { result: await deleteOwnAccountAction({ confirm: 'DELETE' }) };
+    return {
+      result: await deleteOwnAccountAction({ confirm: 'DELETE', password: 'example-password-1' }),
+    };
   } catch (e) {
     return { thrown: (e as Error).message };
   }
@@ -442,16 +456,28 @@ describe('deleteOwnAccountAction: the step-up is decided only for the validated 
       expect(authCalls).toContain('/token');
     });
 
-    it(`a person with no organization, with an authenticator, at aal1: refused, nothing deleted, when the factor list read is not theirs (${kind.label})`, async () => {
+    it(`a person with no organization, with an authenticator, at aal1: refused, nothing deleted, when the level read is not theirs (${kind.label})`, async () => {
       roles.delete(MEMBER);
-      await signedIn(MEMBER, 'aal1', OTHER_REFRESH, CROSSES_AT_THE_FACTOR_LIST);
+      await signedIn(MEMBER, 'aal1', OTHER_REFRESH, CROSSES_AT_THE_LEVEL_READ);
       await grant(OTHER_REFRESH, OTHER, kind.aal, kind.enrolled);
       const { result, thrown } = await run();
       expect(thrown).toBeUndefined();
       expect(result).toEqual(SIGN_IN_AGAIN);
       expect(deleted()).toEqual([]);
-      expect(contextAs).toEqual([MEMBER, MEMBER]);
+      expect(contextAs[0]).toBe(MEMBER);
       expect(authCalls).toContain('/token');
+    });
+
+    it(`a person with no organization and no authenticator: refused before the password is checked, when the level read is not theirs (${kind.label})`, async () => {
+      roles.delete(MEMBER);
+      server.unenrolledUsers.add(MEMBER);
+      await signedIn(MEMBER, 'aal1', OTHER_REFRESH, CROSSES_AT_THE_LEVEL_READ);
+      await grant(OTHER_REFRESH, OTHER, kind.aal, kind.enrolled);
+      const { result, thrown } = await run();
+      expect(thrown).toBeUndefined();
+      expect(result).toEqual(SIGN_IN_AGAIN);
+      expect(deleted()).toEqual([]);
+      expect(vi.mocked(verifyPasswordSideChannel)).not.toHaveBeenCalled();
     });
   }
 
@@ -479,9 +505,9 @@ describe('deleteOwnAccountAction: the step-up is decided only for the validated 
     expect(authCalls).toContain('/token');
   });
 
-  it('an allowlisted platform admin with no authenticator: refused, nothing deleted, when the factor list read is not theirs', async () => {
+  it('an allowlisted platform admin with no authenticator: refused, nothing deleted, when the level read is not theirs', async () => {
     server.unenrolledUsers.add(PLATFORM_ADMIN);
-    await signedIn(PLATFORM_ADMIN, 'aal1', OTHER_REFRESH, CROSSES_AT_THE_FACTOR_LIST);
+    await signedIn(PLATFORM_ADMIN, 'aal1', OTHER_REFRESH, CROSSES_AT_THE_LEVEL_READ);
     await grant(OTHER_REFRESH, OTHER, 'aal1', false);
     const { result, thrown } = await run();
     expect(thrown).toBeUndefined();
@@ -580,11 +606,16 @@ describe("deleteOwnAccountAction with requireOrgContext()'s own gate in front, a
     state.codeGateOut = false;
   });
 
-  it('a member with an authenticator at aal1 is sent to the code page, and nothing is deleted', async () => {
+  it('a member with an authenticator at aal1 is refused with the code answer, and nothing is deleted', async () => {
+    // Deletion asks for the session only, never the organization context, so
+    // the confirmation answers this itself (the dialog shows it).
     await signedIn(MEMBER, 'aal1', OTHER_REFRESH, NEVER);
     const { result, thrown } = await run();
-    expect(thrown).toBe('REDIRECT:/signin/mfa');
-    expect(result).toBeUndefined();
+    expect(thrown).toBeUndefined();
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'forbidden', details: { reason: 'aal2_required' } },
+    });
     expect(deleted()).toEqual([]);
   });
 

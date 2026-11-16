@@ -25,6 +25,7 @@ import {
   banner,
   bodyText,
   brandStrip,
+  card,
   ctaRow,
   detailGrid,
   emailShell,
@@ -39,7 +40,7 @@ import {
   statusPill,
 } from '../components';
 import { esEmailById } from '../registry';
-import { ES_LIGHT, esAssetUrl } from '../tokens';
+import { ES_LIGHT, ES_MONO_INLINE, esAssetUrl } from '../tokens';
 
 const L = ES_LIGHT;
 
@@ -601,6 +602,92 @@ export function renderEmailChangedNoticeEmail(params: EmailChangedNoticeParams):
     `The sign-in email for your StockPilot account changed from ${params.oldEmail} to ${params.newEmail} on ${params.changedAt}. Account emails now go to the new address.`,
     '',
     `Didn’t do this? Contact your administrator immediately — they can disable the account and revoke every session. Support: ${urls.support}`,
+  ].join('\n');
+
+  return { id: def.id, subject, preheader, html, text, from: def.from };
+}
+
+// ── account-delete-code ─────────────────────────────────────────────
+
+export interface AccountDeleteCodeEmailParams {
+  /** Recipient: the account's current sign-in address. */
+  email: string;
+  /** Six digits. In the body only: never in the subject or the preheader. */
+  code: string;
+  /** How long the code works, human phrase. */
+  codeExpiry?: string;
+  firstName?: string | null;
+  appUrl?: string;
+}
+
+/**
+ * The code that confirms deleting an account with no authenticator
+ * (server/lib/account-deletion-credential.ts). Says what the code is for, how
+ * long it works, and that nothing happens unless it is used.
+ */
+export function renderAccountDeleteCodeEmail(params: AccountDeleteCodeEmailParams): RenderedEsEmail {
+  const def = esEmailById('account-delete-code');
+  const codeExpiry = params.codeExpiry ?? '10 minutes';
+  const appUrl = params.appUrl ?? DEFAULT_APP_URL;
+  const urls = marketingUrls(appUrl);
+  const email = escapeHtml(params.email);
+  const code = escapeHtml(params.code);
+
+  const subject = def.subject({});
+  const preheader = def.preheader({ codeExpiry });
+
+  const styles = { darkPills: ['sec' as const], darkCards: '.card' };
+  const html = emailShell({
+    title: escapeHtml(subject),
+    preheader: def.preheader({ codeExpiry: escapeHtml(codeExpiry) }),
+    preheaderPad: 6,
+    styles,
+    rows: [
+      brandStrip({ tag: def.tag }),
+      section(
+        '36px 36px 24px',
+        [
+          statusPill({ variant: 'sec', label: 'Security &middot; Delete account' }),
+          headline({ lead: 'Your code to delete your account.', turn: 'Enter it in StockPilot.' }),
+          bodyText(
+            `${greeting(params.firstName)}— someone asked to delete the StockPilot account for <strong class="ink" style="font-weight:600;color:${L.ink}">${email}</strong>. If that was you, enter this code where you asked for it to confirm.`,
+          ),
+        ].join('\n      '),
+      ),
+      section(
+        '0 36px 24px',
+        card(
+          `<div class="ink" style="font-family:${ES_MONO_INLINE};font-size:30px;font-weight:600;letter-spacing:0.3em;color:${L.ink};text-align:center">${code}</div>
+        <div class="ink3" style="font-size:12px;color:${L.ink3};text-align:center;margin-top:8px">This code works for <strong class="ink2" style="font-weight:600;color:${L.ink2}">${escapeHtml(codeExpiry)}</strong>. Deleting an account cannot be undone.</div>`,
+          { pad: '20px 20px' },
+        ),
+      ),
+      section(
+        '0 36px 30px',
+        infoCard({
+          titleHtml: 'Didn&rsquo;t ask for this?',
+          bodyHtml: `Nothing happens unless the code is used. Do not share it with anyone. If someone else may be signed in to your account, change your password and <a class="ink2" href="${escapeAttr(urls.support)}" style="color:${L.ink2}">tell support</a>.`,
+        }),
+      ),
+      footer({
+        kind: 'ess',
+        reasonHtml: `Sent to <span class="ink2" style="color:${L.ink2};text-decoration:underline">${email}</span> because a code to delete this StockPilot account was requested.`,
+        urls,
+      }),
+    ].join('\n    '),
+  });
+  assertEmailWeight(html);
+
+  const text = [
+    'Your code to delete your StockPilot account.',
+    '',
+    `Someone asked to delete the StockPilot account for ${params.email}. If that was you, enter this code where you asked for it to confirm:`,
+    '',
+    params.code,
+    '',
+    `This code works for ${codeExpiry}. Deleting an account cannot be undone.`,
+    '',
+    `Didn’t ask for this? Nothing happens unless the code is used. Do not share it with anyone. If someone else may be signed in to your account, change your password and tell support: ${urls.support}`,
   ].join('\n');
 
   return { id: def.id, subject, preheader, html, text, from: def.from };

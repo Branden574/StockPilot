@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { esEmailById } from '../registry';
 import { ES_MAX_HTML_BYTES } from '../tokens';
 import {
+  renderAccountDeleteCodeEmail,
   renderPasswordResetEmail,
   renderSigninAlertEmail,
   SIGNIN_ALERT_LAST_FOR_A_DAY_TEXT,
@@ -385,5 +386,52 @@ describe('email-changed (renderEmailChangedNoticeEmail)', () => {
     expect(res.subject).toBe(def.subject({}));
     expect(res.subject).toBe('Your StockPilot email was changed');
     expect(res.preheader).toBe(def.preheader({ newEmail: EC.newEmail }));
+  });
+});
+
+describe('account-delete-code (renderAccountDeleteCodeEmail)', () => {
+  const render = () =>
+    renderAccountDeleteCodeEmail({
+      email: SEED.email,
+      code: '042917',
+      codeExpiry: '10 minutes',
+      firstName: SEED.firstName,
+      appUrl: SEED.appUrl,
+    });
+
+  it('puts the code in the body only, never in the subject or the preheader', () => {
+    const res = render();
+    expect(res.html).toContain('042917');
+    expect(res.text).toContain('042917');
+    expect(res.subject).not.toContain('042917');
+    expect(res.preheader).not.toContain('042917');
+    expect(res.subject).toBe(esEmailById('account-delete-code').subject({}));
+  });
+
+  it('says what the code is for, how long it works, and that nothing happens unless it is used', () => {
+    const res = render();
+    for (const surface of [res.text, res.html]) {
+      expect(surface).toMatch(/delete/i);
+      expect(surface).toContain('10 minutes');
+      expect(surface).toContain('Nothing happens unless the code is used.');
+    }
+    expect(res.text).toContain(SEED.email);
+  });
+
+  it('is sent from security, essential, with no emoji, no exclamation mark and no leakage', () => {
+    const res = render();
+    expect(res.from).toBe('StockPilot Security <security@stockpilotusa.com>');
+    assertEssentialFooter(res.html);
+    assertNoLeakage(res);
+    assertWeight(res);
+    expect(res.text).not.toMatch(/\p{Extended_Pictographic}/u);
+    expect(res.text).not.toContain('!');
+    expect(res.subject).not.toContain('!');
+  });
+
+  it('escapes the address in the markup', () => {
+    const res = renderAccountDeleteCodeEmail({ email: 'a<b>@example.test', code: '000001' });
+    expect(res.html).not.toContain('a<b>@example.test');
+    expect(res.html).toContain('a&lt;b&gt;@example.test');
   });
 });

@@ -53,6 +53,12 @@ export function accountGoneError(): ServiceError {
  *  - `forbidden` with reason `aal2_required` (mfaGateError's enrolled shape)
  *    when the code is owed.
  *
+ * `noFactorRefusal`, when given, is thrown for an account that has NO verified
+ * factor: a caller whose write needs another confirmation from such an account
+ * (account deletion: the password or the emailed code) passes it when this
+ * request did not check one, so a session whose factors were all removed after
+ * its first check is not let through on the code it entered before.
+ *
  * A last check right before a privileged service-role write that other reads
  * of the cookie session came before: account deletion runs it immediately
  * before the delete. It lives apart from services/context.ts so the context's
@@ -62,10 +68,12 @@ export async function assertStepUpHeld({
   supabase,
   admin,
   userId,
+  noFactorRefusal,
 }: {
   supabase: Pick<SupabaseClient, 'auth'>;
   admin: Pick<SupabaseClient, 'auth'>;
   userId: string;
+  noFactorRefusal?: ServiceError;
 }): Promise<void> {
   const claims = await readVerifiedSessionClaimsOf(supabase, userId);
   if (!claims) throw sessionChangedError();
@@ -83,4 +91,5 @@ export async function assertStepUpHeld({
     );
   }
   if (stepUpOwed(data.factors, claims.aal)) throw mfaGateError({ mfaEnrolled: true });
+  if (noFactorRefusal && !stepUpOwed(data.factors, null)) throw noFactorRefusal;
 }

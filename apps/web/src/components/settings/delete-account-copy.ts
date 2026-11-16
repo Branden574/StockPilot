@@ -28,3 +28,18 @@ export const DELETE_ACCOUNT_CARD_COPY =
   'stock movements, received stock and the audit log show “Deleted user” instead of your name, and some records, ' +
   'such as maintenance requests, keep the name or email they were made with. If you are the only owner of an ' +
   'organization with other members, transfer ownership on the Team page first.';
+
+/**
+ * The words around confirming a deletion in the dialog, for an account with no
+ * authenticator: its password, or a code emailed to it. The server's own
+ * answers are in server/lib/account-deletion-credential.ts.
+ */
+export const DELETE_ACCOUNT_CONFIRM_COPY = {
+  passwordLabel: 'Your password',
+  passwordHint: 'Enter your password to confirm. If you have no password or do not remember it, use a code instead.',
+  emailCode: 'Email me a code instead',
+  codeLabel: 'Code from your email',
+  codeSent: 'We sent a six-digit code to your sign-in email. It works for 10 minutes.',
+  sendAgain: 'Send a new code',
+  usePassword: 'Use my password instead',
+} as const;

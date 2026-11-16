@@ -326,7 +326,20 @@ const REVIEWED: Record<string, Reviewed> = {
   'server/actions/profile.ts#deleteOwnAccountAction': {
     kind: 'own-account',
     reason:
-      'Every member can delete their own account; a member goes through gateMfaForSelfService first.',
+      'Every member can delete their own account, whatever the organization requires: an account with an authenticator confirms at aal2, one with none with its password or the emailed code, checked before the first write and again right before the delete (server/lib/account-deletion-credential).',
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'auth.admin.deleteUser',
+      'rpc:account_deletion_check',
+      'rpc:admin_revoke_user_sessions',
+      'storage:user-avatars.remove',
+    ],
+  },
+  'app/api/v1/account/delete/route.ts#POST': {
+    kind: 'own-account',
+    reason:
+      "The phone's deletion of the caller's own account. With a password or the emailed code it applies the web's confirmation (an authenticator needs aal2; none needs the password or the code) and deletes whatever the organization requires; with neither it gives the organization policy's answer, as installed phones expect. The last check before the delete reads the account's factors again.",
     writes: [
       'audit_logs.insert',
       'audit_logs.upsert',

@@ -3,7 +3,6 @@
 import { revalidatePath, revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
-import { factorsOf, readMfaFactorList, type MfaFactorList } from '@/lib/auth/mfa-factors';
 import { isPlatformAdmin } from '@/lib/auth/platform-admin';
 import { readSessionMemberships, requireOrgContext, requireSession } from '@/lib/auth/session';
 import { readVerifiedSessionClaimsOf } from '@/lib/auth/verified-claims';
@@ -39,6 +38,18 @@ import {
   settleFailedDelete,
   soleOwnedOrganizationsWithMembers,
 } from '@/server/lib/account-deletion';
+import {
+  ACCOUNT_DELETE_CODE_NOT_OFFERED_COPY,
+  ACCOUNT_DELETE_CODE_REFUSED_COPY,
+  ACCOUNT_DELETE_CODE_SEND_FAILED_COPY,
+  ACCOUNT_DELETE_CREDENTIAL_CHECK_FAILED_COPY,
+  ACCOUNT_DELETE_CREDENTIAL_PAUSED_COPY,
+  ACCOUNT_DELETE_CREDENTIAL_REQUIRED_COPY,
+  ACCOUNT_DELETE_PASSWORD_REFUSED_COPY,
+  confirmDeletionCredential,
+  type DeletionCredentialResult,
+  sendDeletionCode,
+} from '@/server/lib/account-deletion-credential';
 import { orgLogoBucketUrlPrefix, removePreviousOrgLogo } from '@/server/lib/org-logo-object';
 import { audit } from '@/server/services/audit';
 import { ServiceError, mfaGateError, withContext } from '@/server/services/context';
@@ -88,95 +99,6 @@ async function gateMfa(): Promise<void> {
     // someone who already has a factor to enroll one.
     throw mfaGateError(ctx);
   }
-}
-
-/**
- * The MFA posture of the COOKIE SESSION alone — no org involved.
- *
- * `gateMfa()` above answers "what does this user's ORG demand?", which is the
- * right question for every org-scoped mutation here. It is the wrong question,
- * and an unanswerable one, for a user who has no org: `withContext()` resolves
- * through `requireOrgContext()`, which answers a membership-less session with
- * `redirect('/onboarding')` — a throw, not a value (see SP-129 below).
- *
- * So this reads the same two facts `resolveMfaState` reads, straight off the
- * session: is a factor VERIFIED, and is the session at aal2. Enrollment still
- * escalates (HI-6) — losing your org must not lose the rule that a factor you
- * enrolled has to be satisfied. Shaped like `ServiceContext`'s MFA triple so
- * `mfaGateError` picks the same error shape in both paths.
- *
- * Both facts are those of `userId`, the account the action validated, and of
- * no one else (docket S50a): the factor list says whose list it is
- * (readMfaFactorList, factorsOf), and the level is that account's verified
- * session claims (readVerifiedSessionClaimsOf; anything else is not aal2). A
- * list of another account is no answer about this person: the action stops
- * with SESSION_CHANGED (sign in again), never with the enrollment sentence.
- * A verified factor of any type counts, the rule core's stepUpOwed and
- * resolveMfaState apply (the app enrolls only TOTP).
- */
-async function resolveSessionMfaPosture(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  userId: string,
-): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean; mfaEnrolled: boolean }> {
-  let list: MfaFactorList;
-  try {
-    list = await readMfaFactorList(supabase);
-  } catch (e) {
-    // Fail CLOSED, byte-for-byte the posture `resolveMfaState` takes in
-    // services/context.ts: an unreadable factor list must never read as "no
-    // MFA required" on a destructive action. The unenrolled shape is chosen
-    // deliberately — we do not KNOW there is a factor, and telling someone
-    // with no factor to "re-authenticate with MFA" fires a step-up modal they
-    // can never satisfy.
-    console.error('[profile] session MFA posture read failed:', e);
-    return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false };
-  }
-  const factors = factorsOf(list, userId);
-  if (!factors) throw sessionChangedError();
-  const enrolled = factors.some((f) => f.status === 'verified');
-  if (!enrolled) return { mfaRequired: false, mfaSatisfied: true, mfaEnrolled: false };
-  // Never throws: null (no verified session of this account) is not aal2.
-  const claims = await readVerifiedSessionClaimsOf(supabase, userId);
-  return {
-    mfaRequired: true,
-    mfaSatisfied: claims?.aal === 'aal2',
-    mfaEnrolled: true,
-  };
-}
-
-/**
- * SP-129 — the MFA gate for SELF-SERVICE account actions, which must work for
- * a user who has NO accepted membership.
- *
- * That cohort is real and not small: every signup that abandons /onboarding,
- * and everyone removed from their last org by `TeamService.removeMember`
- * (which deletes the membership row and leaves the auth user + profile alive).
- * For them `gateMfa()` -> `withContext()` -> `requireOrgContext()` throws
- * NEXT_REDIRECT, which the catch-all below used to translate into
- * `internal_error: 'NEXT_REDIRECT'` (recurring pattern #23) — so the one
- * action App Store 5.1.1(v) and GDPR require to always work was the one action
- * they could never complete.
- *
- * A member keeps the org gate EXACTLY as before: this is not a way around an
- * org's mfa_policy, only an answer for the case where there is no org to ask.
- */
-async function gateMfaForSelfService(userId: string): Promise<'gated' | 'memberships_unreadable'> {
-  // A second read of the session and its memberships: React.cache() does not
-  // memoize inside a Server Action (lib/auth/session.ts), so this does not
-  // share requireSession()'s. A session that does not verify as `userId` here
-  // answers no memberships and takes the branch below, whose posture read is
-  // held to `userId` and refuses it. A list that cannot be read is not "no
-  // membership": the action stops there and the person tries again.
-  const read = await readSessionMemberships();
-  if (!read.ok) return 'memberships_unreadable';
-  if (read.memberships.length > 0) {
-    await gateMfa();
-    return 'gated';
-  }
-  const supabase = await createClient();
-  const posture = await resolveSessionMfaPosture(supabase, userId);
-  if (posture.mfaRequired && !posture.mfaSatisfied) throw mfaGateError(posture);
-  return 'gated';
 }
 
 /**
@@ -556,7 +478,71 @@ export async function setOrgLogoUrlAction(input: {
 
 const deleteAccountSchema = z.object({
   confirm: z.literal('DELETE'),
+  /** The account's current password, for an account with no authenticator. */
+  password: z.string().max(1024).optional(),
+  /** Or the emailed code and the challenge requestAccountDeletionCodeAction answered. */
+  code: z.string().max(16).optional(),
+  challenge: z.string().max(256).optional(),
 });
+
+/** The answer for a deletion this request did not confirm (account-deletion-credential). */
+function credentialRefusal(
+  kind: Extract<DeletionCredentialResult, { ok: false }>['kind'],
+): ActionResult<never> {
+  switch (kind) {
+    case 'aal2_required':
+      // mfaGateError's enrolled shape, so the answer is the one the step-up
+      // prompt knows.
+      throw mfaGateError({ mfaEnrolled: true });
+    case 'credential_required':
+      return err('forbidden', ACCOUNT_DELETE_CREDENTIAL_REQUIRED_COPY, { reason: 'credential_required' });
+    case 'password_refused':
+      return err('forbidden', ACCOUNT_DELETE_PASSWORD_REFUSED_COPY, { reason: 'password_refused' });
+    case 'code_refused':
+      return err('forbidden', ACCOUNT_DELETE_CODE_REFUSED_COPY, { reason: 'code_refused' });
+    case 'rate_limited':
+      return err('rate_limited', ACCOUNT_DELETE_CREDENTIAL_PAUSED_COPY);
+    default:
+      return err('internal_error', ACCOUNT_DELETE_CREDENTIAL_CHECK_FAILED_COPY);
+  }
+}
+
+/**
+ * Emails a six-digit code that confirms deleting the account, for an account
+ * with no authenticator (one with an authenticator confirms with its code and
+ * is answered so). The code goes to the account's current sign-in address
+ * only; the answer is the challenge the code is checked with, which holds no
+ * code. Its own limit per account (server/lib/account-deletion-credential).
+ * Asks for the session only, as deleting does: an account with no
+ * organization, or one that must still set up an authenticator, can delete
+ * itself too.
+ */
+export async function requestAccountDeletionCodeAction(): Promise<
+  ActionResult<{ challenge: string; expiresAt: number }>
+> {
+  try {
+    const session = await requireSession();
+    const supabase = await createClient();
+    // The session must still be this account's before anything is sent.
+    if (!(await readVerifiedSessionClaimsOf(supabase, session.userId))) {
+      throw sessionChangedError();
+    }
+    const sent = await sendDeletionCode({ admin: createAdminClient(), userId: session.userId });
+    if (sent.ok) return ok({ challenge: sent.challenge, expiresAt: sent.expiresAt });
+    switch (sent.kind) {
+      case 'not_offered':
+        return err('conflict', ACCOUNT_DELETE_CODE_NOT_OFFERED_COPY, { reason: 'not_offered' });
+      case 'rate_limited':
+        return err('rate_limited', ACCOUNT_DELETE_CREDENTIAL_PAUSED_COPY);
+      case 'gone':
+        throw sessionChangedError();
+      default:
+        return err('internal_error', ACCOUNT_DELETE_CODE_SEND_FAILED_COPY);
+    }
+  } catch (e) {
+    return actionErrorFrom(e);
+  }
+}
 
 /**
  * Self-service account deletion, for every member (migration 0393). Asks the
@@ -572,6 +558,13 @@ const deleteAccountSchema = z.object({
  * when the account cannot go; a refusal that arrives only at the delete itself
  * (a member joined after the check, F-5) keeps the sessions.
  *
+ * Confirmed first, the same rule as the phone's route
+ * (server/lib/account-deletion-credential): an account with a verified
+ * authenticator needs a session at aal2; an account with none needs its
+ * current password or the code emailed to it (requestAccountDeletionCodeAction),
+ * whatever its organization's authenticator policy says. A wrong, expired or
+ * missing confirmation changes nothing.
+ *
  * Refused, in order, before anything changes:
  *  - a StockPilot platform admin while their VERIFIED auth email is on the
  *    allowlist (O-A3-7; never the editable profile email);
@@ -584,18 +577,19 @@ const deleteAccountSchema = z.object({
  */
 export async function deleteOwnAccountAction(input: {
   confirm: string;
+  password?: string;
+  code?: string;
+  challenge?: string;
 }): Promise<ActionResult<void>> {
   const parsed = deleteAccountSchema.safeParse(input);
   if (!parsed.success) {
     return err('validation_error', 'Type DELETE to confirm.');
   }
   try {
+    // The session only, never the organization context: an account with no
+    // organization, and one that must still set up an authenticator, must be
+    // able to delete itself. The confirmation below is the gate.
     const session = await requireSession();
-    // SP-129 — NOT gateMfa(): a user with no membership must still be able to
-    // delete their account. See gateMfaForSelfService.
-    if ((await gateMfaForSelfService(session.userId)) === 'memberships_unreadable') {
-      return membershipReadFailed();
-    }
     const supabase = await createClient();
     const admin = createAdminClient();
 
@@ -617,6 +611,23 @@ export async function deleteOwnAccountAction(input: {
       });
       return err('internal_error', ACCOUNT_DELETE_RETRY_COPY);
     }
+    // The confirmation: the account's own factors read by its id, and the
+    // level of a session that still verifies as this account (anything else:
+    // sign in again). Checked before anything else is read about the account.
+    const claims = await readVerifiedSessionClaimsOf(supabase, session.userId);
+    if (!claims) throw sessionChangedError();
+    const confirmation = await confirmDeletionCredential({
+      admin,
+      userId: session.userId,
+      email: authEmail.email,
+      readLevel: async () => claims.aal,
+      input: parsed.data,
+    });
+    if (!confirmation.ok) {
+      if (confirmation.kind === 'gone') return await endThisBrowserSession(supabase, session.userId);
+      return credentialRefusal(confirmation.kind);
+    }
+
     if (isPlatformAdmin(authEmail.email)) {
       return err('forbidden', ACCOUNT_DELETE_PLATFORM_ADMIN_COPY, { reason: 'platform_admin' });
     }
@@ -704,7 +715,22 @@ export async function deleteOwnAccountAction(input: {
       // unless the account is already gone (lastCheckMetGoneAccount): then
       // this browser is signed out as for the check's "gone" above.
       try {
-        await assertStepUpHeld({ supabase, admin, userId: session.userId });
+        await assertStepUpHeld({
+          supabase,
+          admin,
+          userId: session.userId,
+          // Confirmed with the authenticator: an account whose factors are
+          // all gone by now has not given its password or a code here.
+          ...(confirmation.by === 'authenticator'
+            ? {
+                noFactorRefusal: new ServiceError(
+                  'forbidden',
+                  ACCOUNT_DELETE_CREDENTIAL_REQUIRED_COPY,
+                  { reason: 'credential_required' },
+                ),
+              }
+            : {}),
+        });
       } catch (refusal) {
         if (await lastCheckMetGoneAccount(refusal, admin, session.userId)) {
           return await endThisBrowserSession(supabase, session.userId);

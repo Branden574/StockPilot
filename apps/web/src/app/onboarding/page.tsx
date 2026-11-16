@@ -12,6 +12,7 @@ import { DeleteAccountButton } from '@/components/settings/delete-account-button
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { Button } from '@/components/ui/button';
 import { IconMark } from '@/components/ui/icon-mark';
+import { deletionConfirmMethod } from '@/lib/auth/deletion-confirm-method';
 import { checkPlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireSession } from '@/lib/auth/session';
 import { reportError } from '@/lib/error-reporter';
@@ -70,7 +71,11 @@ export default async function OnboardingPage() {
       {gate.ok ? (
         <CreateWorkspaceCard />
       ) : (
-        <InviteOnlyCard email={session.email} stepUpOwed={gate.reason === 'aal2_required'} />
+        <InviteOnlyCard
+          email={session.email}
+          stepUpOwed={gate.reason === 'aal2_required'}
+          confirmWith={await deletionConfirmMethod(supabase, session.userId)}
+        />
       )}
     </OnboardingFrame>
   );
@@ -131,7 +136,15 @@ function CreateWorkspaceCard() {
  * allowlist, but its session is at AAL1 or has no authenticator code from the
  * last 15 minutes. Only that person is told they are a platform admin.
  */
-function InviteOnlyCard({ email, stepUpOwed }: { email: string; stepUpOwed: boolean }) {
+function InviteOnlyCard({
+  email,
+  stepUpOwed,
+  confirmWith,
+}: {
+  email: string;
+  stepUpOwed: boolean;
+  confirmWith: 'password' | 'authenticator';
+}) {
   const signedInAs = email.trim();
   return (
     <AuthCard
@@ -173,7 +186,7 @@ function InviteOnlyCard({ email, stepUpOwed }: { email: string; stepUpOwed: bool
         <p className="text-muted-foreground text-[12.5px]">
           Don&apos;t need this account any more?
         </p>
-        <DeleteAccountButton />
+        <DeleteAccountButton confirmWith={confirmWith} />
       </div>
     </AuthCard>
   );

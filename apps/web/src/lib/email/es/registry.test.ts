@@ -331,6 +331,14 @@ const EXPECTED: Expected[] = [
     badge: 'Email changed',
   },
   {
+    id: 'account-delete-code',
+    subject: 'Your code to delete your StockPilot account',
+    preheader:
+      'Enter this code to confirm deleting your account. It works for 10 minutes. If you did not ask, nothing happens unless the code is used.',
+    preheaderParams: { codeExpiry: '10 minutes' },
+    badge: 'Delete account',
+  },
+  {
     id: 'return-update',
     subject: 'Return RMA-20261005-ABC123: approved',
     subjectParams: { returnNumber: 'RMA-20261005-ABC123', summary: 'approved' },
@@ -351,23 +359,24 @@ const EXPECTED: Expected[] = [
 ];
 
 describe('es registry — shape', () => {
-  it('carries every row of ES.EMAILS (34 — 29 design-package rows + Maintenance Resolved 2026-08-06 + the 3 email-change rows 2026-08-25 + Return Update 2026-10-05)', () => {
-    expect(ES_EMAILS).toHaveLength(34);
-    expect(EXPECTED).toHaveLength(34);
-    expect(new Set(ES_EMAILS.map((e) => e.id)).size).toBe(34);
+  it('carries every row of ES.EMAILS (35 — 29 design-package rows + Maintenance Resolved 2026-08-06 + the 3 email-change rows 2026-08-25 + Return Update 2026-10-05 + Account Deletion Code 2026-11-15)', () => {
+    expect(ES_EMAILS).toHaveLength(35);
+    expect(EXPECTED).toHaveLength(35);
+    expect(new Set(ES_EMAILS.map((e) => e.id)).size).toBe(35);
   });
 
-  it('splits into 30 live + 2 latent + 2 concept', () => {
+  it('splits into 31 live + 2 latent + 2 concept', () => {
     const by = (st: string) => ES_EMAILS.filter((e) => e.status === st).length;
-    expect(by('live')).toBe(30);
+    expect(by('live')).toBe(31);
     expect(by('latent')).toBe(2);
     expect(by('concept')).toBe(2);
   });
 
   it('matches the family counts from the design package', () => {
     const by = (fam: string) => ES_EMAILS.filter((e) => e.family === fam).length;
-    // 2 design-package rows + 3 email-change rows (2026-08-25).
-    expect(by('security')).toBe(5);
+    // 2 design-package rows + 3 email-change rows (2026-08-25) + the
+    // account deletion code (2026-11-15).
+    expect(by('security')).toBe(6);
     expect(by('invites')).toBe(4);
     expect(by('orders')).toBe(9);
     // 4 design-package rows + Return Update (returns RX-1, 2026-10-05).
@@ -451,6 +460,7 @@ describe('es registry — shape', () => {
       'support-ticket',
       'support-received',
       'support-resolved',
+      'account-delete-code',
     ]) {
       expect(asset(id), id).toBeNull();
     }
