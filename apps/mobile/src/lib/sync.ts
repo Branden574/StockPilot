@@ -58,6 +58,7 @@ import { clearPhotoCaches, wipeWithPhotoCaches } from './photo-cache-wipe';
 import { listPending, markFailed, markHeld, markOk, markRejected, markSending } from './queue';
 import { liveOutboxScope } from './session-scope';
 import {
+  forgetRowRefusal,
   keptRefusalNoted,
   noteKeptRefusal,
   requestSetUpInputsRead,
@@ -965,6 +966,8 @@ export async function drainQueue(): Promise<{
         },
       );
       await markOk(action.id);
+      // Out of the queue: its kept-refusal mark goes with it.
+      forgetRowRefusal(action.idempotencyKey);
       ok += 1;
     } catch (e) {
       // The account changed between the decision above and the moment api()
@@ -1016,12 +1019,14 @@ export async function drainQueue(): Promise<{
           const itemId = typeof action.payload.itemId === 'string' ? action.payload.itemId : '';
           if (itemId) unconfirmedStock.recordUnconfirmed(itemId, handedOffAt ?? Date.now());
           await markRejected(action.id, unconfirmedQueuedAdjustMessage(action.payload));
+          forgetRowRefusal(action.idempotencyKey);
           rejected += 1;
         } else {
           await markRejected(
             action.id,
             refusedQueuedAdjustMessage(action.payload, queuedAdjustRefusalReason(e, msg)),
           );
+          forgetRowRefusal(action.idempotencyKey);
           rejected += 1;
         }
         continue;
@@ -1036,6 +1041,7 @@ export async function drainQueue(): Promise<{
       });
       if (outcome === 'rejected') {
         await markRejected(action.id, msg);
+        forgetRowRefusal(action.idempotencyKey);
         rejected += 1;
       } else {
         // A 403 kept for that check: noted, and the inputs read again.

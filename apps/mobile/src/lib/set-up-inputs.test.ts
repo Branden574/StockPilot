@@ -4,6 +4,8 @@ import { accountScopedStorageKeys } from './account-eviction';
 import {
   beginSetUpRead,
   forgetSetUpInputs,
+  forgetRowRefusal,
+  keptRefusalCountForTests,
   keptRefusalNoted,
   noteKeptRefusal,
   noteServerReadUser,
@@ -280,6 +282,32 @@ describe("setUpAnswerAfterRefusal: only reads that started after THIS row's kept
     expect(keptRefusalNoted('u1', 'org-a', 'row-a')).toBe(true);
     expect(keptRefusalNoted('u1', 'org-a', 'row-b')).toBe(false);
     expect(keptRefusalNoted('u1', 'org-b', 'row-a')).toBe(false);
+  });
+});
+
+describe('forgetRowRefusal: a row that leaves the queue takes its mark', () => {
+  it("removes the row's mark under every account and workspace; a key queued again starts with none", () => {
+    noteKeptRefusal('u1', 'org-a', 'row-a');
+    noteKeptRefusal('u1', 'org-b', 'row-a');
+    noteKeptRefusal('u1', 'org-a', 'row-b');
+    expect(keptRefusalCountForTests()).toBe(3);
+    forgetRowRefusal('row-a');
+    expect(keptRefusalCountForTests()).toBe(1);
+    expect(keptRefusalNoted('u1', 'org-a', 'row-a')).toBe(false);
+    expect(keptRefusalNoted('u1', 'org-a', 'row-b')).toBe(true);
+    // A read made after the old mark does not answer for the key's new row.
+    readMemberships([row('org-a', { mfa_policy: 'optional' })]);
+    expect(setUpAnswerAfterRefusal('u1', 'org-a', 'row-a')).toBe('unknown');
+    forgetRowRefusal('row-b');
+    forgetRowRefusal(null);
+    forgetRowRefusal('');
+    expect(keptRefusalCountForTests()).toBe(0);
+  });
+
+  it('a key that ends like another is not removed with it', () => {
+    noteKeptRefusal('u1', 'org', 'xrow-a');
+    forgetRowRefusal('row-a');
+    expect(keptRefusalCountForTests()).toBe(1);
   });
 });
 
