@@ -26,7 +26,7 @@ import { CONNECTION_FAILURE_COPY, REQUEST_TIMED_OUT_COPY } from './connection-co
  *
  * Sent under the workspace whose list is on screen and only under the
  * account that list was read for (api()'s `orgId` and `asUserId`): if the
- * signed-in account is another one by the time the bearer is read, nothing
+ * session read for the bearer is another account's, or there is none, nothing
  * is sent.
  *
  * Every sentence a person reads is chosen here by the answer's status, code
@@ -142,11 +142,13 @@ export function customerStatusFailure(e: unknown): {
       : undefined;
 
   if (status === null) {
-    // The signed-in account is not the one the list was read for: api() sent
-    // nothing (OutboxSessionChangedError, read by name as the order catalog
-    // screen does).
+    // The session read for the bearer is not the account the list was read
+    // for, or there is none (offline with an expired token, a refresh that
+    // failed): api() sent nothing (OutboxSessionChangedError, read by name as
+    // the order catalog screen does). Words true in both cases; a change of
+    // account redraws the screen for that account.
     if (e instanceof Error && e.name === 'OutboxSessionChangedError') {
-      return say(SIGN_IN_AGAIN_COPY, false);
+      return say(CUSTOMER_STATUS_COPY.notChanged, false);
     }
     // api()'s own timeout: the request may have reached the server.
     if (e instanceof Error && e.message === REQUEST_TIMED_OUT_COPY) {

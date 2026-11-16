@@ -142,9 +142,9 @@ describe('each refusal: its words, and whether the list is read again', () => {
       false,
     ],
     [
-      'another account signed in before the send: nothing sent',
+      'no session of the account the list was read for at the send: nothing sent',
       sessionChanged,
-      SIGN_IN_AGAIN_COPY,
+      CUSTOMER_STATUS_COPY.notChanged,
       false,
     ],
     [

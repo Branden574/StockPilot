@@ -10,6 +10,7 @@ import { notifyUnauthorized } from './account-eviction';
 import { SIGN_IN_AGAIN_COPY } from './api-error-body';
 import { CONNECTION_FAILURE_COPY } from './connection-copy';
 import { changeCustomerStatus, CUSTOMER_STATUS_COPY } from './customer-status';
+import { supabase } from './supabase';
 
 /**
  * The customer status change through the REAL api(), on a stubbed fetch: the
@@ -93,9 +94,28 @@ describe('the customer status change on the wire', () => {
     await expect(changeCustomerStatus(CUSTOMER, 'archived', ORG, 'u2')).resolves.toEqual({
       kind: 'refused',
       title: 'Could not update',
-      message: SIGN_IN_AGAIN_COPY,
+      message: CUSTOMER_STATUS_COPY.notChanged,
       reload: false,
     });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('with no session at the send (offline, token expired): nothing sent, try again, never sign in', async () => {
+    const fetchMock = respondWith(
+      200,
+      JSON.stringify({ ok: true, status: 'archived', changed: true }),
+    );
+    vi.mocked(supabase.auth.getSession).mockResolvedValueOnce({
+      data: { session: null },
+    } as never);
+    const outcome = await changeCustomerStatus(CUSTOMER, 'archived', ORG, USER);
+    expect(outcome).toEqual({
+      kind: 'refused',
+      title: 'Could not update',
+      message: CUSTOMER_STATUS_COPY.notChanged,
+      reload: false,
+    });
+    expect(outcome).not.toMatchObject({ message: SIGN_IN_AGAIN_COPY });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
