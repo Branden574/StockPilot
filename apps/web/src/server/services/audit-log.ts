@@ -29,11 +29,11 @@ export interface AuditLogRow {
 export interface AuditLogFilters {
   event?: string;
   /**
-   * Filter by event-name prefix (e.g. 'stock.' → every stock event). Drives
-   * the category quick-chips on /dashboard/audit. Ignored when `event` is
-   * set (an exact match is always narrower).
+   * Filter by event-name prefixes, any of them (e.g. ['stock.'] → every stock
+   * event). Drives the category quick-chips on /dashboard/audit. Ignored when
+   * `event` is set (an exact match is always narrower). Empty filters nothing.
    */
-  eventPrefix?: string;
+  eventPrefixes?: readonly string[];
   userId?: string;
   entityType?: string;
   /**
@@ -172,7 +172,13 @@ export class AuditLogService {
       .range(offset, offset + limit - 1);
 
     if (filters.event) query = query.eq('event', filters.event);
-    else if (filters.eventPrefix) query = query.like('event', `${filters.eventPrefix}%`);
+    else if (filters.eventPrefixes?.length === 1) {
+      query = query.like('event', `${filters.eventPrefixes[0]}%`);
+    } else if (filters.eventPrefixes && filters.eventPrefixes.length > 1) {
+      // The chips' own constant prefixes (components/admin/audit-categories),
+      // never a request value: no comma or parenthesis to quote.
+      query = query.or(filters.eventPrefixes.map((p) => `event.like.${p}%`).join(','));
+    }
     if (filters.userId) query = query.eq('user_id', filters.userId);
     if (filters.entityType) {
       query = query.filter('metadata->>entity_type', 'eq', filters.entityType);
