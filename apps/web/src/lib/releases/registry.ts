@@ -131,7 +131,10 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whats-new-delete-account-confirm (2026-11-16; was: '2026-11-15T23:48:00Z'):
     // the delete account release below is dated 2026-11-16T04:03:00Z, so the placeholder is that same
     // minute.
-    publishedAt: '2026-11-16T04:03:00Z',
+    // Moved again by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was:
+    // '2026-11-16T04:03:00Z'): the Integrations and schedule event release below is dated
+    // 2026-11-16T09:39:00Z, so the placeholder is that same minute.
+    publishedAt: '2026-11-16T09:39:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -216,6 +219,94 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'connection-and-schedule-messages-2026-11',
+    revision: 1,
+    // Two web changes, no phone update and no migration:
+    // - #591 (squash 7bbbbd33f), live in production since 2026-11-16
+    //   09:38:20Z (its GitHub deployment status, Production, success).
+    // - #590 (squash 30e1b4c06), live in production since 2026-11-16
+    //   09:11:17Z (the same record).
+    // publishedAt is the whole minute after both. #591 went live after #587,
+    // so this release sits above the delete account release and is the newest
+    // published release.
+    // Claims checked against the code at 7bbbbd33f (paths under apps/web/src):
+    // - Entry 1: app/(dashboard)/dashboard/settings/integrations/page.tsx
+    //   reads ?error=forbidden, which the QuickBooks and Sage Intacct
+    //   callbacks (app/api/integrations/{quickbooks,sage_intacct}/callback)
+    //   return to when the connection is not finished, and shows the status
+    //   line "The connection was not finished because your access could not
+    //   be confirmed. If your organization requires an authenticator, set one
+    //   up in Settings > Security, then connect again." with Settings >
+    //   Security linking to AUTHENTICATOR_SET_UP_PAGE
+    //   (lib/auth/authenticator-set-up.ts, /dashboard/settings/security). It
+    //   shows only with the accounting cards (showQbo: the integrations module
+    //   on and integrations:manage held), so it is told to that audience, the
+    //   one integration-retries-2026-11 uses. Any other ?error= value shows
+    //   nothing, and components/settings/integrations-panel.tsx reads none. The reader text writes
+    //   Settings, Security: the schema refuses > in release text. Connecting
+    //   is web only: apps/mobile/app/(drawer)/settings/integrations.tsx has no
+    //   connect button.
+    // - Entry 2: server/services/schedule.ts create() assertWarehouseWrite
+    //   throws assertWarehouseAccess's ForbiddenError as it is when
+    //   accessUnreadable is set (the caller's own access could not be read),
+    //   and keeps the ServiceError 'forbidden' with the check's words for a
+    //   real refusal. server/actions/schedule.ts createScheduleEventAction
+    //   answers through server/lib/action-error-result.ts actionErrorResult,
+    //   which gives ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY (packages/core
+    //   guards/db-guard-copy.ts: "Your warehouse access couldn't be checked
+    //   just now, so nothing was changed. Try again.") as a retryable
+    //   conflict; components/schedule/schedule-event-form.tsx shows the
+    //   result's message as an error toast and keeps the form as it was. A
+    //   real refusal keeps the words of lib/auth/warehouse.ts ("User does not
+    //   have write access to warehouse" and the id). Told to whoever can
+    //   open New event (schedule/new/page.tsx checks schedule:manage) with the
+    //   schedule module on. The phone's New event (apps/mobile/app/schedule/
+    //   new.tsx) writes through its own path and is unchanged. No link: a
+    //   rare state, not a place to go (as module-check-try-again-2026-11).
+    // - Not told: #591's purchase order and PO imports layouts send a member
+    //   who must set up an authenticator to set-up, which is what
+    //   authenticator-set-up-first-2026-11 already says of every page other
+    //   than Security and Profile. #591's email change API answers and #590's
+    //   API routes are outside this release.
+    status: 'published',
+    title:
+      'Clearer messages when an accounting connection or a new schedule event does not go through',
+    summary:
+      'On the website, Settings, Integrations now says when connecting QuickBooks or Sage Intacct was not finished because your access could not be confirmed, and that you can set up an authenticator in Settings, Security if your organization requires one. A new schedule event that could not be saved because your warehouse access could not be checked now says so, and you can try again. The mobile app is unchanged.',
+    // #591 is live in production since 2026-11-16 09:38:20Z, #590 since 09:11:17Z.
+    publishedAt: '2026-11-16T09:39:00Z',
+    entries: [
+      {
+        id: 'accounting-connection-not-finished',
+        category: 'improved',
+        area: 'Settings',
+        title: 'Integrations says when an accounting connection was not finished',
+        whatChanged:
+          'On the website, when connecting QuickBooks or Sage Intacct does not finish because your access could not be confirmed, Settings, Integrations now says: The connection was not finished because your access could not be confirmed. If your organization requires an authenticator, set one up in Settings, Security, then connect again. Settings, Security in that message is a link to the page.',
+        whyItMatters: 'Before, the page did not say why the connection was not finished.',
+        howItAffectsYou:
+          'The message shows with the QuickBooks and Sage Intacct cards. You connect again from the same page. The mobile app is unchanged.',
+        whatToDo:
+          'If you see this message and your organization requires an authenticator, set one up in Settings, Security, then connect again. Otherwise, no action needed.',
+        link: { href: '/dashboard/settings/integrations', label: 'Open Integrations' },
+        audience: { anyPermission: ['integrations:manage'], modules: ['integrations'] },
+      },
+      {
+        id: 'schedule-event-access-not-checked',
+        category: 'fixed',
+        area: 'Schedule',
+        title: 'A new schedule event says when your warehouse access could not be checked',
+        whatChanged:
+          "On the website, if StockPilot cannot check your access to the event's warehouse for a moment when you choose Create event, the form now says Your warehouse access couldn't be checked just now, so nothing was changed. Try again.",
+        whyItMatters: 'Before, the message read as if you had no access to that warehouse.',
+        howItAffectsYou:
+          'This is rare and usually passes in a moment. The event was not saved, and the form keeps what you entered. The mobile app is unchanged.',
+        whatToDo: 'If you see this, wait a moment and choose Create event again.',
+        audience: { anyPermission: ['schedule:manage'], modules: ['schedule'] },
       },
     ],
   },
@@ -334,13 +425,22 @@ export const RELEASES: Release[] = [
   },
   {
     id: 'api-key-audit-2026-11',
-    revision: 1,
+    // Revision 2 (docs/whats-new-integrations-message-and-api-key-rows,
+    // 2026-11-16; was: 1): #591 (squash 7bbbbd33f, live in production since
+    // 2026-11-16 09:38:20Z) gave the rows their API key labels, the Team chip
+    // and their details. Revision 1's words about the labels, the chip and
+    // the key name describe the rows #580 wrote, not these, a material
+    // change (docs/releases/PUBLISHING.md: bump the revision to re-announce).
+    // The words are rewritten to the code at 7bbbbd33f and the release is
+    // told again to whoever read revision 1. Its place and its date stay:
+    // the registry is newest first by first publication.
+    revision: 2,
     // #580 (squash 4712b6918), web only: no phone update and no migration.
     // Live in production since 2026-11-15 21:18:47Z; publishedAt is the
     // minute this release was committed. It went live after #579, so it
     // sits above the invitation audit release and is the newest published
     // release.
-    // Claims checked against the code at 4712b6918 (paths under apps/web/src):
+    // Claims checked against the code at 7bbbbd33f (paths under apps/web/src):
     // - The rows: server/services/api-keys.ts. Creating a key writes
     //   api_key.created once the key is stored, entity api_key (the key's
     //   id), extra { name, scopes }; revoking writes api_key.revoked once
@@ -350,15 +450,18 @@ export const RELEASES: Release[] = [
     //   page.tsx, the API keys panel (components/settings/api-keys-panel.tsx),
     //   shown with the api_access module on and an owner or admin role.
     // - The labels: lib/audit/format.ts formatAuditEvent gives
-    //   "Api Key · Created" and "Api Key · Revoked" (no subject override for
-    //   api_key), and formatEntityType gives "Api Key" for the Entity column,
-    //   above the first 8 characters of the key's id (shortId).
-    // - The chip: components/admin/audit-categories.ts has no chip whose
-    //   prefix matches api_key., so the rows are under All events only.
+    //   "API key · Created" and "API key · Revoked" (the api_key subject
+    //   override), and formatEntityType gives "API key" for the Entity
+    //   column, above the first 8 characters of the key's id (shortId).
+    // - The chip: components/admin/audit-categories.ts, slug user, label
+    //   Team, prefixes user. and api_key., so the rows are under Team and
+    //   All events (server/services/audit-log.ts matches the prefixes in one
+    //   filter).
     // - The details: app/(dashboard)/dashboard/audit/page.tsx renders a
-    //   details row only when before/after differ or changed_keys is set;
-    //   these rows have neither (audit() writes before and after as null),
-    //   so no details show and the name and scopes are not on the page.
+    //   details row when recordedDetailFields (lib/audit/format.ts) names a
+    //   field the row holds; components/audit/metadata-diff.tsx shows them
+    //   behind "Show details": Name and Scopes on api_key.created, Name on
+    //   api_key.revoked, and no other stored field.
     // - The Event filter: an exact match on the event (audit-log.ts eq).
     // - The phone: apps/mobile/app/(drawer)/admin/audit.tsx shows row.event
     //   as written, with no details.
@@ -369,7 +472,7 @@ export const RELEASES: Release[] = [
     status: 'published',
     title: 'Creating and revoking an API key now show in the Audit log',
     summary:
-      'The Audit log now has a row when an API key is created and when one is revoked, with who did it and when. People who can view the audit log see them. No app update is needed.',
+      'The Audit log now has a row when an API key is created and when one is revoked, with who did it and when. On the web, the rows are under the Team chip, and Show details on a row shows the key name, and for a new key its scopes. People who can view the audit log see them. No app update is needed.',
     // #580 is live in production since 2026-11-15 21:18:47Z.
     publishedAt: '2026-11-15T21:37:00Z',
     entries: [
@@ -379,12 +482,13 @@ export const RELEASES: Release[] = [
         area: 'Audit log',
         title: 'Creating and revoking an API key now show in the Audit log',
         whatChanged:
-          'The Audit log now has an Api Key · Created row each time an API key is created and an Api Key · Revoked row each time one is revoked, under API keys in Settings, Integrations.',
-        whyItMatters: 'The Audit log shows who created or revoked an API key, and when.',
+          'The Audit log now has an API key · Created row each time an API key is created and an API key · Revoked row each time one is revoked, under API keys in Settings, Integrations.',
+        whyItMatters:
+          'The Audit log shows who created or revoked an API key, which key it was, and when.',
         howItAffectsYou:
-          'On the web, both rows are under All events, with Api Key and a short record id in the Entity column. That id is not part of the key, and the page does not show the key name. People who can view the audit log see them: owners, admins and managers by default, and anyone given View audit log. The Audit log in the mobile app lists them among its recent events as api_key.created and api_key.revoked.',
+          'On the web, both rows are under the Team chip and All events, with API key and a short record id in the Entity column. That id is not part of the key. Show details on a row shows the key name, and on an API key · Created row its scopes too. People who can view the audit log see them: owners, admins and managers by default, and anyone given View audit log. The Audit log in the mobile app lists them among its recent events as api_key.created and api_key.revoked, without the details.',
         whatToDo:
-          'No action needed. To see only one kind on the web, open the Audit log, type api_key.created or api_key.revoked in the Event filter and choose Apply.',
+          'No action needed. To see them on the web, open the Audit log and choose the Team chip. To see only one kind, type api_key.created or api_key.revoked in the Event filter and choose Apply.',
         link: { href: '/dashboard/audit', label: 'Open the Audit log' },
         audience: { anyPermission: ['activity_logs:read'] },
       },

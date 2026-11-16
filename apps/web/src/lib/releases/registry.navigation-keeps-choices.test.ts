@@ -51,6 +51,8 @@ const deleteConfirmRead = {
   opened_at: '2026-11-16T04:05:00Z',
   read_at: '2026-11-16T04:05:00Z',
 };
+// Added by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16): the Integrations and schedule event release (whoever can manage integrations with the integrations module on, or schedule events with the schedule module on), published later, at the top, below the Liquid Glass draft.
+const CONNECTION_SCHEDULE_ID = 'connection-and-schedule-messages-2026-11';
 const INVITATION_AUDIT_ID = 'invitation-audit-2026-11';
 const invitationAuditRead = {
   release_id: INVITATION_AUDIT_ID,
@@ -62,7 +64,8 @@ const invitationAuditRead = {
 // Added by docs/whats-new-api-key-audit (2026-11-15): the API key audit release (whoever can view the audit log), published later, directly above the invitation audit release.
 const apiKeyAuditRead = {
   release_id: API_KEY_AUDIT_ID,
-  revision: 1,
+  // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: revision 1): the API key audit release is re-announced as revision 2, so a read of it is recorded at revision 2.
+  revision: 2,
   dismissed_at: null,
   opened_at: '2026-11-15T21:30:00Z',
   read_at: '2026-11-15T21:30:00Z',
@@ -115,8 +118,11 @@ describe('the navigation release: order, status and date', () => {
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: RELEASES.slice(0, 5), without it): the API key audit release is published later, at the top, directly below the Liquid Glass draft.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: every pinned position one place higher): the delete account release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES.slice(0, 8).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: every pinned position one place higher): the Integrations and schedule event release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES.slice(0, 9).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: without it): the Integrations and schedule event release is published later, at the top, directly below the Liquid Glass draft.
+      [CONNECTION_SCHEDULE_ID, 'published'],
       // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: without it): the invitation audit release is published later, at the top, directly below the Liquid Glass draft.
       // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, directly below the Liquid Glass draft.
       // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, directly below the Liquid Glass draft.
@@ -133,7 +139,8 @@ describe('the navigation release: order, status and date', () => {
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: INVITATION_AUDIT_ID): the API key audit release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: API_KEY_AUDIT_ID): the authenticator set-up release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: AUTH_SET_UP_ID): the delete account release is published after it, at the top, the newest published release.
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(DELETE_CONFIRM_ID);
+    // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: DELETE_CONFIRM_ID): the Integrations and schedule event release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(CONNECTION_SCHEDULE_ID);
   });
 
   // Renamed by docs/whats-new-invitation-audit (2026-11-15; was: "is dated the whole minute after #564 went live, in the past, with the draft placeholder at the same minute and every release below it older"): the invitation audit release above is dated later, and the draft placeholder moved to its minute. Claim kept: the whole minute after #564 went live, in the past, every release below it older.
@@ -149,7 +156,8 @@ describe('the navigation release: order, status and date', () => {
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: every pinned position one place higher): the delete account release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(6)) {
+    // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: every pinned position one place higher): the Integrations and schedule event release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(7)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
