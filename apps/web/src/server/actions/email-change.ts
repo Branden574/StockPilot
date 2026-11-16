@@ -47,6 +47,9 @@ interface Principal {
   mfa: MfaPosture;
 }
 
+/** Why the organization that applies could not be told: the label its report carries. */
+type SetUpUnchecked = 'no_verified_session' | 'another_account' | 'memberships_unreadable';
+
 /**
  * Does this account owe authenticator set-up in its current organization, the
  * one requireOrgContext() resolves for this request (readSessionOrganization)?
@@ -57,20 +60,28 @@ interface Principal {
  * Called only for an account with no verified factor in its getUser() answer:
  * one with a verified factor cannot owe set-up, and keeps its own rule (aal2).
  * No organization: nothing is owed, as before. An organization row that came
- * back empty is held to the strictest policy. Which organization applies, or
- * its policy, could not be read (no verified session for this request, a
- * session of another account, memberships or a row that did not answer):
- * thrown as OrganizationRowUnavailableError, whose sentence says the access
- * could not be checked, and nothing is changed.
+ * back empty is held to the strictest policy; a row read that failed throws
+ * OrganizationRowUnavailableError. When the organization that applies cannot
+ * be told (no verified session for this request, a session of another
+ * account, memberships that did not answer) the answer is `unchecked` with
+ * that label. Either way the caller says the access could not be checked, and
+ * nothing is changed.
  */
 async function setUpOwedInOrganization(user: {
   id: string;
   factors?: ReadonlyArray<{ readonly status?: string | null }> | null;
-}): Promise<boolean> {
+}): Promise<{ owed: boolean } | { unchecked: SetUpUnchecked }> {
   const read = await readSessionOrganization();
-  if (!read.ok || read.userId !== user.id) throw new OrganizationRowUnavailableError();
-  if (!read.organization) return false;
-  return authenticatorSetUpIsOwedByUser(read.organization, read.organization.held, user.factors);
+  if (!read.ok) return { unchecked: read.reason };
+  if (read.userId !== user.id) return { unchecked: 'another_account' };
+  if (!read.organization) return { owed: false };
+  return {
+    owed: await authenticatorSetUpIsOwedByUser(
+      read.organization,
+      read.organization.held,
+      user.factors,
+    ),
+  };
 }
 
 async function resolvePrincipal(
@@ -112,14 +123,27 @@ async function resolvePrincipal(
   }
   let setUpOwed = false;
   if (opts.askSetUp && !enrolled) {
+    let answer: Awaited<ReturnType<typeof setUpOwedInOrganization>>;
     try {
-      setUpOwed = await setUpOwedInOrganization(user);
+      answer = await setUpOwedInOrganization(user);
     } catch (e) {
       // Next control flow (the session load's redirect for a disabled
       // account) is Next's to act on.
       rethrowControlFlow(e);
       return { ok: false, result: fromServiceError(e) };
     }
+    if ('unchecked' in answer) {
+      // The "could not be checked" sentence, reported with what could not be told.
+      const unchecked = new OrganizationRowUnavailableError();
+      const extra = { reason: answer.unchecked };
+      return {
+        ok: false,
+        result:
+          uncheckedAccessResult(unchecked, 'actions.email_change', { extra }) ??
+          fromServiceError(unchecked),
+      };
+    }
+    setUpOwed = answer.owed;
   }
   return { ok: true, principal: { userId: user.id, mfa: { enrolled, aal2, setUpOwed } } };
 }

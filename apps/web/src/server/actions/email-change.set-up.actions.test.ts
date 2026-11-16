@@ -27,8 +27,15 @@ const svc = vi.hoisted(() => ({
   cancelled: 0,
 }));
 
-/** How the organization row read goes, when the membership does not carry the row. */
+/**
+ * How the request's context reads go: the context call (get_request_context),
+ * the separate membership read it falls back to, each organization's policy,
+ * and the organization row read when the membership does not carry the row.
+ */
 const orgRead = vi.hoisted(() => ({
+  contextFails: false,
+  memberships: 'answer' as 'answer' | 'error',
+  policies: {} as Record<string, string>,
   hidden: false,
   answer: 'row' as 'row' | 'empty' | 'error',
 }));
@@ -48,31 +55,77 @@ vi.mock('@/lib/supabase/server', async () => {
       const client = f.fixtureClient();
       return {
         ...client,
-        // get_request_context(): the fixture's answer, with the organization
-        // row hidden from the member when the case says so.
+        // get_request_context(): the fixture's answer, with each
+        // organization's own policy when the case names one, the organization
+        // row hidden from the member when the case says so, or no answer.
         rpc: async (fn: string) => {
+          if (orgRead.contextFails) {
+            f.world.calls.push(`rpc:${fn}`);
+            return { data: null, error: { code: 'PGRST000', message: 'unavailable' } };
+          }
           const res = (await client.rpc(fn)) as {
-            data: { memberships: Array<{ organization: unknown }> };
+            data: {
+              memberships: Array<{
+                organization_id: string;
+                organization: { mfa_policy: string } | null;
+              }>;
+            };
           };
-          if (orgRead.hidden) {
-            for (const m of res.data.memberships) m.organization = null;
+          for (const m of res.data.memberships) {
+            const policy = orgRead.policies[m.organization_id];
+            if (policy && m.organization) m.organization.mfa_policy = policy;
+            if (orgRead.hidden) m.organization = null;
           }
           return res;
         },
         from: (table: string) => {
           f.world.calls.push(`from:${table}`);
+          let id: unknown = null;
           const builder: Record<string, unknown> = {};
-          for (const m of ['select', 'eq', 'not', 'order']) builder[m] = () => builder;
+          for (const m of ['select', 'not', 'order']) builder[m] = () => builder;
+          builder.eq = (column: string, value: unknown) => {
+            if (column === 'id') id = value;
+            return builder;
+          };
           if (table === 'user_profiles') {
-            // The action's own account status read.
-            builder.maybeSingle = async () => ({ data: { disabled_at: null }, error: null });
+            // The action's own account status read, and the session loader's
+            // profile read when the context call gave no answer.
+            builder.maybeSingle = async () => ({
+              data: {
+                id: f.USER,
+                email: f.EMAIL,
+                full_name: 'Example Person',
+                avatar_url: null,
+                default_organization_id: f.world.orgs[0] ?? null,
+                disabled_at: null,
+              },
+              error: null,
+            });
+          } else if (table === 'organization_members') {
+            // The session loader's membership read when the context call gave no answer.
+            builder.then = (resolve: (v: unknown) => unknown) =>
+              resolve(
+                orgRead.memberships === 'error'
+                  ? { data: null, error: { code: '57014', message: 'statement timeout' } }
+                  : {
+                      data: f.world.orgs.map((org) => ({
+                        organization_id: org,
+                        role: f.world.role,
+                        organizations: { id: org, name: 'Example Org', logo_url: null },
+                      })),
+                      error: null,
+                    },
+              );
           } else if (table === 'organizations') {
             builder.maybeSingle = async () =>
               orgRead.answer === 'error'
                 ? { data: null, error: { code: '57014', message: 'statement timeout' } }
                 : orgRead.answer === 'empty'
                   ? { data: null, error: null }
-                  : { data: { mfa_policy: f.world.policy }, error: null };
+                  : {
+                      data: { mfa_policy: orgRead.policies[String(id)] ?? f.world.policy },
+                      error: null,
+                    };
           } else {
             throw new Error(`unexpected table read: ${table}`);
           }
@@ -182,6 +235,7 @@ vi.mock('@/lib/supabase/admin', async () => {
   };
 });
 
+import { insertAuditRowReported } from '@/server/services/audit';
 import { ORG, ORG_2, resetWorld, VERIFIED_FACTOR, world } from '@/test/step-up-session-fixture';
 
 import {
@@ -201,6 +255,7 @@ const COULD_NOT_CHECK = {
 };
 
 function nothingSpent() {
+  expect(insertAuditRowReported).not.toHaveBeenCalled();
   expect(svc.limitChecks).toBe(0);
   expect(svc.passwordChecks).toBe(0);
   expect(svc.minted).toBe(0);
@@ -208,6 +263,7 @@ function nothingSpent() {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
   resetWorld();
   world.pathname = PROFILE;
   world.returnPath = PROFILE;
@@ -222,7 +278,13 @@ beforeEach(() => {
     limitChecks: 0,
     cancelled: 0,
   });
-  Object.assign(orgRead, { hidden: false, answer: 'row' });
+  Object.assign(orgRead, {
+    contextFails: false,
+    memberships: 'answer',
+    policies: {},
+    hidden: false,
+    answer: 'row',
+  });
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
 });
@@ -295,6 +357,36 @@ describe('a member who must set up an authenticator first, on the profile page',
     expect(await requestEmailChangeAction(INPUT)).toEqual(COULD_NOT_CHECK);
     nothingSpent();
   });
+
+  it('request: the context call gave no answer and the membership read failed: the access could not be checked, and nothing is changed', async () => {
+    orgRead.contextFails = true;
+    orgRead.memberships = 'error';
+    expect(await requestEmailChangeAction(INPUT)).toEqual(COULD_NOT_CHECK);
+    nothingSpent();
+    expect(world.calls).toContain('from:organization_members');
+  });
+
+  it('resend: the context call gave no answer and the membership read failed: the access could not be checked, and nothing is changed', async () => {
+    orgRead.contextFails = true;
+    orgRead.memberships = 'error';
+    svc.pending = PENDING;
+    expect(await resendEmailChangeAction()).toEqual(COULD_NOT_CHECK);
+    nothingSpent();
+    expect(world.calls).toContain('from:organization_members');
+  });
+
+  it('the context call gave no answer and the membership read answered: the policy comes from the organization row, and the member is refused', async () => {
+    orgRead.contextFails = true;
+    const result = await requestEmailChangeAction(INPUT);
+    expect(result).toMatchObject({ ok: false, error: { details: { reason: 'mfa_required' } } });
+    svc.pending = PENDING;
+    expect(await resendEmailChangeAction()).toMatchObject({
+      ok: false,
+      error: { details: { reason: 'mfa_required' } },
+    });
+    nothingSpent();
+    expect(world.calls).toContain('from:organizations');
+  });
 });
 
 describe('everyone else keeps the rules they had', () => {
@@ -343,6 +435,28 @@ describe('everyone else keeps the rules they had', () => {
     svc.pending = PENDING;
     expect((await resendEmailChangeAction()).ok).toBe(true);
     expect((await cancelEmailChangeAction()).ok).toBe(true);
+    expect(svc.passwordChecks).toBe(1);
+  });
+});
+
+describe('a member of two organizations with different policies', () => {
+  beforeEach(() => {
+    world.role = 'staff';
+    orgRead.policies = { [ORG]: 'all_required', [ORG_2]: 'optional' };
+  });
+
+  it("the current organization's policy decides: refused with the requiring one current", async () => {
+    world.orgs = [ORG, ORG_2];
+    expect(await requestEmailChangeAction(INPUT)).toMatchObject({
+      ok: false,
+      error: { details: { reason: 'mfa_required' } },
+    });
+    nothingSpent();
+  });
+
+  it("the current organization's policy decides: allowed with the optional one current", async () => {
+    world.orgs = [ORG_2, ORG];
+    expect((await requestEmailChangeAction(INPUT)).ok).toBe(true);
     expect(svc.passwordChecks).toBe(1);
   });
 });

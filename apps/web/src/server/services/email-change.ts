@@ -131,7 +131,7 @@ export interface EmailChangeStatus {
  * Bearer route from the context withApiContext resolved.
  */
 export interface MfaPosture {
-  /** The user has at least one VERIFIED TOTP factor. */
+  /** The user has at least one VERIFIED factor, of any type. */
   enrolled: boolean;
   /** The calling session is currently at AAL2. */
   aal2: boolean;

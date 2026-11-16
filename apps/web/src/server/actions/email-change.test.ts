@@ -302,13 +302,20 @@ describe('authenticator set-up in the current organization (request and resend)'
     expect(resendEmailChange).not.toHaveBeenCalled();
   });
 
-  it('memberships that could not be read, or a session of another account: the access could not be checked', async () => {
-    readSessionOrganization.mockResolvedValue({ ok: false });
+  it('memberships that could not be read, no verified session, or a session of another account: the access could not be checked, reported with which', async () => {
+    const { reportError } = await import('@/lib/error-reporter');
+    readSessionOrganization.mockResolvedValue({ ok: false, reason: 'memberships_unreadable' });
+    expect(await requestEmailChangeAction(INPUT)).toEqual(COULD_NOT_CHECK);
+    readSessionOrganization.mockResolvedValue({ ok: false, reason: 'no_verified_session' });
     expect(await requestEmailChangeAction(INPUT)).toEqual(COULD_NOT_CHECK);
     readSessionOrganization.mockResolvedValue({ ok: true, userId: 'u-2', organization: null });
     expect(await resendEmailChangeAction()).toEqual(COULD_NOT_CHECK);
     expect(requestEmailChange).not.toHaveBeenCalled();
     expect(resendEmailChange).not.toHaveBeenCalled();
+    const reasons = vi
+      .mocked(reportError)
+      .mock.calls.map((c) => (c[1] as { extra?: { reason?: string } } | undefined)?.extra?.reason);
+    expect(reasons).toEqual(['memberships_unreadable', 'no_verified_session', 'another_account']);
   });
 
   it('an account with no organization owes nothing and keeps working as before', async () => {
@@ -334,7 +341,7 @@ describe('authenticator set-up in the current organization (request and resend)'
   });
 
   it('cancel does not ask: it only removes a pending change', async () => {
-    readSessionOrganization.mockResolvedValue({ ok: false });
+    readSessionOrganization.mockResolvedValue({ ok: false, reason: 'memberships_unreadable' });
     expect(await cancelEmailChangeAction()).toEqual({ ok: true, data: { cancelled: true } });
     expect(readSessionOrganization).not.toHaveBeenCalled();
   });

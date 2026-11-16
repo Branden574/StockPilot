@@ -1197,7 +1197,9 @@ WEB_TESTS=(
   # sent; cancelling a pending change still runs, and an account with no
   # organization keeps its rules.
   src/server/actions/email-change.set-up.actions.test.ts
+  src/server/actions/email-change.test.ts
   src/app/api/v1/account/email/set-up-first.routes.test.ts
+  src/app/api/v1/account/email/set-up-first.real-context.test.ts
   # The phone's sign-in and sign-out notes (S5a), the other two routes on the
   # AAL1 allowlist: an aal1 session of an account with an authenticator writes
   # the sign-in row (code owed) and the device note, and its sign-out revokes

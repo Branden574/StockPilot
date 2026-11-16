@@ -398,7 +398,8 @@ export interface SessionOrganization {
 }
 
 export type SessionOrganizationRead =
-  { ok: false } | { ok: true; userId: string; organization: SessionOrganization | null };
+  | { ok: false; reason: 'no_verified_session' | 'memberships_unreadable' }
+  | { ok: true; userId: string; organization: SessionOrganization | null };
 
 /**
  * Which organization requireOrgContext() resolves for this request, from the
@@ -411,13 +412,14 @@ export type SessionOrganizationRead =
  *
  * `organization` is null for an account with no accepted membership.
  * `{ ok: false }` when this request has no verified session, or when the
- * memberships could not be read: the caller cannot tell which organization
- * applies, so it refuses. The load still sends a disabled account to its own
+ * memberships could not be read (`reason` says which): the caller cannot
+ * tell which organization applies, so it refuses. The load still sends a disabled account to its own
  * page, as it does for every caller.
  */
 export const readSessionOrganization = cache(async (): Promise<SessionOrganizationRead> => {
   const { session, orgId, orgRole, membershipsUnreadable, bundle } = await loadSessionAndContext();
-  if (!session || membershipsUnreadable) return { ok: false };
+  if (!session) return { ok: false, reason: 'no_verified_session' };
+  if (membershipsUnreadable) return { ok: false, reason: 'memberships_unreadable' };
   return {
     ok: true,
     userId: session.userId,

@@ -31,10 +31,10 @@ export function mfaPostureFromContext(ctx: ServiceContext): MfaPosture {
 
 /**
  * Same code → status mapping the rest of /api/v1 uses. Three `forbidden`
- * reasons get their own shape because the mobile client acts on them:
- * `aal2_required` opens the TOTP step-up, `mfa_required` (set up an
- * authenticator first, the account-delete route's code) shows its sentence,
- * `rate_limited` becomes a 429.
+ * reasons keep their own code: `aal2_required`, for which the phone shows its
+ * authenticator prompt (sign out and sign back in with the code);
+ * `mfa_required` (set up an authenticator first, the account-delete route's
+ * code), whose sentence the phone shows; and `rate_limited`, a 429.
  */
 export function emailChangeErrorResponse(e: unknown): NextResponse {
   if (e instanceof ServiceError) {
