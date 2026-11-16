@@ -765,7 +765,7 @@ describe('POST /api/v1/account/delete: the password or the emailed code', () => 
   });
 
   describe('with neither (what installed phones send): the answers as before', () => {
-    it('no authenticator, Optional organization: deleted with DELETE alone', async () => {
+    it('no authenticator, Optional organization: 200, the answer as before', async () => {
       vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(happyStub()) as never);
       const res = await POST(buildRequest({ confirm: 'DELETE' }));
       expect(res.status).toBe(200);
@@ -970,7 +970,7 @@ describe('POST /api/v1/account/delete: the password or the emailed code', () => 
       (vi.mocked(insertAuditRowReported).mock.calls[0]?.[0] as { metadata?: Record<string, unknown> })
         ?.metadata?.confirmed_by;
 
-    it('none: a request with neither, under an Optional policy', async () => {
+    it('none: no password or code was sent with the request', async () => {
       vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(happyStub()) as never);
       expect((await POST(buildRequest({ confirm: 'DELETE' }))).status).toBe(200);
       expect(confirmedBy()).toBe('none');

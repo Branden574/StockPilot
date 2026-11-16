@@ -378,15 +378,14 @@ export async function sendDeletionCode(args: {
  * The last check right before the delete: the account's factors, read again
  * by its id, still agree with how this request was confirmed. A verified
  * authenticator needs the session at aal2 (`readLevel`). No verified authenticator needs the
- * password or the emailed code checked in this request, unless
- * `allowUnconfirmedWithoutFactor` (the phone route's answer for a request
- * that carries neither, under a policy that requires no authenticator).
+ * password or the emailed code checked in this request, unless the caller
+ * passes `allowUnconfirmedWithoutFactor`.
  *
  * On success it answers which branch held, and that is what the audit row
  * records (never what the request carried): a verified authenticator at aal2
  * is 'authenticator' whatever else the body held; no authenticator is the
- * password or the code checked in this request, or 'none' for the phone
- * route's typed word alone. Never throws.
+ * password or the code checked in this request, or 'none': no password or
+ * code was sent with the request. Never throws.
  */
 export async function deletionCredentialStillHeld(args: {
   admin: AdminClient;

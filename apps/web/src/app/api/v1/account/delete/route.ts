@@ -309,10 +309,9 @@ export async function POST(req: NextRequest) {
     // The last check before the delete: the account's factors, read again by
     // its id, still agree with how this request was confirmed. An
     // authenticator needs aal2. None needs the password or the code checked
-    // above; a request that sent neither passes only where nothing required
-    // an authenticator of this member when the request began (no policy, no
-    // factor of their own), so a session whose factors were removed meanwhile
-    // gets no easier path than the password or the code.
+    // above; a request that sent neither passes only as the policy answer at
+    // the top allowed when the request began, so a session whose factors were
+    // removed meanwhile gets no easier path than the password or the code.
     const held = await deletionCredentialStillHeld({
       admin,
       userId: ctx.userId,

@@ -486,8 +486,8 @@ export async function auditAccountDeleted(args: {
   reason: 'self_deletion' | 'self_deletion_mobile';
   /**
    * How the deletion was confirmed (server/lib/account-deletion-credential):
-   * the authenticator code, the password, the emailed code, or none (the
-   * phone route's request that carried neither). Only the way, never the
+   * the authenticator code, the password, the emailed code, or none (no
+   * password or code was sent with the request). Only the way, never the
    * password or the code.
    */
   confirmedBy: 'authenticator' | 'password' | 'emailed_code' | 'none';
