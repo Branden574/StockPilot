@@ -92,8 +92,9 @@ const SELECT_COLUMNS = `
 const RANGE_LIMIT = 500;
 
 /**
- * update()'s refusals. None names a warehouse id: the person may not be able
- * to see that warehouse at all, and managers work in every warehouse.
+ * The refusals of create() and update(). None names a warehouse id: the
+ * person may not be able to see that warehouse at all, and managers work in
+ * every warehouse.
  */
 const SCHEDULE_EVENT_WAREHOUSE_REFUSED =
   "You don't have write access to the warehouse set for this event, so nothing was saved. Choose a warehouse you work in, or ask a manager.";
@@ -392,21 +393,20 @@ export class ScheduleService {
 
   /**
    * The warehouse check of create() and update(). A refusal of the caller's
-   * real scope is the ServiceError 'forbidden' with `refusal` (update()'s
-   * sentences, which name no warehouse id), or the check's own words when
-   * none is given (create()). A refusal that comes from a failed read of the
+   * real scope is the ServiceError 'forbidden' with `refusal`, a sentence that
+   * names no warehouse id. A refusal that comes from a failed read of the
    * caller's own access (ForbiddenError's accessUnreadable) is thrown as it
    * is, so the callers' shared answers keep it apart: the web action's
    * actionErrorResult answers the "could not check" sentence as a retryable
    * conflict, and an API route's forbiddenOrInternalResponse answers 503
    * check_failed.
    */
-  private async assertWarehouseWrite(warehouseId: string, refusal?: string): Promise<void> {
+  private async assertWarehouseWrite(warehouseId: string, refusal: string): Promise<void> {
     try {
       await assertWarehouseAccess(warehouseId, 'write', this.ctx);
     } catch (e) {
       if (e instanceof ForbiddenError && !e.accessUnreadable) {
-        throw new ServiceError('forbidden', refusal ?? e.message);
+        throw new ServiceError('forbidden', refusal);
       }
       throw e;
     }
@@ -424,10 +424,10 @@ export class ScheduleService {
     // warehouse-scoped manager could schedule a kit to be auto-
     // distributed FROM a warehouse they have no rights to.
     if (input.warehouseId) {
-      await this.assertWarehouseWrite(input.warehouseId);
+      await this.assertWarehouseWrite(input.warehouseId, SCHEDULE_EVENT_WAREHOUSE_REFUSED);
     }
     if (input.bundleWarehouseId) {
-      await this.assertWarehouseWrite(input.bundleWarehouseId);
+      await this.assertWarehouseWrite(input.bundleWarehouseId, SCHEDULE_KIT_WAREHOUSE_REFUSED);
     }
 
     const { data, error } = await this.ctx.supabase
@@ -619,18 +619,22 @@ export class ScheduleService {
     if (patch.bundleWarehouseId !== undefined)
       updates.bundle_warehouse_id = patch.bundleWarehouseId ?? null;
 
-    const { data, error } = await this.ctx.supabase
+    // The updated rows come back as a list. The row was read above, so an
+    // empty list is an update the row policy refused (schedule_events_update:
+    // the event's creator or a manager), or a row deleted in between. A
+    // database fault (`error`) and an answer that is not a list (an empty
+    // body) decide nothing and are the internal error.
+    const { data: updatedRows, error } = await this.ctx.supabase
       .from('schedule_events')
       .update(updates)
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
-      .select(SELECT_COLUMNS)
-      .maybeSingle();
+      .select(SELECT_COLUMNS);
     if (error) throw new ServiceError('internal_error', error.message);
-    // The row was read above, so an update that matches no row is one the
-    // row policy refused (schedule_events_update: the event's creator or a
-    // manager), or a row deleted in between. maybeSingle() answers that as no
-    // data and no error, apart from a database fault, which is `error`.
+    if (!Array.isArray(updatedRows)) {
+      throw new ServiceError('internal_error', 'schedule_events update answered no list');
+    }
+    const data = updatedRows[0];
     if (!data) throw new ServiceError('forbidden', SCHEDULE_EVENT_UPDATE_REFUSED);
 
     // Auto-distribute on first transition INTO 'completed' FROM
@@ -669,11 +673,13 @@ export class ScheduleService {
         // (23505) we treat it as benign — another concurrent caller
         // already distributed for this event.
         //
-        // The saved kit warehouse is checked again (defence in depth): it is
-        // the one checked before the save unless the row changed in between.
-        // The status is already saved, so a refusal here is the hand-out's own
-        // failure: the completion audit row is written and the person reads
-        // the "marked complete, but" sentence below, with no warehouse id.
+        // The saved kit warehouse is checked here, before the hand-out. It is
+        // the one checked before the save unless the row changed in between;
+        // then this is the only check of the warehouse the hand-out draws
+        // from. The status is already saved, so a refusal here is the
+        // hand-out's own failure: the completion audit row is written and the
+        // person reads the "marked complete, but" sentence below, with no
+        // warehouse id.
         let kitWarehouseWritable = true;
         if (!distributedBefore.has(id)) {
           try {

@@ -97,7 +97,8 @@ function userClientOver(store: { row: Row }, seen: Row[]) {
       const payload = updatePayload(call);
       seen.push(payload);
       store.row = { ...store.row, ...payload };
-      return { data: store.row, error: null };
+      // An update with a select answers the updated rows as a list.
+      return { data: [store.row], error: null };
     },
     'bundle_distributions.select': { data: [], error: null },
     'user_profiles.select': { data: [], error: null },

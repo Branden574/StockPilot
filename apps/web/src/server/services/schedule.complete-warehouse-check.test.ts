@@ -109,6 +109,9 @@ interface World {
   mayUpdate: boolean;
   /** Overrides what the update hands back (a row changed in between). */
   savedOver: Row;
+  /** 'fault': the update answers a database error; 'no_list': an answer
+   *  with neither rows nor an error (an empty body). */
+  updateAnswer: 'rows' | 'fault' | 'no_list';
   payloads: Row[];
 }
 
@@ -121,16 +124,22 @@ function makeWorld(over: Partial<World> = {}): World {
     handedOut: false,
     mayUpdate: true,
     savedOver: {},
+    updateAnswer: 'rows',
     payloads: [],
     ...over,
   };
 }
 
+const STATEMENT_TIMEOUT = {
+  code: '57014',
+  message: 'canceling statement due to statement timeout',
+};
+
 /**
- * A user client over `world.row`. The update answers as PostgREST does: the
- * row (with the payload applied) when the policy lets it through; no row when
- * it does not, which a single-object read answers as 406 PGRST116 and a
- * maybe-single read as no data and no error.
+ * A user client over `world.row`. The update answers as PostgREST does: a
+ * list with the row (the payload applied) when the policy lets it through,
+ * an empty list when it does not; a single-object read of that answer is
+ * 406 PGRST116.
  */
 function clientFor(w: World): SupabaseStub {
   const updated = (call: MockCall) => {
@@ -143,6 +152,7 @@ function clientFor(w: World): SupabaseStub {
   return makeSupabaseStub({
     'schedule_events.select': () => ({ data: [w.row], error: null }),
     'schedule_events.update.single': (call) => {
+      if (w.updateAnswer === 'fault') return { data: null, error: STATEMENT_TIMEOUT };
       const row = updated(call);
       return row
         ? { data: row, error: null }
@@ -155,7 +165,9 @@ function clientFor(w: World): SupabaseStub {
             },
           };
     },
-    'schedule_events.update.maybeSingle': (call) => {
+    'schedule_events.update': (call) => {
+      if (w.updateAnswer === 'fault') return { data: null, error: STATEMENT_TIMEOUT };
+      if (w.updateAnswer === 'no_list') return { data: null, error: null };
       const row = updated(call);
       return { data: row ? [row] : [], error: null };
     },
@@ -457,6 +469,37 @@ describe('an update the row policy refuses', () => {
     signIn({ mayUpdate: false });
     const res = await updateScheduleEventAction(EVENT, { title: 'Renamed' });
     expect(res).toEqual({ ok: false, error: { code: 'forbidden', message: UPDATE_REFUSED } });
+    expect(audit).not.toHaveBeenCalled();
+  });
+});
+
+describe('an update the database does not answer with rows', () => {
+  it.each([
+    ['a database fault', 'fault'],
+    ['an answer that is not a list', 'no_list'],
+  ] as const)(
+    '%s is the internal error, never the row-policy sentence, with no hand-out and no audit row',
+    async (_label, updateAnswer) => {
+      const svc = signIn({ updateAnswer });
+      const err = await svc.update(EVENT, { status: 'completed' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ServiceError);
+      expect(err).toMatchObject({
+        code: 'internal_error',
+        message: 'An internal error occurred. Please try again.',
+      });
+      expect((err as Error).message).not.toBe(UPDATE_REFUSED);
+      expect(stub.rpcCalls).toEqual([]);
+      expect(audit).not.toHaveBeenCalled();
+    },
+  );
+
+  it('the web action answers the internal error for a database fault', async () => {
+    signIn({ updateAnswer: 'fault' });
+    const res = await updateScheduleEventAction(EVENT, { status: 'completed' });
+    expect(res).toEqual({
+      ok: false,
+      error: { code: 'internal_error', message: 'An internal error occurred. Please try again.' },
+    });
     expect(audit).not.toHaveBeenCalled();
   });
 });
