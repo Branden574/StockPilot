@@ -76,8 +76,11 @@ export type DrainOutcome = 'rejected' | 'failed';
 export const ACCOUNT_DISABLED_REJECTION =
   'Account disabled: this queued change was never sent.';
 
-/** Statuses that are a verdict on THIS request, from our own route (a 403 only after the check below). */
-const DEFINITIVE_REFUSALS: ReadonlySet<number> = new Set([400, 409, 422]);
+/**
+ * Statuses that are a verdict on THIS request, from our own route. A 403 is
+ * decided before this set is read: only after the authenticator check below.
+ */
+const DEFINITIVE_REFUSALS: ReadonlySet<number> = new Set([400, 403, 409, 422]);
 
 /** The reasons a 403 carries when it is the authenticator answer, not one about the change. */
 const AUTHENTICATOR_REASONS: ReadonlySet<string> = new Set(['mfa_required', 'aal2_required']);
