@@ -10,6 +10,7 @@ import {
   ACCOUNT_DELETE_CODE_REFUSED_COPY,
   ACCOUNT_DELETE_CODE_ROUTE_ANSWERS,
   ACCOUNT_DELETE_CODE_SEND_FAILED_COPY,
+  ACCOUNT_DELETE_CODE_SEND_FAILED_NO_PASSWORD_COPY,
   ACCOUNT_DELETE_CODE_SEND_PAUSED_COPY,
   ACCOUNT_DELETE_CODE_SEND_PAUSED_NO_PASSWORD_COPY,
   ACCOUNT_DELETE_CODE_SENT_COPY,
@@ -22,7 +23,7 @@ import {
   ACCOUNT_DELETE_PLATFORM_ADMIN_COPY,
   ACCOUNT_DELETE_RETRY_COPY,
   ACCOUNT_DELETE_ROUTE_ANSWERS,
-  ACCOUNT_DELETE_SESSION_ENDED_COPY,
+  ACCOUNT_DELETE_SIGN_IN_AGAIN_COPY,
   ACCOUNT_DELETE_TYPE_DELETE_COPY,
   ACCOUNT_DELETE_UNSURE_COPY,
   DELETE_ACCOUNT_CODE_SEND_PAUSED_COPY,
@@ -33,7 +34,8 @@ import {
 
 /**
  * The phone's one reading of the two delete routes' answers, and the words
- * they use. The mapper reads the status and the body's `error` code only.
+ * they use. The mapper reads the status and, from the body, the `error` code,
+ * `ok` and whether `challenge` is a string; never the message.
  */
 
 const ans = (next: AccountDeleteAnswer['next'], sentence: string): AccountDeleteAnswer => ({
@@ -89,20 +91,39 @@ describe('accountDeleteAnswer: POST /api/v1/account/delete', () => {
     );
   });
 
-  it('2xx: the account is gone', () => {
-    expect(accountDeleteAnswer({ status: 200 })).toEqual(ans('done', ACCOUNT_DELETE_DONE_COPY));
-    expect(accountDeleteAnswer({ status: 204, error: undefined })).toEqual(
+  it("200 with ok: true, the route's own answer: the account is gone", () => {
+    expect(accountDeleteAnswer({ status: 200, ok: true })).toEqual(
       ans('done', ACCOUNT_DELETE_DONE_COPY),
     );
+    expect(accountDeleteAnswer({ route: 'delete', status: 200, ok: true })).toEqual(
+      ans('done', ACCOUNT_DELETE_DONE_COPY),
+    );
+  });
+
+  it('any other 2xx is never done: it claims nothing either way', () => {
+    for (const body of [
+      { status: 200 },
+      { status: 200, ok: false },
+      { status: 200, ok: 'true' },
+      { status: 200, ok: 1 },
+      { status: 204 },
+      { status: 204, ok: true },
+      { status: 201, ok: true },
+      { status: 299, ok: true },
+    ]) {
+      expect(accountDeleteAnswer(body), JSON.stringify(body)).toEqual(
+        ans('message', ACCOUNT_DELETE_UNSURE_COPY),
+      );
+    }
   });
 
   it('401, with any code or none: sign in again', () => {
     for (const error of ['unauthenticated', undefined, 'anything']) {
       expect(accountDeleteAnswer({ status: 401, error })).toEqual(
-        ans('sign_in', ACCOUNT_DELETE_SESSION_ENDED_COPY),
+        ans('sign_in', ACCOUNT_DELETE_SIGN_IN_AGAIN_COPY),
       );
     }
-    expect(ACCOUNT_DELETE_SESSION_ENDED_COPY).toBe('Your session has ended. Sign in again.');
+    expect(ACCOUNT_DELETE_SIGN_IN_AGAIN_COPY).toBe('Sign in again to continue.');
   });
 
   it('no answer (a timeout or no connection): it may not have been deleted', () => {
@@ -154,8 +175,8 @@ describe('accountDeleteAnswer: POST /api/v1/account/delete/code', () => {
   it.each<[number, string, AccountDeleteAnswer]>([
     [409, 'not_offered', ans('message', ACCOUNT_DELETE_CODE_NOT_OFFERED_COPY)],
     [429, 'rate_limited', ans('message', ACCOUNT_DELETE_CODE_SEND_PAUSED_NO_PASSWORD_COPY)],
-    [503, 'send_failed', ans('message', ACCOUNT_DELETE_CODE_SEND_FAILED_COPY)],
-    [500, 'internal_error', ans('message', ACCOUNT_DELETE_CODE_SEND_FAILED_COPY)],
+    [503, 'send_failed', ans('message', ACCOUNT_DELETE_CODE_SEND_FAILED_NO_PASSWORD_COPY)],
+    [500, 'internal_error', ans('message', ACCOUNT_DELETE_CODE_SEND_FAILED_NO_PASSWORD_COPY)],
   ])('%i %s', (status, error, expected) => {
     expect(accountDeleteAnswer({ route: 'code', status, error })).toEqual(expected);
   });
@@ -168,15 +189,33 @@ describe('accountDeleteAnswer: POST /api/v1/account/delete/code', () => {
     );
   });
 
-  it('2xx: a code was sent; enter it', () => {
-    expect(accountDeleteAnswer({ route: 'code', status: 200 })).toEqual(
-      ans('code', ACCOUNT_DELETE_CODE_SENT_COPY),
-    );
+  it("200 with ok: true and a challenge, the route's own answer: a code was sent; enter it", () => {
+    expect(
+      accountDeleteAnswer({ route: 'code', status: 200, ok: true, challenge: 'v1.a.b.c.d' }),
+    ).toEqual(ans('code', ACCOUNT_DELETE_CODE_SENT_COPY));
+  });
+
+  it('any other 2xx: a code may not have been sent', () => {
+    for (const body of [
+      { status: 200 },
+      { status: 200, ok: true },
+      { status: 200, ok: true, challenge: '' },
+      { status: 200, ok: true, challenge: 7 },
+      { status: 200, ok: true, challenge: null },
+      { status: 200, ok: false, challenge: 'v1.a.b.c.d' },
+      { status: 204 },
+      { status: 204, ok: true, challenge: 'v1.a.b.c.d' },
+      { status: 201, ok: true, challenge: 'v1.a.b.c.d' },
+    ]) {
+      expect(accountDeleteAnswer({ route: 'code', ...body }), JSON.stringify(body)).toEqual(
+        ans('message', ACCOUNT_DELETE_CODE_NO_ANSWER_COPY),
+      );
+    }
   });
 
   it('401 (also the answer for an account that is gone): sign in again', () => {
     expect(accountDeleteAnswer({ route: 'code', status: 401, error: 'unauthenticated' })).toEqual(
-      ans('sign_in', ACCOUNT_DELETE_SESSION_ENDED_COPY),
+      ans('sign_in', ACCOUNT_DELETE_SIGN_IN_AGAIN_COPY),
     );
   });
 
@@ -196,15 +235,24 @@ describe('accountDeleteAnswer: POST /api/v1/account/delete/code', () => {
       [502, undefined],
     ] as const) {
       expect(accountDeleteAnswer({ route: 'code', status, error })).toEqual(
-        ans('message', ACCOUNT_DELETE_CODE_SEND_FAILED_COPY),
+        ans('message', ACCOUNT_DELETE_CODE_SEND_FAILED_NO_PASSWORD_COPY),
       );
     }
   });
 
-  it("the send limit's phone sentence suits an account with no password; the website's stays as it is", () => {
+  it("the code route's phone sentences suit an account with no password; the website's stay as they are", () => {
     expect(ACCOUNT_DELETE_CODE_SEND_PAUSED_NO_PASSWORD_COPY).toBe(
       'Too many codes requested. Wait a few minutes, then ask for a new code, or enter your password if you have one.',
     );
+    expect(ACCOUNT_DELETE_CODE_SEND_FAILED_NO_PASSWORD_COPY).toBe(
+      'The code could not be sent just now. Try again in a few minutes, or enter your password if you have one.',
+    );
+    expect(ACCOUNT_DELETE_CODE_SEND_FAILED_COPY).toBe(
+      'The code could not be sent just now. Try again in a few minutes, or enter your password.',
+    );
+    for (const row of ACCOUNT_DELETE_CODE_ROUTE_ANSWERS) {
+      expect(row.sentence).not.toMatch(/or enter your password\.$/);
+    }
     expect(ACCOUNT_DELETE_CODE_SEND_PAUSED_COPY).toBe(DELETE_ACCOUNT_CODE_SEND_PAUSED_COPY);
     expect(DELETE_ACCOUNT_CODE_SEND_PAUSED_COPY).toBe(
       'Too many codes requested. Try again in a few minutes, or enter your password.',
@@ -258,7 +306,7 @@ describe('the words', () => {
       ACCOUNT_DELETE_NO_ANSWER_COPY,
       ACCOUNT_DELETE_CODE_NO_ANSWER_COPY,
       ACCOUNT_DELETE_UNSURE_COPY,
-      ACCOUNT_DELETE_SESSION_ENDED_COPY,
+      ACCOUNT_DELETE_SIGN_IN_AGAIN_COPY,
     ];
     for (const s of given) {
       expect(s).not.toMatch(/has no password|does not have a password|your password is not set/i);

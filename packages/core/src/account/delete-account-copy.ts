@@ -128,13 +128,23 @@ export const ACCOUNT_DELETE_SIGNED_OUT_COPY =
 /* ───────────────────────── the phone's reading of the answers ───────────────────────── */
 
 /**
- * The send limit's sentence for the phone, where the account may have no
- * password: it points to a new code first.
+ * The code route's failure sentences for the phone, where the account may
+ * have no password: the website's words, with the password offered only to an
+ * account that has one. The website and the code route keep their own
+ * (DELETE_ACCOUNT_CODE_SEND_PAUSED_COPY, ACCOUNT_DELETE_CODE_SEND_FAILED_COPY).
  */
 export const ACCOUNT_DELETE_CODE_SEND_PAUSED_NO_PASSWORD_COPY =
   'Too many codes requested. Wait a few minutes, then ask for a new code, or enter your password if you have one.';
-/** The session the request was sent with has ended (401). */
-export const ACCOUNT_DELETE_SESSION_ENDED_COPY = 'Your session has ended. Sign in again.';
+export const ACCOUNT_DELETE_CODE_SEND_FAILED_NO_PASSWORD_COPY =
+  'The code could not be sent just now. Try again in a few minutes, or enter your password if you have one.';
+/**
+ * A 401 from either route. The routes answer 401 whenever the request's
+ * context cannot be built: no session or an ended one, an account with an
+ * authenticator whose code was not entered, no accepted membership in the
+ * workspace asked for, a disabled account, and on the code route an account
+ * that is already gone. So the sentence claims none of them.
+ */
+export const ACCOUNT_DELETE_SIGN_IN_AGAIN_COPY = 'Sign in again to continue.';
 /** The account is gone. */
 export const ACCOUNT_DELETE_DONE_COPY =
   'Your account has been removed. Thanks for trying StockPilot.';
@@ -160,7 +170,7 @@ export type AccountDeleteRoute = 'delete' | 'code';
  *  - code: show the emailed-code field (with the sentence);
  *  - done: the account is gone; sign out and say so;
  *  - message: show the sentence and stay where the person is;
- *  - sign_in: the session has ended; sign in again.
+ *  - sign_in: the request was not accepted as signed in; sign in again.
  */
 export type AccountDeleteNext = 'password' | 'code' | 'done' | 'message' | 'sign_in';
 
@@ -245,7 +255,11 @@ export const ACCOUNT_DELETE_ROUTE_ANSWERS: readonly AccountDeleteKnownAnswer[] =
   { status: 500, error: 'internal_error', next: 'message', sentence: ACCOUNT_DELETE_UNSURE_COPY },
 ];
 
-/** Every error answer POST /api/v1/account/delete/code gives, by status and code. */
+/**
+ * Every error answer POST /api/v1/account/delete/code gives, by status and
+ * code. The phone's sentences: the password is offered only to an account
+ * that has one.
+ */
 export const ACCOUNT_DELETE_CODE_ROUTE_ANSWERS: readonly AccountDeleteKnownAnswer[] = [
   {
     status: 409,
@@ -263,24 +277,30 @@ export const ACCOUNT_DELETE_CODE_ROUTE_ANSWERS: readonly AccountDeleteKnownAnswe
     status: 503,
     error: 'send_failed',
     next: 'message',
-    sentence: ACCOUNT_DELETE_CODE_SEND_FAILED_COPY,
+    sentence: ACCOUNT_DELETE_CODE_SEND_FAILED_NO_PASSWORD_COPY,
   },
   {
     status: 500,
     error: 'internal_error',
     next: 'message',
-    sentence: ACCOUNT_DELETE_CODE_SEND_FAILED_COPY,
+    sentence: ACCOUNT_DELETE_CODE_SEND_FAILED_NO_PASSWORD_COPY,
   },
 ];
 
 /**
  * What the phone does with an answer from one of the two delete routes, and
- * the sentence it shows. Reads the status and the body's `error` code only,
- * never the server's message, so every sentence is one of the above.
+ * the sentence it shows. Reads the status, and from the body the `error` code,
+ * `ok` and (code route) whether `challenge` is a string; never the server's
+ * message, so every sentence is one of the above.
  *
  *  - `status` null, undefined or 0: no HTTP answer (a timeout, no connection).
- *  - 2xx: the delete route deleted the account (done); the code route sent a
- *    code (code).
+ *  - 200 with `ok === true`: the delete route deleted the account (done); on
+ *    the code route only when `challenge` is also a non-empty string, a code
+ *    was sent (code). The routes answer exactly that shape.
+ *  - any other 2xx (204, 201, or 200 with another body: a sign-in page of a
+ *    network, a proxy): not the route's answer, so it is never done. The
+ *    delete route claims nothing either way; the code route says a code may
+ *    not have been sent.
  *  - 401, whatever the code: sign in again.
  *  - a known status and code: its row above.
  *  - anything else: on the delete route, a 4xx says nothing was changed and a
@@ -291,6 +311,8 @@ export function accountDeleteAnswer(answer: {
   route?: AccountDeleteRoute;
   status: number | null | undefined;
   error?: unknown;
+  ok?: unknown;
+  challenge?: unknown;
 }): AccountDeleteAnswer {
   const route = answer.route ?? 'delete';
   const status = answer.status;
@@ -302,17 +324,29 @@ export function accountDeleteAnswer(answer: {
     };
   }
   if (status >= 200 && status < 300) {
-    return route === 'code'
-      ? { next: 'code', sentence: ACCOUNT_DELETE_CODE_SENT_COPY }
-      : { next: 'done', sentence: ACCOUNT_DELETE_DONE_COPY };
+    if (route === 'code') {
+      const sent =
+        status === 200 &&
+        answer.ok === true &&
+        typeof answer.challenge === 'string' &&
+        answer.challenge.length > 0;
+      return sent
+        ? { next: 'code', sentence: ACCOUNT_DELETE_CODE_SENT_COPY }
+        : { next: 'message', sentence: ACCOUNT_DELETE_CODE_NO_ANSWER_COPY };
+    }
+    return status === 200 && answer.ok === true
+      ? { next: 'done', sentence: ACCOUNT_DELETE_DONE_COPY }
+      : { next: 'message', sentence: ACCOUNT_DELETE_UNSURE_COPY };
   }
-  if (status === 401) return { next: 'sign_in', sentence: ACCOUNT_DELETE_SESSION_ENDED_COPY };
+  if (status === 401) return { next: 'sign_in', sentence: ACCOUNT_DELETE_SIGN_IN_AGAIN_COPY };
 
   const rows = route === 'code' ? ACCOUNT_DELETE_CODE_ROUTE_ANSWERS : ACCOUNT_DELETE_ROUTE_ANSWERS;
   const known = rows.find((row) => row.status === status && row.error === answer.error);
   if (known) return { next: known.next, sentence: known.sentence };
 
-  if (route === 'code') return { next: 'message', sentence: ACCOUNT_DELETE_CODE_SEND_FAILED_COPY };
+  if (route === 'code') {
+    return { next: 'message', sentence: ACCOUNT_DELETE_CODE_SEND_FAILED_NO_PASSWORD_COPY };
+  }
   return status >= 400 && status < 500
     ? { next: 'message', sentence: ACCOUNT_DELETE_RETRY_COPY }
     : { next: 'message', sentence: ACCOUNT_DELETE_UNSURE_COPY };

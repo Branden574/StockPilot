@@ -1111,6 +1111,9 @@ WEB_TESTS=(
   # holds every route handler under src/app to the rule or to a reviewed list
   # (core's stepUpOwed truth table is in MANIFEST 4).
   src/lib/auth/api-context.step-up.test.ts
+  # The factor list is read before the organization's policy: a list that
+  # cannot be read throws before any organization read.
+  src/lib/auth/api-context.factor-list-order.test.ts
   # The level those refusals and the MFA label read is the validated user's
   # own (S43a review round 1): a cookie carrying another account's refresh
   # token, timed to refresh after getUser(), reads as not aal2. The real server
@@ -2302,6 +2305,15 @@ CORE_TESTS=(
   # routes' answers: every code, an unknown code, 401 and no answer.
   src/auth/set-up-copy.test.ts
   src/account/delete-account-copy.test.ts
+  # The exact text of the delete-account words and the set-up address and
+  # title the website and the API show, written out in the test.
+  src/shared-words.literals.test.ts
+  # Who owes authenticator set-up (the policy requires one of the role and the
+  # account has no verified factor), the rule the API context decides with.
+  src/auth/step-up.set-up.test.ts
+  # The one "refused before any write" marker: only the API context gate's
+  # exact body is read as nothing written.
+  src/auth/context-unavailable.test.ts
   src/schemas/inventory.test.ts
   src/signature/signature.test.ts
   # The one item-images path builder (web presign and thumbnail, phone

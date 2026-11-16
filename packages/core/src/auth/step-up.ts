@@ -63,14 +63,37 @@ export function enforcedMfaPolicy(
  * The organization row of a membership read with an embed
  * (`organizations:organization_id (...)`). PostgREST answers a to-one embed
  * as an object, and some client typings and older answers as an array of
- * one. Answers the object, the first element of an array, or null for
- * anything else (no row, an empty array, a value that is not an object).
+ * one. Answers the object; for an array, its FIRST element (a to-one embed
+ * returned as an array answers its first element, whatever follows it); null
+ * for anything else (no row, an empty array, a first element that is not an
+ * object, a value that is not an object).
  */
 export function unwrapOrganizationEmbed<T extends object>(
   field: T | readonly T[] | null | undefined,
 ): T | null {
   const one: unknown = Array.isArray(field) ? (field as readonly unknown[])[0] : field;
   return one !== null && typeof one === 'object' && !Array.isArray(one) ? (one as T) : null;
+}
+
+/**
+ * The organization's policy AS READ, or null when it was not read: the row or
+ * the embed is missing, empty or not an object, or its `mfa_policy` is not one
+ * of the three values. Takes the row or the embed field (unwrapped with
+ * unwrapOrganizationEmbed). A caller tells "read: all_required" from "not
+ * read" with this; what to ENFORCE for null is enforcedMfaPolicy's answer,
+ * the strictest policy, so `enforcedMfaPolicy(unwrapOrganizationEmbed(x))`
+ * always equals `readOrganizationMfaPolicy(x) ?? UNREADABLE_ORG_MFA_POLICY`.
+ */
+export function readOrganizationMfaPolicy(
+  field: { mfa_policy?: unknown } | readonly ({ mfa_policy?: unknown } | null)[] | null | undefined,
+): OrganizationMfaPolicy | null {
+  const row = unwrapOrganizationEmbed<{ mfa_policy?: unknown }>(
+    field as { mfa_policy?: unknown } | readonly { mfa_policy?: unknown }[] | null | undefined,
+  );
+  const value = row?.mfa_policy;
+  return value === 'optional' || value === 'admins_required' || value === 'all_required'
+    ? value
+    : null;
 }
 
 /**

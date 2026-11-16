@@ -82,13 +82,16 @@ async function resolveApiMfaState(
   // The (already validated) user's factors — read off the GoTrue user
   // object both paths have in hand, so it costs no extra auth round-trip.
   // A verified one escalates: an enrolled factor must be satisfied
-  // regardless of org policy (HI-6), and it decides the gate's error shape
+  // regardless of org policy, and it decides the gate's error shape
   // ('aal2_required' vs 'mfa_required').
   factors: UserFactors,
   // The session's level, read only when MFA is required. Couldn't read
   // (null, or a throw) → fail closed.
   level: SessionLevelReader,
 ): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean; mfaEnrolled: boolean }> {
+  // The factor list is read first: a list that cannot be read throws here,
+  // before the organization's policy is read.
+  userHasVerifiedFactor({ factors });
   let policy: MfaPolicy;
   try {
     const { data: org, error } = await supabase

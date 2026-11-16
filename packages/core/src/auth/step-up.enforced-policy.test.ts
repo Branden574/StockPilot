@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   authenticatorSetUpOwed,
   enforcedMfaPolicy,
+  readOrganizationMfaPolicy,
   UNREADABLE_ORG_MFA_POLICY,
   unwrapOrganizationEmbed,
 } from './step-up';
@@ -91,6 +92,82 @@ describe('unwrapOrganizationEmbed', () => {
       const policy = enforcedMfaPolicy(unwrapOrganizationEmbed(shape));
       expect(policy).toBe('all_required');
       expect(authenticatorSetUpOwed(policy, 'staff', null)).toBe(true);
+    }
+  });
+});
+
+describe('readOrganizationMfaPolicy: the policy as read, or null when it was not read', () => {
+  type Field = Parameters<typeof readOrganizationMfaPolicy>[0];
+
+  it.each(['optional', 'admins_required', 'all_required'] as const)(
+    '%s read from an object or an array of one',
+    (policy) => {
+      expect(readOrganizationMfaPolicy({ name: 'Example Org', mfa_policy: policy } as Field)).toBe(
+        policy,
+      );
+      expect(readOrganizationMfaPolicy([{ mfa_policy: policy }])).toBe(policy);
+    },
+  );
+
+  it('an array answers its first element only', () => {
+    expect(
+      readOrganizationMfaPolicy([{ mfa_policy: 'optional' }, { mfa_policy: 'all_required' }]),
+    ).toBe('optional');
+    expect(readOrganizationMfaPolicy([null, { mfa_policy: 'all_required' }])).toBeNull();
+  });
+
+  it('not read: no row, an empty array, a value that is not an object', () => {
+    expect(readOrganizationMfaPolicy(null)).toBeNull();
+    expect(readOrganizationMfaPolicy(undefined)).toBeNull();
+    expect(readOrganizationMfaPolicy([])).toBeNull();
+    for (const odd of ['all_required', 7, true, [['all_required']]]) {
+      expect(readOrganizationMfaPolicy(odd as unknown as Field)).toBeNull();
+    }
+  });
+
+  it('not read: a policy value the column cannot hold', () => {
+    for (const mfa_policy of [
+      'ALL_REQUIRED',
+      ' all_required',
+      '',
+      'required',
+      null,
+      1,
+      undefined,
+    ]) {
+      expect(readOrganizationMfaPolicy({ mfa_policy })).toBeNull();
+      expect(readOrganizationMfaPolicy([{ mfa_policy }])).toBeNull();
+    }
+    expect(readOrganizationMfaPolicy({})).toBeNull();
+  });
+
+  it('a real all_required is told apart from a row that was not read', () => {
+    expect(readOrganizationMfaPolicy({ mfa_policy: 'all_required' })).toBe('all_required');
+    expect(readOrganizationMfaPolicy(null)).toBeNull();
+    // Both are ENFORCED the same way.
+    expect(enforcedMfaPolicy({ mfa_policy: 'all_required' })).toBe('all_required');
+    expect(enforcedMfaPolicy(null)).toBe('all_required');
+  });
+
+  it('what is enforced is the policy as read, or the strictest when not read', () => {
+    const shapes: unknown[] = [
+      null,
+      undefined,
+      [],
+      {},
+      'optional',
+      { mfa_policy: 'optional' },
+      { mfa_policy: 'admins_required' },
+      { mfa_policy: 'all_required' },
+      { mfa_policy: 'OPTIONAL' },
+      [{ mfa_policy: 'optional' }],
+      [{ mfa_policy: 'admins_required' }, { mfa_policy: 'all_required' }],
+      [null],
+    ];
+    for (const shape of shapes) {
+      expect(enforcedMfaPolicy(unwrapOrganizationEmbed(shape as object))).toBe(
+        readOrganizationMfaPolicy(shape as Field) ?? UNREADABLE_ORG_MFA_POLICY,
+      );
     }
   });
 });

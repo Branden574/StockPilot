@@ -4,8 +4,9 @@ import { ACCOUNT_DELETE_CODE_RE } from '@stockpilot/core';
 
 /**
  * The emailed code that confirms deleting an account with no authenticator,
- * and the signed challenge that goes with it. Pure: node:crypto only, no env
- * and no `server-only`, so the tests run this very code. The server signs and
+ * and the signed challenge that goes with it. Pure: node:crypto and the
+ * six-digit pattern from @stockpilot/core only, no env and no `server-only`,
+ * so the tests run this very code. The server signs and
  * checks through server/lib/account-deletion-credential.ts, which supplies the
  * key.
  *
