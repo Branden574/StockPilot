@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session, User } from '@supabase/supabase-js';
+import * as Network from 'expo-network';
 import * as React from 'react';
 import { Alert, AppState, type AppStateStatus } from 'react-native';
 
@@ -27,6 +28,7 @@ import {
 import { totalPendingCount } from './cycle-count-cache';
 import { cycleCountSync } from './cycle-count-sync';
 import { wipeForSignOut } from './db';
+import { isOfflineState } from './exceptions-api';
 import { codeGateUp, verifiedTotpFactorId } from './mfa-level';
 import {
   createStepUpReconciler,
@@ -52,8 +54,16 @@ import {
   deviceSignOutSteps,
   FALLBACK_UNBIND_TIMEOUT_MS,
   SIGN_OUT_UNBIND_TIMEOUT_MS,
+  unbindThisDevice,
 } from './push-unbind';
 import { hasStoredSession, liveOutboxScope } from './session-scope';
+import {
+  createHoldPushUnbinder,
+  readSetUpInputsForHold,
+  setUpHoldFor,
+  subscribeSetUpHold,
+  type SetUpHold,
+} from './set-up-hold';
 import { forgetSetUpInputs } from './set-up-inputs';
 import {
   endSession,
@@ -95,6 +105,15 @@ interface AuthState {
    * cold-launch hydrate and at every token refresh.
    */
   mfaRequired: boolean;
+  /**
+   * Whether the authenticator set-up screen takes the app's place
+   * (set-up-hold.ts): 'owed' when the workspace's policy, as read, asks this
+   * account for an authenticator it has not set up; 'unknown' when a check
+   * answered and could not tell; null otherwise, and always null with no
+   * session or while the code is owed (the code screen comes first). RootGate
+   * hands the data hooks nobody while it is not null.
+   */
+  setUpHold: SetUpHold;
   /**
    * Submit a 6-digit TOTP code to complete the AAL1→AAL2 challenge.
    * Returns an error string on an invalid/expired code.
@@ -191,6 +210,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // not be brought up to date (mfa-reconcile.ts).
   const stepUpForced = React.useSyncExternalStore(subscribeStepUpForced, stepUpForcedFor);
   const mfaRequired = codeGateUp(session, stepUpForced);
+
+  // AUTHENTICATOR SET-UP (set-up-hold.ts): worked out in render from what the
+  // set-up store keeps and the session's own factor list, like the code gate.
+  // The code screen comes first: nothing is held while the code is owed.
+  const heldBy = React.useSyncExternalStore(subscribeSetUpHold, () => setUpHoldFor(session?.user));
+  const setUpHold: SetUpHold = session && !mfaRequired ? heldBy : null;
+
+  // The set-up check's own reads (set-up-inputs.ts readSetUpInputsForHold),
+  // which never wait for the sync: at sign-in and the cold launch (and when
+  // the code is accepted), on every return to the foreground, and when the
+  // connection comes back. A workspace switch reads in set-up-hold.ts, an
+  // authenticator answer from a route in api.ts, Check again on the screen.
+  const setUpReadFor = session && !mfaRequired ? (session.user?.id ?? null) : null;
+  React.useEffect(() => {
+    if (!setUpReadFor) return;
+    void readSetUpInputsForHold(setUpReadFor);
+    const appSub = AppState.addEventListener('change', (state: AppStateStatus) => {
+      if (state === 'active') void readSetUpInputsForHold(setUpReadFor);
+    });
+    // Back online: the rule use-sync.ts applies (isOfflineState). The first
+    // answer counts as coming back, since a launch offline sends none.
+    let wasOffline: boolean | null = null;
+    const netSub = Network.addNetworkStateListener((state) => {
+      const offline = isOfflineState(state);
+      if (!offline && wasOffline !== false) void readSetUpInputsForHold(setUpReadFor);
+      wasOffline = offline;
+    });
+    return () => {
+      appSub.remove();
+      netSub.remove();
+    };
+  }, [setUpReadFor]);
+
+  // Push while held: RootGate hands the push hook nobody, which stops a new
+  // registration but leaves an earlier one receiving. This phone's token row
+  // is deleted once each time the hold comes up; on release the push hook is
+  // handed the user again and registers again (use-push-notifications.ts).
+  const [holdPush] = React.useState(() =>
+    createHoldPushUnbinder(() => unbindThisDevice({ timeoutMs: SIGN_OUT_UNBIND_TIMEOUT_MS })),
+  );
+  const heldUserId = setUpHold ? (session?.user?.id ?? null) : null;
+  React.useEffect(() => {
+    holdPush.update(heldUserId);
+  }, [holdPush, heldUserId]);
 
   // A user the account gate's probe reads from the server (use-account-gate.ts)
   // is handed here, so an authenticator turned on or removed elsewhere reaches
@@ -747,6 +810,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signOutToFallback,
         enableBiometric,
         disableBiometric,
+        setUpHold,
       }}
     >
       {children}

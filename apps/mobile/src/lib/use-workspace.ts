@@ -6,7 +6,8 @@ import { useAuth } from './auth-context';
 import { cycleCountSync } from './cycle-count-sync';
 import { deleteOrgData } from './db';
 import { refreshEnabledModules } from './enabled-modules';
-import { beginSetUpRead, recordMembershipInputs } from './set-up-inputs';
+import { noteHoldWorkspace } from './set-up-hold';
+import { beginSetUpRead, noteMembershipReadFailed, recordMembershipInputs } from './set-up-inputs';
 import { refreshCacheOwner } from './use-cache-owner';
 import { syncAfterRunning, syncNow } from './sync';
 import { supabase } from './supabase';
@@ -82,6 +83,8 @@ let cached: WorkspaceState = {
 
 function publish(next: Partial<WorkspaceState>) {
   cached = { ...cached, ...next };
+  // The workspace the holding screen checks (set-up-hold.ts): the one shown.
+  noteHoldWorkspace(epochUserId ?? null, cached.activeOrgId);
   for (const fn of listeners) fn(cached);
 }
 
@@ -96,13 +99,15 @@ function publish(next: Partial<WorkspaceState>) {
  */
 export async function loadOrgs(userId: string): Promise<OrgOption[] | null> {
   const readSeq = beginSetUpRead();
-  const { data, error } = await supabase
+  const { data, error, status } = await supabase
     .from('organization_members')
     .select('role, organization_id, organizations:organization_id (name, mfa_policy)')
     .eq('user_id', userId)
     .not('accepted_at', 'is', null);
   if (error) {
     console.warn('[workspace] loadOrgs failed:', error.message);
+    // Answered with an error, or no answer at all (supabase-js status 0).
+    noteMembershipReadFailed(userId, readSeq, (status ?? 0) > 0);
     return null;
   }
   const rows = (data ?? []) as Array<Record<string, unknown>>;

@@ -38,6 +38,14 @@ import {
  *             read yet, or a hidden row (held to the strictest policy) with
  *             no verified factor.
  *
+ *   - the holding screen's decision (set-up-hold.ts), through the view below
+ *     (setUpInputsView), the outcome of each read, a listener, and reads of
+ *     its own: one that can be awaited (readSetUpInputsForHold) and a plain
+ *     ask for an authenticator answer from any route (askForSetUpRead). Its
+ *     reads write here like every other read, so a row the queue holds is
+ *     released by the same answer that lets the member in. They never set a
+ *     refusal mark and never move the queue's minimum interval.
+ *
  * A LEAF: core only. AsyncStorage and the reads are handed in by
  * set-up-inputs-source.ts (registerSetUpInputsSource), so the drains and the
  * send decision import nothing native.
@@ -139,9 +147,32 @@ const factors = new Map<string, AccountFactors>();
  */
 const refusals = new Map<string, number>();
 
+/**
+ * How a read ended: 'answered' (the membership read returned rows),
+ * 'failed' (the server answered with an error), 'no-answer' (no connection,
+ * or no answer in time).
+ */
+export type SetUpReadOutcome = 'answered' | 'failed' | 'no-answer';
+
+/** Each account's latest read outcome, by the number the read took at its start. */
+const readOutcomes = new Map<string, { outcome: SetUpReadOutcome; readSeq: number }>();
+
+/** Told after every change of what is kept (the holding screen's decision). */
+const listeners = new Set<() => void>();
+
+/**
+ * The read registered by set-up-inputs-source.ts. `forUserId` is the account
+ * the holding screen reads for, so a read that ends before the user is known
+ * is still recorded for it; the queue's reads pass nothing.
+ */
+type SetUpInputsReader = (forUserId?: string | null) => Promise<void>;
+
 let storage: SetUpInputsStorage | null = null;
-let reader: (() => Promise<void>) | null = null;
+let reader: SetUpInputsReader | null = null;
 let readInFlight: Promise<void> | null = null;
+/** The one read queued behind a read in flight for the holding screen. */
+let followUp: Promise<void> | null = null;
+let lastAskAt = -Infinity;
 let lastReadAskedAt = -Infinity;
 let saveChain: Promise<void> = Promise.resolve();
 /**
@@ -201,6 +232,55 @@ export function recordMembershipInputs(
   }
   memberships.set(userId, { orgs, readSeq });
   save(userId, orgs);
+  keepOutcome(userId, readSeq, 'answered');
+  changed();
+}
+
+/**
+ * A membership read for this account ended without rows: `answered` when
+ * the server answered with an error, false when no answer came (no
+ * connection). What was kept stays; only the outcome is recorded.
+ */
+export function noteMembershipReadFailed(userId: string, readSeq: number, answered: boolean): void {
+  noteSetUpReadOutcome(userId, readSeq, answered ? 'failed' : 'no-answer');
+}
+
+/** How a read for this account ended (`readSeq` from beginSetUpRead at its start). */
+export function noteSetUpReadOutcome(
+  userId: string | null | undefined,
+  readSeq: number,
+  outcome: SetUpReadOutcome,
+): void {
+  if (typeof userId !== 'string' || !userId) return;
+  if (keepOutcome(userId, readSeq, outcome)) changed();
+}
+
+/** Keeps the outcome unless a read that started later already ended; true when kept. */
+function keepOutcome(userId: string, readSeq: number, outcome: SetUpReadOutcome): boolean {
+  if (readSeq <= forgottenAt) return false;
+  const current = readOutcomes.get(userId);
+  if (current && current.readSeq > readSeq) return false;
+  readOutcomes.set(userId, { outcome, readSeq });
+  return true;
+}
+
+/** Tells every listener; one that throws never stops the others or the caller. */
+function changed(): void {
+  for (const fn of [...listeners]) {
+    try {
+      fn();
+    } catch {
+      // A listener's own failure is its own.
+    }
+  }
+}
+
+/** Told after every change of the inputs, factor lists, outcomes or a sign-out. */
+export function subscribeSetUpInputs(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => {
+    listeners.delete(fn);
+  };
 }
 
 /**
@@ -231,6 +311,7 @@ export function noteServerReadUser(
   let started = current?.started ?? null;
   if (readSeq !== undefined && (!started || started.readSeq <= at)) started = read;
   factors.set(id, { latest, started });
+  changed();
 }
 
 // ── Answers ──────────────────────────────────────────────────────────────
@@ -265,6 +346,32 @@ function answer(userId: string | null, orgId: string | null, after: number | nul
 /** The answer from what is known: this run's reads, else what an earlier run saved. */
 export function setUpOwedIn(userId: string | null, orgId: string | null): SetUpAnswer {
   return answer(userId, orgId, null);
+}
+
+/** What is kept for one account and workspace, for the holding screen (set-up-hold.ts). */
+export interface SetUpInputsView {
+  /** The workspace's inputs, or null when the kept memberships do not hold it (or none are kept). */
+  inputs: WorkspaceSetUpInputs | null;
+  /** Where the kept memberships come from: a read this run, an earlier run's save, or nothing kept. */
+  membershipsFrom: 'this-run' | 'saved' | null;
+  /** Whether the server's newest factor list read this run has a verified factor; null when none was read. */
+  serverHasVerified: boolean | null;
+  /** How this account's latest read ended; null when none has ended this run. */
+  lastRead: SetUpReadOutcome | null;
+}
+
+export function setUpInputsView(userId: string | null, orgId: string | null): SetUpInputsView {
+  if (!userId) {
+    return { inputs: null, membershipsFrom: null, serverHasVerified: null, lastRead: null };
+  }
+  const account = memberships.get(userId);
+  const list = factors.get(userId)?.latest;
+  return {
+    inputs: (account && orgId ? account.orgs[orgId] : undefined) ?? null,
+    membershipsFrom: !account ? null : account.readSeq === null ? 'saved' : 'this-run',
+    serverHasVerified: list ? list.hasVerified : null,
+    lastRead: readOutcomes.get(userId)?.outcome ?? null,
+  };
 }
 
 /**
@@ -355,6 +462,78 @@ export function setUpInputsReadInFlight(): Promise<void> | null {
   return readInFlight;
 }
 
+/**
+ * Starts a read for the holding screen. Like startRead, but it leaves the
+ * queue's interval (lastReadAskedAt) as it was. Only called with no read in
+ * flight. Never rejects, even when the reader throws.
+ */
+function startHoldRead(forUserId: string | null): Promise<void> {
+  if (!reader) return Promise.resolve();
+  let started: Promise<void>;
+  try {
+    started = reader(forUserId);
+  } catch {
+    return Promise.resolve();
+  }
+  const run = Promise.resolve(started)
+    .catch(() => undefined)
+    .finally(() => {
+      if (readInFlight === run) readInFlight = null;
+    });
+  readInFlight = run;
+  return run;
+}
+
+/**
+ * THE HOLDING SCREEN'S READ: the user and the memberships read again, for
+ * sign-in, a cold launch, the return to the foreground, the connection
+ * coming back, a workspace switch and "Check again". Not throttled. Resolves
+ * once a read that STARTED after this call has ended: with a read already in
+ * flight (it may have started before the member set up the authenticator),
+ * one more read runs after it, shared by every caller meanwhile. Never
+ * rejects. What it reads is written here, so the queue's held rows follow it.
+ */
+export function readSetUpInputsForHold(forUserId: string | null): Promise<void> {
+  if (!reader) return Promise.resolve();
+  if (!readInFlight) return startHoldRead(forUserId);
+  if (!followUp) {
+    const next = readInFlight.then(() => {
+      followUp = null;
+      // A read the queue started in between began after this call: it serves.
+      return readInFlight ?? startHoldRead(forUserId);
+    });
+    followUp = next;
+  }
+  return followUp;
+}
+
+/** At most one read asked for by askForSetUpRead per this many milliseconds. */
+export const SET_UP_ASK_MIN_INTERVAL_MS = 10_000;
+
+/**
+ * Ask for the inputs to be read again, from any screen: a route answered
+ * that this account must set up an authenticator first. It only asks: the
+ * hold comes up only if the read finds set-up owed. Nothing while a read is
+ * in flight (it is that recent), at most one per SET_UP_ASK_MIN_INTERVAL_MS,
+ * and the queue's own interval and refusal marks are left as they were.
+ */
+export function askForSetUpRead(now: number = Date.now()): void {
+  if (!reader || readInFlight) return;
+  if (now - lastAskAt < SET_UP_ASK_MIN_INTERVAL_MS) return;
+  lastAskAt = now;
+  void startHoldRead(null);
+}
+
+/** For api(): a 403 whose `details.reason` is 'mfa_required' asks for a read; nothing else does. */
+export function askForSetUpReadOnRefusal(
+  status: number,
+  details: unknown,
+  now: number = Date.now(),
+): void {
+  if (status !== 403 || details === null || typeof details !== 'object') return;
+  if ((details as { reason?: unknown }).reason === 'mfa_required') askForSetUpRead(now);
+}
+
 // ── Saving and loading ───────────────────────────────────────────────────
 
 function isPolicyAsRead(v: unknown): v is PolicyAsRead {
@@ -401,6 +580,14 @@ function save(userId: string, orgs: Record<string, WorkspaceSetUpInputs>): void 
 
 /** What an earlier run saved, for accounts this run has not read yet. Never throws. */
 async function loadSaved(target: SetUpInputsStorage): Promise<void> {
+  try {
+    await loadSavedInputs(target);
+  } finally {
+    changed();
+  }
+}
+
+async function loadSavedInputs(target: SetUpInputsStorage): Promise<void> {
   const startedAt = forgetCount;
   let keys: readonly string[] = [];
   try {
@@ -439,7 +626,14 @@ export async function forgetSetUpInputs(): Promise<void> {
   memberships.clear();
   factors.clear();
   refusals.clear();
+  readOutcomes.clear();
+  changed();
   await saveChain.catch(() => undefined);
+}
+
+/** Bumped at every forgetSetUpInputs (set-up-hold.ts drops the saved workspace it read before). */
+export function setUpInputsForgetCount(): number {
+  return forgetCount;
 }
 
 /**
@@ -449,7 +643,7 @@ export async function forgetSetUpInputs(): Promise<void> {
  */
 export function registerSetUpInputsSource(source: {
   storage: SetUpInputsStorage;
-  read: () => Promise<void>;
+  read: SetUpInputsReader;
 }): Promise<void> {
   storage = source.storage;
   reader = source.read;
@@ -462,9 +656,13 @@ export function resetSetUpInputsForTests(): void {
   memberships.clear();
   factors.clear();
   refusals.clear();
+  readOutcomes.clear();
+  listeners.clear();
   storage = null;
   reader = null;
   readInFlight = null;
+  followUp = null;
+  lastAskAt = -Infinity;
   lastReadAskedAt = -Infinity;
   saveChain = Promise.resolve();
   forgottenAt = 0;

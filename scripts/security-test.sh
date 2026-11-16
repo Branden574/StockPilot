@@ -2275,6 +2275,20 @@ MOBILE_TESTS=(
   src/lib/drain-failure.test.ts
   src/lib/parked-set-up-words.test.ts
 
+  # The authenticator set-up screen takes the app's place while the
+  # workspace's policy, as read, asks this account for an authenticator it
+  # has not set up, or while a check that answered could not tell; the code
+  # screen and the Face ID lock come first, and with no connection and
+  # nothing saved the app opens. While it holds, the data hooks are handed
+  # nobody and this phone's push token row is deleted once; the push hook
+  # registers again on release. The stored session's factor list decides
+  # only the screen, never the queue's answers; the screen's reads write to
+  # the same store the queue asks and never set a refusal mark; any route's
+  # 403 with details.reason mfa_required only asks for a read.
+  src/lib/set-up-hold.test.ts
+  src/lib/set-up-hold.reads.test.ts
+  src/lib/authenticator-set-up-screen-structure.test.ts
+
   # Deleting your own account from the phone: an account with no authenticator
   # confirms with its current password or a six-digit code emailed to it, and
   # one with an authenticator with the typed word, as the website's dialog

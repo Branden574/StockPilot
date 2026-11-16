@@ -223,7 +223,7 @@ function AppearanceRoot() {
 export default Sentry.wrap(AppearanceRoot);
 
 function RootGate() {
-  const { session, loading, locked, mfaRequired } = useAuth();
+  const { session, loading, locked, mfaRequired, setUpHold } = useAuth();
   const segments = useSegments();
   const router = useRouter();
   const { c } = useTheme();
@@ -239,7 +239,12 @@ function RootGate() {
   // The account gate and the session revocation listener further down keep
   // the session itself: a disabled or signed-out account must still reach a
   // phone that is sitting on the code screen.
-  const dataUser = session && !mfaRequired ? session.user : null;
+  //
+  // The same while the authenticator set-up screen holds the app
+  // (`setUpHold`, set-up-hold.ts): nothing of the account syncs, registers
+  // or is noted until the account may use the app in this workspace. Queued
+  // work stays on the phone and is sent after that.
+  const dataUser = session && !mfaRequired && !setUpHold ? session.user : null;
 
   // Push: no permission prompt, no registration and no tap handler at the
   // code screen. The registration also reads the session's level itself right
@@ -285,6 +290,8 @@ function RootGate() {
     // to navigate: the way back from the auth group runs once the code is
     // accepted and the Stack is mounted again.
     if (session && mfaRequired) return;
+    // The same for the set-up screen; the way back runs once it lets go.
+    if (session && setUpHold) return;
     const inAuthGroup = segments[0] === '(auth)';
     if (!session && !inAuthGroup) {
       // WHERE depends on WHY. An ordinary signed-out launch gets the marketing
@@ -308,7 +315,7 @@ function RootGate() {
       clearSessionEnded();
       router.replace('/');
     }
-  }, [session, loading, mfaRequired, segments, router, accountGate.state]);
+  }, [session, loading, mfaRequired, setUpHold, segments, router, accountGate.state]);
 
   // The account gate outranks every other gate, and deliberately does NOT
   // require a session: a disabled user is rejected AT sign-in, so there is no
@@ -339,6 +346,17 @@ function RootGate() {
 
   if (!loading && session && locked) {
     return <BiometricLockScreen />;
+  }
+
+  // Authenticator set-up owed in this workspace, or could not be checked
+  // (set-up-hold.ts): the set-up screen replaces the navigator. After the
+  // lock; like the code screen it does not wait for `loading`, so on a cold
+  // launch it is drawn under the splash. Required here, not imported at the
+  // top: it is loaded only when a hold comes up, never on the launch path.
+  if (session && setUpHold) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- loaded only for a held session, off the launch path
+    const { AuthenticatorSetUpScreen } = require('@/components/authenticator-set-up-screen') as typeof import('@/components/authenticator-set-up-screen');
+    return <AuthenticatorSetUpScreen state={setUpHold} />;
   }
 
   return (

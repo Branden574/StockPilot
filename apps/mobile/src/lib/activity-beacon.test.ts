@@ -93,8 +93,11 @@ describe('wiring', () => {
   it('the root layout drives the beacon from the signed-in user and the route', () => {
     expect(layout).toContain("import { useActivityBeacon } from '@/lib/use-activity-beacon';");
     // The signed-in user once the session has entered its authenticator code,
-    // nobody before (docket S43b: dataUser, code-gate-wiring.test.ts).
-    expect(layout).toContain('const dataUser = session && !mfaRequired ? session.user : null;');
+    // nobody before, nor while the authenticator set-up screen holds the app
+    // (dataUser, code-gate-wiring.test.ts sections 2 and 7).
+    expect(layout).toContain(
+      'const dataUser = session && !mfaRequired && !setUpHold ? session.user : null;',
+    );
     expect(layout).toMatch(/useActivityBeacon\(\s*dataUser\?\.id \?\? null,\s*segments\.join\('\/'\)\s*\)/);
   });
 

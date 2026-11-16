@@ -151,7 +151,7 @@ describe('the customer status change on the wire', () => {
     });
   });
 
-  it('a 403 with details.reason mfa_required reads as the set-up sentence', async () => {
+  it('a 403 with details.reason mfa_required reads as the set-up sentence and asks for the set-up read', async () => {
     respondWith(
       403,
       JSON.stringify({
@@ -166,6 +166,7 @@ describe('the customer status change on the wire', () => {
       title: 'Could not update',
       message: AUTHENTICATOR_SET_UP_OWED_COPY,
       reload: false,
+      setUpRead: true,
     });
   });
 

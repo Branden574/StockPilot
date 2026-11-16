@@ -39,7 +39,14 @@ export type CustomerStatus = 'active' | 'archived';
 
 export type CustomerStatusOutcome =
   | { kind: 'saved'; status: CustomerStatus; changed: boolean }
-  | { kind: 'refused'; title: string; message: string; reload: boolean };
+  | {
+      kind: 'refused';
+      title: string;
+      message: string;
+      reload: boolean;
+      /** The answer said this account must set up an authenticator first: the screen asks for the set-up read. */
+      setUpRead?: true;
+    };
 
 /** The alert's title, the Accounts screen's own. */
 export const CUSTOMER_STATUS_FAILED_TITLE = 'Could not update';
@@ -120,6 +127,7 @@ export function customerStatusFailure(e: unknown): {
   title: string;
   message: string;
   reload: boolean;
+  setUpRead?: true;
 } {
   const say = (message: string, reload: boolean) => ({
     title: CUSTOMER_STATUS_FAILED_TITLE,
@@ -165,7 +173,9 @@ export function customerStatusFailure(e: unknown): {
   // probe, which decides whether the app signs out.
   if (status === 401) return say(SIGN_IN_AGAIN_COPY, false);
   if (status === 403) {
-    if (reason === 'mfa_required') return say(AUTHENTICATOR_SET_UP_OWED_COPY, false);
+    if (reason === 'mfa_required') {
+      return { ...say(AUTHENTICATOR_SET_UP_OWED_COPY, false), setUpRead: true };
+    }
     if (reason === 'aal2_required') return say(CUSTOMER_STATUS_COPY.codeOwed, false);
     if (code === 'module_disabled') return say(CUSTOMER_STATUS_COPY.moduleOff, false);
     // A missing permission, or a 403 with no body (an edge).
