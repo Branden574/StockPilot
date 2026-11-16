@@ -168,9 +168,10 @@ begin
   return v;
 end $$;
 -- A definition with every line tagged '-- 0464' removed: the body as it was
--- before 0464 (P2 proves it by md5).
+-- before 0464 (P4 proves it by md5). 0466 later added lines tagged '-- 0466'
+-- to both bodies (each an added line only, 0466 P1); they are removed too.
 create function pg_temp.pre0464(p_sig text) returns text language sql stable as $$
-  select regexp_replace(pg_get_functiondef(to_regprocedure(p_sig)), E'\n[^\n]*-- 0464[^\n]*', '', 'g')
+  select regexp_replace(pg_get_functiondef(to_regprocedure(p_sig)), E'\n[^\n]*-- (0464|0466)[^\n]*', '', 'g')
 $$;
 create temp table defs (k text primary key, def text not null);
 insert into defs (k, def) values
@@ -217,12 +218,14 @@ select is(
   'text|true|false|-|The retry key of the call that made this distribution (0464), set by ledger.distribute_bundle; null for a call without one and for a distribution made before 0464.',
   'P3: bundle_distributions.idempotency_key is a nullable text column with no default and no column grant');
 select is(
-  (select string_agg(v.k || '=' || md5(p.prosrc) || '|' || md5(regexp_replace(p.prosrc, E'\n[^\n]*-- 0464[^\n]*', '', 'g'))
+  -- Re-pinned by 0466 (was kit f0fac64f, rcpt ecd99069): 0466 added lines tagged
+  -- -- 0466 to both bodies (0466 P1); they are removed with this file's own.
+  (select string_agg(v.k || '=' || md5(p.prosrc) || '|' || md5(regexp_replace(p.prosrc, E'\n[^\n]*-- (0464|0466)[^\n]*', '', 'g'))
                      || '|' || (select count(*) from regexp_matches(p.prosrc, '-- 0464', 'g'))::text, ' ' order by v.k)
      from (values ('kit',  'ledger.distribute_bundle(uuid,numeric,uuid,boolean,uuid,text,text)'),
                   ('rcpt', 'ledger.post_receipt_v2(uuid,uuid,jsonb,text,text,text)')) v(k, sig)
      join pg_proc p on p.oid = v.sig::regprocedure),
-  'kit=f0fac64fbdabf5870422e7b8fc3f7df3|ebe22d594c11813464c7d50accae54a7|17 rcpt=ecd99069fa482371ac5bafeb3363b248|f044c3a1ea7b125a094a42f736db77c8|12',
+  'kit=52aa32489d62af5c89355b67f6493ea3|ebe22d594c11813464c7d50accae54a7|17 rcpt=43d8753704c547012befef950747b965|f044c3a1ea7b125a094a42f736db77c8|12',
   'P4: each body is 0464''s text, and removing its lines tagged -- 0464 (17 and 12) gives the live pre-0464 body exactly (ebe22d59, f044c3a1): the added lines are the only change');
 select is(
   (select string_agg(p.oid::regprocedure::text || ':' || p.prosecdef::text || ':' || p.proconfig::text || ':' || pg_get_userbyid(p.proowner)
@@ -270,10 +273,12 @@ begin
   end;
   return v;
 end $$;
+-- Re-pinned by 0466 (was ee07dd0a0c69b01b77f39c5791aea9e4|18 / the same second
+-- value): 0466 added tagged lines to the same two bodies (0466 P2).
 select is(
   pg_temp.ledger_fp() || ' / ' || pg_temp.ledger_fp_pre0464(),
-  'ee07dd0a0c69b01b77f39c5791aea9e4|18 / cfc031524c8052a69fceab91be550768|18',
-  'P8: the ledger.* fingerprint 0383 Z2 and 0385 Z2 pin is ee07dd0a|18 after 0464, and with the two bodies taken back to their pre-0464 text it is the pre-0464 pin (cfc03152|18) exactly: nothing else in ledger moved');
+  '7e62f415c0fee59d829acffae47f602c|18 / cfc031524c8052a69fceab91be550768|18',
+  'P8: the ledger.* fingerprint 0383 Z2 and 0385 Z2 pin is 7e62f415|18 after 0464 and 0466, and with the two bodies taken back to their pre-0464 text it is the pre-0464 pin (cfc03152|18) exactly: nothing else in ledger moved');
 
 -- ══ R. Receipts ═══════════════════════════════════════════════════════════
 insert into ids (k, id) values ('r1',  pg_temp.keep(:mgr, pg_temp.rcpt_sql(:po1, :whA, :l1, 2, 'rk-1', 'h-1'))::uuid);
@@ -336,14 +341,18 @@ select is(
 do $$ begin execute pg_temp.pre0464('ledger.post_receipt_v2(uuid,uuid,jsonb,text,text,text)'); end $$;
 select is(md5(prosrc), 'f044c3a1ea7b125a094a42f736db77c8', 'R8a: the receipt body is the pre-0464 one for the next post')
   from pg_proc where oid = 'ledger.post_receipt_v2(uuid,uuid,jsonb,text,text,text)'::regprocedure;
+-- (0466's guard on idempotency_keys is off for this one post: the pre-0464 body
+-- writes its key row without the flag.)
+alter table public.idempotency_keys disable trigger trg_zz_idempotency_keys_guard;
 insert into ids (k, id) values ('rOld', pg_temp.keep(:mgr, pg_temp.rcpt_sql(:po2, :whA, :l2, 1, 'rk-old', 'h-old'))::uuid);
+alter table public.idempotency_keys enable trigger trg_zz_idempotency_keys_guard;
 do $$ begin execute (select def from pg_temp.defs where k = 'rcpt'); end $$;
 select is(
   (select md5(prosrc) from pg_proc where oid = 'ledger.post_receipt_v2(uuid,uuid,jsonb,text,text,text)'::regprocedure)
   || '|' || (pg_temp.keep(:mgr, pg_temp.rcpt_sql(:po2, :whA, :l2, 1, 'rk-old', 'h-old'))::uuid = (select id from ids where k = 'rOld'))::text
   || '|' || (select count(*) from public.receipts where idempotency_key = 'rk-old'),
-  'ecd99069fa482371ac5bafeb3363b248|true|1',
-  'R8: a receipt posted by the pre-0464 body is answered by 0464''s body on replay');
+  '43d8753704c547012befef950747b965|true|1',
+  'R8: a receipt posted by the pre-0464 body is answered by 0464''s body (as 0466 restates it) on replay');
 -- A reversed receipt still replays to itself.
 select lives_ok(
   format($s$select pg_temp.keep(%L, format('select public.reverse_receipt(%%L, %%L)::text', %L::uuid, 'test reversal 0464'))$s$,
@@ -440,7 +449,9 @@ select is(
 do $$ begin execute pg_temp.pre0464('ledger.distribute_bundle(uuid,numeric,uuid,boolean,uuid,text,text)'); end $$;
 select is(md5(prosrc), 'ebe22d594c11813464c7d50accae54a7', 'K9a: the kit body is the pre-0464 one for the next hand-out')
   from pg_proc where oid = 'ledger.distribute_bundle(uuid,numeric,uuid,boolean,uuid,text,text)'::regprocedure;
+alter table public.idempotency_keys disable trigger trg_zz_idempotency_keys_guard;
 insert into ids (k, id) values ('dOld', pg_temp.keep(:mgr, pg_temp.kit_sql(1, 'kk-old'))::uuid);
+alter table public.idempotency_keys enable trigger trg_zz_idempotency_keys_guard;
 do $$ begin execute (select def from pg_temp.defs where k = 'kit'); end $$;
 select is(
   (select md5(prosrc) from pg_proc where oid = 'ledger.distribute_bundle(uuid,numeric,uuid,boolean,uuid,text,text)'::regprocedure)
@@ -449,8 +460,8 @@ select is(
              = (select k.created_at from public.idempotency_keys k where k.organization_id = :org and k.scope = 'bundle_distribution' and k.key = 'kk-old'))::text
   || '|' || (pg_temp.keep(:mgr, pg_temp.kit_sql(1, 'kk-old'))::uuid = (select id from ids where k = 'dOld'))::text
   || '|' || (select count(*) from public.bundle_distributions where bundle_id = :bn),
-  'f0fac64fbdabf5870422e7b8fc3f7df3|null|true|true|6',
-  'K9: a distribution made by the pre-0464 body carries no key and the time of its key row, and 0464''s body answers its replay with it');
+  '52aa32489d62af5c89355b67f6493ea3|null|true|true|6',
+  'K9: a distribution made by the pre-0464 body carries no key and the time of its key row, and 0464''s body (as 0466 restates it) answers its replay with it');
 select is(
   pg_temp.attempt('authenticated', :mgr, pg_temp.kit_sql(1, 'kk-old'),
     format('update public.bundle_distributions set distributed_at = distributed_at - interval ''1 second'' where id = %L', (select id from ids where k = 'dOld'))),

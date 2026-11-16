@@ -1,10 +1,13 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { aalFromJwt, withApiContext } from '@/lib/auth/api-context';
+import { bearerTokenFrom } from '@/lib/auth/cross-site-request';
 import { isPlatformAdmin } from '@/lib/auth/platform-admin';
+import { readVerifiedSessionClaimsOf } from '@/lib/auth/verified-claims';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { createClient } from '@/lib/supabase/server';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
 import {
   ACCOUNT_DELETE_BLOCKED_COPY,
@@ -27,6 +30,19 @@ import {
   settleFailedDelete,
   soleOwnedOrganizationsWithMembers,
 } from '@/server/lib/account-deletion';
+import {
+  ACCOUNT_DELETE_AAL2_COPY,
+  ACCOUNT_DELETE_CODE_REFUSED_COPY,
+  ACCOUNT_DELETE_CREDENTIAL_CHECK_FAILED_COPY,
+  ACCOUNT_DELETE_CREDENTIAL_PAUSED_COPY,
+  ACCOUNT_DELETE_CREDENTIAL_REQUIRED_COPY,
+  ACCOUNT_DELETE_PASSWORD_REFUSED_COPY,
+  confirmDeletionCredential,
+  deletionCredentialStillHeld,
+  deletionCredentialSupplied,
+  type DeletionConfirmedBy,
+  type SessionLevelReader,
+} from '@/server/lib/account-deletion-credential';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 
 export const runtime = 'nodejs';
@@ -44,19 +60,36 @@ export const runtime = 'nodejs';
  *
  * Contract:
  *   POST /api/v1/account/delete
- *   body: { confirm: "DELETE" }
+ *   body: { confirm: "DELETE", password?: string, code?: string, challenge?: string }
+ *         `password` is the account's current password; `code` and
+ *         `challenge` are the emailed code and the challenge
+ *         POST /api/v1/account/delete/code answered.
  *   200: { ok: true }                          // the account is gone (also when it was already gone)
  *   400: { error: "validation_error", message }
+ *   403: { error: "aal2_required", message }   // the account has an authenticator; enter its code
+ *   403: { error: "mfa_required", message }    // no password or code sent, under a policy that
+ *                                              // requires an authenticator of this member
+ *   403: { error: "password_incorrect", message } // the password sent is not correct
+ *   403: { error: "code_incorrect", message }  // the code sent is wrong, expired, or not this account's
+ *   403: { error: "credential_required", message } // the account changed during the request: confirm again
  *   403: { error: "last_owner", message }      // the only owner of an org with other members (0393),
  *                                              // also when a member joined after the check (F-5)
  *   403: { error: "platform_admin", message }  // an allowlisted platform admin's account (O-A3-7)
  *   403: { error: "account_linked_records", message } // a record still refuses it (unexpected after 0393)
- *   429: { error: "rate_limited", message }    // 5 attempts per 10 minutes
+ *   429: { error: "rate_limited", message }    // 5 attempts per 10 minutes; 5 password or code tries per 15
  *   503: { error: "check_failed", message }    // the check could not answer, or a row lock: try again
  *   500: { error: "internal_error", message }  // the delete itself failed (sessions revoked)
  *
  * Every installed phone shows `message` for any non-2xx and stays signed in
  * (settings.tsx performDelete), so these answers need no phone change.
+ *
+ * How a deletion is confirmed (server/lib/account-deletion-credential): an
+ * account with an authenticator needs its code entered (aal2); an account
+ * with none confirms with its current password or the emailed code, and then
+ * deletes whatever its organization's policy says. This route accepts a
+ * request that carries neither too, and then answers by the organization's
+ * policy, as it did before the password and the code were added (installed
+ * phones send only `confirm`).
  * Nothing is written before the delete (no profile tombstone); the
  * `user.deactivated` row is written after it succeeded (0388), after the
  * person's avatar files are removed (0393); it records the counts of the API
@@ -71,32 +104,46 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
 
-  // Enforce the org's MFA policy before this destructive action, matching the
-  // web `deleteOwnAccountAction` gateMfa() check. withApiContext resolves
-  // mfaRequired/mfaSatisfied but the route must act on them — otherwise an
-  // AAL1 bearer token could delete the account under an MFA-required policy.
-  // Error CODE chosen by enrollment, mirroring services/context.ts
-  // mfaGateError: an ENROLLED caller gets 'aal2_required' so the mobile
-  // step-up screen prompts for a TOTP code, while an unenrolled caller under
-  // an MFA-required policy keeps the original 'mfa_required' (enroll first).
-  // Telling someone who already has a factor to enroll one is a dead end.
-  if (ctx.mfaRequired && !ctx.mfaSatisfied) {
-    return NextResponse.json(
-      ctx.mfaEnrolled
-        ? {
-            error: 'aal2_required',
-            message: 'Re-authenticate with MFA before performing this action.',
-          }
-        : { error: 'mfa_required', message: 'Multi-factor authentication required.' },
-      { status: 403 },
-    );
-  }
-
-  let body: { confirm?: string } = {};
+  let body: { confirm?: unknown; password?: unknown; code?: unknown; challenge?: unknown } = {};
   try {
-    body = (await req.json()) as typeof body;
+    const parsed: unknown = await req.json();
+    if (parsed && typeof parsed === 'object') body = parsed as typeof body;
   } catch {
     // empty body falls through to validation error
+  }
+  const credential = {
+    password: body.password,
+    code: body.code,
+    challenge: body.challenge,
+  };
+  const supplied = deletionCredentialSupplied(credential);
+
+  // The verified level of this request's session, read only when the
+  // account has an authenticator: the bearer token's own claim (GoTrue
+  // accepted the token in withApiContext), or the cookie session's verified
+  // claims when they are this account's.
+  const bearer = bearerTokenFrom(req);
+  const readLevel: SessionLevelReader = bearer
+    ? async () => aalFromJwt(bearer)
+    : async () => (await readVerifiedSessionClaimsOf(await createClient(), ctx.userId))?.aal ?? null;
+
+  if (supplied === null) {
+    // No password and no code: the organization's policy decides, with the
+    // answers installed phones show. The code is chosen by enrolment, as
+    // services/context.ts mfaGateError does: an enrolled caller gets
+    // 'aal2_required' (enter the code), an unenrolled one under a requiring
+    // policy 'mfa_required'.
+    if (ctx.mfaRequired && !ctx.mfaSatisfied) {
+      return NextResponse.json(
+        ctx.mfaEnrolled
+          ? {
+              error: 'aal2_required',
+              message: 'Re-authenticate with MFA before performing this action.',
+            }
+          : { error: 'mfa_required', message: 'Multi-factor authentication required.' },
+        { status: 403 },
+      );
+    }
   }
 
   if (body.confirm !== 'DELETE') {
@@ -107,6 +154,42 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    // How the first check confirmed this request: null when it sent neither a
+    // password nor a code; 'authenticator' when the account's authenticator
+    // decided (the body's value is then never checked). Only an input to the
+    // last check below, which answers what the audit row records.
+    let confirmedBy: DeletionConfirmedBy | null = null;
+    if (supplied !== null) {
+      // The password or the code, checked before anything else is read about
+      // the account. The address is the account's current verified one, read
+      // by its id.
+      const admin = createAdminClient();
+      const address = await readAuthEmail(admin, ctx.userId);
+      if (address.kind === 'gone') return NextResponse.json({ ok: true });
+      if (address.kind === 'failed') {
+        void reportError(new Error(address.message), {
+          tag: 'account.delete.credential_address',
+          extra: { source: 'mobile' },
+        });
+        return NextResponse.json(
+          { error: 'check_failed', message: ACCOUNT_DELETE_CREDENTIAL_CHECK_FAILED_COPY },
+          { status: 503 },
+        );
+      }
+      const confirmation = await confirmDeletionCredential({
+        admin,
+        userId: ctx.userId,
+        email: address.email,
+        readLevel,
+        input: credential,
+      });
+      if (!confirmation.ok) {
+        if (confirmation.kind === 'gone') return NextResponse.json({ ok: true });
+        return credentialRefusal(confirmation.kind);
+      }
+      confirmedBy = confirmation.by;
+    }
+
     // The last-owner rule (0393), the account trigger's own predicate read
     // with the caller's client so it can name the organizations: the only
     // accepted owner (impersonation seats count as neither owners nor
@@ -223,6 +306,24 @@ export async function POST(req: NextRequest) {
     const organizationId = ctx.organizationId ?? null;
     const review = await readDeletionReviewFacts(admin, ctx.userId, organizationId, 'mobile');
 
+    // The last check before the delete: the account's factors, read again by
+    // its id, still agree with how this request was confirmed. An
+    // authenticator needs aal2. None needs the password or the code checked
+    // above; a request that sent neither passes only as the policy answer at
+    // the top allowed when the request began, so a session whose factors were
+    // removed meanwhile gets no easier path than the password or the code.
+    const held = await deletionCredentialStillHeld({
+      admin,
+      userId: ctx.userId,
+      readLevel,
+      confirmedBy,
+      allowUnconfirmedWithoutFactor: confirmedBy === null && !ctx.mfaRequired,
+    });
+    if (!held.ok) {
+      if (held.kind === 'gone') return NextResponse.json({ ok: true });
+      return credentialRefusal(held.kind);
+    }
+
     const { error: authErr } = await admin.auth.admin.deleteUser(ctx.userId);
     // deleteUser can answer an error although the account is gone: GoTrue
     // committed and the reply was lost, or another request deleted it first
@@ -279,6 +380,8 @@ export async function POST(req: NextRequest) {
         userId: ctx.userId,
         organizationId,
         reason: 'self_deletion_mobile',
+        // What the last check held, never what the request carried.
+        confirmedBy: held.by,
         createdStillActive: review.createdStillActive,
       });
     }
@@ -288,5 +391,49 @@ export async function POST(req: NextRequest) {
     return internalErrorResponse(e, 'api.v1.account.delete', {
       organizationId: ctx.organizationId,
     });
+  }
+}
+
+/** The answer for a deletion this request did not confirm. Never the password or the code. */
+function credentialRefusal(
+  kind:
+    | 'aal2_required'
+    | 'credential_required'
+    | 'password_refused'
+    | 'code_refused'
+    | 'rate_limited'
+    | 'check_failed',
+): NextResponse {
+  switch (kind) {
+    case 'aal2_required':
+      return NextResponse.json(
+        { error: 'aal2_required', message: ACCOUNT_DELETE_AAL2_COPY },
+        { status: 403 },
+      );
+    case 'credential_required':
+      return NextResponse.json(
+        { error: 'credential_required', message: ACCOUNT_DELETE_CREDENTIAL_REQUIRED_COPY },
+        { status: 403 },
+      );
+    case 'password_refused':
+      return NextResponse.json(
+        { error: 'password_incorrect', message: ACCOUNT_DELETE_PASSWORD_REFUSED_COPY },
+        { status: 403 },
+      );
+    case 'code_refused':
+      return NextResponse.json(
+        { error: 'code_incorrect', message: ACCOUNT_DELETE_CODE_REFUSED_COPY },
+        { status: 403 },
+      );
+    case 'rate_limited':
+      return NextResponse.json(
+        { error: 'rate_limited', message: ACCOUNT_DELETE_CREDENTIAL_PAUSED_COPY },
+        { status: 429 },
+      );
+    default:
+      return NextResponse.json(
+        { error: 'check_failed', message: ACCOUNT_DELETE_CREDENTIAL_CHECK_FAILED_COPY },
+        { status: 503 },
+      );
   }
 }

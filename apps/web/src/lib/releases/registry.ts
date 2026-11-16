@@ -128,7 +128,10 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whats-new-authenticator-set-up-first (2026-11-15; was: '2026-11-15T21:37:00Z'):
     // the authenticator set-up release below is dated 2026-11-15T23:48:00Z, so the placeholder is that
     // same minute.
-    publishedAt: '2026-11-15T23:48:00Z',
+    // Moved again by docs/whats-new-delete-account-confirm (2026-11-16; was: '2026-11-15T23:48:00Z'):
+    // the delete account release below is dated 2026-11-16T04:03:00Z, so the placeholder is that same
+    // minute.
+    publishedAt: '2026-11-16T04:03:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -213,6 +216,56 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'delete-account-confirm-2026-11',
+    revision: 1,
+    // #587 (squash d9917b512), web only: no phone update and no migration.
+    // Live in production since 2026-11-16 04:00Z; publishedAt is a whole
+    // minute after it went live. It went live after #582, so it sits above
+    // the authenticator set-up release and is the newest published release.
+    // Claims checked against the code at d9917b512 (paths under apps/web/src):
+    // - Where: app/(dashboard)/dashboard/settings/profile/page.tsx, the
+    //   Delete account panel with DeleteAccountButton, and app/onboarding
+    //   page.tsx (an account with no workspace), both given
+    //   lib/auth/deletion-confirm-method.ts ('authenticator' with a verified
+    //   authenticator, 'password' with none).
+    // - The words: components/settings/delete-account-copy.ts
+    //   DELETE_ACCOUNT_CONFIRM_COPY (emailCode "Email me a code instead";
+    //   codeSent: a six-digit code to the sign-in email, it works for 10
+    //   minutes, only the newest code works).
+    // - The rule: server/lib/account-deletion-credential.ts and
+    //   lib/auth/account-delete-code.ts (six digits, 10 minutes, newest only).
+    // - Before set-up: lib/auth/authenticator-set-up.ts keeps Profile open
+    //   before an authenticator is set up, and deleting the account is
+    //   confirmed by its own rule there.
+    // - The phone: apps/mobile is unchanged by #587.
+    // Who is told: every member (no audience): every member can delete their
+    // own account. The one link is /dashboard/settings/profile, which
+    // registry.test.ts lists as open to every member.
+    status: 'published',
+    title: 'Deleting your account asks for your password or an emailed code',
+    summary:
+      'On the website, Delete account in Settings, Profile now asks an account with no authenticator for its password, or for a six-digit code sent to its sign-in email. An account with an authenticator confirms with its authenticator code, as before. Nothing changes in the phone app yet.',
+    // #587 is live in production since 2026-11-16 04:00Z.
+    publishedAt: '2026-11-16T04:03:00Z',
+    entries: [
+      {
+        id: 'delete-account-password-or-emailed-code',
+        category: 'improved',
+        area: 'Account',
+        title: 'Deleting your account asks for your password or an emailed code',
+        whatChanged:
+          'On the website, Delete account in Settings, Profile now asks an account with no authenticator for its password. You can choose "Email me a code instead" and enter the six-digit code we send to your sign-in email. An account with an authenticator confirms with its authenticator code, as before.',
+        whyItMatters:
+          'Every member can confirm deleting their own account, with an authenticator or without one.',
+        howItAffectsYou:
+          'If you delete your account, have your password ready or use the emailed code. The code works for 10 minutes, and only the newest one works. If your organization requires an authenticator and you have not set one up yet, you can still delete your account from Profile. Nothing changes in the phone app yet.',
+        whatToDo:
+          'No action needed. To delete your account, open Settings, Profile, choose Delete my account and follow the steps.',
+        link: { href: '/dashboard/settings/profile', label: 'Open Profile settings' },
       },
     ],
   },

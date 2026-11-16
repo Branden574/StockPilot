@@ -220,6 +220,11 @@ const REVIEWED: Record<string, Reviewed> = {
     reason:
       "Cancels the caller's own pending email change: it only withdraws a change, and returns no data.",
   },
+  'server/actions/profile.ts#requestAccountDeletionCodeAction': {
+    kind: 'own-rule',
+    reason:
+      "Emails the caller's own account a code that confirms deleting it, to its current sign-in address, only when the account has no authenticator (an account with one is answered that its code confirms instead); the session must verify as the validated account. Returns a challenge that holds no code, and no organization data.",
+  },
   'server/actions/mfa-recovery.ts#generateMfaRecoveryCodesAction': {
     kind: 'own-rule',
     reason:
@@ -285,7 +290,7 @@ const REVIEWED: Record<string, Reviewed> = {
  */
 const ASKS_LATER: Record<string, string> = {
   'server/actions/mfa.ts#unenrollFactorAction': `requireSession() and the cookie client come first, and neither reads anything; withContext() is next, before the session's level, the policy or the factor is looked at.`,
-  'server/actions/profile.ts#deleteOwnAccountAction': `requireSession() comes first because an account with no organization must be able to delete itself; one with a membership then goes through withContext() (gateMfaForSelfService), and the deletion itself asks an account that has an authenticator for aal2 (docket S50a).`,
+  'server/actions/profile.ts#deleteOwnAccountAction': `requireSession() comes first because an account with no organization, or one that must still set up an authenticator, must be able to delete itself. Its own confirmation comes next, before anything else is read about the account: an account with an authenticator needs a session at aal2, one with none its password or the emailed code (server/lib/account-deletion-credential); the last check before the delete asks the same again. withContext() is asked only for the organization the audit row is filed under.`,
 };
 
 /* ───────────────────────────── the reading ───────────────────────────── */

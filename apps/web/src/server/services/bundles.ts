@@ -111,18 +111,21 @@ export interface DistributionPreview {
   totalShortageUnits: number;
 }
 
+/** One row of a kit's distribution history, as the kit page lists it. */
 export interface BundleDistributionRow {
   id: string;
-  organization_id: string;
-  bundle_id: string;
   warehouse_id: string;
   quantity: number;
   schedule_event_id: string | null;
   notes: string | null;
   shortage_recorded: boolean;
-  distributed_by: string | null;
   distributed_at: string;
 }
+
+/** The columns recentDistributions reads: the ones the kit page shows, and no
+ *  other (the row also carries its retry key, which no page shows). */
+export const RECENT_DISTRIBUTION_COLUMNS =
+  'id, warehouse_id, quantity, schedule_event_id, notes, shortage_recorded, distributed_at';
 
 export interface CreateBundleInput {
   name: string;
@@ -570,7 +573,7 @@ export class BundlesService {
     assertPermission(this.ctx, 'items:read');
     let query = this.ctx.supabase
       .from('bundle_distributions')
-      .select('*')
+      .select(RECENT_DISTRIBUTION_COLUMNS)
       .eq('organization_id', this.ctx.organizationId)
       .order('distributed_at', { ascending: false })
       .limit(opts.limit ?? 50);

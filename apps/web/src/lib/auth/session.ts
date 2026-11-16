@@ -488,8 +488,9 @@ export const requireSession = cache(async (): Promise<ServerSession> => {
  * made from those pages: on the security page setting up an authenticator and
  * switching organization run; on the profile page the page opens and the
  * appearance setting works, while the profile's own actions (name, avatar,
- * email, deleting the account) reach their own authenticator check, which
- * answers that one is required.
+ * email) reach their own authenticator check, which answers that one is
+ * required. Deleting the account asks for the session only and is confirmed
+ * by its own rule (server/lib/account-deletion-credential).
  *
  * ONE EXIT. The context is resolved by resolveOrgContext() below, and this is
  * the only place its answer is handed to a page or an action, always through

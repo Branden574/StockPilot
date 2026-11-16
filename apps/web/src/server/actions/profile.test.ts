@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeSupabaseStub } from '@/test/supabase-mock';
 import { verifiedSessionAuth } from '@/test/verified-session-stub';
@@ -15,7 +15,11 @@ vi.mock('next/cache', () => ({ revalidatePath: vi.fn(), revalidateTag: vi.fn() }
 // Force a stable Supabase URL so the avatar prefix validation is
 // deterministic across local + CI environments.
 vi.mock('@/lib/env', () => ({
-  env: { NEXT_PUBLIC_SUPABASE_URL: 'https://supa.example.com' },
+  env: {
+    NEXT_PUBLIC_SUPABASE_URL: 'https://supa.example.com',
+    NEXT_PUBLIC_APP_URL: 'https://app.example.test',
+    SUPABASE_SERVICE_ROLE_KEY: 'example-service-key-for-tests',
+  },
 }));
 
 const sessionState = {
@@ -159,7 +163,9 @@ const {
       /** The platform-admin check's email read (S50a), and review R7: asked
        *  again after deleteUser answered an error. */
       getUserById: vi.fn(async (_userId: string) => ({
-        data: { user: { id: 'user-1' } as { id: string; email?: string | null } | null },
+        data: {
+          user: { id: 'user-1', email: 'u@example.test' } as { id: string; email?: string | null } | null,
+        },
         error: null as { message: string; status?: number; code?: string } | null,
       })),
       /** S50a: the last check's factor read, by the validated user's id. */
@@ -236,6 +242,29 @@ vi.mock('@/server/services/audit', () => ({
 
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: checkRateLimitMock }));
 
+// The password an account with no authenticator confirms a deletion with,
+// checked on a separate client (lib/auth/verify-password): right by default.
+const { verifyPasswordMock } = vi.hoisted(() => ({
+  verifyPasswordMock: vi.fn(
+    async (
+      _email: string,
+      _password: string,
+    ): Promise<
+      { ok: true } | { ok: false; reason: 'invalid_password' | 'internal_error'; message: string }
+    > => ({ ok: true }),
+  ),
+}));
+vi.mock('@/lib/auth/verify-password', () => ({ verifyPasswordSideChannel: verifyPasswordMock }));
+const PASSWORD = 'example-password-1';
+
+// The deletion-code email; a test reads the code from it, as the person does.
+const { sendEmailMock } = vi.hoisted(() => ({
+  sendEmailMock: vi.fn(async (_m: { to: string; subject: string; text: string; html: string }) => ({
+    ok: true,
+  })),
+}));
+vi.mock('@/lib/email/resend', () => ({ sendEmail: sendEmailMock }));
+
 vi.mock('@/server/services/platform/sessions', () => ({
   revokeAllSessionsForUser: revokeAllSessionsForUserMock,
 }));
@@ -285,8 +314,12 @@ import {
 
 import { err } from '@stockpilot/core';
 
+import { signAccountDeleteChallenge } from '@/lib/auth/account-delete-code';
+import { ACCOUNT_DELETE_CODE_SEND_FAILED_COPY } from '@/server/lib/account-deletion-credential';
+
 import {
   deleteOwnAccountAction,
+  requestAccountDeletionCodeAction,
   setAvatarUrlAction,
   setOrgLogoUrlAction,
   updateProfileNameAction,
@@ -311,9 +344,14 @@ beforeEach(() => {
   mfaState.currentLevel = 'aal1';
   mfaState.sessionUserId = 'user-1';
   adminAuth.deleteUser.mockImplementation(async () => ({ error: null }));
-  adminAuth.getUserById.mockImplementation(async () => ({ data: { user: { id: 'user-1' } }, error: null }));
+  adminAuth.getUserById.mockImplementation(async () => ({
+    data: { user: { id: 'user-1', email: 'u@example.test' } },
+    error: null,
+  }));
   adminRpc.mockImplementation(async () => ({ data: { deletable: true }, error: null }));
   checkRateLimitMock.mockImplementation(async () => ({ allowed: true, count: 1, resetAt: 0 }));
+  verifyPasswordMock.mockImplementation(async () => ({ ok: true }));
+  sendEmailMock.mockImplementation(async () => ({ ok: true }));
   insertAuditRowReportedMock.mockImplementation(async () => true);
   revokeAllSessionsForUserMock.mockImplementation(async () => ({ ok: true, sessionIds: [] }));
   platformAdmin.getVerifiedEmail.mockImplementation(async () => 'u@example.test');
@@ -856,29 +894,38 @@ describe('setOrgLogoUrlAction', () => {
   });
 });
 
+/**
+ * The cookie client for a deletion test: `tables` as given, and the session
+ * legs driven from mfaState: the factor list is GoTrue's user (getUser), the
+ * level the verified session claims, each answering for
+ * mfaState.sessionUserId; signOut ends the browser's own session.
+ */
+function sessionStub(tables: Parameters<typeof makeSupabaseStub>[0]) {
+  const stub = makeSupabaseStub(tables);
+  stub.client.auth.getUser.mockImplementation(async () => ({
+    data: { user: { id: mfaState.sessionUserId, factors: mfaState.totp } },
+    error: null,
+  }));
+  Object.assign(
+    stub.client.auth,
+    verifiedSessionAuth(() => ({ sub: mfaState.sessionUserId, aal: mfaState.currentLevel })),
+  );
+  (stub.client.auth as unknown as { signOut: typeof cookieSignOut }).signOut = cookieSignOut;
+  return stub;
+}
+
+/** The calls to the deletion's own dry-run limit (the password has its own). */
+const dryRunLimitCalls = () =>
+  checkRateLimitMock.mock.calls.filter((c) => (c as unknown[])[0] === 'account-delete:user-1');
+
 describe('deleteOwnAccountAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sessionState.role = 'admin';
-    stubHolder.stub = makeSupabaseStub({
+    stubHolder.stub = sessionStub({
       'organization_members.select': { data: [], error: null },
       'user_profiles.update': { data: null, error: null },
     });
-    // The session MFA legs (all an org-less user has — there is no org policy
-    // to consult) are driven from mfaState: the factor list is GoTrue's user
-    // (getUser), the level the verified session claims (S50a), each answering
-    // for mfaState.sessionUserId.
-    stubHolder.stub.client.auth.getUser.mockImplementation(async () => ({
-      data: { user: { id: mfaState.sessionUserId, factors: mfaState.totp } },
-      error: null,
-    }));
-    Object.assign(
-      stubHolder.stub.client.auth,
-      verifiedSessionAuth(() => ({ sub: mfaState.sessionUserId, aal: mfaState.currentLevel })),
-    );
-    // The browser's own session, ended after a successful delete (walk B9).
-    (stubHolder.stub.client.auth as unknown as { signOut: typeof cookieSignOut }).signOut =
-      cookieSignOut;
     cookieSignOut.mockImplementation(async () => ({ error: null }));
     // No API keys, webhooks, links or subscriptions unless a test says so.
     adminTables.from = makeSupabaseStub().client.from;
@@ -912,7 +959,7 @@ describe('deleteOwnAccountAction', () => {
       order.push('avatars');
       return { data: [], error: null };
     });
-    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
     expect(result.ok).toBe(true);
     // Re-pinned by 0393 (was ['check', 'deleteUser', 'audit']): the avatar
     // files are removed once the account is gone, before the audit row.
@@ -952,7 +999,7 @@ describe('deleteOwnAccountAction', () => {
       data: [{ name: 'avatar.webp' }, { name: 'old.png' }],
       error: null,
     }));
-    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
     expect(result.ok).toBe(true);
     expect(avatarStorage.list).toHaveBeenCalledWith('user-1', { limit: 1000 });
     expect(avatarStorage.remove).toHaveBeenCalledWith(['user-1/avatar.webp', 'user-1/old.png']);
@@ -963,7 +1010,7 @@ describe('deleteOwnAccountAction', () => {
 
   it('a failed avatar removal never changes the answer (the account is gone): reported, audit row still written', async () => {
     avatarStorage.list.mockImplementationOnce(async () => ({ data: null, error: { message: 'storage down' } }));
-    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
     expect(result.ok).toBe(true);
     expect(insertAuditRowReportedMock).toHaveBeenCalledTimes(1);
     expect(reportErrorMock).toHaveBeenCalledWith(
@@ -982,7 +1029,7 @@ describe('deleteOwnAccountAction', () => {
       error: null,
     }));
     platformAdmin.isPlatformAdmin.mockImplementationOnce(() => true);
-    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('forbidden');
@@ -994,7 +1041,7 @@ describe('deleteOwnAccountAction', () => {
     // Never the profile email the person can edit (session.email 'u@example.test').
     expect(platformAdmin.isPlatformAdmin).toHaveBeenCalledWith('platform-admin@example.test');
     expect(stubHolder.stub!.fromCalls).not.toContain('organization_members');
-    expect(checkRateLimitMock).not.toHaveBeenCalled();
+    expect(dryRunLimitCalls()).toEqual([]);
     expect(adminRpc).not.toHaveBeenCalled();
     expect(adminAuth.deleteUser).not.toHaveBeenCalled();
     expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
@@ -1008,7 +1055,7 @@ describe('deleteOwnAccountAction', () => {
       data: { user: null },
       error: { message: 'upstream unavailable', status: 503 },
     }));
-    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('internal_error');
@@ -1039,7 +1086,7 @@ describe('deleteOwnAccountAction', () => {
         message: 'User not found',
       },
     }));
-    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
     expect(result.ok).toBe(true);
     expect(adminRpc).not.toHaveBeenCalled();
     expect(adminAuth.deleteUser).not.toHaveBeenCalled();
@@ -1054,20 +1101,21 @@ describe('deleteOwnAccountAction', () => {
    */
   describe('the last check before the delete (S50a)', () => {
     it('runs after the database check and before the delete', async () => {
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(true);
       expect(adminAuth.listFactors).toHaveBeenCalledWith({ userId: 'user-1' });
-      expect(adminAuth.listFactors.mock.invocationCallOrder[0]).toBeGreaterThan(
+      // The first read is the confirmation's, before the check; the last is this one.
+      const last = adminAuth.listFactors.mock.invocationCallOrder.at(-1)!;
+      expect(adminAuth.listFactors.mock.invocationCallOrder[0]).toBeLessThan(
         adminRpc.mock.invocationCallOrder[0]!,
       );
-      expect(adminAuth.listFactors.mock.invocationCallOrder[0]).toBeLessThan(
-        adminAuth.deleteUser.mock.invocationCallOrder[0]!,
-      );
+      expect(last).toBeGreaterThan(adminRpc.mock.invocationCallOrder[0]!);
+      expect(last).toBeLessThan(adminAuth.deleteUser.mock.invocationCallOrder[0]!);
     });
 
     it("a verified session that is not the validated user's: sign in again, nothing deleted or written", async () => {
       mfaState.sessionUserId = 'user-2';
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result).toEqual({
         ok: false,
         error: {
@@ -1085,7 +1133,7 @@ describe('deleteOwnAccountAction', () => {
     it('an authenticator still owed at aal1: refused with aal2_required, nothing deleted', async () => {
       mfaState.totp = [{ status: 'verified' }];
       mfaState.currentLevel = 'aal1';
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result).toMatchObject({
         ok: false,
         error: { code: 'forbidden', details: { reason: 'aal2_required' } },
@@ -1098,7 +1146,7 @@ describe('deleteOwnAccountAction', () => {
         data: null,
         error: { message: 'service unavailable' },
       }));
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result).toMatchObject({ ok: false, error: { code: 'internal_error' } });
       expect(adminAuth.deleteUser).not.toHaveBeenCalled();
     });
@@ -1106,7 +1154,7 @@ describe('deleteOwnAccountAction', () => {
     it('an authenticator at aal2: deleted', async () => {
       mfaState.totp = [{ status: 'verified' }];
       mfaState.currentLevel = 'aal2';
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(true);
       expect(adminAuth.deleteUser).toHaveBeenCalledWith('user-1');
     });
@@ -1116,7 +1164,7 @@ describe('deleteOwnAccountAction', () => {
     cookieSignOut.mockImplementationOnce(async () => {
       throw new Error('cookie store unavailable');
     });
-    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
     expect(result.ok).toBe(true);
     expect(adminAuth.deleteUser).toHaveBeenCalledTimes(1);
     expect(insertAuditRowReportedMock).toHaveBeenCalledTimes(1);
@@ -1131,9 +1179,9 @@ describe('deleteOwnAccountAction', () => {
       data: { deletable: false, reason: 'blocked', sqlstate: '23503' },
       error: null,
     }));
-    await deleteOwnAccountAction({ confirm: 'DELETE' });
+    await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
     adminAuth.deleteUser.mockImplementationOnce(async () => ({ error: { message: 'boom' } }));
-    await deleteOwnAccountAction({ confirm: 'DELETE' });
+    await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
     expect(cookieSignOut).not.toHaveBeenCalled();
   });
 
@@ -1151,7 +1199,7 @@ describe('deleteOwnAccountAction', () => {
       },
       error: null,
     }));
-    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('conflict');
@@ -1188,7 +1236,7 @@ describe('deleteOwnAccountAction', () => {
         data: { deletable: false, reason: 'blocked', sqlstate, constraint: null, table: null },
         error: null,
       }));
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe('internal_error');
@@ -1203,7 +1251,7 @@ describe('deleteOwnAccountAction', () => {
 
   it('a failed check fails CLOSED: nothing deleted, nothing written, the failure reported', async () => {
     adminRpc.mockImplementationOnce(async () => ({ data: null, error: { code: '57014' } }));
-    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('internal_error');
     expect(adminAuth.deleteUser).not.toHaveBeenCalled();
@@ -1217,14 +1265,17 @@ describe('deleteOwnAccountAction', () => {
 
   it('an unknown answer from the check fails closed too', async () => {
     adminRpc.mockImplementationOnce(async () => ({ data: { reason: 'no_user' }, error: null }));
-    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
     expect(result.ok).toBe(false);
     expect(adminAuth.deleteUser).not.toHaveBeenCalled();
   });
 
   it('is rate limited before the check (5 per 10 minutes per user)', async () => {
-    checkRateLimitMock.mockImplementationOnce(async () => ({ allowed: false, count: 5, resetAt: 0 }));
-    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    checkRateLimitMock.mockImplementation((async (key: string) =>
+      key === 'account-delete:user-1'
+        ? { allowed: false, count: 5, resetAt: 0 }
+        : { allowed: true, count: 1, resetAt: 0 }) as never);
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('rate_limited');
     expect(checkRateLimitMock).toHaveBeenCalledWith('account-delete:user-1', 5, 600_000);
@@ -1237,7 +1288,7 @@ describe('deleteOwnAccountAction', () => {
   // members is told which organization and what to do, as a conflict.
   it('refuses the only owner of an org with other members, naming it, before the rate limit and the check', async () => {
     let n = 0;
-    stubHolder.stub = makeSupabaseStub({
+    stubHolder.stub = sessionStub({
       'organization_members.select': () => {
         n += 1;
         return n === 1
@@ -1247,7 +1298,7 @@ describe('deleteOwnAccountAction', () => {
       'organizations.select': { data: [{ id: 'org-1', name: 'Learn4Life' }], error: null },
       'user_profiles.update': { data: null, error: null },
     });
-    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('conflict');
@@ -1256,7 +1307,7 @@ describe('deleteOwnAccountAction', () => {
       );
       expect((result.error.details as { reason?: string } | undefined)?.reason).toBe('last_owner');
     }
-    expect(checkRateLimitMock).not.toHaveBeenCalled();
+    expect(dryRunLimitCalls()).toEqual([]);
     expect(adminRpc).not.toHaveBeenCalled();
     expect(adminAuth.deleteUser).not.toHaveBeenCalled();
     expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
@@ -1264,7 +1315,7 @@ describe('deleteOwnAccountAction', () => {
 
   it('an owner whose organization has a second owner is not refused (the trigger agrees)', async () => {
     let n = 0;
-    stubHolder.stub = makeSupabaseStub({
+    stubHolder.stub = sessionStub({
       'organization_members.select': () => {
         n += 1;
         return n === 1
@@ -1285,7 +1336,7 @@ describe('deleteOwnAccountAction', () => {
       stubHolder.stub.client.auth,
       verifiedSessionAuth(() => ({ sub: mfaState.sessionUserId, aal: mfaState.currentLevel })),
     );
-    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
     expect(result.ok).toBe(true);
     expect(adminAuth.deleteUser).toHaveBeenCalledWith('user-1');
   });
@@ -1303,7 +1354,7 @@ describe('deleteOwnAccountAction', () => {
       },
       error: null,
     }));
-    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('conflict');
@@ -1326,7 +1377,7 @@ describe('deleteOwnAccountAction', () => {
     ['other-members', 2],
   ])('a failed %s read refuses the delete with a plain sentence, reports it and changes nothing', async (_label, failAt) => {
     let n = 0;
-    stubHolder.stub = makeSupabaseStub({
+    stubHolder.stub = sessionStub({
       'organization_members.select': () => {
         n += 1;
         if (n === failAt) return { data: null, error: { message: 'fetch failed' } };
@@ -1334,7 +1385,7 @@ describe('deleteOwnAccountAction', () => {
       },
       'user_profiles.update': { data: null, error: null },
     });
-    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('internal_error');
@@ -1354,7 +1405,7 @@ describe('deleteOwnAccountAction', () => {
   });
 
   it('does not revoke sessions on the happy path', async () => {
-    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
     expect(result.ok).toBe(true);
     expect(revokeAllSessionsForUserMock).not.toHaveBeenCalled();
   });
@@ -1379,7 +1430,7 @@ describe('deleteOwnAccountAction', () => {
     // audit()'s organization gate then dropped for a person with no org): the
     // row is now written after the delete with organization_id null.
     it('deletes the account instead of dying on the org gate, and still writes the audit row', async () => {
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(true);
       expect(stubHolder.stub!.chains.get('user_profiles.update')).toBeUndefined();
       expect(adminAuth.deleteUser).toHaveBeenCalledWith('user-1');
@@ -1398,7 +1449,7 @@ describe('deleteOwnAccountAction', () => {
       // factor has to be satisfied whatever (or whether) an org policy says.
       mfaState.totp = [{ status: 'verified' }];
       mfaState.currentLevel = 'aal1';
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe('forbidden');
@@ -1412,19 +1463,20 @@ describe('deleteOwnAccountAction', () => {
     it('lets an enrolled user through once the session is at aal2', async () => {
       mfaState.totp = [{ status: 'verified' }];
       mfaState.currentLevel = 'aal2';
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(true);
     });
 
     it('fails CLOSED when the factor list cannot be read', async () => {
-      // Mirrors resolveMfaState in services/context.ts: an unreadable MFA state
-      // must never be treated as "no MFA required" on a destructive action.
-      stubHolder.stub!.client.auth.getUser.mockImplementation(async () => {
-        throw new Error('network');
-      });
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.error.code).toBe('forbidden');
+      // An unreadable factor list must never read as "no authenticator" on a
+      // destructive action: nothing is checked or deleted, try again.
+      adminAuth.listFactors.mockImplementationOnce(async () => ({
+        data: null,
+        error: { message: 'service unavailable' },
+      }));
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
+      expect(result).toMatchObject({ ok: false, error: { code: 'internal_error' } });
+      expect(verifyPasswordMock).not.toHaveBeenCalled();
       expect(adminAuth.deleteUser).not.toHaveBeenCalled();
     });
 
@@ -1432,7 +1484,7 @@ describe('deleteOwnAccountAction', () => {
     // verified level, each held to the user requireSession() validated.
     it("a factor list that is not the validated user's: sign in again, nothing deleted", async () => {
       mfaState.sessionUserId = 'user-2';
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result).toEqual({
         ok: false,
         error: {
@@ -1444,17 +1496,17 @@ describe('deleteOwnAccountAction', () => {
       expect(adminAuth.deleteUser).not.toHaveBeenCalled();
     });
 
-    it("an enrolled user whose verified level is not their own session's is not at aal2", async () => {
+    it("an enrolled user whose verified level is another account's session's: sign in again, nothing deleted", async () => {
       mfaState.totp = [{ status: 'verified' }];
       mfaState.currentLevel = 'aal2';
       stubHolder.stub!.client.auth.getSession = verifiedSessionAuth(() => ({
         sub: 'user-2',
         aal: 'aal2',
       })).getSession;
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result).toMatchObject({
         ok: false,
-        error: { code: 'forbidden', details: { reason: 'aal2_required' } },
+        error: { code: 'unauthenticated', details: { reason: 'session_changed' } },
       });
       expect(adminAuth.deleteUser).not.toHaveBeenCalled();
     });
@@ -1462,7 +1514,7 @@ describe('deleteOwnAccountAction', () => {
     it('reads neither listFactors() nor the unverified level', async () => {
       mfaState.totp = [{ status: 'verified' }];
       mfaState.currentLevel = 'aal2';
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(true);
       expect(stubHolder.stub!.client.auth.mfa.listFactors).not.toHaveBeenCalled();
       expect(
@@ -1471,53 +1523,377 @@ describe('deleteOwnAccountAction', () => {
     });
   });
 
-  it('keeps the org MFA policy for a member WHO HAS an org', async () => {
-    // Behaviour pin: the org-less path must not become a way around the org's
-    // own mfa_policy. A member still goes through withContext().
-    mfaState.orgPolicyRequires = true;
-    mfaState.satisfied = false;
-    mfaState.enrolled = true;
-    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe('forbidden');
-      expect((result.error.details as { reason?: string } | undefined)?.reason).toBe(
-        'aal2_required',
-      );
-    }
-    expect(adminAuth.deleteUser).not.toHaveBeenCalled();
-  });
-
   /**
-   * The action reads the person's memberships twice: once at the top, and once
-   * before the delete. A list that cannot be read is not "no workspace":
-   * nothing is deleted and the person is asked to try again.
+   * How a deletion is confirmed, whatever the organization's authenticator
+   * policy says: an account with a verified authenticator needs a session at
+   * aal2; an account with none needs its current password or the code
+   * emailed to it.
    */
-  describe('a membership list that cannot be read', () => {
-    it('the first read: nothing is deleted or written, try again', async () => {
-      authState.membershipsUnreadableAt = 1;
+  describe('the confirmation', () => {
+    const OTHER_USER = '22222222-2222-4222-8222-222222222222';
+    /** The code the last email carried, read as the person reads it. */
+    const codeFromEmail = () => {
+      const m = (sendEmailMock.mock.calls.at(-1)?.[0]?.text ?? '').match(/\n([0-9]{6})\n/);
+      if (!m) throw new Error('no code in the email');
+      return m[1]!;
+    };
+    /** The organization requires an authenticator of this member, who has none. */
+    const requiringOrgWithoutFactor = () => {
+      mfaState.orgPolicyRequires = true;
+      mfaState.satisfied = false;
+      mfaState.enrolled = false;
+    };
+
+    it('a verified authenticator at aal2: deleted without a password', async () => {
+      mfaState.totp = [{ status: 'verified' }];
+      mfaState.currentLevel = 'aal2';
       const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
-      expect(result).toEqual(err('internal_error', ACCOUNT_DELETE_RETRY_COPY));
+      expect(result.ok).toBe(true);
+      expect(verifyPasswordMock).not.toHaveBeenCalled();
+      expect(adminAuth.deleteUser).toHaveBeenCalledWith('user-1');
+    });
+
+    it('a verified authenticator at aal1: the code is owed, even with a correct password; nothing deleted', async () => {
+      mfaState.totp = [{ status: 'verified' }];
+      mfaState.currentLevel = 'aal1';
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: 'forbidden', details: { reason: 'aal2_required' } },
+      });
+      expect(verifyPasswordMock).not.toHaveBeenCalled();
       expect(adminAuth.deleteUser).not.toHaveBeenCalled();
-      expect(checkRateLimitMock).not.toHaveBeenCalled();
+    });
+
+    it('no authenticator in an organization that requires one: deleted with the password, never mfa_required', async () => {
+      requiringOrgWithoutFactor();
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
+      expect(result.ok).toBe(true);
+      expect(verifyPasswordMock).toHaveBeenCalledWith('u@example.test', PASSWORD);
+      expect(adminAuth.deleteUser).toHaveBeenCalledWith('user-1');
+    });
+
+    it('no authenticator in an organization that requires one, nothing sent: a password or a code is asked for, nothing deleted', async () => {
+      requiringOrgWithoutFactor();
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: 'forbidden', details: { reason: 'credential_required' } },
+      });
+      expect(adminRpc).not.toHaveBeenCalled();
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+    });
+
+    it('no authenticator in an Optional organization: the typed word alone no longer deletes; the password does', async () => {
+      expect(await deleteOwnAccountAction({ confirm: 'DELETE' })).toMatchObject({
+        ok: false,
+        error: { details: { reason: 'credential_required' } },
+      });
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+      expect((await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD })).ok).toBe(true);
+      expect(adminAuth.deleteUser).toHaveBeenCalledTimes(1);
+    });
+
+    it('a session that claims aal2 with no authenticator left: a password or a code is still asked for', async () => {
+      mfaState.totp = [];
+      mfaState.currentLevel = 'aal2';
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result).toMatchObject({ ok: false, error: { details: { reason: 'credential_required' } } });
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+    });
+
+    it('confirmed with the authenticator, and the factors are gone by the last check: nothing deleted', async () => {
+      mfaState.currentLevel = 'aal2';
+      adminAuth.listFactors
+        .mockImplementationOnce(async () => ({
+          data: { factors: [{ id: 'f1', factor_type: 'totp', status: 'verified' }] },
+          error: null,
+        }))
+        .mockImplementationOnce(async () => ({ data: { factors: [] }, error: null }));
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: 'forbidden', details: { reason: 'credential_required' } },
+      });
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
       expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
-      expect(revokeAllSessionsForUserMock).not.toHaveBeenCalled();
-      expect(reportErrorMock).toHaveBeenCalledTimes(1);
-      expect(reportErrorMock).toHaveBeenCalledWith(expect.any(Error), {
-        tag: 'account.delete.membership_read',
-        extra: { source: 'web' },
+    });
+
+    it('a wrong password: a plain refusal, nothing deleted, and the password is never reported', async () => {
+      verifyPasswordMock.mockImplementation(async () => ({
+        ok: false,
+        reason: 'invalid_password',
+        message: 'Password is incorrect.',
+      }));
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: 'forbidden', details: { reason: 'password_refused' } },
+      });
+      expect(adminRpc).not.toHaveBeenCalled();
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+      expect(JSON.stringify(result)).not.toContain(PASSWORD);
+      expect(JSON.stringify(reportErrorMock.mock.calls)).not.toContain(PASSWORD);
+    });
+
+    it('the password tries are limited per account: past the limit nothing is checked or deleted', async () => {
+      checkRateLimitMock.mockImplementation((async (key: string) =>
+        key === 'account-delete-password:user-1'
+          ? { allowed: false, count: 6, resetAt: 0 }
+          : { allowed: true, count: 1, resetAt: 0 }) as never);
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
+      expect(result).toMatchObject({ ok: false, error: { code: 'rate_limited' } });
+      expect(checkRateLimitMock).toHaveBeenCalledWith('account-delete-password:user-1', 5, 900_000, 'closed');
+      expect(verifyPasswordMock).not.toHaveBeenCalled();
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+    });
+
+    describe('the audit row says how the deletion was confirmed, never with what', () => {
+      const confirmedBy = () =>
+        (insertAuditRowReportedMock.mock.calls[0]?.[0] as { metadata?: Record<string, unknown> })
+          ?.metadata?.confirmed_by;
+
+      it('authenticator', async () => {
+        mfaState.totp = [{ status: 'verified' }];
+        mfaState.currentLevel = 'aal2';
+        expect((await deleteOwnAccountAction({ confirm: 'DELETE' })).ok).toBe(true);
+        expect(confirmedBy()).toBe('authenticator');
+      });
+
+      /** The limiter keys this request counted (the deletion's own dry-run key aside). */
+      const credentialKeysCounted = () =>
+        (checkRateLimitMock.mock.calls as unknown as Array<[string]>)
+          .map((c) => c[0])
+          .filter((k) => k.startsWith('account-delete-password:') || k.startsWith('account-delete-code-'));
+
+      it('authenticator at aal2 with a password in the body too: still authenticator; the password is not checked, counted or reported', async () => {
+        mfaState.totp = [{ status: 'verified' }];
+        mfaState.currentLevel = 'aal2';
+        expect((await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD })).ok).toBe(
+          true,
+        );
+        expect(confirmedBy()).toBe('authenticator');
+        expect(verifyPasswordMock).not.toHaveBeenCalled();
+        expect(credentialKeysCounted()).toEqual([]);
+        expect(JSON.stringify(reportErrorMock.mock.calls)).not.toContain(PASSWORD);
+        expect(JSON.stringify(insertAuditRowReportedMock.mock.calls)).not.toContain(PASSWORD);
+      });
+
+      it('authenticator at aal2 with a code and challenge in the body too: still authenticator; the code is not checked or counted', async () => {
+        mfaState.totp = [{ status: 'verified' }];
+        mfaState.currentLevel = 'aal2';
+        expect(
+          (await deleteOwnAccountAction({ confirm: 'DELETE', code: '123456', challenge: 'v1.x' }))
+            .ok,
+        ).toBe(true);
+        expect(confirmedBy()).toBe('authenticator');
+        expect(credentialKeysCounted()).toEqual([]);
+        expect(JSON.stringify(reportErrorMock.mock.calls)).not.toContain('123456');
+      });
+
+      it('the last check decides: a password checked, then an authenticator added and the session at aal2 by the last check: authenticator', async () => {
+        mfaState.currentLevel = 'aal2';
+        adminAuth.listFactors
+          .mockImplementationOnce(async () => ({ data: { factors: [] }, error: null }))
+          .mockImplementationOnce(async () => ({
+            data: { factors: [{ id: 'f1', factor_type: 'totp', status: 'verified' }] },
+            error: null,
+          }));
+        expect((await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD })).ok).toBe(
+          true,
+        );
+        expect(verifyPasswordMock).toHaveBeenCalledTimes(1);
+        expect(confirmedBy()).toBe('authenticator');
+      });
+
+      it('password, and the password is not in the row', async () => {
+        expect((await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD })).ok).toBe(
+          true,
+        );
+        expect(confirmedBy()).toBe('password');
+        expect(JSON.stringify(insertAuditRowReportedMock.mock.calls)).not.toContain(PASSWORD);
+      });
+
+      it('emailed_code, and the code and challenge are not in the row', async () => {
+        const sent = await requestAccountDeletionCodeAction();
+        if (!sent.ok) throw new Error('not sent');
+        const code = codeFromEmail();
+        expect(
+          (await deleteOwnAccountAction({ confirm: 'DELETE', code, challenge: sent.data.challenge }))
+            .ok,
+        ).toBe(true);
+        expect(confirmedBy()).toBe('emailed_code');
+        const rows = JSON.stringify(insertAuditRowReportedMock.mock.calls);
+        expect(rows).not.toContain(sent.data.challenge);
+        expect(rows).not.toMatch(new RegExp(`"${code}"`));
       });
     });
 
-    it('the second read: nothing is deleted or written, try again', async () => {
-      authState.membershipsUnreadableAt = 2;
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    describe('the emailed code', () => {
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it('is sent to the current address, and deletes the account with its challenge, under a requiring policy too', async () => {
+        requiringOrgWithoutFactor();
+        const sent = await requestAccountDeletionCodeAction();
+        if (!sent.ok) throw new Error('not sent');
+        expect(sendEmailMock).toHaveBeenCalledTimes(1);
+        expect(sendEmailMock.mock.calls[0]![0].to).toBe('u@example.test');
+        const code = codeFromEmail();
+        expect(JSON.stringify(sent)).not.toContain(code);
+        const result = await deleteOwnAccountAction({
+          confirm: 'DELETE',
+          code,
+          challenge: sent.data.challenge,
+        });
+        expect(result.ok).toBe(true);
+        expect(verifyPasswordMock).not.toHaveBeenCalled();
+        expect(adminAuth.deleteUser).toHaveBeenCalledWith('user-1');
+      });
+
+      it('a wrong code: a plain refusal, nothing deleted', async () => {
+        const sent = await requestAccountDeletionCodeAction();
+        if (!sent.ok) throw new Error('not sent');
+        const wrong = codeFromEmail() === '000000' ? '000001' : '000000';
+        const result = await deleteOwnAccountAction({
+          confirm: 'DELETE',
+          code: wrong,
+          challenge: sent.data.challenge,
+        });
+        expect(result).toMatchObject({ ok: false, error: { details: { reason: 'code_refused' } } });
+        expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+      });
+
+      it('an expired code (after ten minutes): refused, nothing deleted', async () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date('2026-11-15T12:00:00Z'));
+        const sent = await requestAccountDeletionCodeAction();
+        if (!sent.ok) throw new Error('not sent');
+        const code = codeFromEmail();
+        vi.setSystemTime(new Date('2026-11-15T12:10:01Z'));
+        const result = await deleteOwnAccountAction({
+          confirm: 'DELETE',
+          code,
+          challenge: sent.data.challenge,
+        });
+        expect(result).toMatchObject({ ok: false, error: { details: { reason: 'code_refused' } } });
+        expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+      });
+
+      it("another account's code and challenge: refused for this account, nothing deleted", async () => {
+        const other = signAccountDeleteChallenge('example-service-key-for-tests', {
+          userId: OTHER_USER,
+          email: 'other@example.test',
+          code: '123456',
+          now: new Date(),
+        })!;
+        const result = await deleteOwnAccountAction({
+          confirm: 'DELETE',
+          code: '123456',
+          challenge: other.challenge,
+        });
+        expect(result).toMatchObject({ ok: false, error: { details: { reason: 'code_refused' } } });
+        expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+      });
+
+      it('the code tries are limited per account', async () => {
+        const sent = await requestAccountDeletionCodeAction();
+        if (!sent.ok) throw new Error('not sent');
+        checkRateLimitMock.mockImplementation((async (key: string) =>
+          key === 'account-delete-code-check:user-1'
+            ? { allowed: false, count: 6, resetAt: 0 }
+            : { allowed: true, count: 1, resetAt: 0 }) as never);
+        const result = await deleteOwnAccountAction({
+          confirm: 'DELETE',
+          code: codeFromEmail(),
+          challenge: sent.data.challenge,
+        });
+        expect(result).toMatchObject({ ok: false, error: { code: 'rate_limited' } });
+        expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+      });
+
+      it('an email the service did not accept: the code could not be sent, reported without the code or the address; no code try counted', async () => {
+        sendEmailMock.mockImplementation((async () => ({ ok: false })) as never);
+        const sent = await requestAccountDeletionCodeAction();
+        expect(sent).toMatchObject({
+          ok: false,
+          error: { code: 'internal_error', message: ACCOUNT_DELETE_CODE_SEND_FAILED_COPY },
+        });
+        expect(reportErrorMock).toHaveBeenCalledWith(expect.any(Error), {
+          tag: 'account.delete.code_send_failed',
+          level: 'warning',
+        });
+        const reported = JSON.stringify(
+          (reportErrorMock.mock.calls as unknown as Array<[unknown, unknown]>).map((c) => [String(c[0]), c[1]]),
+        );
+        expect(reported).not.toContain(codeFromEmail());
+        expect(reported).not.toContain('u@example.test');
+        const keys = (checkRateLimitMock.mock.calls as unknown as Array<[string]>).map((c) => c[0]);
+        expect(keys).toEqual(['account-delete-code-send:user-1']);
+      });
+
+      it('a deployment with no email key: the code could not be sent, and reported', async () => {
+        sendEmailMock.mockImplementation((async () => ({ ok: true, id: 'dryrun' })) as never);
+        const sent = await requestAccountDeletionCodeAction();
+        expect(sent).toMatchObject({
+          ok: false,
+          error: { code: 'internal_error', message: ACCOUNT_DELETE_CODE_SEND_FAILED_COPY },
+        });
+        expect(reportErrorMock).toHaveBeenCalledWith(expect.any(Error), {
+          tag: 'account.delete.code_send_failed',
+          level: 'warning',
+        });
+      });
+
+      it('sending is limited per account: past the limit nothing is sent', async () => {
+        checkRateLimitMock.mockImplementation((async (key: string) =>
+          key === 'account-delete-code-send:user-1'
+            ? { allowed: false, count: 6, resetAt: 0 }
+            : { allowed: true, count: 1, resetAt: 0 }) as never);
+        const sent = await requestAccountDeletionCodeAction();
+        expect(sent).toMatchObject({
+          ok: false,
+          error: {
+            code: 'rate_limited',
+            message: 'Too many codes requested. Try again in a few minutes, or enter your password.',
+          },
+        });
+        expect(sendEmailMock).not.toHaveBeenCalled();
+      });
+
+      it('an account with an authenticator is not sent a code', async () => {
+        mfaState.totp = [{ status: 'verified' }];
+        const sent = await requestAccountDeletionCodeAction();
+        expect(sent).toMatchObject({ ok: false, error: { code: 'conflict', details: { reason: 'not_offered' } } });
+        expect(sendEmailMock).not.toHaveBeenCalled();
+      });
+
+      it("a session that is not the validated account's is sent nothing", async () => {
+        mfaState.sessionUserId = 'user-2';
+        const sent = await requestAccountDeletionCodeAction();
+        expect(sent).toMatchObject({ ok: false, error: { details: { reason: 'session_changed' } } });
+        expect(sendEmailMock).not.toHaveBeenCalled();
+      });
+    });
+  });
+
+  /**
+   * The action reads the person's memberships once, before the delete, for
+   * the organization the audit row is filed under. A list that cannot be read
+   * is not "no workspace": nothing is deleted and the person is asked to try
+   * again.
+   */
+  describe('a membership list that cannot be read', () => {
+    it('nothing is deleted or written, try again', async () => {
+      authState.membershipsUnreadableAt = 1;
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result).toEqual(err('internal_error', ACCOUNT_DELETE_RETRY_COPY));
       expect(adminAuth.deleteUser).not.toHaveBeenCalled();
       expect(adminRpc).not.toHaveBeenCalled();
       expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
       // This read comes after the limiter, which counted the attempt.
-      expect(checkRateLimitMock).toHaveBeenCalledTimes(1);
+      expect(dryRunLimitCalls()).toHaveLength(1);
       expect(reportErrorMock).toHaveBeenCalledTimes(1);
       expect(reportErrorMock).toHaveBeenCalledWith(expect.any(Error), {
         tag: 'account.delete.membership_read',
@@ -1526,9 +1902,9 @@ describe('deleteOwnAccountAction', () => {
     });
 
     it('control: a member whose list reads is deleted and the row is filed under their organization', async () => {
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(true);
-      expect(authState.membershipReads).toBe(2);
+      expect(authState.membershipReads).toBe(1);
       expect(insertAuditRowReportedMock).toHaveBeenCalledWith(
         expect.objectContaining({ organization_id: 'org-1', event: 'user.deactivated' }),
       );
@@ -1536,9 +1912,9 @@ describe('deleteOwnAccountAction', () => {
 
     it('control: a person with no workspace is deleted and the row has no organization (SP-129)', async () => {
       authState.orgLess = true;
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(true);
-      expect(authState.membershipReads).toBe(2);
+      expect(authState.membershipReads).toBe(1);
       expect(insertAuditRowReportedMock).toHaveBeenCalledWith(
         expect.objectContaining({ organization_id: null, event: 'user.deactivated' }),
       );
@@ -1550,7 +1926,7 @@ describe('deleteOwnAccountAction', () => {
     // session by THROWING NEXT_REDIRECT. Swallowing it into the catch-all
     // turned "you are signed out" into "internal error: NEXT_REDIRECT".
     authState.signedOut = true;
-    await expect(deleteOwnAccountAction({ confirm: 'DELETE' })).rejects.toMatchObject({
+    await expect(deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD })).rejects.toMatchObject({
       digest: 'NEXT_REDIRECT;replace;/signin;307;',
     });
   });
@@ -1572,7 +1948,7 @@ describe('deleteOwnAccountAction', () => {
     });
 
     it('reports the failure instead of a false success', async () => {
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe('internal_error');
@@ -1586,14 +1962,14 @@ describe('deleteOwnAccountAction', () => {
     });
 
     it('writes no audit row and no tombstone (0388: nothing is written before the delete)', async () => {
-      await deleteOwnAccountAction({ confirm: 'DELETE' });
+      await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
       expect(audit).not.toHaveBeenCalled();
       expect(stubHolder.stub!.chains.get('user_profiles.update')).toBeUndefined();
     });
 
     it('revokes the live sessions and reports the error', async () => {
-      await deleteOwnAccountAction({ confirm: 'DELETE' });
+      await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(revokeAllSessionsForUserMock).toHaveBeenCalledWith('user-1');
       expect(reportErrorMock).toHaveBeenCalledWith(
         expect.anything(),
@@ -1607,7 +1983,7 @@ describe('deleteOwnAccountAction', () => {
       revokeAllSessionsForUserMock.mockImplementation(async () => {
         throw new Error('service role dead');
       });
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe('internal_error');
     });
@@ -1630,9 +2006,9 @@ describe('deleteOwnAccountAction', () => {
       // The platform-admin check reads the account first (S50a); the second
       // read is the one after the failed delete.
       adminAuth.getUserById
-        .mockImplementationOnce(async () => ({ data: { user: { id: 'user-1' } }, error: null }))
+        .mockImplementationOnce(async () => ({ data: { user: { id: 'user-1', email: 'u@example.test' } }, error: null }))
         .mockImplementationOnce(async () => ({ data: { user: null }, error: NOT_FOUND }));
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(true);
       expect(adminAuth.getUserById).toHaveBeenCalledWith('user-1');
       expect(insertAuditRowReportedMock).toHaveBeenCalledTimes(1);
@@ -1660,9 +2036,10 @@ describe('deleteOwnAccountAction', () => {
     // Deleted any earlier, the factor read itself answers 404 (the next case).
     it('deleted by another request after the last check read its factors (404 user_not_found to the delete): success, no second audit row', async () => {
       adminAuth.deleteUser.mockImplementationOnce(async () => ({ error: NOT_FOUND }));
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(true);
-      expect(adminAuth.listFactors).toHaveBeenCalledTimes(1);
+      // The confirmation's read and the last check's.
+      expect(adminAuth.listFactors).toHaveBeenCalledTimes(2);
       // The platform-admin check's read only (S50a): the delete's own answer
       // settles it, so GoTrue is not asked again.
       expect(adminAuth.getUserById).toHaveBeenCalledTimes(1);
@@ -1679,12 +2056,16 @@ describe('deleteOwnAccountAction', () => {
     // answers every /admin/users/<id> route, the factor list included, with
     // 404 user_not_found once the user is gone.
     it('deleted by another request before the last check read its factors (404 user_not_found there): success, this browser signed out, nothing deleted or written here', async () => {
-      adminAuth.listFactors.mockImplementationOnce(async () => ({ data: null, error: NOT_FOUND }));
+      // The confirmation reads the factors first and finds them; the last
+      // check's read meets the deletion.
+      adminAuth.listFactors
+        .mockImplementationOnce(async () => ({ data: { factors: [] }, error: null }))
+        .mockImplementationOnce(async () => ({ data: null, error: NOT_FOUND }));
       // Not Once: a queued answer the action never asks for would carry over
       // to the next test (clearAllMocks keeps it); the top-level beforeEach
       // resets this one.
       adminAuth.deleteUser.mockImplementation(async () => ({ error: NOT_FOUND }));
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result).toEqual({ ok: true, data: undefined });
       expect(adminAuth.listFactors).toHaveBeenCalledWith({ userId: 'user-1' });
       expect(adminAuth.deleteUser).not.toHaveBeenCalled();
@@ -1728,14 +2109,15 @@ describe('deleteOwnAccountAction', () => {
       let reads = 0;
       adminAuth.getUserById.mockImplementation(async () =>
         ++reads === 1
-          ? { data: { user: { id: 'user-1' } }, error: null }
+          ? { data: { user: { id: 'user-1', email: 'u@example.test' } }, error: null }
           : { data: { user: null }, error: NOT_FOUND },
       );
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result).toEqual({ ok: true, data: undefined });
       expect(adminAuth.getUserById).toHaveBeenCalledTimes(2);
       expect(adminAuth.getUserById).toHaveBeenNthCalledWith(2, 'user-1');
-      expect(adminAuth.listFactors).not.toHaveBeenCalled();
+      // The confirmation's read only: the last check never reached its own.
+      expect(adminAuth.listFactors).toHaveBeenCalledTimes(1);
       expect(adminAuth.deleteUser).not.toHaveBeenCalled();
       expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
       expect(cookieSignOut).toHaveBeenCalledWith({ scope: 'local' });
@@ -1749,10 +2131,10 @@ describe('deleteOwnAccountAction', () => {
       let reads = 0;
       adminAuth.getUserById.mockImplementation(async () =>
         ++reads === 1
-          ? { data: { user: { id: 'user-1' } }, error: null }
+          ? { data: { user: { id: 'user-1', email: 'u@example.test' } }, error: null }
           : { data: { user: null }, error: { message: 'upstream unavailable', status: 503 } },
       );
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result).toEqual({
         ok: false,
         error: {
@@ -1770,7 +2152,7 @@ describe('deleteOwnAccountAction', () => {
         data: { deletable: false, reason: 'not_found' },
         error: null,
       }));
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(true);
       expect(adminAuth.deleteUser).not.toHaveBeenCalled();
       expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
@@ -1781,7 +2163,7 @@ describe('deleteOwnAccountAction', () => {
       adminAuth.deleteUser.mockImplementationOnce(async () => ({
         error: { name: 'AuthRetryableFetchError', status: 0, message: 'fetch failed' },
       }));
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe('internal_error');
       expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
@@ -1798,7 +2180,7 @@ describe('deleteOwnAccountAction', () => {
         'public_request_links.select': { data: null, error: null, count: 2 },
         'maintenance_request_share_links.select': { data: null, error: null, count: 3 },
       }).client.from;
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(true);
       expect(insertAuditRowReportedMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1818,7 +2200,7 @@ describe('deleteOwnAccountAction', () => {
             : { data: [{ organization_id: 'org-solo' }], error: null },
         'organizations.select': { data: [{ id: 'org-solo' }], error: null },
       }).client.from;
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(true);
       expect(reportErrorMock).toHaveBeenCalledWith(
         expect.anything(),
@@ -1839,7 +2221,7 @@ describe('deleteOwnAccountAction', () => {
         'organizations.select': { data: [{ id: 'org-solo' }], error: null },
       }).client.from;
       adminAuth.deleteUser.mockImplementationOnce(async () => ({ error: { message: 'Invalid API key' } }));
-      await deleteOwnAccountAction({ confirm: 'DELETE' });
+      await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       const tags = reportErrorMock.mock.calls.map((c) => (c as unknown[])[1] as { tag?: string } | undefined);
       expect(tags.map((t) => t?.tag)).not.toContain('account.delete.solo_owner_subscription');
     });
@@ -1864,7 +2246,7 @@ describe('deleteOwnAccountAction', () => {
           },
           error: null,
         }));
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe('conflict');
@@ -1881,7 +2263,7 @@ describe('deleteOwnAccountAction', () => {
       adminAuth.deleteUser.mockImplementationOnce(async () => ({
         error: { name: 'AuthApiError', status: 500, message: 'Database error deleting user' },
       }));
-      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.message).toBe(ACCOUNT_DELETE_SIGNED_OUT_COPY);
       expect(revokeAllSessionsForUserMock).toHaveBeenCalledWith('user-1');
