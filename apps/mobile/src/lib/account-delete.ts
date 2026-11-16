@@ -57,6 +57,25 @@ export const ACCOUNT_DELETE_CODE_PATH = '/api/v1/account/delete/code';
  */
 export const ACCOUNT_DELETE_TIMEOUT_MS = 45_000;
 
+/**
+ * How long the sheet waits for the sign-out after a deletion before it lets
+ * go: the account is gone either way. The sign-out itself keeps running.
+ */
+export const ACCOUNT_DELETE_SIGN_OUT_WAIT_MS = 20_000;
+
+/**
+ * Thrown by the app's `post` when api() refused to send because the live
+ * session is not the sheet's account (or there is none). Nothing left the
+ * phone; it reads as "sign in again", not as a connection problem.
+ */
+export class AccountDeleteNotSentError extends Error {
+  readonly notSent = true;
+  constructor() {
+    super('Not sent: the signed-in account is not the one this sheet was opened for.');
+    this.name = 'AccountDeleteNotSentError';
+  }
+}
+
 // Deletes under way in this app, across every flow: while one runs, no other
 // flow sends one and no sheet opens (createAccountDeleteOpener).
 let deletesInFlight = 0;
@@ -103,8 +122,9 @@ export interface AccountDeleteDeps {
   /**
    * POST `path` with `body` (none for the code route): api()'s contract.
    * Resolves with the parsed body of a 2xx; rejects with `status` and `code`
-   * for any other answer, and with neither for no answer or a body that did
-   * not parse.
+   * for any other answer, with AccountDeleteNotSentError when nothing was
+   * sent because the session is not the sheet's account, and with neither
+   * for no answer or a body that did not parse.
    */
   post: (path: string, body: Record<string, string> | undefined) => Promise<unknown>;
   /** Sign out and discard this account's queued work (signOut({ afterAccountDeleted: true })). */
@@ -161,10 +181,29 @@ export function answerFromBody(body: unknown): AccountDeleteAnswerInput {
 
 /** A rejected post: the HTTP status and code when there was an answer, else no answer. */
 export function answerFromError(err: unknown): AccountDeleteAnswerInput {
-  const e = err as { status?: unknown; code?: unknown } | null | undefined;
+  const e = err as { status?: unknown; code?: unknown; notSent?: unknown } | null | undefined;
+  // Not sent: this session is not the sheet's account. Read as the routes'
+  // 401 ("Sign in again to continue."), which claims nothing either way.
+  if (e?.notSent === true) return { status: 401 };
   const status = typeof e?.status === 'number' && e.status > 0 ? e.status : null;
   if (status === null) return { status: null };
   return { status, error: typeof e?.code === 'string' ? e.code : undefined };
+}
+
+/** Waits for `work` to settle (a throw counts) or for `ms`, whichever comes first. Never throws. */
+function settledOrAfter(work: () => Promise<void> | void, ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    const done = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    try {
+      Promise.resolve(work()).then(done, done);
+    } catch {
+      done();
+    }
+  });
 }
 
 function isReady(s: Omit<AccountDeleteState, 'ready'>, challenge: string | null): boolean {
@@ -254,12 +293,11 @@ export function createAccountDeleteFlow(opts: {
         // Still busy through the sign-out: nothing closes or sends meanwhile.
         end('done', answer.sentence);
         set({ busy: 'delete' });
-        try {
-          await deps.signOutAfterDeleted();
-        } catch {
-          // The sign-out keeps its own record of what it could not do. The
-          // sheet then offers Close (ended 'done', nothing under way).
-        }
+        // Bounded: a sign-out that does not settle (a logout call with no
+        // answer) lets go after ACCOUNT_DELETE_SIGN_OUT_WAIT_MS. The sign-out
+        // keeps running; the sheet then offers Close (ended 'done', nothing
+        // under way), whether it threw or is still waiting.
+        await settledOrAfter(deps.signOutAfterDeleted, ACCOUNT_DELETE_SIGN_OUT_WAIT_MS);
         set({ busy: null });
         deps.announceDeleted(answer.sentence);
         return;
@@ -376,7 +414,8 @@ export function appAccountDeleteDeps(opts: {
   /**
    * The account the sheet was opened for (the session's user). Every request
    * is sent only under this account's token (api()'s asUserId); with none, or
-   * another session live, nothing is sent and the answer reads as "no answer".
+   * another session live, nothing is sent and the flow ends with "Sign in
+   * again to continue." (AccountDeleteNotSentError).
    */
   userId: string | null;
   signOut: (o?: { afterAccountDeleted?: boolean }) => Promise<void> | void;
@@ -384,14 +423,23 @@ export function appAccountDeleteDeps(opts: {
 }): AccountDeleteDeps {
   return {
     post: async (path, body) => {
-      const { api } = await import('./api');
-      return api<unknown>(path, {
-        method: 'POST',
-        ...(body ? { body } : {}),
-        // An empty id matches no session, so api() refuses before sending.
-        asUserId: opts.userId ?? '',
-        ...(path === ACCOUNT_DELETE_PATH ? { timeoutMs: ACCOUNT_DELETE_TIMEOUT_MS } : {}),
-      });
+      const [{ api }, { OutboxSessionChangedError }] = await Promise.all([
+        import('./api'),
+        import('./outbox-scope'),
+      ]);
+      try {
+        return await api<unknown>(path, {
+          method: 'POST',
+          ...(body ? { body } : {}),
+          // An empty id matches no session, so api() refuses before sending.
+          asUserId: opts.userId ?? '',
+          ...(path === ACCOUNT_DELETE_PATH ? { timeoutMs: ACCOUNT_DELETE_TIMEOUT_MS } : {}),
+        });
+      } catch (err) {
+        // api() refused before sending: the session is not this account's.
+        if (err instanceof OutboxSessionChangedError) throw new AccountDeleteNotSentError();
+        throw err;
+      }
     },
     signOutAfterDeleted: () => opts.signOut({ afterAccountDeleted: true }),
     announceDeleted: opts.announceDeleted,

@@ -212,9 +212,11 @@ describe('nothing typed leaves the flow', () => {
 
   it('the sign-out that discards queued work runs once, on the "done" answer only', () => {
     const code = codeOnly(moduleSource);
-    expect(code.match(/deps\.signOutAfterDeleted\(/g)).toHaveLength(1);
+    expect(code.match(/deps\.signOutAfterDeleted\b/g)).toHaveLength(1);
     const done = code.indexOf("case 'done': {");
-    const signOut = code.indexOf('deps.signOutAfterDeleted(');
+    const signOut = code.indexOf(
+      'await settledOrAfter(deps.signOutAfterDeleted, ACCOUNT_DELETE_SIGN_OUT_WAIT_MS);',
+    );
     const nextCase = code.indexOf("case 'sign_in':");
     expect(done).toBeGreaterThan(-1);
     expect(signOut).toBeGreaterThan(done);

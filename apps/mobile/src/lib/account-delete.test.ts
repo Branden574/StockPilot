@@ -22,7 +22,9 @@ import {
 import {
   ACCOUNT_DELETE_CODE_PATH,
   ACCOUNT_DELETE_PATH,
+  ACCOUNT_DELETE_SIGN_OUT_WAIT_MS,
   ACCOUNT_DELETE_TIMEOUT_MS,
+  AccountDeleteNotSentError,
   accountDeleteInFlight,
   answerFromBody,
   answerFromError,
@@ -296,6 +298,8 @@ describe('reading an answer', () => {
       error: 'password_incorrect',
     });
     expect(answerFromError({ status: 503 })).toEqual({ status: 503, error: undefined });
+    // Not sent (the session is not the sheet's account): the 401 answer.
+    expect(answerFromError(new AccountDeleteNotSentError())).toEqual({ status: 401 });
   });
 });
 
@@ -350,6 +354,62 @@ describe('the delete route: every answer leads to its state', () => {
     expect(deps.announceDeleted).toHaveBeenCalledTimes(1);
     expect(accountDeleteInFlight()).toBe(false);
     expect(flow.cancel()).toBe(true);
+  });
+
+  it('a sign-out that never settles lets go after the wait: Close shows, the count is back to zero, a later open works', async () => {
+    vi.useFakeTimers();
+    try {
+      const { flow, deps } = harness();
+      deps.signOutAfterDeleted.mockImplementation(() => new Promise<undefined>(() => undefined));
+      typedPassword(flow);
+      const deleting = flow.confirm();
+      await vi.advanceTimersByTimeAsync(ACCOUNT_DELETE_SIGN_OUT_WAIT_MS - 1);
+      expect(flow.getState()).toMatchObject({ ended: 'done', busy: 'delete' });
+      expect(accountDeleteInFlight()).toBe(true);
+      expect(deps.announceDeleted).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await deleting;
+      expect(ACCOUNT_DELETE_SIGN_OUT_WAIT_MS).toBe(20_000);
+      expect(flow.getState()).toMatchObject({ ended: 'done', busy: null });
+      expect(accountDeleteInFlight()).toBe(false);
+      expect(deps.announceDeleted).toHaveBeenCalledTimes(1);
+      expect(flow.cancel()).toBe(true);
+      const opener = createAccountDeleteOpener();
+      opener.open();
+      expect(opener.isOpen()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a sign-out that throws at once is not waited on', async () => {
+    const { flow, deps } = harness();
+    deps.signOutAfterDeleted.mockImplementation(() => {
+      throw new Error('could not start');
+    });
+    typedPassword(flow);
+    await flow.confirm();
+    expect(flow.getState()).toMatchObject({ ended: 'done', busy: null });
+    expect(deps.announceDeleted).toHaveBeenCalledTimes(1);
+  });
+
+  it('not sent because the session is not the sheet\'s account: "Sign in again to continue.", nothing signed out', async () => {
+    const del = harness({ post: answers({ error: new AccountDeleteNotSentError() }) });
+    typedPassword(del.flow);
+    await del.flow.confirm();
+    expect(del.flow.getState()).toMatchObject({
+      ended: 'sign_in',
+      notice: ACCOUNT_DELETE_SIGN_IN_AGAIN_COPY,
+      password: '',
+    });
+    expect(del.deps.signOutAfterDeleted).not.toHaveBeenCalled();
+
+    const code = harness({ post: answers({ error: new AccountDeleteNotSentError() }) });
+    await code.flow.sendCode();
+    expect(code.flow.getState()).toMatchObject({
+      ended: 'sign_in',
+      notice: ACCOUNT_DELETE_SIGN_IN_AGAIN_COPY,
+    });
   });
 
   it('aal2_required: the factors are read again and the sentence shows', async () => {

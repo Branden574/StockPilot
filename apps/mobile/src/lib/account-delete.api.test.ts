@@ -5,6 +5,7 @@ import {
   ACCOUNT_DELETE_DONE_COPY,
   ACCOUNT_DELETE_NO_ANSWER_COPY,
   ACCOUNT_DELETE_PASSWORD_REFUSED_COPY,
+  ACCOUNT_DELETE_SIGN_IN_AGAIN_COPY,
 } from '@stockpilot/core';
 
 import {
@@ -196,29 +197,65 @@ describe('answers that are not the route\'s are never "deleted"', () => {
 });
 
 describe("sent only as the sheet's account", () => {
-  it('another session live: nothing is sent, and it reads as no answer', async () => {
+  it('another session live: nothing is sent, and the flow ends with "Sign in again to continue."', async () => {
     const { flow, signOut } = flowAs('u1');
     flow.setTyped('DELETE');
     flow.setPassword(PASSWORD);
     await flow.confirm();
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(flow.getState()).toMatchObject({ ended: null, notice: ACCOUNT_DELETE_NO_ANSWER_COPY });
+    expect(flow.getState()).toMatchObject({
+      ended: 'sign_in',
+      notice: ACCOUNT_DELETE_SIGN_IN_AGAIN_COPY,
+      password: '',
+    });
     expect(signOut).not.toHaveBeenCalled();
   });
 
-  it('no account known: nothing is sent', async () => {
+  it('no account known: nothing is sent; the code request ends the same way', async () => {
     const { flow } = flowAs(null);
     await flow.sendCode();
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(flow.getState().notice).toBe(ACCOUNT_DELETE_CODE_NO_ANSWER_COPY);
+    expect(flow.getState()).toMatchObject({
+      ended: 'sign_in',
+      notice: ACCOUNT_DELETE_SIGN_IN_AGAIN_COPY,
+    });
   });
 
-  it('nobody signed in: nothing is sent', async () => {
+  it('nobody signed in: nothing is sent, "Sign in again to continue."', async () => {
     state.session = null;
-    const { flow } = flowAs('u2');
+    const { flow, signOut } = flowAs('u2');
     flow.setTyped('DELETE');
     flow.setPassword(PASSWORD);
     await flow.confirm();
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(flow.getState()).toMatchObject({
+      ended: 'sign_in',
+      notice: ACCOUNT_DELETE_SIGN_IN_AGAIN_COPY,
+    });
+    expect(signOut).not.toHaveBeenCalled();
+  });
+
+  it('offline (fetch throws): still the connection sentence, the password kept', async () => {
+    // No reply queued: the stand-in fetch throws a network error.
+    const { flow, signOut } = flowAs('u2');
+    flow.setTyped('DELETE');
+    flow.setPassword(PASSWORD);
+    await flow.confirm();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(flow.getState()).toMatchObject({
+      ended: null,
+      notice: ACCOUNT_DELETE_NO_ANSWER_COPY,
+      password: PASSWORD,
+    });
+    expect(signOut).not.toHaveBeenCalled();
+  });
+
+  it('offline on the code request: the code connection sentence', async () => {
+    const { flow } = flowAs('u2');
+    await flow.sendCode();
+    expect(flow.getState()).toMatchObject({
+      ended: null,
+      notice: ACCOUNT_DELETE_CODE_NO_ANSWER_COPY,
+    });
   });
 });
