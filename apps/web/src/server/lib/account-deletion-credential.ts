@@ -278,8 +278,8 @@ export type DeletionCodeSendResult =
       /**
        *  - not_offered: the account has an authenticator (its code confirms instead);
        *  - rate_limited: too many codes sent in the window;
-       *  - send_failed: the factors or the address could not be read, or the code could not
-       *    be signed (an email the service did not accept is reported and answered as sent);
+       *  - send_failed: the factors or the address could not be read, the code could not be
+       *    signed, or the email did not go (the service refused it, or there is no email key);
        *  - gone: the account no longer exists.
        */
       kind: 'not_offered' | 'rate_limited' | 'send_failed' | 'gone';
@@ -348,8 +348,11 @@ export async function sendDeletionCode(args: {
     });
     // An email the service did not accept, or a deployment with no email key
     // (sendEmail then sends nothing and answers ok with the id 'dryrun'):
-    // reported, never with the code or the address, and answered as a sent
-    // code, so the answer says nothing about the mailbox or the deployment.
+    // reported, never with the code or the address, and answered send_failed,
+    // so the person is told no code is coming (try again, or the password).
+    // The caller is signed in as the account and the address is its own, so
+    // saying so tells nobody anything new. The send was counted above; the
+    // code-check limit is not touched.
     if (!sent.ok || sent.id === 'dryrun') {
       void reportError(
         new Error(
@@ -359,6 +362,7 @@ export async function sendDeletionCode(args: {
         ),
         { tag: 'account.delete.code_send_failed', level: 'warning' },
       );
+      return { ok: false, kind: 'send_failed' };
     }
     return { ok: true, challenge: signed.challenge, expiresAt: signed.expiresAt };
   } catch (e) {
@@ -377,7 +381,12 @@ export async function sendDeletionCode(args: {
  * password or the emailed code checked in this request, unless
  * `allowUnconfirmedWithoutFactor` (the phone route's answer for a request
  * that carries neither, under a policy that requires no authenticator).
- * Never throws.
+ *
+ * On success it answers which branch held, and that is what the audit row
+ * records (never what the request carried): a verified authenticator at aal2
+ * is 'authenticator' whatever else the body held; no authenticator is the
+ * password or the code checked in this request, or 'none' for the phone
+ * route's typed word alone. Never throws.
  */
 export async function deletionCredentialStillHeld(args: {
   admin: AdminClient;
@@ -386,7 +395,7 @@ export async function deletionCredentialStillHeld(args: {
   confirmedBy: DeletionConfirmedBy | null;
   allowUnconfirmedWithoutFactor?: boolean;
 }): Promise<
-  | { ok: true }
+  | { ok: true; by: DeletionConfirmedBy | 'none' }
   | { ok: false; kind: 'aal2_required' | 'credential_required' | 'check_failed' | 'gone' }
 > {
   const read = await readFactorsById(args.admin, args.userId);
@@ -395,9 +404,11 @@ export async function deletionCredentialStillHeld(args: {
   if (hasVerifiedFactor(read.factors)) {
     return stepUpOwed(read.factors, await readLevelSafely(args.readLevel))
       ? { ok: false, kind: 'aal2_required' }
-      : { ok: true };
+      : { ok: true, by: 'authenticator' };
   }
-  if (args.confirmedBy === 'password' || args.confirmedBy === 'emailed_code') return { ok: true };
-  if (args.allowUnconfirmedWithoutFactor) return { ok: true };
+  if (args.confirmedBy === 'password' || args.confirmedBy === 'emailed_code') {
+    return { ok: true, by: args.confirmedBy };
+  }
+  if (args.allowUnconfirmedWithoutFactor) return { ok: true, by: 'none' };
   return { ok: false, kind: 'credential_required' };
 }

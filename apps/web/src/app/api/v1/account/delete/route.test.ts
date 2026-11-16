@@ -8,6 +8,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { audit, insertAuditRowReported } from '@/server/services/audit';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 import { ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE } from '@/server/lib/account-deletion';
+import { ACCOUNT_DELETE_CODE_SEND_FAILED_COPY } from '@/server/lib/account-deletion-credential';
 import { makeSupabaseStub, type SupabaseStub } from '@/test/supabase-mock';
 
 import { POST as POST_CODE } from './code/route';
@@ -982,12 +983,84 @@ describe('POST /api/v1/account/delete: the password or the emailed code', () => 
       expect(JSON.stringify(vi.mocked(insertAuditRowReported).mock.calls)).not.toContain(PASSWORD);
     });
 
-    it('authenticator', async () => {
+    /** The limiter keys this request counted (the deletion's own dry-run key aside). */
+    const credentialKeysCounted = () =>
+      checkRateLimit.mock.calls
+        .map((c) => c[0])
+        .filter((k) => k.startsWith('account-delete-password:') || k.startsWith('account-delete-code-'));
+    /** Everything this request reported or wrote to the console, as text. */
+    const loggedText = (consoleCalls: unknown[][]) =>
+      JSON.stringify([
+        vi.mocked(reportError).mock.calls.map((c) => [String(c[0]), c[1]]),
+        consoleCalls.map((c) => c.map(String)),
+      ]);
+
+    it('authenticator: a request with neither (an installed phone), a factor at aal2', async () => {
       factorState.factors = [{ status: 'verified' }];
       vi.mocked(withApiContext).mockResolvedValueOnce(enrolledAtAal2(happyStub()) as never);
+      expect((await POST(buildRequest({ confirm: 'DELETE' }, 'aal2'))).status).toBe(200);
+      expect(confirmedBy()).toBe('authenticator');
+    });
+
+    it('authenticator: the same with a password in the body; the password is not checked, counted or logged', async () => {
+      const consoleSpies = (['log', 'info', 'warn', 'error'] as const).map((m) =>
+        vi.spyOn(console, m).mockImplementation(() => {}),
+      );
+      try {
+        factorState.factors = [{ status: 'verified' }];
+        vi.mocked(withApiContext).mockResolvedValueOnce(enrolledAtAal2(happyStub()) as never);
+        expect(
+          (await POST(buildRequest({ confirm: 'DELETE', password: PASSWORD }, 'aal2'))).status,
+        ).toBe(200);
+        expect(confirmedBy()).toBe('authenticator');
+        expect(verifyPassword).not.toHaveBeenCalled();
+        expect(credentialKeysCounted()).toEqual([]);
+        const logged = loggedText(consoleSpies.flatMap((s) => s.mock.calls));
+        expect(logged).not.toContain(PASSWORD);
+        expect(JSON.stringify(vi.mocked(insertAuditRowReported).mock.calls)).not.toContain(PASSWORD);
+      } finally {
+        consoleSpies.forEach((s) => s.mockRestore());
+      }
+    });
+
+    it('authenticator: the same with a code and challenge in the body; neither is checked, counted or logged', async () => {
+      const STRAY_CODE = '246802';
+      const STRAY_CHALLENGE = 'v1.stray-challenge';
+      const consoleSpies = (['log', 'info', 'warn', 'error'] as const).map((m) =>
+        vi.spyOn(console, m).mockImplementation(() => {}),
+      );
+      try {
+        factorState.factors = [{ status: 'verified' }];
+        vi.mocked(withApiContext).mockResolvedValueOnce(enrolledAtAal2(happyStub()) as never);
+        expect(
+          (
+            await POST(
+              buildRequest({ confirm: 'DELETE', code: STRAY_CODE, challenge: STRAY_CHALLENGE }, 'aal2'),
+            )
+          ).status,
+        ).toBe(200);
+        expect(confirmedBy()).toBe('authenticator');
+        expect(credentialKeysCounted()).toEqual([]);
+        const logged = loggedText(consoleSpies.flatMap((s) => s.mock.calls));
+        expect(logged).not.toContain(STRAY_CODE);
+        expect(logged).not.toContain(STRAY_CHALLENGE);
+        const rows = JSON.stringify(vi.mocked(insertAuditRowReported).mock.calls);
+        expect(rows).not.toContain(STRAY_CODE);
+        expect(rows).not.toContain(STRAY_CHALLENGE);
+      } finally {
+        consoleSpies.forEach((s) => s.mockRestore());
+      }
+    });
+
+    it('the last check decides: a password checked, then a factor at aal2 by the last check: authenticator', async () => {
+      listFactors
+        .mockImplementationOnce(async () => ({ data: { factors: [] }, error: null }))
+        .mockImplementationOnce(async () => ({ data: { factors: [{ status: 'verified' }] }, error: null }));
+      vi.mocked(withApiContext).mockResolvedValueOnce(requiring(happyStub()) as never);
       expect(
         (await POST(buildRequest({ confirm: 'DELETE', password: PASSWORD }, 'aal2'))).status,
       ).toBe(200);
+      expect(verifyPassword).toHaveBeenCalledTimes(1);
       expect(confirmedBy()).toBe('authenticator');
     });
 
@@ -1133,12 +1206,13 @@ describe('POST /api/v1/account/delete/code', () => {
     expect(sendEmail).not.toHaveBeenCalled();
   });
 
-  it('an email the service did not accept: the same answer as a sent code, and reported without the code or the address', async () => {
+  it('an email the service did not accept: 503 send_failed, reported without the code or the address, no code try counted', async () => {
     sendEmail.mockImplementation(async () => ({ ok: false }));
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(happyStub()) as never);
     const res = await POST_CODE(codeRequest());
-    expect(res.status).toBe(200);
-    expect((await res.json()).ok).toBe(true);
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { error: string; message: string; challenge?: string };
+    expect(body).toEqual({ error: 'send_failed', message: ACCOUNT_DELETE_CODE_SEND_FAILED_COPY });
     expect(reportError).toHaveBeenCalledWith(expect.any(Error), {
       tag: 'account.delete.code_send_failed',
       level: 'warning',
@@ -1147,6 +1221,20 @@ describe('POST /api/v1/account/delete/code', () => {
     const reported = JSON.stringify(vi.mocked(reportError).mock.calls.map((c) => [String(c[0]), c[1]]));
     expect(reported).not.toContain(code);
     expect(reported).not.toContain('staff@example.test');
+    // The send was counted before it was tried; the code-check limit is untouched.
+    expect(checkRateLimit.mock.calls.map((c) => c[0])).toEqual([`account-delete-code-send:${USER_ID}`]);
+  });
+
+  it('a deployment with no email key (nothing sent): 503 send_failed, reported', async () => {
+    sendEmail.mockImplementation(async () => ({ ok: true, id: 'dryrun' }) as never);
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(happyStub()) as never);
+    const res = await POST_CODE(codeRequest());
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: 'send_failed', message: ACCOUNT_DELETE_CODE_SEND_FAILED_COPY });
+    expect(reportError).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'account.delete.code_send_failed',
+      level: 'warning',
+    });
   });
 
   it('503 send_failed when the account cannot be read', async () => {

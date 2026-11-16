@@ -375,10 +375,13 @@ describe('the emailed code', () => {
     expect(checkRateLimit).not.toHaveBeenCalled();
   });
 
-  it('an email the service did not accept: answered as a sent code, reported without the code or the address', async () => {
+  it('an email the service did not accept: send_failed, reported without the code or the address; the send counted, no code try', async () => {
     sendEmail.mockImplementation(async () => ({ ok: false, id: undefined }));
     const sent = await sendDeletionCode({ admin, userId: USER });
-    expect(sent.ok).toBe(true);
+    expect(sent).toEqual({ ok: false, kind: 'send_failed' });
+    expect(checkRateLimit.mock.calls.map((c) => c[0])).toEqual([
+      `account-delete-code-send:${USER}`,
+    ]);
     expect(reportError).toHaveBeenCalledWith(expect.any(Error), {
       tag: 'account.delete.code_send_failed',
       level: 'warning',
@@ -386,10 +389,10 @@ describe('the emailed code', () => {
     noSecretReported(codeFromLastEmail(), EMAIL);
   });
 
-  it('a deployment with no email key (nothing sent): answered as a sent code, reported', async () => {
+  it('a deployment with no email key (nothing sent): send_failed, reported', async () => {
     sendEmail.mockImplementation(async () => ({ ok: true, id: 'dryrun' }));
     const sent = await sendDeletionCode({ admin, userId: USER });
-    expect(sent.ok).toBe(true);
+    expect(sent).toEqual({ ok: false, kind: 'send_failed' });
     expect(reportError).toHaveBeenCalledWith(expect.any(Error), {
       tag: 'account.delete.code_send_failed',
       level: 'warning',
@@ -479,17 +482,24 @@ describe('deletionCredentialStillHeld (the last check before the delete)', () =>
   it('confirmed by the password, and a factor was added since: the code is owed', async () => {
     world.factors = [{ status: 'verified' }];
     expect(await held(TYPED, AAL1)).toEqual({ ok: false, kind: 'aal2_required' });
-    expect(await held(TYPED, AAL2)).toEqual({ ok: true });
+    expect(await held(TYPED, AAL2)).toEqual({ ok: true, by: 'authenticator' });
+  });
+
+  it('an authenticator at aal2: authenticator, whatever the request carried', async () => {
+    world.factors = [{ status: 'verified' }];
+    expect(await held(null, AAL2)).toEqual({ ok: true, by: 'authenticator' });
+    expect(await held(AUTHENTICATOR, AAL2)).toEqual({ ok: true, by: 'authenticator' });
+    expect(await held(EMAILED, AAL2)).toEqual({ ok: true, by: 'authenticator' });
   });
 
   it('confirmed by the password or the code, still no factor: held', async () => {
-    expect(await held(TYPED, AAL1)).toEqual({ ok: true });
-    expect(await held(EMAILED, AAL1)).toEqual({ ok: true });
+    expect(await held(TYPED, AAL1)).toEqual({ ok: true, by: 'password' });
+    expect(await held(EMAILED, AAL1)).toEqual({ ok: true, by: 'emailed_code' });
   });
 
   it('no confirmation: held only where the caller allows it', async () => {
     expect(await held(null, AAL1)).toEqual({ ok: false, kind: 'credential_required' });
-    expect(await held(null, AAL1, true)).toEqual({ ok: true });
+    expect(await held(null, AAL1, true)).toEqual({ ok: true, by: 'none' });
   });
 
   it('factors that cannot be read: fails closed', async () => {

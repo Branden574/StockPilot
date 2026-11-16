@@ -315,6 +315,7 @@ import {
 import { err } from '@stockpilot/core';
 
 import { signAccountDeleteChallenge } from '@/lib/auth/account-delete-code';
+import { ACCOUNT_DELETE_CODE_SEND_FAILED_COPY } from '@/server/lib/account-deletion-credential';
 
 import {
   deleteOwnAccountAction,
@@ -1659,6 +1660,52 @@ describe('deleteOwnAccountAction', () => {
         expect(confirmedBy()).toBe('authenticator');
       });
 
+      /** The limiter keys this request counted (the deletion's own dry-run key aside). */
+      const credentialKeysCounted = () =>
+        (checkRateLimitMock.mock.calls as unknown as Array<[string]>)
+          .map((c) => c[0])
+          .filter((k) => k.startsWith('account-delete-password:') || k.startsWith('account-delete-code-'));
+
+      it('authenticator at aal2 with a password in the body too: still authenticator; the password is not checked, counted or reported', async () => {
+        mfaState.totp = [{ status: 'verified' }];
+        mfaState.currentLevel = 'aal2';
+        expect((await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD })).ok).toBe(
+          true,
+        );
+        expect(confirmedBy()).toBe('authenticator');
+        expect(verifyPasswordMock).not.toHaveBeenCalled();
+        expect(credentialKeysCounted()).toEqual([]);
+        expect(JSON.stringify(reportErrorMock.mock.calls)).not.toContain(PASSWORD);
+        expect(JSON.stringify(insertAuditRowReportedMock.mock.calls)).not.toContain(PASSWORD);
+      });
+
+      it('authenticator at aal2 with a code and challenge in the body too: still authenticator; the code is not checked or counted', async () => {
+        mfaState.totp = [{ status: 'verified' }];
+        mfaState.currentLevel = 'aal2';
+        expect(
+          (await deleteOwnAccountAction({ confirm: 'DELETE', code: '123456', challenge: 'v1.x' }))
+            .ok,
+        ).toBe(true);
+        expect(confirmedBy()).toBe('authenticator');
+        expect(credentialKeysCounted()).toEqual([]);
+        expect(JSON.stringify(reportErrorMock.mock.calls)).not.toContain('123456');
+      });
+
+      it('the last check decides: a password checked, then an authenticator added and the session at aal2 by the last check: authenticator', async () => {
+        mfaState.currentLevel = 'aal2';
+        adminAuth.listFactors
+          .mockImplementationOnce(async () => ({ data: { factors: [] }, error: null }))
+          .mockImplementationOnce(async () => ({
+            data: { factors: [{ id: 'f1', factor_type: 'totp', status: 'verified' }] },
+            error: null,
+          }));
+        expect((await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD })).ok).toBe(
+          true,
+        );
+        expect(verifyPasswordMock).toHaveBeenCalledTimes(1);
+        expect(confirmedBy()).toBe('authenticator');
+      });
+
       it('password, and the password is not in the row', async () => {
         expect((await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD })).ok).toBe(
           true,
@@ -1764,6 +1811,39 @@ describe('deleteOwnAccountAction', () => {
         });
         expect(result).toMatchObject({ ok: false, error: { code: 'rate_limited' } });
         expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+      });
+
+      it('an email the service did not accept: the code could not be sent, reported without the code or the address; no code try counted', async () => {
+        sendEmailMock.mockImplementation((async () => ({ ok: false })) as never);
+        const sent = await requestAccountDeletionCodeAction();
+        expect(sent).toMatchObject({
+          ok: false,
+          error: { code: 'internal_error', message: ACCOUNT_DELETE_CODE_SEND_FAILED_COPY },
+        });
+        expect(reportErrorMock).toHaveBeenCalledWith(expect.any(Error), {
+          tag: 'account.delete.code_send_failed',
+          level: 'warning',
+        });
+        const reported = JSON.stringify(
+          (reportErrorMock.mock.calls as unknown as Array<[unknown, unknown]>).map((c) => [String(c[0]), c[1]]),
+        );
+        expect(reported).not.toContain(codeFromEmail());
+        expect(reported).not.toContain('u@example.test');
+        const keys = (checkRateLimitMock.mock.calls as unknown as Array<[string]>).map((c) => c[0]);
+        expect(keys).toEqual(['account-delete-code-send:user-1']);
+      });
+
+      it('a deployment with no email key: the code could not be sent, and reported', async () => {
+        sendEmailMock.mockImplementation((async () => ({ ok: true, id: 'dryrun' })) as never);
+        const sent = await requestAccountDeletionCodeAction();
+        expect(sent).toMatchObject({
+          ok: false,
+          error: { code: 'internal_error', message: ACCOUNT_DELETE_CODE_SEND_FAILED_COPY },
+        });
+        expect(reportErrorMock).toHaveBeenCalledWith(expect.any(Error), {
+          tag: 'account.delete.code_send_failed',
+          level: 'warning',
+        });
       });
 
       it('sending is limited per account: past the limit nothing is sent', async () => {

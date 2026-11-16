@@ -154,8 +154,10 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // How this request confirmed the deletion: null when it sent neither a
-    // password nor a code and the policy above let it through.
+    // How the first check confirmed this request: null when it sent neither a
+    // password nor a code; 'authenticator' when the account's authenticator
+    // decided (the body's value is then never checked). Only an input to the
+    // last check below, which answers what the audit row records.
     let confirmedBy: DeletionConfirmedBy | null = null;
     if (supplied !== null) {
       // The password or the code, checked before anything else is read about
@@ -379,7 +381,8 @@ export async function POST(req: NextRequest) {
         userId: ctx.userId,
         organizationId,
         reason: 'self_deletion_mobile',
-        confirmedBy: confirmedBy ?? 'none',
+        // What the last check held, never what the request carried.
+        confirmedBy: held.by,
         createdStillActive: review.createdStillActive,
       });
     }

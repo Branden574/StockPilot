@@ -47,6 +47,7 @@ import {
   ACCOUNT_DELETE_CREDENTIAL_REQUIRED_COPY,
   ACCOUNT_DELETE_PASSWORD_REFUSED_COPY,
   confirmDeletionCredential,
+  type DeletionConfirmedBy,
   type DeletionCredentialResult,
   sendDeletionCode,
 } from '@/server/lib/account-deletion-credential';
@@ -679,8 +680,10 @@ export async function deleteOwnAccountAction(input: {
     // (see SP-008 below), so on a failure it only marked a live account as
     // deleted, and on success the profile cascades away with it.
     const check = await checkAccountDeletable(admin, session.userId, 'web');
-    // Whether THIS request deleted the account (and so writes the audit row).
-    let deletedHere = false;
+    // How the account was confirmed when THIS request deleted it (and so
+    // writes the audit row): what the last check before the delete held,
+    // never what the request carried. Null when this request deleted nothing.
+    let deletedHereConfirmedBy: DeletionConfirmedBy | null = null;
     let createdStillActive: CreatedStillActive | null = null;
     if (!check.ok) {
       // A member joined between the read above and the check (the trigger is
@@ -714,8 +717,9 @@ export async function deleteOwnAccountAction(input: {
       // organization, the check). It throws, and nothing is deleted or written,
       // unless the account is already gone (lastCheckMetGoneAccount): then
       // this browser is signed out as for the check's "gone" above.
+      let lastHeld: DeletionConfirmedBy;
       try {
-        await assertStepUpHeld({
+        const heldBy = await assertStepUpHeld({
           supabase,
           admin,
           userId: session.userId,
@@ -731,6 +735,10 @@ export async function deleteOwnAccountAction(input: {
               }
             : {}),
         });
+        // A verified authenticator at aal2 is 'authenticator' whatever the
+        // body held. No authenticator: the password or the code checked
+        // above (an authenticator confirmation was refused just now).
+        lastHeld = heldBy === 'authenticator' ? 'authenticator' : confirmation.by;
       } catch (refusal) {
         if (await lastCheckMetGoneAccount(refusal, admin, session.userId)) {
           return await endThisBrowserSession(supabase, session.userId);
@@ -803,8 +811,8 @@ export async function deleteOwnAccountAction(input: {
           extra: { userId: session.userId, source: 'web', settled },
         });
       }
-      deletedHere = settled === 'deleted';
-      if (deletedHere) {
+      if (settled === 'deleted') {
+        deletedHereConfirmedBy = lastHeld;
         // O-A3-2: a subscription nothing cancels is the platform admin's to
         // review; O-A3-5: the counts go in the audit row below.
         reportDeletionReviewFacts(review, 'web');
@@ -816,13 +824,13 @@ export async function deleteOwnAccountAction(input: {
     // audit row (user_id null, the profile no longer exists; the entity id
     // keeps who it was; stamped "Deleted user"; O-A3-5 counts), written by the
     // request that deleted it.
-    if (deletedHere) {
+    if (deletedHereConfirmedBy !== null) {
       await removeAvatarObjects(admin, session.userId);
       await auditAccountDeleted({
         userId: session.userId,
         organizationId: auditOrganizationId,
         reason: 'self_deletion',
-        confirmedBy: confirmation.by,
+        confirmedBy: deletedHereConfirmedBy,
         createdStillActive,
       });
     }

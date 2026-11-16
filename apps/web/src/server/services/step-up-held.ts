@@ -53,6 +53,11 @@ export function accountGoneError(): ServiceError {
  *  - `forbidden` with reason `aal2_required` (mfaGateError's enrolled shape)
  *    when the code is owed.
  *
+ * Answers which held: 'authenticator' (a verified factor, the session at
+ * aal2) or 'no_factor' (the account has no verified factor, and no
+ * `noFactorRefusal` was given). A caller that records how a write was
+ * confirmed reads it from here, the last check, never from the request.
+ *
  * `noFactorRefusal`, when given, is thrown for an account that has NO verified
  * factor: a caller whose write needs another confirmation from such an account
  * (account deletion: the password or the emailed code) passes it when this
@@ -74,7 +79,7 @@ export async function assertStepUpHeld({
   admin: Pick<SupabaseClient, 'auth'>;
   userId: string;
   noFactorRefusal?: ServiceError;
-}): Promise<void> {
+}): Promise<'authenticator' | 'no_factor'> {
   const claims = await readVerifiedSessionClaimsOf(supabase, userId);
   if (!claims) throw sessionChangedError();
   const { data, error } = await admin.auth.admin.mfa.listFactors({ userId });
@@ -91,5 +96,7 @@ export async function assertStepUpHeld({
     );
   }
   if (stepUpOwed(data.factors, claims.aal)) throw mfaGateError({ mfaEnrolled: true });
-  if (noFactorRefusal && !stepUpOwed(data.factors, null)) throw noFactorRefusal;
+  const hasFactor = stepUpOwed(data.factors, null);
+  if (noFactorRefusal && !hasFactor) throw noFactorRefusal;
+  return hasFactor ? 'authenticator' : 'no_factor';
 }

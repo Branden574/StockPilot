@@ -25,7 +25,7 @@ export const runtime = 'nodejs';
  *   401: { error: "unauthenticated" }
  *   409: { error: "not_offered", message }   // the account has an authenticator: its code confirms
  *   429: { error: "rate_limited", message }  // 5 codes per 15 minutes per account
- *   503: { error: "send_failed", message }   // the account could not be read: try again, or use the password
+ *   503: { error: "send_failed", message }   // nothing was sent: try again, or use the password
  *
  * `expiresAt` is whole UTC seconds. The challenge holds no code; the code is
  * only in the email.
