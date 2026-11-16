@@ -1,0 +1,376 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { contextUnavailableBody, isRefusedBeforeAnyWrite } from '@stockpilot/core';
+
+/**
+ * The API context gate over the REAL API context, when the organization's
+ * authenticator policy could not be read.
+ *
+ * withApiContext then holds the member to the strictest policy and marks the
+ * context (lib/auth/mfa-policy.ts). A member with no verified authenticator
+ * looks like one who must set one up first, so the route's service gate would
+ * answer a write 403 `mfa_required`, which may be untrue and which the phone
+ * treats as final for a queued change. The gate answers that write with its
+ * marker instead (503 `check_failed`, retryable, nothing written), before the
+ * route does anything.
+ *
+ * Every session shape (policy x role x authenticator x level), on both sign-in
+ * paths and both ways the context is read, for each organization row state
+ * (read; hidden; a failed read; a policy value it does not know), for a GET,
+ * a HEAD and each writing method:
+ *   - a session that owes its code: withApiContext's null, so the route's own
+ *     401, whatever the state;
+ *   - a policy that was not read, a member with no verified authenticator, a
+ *     write: the marker;
+ *   - everything else (a read; a policy that was read, owed set-up or not; a
+ *     verified authenticator at aal2): exactly the context withApiContext
+ *     gives, so the route answers as it does today (an owed member's write
+ *     still meets its service gate's 403).
+ */
+
+const refs = vi.hoisted(() => ({ client: null as unknown }));
+
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+vi.mock('@/lib/env', () => ({
+  env: {
+    NEXT_PUBLIC_SUPABASE_URL: 'https://example.supabase.co',
+    NEXT_PUBLIC_SUPABASE_ANON_KEY: 'anon-key',
+  },
+}));
+vi.mock('@/lib/auth/effective-permissions', () => ({
+  loadEffectivePermissions: async () => new Set<string>(['items:read']),
+}));
+vi.mock('@supabase/supabase-js', () => ({ createClient: () => refs.client }));
+vi.mock('@/lib/supabase/server', () => ({ createClient: async () => refs.client }));
+
+import { verifiedSessionAuth } from '@/test/verified-session-stub';
+
+import { withApiContext } from '@/lib/auth/api-context';
+import { mfaPolicyWasUnread } from '@/lib/auth/mfa-policy';
+
+import { apiContextGate } from './api-context-gate';
+
+import type { Role } from '@stockpilot/core';
+
+const USER_ID = '31313131-4141-4515-8616-717171717171';
+const ORG_ID = '81818181-9191-4a1a-8b1b-c1c1c1c1c1c1';
+
+type Policy = 'optional' | 'admins_required' | 'all_required';
+type Aal = 'aal1' | 'aal2';
+type Path = 'bearer' | 'cookie';
+type Read = 'one round trip' | 'separate reads';
+type Method = 'GET' | 'HEAD' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
+type Org = 'read' | 'hidden' | 'error' | 'odd';
+
+interface Session {
+  policy: Policy;
+  role: Role;
+  authenticator: boolean;
+  aal: Aal;
+}
+
+const state: Session & {
+  rpc: boolean;
+  /** The organization row: as read, hidden (no row), a failed read, or a policy value it does not know. */
+  org: Org;
+  calls: string[];
+} = {
+  policy: 'optional',
+  role: 'staff',
+  authenticator: false,
+  aal: 'aal1',
+  rpc: true,
+  org: 'read',
+  calls: [],
+};
+
+const ROLES: Role[] = ['owner', 'admin', 'manager', 'staff', 'viewer'];
+const POLICIES: Policy[] = ['optional', 'admins_required', 'all_required'];
+const PATHS: Path[] = ['bearer', 'cookie'];
+const READS: Read[] = ['one round trip', 'separate reads'];
+const METHODS: Method[] = ['GET', 'HEAD', 'POST', 'PATCH', 'PUT', 'DELETE'];
+const WRITES = new Set<Method>(['POST', 'PATCH', 'PUT', 'DELETE']);
+
+const SESSIONS: Session[] = POLICIES.flatMap((policy) =>
+  ROLES.flatMap((role) =>
+    [false, true].flatMap((authenticator) =>
+      (['aal1', 'aal2'] as Aal[]).map((aal) => ({ policy, role, authenticator, aal })),
+    ),
+  ),
+);
+
+const label = (s: Session) =>
+  `${s.policy}, ${s.role}, ${s.authenticator ? 'authenticator' : 'no authenticator'}, ${s.aal}`;
+
+function table(name: string, single: unknown, list: unknown[] = [], error: unknown = null) {
+  const q: Record<string, unknown> = {};
+  const self = () => q;
+  for (const k of ['select', 'eq', 'is', 'not', 'in', 'limit', 'order']) q[k] = self;
+  q.maybeSingle = async () => {
+    state.calls.push(`from:${name}`);
+    return { data: single, error, status: error ? 500 : 200 };
+  };
+  q.then = (resolve: (v: unknown) => unknown) => {
+    state.calls.push(`from:${name}`);
+    return Promise.resolve({ data: list, error: null, status: 200 }).then(resolve);
+  };
+  return q;
+}
+
+const row = (name: string, r: unknown) => table(name, r, r ? [r] : []);
+
+function bundle() {
+  return {
+    user_id: USER_ID,
+    profile: {
+      id: USER_ID,
+      email: 'member@example.com',
+      full_name: null,
+      avatar_url: null,
+      default_organization_id: ORG_ID,
+      disabled_at: null,
+    },
+    memberships: [
+      {
+        organization_id: ORG_ID,
+        role: state.role,
+        organization:
+          state.org === 'read' || state.org === 'odd'
+            ? {
+                id: ORG_ID,
+                name: 'Example Goods',
+                logo_url: null,
+                terminology: null,
+                mfa_policy: state.org === 'odd' ? 'something_else' : state.policy,
+                timezone: null,
+                nav_overrides: null,
+                dashboard_layout: null,
+                order_status_config: null,
+                all_modules_comp: false,
+                order_catalog_last_hide_at: null,
+              }
+            : null,
+        role_overrides: [],
+        user_overrides: [],
+        enabled_modules: [],
+      },
+    ],
+  };
+}
+
+function makeClient() {
+  return {
+    rpc: async () => {
+      state.calls.push('rpc');
+      return state.rpc
+        ? { data: bundle(), error: null }
+        : { data: null, error: { code: 'PGRST301' } };
+    },
+    from: (name: string) => {
+      if (name === 'organizations') {
+        if (state.org === 'error') return table(name, null, [], { code: '57014' });
+        if (state.org === 'hidden') return row(name, null);
+        return row(name, {
+          mfa_policy: state.org === 'odd' ? 'something_else' : state.policy,
+          all_modules_comp: false,
+        });
+      }
+      if (name === 'organization_members')
+        return row(name, { organization_id: ORG_ID, role: state.role });
+      if (name === 'user_profiles')
+        return row(name, {
+          id: USER_ID,
+          email: 'member@example.com',
+          default_organization_id: ORG_ID,
+          disabled_at: null,
+        });
+      return table(name, null, []);
+    },
+    auth: {
+      getUser: async () => {
+        state.calls.push('auth:getUser');
+        return {
+          data: {
+            user: {
+              id: USER_ID,
+              email: 'member@example.com',
+              factors: state.authenticator ? [{ status: 'verified' }] : [],
+            },
+          },
+          error: null,
+        };
+      },
+      ...verifiedSessionAuth(() => ({ sub: USER_ID, aal: state.aal })),
+    },
+  };
+}
+
+function fakeJwt(aal: Aal): string {
+  const seg = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  return `${seg({ alg: 'HS256', typ: 'JWT' })}.${seg({ sub: USER_ID, aal })}.sig`;
+}
+
+function request(
+  path: Path,
+  method: Method,
+  at = '/api/v1/items/5e5e5e5e-6f6f-4a7a-8b8b-9c9c9c9c9c9c/adjust',
+): Request {
+  const headers: Record<string, string> =
+    path === 'bearer'
+      ? { authorization: `Bearer ${fakeJwt(state.aal)}`, 'x-organization-id': ORG_ID }
+      : // A write from a page of this origin, so the cookie path reads it.
+        { cookie: 'sb-example-auth-token=abc', origin: 'https://app.test' };
+  return new Request(`https://app.test${at}`, { method, headers });
+}
+
+function arrange(s: Session, read: Read, org: Org = 'read') {
+  Object.assign(state, s, { rpc: read === 'one round trip', org, calls: [] });
+  refs.client = makeClient();
+}
+
+/** Comparable: the context's own fields, the client left out. */
+function shape(ctx: Awaited<ReturnType<typeof withApiContext>>) {
+  if (!ctx) return null;
+  const { supabase: _client, ...rest } = ctx;
+  return {
+    ...rest,
+    permissions: rest.permissions ? [...rest.permissions].sort() : rest.permissions,
+    // A module state that could not be read refuses to be listed: compare it as such.
+    enabledModules: listedOrUnreadable(rest.enabledModules),
+  };
+}
+
+function listedOrUnreadable(modules: Iterable<string>): string[] | 'unreadable' {
+  try {
+    return [...modules].sort();
+  } catch {
+    return 'unreadable';
+  }
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+  vi.spyOn(console, 'info').mockImplementation(() => {});
+});
+
+type Expect = 'null' | 'marker' | 'ctx';
+
+/**
+ * The organization states, each with the ways of reading the context that
+ * reach it as unread (a failed read is reached through the separate reads).
+ */
+const ORG_STATES: ReadonlyArray<readonly [Org, readonly Read[]]> = [
+  ['read', READS],
+  ['hidden', READS],
+  ['error', ['separate reads']],
+  ['odd', READS],
+];
+
+function expected(s: Session, org: Org, method: Method): Expect {
+  if (s.authenticator && s.aal === 'aal1') return 'null';
+  const unread = org !== 'read';
+  if (unread && !s.authenticator && WRITES.has(method)) return 'marker';
+  return 'ctx';
+}
+
+async function expectMarker(gate: Awaited<ReturnType<typeof apiContextGate>>) {
+  expect('response' in gate).toBe(true);
+  const res = (gate as { response: Response }).response;
+  expect(res.status).toBe(503);
+  expect(res.headers.get('retry-after')).toBe('5');
+  expect(res.headers.get('cache-control')).toBe('no-store');
+  const body = (await res.json()) as { error: string; details: unknown };
+  expect(body).toEqual(contextUnavailableBody());
+  // What the phone reads it through: nothing was written, send it again.
+  expect(isRefusedBeforeAnyWrite({ status: 503, code: body.error, details: body.details })).toBe(
+    true,
+  );
+}
+
+describe.each(PATHS)('apiContextGate over withApiContext (%s)', (path) => {
+  describe.each(ORG_STATES.flatMap(([org, reads]) => reads.map((r) => [org, r] as const)))(
+    'organization row %s, through the %s',
+    (org, read) => {
+      describe.each(METHODS)('%s', (method) => {
+        it.each(SESSIONS.map((s) => [label(s), s] as const))('%s', async (_name, s) => {
+          arrange(s, read, org);
+          const plain = await withApiContext(request(path, method));
+          arrange(s, read, org);
+          const gate = await apiContextGate(request(path, method));
+
+          const want = expected(s, org, method);
+          if (want === 'null') {
+            expect(plain).toBeNull();
+            expect(gate).toEqual({ ctx: null });
+            return;
+          }
+          expect(plain?.userId).toBe(USER_ID);
+          // The state this row is about: the mark is there exactly when the row was not read.
+          expect(mfaPolicyWasUnread(plain!)).toBe(org !== 'read');
+          if (want === 'marker') {
+            expect([plain?.mfaRequired, plain?.mfaSatisfied, plain?.mfaEnrolled]).toEqual([
+              true,
+              false,
+              false,
+            ]);
+            await expectMarker(gate);
+            return;
+          }
+          expect(Object.keys(gate)).toEqual(['ctx']);
+          expect(shape((gate as { ctx: typeof plain }).ctx)).toEqual(shape(plain));
+        });
+      });
+    },
+  );
+});
+
+describe('which answers move, and which stay', () => {
+  const owed: Session = {
+    policy: 'all_required',
+    role: 'staff',
+    authenticator: false,
+    aal: 'aal2',
+  };
+
+  it('a member whose policy was read and who owes set-up: the context, labelled, so the route keeps its 403', async () => {
+    for (const path of PATHS) {
+      for (const read of READS) {
+        arrange(owed, read);
+        const gate = await apiContextGate(request(path, 'POST'));
+        expect('ctx' in gate && gate.ctx?.mfaRequired, `${path} ${read}`).toBe(true);
+        expect('ctx' in gate && gate.ctx?.mfaEnrolled).toBe(false);
+        expect('ctx' in gate && mfaPolicyWasUnread(gate.ctx!)).toBe(false);
+      }
+    }
+  });
+
+  it('the same member when the policy was not read: the marker, and one log line naming the state only', async () => {
+    arrange({ ...owed, policy: 'optional' }, 'separate reads', 'error');
+    await expectMarker(await apiContextGate(request('bearer', 'POST')));
+    const warn = vi.mocked(console.warn);
+    const line = warn.mock.calls.find((c) => String(c[0]).includes('[api-context-gate]'));
+    expect(line).toEqual([
+      '[api-context-gate] access could not be checked, refused before any work:',
+      'MfaPolicyUnread',
+    ]);
+  });
+
+  it('a verified authenticator at aal2 passes in every state', async () => {
+    for (const [org, reads] of ORG_STATES) {
+      for (const read of reads) {
+        arrange({ ...owed, authenticator: true }, read, org);
+        const gate = await apiContextGate(request('bearer', 'POST'));
+        expect('ctx' in gate && gate.ctx?.userId, `${org} ${read}`).toBe(USER_ID);
+      }
+    }
+  });
+
+  it('a copy of the context carries no mark, so only the object withApiContext returned is answered', async () => {
+    arrange({ ...owed, policy: 'optional' }, 'separate reads', 'hidden');
+    const ctx = await withApiContext(request('bearer', 'POST'));
+    expect(mfaPolicyWasUnread(ctx!)).toBe(true);
+    expect(mfaPolicyWasUnread({ ...ctx! })).toBe(false);
+  });
+});
