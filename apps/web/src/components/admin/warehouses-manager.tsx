@@ -40,6 +40,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
+import { editedOptionalText } from '@/lib/edited-optional-text';
 import { cn } from '@/lib/utils';
 import {
   archiveWarehouseAction,
@@ -410,10 +411,10 @@ function WarehouseDialog({
       code: values.code,
       charterIds: values.charterIds,
       managerUserId: values.managerUserId || null,
-      contactName: values.contactName || undefined,
-      contactEmail: values.contactEmail || undefined,
-      contactPhone: values.contactPhone || undefined,
-      notes: values.notes || undefined,
+      contactName: editedOptionalText(values.contactName, editing?.contact_name),
+      contactEmail: editedOptionalText(values.contactEmail, editing?.contact_email),
+      contactPhone: editedOptionalText(values.contactPhone, editing?.contact_phone),
+      notes: editedOptionalText(values.notes, editing?.notes),
       status: 'active' as const,
     };
     const res = editing

@@ -352,3 +352,67 @@ describe('LocationsManager — refusals are announced inside the dialog', () => 
     );
   });
 });
+
+describe('LocationsManager — edit and create payloads', () => {
+  const SITE = { ...ROWS[0]!, notes: 'Back entrance after 5pm' };
+
+  async function openAndSave(user: ReturnType<typeof userEvent.setup>, clearNotes: boolean) {
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    const dialog = await screen.findByRole('dialog');
+    if (clearNotes) await user.clear(within(dialog).getByLabelText(/Notes/));
+    await user.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const actions = await import('@/server/actions/locations');
+    vi.mocked(actions.updateLocationAction).mockResolvedValue({
+      ok: true,
+      data: { id: 'x' },
+    } as never);
+    vi.mocked(actions.createLocationAction).mockResolvedValue({
+      ok: true,
+      data: { id: 'x' },
+    } as never);
+  });
+
+  it('Edit sends emptied notes as cleared', async () => {
+    const { updateLocationAction } = await import('@/server/actions/locations');
+    const user = userEvent.setup();
+    render(<LocationsManager initial={[SITE]} canManage />);
+    await openAndSave(user, true);
+    await waitFor(() => expect(updateLocationAction).toHaveBeenCalledTimes(1));
+    expect(updateLocationAction).toHaveBeenCalledWith('site-1', {
+      name: 'DC4',
+      type: 'warehouse',
+      notes: '',
+    });
+  });
+
+  it('Edit leaves out notes that were empty and stayed empty, and keeps notes left as they were', async () => {
+    const { updateLocationAction } = await import('@/server/actions/locations');
+    const user = userEvent.setup();
+    const { unmount } = render(<LocationsManager initial={[ROWS[0]!]} canManage />);
+    await openAndSave(user, false);
+    await waitFor(() => expect(updateLocationAction).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(updateLocationAction).mock.calls[0]![1].notes).toBeUndefined();
+    unmount();
+
+    render(<LocationsManager initial={[SITE]} canManage />);
+    await openAndSave(user, false);
+    await waitFor(() => expect(updateLocationAction).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(updateLocationAction).mock.calls[1]![1].notes).toBe('Back entrance after 5pm');
+  });
+
+  it('New location sends empty notes as left out', async () => {
+    const { createLocationAction } = await import('@/server/actions/locations');
+    const user = userEvent.setup();
+    render(<LocationsManager initial={[]} canManage />);
+    await user.click(screen.getByRole('button', { name: /New location/ }));
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText('Name'), 'Room 12');
+    await user.click(within(dialog).getByRole('button', { name: 'Create location' }));
+    await waitFor(() => expect(createLocationAction).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(createLocationAction).mock.calls[0]![0].notes).toBeUndefined();
+  });
+});

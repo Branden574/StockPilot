@@ -151,13 +151,14 @@ export class SuppliersService {
   async update(id: string, patch: UpdateSupplierInput) {
     assertModuleEnabled(this.ctx, 'suppliers');
     assertPermission(this.ctx, 'suppliers:manage');
+    // A key left out keeps its column; an emptied field ('') is stored as null.
     const updates: Record<string, unknown> = {};
     if (patch.name !== undefined) updates.name = patch.name;
-    if (patch.contactName !== undefined) updates.contact_name = patch.contactName ?? null;
+    if (patch.contactName !== undefined) updates.contact_name = patch.contactName || null;
     if (patch.email !== undefined) updates.email = patch.email ? patch.email.toLowerCase() : null;
-    if (patch.phone !== undefined) updates.phone = patch.phone ?? null;
+    if (patch.phone !== undefined) updates.phone = patch.phone || null;
     if (patch.website !== undefined) updates.website = patch.website || null;
-    if (patch.notes !== undefined) updates.notes = patch.notes ?? null;
+    if (patch.notes !== undefined) updates.notes = patch.notes || null;
     const { data, error } = await this.ctx.supabase
       .from('suppliers')
       .update(updates)

@@ -41,6 +41,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
+import { editedOptionalText } from '@/lib/edited-optional-text';
 import { cn } from '@/lib/utils';
 import {
   archiveCharterAction,
@@ -421,10 +422,11 @@ function CharterDialog({
   const onSubmit = handleSubmit(async (values) => {
     const payload = {
       name: values.name,
-      code: values.code || undefined,
-      description: values.description || undefined,
-      notes: values.notes || undefined,
+      code: editedOptionalText(values.code, editing?.code),
+      description: editedOptionalText(values.description, editing?.description),
+      notes: editedOptionalText(values.notes, editing?.notes),
       status: 'active' as const,
+      // The address is saved whole, so an emptied line is left out of it.
       address: {
         line1: values.addressLine1 || undefined,
         line2: values.addressLine2 || undefined,
@@ -433,9 +435,9 @@ function CharterDialog({
         postalCode: values.postalCode || undefined,
         country: values.country || undefined,
       },
-      contactName: values.contactName || undefined,
-      contactEmail: values.contactEmail || undefined,
-      contactPhone: values.contactPhone || undefined,
+      contactName: editedOptionalText(values.contactName, editing?.contact_name),
+      contactEmail: editedOptionalText(values.contactEmail, editing?.contact_email),
+      contactPhone: editedOptionalText(values.contactPhone, editing?.contact_phone),
     };
     const res = editing
       ? await updateCharterAction(editing.id, payload)
