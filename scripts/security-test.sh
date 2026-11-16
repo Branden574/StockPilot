@@ -1203,6 +1203,10 @@ WEB_TESTS=(
   # layout reaches that check or redirects to a path under itself, and only
   # dashboard layouts use the resolver without it.
   src/lib/auth/authenticator-set-up.guard.test.ts
+  # A layout that shows a panel in place of its pages (the PO imports
+  # manager-only panel) renders the page for such a member, so the page's own
+  # rule sends them to set-up, and redirects nobody.
+  'src/app/(dashboard)/dashboard/purchase-orders/imports/layout.test.tsx'
   # The sign-in email change gives such a member the answer the profile's
   # name and avatar give (set up an authenticator first), on the website
   # through the real session loader and on the phone's request and resend
@@ -1213,6 +1217,10 @@ WEB_TESTS=(
   src/server/actions/email-change.test.ts
   src/app/api/v1/account/email/set-up-first.routes.test.ts
   src/app/api/v1/account/email/set-up-first.real-context.test.ts
+  # The phone's four email change routes answer the try-again 503 through the
+  # API context gate when the caller's access cannot be read, before anything
+  # is spent, checked, minted, sent or recorded.
+  src/app/api/v1/account/email/context-unavailable.routes.test.ts
   # The phone's sign-in and sign-out notes (S5a), the other two routes on the
   # AAL1 allowlist: an aal1 session of an account with an authenticator writes
   # the sign-in row (code owed) and the device note, and its sign-out revokes
