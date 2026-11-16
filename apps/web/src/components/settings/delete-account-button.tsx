@@ -16,8 +16,7 @@ import { Label } from '@/components/ui/label';
 import { purgeInterruptedRuns } from '@/lib/interrupted-run';
 import { deleteOwnAccountAction, requestAccountDeletionCodeAction } from '@/server/actions/profile';
 
-/** Exactly six digits. */
-const CODE_RE = /^[0-9]{6}$/;
+import { ACCOUNT_DELETE_CODE_RE } from '@stockpilot/core';
 
 /**
  * Button + critical-confirm dialog that lets a user delete their own
@@ -146,7 +145,9 @@ export function DeleteAccountButton({
 
   const credentialIncomplete =
     askCredential &&
-    (method === 'password' ? password.length === 0 : !CODE_RE.test(code) || !challenge);
+    (method === 'password'
+      ? password.length === 0
+      : !ACCOUNT_DELETE_CODE_RE.test(code) || !challenge);
   const busy = pending || sending;
 
   React.useEffect(() => {

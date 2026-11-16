@@ -1111,6 +1111,9 @@ WEB_TESTS=(
   # holds every route handler under src/app to the rule or to a reviewed list
   # (core's stepUpOwed truth table is in MANIFEST 4).
   src/lib/auth/api-context.step-up.test.ts
+  # The factor list is read before the organization's policy: a list that
+  # cannot be read throws before any organization read.
+  src/lib/auth/api-context.factor-list-order.test.ts
   # The level those refusals and the MFA label read is the validated user's
   # own (S43a review round 1): a cookie carrying another account's refresh
   # token, timed to refresh after getUser(), reads as not aal2. The real server
@@ -1203,6 +1206,18 @@ WEB_TESTS=(
   # layout reaches that check or redirects to a path under itself, and only
   # dashboard layouts use the resolver without it.
   src/lib/auth/authenticator-set-up.guard.test.ts
+  # The same rule through the real session loader: requireOrgContext() sends
+  # such a member to set-up on every page and policy, and the layouts' own
+  # answer (authenticatorSetUpOwedForLayout) is the page's, with no redirect;
+  # the dashboard, settings and purchase-order layouts render for them and
+  # never redirect.
+  src/lib/auth/session.authenticator-set-up.test.ts
+  'src/app/(dashboard)/layouts.set-up.test.tsx'
+  # A layout that shows a panel in place of its pages (the purchase orders
+  # access panel, the PO imports manager-only panel) renders the page for such
+  # a member, so the page's own rule sends them to set-up, and redirects nobody.
+  'src/app/(dashboard)/dashboard/purchase-orders/layout.test.tsx'
+  'src/app/(dashboard)/dashboard/purchase-orders/imports/layout.test.tsx'
   # The sign-in email change gives such a member the answer the profile's
   # name and avatar give (set up an authenticator first), on the website
   # through the real session loader and on the phone's request and resend
@@ -1213,6 +1228,15 @@ WEB_TESTS=(
   src/server/actions/email-change.test.ts
   src/app/api/v1/account/email/set-up-first.routes.test.ts
   src/app/api/v1/account/email/set-up-first.real-context.test.ts
+  # The phone's four email change routes answer the try-again 503 through the
+  # API context gate when the caller's access cannot be read, before anything
+  # is spent, checked, minted, sent or recorded.
+  src/app/api/v1/account/email/context-unavailable.routes.test.ts
+  # The Audit log shows an API key row's stored name and scopes as its details,
+  # from a list named one by one per event: no listed field is named like a
+  # key, a secret, a hash or a token, and such a field in a row is never shown.
+  src/lib/audit/format.test.ts
+  src/components/audit/metadata-diff.test.tsx
   # The phone's sign-in and sign-out notes (S5a), the other two routes on the
   # AAL1 allowlist: an aal1 session of an account with an authenticator writes
   # the sign-in row (code owed) and the device note, and its sign-out revokes
@@ -1711,6 +1735,10 @@ WEB_TESTS=(
   # again. Without either, the phone route answers by the policy as before.
   src/lib/auth/account-delete-code.test.ts
   src/server/lib/account-deletion-credential.test.ts
+  # The web's delete-account words and its authenticator policy rule are
+  # core's own values, and core's reading of the two delete routes' answers
+  # (for the phone) has a row for every answer they give.
+  src/app/api/v1/account/delete/answers.core.test.ts
 
   # One create path, no duplicate order (0391, phone ordering PO-2). The
   # service gates (Orders module, the MFA step-up, orders:request) come before
@@ -2082,6 +2110,31 @@ WEB_TESTS=(
   src/app/api/v1/outbox-refusal-details.routes.test.ts
   src/server/lib/refusal-reason.test.ts
   src/app/api/v1/size-counts/route.test.ts
+
+  # Schedule events, serial numbers and customer status over /api/v1 (cookie
+  # or Bearer). POST /api/v1/schedule, POST
+  # /api/v1/items/[id]/serials, PATCH and DELETE /api/v1/serials/[id] and
+  # PATCH /api/v1/customers/[id]/status each build their context with
+  # withApiContext, through the API context gate, and call the service the
+  # website calls (ScheduleService.create, SerialsService.add, updateSerial and
+  # remove, CustomersService.setStatus), so the module, the permission, the
+  # organization's authenticator rule and the reads in the caller's
+  # organization are the website's own, and the service writes the one audit
+  # row with the caller's organization and account. A refused request writes
+  # nothing and no audit row. The parity suite runs the real audit writer: a
+  # route's row and the website action's row for the same change are the same
+  # but for the user agent, and a row the database refuses never undoes or
+  # refuses the change. A warehouse check on a new event that could not read
+  # the caller's own access keeps that apart from a real refusal: the web
+  # action answers the shared "could not check" sentence and the route the
+  # retryable 503, where a warehouse outside the scope is forbidden. All six
+  # files carry the "Security invariant" marker.
+  src/app/api/v1/schedule/route.test.ts
+  'src/app/api/v1/items/[id]/serials/route.test.ts'
+  'src/app/api/v1/serials/[id]/route.test.ts'
+  'src/app/api/v1/customers/[id]/status/route.test.ts'
+  src/app/api/v1/change-routes.audit-rows.test.ts
+  src/server/services/schedule.create-warehouse-check.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2305,6 +2358,23 @@ CORE_TESTS=(
   # S43a: the one rule for "this session still owes its authenticator code"
   # (web API context now; the phone's code gate next).
   src/auth/step-up.test.ts
+  # The policy a reader enforces from an organization row as read: a missing
+  # or odd value, a hidden row and an empty embed are held to all_required;
+  # both embed shapes (object, array of one) read the same policy.
+  src/auth/step-up.enforced-policy.test.ts
+  # The set-up address and words, and the phone's reading of the delete
+  # routes' answers: every code, an unknown code, 401 and no answer.
+  src/auth/set-up-copy.test.ts
+  src/account/delete-account-copy.test.ts
+  # The exact text of the delete-account words and the set-up address and
+  # title the website and the API show, written out in the test.
+  src/shared-words.literals.test.ts
+  # Who owes authenticator set-up (the policy requires one of the role and the
+  # account has no verified factor), the rule the API context decides with.
+  src/auth/step-up.set-up.test.ts
+  # The one "refused before any write" marker: only the API context gate's
+  # exact body is read as nothing written.
+  src/auth/context-unavailable.test.ts
   src/schemas/inventory.test.ts
   src/signature/signature.test.ts
   # The one item-images path builder (web presign and thumbnail, phone

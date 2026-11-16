@@ -45,6 +45,8 @@ import {
 } from '@/server/lib/account-deletion-credential';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 
+import { ACCOUNT_DELETE_TYPE_DELETE_COPY } from '@stockpilot/core';
+
 export const runtime = 'nodejs';
 
 /**
@@ -148,7 +150,7 @@ export async function POST(req: NextRequest) {
 
   if (body.confirm !== 'DELETE') {
     return NextResponse.json(
-      { error: 'validation_error', message: 'Type DELETE to confirm.' },
+      { error: 'validation_error', message: ACCOUNT_DELETE_TYPE_DELETE_COPY },
       { status: 400 },
     );
   }

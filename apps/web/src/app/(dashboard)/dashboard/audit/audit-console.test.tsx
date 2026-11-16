@@ -104,10 +104,25 @@ describe('/dashboard/audit (consolidated console)', () => {
     expect(screen.getByRole('heading', { name: 'Audit log' })).toBeInTheDocument();
   });
 
-  it('?category=stock maps onto the eventPrefix filter (admin-console chips parity)', async () => {
+  it('?category=stock maps onto the eventPrefixes filter (admin-console chips parity)', async () => {
     setCtx('manager');
     render(await AuditLogPage({ searchParams: Promise.resolve({ category: 'stock' }) }));
-    expect(auditList).toHaveBeenCalledWith(expect.objectContaining({ eventPrefix: 'stock.' }));
+    expect(auditList).toHaveBeenCalledWith(expect.objectContaining({ eventPrefixes: ['stock.'] }));
+  });
+
+  it('?category=user lists the Team events and the API key events; All events filters nothing', async () => {
+    setCtx('manager');
+    const { unmount } = render(
+      await AuditLogPage({ searchParams: Promise.resolve({ category: 'user' }) }),
+    );
+    expect(auditList).toHaveBeenLastCalledWith(
+      expect.objectContaining({ eventPrefixes: ['user.', 'api_key.'] }),
+    );
+    unmount();
+    render(await AuditLogPage({ searchParams: Promise.resolve({}) }));
+    expect(auditList).toHaveBeenLastCalledWith(
+      expect.objectContaining({ eventPrefixes: undefined }),
+    );
   });
 
   it('settings-era filters (entityType/entityId/page) still drive the query', async () => {
