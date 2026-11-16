@@ -53,10 +53,10 @@
 --    23505 on every try). An item whose supplier is archived is drafted onto
 --    that supplier, as recorded (the reorder drafts do the same; the screens
 --    name it as archived).
--- I. Idempotency: a replay (4 and 4.0 are the same request; another manager
---    too) returns the first answer with replay true and writes nothing; the
---    key with another request, or for another order: P0001
---    idempotency_conflict; the key row as stored, each draft named by its
+-- I. Idempotency: a replay (4 and 4.0 are the same request) returns the
+--    first answer with replay true and writes nothing; the key with another
+--    request, for another order, or from another manager of the org (0466):
+--    P0001 idempotency_conflict; the key row as stored, each draft named by its
 --    id only (a viewer reads the row but no PO number or supplier in it),
 --    while a replay still answers each draft's number and supplier, read
 --    from the PO; a refused call leaves no key and the key can be used again.
@@ -826,27 +826,28 @@ select pg_temp.pos() as "posI" \gset
 set local role to 'authenticated';
 set local "request.jwt.claim.sub" to :mgr;
 insert into ans select 'I2', public.draft_order_shortfall_pos(:ordIdem, pg_temp.l1(:iI, '4.0000')::jsonb, 'idem-1');
-set local "request.jwt.claim.sub" to :mgr2;
-insert into ans select 'I3', public.draft_order_shortfall_pos(:ordIdem, pg_temp.l1(:iI, '4')::jsonb, 'idem-1');
 reset role;
+-- 0466: a replay answers only the person whose drafts the key stands for (a
+-- retry comes from the account that sent the first call), so another manager
+-- of the org sending the same key is now refused (I2) instead of replayed.
 select is(
   (select jsonb_build_object(
-            'sameAnswer', (select r - 'replay' from ans where who = 'I2') = (select r - 'replay' from ans where who = 'I1')
-                      and (select r - 'replay' from ans where who = 'I3') = (select r - 'replay' from ans where who = 'I1'),
-            'replay', jsonb_build_array((select r->'replay' from ans where who = 'I1'), (select r->'replay' from ans where who = 'I2'),
-                                        (select r->'replay' from ans where who = 'I3')),
+            'sameAnswer', (select r - 'replay' from ans where who = 'I2') = (select r - 'replay' from ans where who = 'I1'),
+            'replay', jsonb_build_array((select r->'replay' from ans where who = 'I1'), (select r->'replay' from ans where who = 'I2')),
             'pos', pg_temp.pos() = :posI)),
-  jsonb_build_object('sameAnswer', true, 'replay', jsonb_build_array(false, true, true), 'pos', true),
-  'I1: a replay (4 and 4.0000 are the same request; another manager of the org too) returns the first answer, the same POs, with replay true, and writes nothing');
+  jsonb_build_object('sameAnswer', true, 'replay', jsonb_build_array(false, true), 'pos', true),
+  'I1: a replay (4 and 4.0000 are the same request) returns the first answer, the same POs, with replay true, and writes nothing');
 set local role to 'authenticated';
 set local "request.jwt.claim.sub" to :mgr;
 insert into fx select 'other lines', pg_temp.err(pg_temp.draft(:ordIdem, pg_temp.l1(:iI, '1'), 'idem-1'));
 insert into fx select 'other order', pg_temp.err(pg_temp.draft(:ordIdm2, pg_temp.l1(:iI, '1'), 'idem-1'));
+set local "request.jwt.claim.sub" to :mgr2;
+insert into fx select 'another manager', pg_temp.err(pg_temp.draft(:ordIdem, pg_temp.l1(:iI, '4'), 'idem-1'));
 reset role;
 select is(
-  (select string_agg(who || '=' || r, ', ' order by who) from fx),
-  'other lines=P0001:idempotency_conflict:idempotency_conflict, other order=P0001:idempotency_conflict:idempotency_conflict',
-  'I2: the key with another request (other quantities, another order) is P0001 idempotency_conflict');
+  (select string_agg(who || '=' || r, ', ' order by who) || ' / ' || (pg_temp.pos() = :posI)::text from fx),
+  'another manager=P0001:idempotency_conflict:idempotency_conflict, other lines=P0001:idempotency_conflict:idempotency_conflict, other order=P0001:idempotency_conflict:idempotency_conflict / true',
+  'I2: the key with another request (other quantities, another order), or from another manager of the org, is P0001 idempotency_conflict and drafts nothing');
 delete from fx;
 select is(
   (select jsonb_build_object('scope', k.scope, 'status', k.status, 'type', k.resource_type, 'resource', k.resource_id,
@@ -1170,7 +1171,12 @@ select is(
   -- key lines (header, owner and ACL unchanged); F2-5's function calls neither.
   -- 0464's pgTAP P8 takes both back to their pre-0464 text and gets
   -- cfc03152|18 exactly.
-  'ledger.*|ee07dd0a0c69b01b77f39c5791aea9e4|18\n'
+  -- Re-pinned by 0466 (retry keys; was ee07dd0a0c69b01b77f39c5791aea9e4|18):
+  -- ledger.post_receipt_v2 and ledger.distribute_bundle gained their tagged
+  -- lines refusing a key already on a receipt or distribution (header, owner
+  -- and ACL unchanged); F2-5's function calls neither. 0466's pgTAP P2 takes
+  -- both back to their pre-0466 text and gets ee07dd0a|18 exactly.
+  'ledger.*|7e62f415c0fee59d829acffae47f602c|18\n'
   -- Re-pinned by 0390 (was a85d7406f48ad916cb5fcdb2193fa201|8): order_requests_update
   -- (USING and WITH CHECK) and order_requests_insert lost the has_org_role
   -- manager term; every other term and both schedule_events policies are

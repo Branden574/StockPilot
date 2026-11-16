@@ -907,6 +907,19 @@ PGTAP_TESTS=(
   # outbox_event_in_org), a connection names only the Vault secret stored for
   # it and only the server sets it, and the Vault reads check the row.
   supabase/tests/0465_connection_records_in_their_organization.test.sql
+  # Retry keys written by their functions (0466): an
+  # insert, update or delete of an idempotency_keys row by authenticated or
+  # anon needs stockpilot.idempotency_write equal to the transaction id,
+  # which only the four key-keeping functions set around their own key
+  # writes (42501 idempotency_key_through_rpc otherwise); the service role,
+  # the table owner and the SECURITY DEFINER return functions are not held.
+  # A recount replay answers only the count its key row names; a shortfall
+  # replay only this order and the caller's own drafts (P0001
+  # idempotency_conflict); a fresh receipt post or kit hand-out whose key a
+  # receipt or distribution already carries is 55000. Each body is
+  # production's with its added lines removed. The lock footprint is
+  # scripts/db-concurrency/0466_migration_lock_footprint.sh.
+  supabase/tests/0466_retry_keys_written_by_their_functions.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
