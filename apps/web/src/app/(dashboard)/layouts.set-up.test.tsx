@@ -71,6 +71,7 @@ vi.mock('@/lib/error-reporter', async (importOriginal) => ({
 
 import { resetWorld, world } from '@/test/step-up-session-fixture';
 
+import PoImportsLayout from './dashboard/purchase-orders/imports/layout';
 import SettingsLayout from './dashboard/settings/layout';
 import DashboardLayout from './layout';
 
@@ -161,9 +162,43 @@ describe.each([
     world.pathname = CLOSED;
     const { default: Integrations } = await import('./dashboard/settings/integrations/page');
     world.calls = [];
-    await expect(Integrations()).rejects.toThrow(SET_UP);
+    await expect(Integrations({ searchParams: Promise.resolve({}) })).rejects.toThrow(SET_UP);
     expect(world.calls.filter((c) => c.startsWith('from:'))).toEqual([]);
   });
+});
+
+/**
+ * The PO imports layout shows its manager-only panel in place of the pages to
+ * someone without Manage purchase orders. A staff member or a viewer who must
+ * set up an authenticator first gets the page instead, whose own rule sends
+ * them to set-up; the layout never redirects.
+ */
+describe('the PO imports layout, for someone without Manage purchase orders', () => {
+  const IMPORTS = '/dashboard/purchase-orders/imports';
+
+  it.each(['staff', 'viewer'] as const)(
+    'a %s with no authenticator under Required for everyone: the page, never a redirect',
+    async (role) => {
+      world.policy = 'all_required';
+      world.role = role;
+      world.pathname = IMPORTS;
+      const tree = await PoImportsLayout({ children: <PageBelow /> });
+      expect(findByTypeName(tree, 'PageBelow')).not.toBeNull();
+      expect(findByTypeName(tree, 'StatePanel')).toBeNull();
+    },
+  );
+
+  it.each(['staff', 'viewer'] as const)(
+    'a %s who owes no set-up (Required for admins): the manager-only panel, not the page',
+    async (role) => {
+      world.policy = 'admins_required';
+      world.role = role;
+      world.pathname = IMPORTS;
+      const tree = await PoImportsLayout({ children: <PageBelow /> });
+      expect(findByTypeName(tree, 'StatePanel')).not.toBeNull();
+      expect(findByTypeName(tree, 'PageBelow')).toBeNull();
+    },
+  );
 });
 
 describe('control: a Manager under Required for admins', () => {

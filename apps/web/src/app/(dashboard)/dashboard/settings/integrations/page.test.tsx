@@ -133,7 +133,9 @@ function as(role: typeof ctxHolder.role, permissions: string[]) {
 const panel = () => screen.getByTestId('integrations-panel');
 
 /** The page's props: what the address carries back from an accounting connection. */
-const returnedWith = (query: Record<string, string>) => ({ searchParams: Promise.resolve(query) });
+const returnedWith = (query: { error?: string | string[]; connected?: string }) => ({
+  searchParams: Promise.resolve(query),
+});
 const noReturn = () => returnedWith({});
 
 beforeEach(() => {
@@ -197,9 +199,7 @@ describe('Settings > Integrations after a refused accounting connection', () => 
       unmount();
     }
     const { unmount } = render(
-      await IntegrationsSettingsPage({
-        searchParams: Promise.resolve({ error: ['forbidden', 'forbidden'] }),
-      }),
+      await IntegrationsSettingsPage(returnedWith({ error: ['forbidden', 'forbidden'] })),
     );
     expect(screen.queryByRole('status')).toBeNull();
     unmount();
