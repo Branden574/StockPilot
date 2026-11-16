@@ -38,7 +38,7 @@ import {
 /**
  * Security invariant: a member whose organization requires an authenticator
  * of their role, and who has none, reads no organization data through the
- * API. Every GET and HEAD handler under /api/v1 answers them 403 `forbidden`
+ * API. Every GET and HEAD handler under /api answers them 403 `forbidden`
  * with core's sentence and `details.reason: 'mfa_required'` (or, when their
  * organization's policy could not be read, the retryable 503 `check_failed`)
  * before it does anything else, or is listed here as open with its reason.
@@ -56,7 +56,7 @@ import {
  * Read on the syntax tree (a comment or a string never counts), over every
  * shipped source file under apps/web/src (test/authenticator-read-tree.ts):
  *
- *   1. every GET and HEAD handler of a route file served under /api/v1 (route
+ *   1. every GET and HEAD handler of a route file served under /api (route
  *      groups and slots left out of the address) calls a read gate as its
  *      first step: the first call it awaits or returns, following the file's
  *      own functions it calls first and the handler it re-exports from
@@ -120,7 +120,7 @@ interface Open {
   reason: string;
 }
 
-/** The GET handlers under /api/v1 that are not held, by route file (apps/web/src relative). */
+/** The GET handlers under /api that are not held, by route file (apps/web/src relative). */
 const OPEN_READS: Record<string, Open> = {
   'app/api/v1/account/email/route.ts': {
     kind: 'own-account',
@@ -141,6 +141,55 @@ const OPEN_READS: Record<string, Open> = {
     kind: 'no-session',
     reason:
       "The delivery location for a requester's order behind the order's own signed token: no session is read, so there is no member to hold.",
+  },
+  'app/api/public/v1/hooks/route.ts': {
+    kind: 'no-session',
+    reason:
+      "The public API, called with an organization's API key (authorizePublicApi): no member session is read, so there is no member to hold.",
+  },
+  'app/api/public/v1/items/route.ts': {
+    kind: 'no-session',
+    reason:
+      "The public API, called with an organization's API key (authorizePublicApi): no member session is read, so there is no member to hold.",
+  },
+  'app/api/public/v1/orders/route.ts': {
+    kind: 'no-session',
+    reason:
+      "The public API, called with an organization's API key (authorizePublicApi): no member session is read, so there is no member to hold.",
+  },
+  'app/api/public/v1/purchase-orders/route.ts': {
+    kind: 'no-session',
+    reason:
+      "The public API, called with an organization's API key (authorizePublicApi): no member session is read, so there is no member to hold.",
+  },
+  'app/api/admin/backfill-item-thumbs/route.ts': {
+    kind: 'no-session',
+    reason:
+      'An operator tool behind its own bearer secret (BACKFILL_ADMIN_SECRET); the GET says what the build accepts and reads no session.',
+  },
+  'app/api/books/lookup/route.ts': {
+    kind: 'no-session',
+    reason:
+      'Book facts from public sources by ISBN, limited per address: no session is read and no organization data is served.',
+  },
+  'app/api/health/route.ts': {
+    kind: 'no-session',
+    reason: 'The health check for the host and monitors: no session is read and no data is served.',
+  },
+  'app/api/version/route.ts': {
+    kind: 'no-session',
+    reason:
+      'The build the server is running, for the update prompt and the phone: no session is read and no organization data is served.',
+  },
+  'app/api/integrations/quickbooks/callback/route.ts': {
+    kind: 'oauth-callback',
+    reason:
+      'The QuickBooks OAuth return: it builds its own principal from the cookie session and refuses a session that has not met the policy (cookieSessionMfaState), before it stores anything.',
+  },
+  'app/api/integrations/sage_intacct/callback/route.ts': {
+    kind: 'oauth-callback',
+    reason:
+      'The Sage Intacct OAuth return: it builds its own principal from the cookie session and refuses a session that has not met the policy (cookieSessionMfaState), before it stores anything.',
   },
 };
 
@@ -224,7 +273,7 @@ function describeFirst(h: ReadHandler): string {
   return h.first.instead ?? '(none)';
 }
 
-/** Rule 1: GET and HEAD handlers under /api/v1 that are neither held nor listed, and stale entries. */
+/** Rule 1: GET and HEAD handlers under /api that are neither held nor listed, and stale entries. */
 function openReadFindings(sources: Sources, open: Record<string, Open>): string[] {
   const found: string[] = [];
   for (const file of unreadableRouteFiles(sources)) {
@@ -528,13 +577,15 @@ describe('every API read holds a member who must set up an authenticator first',
     expect(SHIPPED.size).toBeGreaterThan(1000);
     const files = apiRouteFiles(SHIPPED);
     expect(files.filter(servesV1).length).toBeGreaterThan(150);
-    expect(files.every(servesV1)).toBe(true);
+    expect(files.length).toBeGreaterThan(files.filter(servesV1).length + 50);
     expect(files).toContain('app/api/v1/reports/book-order-totals/export/route.tsx');
     expect(files).toContain('app/api/v1/mobile/snapshot/route.ts');
+    expect(files).toContain('app/api/items/search/route.ts');
+    expect(files).toContain('app/api/cron/drain-outbox/route.ts');
     const gets = files.flatMap((f) => readHandlersOf(f, SHIPPED, READ_METHODS));
-    // 58 GET handlers under /api/v1 on 2026-11-16.
-    expect(gets.length).toBeGreaterThan(55);
-    expect(gets.filter(isHeldRead).length).toBeGreaterThan(50);
+    // 113 GET handlers under /api on 2026-11-16: 58 under /api/v1.
+    expect(gets.length).toBeGreaterThan(100);
+    expect(gets.filter(isHeldRead).length).toBeGreaterThan(75);
     expect(servedPath('app/(x)/api/v1/y/route.ts')).toBe('api/v1/y');
     expect(heldHandlers(SHIPPED)).toContain('v1/orders/signature-lookup POST');
   });
@@ -674,6 +725,8 @@ describe('self-test: a planted violation of each rule is reported', () => {
     ).toEqual(
       [
         'app/(group)/api/v1/grouped/route.ts GET: calls none of apiReadContext, returnsContext, memberRequesterGate first and is not on OPEN_READS (first: withApiContext(req))',
+        'app/api/cron/job/route.ts: says it reads no session, but imports createClient from @/lib/supabase/server',
+        'app/api/not-v1/route.ts GET: calls none of apiReadContext, returnsContext, memberRequesterGate first and is not on OPEN_READS (first: withApiContext(req))',
         'app/api/v1/as-jsx/route.jsx: a route file this guard does not read',
         "app/api/v1/late/route.ts GET: reaches a read gate, but its first step is createAdminClient().from('items').select('id').eq('id', id)",
         'app/api/v1/listed-as-service-gate/route.ts: a GET is never open as service-gate',
@@ -692,8 +745,9 @@ describe('self-test: a planted violation of each rule is reported', () => {
         'app/api/v1/star/route.ts: cannot read export * from ../held/route',
       ].sort(),
     );
-    // The held shapes, and the derived list the sweep calls: nothing outside /api/v1.
+    // The held shapes, the derived list the sweep calls, and an address outside /api.
     expect(heldHandlers(tree)).toEqual([
+      'elsewhere GET',
       'v1/after-params GET',
       'v1/answer-first GET',
       'v1/held GET',
@@ -727,6 +781,7 @@ describe('self-test: a planted violation of each rule is reported', () => {
       answerFindings(tree, { 'app/api/v1/gated-listed/route.ts': open('x'.repeat(50)) }),
     ).toEqual(
       [
+        'app/api/gated-elsewhere/route.ts GET: reaches apiContextGate, which gives no set-up answer, and is not on OPEN_READS',
         'app/api/v1/gated/route.ts GET: reaches apiContextGate, which gives no set-up answer, and is not on OPEN_READS',
         "app/api/v1/orders/[id]/return-request/http.ts:5: refuseSetUpOwedRead is not handed the gate's own `kind`",
         'app/api/v1/orders/[id]/return-request/http.ts:5: the answer of refuseSetUpOwedRead is not returned at once',

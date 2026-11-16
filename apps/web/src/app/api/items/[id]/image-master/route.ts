@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { reportError } from '@/lib/error-reporter';
 import { ItemImagesService } from '@/server/services/item-images';
 
@@ -48,7 +48,9 @@ export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   const { id } = await params;
   if (!UUID_RE.test(id)) {

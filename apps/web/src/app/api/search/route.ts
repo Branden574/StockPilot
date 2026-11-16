@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { ItemImagesService } from '@/server/services/item-images';
@@ -15,7 +15,9 @@ export const dynamic = 'force-dynamic';
  * the org. Suppliers are org-scoped.
  */
 export async function GET(req: Request) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   // A member who must set up an authenticator first (the API context decides

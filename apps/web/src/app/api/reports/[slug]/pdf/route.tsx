@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { Readable } from 'node:stream';
 import { renderToStream } from '@react-pdf/renderer';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { prefetchImagesAsDataUris, prefetchPdfLogo } from '@/lib/pdf/image-prefetch';
 import { REPORT_PDF_SECTIONS } from '@/lib/pdf/report-configs';
@@ -90,7 +90,9 @@ export async function GET(
     // a session (401); reports:export with the MFA step-up (403); a known
     // report (404); reports:read and the report's modules (403); the request
     // (400); then the export limit (429). Same order as the CSV dispatcher.
-    ctx = await withApiContext(request);
+    const read = await apiReadContext(request);
+    if ('response' in read) return read.response;
+    ctx = read.ctx;
     if (!ctx) return reportExportUnauthenticated();
     assertPermission(ctx, 'reports:export');
     if (!PDF_REPORTS.has(slug)) {

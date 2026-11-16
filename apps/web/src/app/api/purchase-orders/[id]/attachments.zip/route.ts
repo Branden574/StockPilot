@@ -3,7 +3,7 @@ import { zipSync } from 'fflate';
 
 import { can } from '@stockpilot/core';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
@@ -48,7 +48,9 @@ function dedupe(name: string, used: Set<string>): string {
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   try {
-    const ctx = await withApiContext(req);
+    const read = await apiReadContext(req);
+    if ('response' in read) return read.response;
+    const ctx = read.ctx;
     if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     // A malformed id is a 400 before anything is read or spent (B63).
     const invalidId = invalidPathIdResponse(id, 'That purchase order id is not valid.');

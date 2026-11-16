@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { reportError } from '@/lib/error-reporter';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
@@ -39,7 +39,9 @@ const DEFAULT_LIMIT = 50;
  */
 export async function GET(req: NextRequest) {
   try {
-    const ctx = await withApiContext(req);
+    const read = await apiReadContext(req);
+    if ('response' in read) return read.response;
+    const ctx = read.ctx;
     if (!ctx) {
       return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
     }

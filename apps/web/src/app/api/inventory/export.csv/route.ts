@@ -2,7 +2,7 @@ import { unstable_rethrow } from 'next/navigation';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { csvFilename, toCsv } from '@/lib/csv';
 import { reportError } from '@/lib/error-reporter';
@@ -60,7 +60,9 @@ const VALID_TYPES = new Set(['product', 'book', 'asset', 'consumable', 'all']);
 
 export async function GET(request: Request) {
   try {
-    const ctx = await withApiContext(request);
+    const read = await apiReadContext(request);
+    if ('response' in read) return read.response;
+    const ctx = read.ctx;
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }

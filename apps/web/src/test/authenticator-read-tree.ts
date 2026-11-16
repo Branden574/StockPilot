@@ -93,8 +93,8 @@ export function servedPath(file: string): string | null {
   return dirs.filter((d) => !/^\(.*\)$/.test(d) && !d.startsWith('@')).join('/');
 }
 
-/** The addresses the read rule covers: everything served under /api/v1. */
-export const READ_SCOPE = 'api/v1';
+/** The addresses the read rule covers: everything served under /api. */
+export const READ_SCOPE = 'api';
 
 /** A route file that serves an address in READ_SCOPE, whatever folders it sits in. */
 function servesApi(file: string): boolean {

@@ -12,8 +12,8 @@ import { heldHandlers, shippedSources } from '@/test/authenticator-read-tree';
  * and every held handler answers 403 `forbidden` with core's sentence and
  * `details.reason: 'mfa_required'`, not stored, before any work of its own:
  * no table, no service client, no rate-limit slot. The handlers are every GET
- * and every read by POST under /api/v1, read from the source tree by the
- * guard's own reading.
+ * under /api (the website's exports and searches too) and the reads by POST
+ * under /api/v1, read from the source tree by the guard's own reading.
  *
  * When the organization's policy could not be read (the context carries the
  * mark withApiContext gives it), the same handlers answer the retryable 503
@@ -111,7 +111,7 @@ function owedCtx() {
  * Every handler the read rule holds, as `<route folder under app/api> <METHOD>`,
  * read from the source tree by the guard's own reading
  * (test/authenticator-read-tree.ts heldHandlers): every GET and HEAD under
- * /api/v1 whose first step is a read gate, and every handler by another method
+ * /api whose first step is a read gate, and every handler by another method
  * that hands a read gate 'read'. A handler the guard counts as held is called
  * here, so the two cannot drift apart.
  */
@@ -133,6 +133,7 @@ const WRITES: Array<[string, string]> = [
   ['v1/product-groups/linking', 'DELETE'],
   ['v1/returns/[id]/cancel', 'POST'],
   ['v1/size-counts/training', 'POST'],
+  ['ai/sessions', 'POST'],
 ];
 
 type Handler = (req: NextRequest, ctx: { params: Promise<typeof PARAMS> }) => Promise<Response>;
@@ -173,11 +174,15 @@ async function expectHeld(res: Response) {
 
 describe('a read by a member who must set up an authenticator first', () => {
   it('reads the held handlers from the tree', () => {
-    // 56 on 2026-11-16: 54 GETs and 2 POSTs.
-    expect(HELD.length).toBeGreaterThan(50);
+    // 81 on 2026-11-16: 54 GETs under /api/v1, 2 POSTs there, and 25 GETs
+    // elsewhere under /api (the order signature image is held at both of its
+    // addresses).
+    expect(HELD.length).toBeGreaterThan(75);
     expect(HELD).toContainEqual({ route: 'v1/mobile/snapshot', method: 'GET' });
     expect(HELD).toContainEqual({ route: 'v1/orders/[id]/return-request/options', method: 'POST' });
     expect(HELD).toContainEqual({ route: 'v1/orders/signature-lookup', method: 'POST' });
+    expect(HELD).toContainEqual({ route: 'items/search', method: 'GET' });
+    expect(HELD).toContainEqual({ route: 'inventory/export.csv', method: 'GET' });
   });
 
   it.each(HELD)(
@@ -192,9 +197,14 @@ describe('a read by a member who must set up an authenticator first', () => {
     expect(h.calls).toEqual([]);
   });
 
-  it('a null context stays each route its own 401 (snapshot, returns, a member return)', async () => {
+  it('a null context stays each route its own 401 (snapshot, returns, a member return, an export)', async () => {
     h.ctx = null;
-    for (const route of ['v1/mobile/snapshot', 'v1/returns', 'v1/orders/[id]/return-request']) {
+    for (const route of [
+      'v1/mobile/snapshot',
+      'v1/returns',
+      'v1/orders/[id]/return-request',
+      'inventory/export.csv',
+    ]) {
       expect((await call(route, 'GET')).status, route).toBe(401);
     }
   });

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { csvFilename, toCsv } from '@/lib/csv';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
@@ -79,7 +79,9 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const ctx = await withApiContext(request);
+    const read = await apiReadContext(request);
+    if ('response' in read) return read.response;
+    const ctx = read.ctx;
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }

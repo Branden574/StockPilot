@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { csvFilename, toCsv } from '@/lib/csv';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import {
@@ -70,7 +70,9 @@ export async function GET(
   const url = new URL(request.url);
   let ctx: ServiceContext | null = null;
   try {
-    ctx = await withApiContext(request);
+    const read = await apiReadContext(request);
+    if ('response' in read) return read.response;
+    ctx = read.ctx;
     if (!ctx) return reportExportUnauthenticated();
     assertPermission(ctx, 'reports:export');
     if (!CSV_REPORTS.has(slug)) {

@@ -4,7 +4,7 @@ import { renderToStream } from '@react-pdf/renderer';
 
 import { can } from '@stockpilot/core';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { humanizeChargeType } from '@/lib/po-imports/charges';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
@@ -42,7 +42,9 @@ export async function GET(
     // Pass `req` so bearer-token (mobile) callers authenticate the same way
     // as cookie sessions — /api/* bypasses middleware so this is the only
     // place auth is resolved.
-    const ctx = await withApiContext(req);
+    const read = await apiReadContext(req);
+    if ('response' in read) return read.response;
+    const ctx = read.ctx;
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }
