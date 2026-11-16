@@ -2096,6 +2096,21 @@ WEB_TESTS=(
   src/server/services/team.update-member-role.test.ts
   src/server/actions/mfa.policy-unchanged.test.ts
 
+  # The routes the phone's outbox sends queued changes to (record and clear a
+  # count, receive a PO line, distribute a kit, append size-count events): a
+  # refusal carries only a string `details.reason` from the ServiceError
+  # (server/lib/refusal-reason.ts), so the authenticator answers
+  # ('mfa_required', 'aal2_required') are told apart from a missing
+  # permission; no other field of `details` is forwarded; an internal error
+  # keeps its fixed sentence with no details and none of the raw text. Both
+  # files carry the "Security invariant" marker. The reason is forwarded only
+  # when it is a fixed lower-case word of at most 64 characters. The size-count
+  # suite pins that the other size-count handlers answer the code and message
+  # alone, with no details.
+  src/app/api/v1/outbox-refusal-details.routes.test.ts
+  src/server/lib/refusal-reason.test.ts
+  src/app/api/v1/size-counts/route.test.ts
+
   # Schedule events, serial numbers and customer status over /api/v1 (cookie
   # or Bearer). POST /api/v1/schedule, POST
   # /api/v1/items/[id]/serials, PATCH and DELETE /api/v1/serials/[id] and
