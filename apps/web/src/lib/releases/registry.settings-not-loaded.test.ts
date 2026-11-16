@@ -61,6 +61,15 @@ const connectionScheduleRead = {
   opened_at: '2026-11-16T09:45:00Z',
   read_at: '2026-11-16T09:45:00Z',
 };
+// Added by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16): the emptied fields and schedule completion release (whoever can manage the schedule or suppliers with those modules on, or the organization, locations or categories), published later, at the top, below the Liquid Glass draft.
+const EMPTIED_FIELDS_ID = 'emptied-fields-and-schedule-completion-2026-11';
+const emptiedFieldsRead = {
+  release_id: EMPTIED_FIELDS_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-16T12:35:00Z',
+  read_at: '2026-11-16T12:35:00Z',
+};
 const MODULE_CHECK_ID = 'module-check-try-again-2026-11';
 const COUNT_RELEASE_ID = 'count-read-rule-2026-11';
 // Added by docs/whats-new-navigation-keeps-choices (2026-11-15): the navigation release (owners and admins who can open Settings, Navigation), published later, directly above this one.
@@ -155,9 +164,12 @@ describe('the settings release: order, status and date', () => {
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: every pinned position one place higher): the delete account release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: every pinned position one place higher): the Integrations and schedule event release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES.slice(0, 10).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: RELEASES.slice(0, 10)): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    expect(RELEASES.slice(0, 11).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
       // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: without it): the Integrations and schedule event release is published later, at the top, directly below the Liquid Glass draft.
+      // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: without it): the emptied fields and schedule completion release is published later, at the top, directly below the Liquid Glass draft.
+      [EMPTIED_FIELDS_ID, 'published'],
       [CONNECTION_SCHEDULE_ID, 'published'],
       // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: without it): the invitation audit release is published later, at the top, directly below the Liquid Glass draft.
       // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, directly below the Liquid Glass draft.
@@ -189,7 +201,8 @@ describe('the settings release: order, status and date', () => {
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: every pinned position one place higher): the delete account release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: every pinned position one place higher): the Integrations and schedule event release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(8)) {
+    // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: every pinned position one place higher): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(9)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -369,7 +382,8 @@ describe('the settings release: who is told', () => {
           RELEASES,
           v,
           // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: without it): the Integrations and schedule event release is published later, at the top, and reaches whoever can manage integrations or schedule events with those modules on (owners and admins, and managers for its schedule entry, by default), so it is read or seen with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
-          [connectionScheduleRead, deleteConfirmRead, authSetUpRead, apiKeyAuditRead, invitationAuditRead, navigationRead],
+          // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: without it): the emptied fields and schedule completion release is published later, at the top, and reaches whoever can manage the schedule or suppliers with those modules on, or the organization, locations or categories (owners and admins, and managers for all but its charter and warehouse entry, by default), an owner with every permission included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          [emptiedFieldsRead, connectionScheduleRead, deleteConfirmRead, authSetUpRead, apiKeyAuditRead, invitationAuditRead, navigationRead],
           null,
         ).latestUnread?.id,
         v.role,
@@ -391,7 +405,8 @@ describe('the settings release: who is told', () => {
           // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member, so it is read first, and the notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: without it): the delete account release is published later, at the top, and reaches every member, so it is read first, and the notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: without it): the Integrations and schedule event release is published later, at the top, and reaches whoever can manage integrations or schedule events with those modules on (owners and admins, and managers for its schedule entry, by default), so it is read or seen with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
-          [connectionScheduleRead, deleteConfirmRead, authSetUpRead, apiKeyAuditRead, invitationAuditRead, navigationRead, read],
+          // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: without it): the emptied fields and schedule completion release is published later, at the top, and reaches whoever can manage the schedule or suppliers with those modules on, or the organization, locations or categories (owners and admins, and managers for all but its charter and warehouse entry, by default), an owner with every permission included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          [emptiedFieldsRead, connectionScheduleRead, deleteConfirmRead, authSetUpRead, apiKeyAuditRead, invitationAuditRead, navigationRead, read],
           null,
         ).latestUnread?.id,
         v.role,
