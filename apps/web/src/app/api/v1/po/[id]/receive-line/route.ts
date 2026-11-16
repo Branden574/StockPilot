@@ -7,6 +7,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
+import { refusalReasonDetails } from '@/server/lib/refusal-reason';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { ReceivingService } from '@/server/services/receiving';
 import { ServiceError } from '@/server/services/context';
@@ -225,7 +226,16 @@ export async function POST(
                 : e.code === 'unauthenticated'
                   ? 401
                   : 500;
-      return NextResponse.json({ error: e.code, message: e.message }, { status });
+      return NextResponse.json(
+        {
+          error: e.code,
+          message: e.message,
+          // Only a string `details.reason`, and never for an internal_error
+          // (server/lib/refusal-reason.ts).
+          ...refusalReasonDetails(e),
+        },
+        { status },
+      );
     }
     // A module state that could not be read (docket S81): the fixed
     // try-again answer at warning level, which the phone's outbox sends again.

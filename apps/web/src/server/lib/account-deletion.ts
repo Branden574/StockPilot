@@ -9,6 +9,8 @@ import type { createAdminClient } from '@/lib/supabase/admin';
 import type { createClient } from '@/lib/supabase/server';
 import { insertAuditRowReported } from '@/server/services/audit';
 
+import { ACCOUNT_DELETE_LAST_OWNER_COPY, ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE } from '@stockpilot/core';
+
 /**
  * Account deletion, shared by the web self-delete action, the phone's
  * POST /api/v1/account/delete and the platform console's orphan cleanup.
@@ -74,33 +76,20 @@ export type AccountDeletionCheck =
       sqlstate?: string;
     };
 
-/** Plain sentences (A2 plan 4.5, A3 plan 9.5). Never "book" for a recorded quantity. */
-/** An integrity refusal after 0393, which converted every refusing key: unexpected. */
-export const ACCOUNT_DELETE_BLOCKED_COPY =
-  'Your account could not be deleted because it is linked to a record that could not be released. Nothing was changed. Contact StockPilot support.';
 /**
- * The check's last-owner answer (0393), when the app could not name the
- * organization (web). The Team page's control is a member row's "Transfer
- * ownership…" (owner is not in the role list), and removing the other members
- * also lets the account go (a solo organization), so the sentence names both
- * (A3 review).
+ * Plain sentences, in @stockpilot/core (account/delete-account-copy.ts),
+ * shared with the phone's reading of the delete route's answers. Never "book"
+ * for a recorded quantity.
  */
-export const ACCOUNT_DELETE_LAST_OWNER_COPY =
-  'You are the only owner of an organization that has other members. On the Team page, choose Transfer ownership on another member, or remove the other members, then delete your account. Nothing was changed.';
-/** The same for the phone, where ownership is transferred on the web (O-A3-8). */
-export const ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE =
-  'You are the only owner of an organization that has other members. On the Team page on the web, choose Transfer ownership on another member, or remove the other members, then delete your account. Nothing was changed.';
-/** The owner check could not be read (web and phone): nothing changed. */
-export const ACCOUNT_DELETE_OWNER_CHECK_FAILED_COPY =
-  'Could not check the organizations you own. Nothing was deleted. Try again.';
-/** O-A3-7: a platform admin's account is not deleted while its email is on the allowlist. */
-export const ACCOUNT_DELETE_PLATFORM_ADMIN_COPY =
-  'This account is a StockPilot platform admin. Remove it from the platform admin list before deleting it. Nothing was changed.';
-export const ACCOUNT_DELETE_RETRY_COPY =
-  'Your account could not be deleted right now. Nothing was changed. Try again in a minute.';
-/** After a failed deleteUser: the sessions were revoked (SP-008). */
-export const ACCOUNT_DELETE_SIGNED_OUT_COPY =
-  'Your account could not be deleted right now. You have been signed out; nothing else changed. Try again in a minute.';
+export {
+  ACCOUNT_DELETE_BLOCKED_COPY,
+  ACCOUNT_DELETE_LAST_OWNER_COPY,
+  ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE,
+  ACCOUNT_DELETE_OWNER_CHECK_FAILED_COPY,
+  ACCOUNT_DELETE_PLATFORM_ADMIN_COPY,
+  ACCOUNT_DELETE_RETRY_COPY,
+  ACCOUNT_DELETE_SIGNED_OUT_COPY,
+} from '@stockpilot/core';
 
 /** Attempts per user per window before the check (each runs a full dry-run cascade). */
 export const ACCOUNT_DELETE_RATE_LIMIT = 5;

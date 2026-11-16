@@ -18,11 +18,6 @@ import { checkRateLimit } from '@/lib/rate-limit';
 
 import { stepUpOwed } from '@stockpilot/core';
 
-import {
-  DELETE_ACCOUNT_CODE_SEND_PAUSED_COPY,
-  DELETE_ACCOUNT_CONFIRM_COPY,
-} from '@/components/settings/delete-account-copy';
-
 /**
  * How a person confirms deleting their own account, on the web and the phone.
  *
@@ -63,27 +58,23 @@ export function accountDeleteCodeCheckKey(userId: string): string {
 /** The longest password this check sends on (the sign-up limit is far below). */
 const MAX_PASSWORD_LENGTH = 1024;
 
-/** Plain sentences. They never say whether an account has a password. */
-export const ACCOUNT_DELETE_CREDENTIAL_REQUIRED_COPY =
-  'Enter your password, or ask for a code by email, to confirm. Nothing was deleted.';
-export const ACCOUNT_DELETE_PASSWORD_REFUSED_COPY =
-  'That password is not correct. Nothing was deleted. You can ask for a code by email instead.';
-export const ACCOUNT_DELETE_CODE_REFUSED_COPY =
-  'That code is not correct or has expired. Nothing was deleted. Ask for a new code and try again.';
-export const ACCOUNT_DELETE_CREDENTIAL_PAUSED_COPY =
-  'Too many tries. Nothing was deleted. Wait a few minutes and try again.';
-export const ACCOUNT_DELETE_CREDENTIAL_CHECK_FAILED_COPY =
-  'Could not check that just now. Nothing was deleted. Try again in a minute.';
-export const ACCOUNT_DELETE_AAL2_COPY =
-  'Enter your authenticator code before deleting your account. Nothing was deleted.';
-/** The dialog's own sentence (components/settings/delete-account-copy.ts). */
-export const ACCOUNT_DELETE_CODE_SENT_COPY = DELETE_ACCOUNT_CONFIRM_COPY.codeSent;
-/** Too many codes asked for (the send limit); the try limit says PAUSED_COPY. */
-export const ACCOUNT_DELETE_CODE_SEND_PAUSED_COPY = DELETE_ACCOUNT_CODE_SEND_PAUSED_COPY;
-export const ACCOUNT_DELETE_CODE_NOT_OFFERED_COPY =
-  'Your account has an authenticator, so deleting it is confirmed with your authenticator code.';
-export const ACCOUNT_DELETE_CODE_SEND_FAILED_COPY =
-  'The code could not be sent just now. Try again in a few minutes, or enter your password.';
+/**
+ * Plain sentences, in @stockpilot/core (account/delete-account-copy.ts) with
+ * the dialog's words and the phone's reading of these answers. They never say
+ * whether an account has a password.
+ */
+export {
+  ACCOUNT_DELETE_AAL2_COPY,
+  ACCOUNT_DELETE_CODE_NOT_OFFERED_COPY,
+  ACCOUNT_DELETE_CODE_REFUSED_COPY,
+  ACCOUNT_DELETE_CODE_SEND_FAILED_COPY,
+  ACCOUNT_DELETE_CODE_SEND_PAUSED_COPY,
+  ACCOUNT_DELETE_CODE_SENT_COPY,
+  ACCOUNT_DELETE_CREDENTIAL_CHECK_FAILED_COPY,
+  ACCOUNT_DELETE_CREDENTIAL_PAUSED_COPY,
+  ACCOUNT_DELETE_CREDENTIAL_REQUIRED_COPY,
+  ACCOUNT_DELETE_PASSWORD_REFUSED_COPY,
+} from '@stockpilot/core';
 
 /** What the caller sent to confirm: the password, or the emailed code with its challenge. */
 export interface DeletionCredentialInput {

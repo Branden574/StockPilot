@@ -1,9 +1,12 @@
 import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 
+import { ACCOUNT_DELETE_CODE_RE } from '@stockpilot/core';
+
 /**
  * The emailed code that confirms deleting an account with no authenticator,
- * and the signed challenge that goes with it. Pure: node:crypto only, no env
- * and no `server-only`, so the tests run this very code. The server signs and
+ * and the signed challenge that goes with it. Pure: node:crypto and the
+ * six-digit pattern from @stockpilot/core only, no env and no `server-only`,
+ * so the tests run this very code. The server signs and
  * checks through server/lib/account-deletion-credential.ts, which supplies the
  * key.
  *
@@ -50,8 +53,8 @@ const SECONDS_RE = /^[0-9]{1,12}$/;
 const NONCE_RE = /^[A-Za-z0-9_-]{22}$/;
 /** 32 bytes of HMAC-SHA256 in base64url without padding. */
 const TAG_RE = /^[A-Za-z0-9_-]{43}$/;
-/** Exactly six digits. */
-export const ACCOUNT_DELETE_CODE_RE = /^[0-9]{6}$/;
+/** Exactly six digits (@stockpilot/core, shared with the web dialog and the phone). */
+export { ACCOUNT_DELETE_CODE_RE };
 
 /**
  * What a code is, with its challenge, for one account and address at a time:
