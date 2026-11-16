@@ -2324,7 +2324,8 @@ MOBILE_TESTS=(
   src/lib/ungroup-selected.test.ts
   # Accounts: archive and restore a customer account go through PATCH
   # /api/v1/customers/[id]/status with the bearer and the workspace on
-  # screen (the server checks the module, customers:manage and the
+  # screen, only under the account the list was read for, one change per
+  # row at a time (the server checks the module, customers:manage and the
   # authenticator rule, and records the change); the screen writes no
   # customer row itself; every answer is plain words, never a permission,
   # module id or code word; the row keeps its status after a refusal and the

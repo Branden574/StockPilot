@@ -5,6 +5,7 @@ import {
 } from '@stockpilot/core';
 
 import { api } from './api';
+import { SIGN_IN_AGAIN_COPY } from './api-error-body';
 import { CONNECTION_FAILURE_COPY, REQUEST_TIMED_OUT_COPY } from './connection-copy';
 
 /**
@@ -15,14 +16,18 @@ import { CONNECTION_FAILURE_COPY, REQUEST_TIMED_OUT_COPY } from './connection-co
  *
  * The route runs CustomersService.setStatus under the caller's session: the
  * customer portal module, customers:manage and the organization's
- * authenticator rule are checked, the one status column is written, and one
- * `organization.updated` audit row is recorded. The same status again changes
- * nothing and records nothing (`changed: false`).
+ * authenticator rule are checked, the one status column is written, and the
+ * change is recorded. The same status again changes nothing and records
+ * nothing (`changed: false`).
  *
- * ONLINE ONLY, as the switch has always been: no outbox kind, nothing kept to
- * try later. A request with no answer fails at once with the app's connection
- * sentence. Setting a status is safe to repeat, so a person may simply try
- * again.
+ * ONLINE ONLY: no outbox kind, nothing kept to try later. A request with no
+ * answer fails at once with the app's connection sentence. Setting a status
+ * is safe to repeat, so a person may simply try again.
+ *
+ * Sent under the workspace whose list is on screen and only under the
+ * account that list was read for (api()'s `orgId` and `asUserId`): if the
+ * signed-in account is another one by the time the bearer is read, nothing
+ * is sent.
  *
  * Every sentence a person reads is chosen here by the answer's status, code
  * and `details.reason`, never the server's permission, module or MFA words
@@ -36,14 +41,13 @@ export type CustomerStatusOutcome =
   | { kind: 'saved'; status: CustomerStatus; changed: boolean }
   | { kind: 'refused'; title: string; message: string; reload: boolean };
 
-/** The alert's title, the one the Accounts screen has always used. */
+/** The alert's title, the Accounts screen's own. */
 export const CUSTOMER_STATUS_FAILED_TITLE = 'Could not update';
 
 export const CUSTOMER_STATUS_COPY = {
-  sessionEnded: 'Your session has ended. Sign in again.',
   codeOwed:
     'Your account uses an authenticator app, and this session has not been verified with it. Sign out, sign back in with your code, then try again.',
-  notAllowed: 'You need manager access to change accounts.',
+  notAllowed: 'You do not have access to do that in this workspace.',
   moduleOff: 'B2B customer accounts are turned off for this workspace.',
   notFound: 'This account may have been removed.',
   changedMeanwhile: 'This account was just changed. Refresh and try again.',
@@ -58,13 +62,15 @@ export function customerStatusPath(customerId: string): string {
 }
 
 /**
- * Sends the change under `orgId`, the workspace whose list is on screen, and
- * says what came of it. Never throws.
+ * Sends the change under `orgId`, the workspace whose list is on screen, as
+ * `userId`, the account that list was read for, and says what came of it.
+ * Never throws.
  */
 export async function changeCustomerStatus(
   customerId: string,
   status: CustomerStatus,
   orgId: string,
+  userId: string,
 ): Promise<CustomerStatusOutcome> {
   let answer: unknown;
   try {
@@ -72,6 +78,7 @@ export async function changeCustomerStatus(
       method: 'PATCH',
       body: { status },
       orgId,
+      asUserId: userId,
     });
   } catch (e) {
     return { kind: 'refused', ...customerStatusFailure(e) };
@@ -135,6 +142,12 @@ export function customerStatusFailure(e: unknown): {
       : undefined;
 
   if (status === null) {
+    // The signed-in account is not the one the list was read for: api() sent
+    // nothing (OutboxSessionChangedError, read by name as the order catalog
+    // screen does).
+    if (e instanceof Error && e.name === 'OutboxSessionChangedError') {
+      return say(SIGN_IN_AGAIN_COPY, false);
+    }
     // api()'s own timeout: the request may have reached the server.
     if (e instanceof Error && e.message === REQUEST_TIMED_OUT_COPY) {
       return say(REQUEST_TIMED_OUT_COPY, true);
@@ -145,12 +158,15 @@ export function customerStatusFailure(e: unknown): {
     // No answer at all (offline, a dropped connection): never the platform's text.
     return say(CONNECTION_FAILURE_COPY, false);
   }
-  // api() has already asked for the account probe on a 401.
-  if (status === 401) return say(CUSTOMER_STATUS_COPY.sessionEnded, false);
+  // A 401 names no cause (no session, a code not entered, no membership in
+  // this workspace, a disabled account). api() has asked for the account
+  // probe, which decides whether the app signs out.
+  if (status === 401) return say(SIGN_IN_AGAIN_COPY, false);
   if (status === 403) {
     if (reason === 'mfa_required') return say(AUTHENTICATOR_SET_UP_OWED_COPY, false);
     if (reason === 'aal2_required') return say(CUSTOMER_STATUS_COPY.codeOwed, false);
     if (code === 'module_disabled') return say(CUSTOMER_STATUS_COPY.moduleOff, false);
+    // A missing permission, or a 403 with no body (an edge).
     return say(CUSTOMER_STATUS_COPY.notAllowed, false);
   }
   if (status === 404) {

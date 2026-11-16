@@ -1059,11 +1059,11 @@ describe('Team and Accounts (M-WS-07, 08)', () => {
     const setStatus = functionBody(ACCOUNTS, 'setStatus');
     expect(setStatus).not.toContain("Alert.alert('Archive");
     expect(setStatus).toMatch(
-      /setBusyId\(row\.id\);\s*const outcome = await changeCustomerStatus\([^;]*\);\s*setBusyId\(null\);/,
+      /inFlight\.current\.add\(row\.id\);\s*setBusyIds\([^;]*\);\s*let outcome: CustomerStatusOutcome;\s*try \{\s*outcome = await changeCustomerStatus\([^;]*\);\s*\} finally \{\s*inFlight\.current\.delete\(row\.id\);\s*setBusyIds\(/,
     );
     expect(setStatus).toContain('Alert.alert(outcome.title, outcome.message);');
     expect(sourceOf('src/lib/customer-status.ts')).toContain(
-      "notAllowed: 'You need manager access to change accounts.'",
+      "notAllowed: 'You do not have access to do that in this workspace.'",
     );
   });
 });

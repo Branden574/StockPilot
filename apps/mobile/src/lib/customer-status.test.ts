@@ -11,6 +11,7 @@ import {
 } from '@stockpilot/core';
 
 import { screenFunction } from './__fixtures__/screen-functions';
+import { SIGN_IN_AGAIN_COPY } from './api-error-body';
 import { CONNECTION_FAILURE_COPY, REQUEST_TIMED_OUT_COPY } from './connection-copy';
 import {
   CUSTOMER_STATUS_COPY,
@@ -53,6 +54,7 @@ vi.mock('./api', () => apiMock);
 
 const CUSTOMER = 'c0ffee00-0000-4000-8000-00000000c001';
 const ORG = 'a0000000-0000-4000-8000-00000000000a';
+const USER = 'u1';
 
 const err = (status: number, message: string, code?: string, details?: unknown) =>
   new apiMock.ApiError(message, status, code, details);
@@ -62,22 +64,24 @@ beforeEach(() => apiMock.api.mockReset());
 describe('the request', () => {
   it('is one PATCH to the route with the status, under the workspace on screen', async () => {
     apiMock.api.mockResolvedValueOnce({ ok: true, status: 'archived', changed: true });
-    await changeCustomerStatus(CUSTOMER, 'archived', ORG);
+    await changeCustomerStatus(CUSTOMER, 'archived', ORG, USER);
     expect(apiMock.api).toHaveBeenCalledTimes(1);
     expect(apiMock.api).toHaveBeenCalledWith(`/api/v1/customers/${CUSTOMER}/status`, {
       method: 'PATCH',
       body: { status: 'archived' },
       orgId: ORG,
+      asUserId: USER,
     });
   });
 
   it('sends active for a restore', async () => {
     apiMock.api.mockResolvedValueOnce({ ok: true, status: 'active', changed: true });
-    await changeCustomerStatus(CUSTOMER, 'active', ORG);
+    await changeCustomerStatus(CUSTOMER, 'active', ORG, USER);
     expect(apiMock.api.mock.calls[0]![1]).toEqual({
       method: 'PATCH',
       body: { status: 'active' },
       orgId: ORG,
+      asUserId: USER,
     });
   });
 
@@ -90,7 +94,7 @@ describe('the request', () => {
 describe('a 200', () => {
   it('is saved with the status the server answered', async () => {
     apiMock.api.mockResolvedValueOnce({ ok: true, status: 'archived', changed: true });
-    await expect(changeCustomerStatus(CUSTOMER, 'archived', ORG)).resolves.toEqual({
+    await expect(changeCustomerStatus(CUSTOMER, 'archived', ORG, USER)).resolves.toEqual({
       kind: 'saved',
       status: 'archived',
       changed: true,
@@ -99,7 +103,7 @@ describe('a 200', () => {
 
   it('with changed false is saved too, with the status the account has', async () => {
     apiMock.api.mockResolvedValueOnce({ ok: true, status: 'active', changed: false });
-    await expect(changeCustomerStatus(CUSTOMER, 'active', ORG)).resolves.toEqual({
+    await expect(changeCustomerStatus(CUSTOMER, 'active', ORG, USER)).resolves.toEqual({
       kind: 'saved',
       status: 'active',
       changed: false,
@@ -114,7 +118,7 @@ describe('a 200', () => {
     ['null', null],
   ])('with %s is not trusted: the list is read again', async (_label, body) => {
     apiMock.api.mockResolvedValueOnce(body);
-    await expect(changeCustomerStatus(CUSTOMER, 'active', ORG)).resolves.toEqual({
+    await expect(changeCustomerStatus(CUSTOMER, 'active', ORG, USER)).resolves.toEqual({
       kind: 'refused',
       title: CUSTOMER_STATUS_FAILED_TITLE,
       message: CUSTOMER_STATUS_COPY.serverProblem,
@@ -125,12 +129,22 @@ describe('a 200', () => {
 
 describe('each refusal: its words, and whether the list is read again', () => {
   const MARKER = contextUnavailableBody();
+  const sessionChanged = Object.assign(
+    new Error('The signed-in account changed before this queued change was sent.'),
+    { name: 'OutboxSessionChangedError' },
+  );
 
   it.each([
     [
-      '401 (no message: api() puts the code word in message)',
+      '401 (no message: api() puts the code word in message): no cause claimed',
       err(401, 'unauthenticated', 'unauthenticated'),
-      CUSTOMER_STATUS_COPY.sessionEnded,
+      SIGN_IN_AGAIN_COPY,
+      false,
+    ],
+    [
+      'another account signed in before the send: nothing sent',
+      sessionChanged,
+      SIGN_IN_AGAIN_COPY,
       false,
     ],
     [
@@ -155,6 +169,12 @@ describe('each refusal: its words, and whether the list is read again', () => {
     [
       '403 forbidden: never "Missing permission: ..."',
       err(403, 'Missing permission: customers:manage', 'forbidden'),
+      CUSTOMER_STATUS_COPY.notAllowed,
+      false,
+    ],
+    [
+      '403 with no body (an edge): the same sentence',
+      err(403, 'You do not have access to that.', undefined),
       CUSTOMER_STATUS_COPY.notAllowed,
       false,
     ],
@@ -262,7 +282,7 @@ describe('each refusal: its words, and whether the list is read again', () => {
       reload,
     });
     apiMock.api.mockRejectedValueOnce(thrown);
-    await expect(changeCustomerStatus(CUSTOMER, 'archived', ORG)).resolves.toEqual({
+    await expect(changeCustomerStatus(CUSTOMER, 'archived', ORG, USER)).resolves.toEqual({
       kind: 'refused',
       title: CUSTOMER_STATUS_FAILED_TITLE,
       message,
@@ -271,11 +291,16 @@ describe('each refusal: its words, and whether the list is read again', () => {
   });
 
   it('shows no code, id or module name in any sentence', () => {
-    for (const [key, s] of Object.entries(CUSTOMER_STATUS_COPY)) {
+    for (const [key, s] of Object.entries({ ...CUSTOMER_STATUS_COPY, SIGN_IN_AGAIN_COPY })) {
       expect(s, key).not.toMatch(/[a-z]+_[a-z]+|customers:|b2b_portal|\(\d{3}\)/);
       expect(s, key).toMatch(/^[A-Z].*\.$/);
     }
-    expect(CUSTOMER_STATUS_COPY.notAllowed).toBe('You need manager access to change accounts.');
+    expect(CUSTOMER_STATUS_COPY.notAllowed).toBe(
+      'You do not have access to do that in this workspace.',
+    );
+    // A 401 names no cause.
+    expect(SIGN_IN_AGAIN_COPY).toBe('Sign in again to continue.');
+    expect(SIGN_IN_AGAIN_COPY).not.toMatch(/session|ended|expired/i);
   });
 
   it('a 403 refusal says authenticator, not MFA', () => {
@@ -286,29 +311,63 @@ describe('each refusal: its words, and whether the list is read again', () => {
   });
 });
 
-/* ───────────── the screen's own setStatus, run against each outcome ───────────── */
+/* --- the screen's own setStatus, run against each outcome --- */
 
 const SCREEN = 'app/(drawer)/customers.tsx';
 const MOBILE_ROOT = path.resolve(__dirname, '../..');
 
+const ORG_B = 'b0000000-0000-4000-8000-00000000000b';
+
 type Row = { id: string; name: string; status: 'active' | 'archived' };
 type List = { orgId: string; userId: string | null; rows: Row[] } | null;
 
-function screen(outcome: unknown, start: List, activeOrgId: string | null = ORG) {
-  const state: { list: List; busy: (string | null)[] } = { list: start, busy: [] };
-  const change = vi.fn(async (..._a: unknown[]) => outcome);
+function deferred<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+/**
+ * The screen's setStatus with its names bound. `outcomes` answers each send
+ * in turn (a promise holds that answer until the test resolves it). The
+ * tapped render's `load` throws: a re-read goes through `latestLoad`, the
+ * newest load.
+ */
+function screen(
+  outcomes: unknown[],
+  start: List,
+  opts: { activeOrgId?: string | null; userId?: string | null } = {},
+) {
+  const state: { list: List; busy: ReadonlySet<string>; busyHistory: string[][] } = {
+    list: start,
+    busy: new Set(),
+    busyHistory: [],
+  };
+  const queue = [...outcomes];
+  const change = vi.fn(async (..._a: unknown[]) => queue.shift());
   const alert = vi.fn();
-  const load = vi.fn(async () => undefined);
+  const latest = vi.fn(async () => undefined);
+  const latestLoad = { current: latest };
+  const inFlight = { current: new Set<string>() };
   const setStatus = screenFunction<(row: Row, active: boolean) => Promise<void>>(
     SCREEN,
     'setStatus',
     {
-      activeOrgId,
-      userId: 'u1',
+      activeOrgId: opts.activeOrgId === undefined ? ORG : opts.activeOrgId,
+      userId: opts.userId === undefined ? USER : opts.userId,
       changeCustomerStatus: change,
       Alert: { alert },
-      load,
-      setBusyId: (v: string | null) => state.busy.push(v),
+      load: () => {
+        throw new Error("setStatus re-read through the tapped render's load");
+      },
+      latestLoad,
+      inFlight,
+      setBusyIds: (fn: (prev: ReadonlySet<string>) => ReadonlySet<string>) => {
+        state.busy = fn(state.busy);
+        state.busyHistory.push([...state.busy]);
+      },
       setList: (fn: (prev: List) => List) => {
         state.list = fn(state.list);
       },
@@ -320,7 +379,7 @@ function screen(outcome: unknown, start: List, activeOrgId: string | null = ORG)
       },
     },
   );
-  return { state, change, alert, load, setStatus };
+  return { state, change, alert, latest, latestLoad, inFlight, setStatus };
 }
 
 const A: Row = { id: CUSTOMER, name: 'Northwind Test Co', status: 'active' };
@@ -329,33 +388,41 @@ const B: Row = {
   name: 'Contoso Test',
   status: 'active',
 };
-const LIST: List = { orgId: ORG, userId: 'u1', rows: [A, B] };
+const LIST: List = { orgId: ORG, userId: USER, rows: [A, B] };
+const REFUSED_RELOAD = {
+  kind: 'refused',
+  title: 'Could not update',
+  message: REQUEST_TIMED_OUT_COPY,
+  reload: true,
+};
 
 describe('the Accounts screen', () => {
-  it('archives through the route under the workspace on screen, and shows the saved status', async () => {
-    const s = screen({ kind: 'saved', status: 'archived', changed: true }, LIST);
+  it('archives through the route under the workspace and account on screen, and shows the saved status', async () => {
+    const s = screen([{ kind: 'saved', status: 'archived', changed: true }], LIST);
     await s.setStatus(A, false);
-    expect(s.change).toHaveBeenCalledWith(CUSTOMER, 'archived', ORG);
-    expect(s.state.busy).toEqual([CUSTOMER, null]);
+    expect(s.change).toHaveBeenCalledWith(CUSTOMER, 'archived', ORG, USER);
+    expect(s.state.busyHistory).toEqual([[CUSTOMER], []]);
+    expect(s.inFlight.current.size).toBe(0);
     expect(s.state.list?.rows).toEqual([{ ...A, status: 'archived' }, B]);
     expect(s.alert).not.toHaveBeenCalled();
-    expect(s.load).not.toHaveBeenCalled();
+    expect(s.latest).not.toHaveBeenCalled();
   });
 
   it('restores with active', async () => {
     const archived = { ...A, status: 'archived' as const };
-    const s = screen(
-      { kind: 'saved', status: 'active', changed: true },
-      { orgId: ORG, userId: 'u1', rows: [archived, B] },
-    );
+    const s = screen([{ kind: 'saved', status: 'active', changed: true }], {
+      orgId: ORG,
+      userId: USER,
+      rows: [archived, B],
+    });
     await s.setStatus(archived, true);
-    expect(s.change).toHaveBeenCalledWith(CUSTOMER, 'active', ORG);
+    expect(s.change).toHaveBeenCalledWith(CUSTOMER, 'active', ORG, USER);
     expect(s.state.list?.rows).toEqual([A, B]);
   });
 
   it('changed false: the row shows the status the server answered', async () => {
     // The list said active; the account was already archived on the server.
-    const s = screen({ kind: 'saved', status: 'archived', changed: false }, LIST);
+    const s = screen([{ kind: 'saved', status: 'archived', changed: false }], LIST);
     await s.setStatus(A, false);
     expect(s.state.list?.rows).toEqual([{ ...A, status: 'archived' }, B]);
     expect(s.alert).not.toHaveBeenCalled();
@@ -363,59 +430,121 @@ describe('the Accounts screen', () => {
 
   it('a refusal: the alert, and the row keeps the status it had', async () => {
     const s = screen(
-      {
-        kind: 'refused',
-        title: 'Could not update',
-        message: 'You need manager access to change accounts.',
-        reload: false,
-      },
+      [
+        {
+          kind: 'refused',
+          title: 'Could not update',
+          message: CUSTOMER_STATUS_COPY.notAllowed,
+          reload: false,
+        },
+      ],
       LIST,
     );
     await s.setStatus(A, false);
-    expect(s.alert).toHaveBeenCalledWith(
-      'Could not update',
-      'You need manager access to change accounts.',
-    );
+    expect(s.alert).toHaveBeenCalledWith('Could not update', CUSTOMER_STATUS_COPY.notAllowed);
     expect(s.state.list).toEqual(LIST);
-    expect(s.state.busy).toEqual([CUSTOMER, null]);
-    expect(s.load).not.toHaveBeenCalled();
+    expect(s.state.busyHistory).toEqual([[CUSTOMER], []]);
+    expect(s.latest).not.toHaveBeenCalled();
   });
 
-  it('a refusal that leaves the account unknown: the list is read again', async () => {
-    const s = screen(
-      {
-        kind: 'refused',
-        title: 'Could not update',
-        message: 'This account may have been removed.',
-        reload: true,
-      },
-      LIST,
-    );
+  it('a refusal that leaves the account unknown: the newest load reads the list again', async () => {
+    const s = screen([REFUSED_RELOAD], LIST);
     await s.setStatus(A, false);
     expect(s.alert).toHaveBeenCalledTimes(1);
     expect(s.state.list).toEqual(LIST);
-    expect(s.load).toHaveBeenCalledTimes(1);
+    expect(s.latest).toHaveBeenCalledTimes(1);
   });
 
-  it('an answer for another workspace list never lands in this one', async () => {
-    const other: List = { orgId: 'b0000000-0000-4000-8000-00000000000b', userId: 'u1', rows: [A] };
-    const s = screen({ kind: 'saved', status: 'archived', changed: true }, other);
-    await s.setStatus(A, false);
-    expect(s.state.list).toEqual(other);
+  it('a refusal that lands after a workspace switch leaves the new workspace list as it is', async () => {
+    const answer = deferred<unknown>();
+    const s = screen([answer.promise], LIST);
+    const sent = s.setStatus(A, false);
+    // The person switches to workspace B while the change is out: B's list is
+    // read and drawn, and the screen's newest load is B's.
+    const listB: List = { orgId: ORG_B, userId: USER, rows: [{ ...B, name: 'Fabrikam Test' }] };
+    s.state.list = listB;
+    const loadB = vi.fn(async () => undefined);
+    s.latestLoad.current = loadB;
+    answer.resolve(REFUSED_RELOAD);
+    await sent;
+    expect(s.state.list).toEqual(listB);
+    expect(loadB).toHaveBeenCalledTimes(1);
+    expect(s.latest).not.toHaveBeenCalled();
+  });
+
+  it('a 200 that lands after a workspace switch never changes the new workspace rows', async () => {
+    const answer = deferred<unknown>();
+    const s = screen([answer.promise], LIST);
+    const sent = s.setStatus(A, false);
+    const listB: List = { orgId: ORG_B, userId: USER, rows: [{ ...A }] };
+    s.state.list = listB;
+    answer.resolve({ kind: 'saved', status: 'archived', changed: true });
+    await sent;
+    expect(s.state.list).toEqual(listB);
+  });
+
+  it('two presses on one row before a render send one request', async () => {
+    const answer = deferred<unknown>();
+    const s = screen([answer.promise, { kind: 'saved', status: 'archived', changed: true }], LIST);
+    const first = s.setStatus(A, false);
+    const second = s.setStatus(A, false);
+    await second;
+    expect(s.change).toHaveBeenCalledTimes(1);
+    answer.resolve({ kind: 'saved', status: 'archived', changed: true });
+    await first;
+    expect(s.change).toHaveBeenCalledTimes(1);
+    expect(s.alert).not.toHaveBeenCalled();
+    expect(s.state.list?.rows).toEqual([{ ...A, status: 'archived' }, B]);
+  });
+
+  it('a row whose change is out stays busy and sends nothing more when another row answers', async () => {
+    const one = deferred<unknown>();
+    const two = deferred<unknown>();
+    const s = screen(
+      [one.promise, two.promise, { kind: 'saved', status: 'active', changed: true }],
+      LIST,
+    );
+    const sentA = s.setStatus(A, false);
+    const sentB = s.setStatus(B, false);
+    expect([...s.state.busy]).toEqual([CUSTOMER, B.id]);
+    one.resolve({ kind: 'saved', status: 'archived', changed: true });
+    await sentA;
+    // Row B's change is out: drawn busy, and a tap on it sends nothing.
+    expect([...s.state.busy]).toEqual([B.id]);
+    await s.setStatus(B, false);
+    expect(s.change).toHaveBeenCalledTimes(2);
+    two.resolve({ kind: 'saved', status: 'archived', changed: true });
+    await sentB;
+    expect([...s.state.busy]).toEqual([]);
+    expect(s.inFlight.current.size).toBe(0);
+    // After the answer the row takes a new change again.
+    await s.setStatus(B, true);
+    expect(s.change).toHaveBeenCalledTimes(3);
   });
 
   it('with no workspace known, nothing is sent', async () => {
-    const s = screen({ kind: 'saved', status: 'archived', changed: true }, LIST, null);
+    const s = screen([{ kind: 'saved', status: 'archived', changed: true }], LIST, {
+      activeOrgId: null,
+    });
     await s.setStatus(A, false);
     expect(s.change).not.toHaveBeenCalled();
-    expect(s.state.busy).toEqual([]);
+    expect(s.state.busyHistory).toEqual([]);
     expect(s.state.list).toEqual(LIST);
+  });
+
+  it('with nobody signed in, nothing is sent', async () => {
+    const s = screen([{ kind: 'saved', status: 'archived', changed: true }], LIST, {
+      userId: null,
+    });
+    await s.setStatus(A, false);
+    expect(s.change).not.toHaveBeenCalled();
   });
 });
 
 describe('the Accounts screen source', () => {
   const src = readFileSync(path.join(MOBILE_ROOT, SCREEN), 'utf8');
   const sf = ts.createSourceFile(SCREEN, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const flat = src.replace(/\s+/g, ' ');
 
   /** Every call `<x>.from('<table>')` in the file, with the methods chained on it. */
   function tableCalls(): { table: string; chain: string[] }[] {
@@ -446,6 +575,16 @@ describe('the Accounts screen source', () => {
     return out;
   }
 
+  function setStatusBody(): string {
+    let setStatus: ts.FunctionDeclaration | undefined;
+    const visit = (n: ts.Node): void => {
+      if (ts.isFunctionDeclaration(n) && n.name?.text === 'setStatus') setStatus = n;
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+    return setStatus!.body!.getText(sf);
+  }
+
   it('reads the accounts list from the table and writes nothing to it', () => {
     const calls = tableCalls();
     expect(calls.map((c) => c.table)).toEqual(['customers']);
@@ -458,15 +597,28 @@ describe('the Accounts screen source', () => {
   });
 
   it('changes the status only through changeCustomerStatus', () => {
-    expect(src).toContain("import { changeCustomerStatus } from '@/lib/customer-status';");
-    let setStatus: ts.FunctionDeclaration | undefined;
-    const visit = (n: ts.Node): void => {
-      if (ts.isFunctionDeclaration(n) && n.name?.text === 'setStatus') setStatus = n;
-      ts.forEachChild(n, visit);
-    };
-    visit(sf);
-    const body = setStatus!.body!.getText(sf);
+    expect(src).toMatch(
+      /import \{ changeCustomerStatus, type CustomerStatusOutcome \} from '@\/lib\/customer-status';/,
+    );
+    const body = setStatusBody();
     expect(body).toContain('await changeCustomerStatus(');
     expect(body).not.toMatch(/supabase|\.update\(/);
+  });
+
+  it('reads again through the newest load, kept in a ref by an effect', () => {
+    const body = setStatusBody();
+    expect(body).toContain('void latestLoad.current();');
+    expect(body).not.toMatch(/void load\(\)/);
+    expect(flat).toContain(
+      'const latestLoad = React.useRef(load); React.useEffect(() => { latestLoad.current = load; }, [load]);',
+    );
+  });
+
+  it('holds each row in flight in a ref, and draws every such row busy', () => {
+    expect(flat).toContain('const inFlight = React.useRef(new Set<string>());');
+    expect(setStatusBody().replace(/\s+/g, ' ')).toContain(
+      'if (inFlight.current.has(row.id)) return; inFlight.current.add(row.id);',
+    );
+    expect(flat).toContain('busy={busyIds.has(c.id)}');
   });
 });
