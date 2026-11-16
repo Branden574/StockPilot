@@ -907,6 +907,19 @@ PGTAP_TESTS=(
   # outbox_event_in_org), a connection names only the Vault secret stored for
   # it and only the server sets it, and the Vault reads check the row.
   supabase/tests/0465_connection_records_in_their_organization.test.sql
+  # Retry keys written by their functions (0466): an
+  # insert, update or delete of an idempotency_keys row by authenticated or
+  # anon needs stockpilot.idempotency_write equal to the transaction id,
+  # which only the four key-keeping functions set around their own key
+  # writes (42501 idempotency_key_through_rpc otherwise); the service role,
+  # the table owner and the SECURITY DEFINER return functions are not held.
+  # A recount replay answers only the count its key row names; a shortfall
+  # replay only this order and the caller's own drafts (P0001
+  # idempotency_conflict); a fresh receipt post or kit hand-out whose key a
+  # receipt or distribution already carries is 55000. Each body is
+  # production's with its added lines removed. The lock footprint is
+  # scripts/db-concurrency/0466_migration_lock_footprint.sh.
+  supabase/tests/0466_retry_keys_written_by_their_functions.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -1679,6 +1692,15 @@ WEB_TESTS=(
   src/server/lib/account-deletion.test.ts
   src/app/api/v1/account/delete/route.test.ts
   src/server/services/order-requests.deleted-requester-email.test.ts
+
+  # How a deletion is confirmed, on the web and the phone: an account with an
+  # authenticator needs aal2; one with none its password (checked on a
+  # separate client) or a six-digit code emailed to its current address, ten
+  # minutes, for that account and address only; each with its own per-account
+  # limit, never reported. The last check before the delete reads the factors
+  # again. Without either, the phone route answers by the policy as before.
+  src/lib/auth/account-delete-code.test.ts
+  src/server/lib/account-deletion-credential.test.ts
 
   # One create path, no duplicate order (0391, phone ordering PO-2). The
   # service gates (Orders module, the MFA step-up, orders:request) come before

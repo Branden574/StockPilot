@@ -331,17 +331,17 @@ describe('auditAccountDeleted', () => {
 
   it('the ip is read by the one rule (lib/client-ip): off Vercel x-forwarded-for is not read', async () => {
     vi.stubEnv('VERCEL', '');
-    await auditAccountDeleted({ userId: 'u-1', organizationId: 'org-1', reason: 'self_deletion' });
+    await auditAccountDeleted({ userId: 'u-1', organizationId: 'org-1', reason: 'self_deletion', confirmedBy: 'password' });
     expect(insertAuditRowReportedMock).toHaveBeenLastCalledWith(expect.objectContaining({ ip: null }));
     requestHeaders.current = { 'x-forwarded-for': '203.0.113.7', 'x-real-ip': '198.51.100.2' };
-    await auditAccountDeleted({ userId: 'u-1', organizationId: 'org-1', reason: 'self_deletion' });
+    await auditAccountDeleted({ userId: 'u-1', organizationId: 'org-1', reason: 'self_deletion', confirmedBy: 'password' });
     expect(insertAuditRowReportedMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ ip: '198.51.100.2' }),
     );
   });
 
   it('writes user.deactivated with user_id null, the entity id, the reason, ip and user agent', async () => {
-    await auditAccountDeleted({ userId: 'u-1', organizationId: 'org-1', reason: 'self_deletion' });
+    await auditAccountDeleted({ userId: 'u-1', organizationId: 'org-1', reason: 'self_deletion', confirmedBy: 'password' });
     expect(insertAuditRowReportedMock).toHaveBeenCalledWith({
       organization_id: 'org-1',
       user_id: null,
@@ -355,6 +355,7 @@ describe('auditAccountDeleted', () => {
         before: null,
         after: null,
         reason: 'self_deletion',
+        confirmed_by: 'password',
       },
       // 0393: the row's actor is the person who deleted their account.
       deleted_users: { user_id: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) },
@@ -366,6 +367,7 @@ describe('auditAccountDeleted', () => {
       userId: 'u-1',
       organizationId: 'org-1',
       reason: 'self_deletion',
+      confirmedBy: 'emailed_code',
       createdStillActive: { apiKeys: 1, webhooks: 2, publicRequestLinks: 3, shareLinks: 4 },
     });
     expect(insertAuditRowReportedMock).toHaveBeenCalledWith(
@@ -378,8 +380,22 @@ describe('auditAccountDeleted', () => {
     );
   });
 
+  it('records how the deletion was confirmed, each way', async () => {
+    for (const confirmedBy of ['authenticator', 'password', 'emailed_code', 'none'] as const) {
+      await auditAccountDeleted({
+        userId: 'u-1',
+        organizationId: 'org-1',
+        reason: 'self_deletion',
+        confirmedBy,
+      });
+      expect(insertAuditRowReportedMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ metadata: expect.objectContaining({ confirmed_by: confirmedBy }) }),
+      );
+    }
+  });
+
   it('a person with no organization (SP-129) is written with organization_id null', async () => {
-    await auditAccountDeleted({ userId: 'u-2', organizationId: null, reason: 'self_deletion_mobile' });
+    await auditAccountDeleted({ userId: 'u-2', organizationId: null, reason: 'self_deletion_mobile', confirmedBy: 'none' });
     expect(insertAuditRowReportedMock).toHaveBeenCalledWith(
       expect.objectContaining({ organization_id: null, user_id: null }),
     );

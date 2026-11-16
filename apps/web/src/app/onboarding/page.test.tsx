@@ -62,7 +62,10 @@ vi.mock('@/server/actions/organization', () => ({ createOrganizationAction: vi.f
 // SignOutForm and DeleteAccountButton are the real client components; only the
 // Server Actions behind them are stand-ins.
 vi.mock('@/server/actions/auth', () => ({ signOutAction: vi.fn() }));
-vi.mock('@/server/actions/profile', () => ({ deleteOwnAccountAction: vi.fn() }));
+vi.mock('@/server/actions/profile', () => ({
+  deleteOwnAccountAction: vi.fn(),
+  requestAccountDeletionCodeAction: vi.fn(),
+}));
 vi.mock('@/components/theme/theme-toggle', () => ({
   ThemeToggle: () => <button type="button">Theme</button>,
 }));
