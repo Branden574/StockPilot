@@ -482,6 +482,17 @@ describe('an update the row policy refuses', () => {
     expect(audit).not.toHaveBeenCalled();
   });
 
+  it('completing an event with a kit that matches no row (deleted in between) never reaches the hand-out', async () => {
+    const svc = signIn({ mayUpdate: false }, 'manager');
+    const err = await svc.update(EVENT, { status: 'completed' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ServiceError);
+    expect(err).toMatchObject({ code: 'forbidden', message: UPDATE_REFUSED });
+    expect(world.payloads).toEqual([expect.objectContaining({ status: 'completed' })]);
+    expect(world.row.status).toBe('in_progress');
+    expect(stub.rpcCalls).toEqual([]);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
   it('the web action answers that sentence', async () => {
     signIn({ mayUpdate: false });
     const res = await updateScheduleEventAction(EVENT, { title: 'Renamed' });

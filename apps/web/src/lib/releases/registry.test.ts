@@ -343,7 +343,8 @@ const redesignReads = () =>
   ].map((id) => ({
     release_id: id,
     // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: 1): the API key audit release is re-announced as revision 2, so a read of it is recorded at revision 2.
-    revision: id === API_KEY_AUDIT_ID ? 2 : 1,
+    // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: id === API_KEY_AUDIT_ID ? 2 : 1): the emptied fields and schedule completion release is re-announced as revision 2, so a read of it is recorded at revision 2.
+    revision: id === API_KEY_AUDIT_ID || id === EMPTIED_FIELDS_ID ? 2 : 1,
     dismissed_at: null,
     opened_at: '2026-10-20T13:00:00Z',
     read_at: '2026-10-20T13:00:00Z',
@@ -628,7 +629,8 @@ const authRetriesRead = () =>
   [...eveningIds, AUTH_CODE_ID, RETRIES_ID].map((id) => ({
     release_id: id,
     // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: 1): the API key audit release is re-announced as revision 2, so a read of it is recorded at revision 2.
-    revision: id === API_KEY_AUDIT_ID ? 2 : 1,
+    // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: id === API_KEY_AUDIT_ID ? 2 : 1): the emptied fields and schedule completion release is re-announced as revision 2, so a read of it is recorded at revision 2.
+    revision: id === API_KEY_AUDIT_ID || id === EMPTIED_FIELDS_ID ? 2 : 1,
     dismissed_at: null,
     opened_at: '2026-11-02T15:50:00Z',
     read_at: '2026-11-02T15:50:00Z',
@@ -5118,7 +5120,8 @@ describe('one order per submission (phone ordering PO-2) is published', () => {
     const readNow = (id: string) => ({
       release_id: id,
       // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: 1): the API key audit release is re-announced as revision 2, so a read of it is recorded at revision 2.
-      revision: id === API_KEY_AUDIT_ID ? 2 : 1,
+      // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: id === API_KEY_AUDIT_ID ? 2 : 1): the emptied fields and schedule completion release is re-announced as revision 2, so a read of it is recorded at revision 2.
+      revision: id === API_KEY_AUDIT_ID || id === EMPTIED_FIELDS_ID ? 2 : 1,
       dismissed_at: null,
       opened_at: '2026-10-06T13:00:00Z',
       read_at: '2026-10-06T13:00:00Z',
@@ -9142,7 +9145,8 @@ describe('the weekly digest and fixes release', () => {
     const readNow = (id: string) => ({
       release_id: id,
       // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: 1): the API key audit release is re-announced as revision 2, so a read of it is recorded at revision 2.
-      revision: id === API_KEY_AUDIT_ID ? 2 : 1,
+      // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: id === API_KEY_AUDIT_ID ? 2 : 1): the emptied fields and schedule completion release is re-announced as revision 2, so a read of it is recorded at revision 2.
+      revision: id === API_KEY_AUDIT_ID || id === EMPTIED_FIELDS_ID ? 2 : 1,
       dismissed_at: null,
       opened_at: '2026-10-06T13:00:00Z',
       read_at: '2026-10-06T13:00:00Z',
@@ -10011,7 +10015,8 @@ describe('a partly approved order says what is reserved (small fixes slice 2) is
     const readNow = (id: string) => ({
       release_id: id,
       // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: 1): the API key audit release is re-announced as revision 2, so a read of it is recorded at revision 2.
-      revision: id === API_KEY_AUDIT_ID ? 2 : 1,
+      // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: id === API_KEY_AUDIT_ID ? 2 : 1): the emptied fields and schedule completion release is re-announced as revision 2, so a read of it is recorded at revision 2.
+      revision: id === API_KEY_AUDIT_ID || id === EMPTIED_FIELDS_ID ? 2 : 1,
       dismissed_at: null,
       opened_at: '2026-10-06T13:00:00Z',
       read_at: '2026-10-06T13:00:00Z',
@@ -20080,7 +20085,8 @@ describe('the web fixes found while redrawing every page (redesign-web-fixes-202
     const read = (id: string) => ({
       release_id: id,
       // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: 1): the API key audit release is re-announced as revision 2, so a read of it is recorded at revision 2.
-      revision: id === API_KEY_AUDIT_ID ? 2 : 1,
+      // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: id === API_KEY_AUDIT_ID ? 2 : 1): the emptied fields and schedule completion release is re-announced as revision 2, so a read of it is recorded at revision 2.
+      revision: id === API_KEY_AUDIT_ID || id === EMPTIED_FIELDS_ID ? 2 : 1,
       dismissed_at: null,
       opened_at: '2026-10-20T13:00:00Z',
       read_at: '2026-10-20T13:00:00Z',

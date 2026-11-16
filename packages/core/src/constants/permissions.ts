@@ -1,5 +1,5 @@
 import type { Role } from './roles';
-import { isManagerOrAbove } from './terminology';
+import { ROLE_LABELS } from './terminology';
 
 export const PERMISSIONS = [
   'organization:update',
@@ -291,10 +291,11 @@ export function canDistributeBundles(ctx: {
  * needs the role only, 0415). Every app check of the role floor (the bundle
  * page and the phone's Distribute, BundlesService.distribute and
  * ScheduleService.update) asks this one function, so a change of that floor
- * in the database is made here once.
+ * in the database is made here once. A role that is not one of the five
+ * (unknown, empty, null or missing) answers false, so every check refuses.
  */
 export function roleCanHandOutKits(role: Role): boolean {
-  return isManagerOrAbove(role);
+  return ROLE_LABELS[role]?.isManager === true;
 }
 
 export function assertPermission(role: Role, permission: Permission): void {

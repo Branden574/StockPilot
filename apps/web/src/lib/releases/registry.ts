@@ -227,7 +227,20 @@ export const RELEASES: Release[] = [
   },
   {
     id: 'emptied-fields-and-schedule-completion-2026-11',
-    revision: 1,
+    // Revision 2 (bundles/hand-out-follows-the-manager-rule, 2026-11-16; was:
+    // 1): #603 checks the caller's role, against the floor of a kit hand-out
+    // (packages/core roleCanHandOutKits: manager or above), before the stored
+    // kit warehouse when an event with a kit not handed out yet is completed.
+    // Only staff and viewers can lack write access to a warehouse of their
+    // organization (managers and above work in every warehouse), so everyone
+    // revision 1's schedule entry describes reads the role sentence from Mark
+    // complete, and the warehouse sentence it quotes is read by nobody there:
+    // a material change (docs/releases/PUBLISHING.md: bump the revision to
+    // re-announce). The schedule entry and the summary's schedule sentence are
+    // rewritten to the code at #603's head and the release is told again to
+    // whoever read revision 1. Its place and its date stay: the registry is
+    // newest first by first publication. The four field entries are as they were.
+    revision: 2,
     // Two web changes, no phone update and no migration:
     // - #595 (squash c05cf8ffa), live in production since 2026-11-16
     //   12:10:47Z (its GitHub deployment status, Production, success, is
@@ -263,16 +276,24 @@ export const RELEASES: Release[] = [
     //   categories:manage, which LocationsService.update and
     //   CategoriesService.update assert (neither page nor service checks a
     //   module).
-    // - The schedule entry: server/services/schedule.ts update(). A save that
-    //   moves an event from in progress to completed, with no hand-out yet,
-    //   whose kit (bundle, quantity and kit warehouse, the patch over the
-    //   stored row) has a kit warehouse the patch does not name, checks write
-    //   access to that warehouse before anything is written, and a refusal is
-    //   the ServiceError 'forbidden' with SCHEDULE_COMPLETE_KIT_WAREHOUSE_
-    //   REFUSED. Mark complete (components/schedule/schedule-status-actions.tsx,
+    // - The schedule entry (revision 2, checked against the code at #603's
+    //   head): server/services/schedule.ts update(). A save that moves an
+    //   event from in progress to completed, with no hand-out yet, whose kit
+    //   (bundle, quantity and kit warehouse, the patch over the stored row;
+    //   the schema takes the three together) is set, refuses a caller whose
+    //   role is below manager (roleCanHandOutKits) before anything is written,
+    //   with the ServiceError 'forbidden' and SCHEDULE_COMPLETE_KIT_HAND_OUT_
+    //   REFUSED. Only after that does it check write access to a kit warehouse
+    //   the patch does not name (SCHEDULE_COMPLETE_KIT_WAREHOUSE_REFUSED), which
+    //   a manager or above passes for every warehouse of the organization, so
+    //   Mark complete answers that sentence to nobody and the entry does not
+    //   quote it. Mark complete (components/schedule/schedule-status-actions.tsx,
     //   shown for an in progress event) sends only { status: 'completed' },
-    //   so that is the check it meets; it shows the result's message as an
-    //   error toast, and the event keeps its status. The event page shows the
+    //   so those are the checks it meets; it shows the result's message as an
+    //   error toast, and the event keeps its status. A change the row policy
+    //   refuses (SCHEDULE_EVENT_UPDATE_REFUSED) is met by any other save; a
+    //   completion of someone else's event with a kit not handed out yet meets
+    //   the role check first, so the entry says "any other change". The event page shows the
     //   buttons with canManage (schedule:manage) and checks the schedule
     //   module (schedule/[id]/page.tsx), and its Linked bundle line says how
     //   many kits will be distributed from which warehouse when the event is
@@ -284,9 +305,10 @@ export const RELEASES: Release[] = [
     //   assertWarehouseWrite). An update that comes back with no row is
     //   SCHEDULE_EVENT_UPDATE_REFUSED. server/actions/schedule.ts answers
     //   each through actionErrorResult, which keeps a ServiceError's words.
-    //   The entry says only that the warehouse access case is refused before
-    //   anything is saved: it does not say that completing always hands a kit
-    //   out, nor that a completed event always has its hand-out. The phone
+    //   The entry says only who completes such an event and that anyone else
+    //   is refused before anything is saved: it does not say that completing
+    //   always hands a kit out, nor that a completed event always has its
+    //   hand-out. The phone
     //   has no Mark complete (apps/mobile/app/(drawer)/schedule.tsx lists
     //   events; apps/mobile/app/schedule/new.tsx inserts through its own
     //   path).
@@ -298,7 +320,7 @@ export const RELEASES: Release[] = [
     title:
       'Emptying a field and saving clears it, and clearer messages when a schedule event is not saved',
     summary:
-      "On the website, emptying an optional field when you edit a supplier, charter, warehouse, location or category, and saving, now clears it. Mark complete on a schedule event whose kits come from a warehouse you don't have write access to now says so before anything is saved, and the event stays In progress. The mobile app is unchanged.",
+      "On the website, emptying an optional field when you edit a supplier, charter, warehouse, location or category, and saving, now clears it. Mark complete on a schedule event whose kits have not been handed out yet says, before anything is saved, when the event has to be completed by a manager, and the event stays In progress. The mobile app is unchanged.",
     // #595 is live in production since 2026-11-16 12:10:47Z, #597 since 12:32:17Z.
     publishedAt: '2026-11-16T12:33:00Z',
     entries: [
@@ -306,15 +328,14 @@ export const RELEASES: Release[] = [
         id: 'schedule-complete-kit-warehouse-refused',
         category: 'improved',
         area: 'Schedule',
-        title:
-          "Mark complete says right away when an event's kits come from a warehouse you don't have write access to",
+        title: 'Mark complete says right away when a schedule event has to be completed by a manager',
         whatChanged:
-          "On the website, when you choose Mark complete on a schedule event whose kits will be distributed from a warehouse you don't have write access to, the event is not completed and StockPilot says: You can't complete this event because you don't have write access to the warehouse its kit comes from. Ask a manager to complete it, or to give you access to that warehouse.",
+          "On the website, a schedule event whose kits have not been handed out yet is marked complete by a manager, an admin or an owner. When anyone else chooses Mark complete on it, the event is not completed and StockPilot says: You can't complete this event because its kit has to be handed out by a manager. Ask a manager to complete it.",
         whyItMatters: 'You find out before anything is saved, and the event stays In progress.',
         howItAffectsYou:
-          "Saving an event on New event or Edit with a warehouse you don't have write access to now says: You don't have write access to the warehouse set for this event, so nothing was saved. Choose a warehouse you work in, or ask a manager. For the Distribute from warehouse, the message says the warehouse this event's kit comes from. A change to an event you may not change says: You can't change this event. Ask a manager. Nothing is saved in each case. The mobile app is unchanged.",
+          "Saving an event on New event or Edit with a warehouse you don't have write access to now says: You don't have write access to the warehouse set for this event, so nothing was saved. Choose a warehouse you work in, or ask a manager. For the Distribute from warehouse, the message says the warehouse this event's kit comes from. Any other change to an event you may not change says: You can't change this event. Ask a manager. Nothing is saved in each case. The mobile app is unchanged.",
         whatToDo:
-          'If you see one of these messages, choose a warehouse you work in, or ask a manager to make the change or to give you access to that warehouse.',
+          'If you see one of these messages, choose a warehouse you work in, or ask a manager to complete the event, to make the change or to give you access to that warehouse.',
         audience: { anyPermission: ['schedule:manage'], modules: ['schedule'] },
       },
       {

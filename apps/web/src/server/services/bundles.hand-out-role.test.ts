@@ -120,7 +120,7 @@ describe('BundlesService.distribute: the role the database accepts', () => {
     expectNothingReadOrWritten(stub);
   });
 
-  it('staff without bundles:distribute get the permission answer, as before', async () => {
+  it('staff without bundles:distribute get the permission answer', async () => {
     const revoked = effectivePermissions('staff', [
       { permission: 'bundles:distribute', granted: false },
     ]);

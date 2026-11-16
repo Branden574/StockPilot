@@ -7,6 +7,7 @@ import {
   PERMISSIONS,
   releaseSchema,
   ROLE_PERMISSIONS,
+  roleCanHandOutKits,
   type ModuleId,
   type Release,
   type ReleaseViewer,
@@ -47,6 +48,10 @@ const LOCATIONS_LINK = { href: '/dashboard/locations', label: 'Open Locations' }
 const CATEGORIES_LINK = { href: '/dashboard/categories', label: 'Open Categories' };
 
 /** The sentences server/services/schedule.ts answers, as the reader text quotes them. */
+// Added by bundles/hand-out-follows-the-manager-rule (2026-11-16): revision 2 quotes the role refusal Mark complete answers.
+const COMPLETE_ROLE_REFUSED =
+  "You can't complete this event because its kit has to be handed out by a manager. Ask a manager to complete it.";
+// Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: quoted by the reader text): the warehouse refusal of completing, which revision 2 does not quote (nobody reads it from Mark complete); the code still holds it, after the role check.
 const COMPLETE_REFUSED =
   "You can't complete this event because you don't have write access to the warehouse its kit comes from. Ask a manager to complete it, or to give you access to that warehouse.";
 const EVENT_WAREHOUSE_REFUSED =
@@ -99,10 +104,11 @@ function readerText(r: Release): string[] {
 }
 
 describe('the emptied fields and schedule completion release: order, status and date', () => {
-  it('is published once, as revision 1, directly below the Liquid Glass draft and above the Integrations and schedule event release, the newest published release', () => {
+  // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: as revision 1): the release is told again as revision 2; its place and date stay.
+  it('is published once, as revision 2, directly below the Liquid Glass draft and above the Integrations and schedule event release, the newest published release', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
-    expect(release().revision).toBe(1);
+    expect(release().revision).toBe(2);
     expect(release().withdrawnNote).toBeUndefined();
     expect(RELEASES.slice(0, 4).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
@@ -111,6 +117,25 @@ describe('the emptied fields and schedule completion release: order, status and 
       [DELETE_CONFIRM_ID, 'published'],
     ]);
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+  });
+
+  // Added by bundles/hand-out-follows-the-manager-rule (2026-11-16): revision 2 is told again.
+  it('is told again to whoever read revision 1, and a read of revision 2 counts as read', () => {
+    const readAt = (revision: number) => ({
+      release_id: ID,
+      revision,
+      dismissed_at: null,
+      opened_at: '2026-11-16T12:34:00Z',
+      read_at: '2026-11-16T12:34:00Z',
+    });
+    for (const v of [owner, admin, manager, scheduleOnly, suppliersOnly]) {
+      expect(buildReleaseList(RELEASES, v, [readAt(1)], null).latestUnread?.id, v.role).toBe(ID);
+      expect(buildReleaseList(RELEASES, v, [readAt(2)], null).latestUnread?.id, v.role).not.toBe(
+        ID,
+      );
+    }
+    // Its place and its date are those of its first publication.
+    expect(release().publishedAt).toBe(PUBLISHED_AT);
   });
 
   it('is dated on a whole minute after #595 and #597 went live, in the past, with the draft placeholder at the same minute and every release below it older', () => {
@@ -149,36 +174,46 @@ describe('the emptied fields and schedule completion release: the words', () => 
     expect(release().title).toBe(
       'Emptying a field and saving clears it, and clearer messages when a schedule event is not saved',
     );
+    // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: "Mark complete on a schedule event whose kits come from a warehouse you don't have write access to now says so before anything is saved, ..."): revision 2's schedule sentence; the field sentence is as it was.
     expect(release().summary).toBe(
-      "On the website, emptying an optional field when you edit a supplier, charter, warehouse, location or category, and saving, now clears it. Mark complete on a schedule event whose kits come from a warehouse you don't have write access to now says so before anything is saved, and the event stays In progress. The mobile app is unchanged.",
+      'On the website, emptying an optional field when you edit a supplier, charter, warehouse, location or category, and saving, now clears it. Mark complete on a schedule event whose kits have not been handed out yet says, before anything is saved, when the event has to be completed by a manager, and the event stays In progress. The mobile app is unchanged.',
     );
   });
 
-  it('says what Mark complete and the event form say when a warehouse is not yours to write to, as written', () => {
+  // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: 'says what Mark complete and the event form say when a warehouse is not yours to write to, as written', with the title "Mark complete says right away when an event's kits come from a warehouse you don't have write access to", whatChanged quoting COMPLETE_REFUSED for "a schedule event whose kits will be distributed from a warehouse you don't have write access to", "A change to an event you may not change" and whatToDo "... ask a manager to make the change or to give you access to that warehouse."): revision 2's words.
+  it('says who completes an event whose kits have not been handed out yet, what anyone else reads, and what the event form says, as written', () => {
     const e = entry(SCHEDULE_ENTRY);
     expect(e.title).toBe(
-      "Mark complete says right away when an event's kits come from a warehouse you don't have write access to",
+      'Mark complete says right away when a schedule event has to be completed by a manager',
     );
     expect(e.whatChanged).toBe(
-      `On the website, when you choose Mark complete on a schedule event whose kits will be distributed from a warehouse you don't have write access to, the event is not completed and StockPilot says: ${COMPLETE_REFUSED}`,
+      `On the website, a schedule event whose kits have not been handed out yet is marked complete by a manager, an admin or an owner. When anyone else chooses Mark complete on it, the event is not completed and StockPilot says: ${COMPLETE_ROLE_REFUSED}`,
     );
+    expect(readerText(release()).join(' ')).not.toContain(COMPLETE_REFUSED);
     expect(e.whyItMatters).toBe(
       'You find out before anything is saved, and the event stays In progress.',
     );
     expect(e.howItAffectsYou).toBe(
-      `Saving an event on New event or Edit with a warehouse you don't have write access to now says: ${EVENT_WAREHOUSE_REFUSED} For the Distribute from warehouse, the message says the warehouse this event's kit comes from. A change to an event you may not change says: ${UPDATE_REFUSED} Nothing is saved in each case. The mobile app is unchanged.`,
+      `Saving an event on New event or Edit with a warehouse you don't have write access to now says: ${EVENT_WAREHOUSE_REFUSED} For the Distribute from warehouse, the message says the warehouse this event's kit comes from. Any other change to an event you may not change says: ${UPDATE_REFUSED} Nothing is saved in each case. The mobile app is unchanged.`,
     );
     expect(e.whatToDo).toBe(
-      'If you see one of these messages, choose a warehouse you work in, or ask a manager to make the change or to give you access to that warehouse.',
+      'If you see one of these messages, choose a warehouse you work in, or ask a manager to complete the event, to make the change or to give you access to that warehouse.',
     );
     expect(e.link).toBeUndefined();
   });
 
-  it('claims only the warehouse access case of completing: never that completing always hands a kit out, nor that a completed event always has its hand-out', () => {
+  // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: 'claims only the warehouse access case of completing: ...', with no "handed out" anywhere): revision 2 says whose kits "have not been handed out yet" and quotes the role refusal, which says the kit "has to be handed out by a manager". Neither says completing hands a kit out; outside those two, no "hand out" wording is allowed.
+  it('claims only who completes an event whose kits have not been handed out yet: never that completing always hands a kit out, nor that a completed event always has its hand-out', () => {
     const text = readerText(release()).join(' ');
     expect(text).not.toMatch(/\b(always|never|every time)\b/i);
-    expect(text).not.toMatch(/\b(hands? out|handed out)\b/i);
+    const rest = text
+      .split(COMPLETE_ROLE_REFUSED)
+      .join(' ')
+      .split('whose kits have not been handed out yet')
+      .join(' ');
+    expect(rest).not.toMatch(/\b(hands? out|handed out|hand it out)\b/i);
     expect(text).not.toMatch(/\bdistributed when\b/i);
+    expect(text).not.toMatch(/\b(completing|Mark complete) (hands|distributes)\b/i);
   });
 
   it('says which supplier fields an emptied value clears, as written', () => {
@@ -302,7 +337,8 @@ describe('the emptied fields and schedule completion release: who is told', () =
   it('is the first notice for whoever it reaches, the next notice follows, and an old phone build lists it first with a link only where a linked entry is told', () => {
     const read = {
       release_id: ID,
-      revision: 1,
+      // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: revision 1): a read of revision 2.
+      revision: 2,
       dismissed_at: null,
       opened_at: '2026-11-16T12:34:00Z',
       read_at: '2026-11-16T12:34:00Z',
@@ -482,11 +518,34 @@ describe('the emptied fields and schedule completion release: the code the words
     );
   });
 
-  it('completing an in progress event checks the kit warehouse before the row is written, and refuses with the sentence quoted', () => {
+  // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: 'completing an in progress event checks the kit warehouse before the row is written, and refuses with the sentence quoted'): the role check comes first and its sentence is the one quoted; the warehouse check follows it, before the row is written.
+  it('completing an in progress event checks the role, then the kit warehouse, before the row is written, and refuses with the sentence quoted', () => {
     const service = source(`${WEB}/server/services/schedule.ts`);
     const update = service.slice(
       service.indexOf('async update(id: string, patch: UpdateScheduleEventInput)'),
     );
+    expect(service).toContain(
+      `const SCHEDULE_COMPLETE_KIT_HAND_OUT_REFUSED =\n  ${JSON.stringify(COMPLETE_ROLE_REFUSED)};`,
+    );
+    const roleCheck = update.indexOf(
+      'if (kitId && kitQuantity && kitWarehouseId && !roleCanHandOutKits(this.ctx.role)) {',
+    );
+    expect(roleCheck).toBeGreaterThan(0);
+    expect(update.slice(roleCheck)).toMatch(
+      /^[^\n]*\n\s*throw new ServiceError\('forbidden', SCHEDULE_COMPLETE_KIT_HAND_OUT_REFUSED\);/,
+    );
+    expect(roleCheck).toBeGreaterThan(
+      update.indexOf('if (completing && !distributedBefore.has(id)) {'),
+    );
+    expect(roleCheck).toBeLessThan(
+      update.indexOf(
+        'await this.assertWarehouseWrite(kitWarehouseId, SCHEDULE_COMPLETE_KIT_WAREHOUSE_REFUSED);',
+      ),
+    );
+    // The floor the entry names: a manager, an admin or an owner.
+    expect(
+      (['owner', 'admin', 'manager', 'staff', 'viewer'] as const).filter(roleCanHandOutKits),
+    ).toEqual(['owner', 'admin', 'manager']);
     expect(service).toContain(
       `const SCHEDULE_COMPLETE_KIT_WAREHOUSE_REFUSED =\n  ${JSON.stringify(COMPLETE_REFUSED)};`,
     );

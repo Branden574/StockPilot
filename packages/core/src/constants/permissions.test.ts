@@ -20,6 +20,7 @@ import {
   withoutPlatformManaged,
   type Permission,
 } from './permissions';
+import type { Role } from './roles';
 
 describe('effectivePermissions', () => {
   it('returns the static defaults when there are no overrides', () => {
@@ -280,6 +281,13 @@ describe('roleCanHandOutKits', () => {
     }
     for (const role of ['staff', 'viewer'] as const) {
       expect(roleCanHandOutKits(role), role).toBe(false);
+    }
+  });
+
+  it('answers false, without throwing, for a role that is not one of the five', () => {
+    for (const role of ['custom', '', null, undefined] as unknown as Role[]) {
+      expect(roleCanHandOutKits(role), String(role)).toBe(false);
+      expect(canDistributeBundles({ role }), String(role)).toBe(false);
     }
   });
 

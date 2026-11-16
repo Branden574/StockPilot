@@ -145,7 +145,11 @@ const S2_IDS = [
 const newerReads = [...S2_IDS, ...NIGHT_IDS, ...LATER_IDS, ...NEWER_IDS].map((id) => ({
   release_id: id,
   // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: revision 1): the API key audit release is re-announced as revision 2, so a read of it is recorded at revision 2.
-  revision: id === 'api-key-audit-2026-11' ? 2 : 1,
+  // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: id === 'api-key-audit-2026-11' ? 2 : 1): the emptied fields and schedule completion release is re-announced as revision 2, so a read of it is recorded at revision 2.
+  revision:
+    id === 'api-key-audit-2026-11' || id === 'emptied-fields-and-schedule-completion-2026-11'
+      ? 2
+      : 1,
   dismissed_at: null,
   opened_at: '2026-11-02T17:40:00Z',
   read_at: '2026-11-02T17:40:00Z',

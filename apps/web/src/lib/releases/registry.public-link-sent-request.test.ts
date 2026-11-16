@@ -176,7 +176,8 @@ describe('the public order link release (a sent request leaves nothing behind)',
       ...listsRead,
       release_id: id,
       // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: revision 1): the API key audit release is re-announced as revision 2, so a read of it is recorded at revision 2.
-      revision: id === 'api-key-audit-2026-11' ? 2 : 1,
+      // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: id === 'api-key-audit-2026-11' ? 2 : 1): the emptied fields and schedule completion release is re-announced as revision 2, so a read of it is recorded at revision 2.
+      revision: id === 'api-key-audit-2026-11' || id === 'emptied-fields-and-schedule-completion-2026-11' ? 2 : 1,
       opened_at: '2026-11-02T15:50:00Z',
       read_at: '2026-11-02T15:50:00Z',
     }));
@@ -293,7 +294,8 @@ describe('the public order link release (a sent request leaves nothing behind)',
       ...rx2Read,
       release_id: id,
       // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: revision 1): the API key audit release is re-announced as revision 2, so a read of it is recorded at revision 2.
-      revision: id === 'api-key-audit-2026-11' ? 2 : 1,
+      // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: id === 'api-key-audit-2026-11' ? 2 : 1): the emptied fields and schedule completion release is re-announced as revision 2, so a read of it is recorded at revision 2.
+      revision: id === 'api-key-audit-2026-11' || id === 'emptied-fields-and-schedule-completion-2026-11' ? 2 : 1,
     }));
     const aiSearchRead = { ...rx2Read, release_id: 'ai-search-finds-every-item-2026-10' };
     const newerRead = [
