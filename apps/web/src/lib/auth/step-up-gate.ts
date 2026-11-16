@@ -165,9 +165,32 @@ export async function authenticatorSetUpIsOwed(
   // Another account's list: stepUpIsOwed() already sent this session to the
   // code page, so this is never reached with one; no answer, no set-up.
   if (!own) return false;
-  if (own.some((f) => f.status === 'verified')) return false;
+  return authenticatorSetUpIsOwedByUser(member, held, own);
+}
+
+/**
+ * The same set-up question for a funnel that validated its own user with
+ * getUser() instead of asking requireOrgContext(): the sign-in email change
+ * (server/actions/email-change.ts), which must still work for an account with
+ * no organization. `factors` are that account's own, from that same getUser()
+ * answer; `member` and `held` are the organization requireOrgContext()
+ * resolves for this request and the membership it came from
+ * (readSessionOrganization in lib/auth/session.ts).
+ *
+ * The policy is read as above: from the membership when it carries the
+ * organization row, else the request-cached row. A row that came back empty is
+ * held to the strictest policy (enforcedMfaPolicy); a read that FAILED throws
+ * OrganizationRowUnavailableError, the "could not check your access" state.
+ * A verified factor reads nothing.
+ */
+export async function authenticatorSetUpIsOwedByUser(
+  member: { organizationId: string; role: Role },
+  held: BundleMembership | null,
+  factors: ReadonlyArray<{ readonly status?: string | null }> | null | undefined,
+): Promise<boolean> {
+  if ((factors ?? []).some((f) => f.status === 'verified')) return false;
   const orgRow = orgRowFromMembership(held) ?? (await getOrgRowForRequest(member.organizationId));
-  return authenticatorSetUpOwed(enforcedMfaPolicy(orgRow), member.role, own);
+  return authenticatorSetUpOwed(enforcedMfaPolicy(orgRow), member.role, factors);
 }
 
 /**

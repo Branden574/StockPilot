@@ -14,7 +14,7 @@ import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { ServiceError } from '@/server/services/context';
+import { mfaGateError, ServiceError } from '@/server/services/context';
 
 import { insertAuditRowReported, type AuditEvent } from '@/server/services/audit';
 import { resolveDefaultOrgAndRole } from '@/server/services/auth-audit';
@@ -127,14 +127,36 @@ export interface EmailChangeStatus {
 /**
  * What the caller already knows about the session's MFA posture. Resolved by
  * the caller because the two callers learn it differently: the web action
- * from the cookie session (listFactors + getAuthenticatorAssuranceLevel), the
- * Bearer route from the verified token's `aal` claim via withApiContext.
+ * from the getUser() answer and that account's verified session claims, the
+ * Bearer route from the context withApiContext resolved.
  */
 export interface MfaPosture {
-  /** The user has at least one VERIFIED TOTP factor. */
+  /** The user has at least one VERIFIED factor, of any type. */
   enrolled: boolean;
   /** The calling session is currently at AAL2. */
   aal2: boolean;
+  /**
+   * The member's current organization requires an authenticator of their
+   * role, and the account has none verified: the member must set one up
+   * first. Each caller asks its own surface's gate, on core's rule: the web
+   * action the rule requireOrgContext() applies (authenticatorSetUpIsOwedByUser
+   * in lib/auth/step-up-gate.ts), the Bearer routes the context withApiContext
+   * resolved with the organization's policy (mfaPostureFromContext in
+   * server/lib/email-change-api.ts). False for an account with no
+   * organization.
+   */
+  setUpOwed: boolean;
+}
+
+/**
+ * A member who must set up an authenticator first gets the answer the
+ * profile's name and avatar give them (mfaGateError, the 'mfa_required'
+ * shape: set one up first), before anything is read, limited, checked or
+ * sent. Request and resend ask it first; cancel does not, since it only
+ * removes a pending change.
+ */
+function refuseUntilAuthenticatorSetUp(mfa: MfaPosture): void {
+  if (mfa.setUpOwed) throw mfaGateError({ mfaEnrolled: false });
 }
 
 /**
@@ -425,14 +447,15 @@ export interface RequestEmailChangeResult {
 
 /**
  * Starts a change. Order of refusals matters and is tested:
- *   account status → same-address no-op → rate limits (user AND target, closed)
- *   → MFA step-up when enrolled → current password (side-channel) → duplicate
- *   → mint → deliver → audit.
+ *   authenticator set-up owed → account status → same-address no-op → rate
+ *   limits (user AND target, closed) → MFA step-up when enrolled → current
+ *   password (side-channel) → duplicate → mint → deliver → audit.
  * Rate limits come BEFORE the password check so this endpoint cannot be used
  * as a password oracle; the AAL check comes before it so an enrolled user is
  * asked to step up without spending a GoTrue sign-in.
  */
 export async function requestEmailChange(args: RequestEmailChangeArgs): Promise<RequestEmailChangeResult> {
+  refuseUntilAuthenticatorSetUp(args.mfa);
   const guard = await loadProfileGuard(args.userId);
   const user = await loadAuthUser(args.userId);
   const currentEmail = user.email;
@@ -510,12 +533,15 @@ export async function requestEmailChange(args: RequestEmailChangeArgs): Promise<
  * Re-mints and re-sends both links for the address already pending in
  * GoTrue. The target comes from GoTrue's own state, never from the caller,
  * so a resend can never redirect the change. Previous links stop working.
+ * A member who must set up an authenticator first is refused before anything
+ * else, as for a request.
  */
 export async function resendEmailChange(args: {
   userId: string;
   mfa: MfaPosture;
   source: 'web' | 'mobile';
 }): Promise<{ pendingEmail: string; sentAt: string; expiresAt: string }> {
+  refuseUntilAuthenticatorSetUp(args.mfa);
   const guard = await loadProfileGuard(args.userId);
   const user = await loadAuthUser(args.userId);
   const pending = user.new_email?.trim() ? user.new_email : null;

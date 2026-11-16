@@ -6,7 +6,11 @@ import { resendEmailChange } from '@/server/services/email-change';
 
 export const runtime = 'nodejs';
 
-/** POST /api/v1/account/email/resend — re-sends both links for the pending address. */
+/**
+ * POST /api/v1/account/email/resend — re-sends both links for the pending
+ * address. The same authenticator answers as a request (aal2_required,
+ * mfa_required), before anything is spent.
+ */
 export async function POST(req: NextRequest) {
   const ctx = await withApiContext(req);
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });

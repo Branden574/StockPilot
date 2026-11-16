@@ -310,12 +310,13 @@ const REVIEWED: Record<string, Reviewed> = {
   },
   'server/actions/email-change.ts#requestEmailChangeAction': {
     kind: 'own-account',
-    reason: "The caller's own email change; an enrolled account must be at aal2 (its own rule).",
+    reason:
+      "The caller's own email change; an enrolled account must be at aal2, and a member who must set up an authenticator first is refused (its own rule).",
     writes: ['audit_logs.insert', 'audit_logs.upsert', 'auth.admin.generateLink'],
   },
   'server/actions/email-change.ts#resendEmailChangeAction': {
     kind: 'own-account',
-    reason: "Sends the caller's own pending email change again; same rule as requesting it.",
+    reason: "Sends the caller's own pending email change again; same rules as requesting it.",
     writes: ['audit_logs.insert', 'audit_logs.upsert', 'auth.admin.generateLink'],
   },
   'server/actions/email-change.ts#cancelEmailChangeAction': {
@@ -351,12 +352,14 @@ const REVIEWED: Record<string, Reviewed> = {
   },
   'app/api/v1/account/email/request/route.ts#POST': {
     kind: 'own-account',
-    reason: "The phone's own email change; an enrolled account must be at aal2 (its own rule).",
+    reason:
+      "The phone's own email change; an enrolled account must be at aal2, and a member who must set up an authenticator first is refused (its own rule).",
     writes: ['audit_logs.insert', 'audit_logs.upsert', 'auth.admin.generateLink'],
   },
   'app/api/v1/account/email/resend/route.ts#POST': {
     kind: 'own-account',
-    reason: "The phone's resend of the caller's own pending email change.",
+    reason:
+      "The phone's resend of the caller's own pending email change; same rules as requesting it.",
     writes: ['audit_logs.insert', 'audit_logs.upsert', 'auth.admin.generateLink'],
   },
   'app/api/v1/account/email/cancel/route.ts#POST': {
@@ -367,12 +370,13 @@ const REVIEWED: Record<string, Reviewed> = {
   'server/services/email-change.ts#requestEmailChange': {
     kind: 'own-account',
     reason:
-      'The email change the web and phone entries share, handed the account posture by its caller.',
+      'The email change the web and phone entries share, handed the account posture by its caller; it refuses a member who must set up an authenticator first before anything is spent.',
     writes: ['audit_logs.insert', 'audit_logs.upsert', 'auth.admin.generateLink'],
   },
   'server/services/email-change.ts#resendEmailChange': {
     kind: 'own-account',
-    reason: 'The resend the web and phone entries share, handed the account posture by its caller.',
+    reason:
+      'The resend the web and phone entries share, handed the account posture by its caller; same refusals as the request.',
     writes: ['audit_logs.insert', 'audit_logs.upsert', 'auth.admin.generateLink'],
   },
   'server/services/email-change.ts#cancelEmailChange': {
