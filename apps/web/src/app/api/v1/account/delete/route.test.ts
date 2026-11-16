@@ -1252,3 +1252,160 @@ describe('POST /api/v1/account/delete/code', () => {
     expect(sendEmail).not.toHaveBeenCalled();
   });
 });
+
+describe('POST /api/v1/account/delete: the count line for a request with no password or code', () => {
+  const LINE = '[v1/account/delete] request with no password or code from an account with no authenticator';
+  const PASSWORD = 'example-password-2';
+  /** A member with no authenticator whose organization requires one. */
+  const requiring = (stub: SupabaseStub) => ({
+    ...buildCtx(stub, 'admin'),
+    mfaRequired: true,
+    mfaSatisfied: false,
+    mfaEnrolled: false,
+  });
+  /** A member with an authenticator, at aal2. */
+  const enrolledAtAal2 = (stub: SupabaseStub) => ({
+    ...buildCtx(stub, 'admin'),
+    mfaRequired: true,
+    mfaSatisfied: true,
+    mfaEnrolled: true,
+  });
+  const spyOnInfo = () => vi.spyOn(console, 'info').mockImplementation(() => {});
+  let info: ReturnType<typeof spyOnInfo>;
+  /** The calls that wrote the count line. */
+  const countLines = () => info.mock.calls.filter((c) => c[0] === LINE);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    deleteUser.mockResolvedValue({ error: null });
+    getUserById.mockResolvedValue({ data: { user: { id: USER_ID, email: 'staff@example.test' } }, error: null });
+    rpc.mockResolvedValue({ data: { deletable: true }, error: null });
+    checkRateLimit.mockResolvedValue({ allowed: true, count: 1, resetAt: 0 });
+    isPlatformAdmin.mockImplementation(() => false);
+    avatarList.mockResolvedValue({ data: [], error: null });
+    avatarRemove.mockResolvedValue({ data: [], error: null });
+    adminTables.stub = makeSupabaseStub();
+    factorState.factors = [];
+    listFactors.mockImplementation(async () => ({ data: { factors: factorState.factors }, error: null }));
+    verifyPassword.mockImplementation(async () => ({ ok: true }));
+    cookieClaims.mockReset();
+    cookieClaims.mockResolvedValue(null);
+    info = spyOnInfo();
+  });
+
+  afterEach(() => {
+    info.mockRestore();
+  });
+
+  it('a phone with no authenticator, Optional organization: one line (bearer, word_only), and the deletion as before', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(happyStub()) as never);
+    const res = await POST(buildRequest({ confirm: 'DELETE' }, 'aal1'));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(deleteUser).toHaveBeenCalledWith(USER_ID);
+    expect(countLines()).toEqual([[LINE, { via: 'bearer', answer: 'word_only' }]]);
+  });
+
+  it('a phone with no authenticator, an organization that requires one: one line (bearer, mfa_required), the same 403', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(requiring(happyStub()) as never);
+    const res = await POST(buildRequest({ confirm: 'DELETE' }, 'aal1'));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: 'mfa_required',
+      message: 'Multi-factor authentication required.',
+    });
+    expect(deleteUser).not.toHaveBeenCalled();
+    expect(countLines()).toEqual([[LINE, { via: 'bearer', answer: 'mfa_required' }]]);
+  });
+
+  it('a browser session with no authenticator: one line (cookie)', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(requiring(happyStub()) as never);
+    const res = await POST(buildRequest({ confirm: 'DELETE' }));
+    expect(res.status).toBe(403);
+    expect(countLines()).toEqual([[LINE, { via: 'cookie', answer: 'mfa_required' }]]);
+  });
+
+  it('the line changes no answer, limit count or audit row, and a console that throws fails nothing', async () => {
+    info.mockImplementation(() => {
+      throw new Error('console unavailable');
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(happyStub()) as never);
+    const res = await POST(buildRequest({ confirm: 'DELETE' }, 'aal1'));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(deleteUser).toHaveBeenCalledTimes(1);
+    expect(checkRateLimit).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(insertAuditRowReported)).toHaveBeenCalledTimes(1);
+    expect(
+      (vi.mocked(insertAuditRowReported).mock.calls[0]?.[0] as { metadata?: Record<string, unknown> })
+        ?.metadata?.confirmed_by,
+    ).toBe('none');
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a password', { confirm: 'DELETE', password: PASSWORD }],
+    ['a code and its challenge', { confirm: 'DELETE', code: '135790', challenge: 'v1.example-challenge' }],
+    ['a challenge alone', { confirm: 'DELETE', challenge: 'v1.example-challenge' }],
+  ])('no line for a request with %s', async (_kind, body) => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(requiring(happyStub()) as never);
+    await POST(buildRequest(body, 'aal1'));
+    expect(countLines()).toEqual([]);
+  });
+
+  it('no line for an account with an authenticator, at aal2 or not', async () => {
+    factorState.factors = [{ status: 'verified' }];
+    vi.mocked(withApiContext).mockResolvedValueOnce(enrolledAtAal2(happyStub()) as never);
+    expect((await POST(buildRequest({ confirm: 'DELETE' }, 'aal2'))).status).toBe(200);
+    vi.mocked(withApiContext).mockResolvedValueOnce({
+      ...enrolledAtAal2(happyStub()),
+      mfaSatisfied: false,
+    } as never);
+    expect((await POST(buildRequest({ confirm: 'DELETE' }, 'aal1'))).status).toBe(403);
+    expect(countLines()).toEqual([]);
+  });
+
+  it('no line for a request with no session (refused by the context)', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(null);
+    expect((await POST(buildRequest({ confirm: 'DELETE' }, 'aal1'))).status).toBe(401);
+    vi.mocked(withApiContext).mockResolvedValueOnce(null);
+    expect((await POST(buildRequest({ confirm: 'DELETE' }))).status).toBe(401);
+    expect(countLines()).toEqual([]);
+  });
+
+  it("the line carries none of the request's identifying values", async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(happyStub()) as never);
+    const seg = (v: object) => Buffer.from(JSON.stringify(v)).toString('base64url');
+    const token = `${seg({ alg: 'none' })}.${seg({ sub: USER_ID, aal: 'aal1', email: 'staff@example.test' })}.`;
+    const req = new Request('https://test.local/api/v1/account/delete?ref=example-query-value', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        'x-forwarded-for': '203.0.113.7',
+        'x-real-ip': '203.0.113.7',
+        'user-agent': 'ExampleAgent/9.9',
+      },
+      body: JSON.stringify({ confirm: 'DELETE', note: 'example-body-value' }),
+    }) as unknown as Parameters<typeof POST>[0];
+    expect((await POST(req)).status).toBe(200);
+
+    const lines = countLines();
+    expect(lines).toHaveLength(1);
+    expect(Object.keys(lines[0]![1] as object).sort()).toEqual(['answer', 'via']);
+    const logged = JSON.stringify(lines);
+    for (const value of [
+      USER_ID,
+      'org-1',
+      'staff@example.test',
+      token,
+      '203.0.113.7',
+      'ExampleAgent',
+      'example-query-value',
+      'example-body-value',
+      'DELETE',
+    ]) {
+      expect(logged).not.toContain(value);
+    }
+  });
+});

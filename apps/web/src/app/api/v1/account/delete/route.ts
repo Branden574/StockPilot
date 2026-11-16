@@ -128,6 +128,12 @@ export async function POST(req: NextRequest) {
     : async () => (await readVerifiedSessionClaimsOf(await createClient(), ctx.userId))?.aal ?? null;
 
   if (supplied === null) {
+    if (!ctx.mfaEnrolled) {
+      logUnconfirmedRequest(
+        bearer ? 'bearer' : 'cookie',
+        ctx.mfaRequired ? 'mfa_required' : 'word_only',
+      );
+    }
     // No password and no code: the organization's policy decides, with the
     // answers installed phones show. The code is chosen by enrolment, as
     // services/context.ts mfaGateError does: an enrolled caller gets
@@ -391,6 +397,30 @@ export async function POST(req: NextRequest) {
     return internalErrorResponse(e, 'api.v1.account.delete', {
       organizationId: ctx.organizationId,
     });
+  }
+}
+
+/**
+ * One info line per request that sent neither a password nor a code from an
+ * account with no authenticator, so the runtime logs can count how many such
+ * requests still arrive. Info, not a report: it is an expected request. Fixed
+ * words, which way the session came (bearer or cookie) and what this route
+ * answers such a request (mfa_required, or the typed word alone is enough):
+ * never an id, an address, a token, a header or anything from the body. The
+ * method, path, status and time are on the platform's own request record. A
+ * failure to write it never changes the answer.
+ */
+function logUnconfirmedRequest(
+  via: 'bearer' | 'cookie',
+  answer: 'mfa_required' | 'word_only',
+): void {
+  try {
+    console.info(
+      '[v1/account/delete] request with no password or code from an account with no authenticator',
+      { via, answer },
+    );
+  } catch {
+    // The line is best-effort.
   }
 }
 
