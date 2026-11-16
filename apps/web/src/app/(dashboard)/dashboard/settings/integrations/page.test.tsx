@@ -132,6 +132,12 @@ function as(role: typeof ctxHolder.role, permissions: string[]) {
 
 const panel = () => screen.getByTestId('integrations-panel');
 
+/** The page's props: what the address carries back from an accounting connection. */
+const returnedWith = (query: { error?: string | string[]; connected?: string }) => ({
+  searchParams: Promise.resolve(query),
+});
+const noReturn = () => returnedWith({});
+
 beforeEach(() => {
   vi.clearAllMocks();
   ctxHolder.modules = new Set(['integrations', 'shipping']);
@@ -141,7 +147,7 @@ beforeEach(() => {
 describe('Settings > Integrations with both modules on', () => {
   it('a manager given only Manage shipping gets the EasyPost card and the dead-letter view', async () => {
     as('manager', ['shipping:manage']);
-    render(await IntegrationsSettingsPage());
+    render(await IntegrationsSettingsPage(noReturn()));
     expect(panel()).toHaveAttribute('data-easypost', 'shown');
     expect(panel()).toHaveAttribute('data-quickbooks', 'hidden');
     expect(panel()).toHaveAttribute('data-failed-syncs', '1');
@@ -150,7 +156,7 @@ describe('Settings > Integrations with both modules on', () => {
 
   it('an admin whose Manage integrations was taken away gets the EasyPost card; with both keys, both cards (unchanged)', async () => {
     as('admin', ['integrations:manage', 'shipping:manage']);
-    const { unmount } = render(await IntegrationsSettingsPage());
+    const { unmount } = render(await IntegrationsSettingsPage(noReturn()));
     expect(panel()).toHaveAttribute('data-quickbooks', 'shown');
     expect(panel()).toHaveAttribute('data-easypost', 'shown');
     expect(panel()).toHaveAttribute('data-failed-syncs', '1');
@@ -158,10 +164,52 @@ describe('Settings > Integrations with both modules on', () => {
     unmount();
 
     as('admin', ['shipping:manage']);
-    render(await IntegrationsSettingsPage());
+    render(await IntegrationsSettingsPage(noReturn()));
     expect(panel()).toHaveAttribute('data-quickbooks', 'hidden');
     expect(panel()).toHaveAttribute('data-easypost', 'shown');
     expect(panel()).toHaveAttribute('data-failed-syncs', '1');
     expect(screen.queryByTestId('webhooks-panel')).toBeNull();
+  });
+});
+
+// An accounting connection that was refused comes back here with
+// ?error=forbidden (api/integrations/{quickbooks,sage_intacct}/callback). The
+// page says why, and where to go, to the people the accounting cards show to.
+describe('Settings > Integrations after a refused accounting connection', () => {
+  // True of every reason the callbacks answer forbidden for, and says what to
+  // do when an authenticator is the reason.
+  const SENTENCE =
+    'The connection was not finished because your access could not be confirmed. If your organization requires an authenticator, set one up in Settings > Security, then connect again.';
+
+  it('error=forbidden: says the access could not be confirmed and points to Settings > Security', async () => {
+    as('admin', ['integrations:manage', 'shipping:manage']);
+    render(await IntegrationsSettingsPage(returnedWith({ error: 'forbidden' })));
+    const line = screen.getByRole('status');
+    expect(line.textContent?.replace(/\s+/g, ' ').trim()).toBe(SENTENCE);
+    expect(screen.getByRole('link', { name: 'Settings > Security' })).toHaveAttribute(
+      'href',
+      '/dashboard/settings/security',
+    );
+  });
+
+  it('says nothing with no error, with another code, or with the code given twice', async () => {
+    as('admin', ['integrations:manage', 'shipping:manage']);
+    for (const query of [{}, { error: 'connect_failed' }, { connected: 'quickbooks' }]) {
+      const { unmount } = render(await IntegrationsSettingsPage(returnedWith(query)));
+      expect(screen.queryByRole('status'), JSON.stringify(query)).toBeNull();
+      unmount();
+    }
+    const { unmount } = render(
+      await IntegrationsSettingsPage(returnedWith({ error: ['forbidden', 'forbidden'] })),
+    );
+    expect(screen.queryByRole('status')).toBeNull();
+    unmount();
+  });
+
+  it('says nothing to someone the accounting cards do not show to', async () => {
+    as('manager', ['shipping:manage']);
+    render(await IntegrationsSettingsPage(returnedWith({ error: 'forbidden' })));
+    expect(panel()).toHaveAttribute('data-quickbooks', 'hidden');
+    expect(screen.queryByRole('status')).toBeNull();
   });
 });

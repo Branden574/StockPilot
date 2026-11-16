@@ -9,7 +9,6 @@ import {
   EMPTY_MEMORY,
   FOCUS_RECHECK_MS,
   isWorkRoute,
-  LAUNCH_SCREEN_GROUND,
   MEMORY_KEY,
   MEMORY_MAX_ENTRIES,
   nativeStateFromContext,
@@ -43,6 +42,7 @@ import {
   type UpdatePromptController,
   type UpdatePromptDeps,
 } from './ota-update-prompt';
+import { ICON_LAUNCH_GROUND, LAST_ICON_LAUNCH_RUNTIME, PLAIN_LAUNCH_GROUND } from './launch-look';
 
 /**
  * The phone update pop-up's rules (B44), run with fake dependencies and a
@@ -265,7 +265,9 @@ describe('the words', () => {
     expect(UPDATE_PROMPT_LOCK_ID).toBe('update-prompt');
     expect(MEMORY_KEY).toBe('stockpilot.update-prompt.v1');
     expect(MEMORY_MAX_ENTRIES).toBe(10);
-    expect(LAUNCH_SCREEN_GROUND).toBe('#0a0f1f');
+    expect(ICON_LAUNCH_GROUND).toBe('#0a0f1f');
+    expect(PLAIN_LAUNCH_GROUND).toBe('#0c0d0a');
+    expect(LAST_ICON_LAUNCH_RUNTIME).toBe('1.4.0');
     expect(RETURN_CHECK_MIN_GAP_MS).toBe(30 * 60_000);
     expect(SHOW_SETTLE_MS).toBe(600);
     expect(FOCUS_RECHECK_MS).toBe(2_000);

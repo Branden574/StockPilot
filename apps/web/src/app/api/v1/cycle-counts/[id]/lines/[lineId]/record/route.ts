@@ -7,6 +7,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { resolveCapturedAt } from '@/lib/cycle-counts/capture-time';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { forbiddenOrInternalResponse } from '@/server/lib/api-error-response';
+import { refusalReasonDetails } from '@/server/lib/refusal-reason';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { ServiceError } from '@/server/services/context';
 
@@ -121,14 +122,23 @@ export async function POST(
         );
       }
       const status =
-        e.code === 'forbidden'
+        e.code === 'forbidden' || e.code === 'module_disabled'
           ? 403
           : e.code === 'not_found'
             ? 404
             : e.code === 'conflict' || e.code === 'validation_error'
               ? 409
               : 500;
-      return NextResponse.json({ error: e.code, message: e.message }, { status });
+      return NextResponse.json(
+        {
+          error: e.code,
+          message: e.message,
+          // Only a string `details.reason`, and never for an internal_error
+          // (server/lib/refusal-reason.ts).
+          ...refusalReasonDetails(e),
+        },
+        { status },
+      );
     }
     // A warehouse refusal (assertSessionAccess's ForbiddenError) is a 403,
     // final on the phone, or a 503 when the access could not be read;

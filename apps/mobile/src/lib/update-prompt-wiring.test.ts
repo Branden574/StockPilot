@@ -4,11 +4,9 @@ import * as path from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
-import {
-  LAUNCH_SCREEN_GROUND,
-  UPDATE_PROMPT_LATER,
-  UPDATE_PROMPT_RESTART,
-} from './ota-update-prompt';
+import { ICON_LAUNCH_GROUND, PLAIN_LAUNCH_GROUND } from './launch-look';
+import { UPDATE_PROMPT_LATER, UPDATE_PROMPT_RESTART } from './ota-update-prompt';
+import { palette } from './theme';
 
 /**
  * The phone update pop-up's wiring across the app (B44), read with the
@@ -271,8 +269,22 @@ describe('the host hands the controller the real screen, and covers a restart', 
     expect(host).toContain('accessible accessibilityViewIsModal');
     expect(host).toContain('accessibilityLabel={RESTARTING_LABEL}');
     expect(tight(host)).toContain(
-      tight('overlay: { backgroundColor: LAUNCH_SCREEN_GROUND, zIndex: 1000, elevation: 1000, },'),
+      tight('overlay: { backgroundColor: RESTART_GROUND, zIndex: 1000, elevation: 1000, },'),
     );
+  });
+
+  it('draws the cover in the restart screen’s look: its ground, and the icon only where the launch screen has it', () => {
+    expect(host).toContain(
+      "import { LAUNCH_ICON, RESTART_GROUND, RESTART_SHOWS_ICON } from '@/lib/restart-screen';",
+    );
+    expect(tight(host)).toContain(
+      tight(
+        '{RESTART_SHOWS_ICON ? ( <Image source={LAUNCH_ICON} resizeMode="contain" style={styles.icon} accessibilityIgnoresInvertColors /> ) : null}',
+      ),
+    );
+    expect(tight(host)).toContain(tight("icon: { width: '100%', height: '100%' }"));
+    // The only Image the cover draws is that one.
+    expect(host.match(/<Image\b/g)).toHaveLength(1);
   });
 });
 
@@ -338,7 +350,7 @@ describe('the one restart', () => {
     expect(keys).toEqual(['url']);
   });
 
-  it('the restart and its cover use the launch screen’s colour', () => {
+  it('the restart and its cover use the installed binary’s launch screen', () => {
     const sf = parse('app.config.ts');
     let splashGround: string | null = null;
     walk(sf, (n) => {
@@ -361,15 +373,35 @@ describe('the one restart', () => {
         }
       }
     });
-    expect(splashGround).toBe(LAUNCH_SCREEN_GROUND);
+    // The launch screen this config builds is the plain one, the loading
+    // animation's ground.
+    expect(splashGround).toBe(PLAIN_LAUNCH_GROUND);
+    expect(PLAIN_LAUNCH_GROUND).toBe(palette('dark').paper);
+    // Binaries up to 1.4.0 launch with the icon on this ground.
+    expect(ICON_LAUNCH_GROUND).toBe('#0a0f1f');
 
     const screen = flatCode('src/lib/restart-screen.ts');
     expect(screen).toContain(
-      `export const RESTART_SCREEN = { backgroundColor: '${LAUNCH_SCREEN_GROUND}', image: LAUNCH_ICON, imageResizeMode: 'contain', imageFullScreen: false, spinner: { enabled: false }, fade: true, } as const satisfies ReloadScreenOptions;`,
-    );
-    expect(screen).toContain(
       "export const LAUNCH_ICON: number = require('../../assets/icon.png');",
     );
+    // The look comes from the binary's own runtime version.
+    expect(screen).toContain("import * as Updates from 'expo-updates';");
+    expect(screen).toContain('export const LAUNCH_LOOK = launchLookFor(Updates.runtimeVersion);');
+    // The icon look, for binaries with the icon launch screen.
+    expect(screen).toContain(
+      "const ICON_RESTART_SCREEN = { backgroundColor: ICON_LAUNCH_GROUND, image: LAUNCH_ICON, imageResizeMode: 'contain', imageFullScreen: false, spinner: { enabled: false }, fade: true, } as const satisfies ReloadScreenOptions;",
+    );
+    // The plain look, for every later binary: the ground alone.
+    expect(screen).toContain(
+      'const GROUND_RESTART_SCREEN = { backgroundColor: PLAIN_LAUNCH_GROUND, spinner: { enabled: false }, fade: true, } as const satisfies ReloadScreenOptions;',
+    );
+    expect(screen).toContain(
+      "export const RESTART_SCREEN: ReloadScreenOptions = LAUNCH_LOOK === 'icon' ? ICON_RESTART_SCREEN : GROUND_RESTART_SCREEN;",
+    );
+    expect(screen).toContain(
+      "export const RESTART_GROUND: string = LAUNCH_LOOK === 'icon' ? ICON_LAUNCH_GROUND : PLAIN_LAUNCH_GROUND;",
+    );
+    expect(screen).toContain("export const RESTART_SHOWS_ICON: boolean = LAUNCH_LOOK === 'icon';");
   });
 });
 

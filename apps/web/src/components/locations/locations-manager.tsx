@@ -6,6 +6,7 @@ import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
+import { editedOptionalText } from '@/lib/edited-optional-text';
 import { isSystemLocation, locationGroup, type LocationGroup } from '@/lib/locations/groups';
 import { PageHeader } from '@/components/patterns/page-header';
 import { SegmentedTabs } from '@/components/patterns/segmented-tabs';
@@ -434,7 +435,7 @@ function LocationDialog({
       name: values.name,
       type: (values.type || undefined) as
         'warehouse' | 'room' | 'shelf' | 'bin' | 'vehicle' | 'jobsite' | 'other' | undefined,
-      notes: values.notes || undefined,
+      notes: editedOptionalText(values.notes, editing?.notes),
     };
     const res = editing
       ? await updateLocationAction(editing.id, payload)

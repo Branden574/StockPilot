@@ -227,6 +227,68 @@ export class CustomersService {
     if (!data) throw new ServiceError('not_found', 'Customer not found');
   }
 
+  /**
+   * Archive or restore one customer account, and nothing else about it.
+   *
+   * The account is read in the caller's organization first: not_found when it
+   * is not there, and the status it had, for the audit row. A save of the
+   * status it already has writes nothing and records nothing
+   * (`changed: false`). Otherwise the one column is updated, keyed by the
+   * organization, the id and the status that was read, so a change made by
+   * someone else in between answers conflict instead of being recorded over.
+   *
+   * One audit row per change, in the shape the customer rows already have
+   * (`organization.updated`, entity customer, `extra.action`): before and
+   * after status, and the account's name. Like every audit() row it is
+   * best-effort: a row that cannot be written is reported, and the change
+   * stands.
+   */
+  async setStatus(
+    id: string,
+    status: 'active' | 'archived',
+  ): Promise<{ status: 'active' | 'archived'; changed: boolean }> {
+    this.gate();
+    const { data: current, error: readError } = await this.ctx.supabase
+      .from('customers')
+      .select('id, name, status')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (readError) throw new ServiceError('internal_error', readError.message);
+    if (!current) throw new ServiceError('not_found', 'Customer not found');
+    const before = current as { id: string; name: string; status: 'active' | 'archived' };
+    if (before.status === status) return { status, changed: false };
+
+    const { data, error } = await this.ctx.supabase
+      .from('customers')
+      .update({ status })
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .eq('status', before.status)
+      .select('id')
+      .maybeSingle();
+    if (error) throw new ServiceError('internal_error', error.message);
+    if (!data) {
+      throw new ServiceError('conflict', 'This account was just changed. Refresh and try again.');
+    }
+
+    await audit(
+      {
+        event: 'organization.updated',
+        entityType: 'customer',
+        entityId: id,
+        before: { status: before.status },
+        after: { status },
+        extra: {
+          action: status === 'archived' ? 'customer_archived' : 'customer_restored',
+          name: before.name,
+        },
+      },
+      this.ctx,
+    );
+    return { status, changed: true };
+  }
+
   // ── Price lists ───────────────────────────────────────────────────────────
 
   async listPriceLists(): Promise<Array<{ id: string; name: string; item_count: number }>> {

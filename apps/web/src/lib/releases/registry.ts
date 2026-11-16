@@ -128,7 +128,16 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whats-new-authenticator-set-up-first (2026-11-15; was: '2026-11-15T21:37:00Z'):
     // the authenticator set-up release below is dated 2026-11-15T23:48:00Z, so the placeholder is that
     // same minute.
-    publishedAt: '2026-11-15T23:48:00Z',
+    // Moved again by docs/whats-new-delete-account-confirm (2026-11-16; was: '2026-11-15T23:48:00Z'):
+    // the delete account release below is dated 2026-11-16T04:03:00Z, so the placeholder is that same
+    // minute.
+    // Moved again by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was:
+    // '2026-11-16T04:03:00Z'): the Integrations and schedule event release below is dated
+    // 2026-11-16T09:39:00Z, so the placeholder is that same minute.
+    // Moved again by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was:
+    // '2026-11-16T09:39:00Z'): the emptied fields and schedule completion release below is dated
+    // 2026-11-16T12:33:00Z, so the placeholder is that same minute.
+    publishedAt: '2026-11-16T12:33:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -217,6 +226,302 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    id: 'emptied-fields-and-schedule-completion-2026-11',
+    revision: 1,
+    // Two web changes, no phone update and no migration:
+    // - #595 (squash c05cf8ffa), live in production since 2026-11-16
+    //   12:10:47Z (its GitHub deployment status, Production, success, is
+    //   stamped 12:10:31Z).
+    // - #597 (squash 0a6215d57), live in production since 2026-11-16
+    //   12:32:17Z (its deployment status is stamped 12:32:00Z).
+    // publishedAt is the whole minute after both. #597 went live after #591,
+    // so this release sits above the Integrations and schedule event release
+    // and is the newest published release.
+    // Claims checked against the code at 0a6215d57 (paths under apps/web/src):
+    // - The four field entries: lib/edited-optional-text.ts
+    //   editedOptionalText sends an emptied field whose record had text as
+    //   '', and leaves out an empty field whose record had none; update() in
+    //   server/services/{suppliers,charters,warehouses,locations,categories}.ts
+    //   stores '' as null and keeps a column whose key is left out. The
+    //   fields named are the ones each edit dialog sends through the helper:
+    //   components/suppliers/suppliers-manager.tsx (Contact name, Phone,
+    //   Email, Website, Notes), components/admin/charters-manager.tsx (Code,
+    //   Description, the Contact name, email and phone boxes, Internal
+    //   notes), components/admin/warehouses-manager.tsx (the Contact name,
+    //   email and phone boxes, Notes), components/locations/
+    //   locations-manager.tsx (Notes), components/categories/
+    //   categories-manager.tsx (Description). The charter address and a
+    //   category's colour are not sent through it and are not named. Each
+    //   dialog's edit button reads Save changes.
+    // - Who is told about the fields, one entry per gate, so nobody is told
+    //   of a dialog they cannot open: suppliers/page.tsx checks the suppliers
+    //   module and passes canManage (suppliers:manage) for Edit, and
+    //   SuppliersService.update asserts both; admin/layout.tsx sends anyone
+    //   without organization:update away from admin/charters and
+    //   admin/warehouses, and both services' update() assert it; Edit on
+    //   locations/page.tsx needs locations:manage and on categories/page.tsx
+    //   categories:manage, which LocationsService.update and
+    //   CategoriesService.update assert (neither page nor service checks a
+    //   module).
+    // - The schedule entry: server/services/schedule.ts update(). A save that
+    //   moves an event from in progress to completed, with no hand-out yet,
+    //   whose kit (bundle, quantity and kit warehouse, the patch over the
+    //   stored row) has a kit warehouse the patch does not name, checks write
+    //   access to that warehouse before anything is written, and a refusal is
+    //   the ServiceError 'forbidden' with SCHEDULE_COMPLETE_KIT_WAREHOUSE_
+    //   REFUSED. Mark complete (components/schedule/schedule-status-actions.tsx,
+    //   shown for an in progress event) sends only { status: 'completed' },
+    //   so that is the check it meets; it shows the result's message as an
+    //   error toast, and the event keeps its status. The event page shows the
+    //   buttons with canManage (schedule:manage) and checks the schedule
+    //   module (schedule/[id]/page.tsx), and its Linked bundle line says how
+    //   many kits will be distributed from which warehouse when the event is
+    //   marked complete. The Edit and New event form
+    //   (components/schedule/schedule-event-form.tsx) sends the event's
+    //   warehouse and, with a bundle, its Distribute from warehouse, so its
+    //   refusals are SCHEDULE_EVENT_WAREHOUSE_REFUSED and
+    //   SCHEDULE_KIT_WAREHOUSE_REFUSED (create() and update() through
+    //   assertWarehouseWrite). An update that comes back with no row is
+    //   SCHEDULE_EVENT_UPDATE_REFUSED. server/actions/schedule.ts answers
+    //   each through actionErrorResult, which keeps a ServiceError's words.
+    //   The entry says only that the warehouse access case is refused before
+    //   anything is saved: it does not say that completing always hands a kit
+    //   out, nor that a completed event always has its hand-out. The phone
+    //   has no Mark complete (apps/mobile/app/(drawer)/schedule.tsx lists
+    //   events; apps/mobile/app/schedule/new.tsx inserts through its own
+    //   path).
+    // - Not told: #595's charter and warehouse edit payloads leave the status
+    //   out (an edit keeps it), and a blank charter code is stored as null on
+    //   create too; #597's four API routes that answer 403 when their module
+    //   is off. None changes what a page shows.
+    status: 'published',
+    title:
+      'Emptying a field and saving clears it, and clearer messages when a schedule event is not saved',
+    summary:
+      "On the website, emptying an optional field when you edit a supplier, charter, warehouse, location or category, and saving, now clears it. Mark complete on a schedule event whose kits come from a warehouse you don't have write access to now says so before anything is saved, and the event stays In progress. The mobile app is unchanged.",
+    // #595 is live in production since 2026-11-16 12:10:47Z, #597 since 12:32:17Z.
+    publishedAt: '2026-11-16T12:33:00Z',
+    entries: [
+      {
+        id: 'schedule-complete-kit-warehouse-refused',
+        category: 'improved',
+        area: 'Schedule',
+        title:
+          "Mark complete says right away when an event's kits come from a warehouse you don't have write access to",
+        whatChanged:
+          "On the website, when you choose Mark complete on a schedule event whose kits will be distributed from a warehouse you don't have write access to, the event is not completed and StockPilot says: You can't complete this event because you don't have write access to the warehouse its kit comes from. Ask a manager to complete it, or to give you access to that warehouse.",
+        whyItMatters: 'You find out before anything is saved, and the event stays In progress.',
+        howItAffectsYou:
+          "Saving an event on New event or Edit with a warehouse you don't have write access to now says: You don't have write access to the warehouse set for this event, so nothing was saved. Choose a warehouse you work in, or ask a manager. For the Distribute from warehouse, the message says the warehouse this event's kit comes from. A change to an event you may not change says: You can't change this event. Ask a manager. Nothing is saved in each case. The mobile app is unchanged.",
+        whatToDo:
+          'If you see one of these messages, choose a warehouse you work in, or ask a manager to make the change or to give you access to that warehouse.',
+        audience: { anyPermission: ['schedule:manage'], modules: ['schedule'] },
+      },
+      {
+        id: 'supplier-emptied-field-cleared',
+        category: 'fixed',
+        area: 'Suppliers',
+        title: 'Emptying a field on a supplier and saving clears it',
+        whatChanged:
+          'On the website, when you edit a supplier, empty its Contact name, Phone, Email, Website or Notes and choose Save changes, that field is now cleared.',
+        whyItMatters:
+          'You can remove a contact detail or a note that is out of date without typing something in its place.',
+        howItAffectsYou:
+          'The fields you leave as they are keep what they hold. The mobile app is unchanged.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/suppliers', label: 'Open Suppliers' },
+        audience: { anyPermission: ['suppliers:manage'], modules: ['suppliers'] },
+      },
+      {
+        id: 'charter-warehouse-emptied-field-cleared',
+        category: 'fixed',
+        area: 'Charters and warehouses',
+        title: 'Emptying a field on a charter or a warehouse and saving clears it',
+        whatChanged:
+          'On the website, when you edit a charter and empty its Code, Description, contact name, email or phone, or Internal notes, or edit a warehouse and empty its contact name, email or phone, or Notes, then choose Save changes, that field is now cleared.',
+        whyItMatters:
+          'You can remove a contact detail or a note that is out of date without typing something in its place.',
+        howItAffectsYou:
+          'The fields you leave as they are keep what they hold. The mobile app is unchanged.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['organization:update'] },
+      },
+      {
+        id: 'location-emptied-notes-cleared',
+        category: 'fixed',
+        area: 'Locations',
+        title: "Emptying a location's notes and saving clears them",
+        whatChanged:
+          'On the website, when you edit a location, empty its Notes and choose Save changes, the notes are now cleared.',
+        whyItMatters:
+          'You can remove a note that is out of date without typing something in its place.',
+        howItAffectsYou: 'The other fields keep what they hold. The mobile app is unchanged.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/locations', label: 'Open Locations' },
+        audience: { anyPermission: ['locations:manage'] },
+      },
+      {
+        id: 'category-emptied-description-cleared',
+        category: 'fixed',
+        area: 'Categories',
+        title: "Emptying a category's description and saving clears it",
+        whatChanged:
+          'On the website, when you edit a category, empty its Description and choose Save changes, the description is now cleared.',
+        whyItMatters:
+          'You can remove a description that is out of date without typing something in its place.',
+        howItAffectsYou: 'The other fields keep what they hold. The mobile app is unchanged.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/categories', label: 'Open Categories' },
+        audience: { anyPermission: ['categories:manage'] },
+      },
+    ],
+  },
+  {
+    id: 'connection-and-schedule-messages-2026-11',
+    revision: 1,
+    // Two web changes, no phone update and no migration:
+    // - #591 (squash 7bbbbd33f), live in production since 2026-11-16
+    //   09:38:20Z (its GitHub deployment status, Production, success).
+    // - #590 (squash 30e1b4c06), live in production since 2026-11-16
+    //   09:11:17Z (the same record).
+    // publishedAt is the whole minute after both. #591 went live after #587,
+    // so this release sits above the delete account release and is the newest
+    // published release.
+    // Claims checked against the code at 7bbbbd33f (paths under apps/web/src):
+    // - Entry 1: app/(dashboard)/dashboard/settings/integrations/page.tsx
+    //   reads ?error=forbidden, which the QuickBooks and Sage Intacct
+    //   callbacks (app/api/integrations/{quickbooks,sage_intacct}/callback)
+    //   return to when the connection is not finished, and shows the status
+    //   line "The connection was not finished because your access could not
+    //   be confirmed. If your organization requires an authenticator, set one
+    //   up in Settings > Security, then connect again." with Settings >
+    //   Security linking to AUTHENTICATOR_SET_UP_PAGE
+    //   (lib/auth/authenticator-set-up.ts, /dashboard/settings/security). It
+    //   shows only with the accounting cards (showQbo: the integrations module
+    //   on and integrations:manage held), so it is told to that audience, the
+    //   one integration-retries-2026-11 uses. Any other ?error= value shows
+    //   nothing, and components/settings/integrations-panel.tsx reads none. The reader text writes
+    //   Settings, Security: the schema refuses > in release text. Connecting
+    //   is web only: apps/mobile/app/(drawer)/settings/integrations.tsx has no
+    //   connect button.
+    // - Entry 2: server/services/schedule.ts create() assertWarehouseWrite
+    //   throws assertWarehouseAccess's ForbiddenError as it is when
+    //   accessUnreadable is set (the caller's own access could not be read),
+    //   and answers a real refusal with the ServiceError 'forbidden' and a
+    //   sentence of its own. server/actions/schedule.ts createScheduleEventAction
+    //   answers through server/lib/action-error-result.ts actionErrorResult,
+    //   which gives ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY (packages/core
+    //   guards/db-guard-copy.ts: "Your warehouse access couldn't be checked
+    //   just now, so nothing was changed. Try again.") as a retryable
+    //   conflict; components/schedule/schedule-event-form.tsx shows the
+    //   result's message as an error toast and keeps the form as it was. A
+    //   real refusal reads SCHEDULE_EVENT_WAREHOUSE_REFUSED or
+    //   SCHEDULE_KIT_WAREHOUSE_REFUSED ("You don't have write access to the
+    //   warehouse set for this event, so nothing was saved. ..." and the kit
+    //   version), which name no warehouse id. (Re-read by
+    //   docs/whats-new-emptied-fields-and-schedule-completion, 2026-11-16,
+    //   against 0a6215d57 (#597), which gave a real refusal these sentences;
+    //   at 7bbbbd33f it kept the words of lib/auth/warehouse.ts. The reader
+    //   text, about the access that could not be checked, holds at both.)
+    //   Told to whoever can
+    //   open New event (schedule/new/page.tsx checks schedule:manage) with the
+    //   schedule module on. The phone's New event (apps/mobile/app/schedule/
+    //   new.tsx) writes through its own path and is unchanged. No link: a
+    //   rare state, not a place to go (as module-check-try-again-2026-11).
+    // - Not told: #591's purchase order and PO imports layouts send a member
+    //   who must set up an authenticator to set-up, which is what
+    //   authenticator-set-up-first-2026-11 already says of every page other
+    //   than Security and Profile. #591's email change API answers and #590's
+    //   API routes are outside this release.
+    status: 'published',
+    title:
+      'Clearer messages when an accounting connection or a new schedule event does not go through',
+    summary:
+      'On the website, Settings, Integrations now says when connecting QuickBooks or Sage Intacct was not finished because your access could not be confirmed, and that you can set up an authenticator in Settings, Security if your organization requires one. A new schedule event that could not be saved because your warehouse access could not be checked now says so, and you can try again. The mobile app is unchanged.',
+    // #591 is live in production since 2026-11-16 09:38:20Z, #590 since 09:11:17Z.
+    publishedAt: '2026-11-16T09:39:00Z',
+    entries: [
+      {
+        id: 'accounting-connection-not-finished',
+        category: 'improved',
+        area: 'Settings',
+        title: 'Integrations says when an accounting connection was not finished',
+        whatChanged:
+          'On the website, when connecting QuickBooks or Sage Intacct does not finish because your access could not be confirmed, Settings, Integrations now says: The connection was not finished because your access could not be confirmed. If your organization requires an authenticator, set one up in Settings, Security, then connect again. Settings, Security in that message is a link to the page.',
+        whyItMatters: 'Before, the page did not say why the connection was not finished.',
+        howItAffectsYou:
+          'The message shows with the QuickBooks and Sage Intacct cards. You connect again from the same page. The mobile app is unchanged.',
+        whatToDo:
+          'If you see this message and your organization requires an authenticator, set one up in Settings, Security, then connect again. Otherwise, no action needed.',
+        link: { href: '/dashboard/settings/integrations', label: 'Open Integrations' },
+        audience: { anyPermission: ['integrations:manage'], modules: ['integrations'] },
+      },
+      {
+        id: 'schedule-event-access-not-checked',
+        category: 'fixed',
+        area: 'Schedule',
+        title: 'A new schedule event says when your warehouse access could not be checked',
+        whatChanged:
+          "On the website, if StockPilot cannot check your access to the event's warehouse for a moment when you choose Create event, the form now says Your warehouse access couldn't be checked just now, so nothing was changed. Try again.",
+        whyItMatters: 'Before, the message read as if you had no access to that warehouse.',
+        howItAffectsYou:
+          'This is rare and usually passes in a moment. The event was not saved, and the form keeps what you entered. The mobile app is unchanged.',
+        whatToDo: 'If you see this, wait a moment and choose Create event again.',
+        audience: { anyPermission: ['schedule:manage'], modules: ['schedule'] },
+      },
+    ],
+  },
+  {
+    id: 'delete-account-confirm-2026-11',
+    revision: 1,
+    // #587 (squash d9917b512), web only: no phone update and no migration.
+    // Live in production since 2026-11-16 04:00Z; publishedAt is a whole
+    // minute after it went live. It went live after #582, so it sits above
+    // the authenticator set-up release and is the newest published release.
+    // Claims checked against the code at d9917b512 (paths under apps/web/src):
+    // - Where: app/(dashboard)/dashboard/settings/profile/page.tsx, the
+    //   Delete account panel with DeleteAccountButton, and app/onboarding
+    //   page.tsx (an account with no workspace), both given
+    //   lib/auth/deletion-confirm-method.ts ('authenticator' with a verified
+    //   authenticator, 'password' with none).
+    // - The words: components/settings/delete-account-copy.ts
+    //   DELETE_ACCOUNT_CONFIRM_COPY (emailCode "Email me a code instead";
+    //   codeSent: a six-digit code to the sign-in email, it works for 10
+    //   minutes, only the newest code works).
+    // - The rule: server/lib/account-deletion-credential.ts and
+    //   lib/auth/account-delete-code.ts (six digits, 10 minutes, newest only).
+    // - Before set-up: lib/auth/authenticator-set-up.ts keeps Profile open
+    //   before an authenticator is set up, and deleting the account is
+    //   confirmed by its own rule there.
+    // - The phone: apps/mobile is unchanged by #587.
+    // Who is told: every member (no audience): every member can delete their
+    // own account. The one link is /dashboard/settings/profile, which
+    // registry.test.ts lists as open to every member.
+    status: 'published',
+    title: 'Deleting your account asks for your password or an emailed code',
+    summary:
+      'On the website, Delete account in Settings, Profile now asks an account with no authenticator for its password, or for a six-digit code sent to its sign-in email. An account with an authenticator confirms with its authenticator code, as before. Nothing changes in the phone app yet.',
+    // #587 is live in production since 2026-11-16 04:00Z.
+    publishedAt: '2026-11-16T04:03:00Z',
+    entries: [
+      {
+        id: 'delete-account-password-or-emailed-code',
+        category: 'improved',
+        area: 'Account',
+        title: 'Deleting your account asks for your password or an emailed code',
+        whatChanged:
+          'On the website, Delete account in Settings, Profile now asks an account with no authenticator for its password. You can choose "Email me a code instead" and enter the six-digit code we send to your sign-in email. An account with an authenticator confirms with its authenticator code, as before.',
+        whyItMatters:
+          'Every member can confirm deleting their own account, with an authenticator or without one.',
+        howItAffectsYou:
+          'If you delete your account, have your password ready or use the emailed code. The code works for 10 minutes, and only the newest one works. If your organization requires an authenticator and you have not set one up yet, you can still delete your account from Profile. Nothing changes in the phone app yet.',
+        whatToDo:
+          'No action needed. To delete your account, open Settings, Profile, choose Delete my account and follow the steps.',
+        link: { href: '/dashboard/settings/profile', label: 'Open Profile settings' },
+      },
+    ],
+  },
+  {
     id: 'authenticator-set-up-first-2026-11',
     revision: 1,
     // #582 (squash ab57012e1), web only: no phone update and no migration.
@@ -281,13 +586,22 @@ export const RELEASES: Release[] = [
   },
   {
     id: 'api-key-audit-2026-11',
-    revision: 1,
+    // Revision 2 (docs/whats-new-integrations-message-and-api-key-rows,
+    // 2026-11-16; was: 1): #591 (squash 7bbbbd33f, live in production since
+    // 2026-11-16 09:38:20Z) gave the rows their API key labels, the Team chip
+    // and their details. Revision 1's words about the labels, the chip and
+    // the key name describe the rows #580 wrote, not these, a material
+    // change (docs/releases/PUBLISHING.md: bump the revision to re-announce).
+    // The words are rewritten to the code at 7bbbbd33f and the release is
+    // told again to whoever read revision 1. Its place and its date stay:
+    // the registry is newest first by first publication.
+    revision: 2,
     // #580 (squash 4712b6918), web only: no phone update and no migration.
     // Live in production since 2026-11-15 21:18:47Z; publishedAt is the
     // minute this release was committed. It went live after #579, so it
     // sits above the invitation audit release and is the newest published
     // release.
-    // Claims checked against the code at 4712b6918 (paths under apps/web/src):
+    // Claims checked against the code at 7bbbbd33f (paths under apps/web/src):
     // - The rows: server/services/api-keys.ts. Creating a key writes
     //   api_key.created once the key is stored, entity api_key (the key's
     //   id), extra { name, scopes }; revoking writes api_key.revoked once
@@ -297,15 +611,18 @@ export const RELEASES: Release[] = [
     //   page.tsx, the API keys panel (components/settings/api-keys-panel.tsx),
     //   shown with the api_access module on and an owner or admin role.
     // - The labels: lib/audit/format.ts formatAuditEvent gives
-    //   "Api Key · Created" and "Api Key · Revoked" (no subject override for
-    //   api_key), and formatEntityType gives "Api Key" for the Entity column,
-    //   above the first 8 characters of the key's id (shortId).
-    // - The chip: components/admin/audit-categories.ts has no chip whose
-    //   prefix matches api_key., so the rows are under All events only.
+    //   "API key · Created" and "API key · Revoked" (the api_key subject
+    //   override), and formatEntityType gives "API key" for the Entity
+    //   column, above the first 8 characters of the key's id (shortId).
+    // - The chip: components/admin/audit-categories.ts, slug user, label
+    //   Team, prefixes user. and api_key., so the rows are under Team and
+    //   All events (server/services/audit-log.ts matches the prefixes in one
+    //   filter).
     // - The details: app/(dashboard)/dashboard/audit/page.tsx renders a
-    //   details row only when before/after differ or changed_keys is set;
-    //   these rows have neither (audit() writes before and after as null),
-    //   so no details show and the name and scopes are not on the page.
+    //   details row when recordedDetailFields (lib/audit/format.ts) names a
+    //   field the row holds; components/audit/metadata-diff.tsx shows them
+    //   behind "Show details": Name and Scopes on api_key.created, Name on
+    //   api_key.revoked, and no other stored field.
     // - The Event filter: an exact match on the event (audit-log.ts eq).
     // - The phone: apps/mobile/app/(drawer)/admin/audit.tsx shows row.event
     //   as written, with no details.
@@ -316,7 +633,7 @@ export const RELEASES: Release[] = [
     status: 'published',
     title: 'Creating and revoking an API key now show in the Audit log',
     summary:
-      'The Audit log now has a row when an API key is created and when one is revoked, with who did it and when. People who can view the audit log see them. No app update is needed.',
+      'The Audit log now has a row when an API key is created and when one is revoked, with who did it and when. On the web, the rows are under the Team chip, and Show details on a row shows the key name, and for a new key its scopes. People who can view the audit log see them. No app update is needed.',
     // #580 is live in production since 2026-11-15 21:18:47Z.
     publishedAt: '2026-11-15T21:37:00Z',
     entries: [
@@ -326,12 +643,13 @@ export const RELEASES: Release[] = [
         area: 'Audit log',
         title: 'Creating and revoking an API key now show in the Audit log',
         whatChanged:
-          'The Audit log now has an Api Key · Created row each time an API key is created and an Api Key · Revoked row each time one is revoked, under API keys in Settings, Integrations.',
-        whyItMatters: 'The Audit log shows who created or revoked an API key, and when.',
+          'The Audit log now has an API key · Created row each time an API key is created and an API key · Revoked row each time one is revoked, under API keys in Settings, Integrations.',
+        whyItMatters:
+          'The Audit log shows who created or revoked an API key, which key it was, and when.',
         howItAffectsYou:
-          'On the web, both rows are under All events, with Api Key and a short record id in the Entity column. That id is not part of the key, and the page does not show the key name. People who can view the audit log see them: owners, admins and managers by default, and anyone given View audit log. The Audit log in the mobile app lists them among its recent events as api_key.created and api_key.revoked.',
+          'On the web, both rows are under the Team chip and All events, with API key and a short record id in the Entity column. That id is not part of the key. Show details on a row shows the key name, and on an API key · Created row its scopes too. People who can view the audit log see them: owners, admins and managers by default, and anyone given View audit log. The Audit log in the mobile app lists them among its recent events as api_key.created and api_key.revoked, without the details.',
         whatToDo:
-          'No action needed. To see only one kind on the web, open the Audit log, type api_key.created or api_key.revoked in the Event filter and choose Apply.',
+          'No action needed. To see them on the web, open the Audit log and choose the Team chip. To see only one kind, type api_key.created or api_key.revoked in the Event filter and choose Apply.',
         link: { href: '/dashboard/audit', label: 'Open the Audit log' },
         audience: { anyPermission: ['activity_logs:read'] },
       },

@@ -228,14 +228,25 @@ interface NestedFinding {
   at: string;
 }
 
+/**
+ * Each file's syntax tree, kept by path for the text it was made from, so a
+ * second scan over the same texts (the receipt check below) parses only the
+ * file whose text it changed. The trees are only read, never changed.
+ */
+const parsed = new Map<string, { source: string; sf: ts.SourceFile }>();
+
 function parse(file: string, source: string): ts.SourceFile {
-  return ts.createSourceFile(
+  const hit = parsed.get(file);
+  if (hit && hit.source === source) return hit.sf;
+  const sf = ts.createSourceFile(
     file,
     source,
     ts.ScriptTarget.Latest,
     true,
     file.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   );
+  parsed.set(file, { source, sf });
+  return sf;
 }
 
 const lineOf = (sf: ts.SourceFile, node: ts.Node) =>
@@ -444,20 +455,25 @@ describe('a list inside a list sits behind the request entry budget', () => {
   const nested = findNestedListsOutsideBudget(texts);
   const allowlisted = (f: NestedFinding) =>
     Object.prototype.hasOwnProperty.call(NESTED_ALLOWLIST, `${f.file}#${f.key}`);
-
-  it('finds the receipt lines behind the budget (a scan that finds nothing cannot pass)', () => {
-    const receipts = texts.find((t) => t.file === 'packages/core/src/schemas/receipts.ts');
-    expect(receipts?.source).toContain(`${BUDGET_WRAPPER}(postReceiptFields)`);
-    // Unwrapped, the same receipt schema is reported.
-    const unwrapped = texts.map((t) =>
+  // The same scan with the receipt schema taken out of the budget, run here
+  // once like the one above, so no test scans the tree itself. Every other
+  // file's tree is the one parsed above.
+  const receipts = texts.find((t) => t.file === 'packages/core/src/schemas/receipts.ts');
+  const unwrappedNested = findNestedListsOutsideBudget(
+    texts.map((t) =>
       t.file === receipts?.file
         ? {
             ...t,
             source: t.source.replace(`${BUDGET_WRAPPER}(postReceiptFields)`, 'postReceiptFields'),
           }
         : t,
-    );
-    expect(findNestedListsOutsideBudget(unwrapped).map((f) => f.key)).toContain('lines');
+    ),
+  );
+
+  it('finds the receipt lines behind the budget (a scan that finds nothing cannot pass)', () => {
+    expect(receipts?.source).toContain(`${BUDGET_WRAPPER}(postReceiptFields)`);
+    // Unwrapped, the same receipt schema is reported.
+    expect(unwrappedNested.map((f) => f.key)).toContain('lines');
   });
 
   it('finds no list inside a list outside the budget', () => {

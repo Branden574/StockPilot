@@ -5,6 +5,7 @@ import { isUuid } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { forbiddenOrInternalResponse } from '@/server/lib/api-error-response';
+import { refusalReasonDetails } from '@/server/lib/refusal-reason';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { BundlesService } from '@/server/services/bundles';
 import { ServiceError } from '@/server/services/context';
@@ -81,14 +82,23 @@ export async function POST(
       const status =
         e.code === 'validation_error'
           ? 400
-          : e.code === 'forbidden'
+          : e.code === 'forbidden' || e.code === 'module_disabled'
             ? 403
             : e.code === 'not_found'
               ? 404
               : e.code === 'conflict'
                 ? 409
                 : 500;
-      return NextResponse.json({ error: e.code, message: e.message }, { status });
+      return NextResponse.json(
+        {
+          error: e.code,
+          message: e.message,
+          // Only a string `details.reason`, and never for an internal_error
+          // (server/lib/refusal-reason.ts).
+          ...refusalReasonDetails(e),
+        },
+        { status },
+      );
     }
     // The warehouse gate's refusal (assertWarehouseAccess, a ForbiddenError)
     // is a 403: the phone shows it and does not queue it. As a 500 the phone

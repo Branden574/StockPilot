@@ -484,3 +484,65 @@ describe('CategoriesManager: a stored colour that is not #rrggbb (docket T14)', 
     expect(payload.color).toBe('#6366f1');
   });
 });
+
+describe('CategoriesManager — the description on edit and create', () => {
+  const plainRow = (over: Parameters<typeof row>[0]) =>
+    row({ parent_id: null, sports_subcategory_key: null, supports_sizes: false, ...over });
+
+  function renderPlain(rows: ReturnType<typeof row>[]) {
+    render(
+      <CategoriesManager
+        initial={rows}
+        canManage
+        canManagePublicVisibility={false}
+        sportsEnabled={false}
+        canManageSports={false}
+      />,
+    );
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(updateCategoryAction).mockResolvedValue({ ok: true, data: { id: 'x' } } as never);
+    vi.mocked(createCategoryAction).mockResolvedValue({ ok: true, data: { id: 'x' } } as never);
+  });
+
+  it('Edit sends an emptied description as cleared', async () => {
+    const user = userEvent.setup();
+    renderPlain([plainRow({ id: 'cat-p', name: 'Paper', description: 'Reams and pads' })]);
+    await user.click(screen.getByRole('button', { name: 'Paper' }));
+    await user.clear(await screen.findByLabelText(/Description/));
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(updateCategoryAction).toHaveBeenCalledTimes(1));
+    const [id, payload] = vi.mocked(updateCategoryAction).mock.calls[0]!;
+    expect(id).toBe('cat-p');
+    expect(payload.description).toBe('');
+  });
+
+  it('Edit keeps a description left as it was, and leaves out one that was empty', async () => {
+    const user = userEvent.setup();
+    renderPlain([
+      plainRow({ id: 'cat-p', name: 'Paper', description: 'Reams and pads' }),
+      plainRow({ id: 'cat-t', name: 'Toner', description: null }),
+    ]);
+    await user.click(screen.getByRole('button', { name: 'Paper' }));
+    await user.click(await screen.findByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(updateCategoryAction).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(updateCategoryAction).mock.calls[0]![1].description).toBe('Reams and pads');
+
+    await user.click(screen.getByRole('button', { name: 'Toner' }));
+    await user.click(await screen.findByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(updateCategoryAction).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(updateCategoryAction).mock.calls[1]![1].description).toBeUndefined();
+  });
+
+  it('New category sends an empty description as left out', async () => {
+    const user = userEvent.setup();
+    renderPlain([]);
+    await user.click(screen.getByRole('button', { name: /New category/ }));
+    await user.type(await screen.findByLabelText('Name'), 'Paper');
+    await user.click(screen.getByRole('button', { name: 'Create category' }));
+    await waitFor(() => expect(createCategoryAction).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(createCategoryAction).mock.calls[0]![0].description).toBeUndefined();
+  });
+});

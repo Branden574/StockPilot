@@ -30,6 +30,26 @@ import { RELEASES } from './registry';
  * file, so the release tests other open branches edit stay as they are.
  */
 const ID = 'authenticator-set-up-first-2026-11';
+// Added by docs/whats-new-delete-account-confirm (2026-11-16): the delete account release (every member: its entry has no audience), published later, at the top, below the Liquid Glass draft.
+const DELETE_CONFIRM_ID = 'delete-account-confirm-2026-11';
+// Added by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16): the Integrations and schedule event release (whoever can manage integrations where Integrations is on, and whoever can manage the schedule where Schedule is on), published later, at the top, below the Liquid Glass draft.
+const CONNECTION_SCHEDULE_ID = 'connection-and-schedule-messages-2026-11';
+// Added by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16): the emptied fields and schedule completion release (owners and admins, managers for its location and category entries, and whoever manages the schedule or suppliers with those modules on), published later, at the top, below the Liquid Glass draft.
+const EMPTIED_FIELDS_ID = 'emptied-fields-and-schedule-completion-2026-11';
+const emptiedRead = {
+  release_id: EMPTIED_FIELDS_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-16T12:34:00Z',
+  read_at: '2026-11-16T12:34:00Z',
+};
+const deleteConfirmRead = {
+  release_id: DELETE_CONFIRM_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-16T04:05:00Z',
+  read_at: '2026-11-16T04:05:00Z',
+};
 const ENTRY_ID = 'authenticator-set-up-before-other-pages';
 const API_KEY_AUDIT_ID = 'api-key-audit-2026-11';
 const INVITATION_AUDIT_ID = 'invitation-audit-2026-11';
@@ -73,27 +93,46 @@ function readerText(r: Release): string[] {
 }
 
 describe('the authenticator set-up release: order, status and date', () => {
-  it('is published once, as revision 1, directly below the Liquid Glass draft and above the API key audit release, the newest published release', () => {
+  // Renamed by docs/whats-new-delete-account-confirm (2026-11-16; was: "is published once, as revision 1, directly below the Liquid Glass draft and above the API key audit release, the newest published release"): the delete account release is published later, directly below the draft and above this one. Claim kept: published once, as revision 1, directly above the API key audit release.
+  // Renamed by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: "is published once, as revision 1, directly below the delete account release (published later, below the Liquid Glass draft at the top) and above the API key audit release"): the Integrations and schedule event release is published later, at the top, above the delete account release. Claim kept: published once, as revision 1, directly below the delete account release and above the API key audit release.
+  it('is published once, as revision 1, directly below the delete account release (published later, below the Integrations and schedule event release and the Liquid Glass draft at the top) and above the API key audit release', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
-    expect(RELEASES.slice(0, 4).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: every pinned position one place higher): the delete account release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: RELEASES.slice(0, 5)): the Integrations and schedule event release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: RELEASES.slice(0, 6)): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    expect(RELEASES.slice(0, 7).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: without it): the emptied fields and schedule completion release is published later, at the top, directly below the Liquid Glass draft.
+      [EMPTIED_FIELDS_ID, 'published'],
+      // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: without it): the delete account release is published later, at the top, directly below the Liquid Glass draft.
+      // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: without it): the Integrations and schedule event release is published later, at the top, directly below the Liquid Glass draft.
+      [CONNECTION_SCHEDULE_ID, 'published'],
+      [DELETE_CONFIRM_ID, 'published'],
       [ID, 'published'],
       [API_KEY_AUDIT_ID, 'published'],
       [INVITATION_AUDIT_ID, 'published'],
     ]);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: ID): the delete account release is published after it, at the top, the newest published release.
+    // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: DELETE_CONFIRM_ID): the Integrations and schedule event release is published after it, at the top, the newest published release.
+    // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: CONNECTION_SCHEDULE_ID): the emptied fields and schedule completion release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(EMPTIED_FIELDS_ID);
   });
 
-  it('is dated on a whole minute after #582 went live, in the past, with the draft placeholder at the same minute and every release below it older', () => {
+  // Renamed by docs/whats-new-delete-account-confirm (2026-11-16; was: "is dated on a whole minute after #582 went live, in the past, with the draft placeholder at the same minute and every release below it older"): the delete account release above is dated later, and the draft placeholder moved to its minute. Claim kept: a whole minute after #582 went live, in the past, every release below it older.
+  it('is dated on a whole minute after #582 went live, in the past, with the draft placeholder at or after it and every release below it older', () => {
     expect(release().publishedAt).toBe(PUBLISHED_AT);
     const at = Date.parse(release().publishedAt);
     expect(at).toBeGreaterThan(Date.parse('2026-11-15T23:29:54Z'));
     expect(at).toBeLessThanOrEqual(Date.now());
-    expect(RELEASES[0]!.publishedAt).toBe(release().publishedAt);
-    for (const r of RELEASES.slice(2)) {
+    // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: RELEASES[0]!.publishedAt toBe this minute): the draft placeholder moved to the minute of the delete account release, published later, directly above this one.
+    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
+    // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: every pinned position one place higher): the delete account release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: every pinned position one place higher): the Integrations and schedule event release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: every pinned position one place higher): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(5)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -164,7 +203,8 @@ describe('the authenticator set-up release: who is told', () => {
     }
   });
 
-  it('is the first notice for every member, the API key audit release is next for whoever can view the audit log, and an old phone build lists it first with its link', () => {
+  // Renamed by docs/whats-new-delete-account-confirm (2026-11-16; was: "is the first notice for every member, the API key audit release is next for whoever can view the audit log, and an old phone build lists it first with its link"): the delete account release is published later and reaches every member, who read it first. Claim kept: the notice for every member, the API key audit release next for whoever can view the audit log, and an old phone build lists it with its link.
+  it('is the notice for every member once the delete account release is read, the API key audit release is next for whoever can view the audit log, and an old phone build lists it first once that release is seen, with its link', () => {
     const read = {
       release_id: ID,
       revision: 1,
@@ -173,15 +213,23 @@ describe('the authenticator set-up release: who is told', () => {
       read_at: '2026-11-15T23:45:00Z',
     };
     for (const v of everyReader) {
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
-    }
-    for (const v of [owner, admin, manager]) {
-      expect(buildReleaseList(RELEASES, v, [read], null).latestUnread?.id, v.role).toBe(
-        API_KEY_AUDIT_ID,
+      // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: nothing read): the delete account release is published later, at the top, and reaches every member, so each reads it first, and the notice this test checks is the one it checked before.
+      // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: without it): the emptied fields and schedule completion release is published later, at the top, and reaches owners, admins and managers by default, so they read it first, and the notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+      expect(buildReleaseList(RELEASES, v, [emptiedRead, deleteConfirmRead], null).latestUnread?.id, v.role).toBe(
+        ID,
       );
     }
+    for (const v of [owner, admin, manager]) {
+      // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: [read]): the delete account release is read too, as above.
+      expect(
+        // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: without it): the emptied fields and schedule completion release is read too, as above.
+        buildReleaseList(RELEASES, v, [emptiedRead, deleteConfirmRead, read], null).latestUnread?.id,
+        v.role,
+      ).toBe(API_KEY_AUDIT_ID);
+    }
     for (const v of [staff, member]) {
-      expect(legacyAnnouncementsFor(RELEASES, v, {})[0], v.role).toEqual({
+      // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: nothing seen): the delete account release is published later and reaches every member, so the phone has seen it first.
+      expect(legacyAnnouncementsFor(RELEASES, v, { [DELETE_CONFIRM_ID]: true })[0], v.role).toEqual({
         id: ID,
         date: '2026-11-15',
         title: release().title,

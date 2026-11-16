@@ -580,7 +580,8 @@ export class LocationsService {
       if (patch.parentId) await this.assertParentInActiveOrg(patch.parentId);
       updates.parent_id = patch.parentId ?? null;
     }
-    if (patch.notes !== undefined) updates.notes = patch.notes ?? null;
+    // Left out keeps the notes; emptied ('') stores null.
+    if (patch.notes !== undefined) updates.notes = patch.notes || null;
     const { data, error } = await this.ctx.supabase
       .from('locations')
       .update(updates)

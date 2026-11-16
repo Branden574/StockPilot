@@ -16,6 +16,7 @@ import {
   heldMembership,
   holdMembership,
   resolveRequestContext,
+  type BundleMembership,
   type RequestContextBundle,
 } from '@/lib/auth/request-context-bundle';
 import {
@@ -388,6 +389,47 @@ export const readSessionMemberships = cache(async (): Promise<SessionMemberships
   return { ok: true, memberships };
 });
 
+/** The organization requireOrgContext() resolves for this request, and the member's role in it. */
+export interface SessionOrganization {
+  organizationId: string;
+  role: Role;
+  /** The membership it came from when get_request_context() answered, else null. */
+  held: BundleMembership | null;
+}
+
+export type SessionOrganizationRead =
+  | { ok: false; reason: 'no_verified_session' | 'memberships_unreadable' }
+  | { ok: true; userId: string; organization: SessionOrganization | null };
+
+/**
+ * Which organization requireOrgContext() resolves for this request, from the
+ * same load and by the same rule (the profile's default organization when it
+ * is an accepted membership, else the oldest), with none of its redirects and
+ * no context. For a funnel that validated its own user and must still work for
+ * an account with no organization: the sign-in email change asks it which
+ * organization's authenticator policy applies (server/actions/email-change.ts).
+ * NOT a context: nothing is read or written for the organization on it.
+ *
+ * `organization` is null for an account with no accepted membership.
+ * `{ ok: false }` when this request has no verified session, or when the
+ * memberships could not be read (`reason` says which): the caller cannot
+ * tell which organization applies, so it refuses. The load still sends a disabled account to its own
+ * page, as it does for every caller.
+ */
+export const readSessionOrganization = cache(async (): Promise<SessionOrganizationRead> => {
+  const { session, orgId, orgRole, membershipsUnreadable, bundle } = await loadSessionAndContext();
+  if (!session) return { ok: false, reason: 'no_verified_session' };
+  if (membershipsUnreadable) return { ok: false, reason: 'memberships_unreadable' };
+  return {
+    ok: true,
+    userId: session.userId,
+    organization:
+      orgId && orgRole
+        ? { organizationId: orgId, role: orgRole, held: bundleMembership(bundle, orgId) }
+        : null,
+  };
+});
+
 export const getServerSession = cache(async (): Promise<ServerSession | null> => {
   const { session } = await loadSessionAndContext();
   return session;
@@ -621,12 +663,37 @@ const resolveOrgContext = cache(
  * without one, the request-cached organization row the layout reads too).
  */
 async function sendToSetUpWhenOwed<T extends OrgContext>(reads: StepUpReads, ctx: T): Promise<T> {
-  if (openBeforeAuthenticatorSetUp((await headers()).get('x-pathname'))) return ctx;
-  if (await authenticatorSetUpIsOwed(reads, ctx, heldMembership(ctx))) {
-    redirect(AUTHENTICATOR_SET_UP_URL);
-  }
+  if (await setUpOwedOnThisPage(reads, ctx)) redirect(AUTHENTICATOR_SET_UP_URL);
   return ctx;
 }
+
+/**
+ * The set-up question itself, for requireOrgContext() above and for the
+ * layouts (authenticatorSetUpOwedForLayout below): owed, and the page asked
+ * for is not open before set-up. Checked on the page first, so an open page
+ * reads nothing for it.
+ */
+async function setUpOwedOnThisPage(reads: StepUpReads, ctx: OrgContext): Promise<boolean> {
+  if (openBeforeAuthenticatorSetUp((await headers()).get('x-pathname'))) return false;
+  return authenticatorSetUpIsOwed(reads, ctx, heldMembership(ctx));
+}
+
+/**
+ * FOR THE DASHBOARD'S LAYOUTS ONLY: will the page below send this member to
+ * set up an authenticator? The same answer requireOrgContext() acts on, asked
+ * without the redirect: the layout's context, the same question
+ * (setUpOwedOnThisPage) and the same request-cached reads (the claims and the
+ * factor list behind startStepUpReads), so the layout and its page agree.
+ *
+ * For a layout that shows a panel in place of its pages, such as a rank
+ * panel: for a member this answers true for, the layout renders its page
+ * instead, and the page's own rule sends them to set-up. No layout redirects
+ * for it (requireOrgContextForLayout above).
+ */
+export const authenticatorSetUpOwedForLayout = cache(async (): Promise<boolean> => {
+  const ctx = await requireOrgContextForLayout();
+  return setUpOwedOnThisPage(startStepUpReads(), ctx);
+});
 
 /**
  * Effective permissions = static role defaults + the organization's overrides
