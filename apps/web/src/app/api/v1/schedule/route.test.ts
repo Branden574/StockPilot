@@ -62,7 +62,7 @@ const savedRow = {
   warehouse: { name: 'Main' },
 };
 
-const phoneBody = {
+const eventBody = {
   title: 'Field day pickup',
   startsAt: '2026-12-01T16:00:00.000Z',
   endsAt: '2026-12-01T17:00:00.000Z',
@@ -92,7 +92,7 @@ function signIn(
   return ctx;
 }
 
-function request(body: unknown = phoneBody, raw?: string) {
+function request(body: unknown = eventBody, raw?: string) {
   return new Request('https://test.local/api/v1/schedule', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -172,9 +172,9 @@ describe('POST /api/v1/schedule', () => {
 
   it.each([
     ['a body that is not JSON', undefined, '{not json'],
-    ['no title', { ...phoneBody, title: '' }, undefined],
-    ['a start that is not a time', { ...phoneBody, startsAt: 'tomorrow' }, undefined],
-    ['an end before the start', { ...phoneBody, endsAt: '2026-12-01T15:00:00.000Z' }, undefined],
+    ['no title', { ...eventBody, title: '' }, undefined],
+    ['a start that is not a time', { ...eventBody, startsAt: 'tomorrow' }, undefined],
+    ['an end before the start', { ...eventBody, endsAt: '2026-12-01T15:00:00.000Z' }, undefined],
   ])('answers 400 for %s, with nothing written', async (_label, body, raw) => {
     signIn();
     const res = await POST(request(body, raw));
@@ -202,7 +202,7 @@ describe('POST /api/v1/schedule', () => {
     expect(res.status).toBe(403);
     const body = await res.json();
     expect(body.error).toBe('forbidden');
-    expect(body.details?.reason).toEqual(expect.any(String));
+    expect(body.details?.reason).toBe('mfa_required');
     expect(stub.fromCalls).toEqual([]);
     expect(audit).not.toHaveBeenCalled();
   });

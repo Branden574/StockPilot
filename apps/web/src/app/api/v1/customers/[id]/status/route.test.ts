@@ -60,6 +60,15 @@ function signIn(
   return ctx;
 }
 
+/** Every recorded query on `key` (table.op) is filtered by the caller's
+ *  organization: a member of two organizations changes and reads only rows of
+ *  the one the request acts in. */
+function expectEveryQueryInOrganization(key: string) {
+  const chains = stub.chainArgsAll.get(key) ?? [];
+  expect(chains.length, key).toBeGreaterThan(0);
+  for (const chain of chains) expect(chain, key).toContainEqual(['organization_id', 'org-route']);
+}
+
 function request(opts: { id?: string; body?: unknown; raw?: string } = {}) {
   const id = opts.id ?? CUSTOMER;
   return {
@@ -90,6 +99,7 @@ describe('PATCH /api/v1/customers/[id]/status', () => {
     expect(await res.json()).toEqual({ ok: true, status: 'archived', changed: true });
 
     expect(stub.chainArgs.get('customers.update')![0]).toEqual([{ status: 'archived' }]);
+    expectEveryQueryInOrganization('customers.select');
     expect(stub.chainsAll.get('customers.update')![0]!.slice(0, 4)).toEqual([
       'update',
       'eq',
@@ -144,6 +154,7 @@ describe('PATCH /api/v1/customers/[id]/status', () => {
     const res = await PATCH(req, params);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, status: 'active', changed: false });
+    expectEveryQueryInOrganization('customers.select');
     expect(stub.chainArgs.get('customers.update')).toBeUndefined();
     expect(audit).not.toHaveBeenCalled();
     expect(revalidatePath).not.toHaveBeenCalled();
@@ -185,7 +196,7 @@ describe('PATCH /api/v1/customers/[id]/status', () => {
     const { req, params } = request();
     const res = await PATCH(req, params);
     expect(res.status).toBe(403);
-    expect((await res.json()).details?.reason).toEqual(expect.any(String));
+    expect((await res.json()).details?.reason).toBe('mfa_required');
     expect(stub.fromCalls).toEqual([]);
     expect(audit).not.toHaveBeenCalled();
   });

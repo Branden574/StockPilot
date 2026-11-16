@@ -5,8 +5,8 @@ import { forbiddenOrInternalResponse } from '@/server/lib/api-error-response';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 
 /**
- * The one error shape of the phone's schedule, serial number and customer
- * status routes (app/api/v1/schedule, items/[id]/serials, serials/[id],
+ * The one error shape of the schedule, serial number and customer status
+ * routes (app/api/v1/schedule, items/[id]/serials, serials/[id],
  * customers/[id]/status): `{ error: <code>, message, details? }`. The members
  * routes answer the same way (app/api/v1/members/error-response.ts).
  */
@@ -37,12 +37,16 @@ export function changeValidationResponse(message: string): NextResponse {
  * A ServiceError keeps its code and its words, with the status
  * serviceErrorStatus gives the code (403 forbidden and module_disabled, 404
  * not_found, 409 conflict and plan_limit_exceeded, 400 validation_error).
- * `details` carries the reason the service wrote (aal2_required or
- * mfa_required from the authenticator rule, the duplicate serial numbers),
- * which a caller can act on. An internal_error answers the service's fixed
- * sentence (the class never holds the database's text as its message), sends
- * no details, and is reported with the route's tag. A warehouse refusal
- * (ForbiddenError) is 403 with its words; anything else answers
+ * `details` carries the reason the service wrote (mfa_required from the
+ * authenticator rule, the duplicate serial numbers), which a caller can act
+ * on. A session that still owes its authenticator code never reaches a
+ * service: withApiContext gives it no context and the route answers 401. An
+ * internal_error answers the service's fixed sentence (the class never holds
+ * the database's text as its message), sends no details, and is reported with
+ * the route's tag. A warehouse check whose read of the caller's own access
+ * failed (a ForbiddenError with accessUnreadable, thrown as it is by
+ * ScheduleService.create) is the retryable 503 check_failed; any other
+ * ForbiddenError is 403 with its words; anything else answers
  * internalErrorResponse's fixed sentence and is reported there.
  */
 export function changeErrorResponse(e: unknown, tag: string, organizationId: string): NextResponse {

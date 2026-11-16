@@ -26,7 +26,7 @@ const bodySchema = z.object({ status: z.enum(['active', 'archived']) });
 
 /**
  * PATCH /api/v1/customers/[id]/status: archive or restore one customer
- * account. Cookie or Bearer, so the phone can call it. `[id]` is the
+ * account. Cookie, or a Bearer token for clients that hold one. `[id]` is the
  * customer's id, in either case; it is lower-cased before use.
  *
  * Body: `{ status: 'active' | 'archived' }`.
@@ -45,9 +45,11 @@ const bodySchema = z.object({ status: z.enum(['active', 'archived']) });
  *   200 `{ ok: true, status, changed }`;
  *   400 `validation_error`: an id that is not a uuid, a body that is not JSON
  *       or not one of the two statuses;
- *   401 `unauthenticated`;
- *   403 `forbidden` (with `details.reason` when the authenticator rule
- *       refused) or `module_disabled`;
+ *   401 `unauthenticated`: no session, or a session that still owes its
+ *       authenticator code (withApiContext gives it no context);
+ *   403 `forbidden` (with `details.reason` mfa_required when the
+ *       organization requires an authenticator and the account has none)
+ *       or `module_disabled`;
  *   404 `not_found`: no such account in the caller's organization;
  *   409 `conflict`: the account's status was changed meanwhile;
  *   429 `rate_limited`, with Retry-After (60 a minute per account);

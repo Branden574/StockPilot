@@ -32,7 +32,7 @@ const bodySchema = z.object({
 
 /**
  * POST /api/v1/items/[id]/serials: register serial numbers for one item at
- * one warehouse. Cookie or Bearer, so the phone can call it. `[id]` is the
+ * one warehouse. Cookie, or a Bearer token for clients that hold one. `[id]` is the
  * item id, in either case; it is lower-cased before use.
  *
  * Body: `{ warehouseId, serials: string[] }`, as addItemSerialsAction reads
@@ -53,9 +53,10 @@ const bodySchema = z.object({
  *   400 `validation_error`: an id that is not a uuid, a body that is not JSON
  *       or not the shape above, a warehouse not in the organization, a serial
  *       number that is too long;
- *   401 `unauthenticated`;
- *   403 `forbidden` (with `details.reason` when the authenticator rule
- *       refused);
+ *   401 `unauthenticated`: no session, or a session that still owes its
+ *       authenticator code (withApiContext gives it no context);
+ *   403 `forbidden` (with `details.reason` mfa_required when the
+ *       organization requires an authenticator and the account has none);
  *   404 `not_found`: no such item in the caller's organization;
  *   409 `conflict`: a serial number already on the item (`details.duplicates`);
  *   429 `rate_limited`, with Retry-After (60 a minute per account);

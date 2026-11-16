@@ -4,8 +4,8 @@ import { reportError } from '@/lib/error-reporter';
 
 /**
  * The item pages the serial number actions refresh (server/actions/serials.ts
- * revalidateItemDetail: inventory, books, rentals), for the phone's serial
- * number routes. The change is saved by the time this runs, so a refresh that
+ * revalidateItemDetail: inventory, books, rentals), for the serial number
+ * routes. The change is saved by the time this runs, so a refresh that
  * fails is reported, never answered.
  */
 export function revalidateItemPages(itemId: string, organizationId: string, tag: string): void {

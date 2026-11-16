@@ -161,8 +161,8 @@ const CORE_MARKER_FILE = 'auth/context-unavailable.ts';
  * The routes reviewed to use the gate (docket S26). A new one is a reviewed
  * addition. The two member routes (a role, one category grant) call the gate
  * as their first statement, and each is safe to send again: the same role or
- * the same grant a second time changes nothing. The phone's schedule, serial
- * number and customer status routes call it first too: the gate's answer
+ * the same grant a second time changes nothing. The schedule, serial number
+ * and customer status routes call it first too: the gate's answer
  * comes before any work, so sending the request again after it is safe; a
  * serial number sent twice is refused by name, and the same status twice
  * changes nothing.

@@ -57,6 +57,15 @@ function signIn(
   return ctx;
 }
 
+/** Every recorded query on `key` (table.op) is filtered by the caller's
+ *  organization: a member of two organizations changes and reads only rows of
+ *  the one the request acts in. */
+function expectEveryQueryInOrganization(key: string) {
+  const chains = stub.chainArgsAll.get(key) ?? [];
+  expect(chains.length, key).toBeGreaterThan(0);
+  for (const chain of chains) expect(chain, key).toContainEqual(['organization_id', 'org-route']);
+}
+
 function request(opts: { id?: string; body?: unknown; raw?: string } = {}) {
   const id = opts.id ?? ITEM;
   return {
@@ -92,6 +101,9 @@ describe('POST /api/v1/items/[id]/serials', () => {
       Record<string, unknown>
     >;
     expect(rows.map((r) => r.serial_number)).toEqual(['SN-1', 'SN-2']);
+    expectEveryQueryInOrganization('inventory_items.select');
+    expectEveryQueryInOrganization('warehouses.select');
+    expectEveryQueryInOrganization('serial_registry.select');
     for (const row of rows) {
       expect(row).toMatchObject({
         organization_id: 'org-route',
@@ -186,7 +198,7 @@ describe('POST /api/v1/items/[id]/serials', () => {
     const { req, params } = request();
     const res = await POST(req, params);
     expect(res.status).toBe(403);
-    expect((await res.json()).details?.reason).toEqual(expect.any(String));
+    expect((await res.json()).details?.reason).toBe('mfa_required');
     expect(stub.fromCalls).toEqual([]);
     expect(audit).not.toHaveBeenCalled();
   });

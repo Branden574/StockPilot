@@ -373,6 +373,26 @@ export class ScheduleService {
     };
   }
 
+  /**
+   * create()'s warehouse check. A refusal of the caller's real scope is the
+   * ServiceError 'forbidden' with the check's words. A refusal that comes
+   * from a failed read of the caller's own access (ForbiddenError's
+   * accessUnreadable) is thrown as it is, so the callers' shared answers
+   * keep it apart: the web action's actionErrorResult answers the "could not
+   * check" sentence as a retryable conflict, and an API route's
+   * forbiddenOrInternalResponse answers 503 check_failed.
+   */
+  private async assertWarehouseWrite(warehouseId: string): Promise<void> {
+    try {
+      await assertWarehouseAccess(warehouseId, 'write', this.ctx);
+    } catch (e) {
+      if (e instanceof ForbiddenError && !e.accessUnreadable) {
+        throw new ServiceError('forbidden', e.message);
+      }
+      throw e;
+    }
+  }
+
   async create(input: CreateScheduleEventInput): Promise<ScheduleEventRow> {
     assertModuleEnabled(this.ctx, 'schedule');
     assertPermission(this.ctx, 'schedule:manage');
@@ -385,20 +405,10 @@ export class ScheduleService {
     // warehouse-scoped manager could schedule a kit to be auto-
     // distributed FROM a warehouse they have no rights to.
     if (input.warehouseId) {
-      try {
-        await assertWarehouseAccess(input.warehouseId, 'write', this.ctx);
-      } catch (e) {
-        if (e instanceof ForbiddenError) throw new ServiceError('forbidden', e.message);
-        throw e;
-      }
+      await this.assertWarehouseWrite(input.warehouseId);
     }
     if (input.bundleWarehouseId) {
-      try {
-        await assertWarehouseAccess(input.bundleWarehouseId, 'write', this.ctx);
-      } catch (e) {
-        if (e instanceof ForbiddenError) throw new ServiceError('forbidden', e.message);
-        throw e;
-      }
+      await this.assertWarehouseWrite(input.bundleWarehouseId);
     }
 
     const { data, error } = await this.ctx.supabase

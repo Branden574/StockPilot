@@ -2,25 +2,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * Security invariant: a schedule event, a serial number or a customer
- * account's status changed through the phone's routes leaves the same one
- * audit_logs row the website's action leaves for the same change: the same
- * event, organization, account and metadata. The only difference is the
- * request's user agent, which is how the log tells the phone from the
- * browser (the audit writer has no other field for it).
+ * account's status changed through the /api/v1 routes leaves one
+ * audit_logs row, and for the schedule and serial number changes it is the
+ * row the website's action leaves for the same change: the same event,
+ * organization, account and metadata. The two differ only in the request's
+ * user agent (the audit writer has no other field for where a request came
+ * from).
  *
  * The real audit writer (server/services/audit.ts) runs here, over a
  * recording admin client, so each row is checked as it is sent. The services
  * are the real ones too, over a recording database client.
  *
- * An audit row that cannot be written does not undo or refuse the change, on
- * the website or on the phone: the writer never throws, reports the loss, and
- * the route answers the change as made.
+ * An audit row that cannot be written does not undo or refuse the change,
+ * through a route or through the website's action: the writer never throws,
+ * reports the loss, and the change is answered as made.
  */
 
 const h = vi.hoisted(() => ({
   sent: [] as Array<Record<string, unknown>>,
   insertAnswer: { error: null } as { error: { message: string; code?: string } | null },
-  userAgent: 'StockPilot/1.0 (iPhone)',
+  userAgent: 'StockPilot/1.0 (Bearer client)',
   withContext: vi.fn(),
 }));
 
@@ -104,7 +105,7 @@ const EVENT = '9e8d7c6b-0000-4000-8000-000000000042';
 const ITEM = '1a2b3c4d-0000-4000-8000-000000000043';
 const SERIAL = '5e5e5e5e-0000-4000-8000-000000000044';
 const CUSTOMER = '6c6c6c6c-0000-4000-8000-000000000045';
-const PHONE = 'StockPilot/1.0 (iPhone)';
+const BEARER_CLIENT = 'StockPilot/1.0 (Bearer client)';
 const BROWSER = 'Mozilla/5.0 (Macintosh)';
 
 const eventRow = {
@@ -181,15 +182,15 @@ function json(url: string, method: string, body?: unknown) {
 
 const params = (id: string) => ({ params: Promise.resolve({ id }) });
 
-/** The rows sent while `run` ran, as the phone (Bearer) or the browser. */
+/** The rows sent while `run` ran: through a route (a Bearer context) or a website action (a cookie context). */
 async function rowsSentBy(
-  surface: 'phone' | 'browser',
+  surface: 'route' | 'action',
   run: () => Promise<unknown>,
 ): Promise<Array<Record<string, unknown>>> {
   h.sent.length = 0;
-  h.userAgent = surface === 'phone' ? PHONE : BROWSER;
+  h.userAgent = surface === 'route' ? BEARER_CLIENT : BROWSER;
   const ctx = context();
-  vi.mocked(withApiContext).mockResolvedValue(surface === 'phone' ? (ctx as never) : null);
+  vi.mocked(withApiContext).mockResolvedValue(surface === 'route' ? (ctx as never) : null);
   h.withContext.mockResolvedValue(ctx);
   await run();
   return [...h.sent];
@@ -215,7 +216,7 @@ const CASES = [
   {
     name: 'a schedule event made',
     event: 'schedule.created',
-    phone: async () => {
+    route: async () => {
       const res = await createEvent(
         json('https://test.local/api/v1/schedule', 'POST', {
           title: 'Science night setup',
@@ -239,7 +240,7 @@ const CASES = [
   {
     name: 'serial numbers added',
     event: 'item.serials.added',
-    phone: async () => {
+    route: async () => {
       const res = await addSerials(
         json(`https://test.local/api/v1/items/${ITEM}/serials`, 'POST', {
           warehouseId: WAREHOUSE,
@@ -261,7 +262,7 @@ const CASES = [
   {
     name: "a serial number's status changed",
     event: 'item.serial.updated',
-    phone: async () => {
+    route: async () => {
       const res = await patchSerial(
         json(`https://test.local/api/v1/serials/${SERIAL}`, 'PATCH', { status: 'rma' }),
         params(SERIAL),
@@ -276,7 +277,7 @@ const CASES = [
   {
     name: 'a serial number removed',
     event: 'item.serial.deleted',
-    phone: async () => {
+    route: async () => {
       const res = await deleteSerial(
         json(`https://test.local/api/v1/serials/${SERIAL}`, 'DELETE'),
         params(SERIAL),
@@ -290,20 +291,20 @@ const CASES = [
   },
 ] as const;
 
-describe('the phone and the website leave the same audit row for the same change', () => {
+describe('a route and the website action leave the same audit row for the same change', () => {
   it.each(CASES.map((c) => [c.name, c] as const))('%s', async (_name, c) => {
-    const phoneRows = await rowsSentBy('phone', c.phone);
-    const webRows = await rowsSentBy('browser', c.web);
+    const routeRows = await rowsSentBy('route', c.route);
+    const webRows = await rowsSentBy('action', c.web);
 
-    expect(phoneRows).toHaveLength(1);
+    expect(routeRows).toHaveLength(1);
     expect(webRows).toHaveLength(1);
-    const [phone] = phoneRows;
+    const [routeRow] = routeRows;
     const [web] = webRows;
-    expect(phone).toMatchObject({
+    expect(routeRow).toMatchObject({
       event: c.event,
       organization_id: ORG,
       user_id: USER,
-      user_agent: PHONE,
+      user_agent: BEARER_CLIENT,
     });
     expect(web).toMatchObject({
       event: c.event,
@@ -311,11 +312,11 @@ describe('the phone and the website leave the same audit row for the same change
       user_id: USER,
       user_agent: BROWSER,
     });
-    expect(comparable(phone!)).toEqual(comparable(web!));
+    expect(comparable(routeRow!)).toEqual(comparable(web!));
   });
 
-  it('a customer account archived on the phone leaves one row naming the account, its status before and after, the caller and the phone', async () => {
-    const rows = await rowsSentBy('phone', async () => {
+  it('a customer account archived through its route leaves one row naming the account, its status before and after, the caller and the request', async () => {
+    const rows = await rowsSentBy('route', async () => {
       const res = await patchCustomerStatus(
         json(`https://test.local/api/v1/customers/${CUSTOMER}/status`, 'PATCH', {
           status: 'archived',
@@ -329,7 +330,7 @@ describe('the phone and the website leave the same audit row for the same change
       event: 'organization.updated',
       organization_id: ORG,
       user_id: USER,
-      user_agent: PHONE,
+      user_agent: BEARER_CLIENT,
       metadata: {
         entity_type: 'customer',
         entity_id: CUSTOMER,
@@ -342,7 +343,7 @@ describe('the phone and the website leave the same audit row for the same change
   });
 
   it('a refused change sends no row', async () => {
-    const rows = await rowsSentBy('phone', async () => {
+    const rows = await rowsSentBy('route', async () => {
       const res = await patchSerial(
         json(`https://test.local/api/v1/serials/${SERIAL}`, 'PATCH', { status: 'lost' }),
         params(SERIAL),
@@ -352,9 +353,9 @@ describe('the phone and the website leave the same audit row for the same change
     expect(rows).toEqual([]);
   });
 
-  it('a row the database refuses does not undo or refuse the change, on the phone as on the website', async () => {
+  it('a row the database refuses does not undo or refuse the change, through the route or the website action', async () => {
     h.insertAnswer = { error: { message: 'null value in column', code: '23502' } };
-    const phoneRows = await rowsSentBy('phone', async () => {
+    const routeRows = await rowsSentBy('route', async () => {
       const res = await deleteSerial(
         json(`https://test.local/api/v1/serials/${SERIAL}`, 'DELETE'),
         params(SERIAL),
@@ -362,12 +363,12 @@ describe('the phone and the website leave the same audit row for the same change
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({ ok: true, itemId: ITEM });
     });
-    const webRows = await rowsSentBy('browser', async () => {
+    const webRows = await rowsSentBy('action', async () => {
       const res = await deleteItemSerialAction({ id: SERIAL });
       expect(res.ok).toBe(true);
     });
     // Each sent its one row; neither answer changed when it was refused.
-    expect(phoneRows).toHaveLength(1);
+    expect(routeRows).toHaveLength(1);
     expect(webRows).toHaveLength(1);
   });
 });

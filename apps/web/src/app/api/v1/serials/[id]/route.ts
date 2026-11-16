@@ -37,7 +37,7 @@ const patchSchema = z
 
 /**
  * PATCH /api/v1/serials/[id]: change one serial number's text, its status,
- * or both. Cookie or Bearer, so the phone can call it. `[id]` is the
+ * or both. Cookie, or a Bearer token for clients that hold one. `[id]` is the
  * serial_registry row's id, in either case; it is lower-cased before use.
  *
  * Body: `{ serialNumber?, status? }`, at least one, as updateItemSerialAction
@@ -57,9 +57,10 @@ const patchSchema = z
  *   400 `validation_error`: an id that is not a uuid, a body that is not JSON
  *       or names nothing to change, an unknown status, an empty or too long
  *       number;
- *   401 `unauthenticated`;
- *   403 `forbidden` (with `details.reason` when the authenticator rule
- *       refused);
+ *   401 `unauthenticated`: no session, or a session that still owes its
+ *       authenticator code (withApiContext gives it no context);
+ *   403 `forbidden` (with `details.reason` mfa_required when the
+ *       organization requires an authenticator and the account has none);
  *   404 `not_found`: no such serial number in the caller's organization;
  *   409 `conflict`: the number is already on the item;
  *   429 `rate_limited`, with Retry-After (120 changes a minute per account,

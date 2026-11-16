@@ -69,6 +69,15 @@ function signIn(
   return ctx;
 }
 
+/** Every recorded query on `key` (table.op) is filtered by the caller's
+ *  organization: a member of two organizations changes and reads only rows of
+ *  the one the request acts in. */
+function expectEveryQueryInOrganization(key: string) {
+  const chains = stub.chainArgsAll.get(key) ?? [];
+  expect(chains.length, key).toBeGreaterThan(0);
+  for (const chain of chains) expect(chain, key).toContainEqual(['organization_id', 'org-route']);
+}
+
 function request(
   method: 'PATCH' | 'DELETE',
   opts: { id?: string; body?: unknown; raw?: string } = {},
@@ -113,6 +122,8 @@ describe('PATCH /api/v1/serials/[id]', () => {
     expect(stub.chainArgs.get('serial_registry.update')![0]).toEqual([
       { current_status: 'damaged' },
     ]);
+    expectEveryQueryInOrganization('serial_registry.select');
+    expectEveryQueryInOrganization('serial_registry.update');
 
     expect(audit).toHaveBeenCalledTimes(1);
     const [payload, auditCtx] = vi.mocked(audit).mock.calls[0]!;
@@ -209,6 +220,8 @@ describe('DELETE /api/v1/serials/[id]', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, itemId: ITEM });
     expect(stub.chains.get('serial_registry.delete')).toBeDefined();
+    expectEveryQueryInOrganization('serial_registry.select');
+    expectEveryQueryInOrganization('serial_registry.delete');
 
     expect(audit).toHaveBeenCalledTimes(1);
     const [payload, auditCtx] = vi.mocked(audit).mock.calls[0]!;

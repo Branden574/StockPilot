@@ -21,8 +21,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *
  * The two member routes (a role, a category grant) are held to the same
  * answers: 401 first, then the strict check, before their limiter. So are the
- * phone's serial number routes (add, change, remove) and its customer status
- * route.
+ * serial number routes (add, change, remove) and the customer status route.
  *
  * The static half (every dynamic route, the first use of each id) is
  * app/path-ids.guard.test.ts.
@@ -451,9 +450,9 @@ const MEMBER_ROUTES: Row[] = [
   },
 ];
 
-/** The phone's serial number and customer status routes: the path id, by the
- *  strict check. */
-const PHONE_CHANGE_ROUTES: Row[] = [
+/** The serial number and customer status routes: the path id, by the strict
+ *  check. */
+const CHANGE_ROUTES: Row[] = [
   {
     name: 'add serial numbers to an item (v1/items/[id]/serials)',
     load: () => import('./v1/items/[id]/serials/route'),
@@ -544,7 +543,7 @@ beforeEach(() => {
   process.env.NEXT_PUBLIC_APP_URL = 'https://test.local';
 });
 
-const ALL = [...UNCHECKED, ...LOOSE, ...MEMBER_ROUTES, ...PHONE_CHANGE_ROUTES];
+const ALL = [...UNCHECKED, ...LOOSE, ...MEMBER_ROUTES, ...CHANGE_ROUTES];
 
 describe('a malformed record id in an API path answers 400 before anything is read (B63)', () => {
   it('covers the 18 route files that used the id unchecked and the 14 with the loose pattern', async () => {
@@ -556,7 +555,7 @@ describe('a malformed record id in an API path answers 400 before anything is re
       'v1/members/[id]/role',
       'v1/members/[id]/category-access',
     ]);
-    expect([...files(PHONE_CHANGE_ROUTES)]).toEqual([
+    expect([...files(CHANGE_ROUTES)]).toEqual([
       'v1/items/[id]/serials',
       'v1/serials/[id]',
       'v1/customers/[id]/status',
