@@ -340,16 +340,17 @@ export class WarehousesService {
     // and a miss refuses. Everything below names the warehouse by id: the
     // charter list's checks and writes, the row's update and the audit row.
     await readInActiveOrg(this.ctx, 'warehouses', id, 'Warehouse not found.');
+    // A key left out keeps its column; an emptied text field ('') is stored as null.
     const updates: Record<string, unknown> = {};
     if (patch.name !== undefined) updates.name = patch.name;
     if (patch.code !== undefined) updates.code = patch.code;
-    if (patch.contactName !== undefined) updates.contact_name = patch.contactName ?? null;
+    if (patch.contactName !== undefined) updates.contact_name = patch.contactName || null;
     if (patch.contactEmail !== undefined)
       updates.contact_email = patch.contactEmail ? patch.contactEmail.toLowerCase() : null;
-    if (patch.contactPhone !== undefined) updates.contact_phone = patch.contactPhone ?? null;
+    if (patch.contactPhone !== undefined) updates.contact_phone = patch.contactPhone || null;
     if (patch.managerUserId !== undefined) updates.manager_user_id = patch.managerUserId ?? null;
     if (patch.address !== undefined) updates.address = patch.address ?? null;
-    if (patch.notes !== undefined) updates.notes = patch.notes ?? null;
+    if (patch.notes !== undefined) updates.notes = patch.notes || null;
     if (patch.status !== undefined) updates.status = patch.status;
 
     // Charter list reconciliation lives in WarehouseChartersService — calling

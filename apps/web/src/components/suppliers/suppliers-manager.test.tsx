@@ -25,11 +25,15 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 const archive = vi.fn(async (_id: string) => ({ ok: true as const, data: undefined }));
 const restore = vi.fn(async (_id: string) => ({ ok: true as const, data: undefined }));
 const create = vi.fn(async (_p: unknown) => ({ ok: true as const, data: { id: 'new' } }));
+const update = vi.fn(async (_id: string, _p: unknown) => ({
+  ok: true as const,
+  data: { id: 's1' },
+}));
 vi.mock('@/server/actions/suppliers', () => ({
   archiveSupplierAction: (id: string) => archive(id),
   restoreSupplierAction: (id: string) => restore(id),
   createSupplierAction: (p: unknown) => create(p),
-  updateSupplierAction: vi.fn(async () => ({ ok: true as const, data: { id: 's1' } })),
+  updateSupplierAction: (id: string, p: unknown) => update(id, p),
 }));
 
 import { SuppliersManager } from './suppliers-manager';
@@ -138,5 +142,63 @@ describe('SuppliersManager', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create supplier' }));
     expect(await within(dialog).findByText('Name is required.')).toBeInTheDocument();
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it('Edit sends an emptied field as cleared, keeps a field left as it was, and leaves an empty one out', async () => {
+    render(
+      <SuppliersManager
+        initial={[ROW({ website: 'https://acme.example', notes: 'Ships Tuesdays' })]}
+        canManage
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const dialog = await screen.findByRole('dialog');
+    for (const label of [/Contact name/, /Email/, /Website/, /Notes/]) {
+      fireEvent.change(within(dialog).getByLabelText(label), { target: { value: '' } });
+    }
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(update).toHaveBeenCalledWith('s1', {
+      name: 'Acme Supplies',
+      contactName: '',
+      email: '',
+      phone: '555-010-0100',
+      website: '',
+      notes: '',
+    });
+  });
+
+  it('Edit leaves out an optional field that was empty and stayed empty', async () => {
+    render(<SuppliersManager initial={[ROW({ contact_name: null, email: null })]} canManage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    const [, payload] = update.mock.calls[0]!;
+    expect(payload).toEqual({
+      name: 'Acme Supplies',
+      contactName: undefined,
+      email: undefined,
+      phone: '555-010-0100',
+      website: undefined,
+      notes: undefined,
+    });
+  });
+
+  it('New supplier sends an empty optional field as left out', async () => {
+    render(<SuppliersManager initial={[]} canManage />);
+    fireEvent.click(screen.getByRole('button', { name: /New supplier/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Harbor Paper' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create supplier' }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    expect(create).toHaveBeenCalledWith({
+      name: 'Harbor Paper',
+      contactName: undefined,
+      email: undefined,
+      phone: undefined,
+      website: undefined,
+      notes: undefined,
+    });
   });
 });

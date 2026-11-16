@@ -201,7 +201,8 @@ export class ChartersService {
       .insert({
         organization_id: this.ctx.organizationId,
         name: input.name,
-        code: input.code ?? null,
+        // A code is unique per organization when present, so a blank one is null.
+        code: input.code || null,
         description: input.description ?? null,
         notes: input.notes ?? null,
         status: input.status,
@@ -220,17 +221,19 @@ export class ChartersService {
 
   async update(id: string, patch: UpdateCharterInput) {
     assertPermission(this.ctx, 'organization:update');
+    // A key left out keeps its column; an emptied field ('') is stored as null
+    // (a code is unique per organization when present, so never '').
     const updates: Record<string, unknown> = {};
     if (patch.name !== undefined) updates.name = patch.name;
-    if (patch.code !== undefined) updates.code = patch.code ?? null;
-    if (patch.description !== undefined) updates.description = patch.description ?? null;
-    if (patch.notes !== undefined) updates.notes = patch.notes ?? null;
+    if (patch.code !== undefined) updates.code = patch.code || null;
+    if (patch.description !== undefined) updates.description = patch.description || null;
+    if (patch.notes !== undefined) updates.notes = patch.notes || null;
     if (patch.status !== undefined) updates.status = patch.status;
     if (patch.address !== undefined) updates.address = normalizeAddress(patch.address);
-    if (patch.contactName !== undefined) updates.contact_name = patch.contactName ?? null;
+    if (patch.contactName !== undefined) updates.contact_name = patch.contactName || null;
     if (patch.contactEmail !== undefined)
       updates.contact_email = patch.contactEmail ? patch.contactEmail.toLowerCase() : null;
-    if (patch.contactPhone !== undefined) updates.contact_phone = patch.contactPhone ?? null;
+    if (patch.contactPhone !== undefined) updates.contact_phone = patch.contactPhone || null;
     if (Object.keys(updates).length > 0) {
       // The changed row is asked back, as archive() and restore() below do
       // (S41): a filtered update that matches no row is not an error, so only
