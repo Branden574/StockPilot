@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
   storefrontError,
@@ -32,7 +32,9 @@ export const dynamic = 'force-dynamic';
  * later). Private, no-store, and names the organization.
  */
 export async function GET(req: NextRequest) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return storefrontUnauthenticated();
 
   const rl = await checkRateLimit(`order-photos:${ctx.userId}`, 30, 60_000);

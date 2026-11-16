@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import {
   verificationErrorResponse,
   verificationUnauthenticatedResponse,
@@ -32,7 +32,9 @@ export const dynamic = 'force-dynamic';
  * page (the response says which page it is).
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return verificationUnauthenticatedResponse();
 
   const { id } = await params;

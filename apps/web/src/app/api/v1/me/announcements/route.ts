@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { computeSeenViewedMap } from '@/lib/onboarding/announcement-logic';
 import { legacyAnnouncementsFor } from '@/lib/releases/logic';
@@ -47,7 +48,9 @@ export const dynamic = 'force-dynamic';
 /** GET — role-filtered, unseen, newest-first, capped at 3, `roles` stripped. */
 export async function GET(req: Request): Promise<Response> {
   try {
-    const ctx = await withApiContext(req);
+    const read = await apiReadContext(req);
+    if ('response' in read) return read.response;
+    const ctx = read.ctx;
     if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
     const { data } = await ctx.supabase
       .from('user_onboarding')

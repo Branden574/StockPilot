@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { reportError } from '@/lib/error-reporter';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { RentalsService } from '@/server/services/rentals';
@@ -25,7 +25,9 @@ export const dynamic = 'force-dynamic';
  * need not hold, and it returns no email, which a rental needs.
  */
 export async function GET(req: NextRequest) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
   try {

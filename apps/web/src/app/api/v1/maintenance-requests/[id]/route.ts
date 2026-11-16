@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { can } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { reportError } from '@/lib/error-reporter';
 import { serviceErrorStatus, ServiceError } from '@/server/services/context';
 import { MaintenanceRequestsService } from '@/server/services/maintenance-requests';
@@ -36,7 +37,9 @@ export const dynamic = 'force-dynamic';
  * propagating. A non-ServiceError (a real bug) still surfaces normally.
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
   const { id } = await params;

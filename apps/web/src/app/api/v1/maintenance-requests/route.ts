@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { MAINTENANCE_STATUS_LABELS, type MaintenanceStatus } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { reportError } from '@/lib/error-reporter';
 import { serviceErrorStatus, ServiceError } from '@/server/services/context';
 import { MaintenanceRequestsService } from '@/server/services/maintenance-requests';
@@ -26,7 +27,9 @@ const STATUS_VALUES = [...(Object.keys(MAINTENANCE_STATUS_LABELS) as Maintenance
  * shaped; StockPilot cannot observe ticket state (brief §20/21).
  */
 export async function GET(req: NextRequest) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
   const url = new URL(req.url);

@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { reportError } from '@/lib/error-reporter';
 import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
 import { invalidPathIdResponse } from '@/server/lib/path-id';
@@ -46,7 +46,9 @@ function allowListedOrder(row: Record<string, unknown>): Record<string, unknown>
  * org-scoped + RLS-guarded, so a caller only ever sees their own org's order.
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
   const { id } = await params;

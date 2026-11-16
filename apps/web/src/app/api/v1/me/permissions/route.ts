@@ -1,7 +1,7 @@
 // apps/web/src/app/api/v1/me/permissions/route.ts
 import { NextResponse } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 
 export const runtime = 'nodejs';
@@ -22,7 +22,9 @@ export const dynamic = 'force-dynamic';
  * StockPilot may have denied this member.
  */
 export async function GET(req: Request): Promise<Response> {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   if (!ctx.permissions) throw new PermissionsUnavailableError();
 

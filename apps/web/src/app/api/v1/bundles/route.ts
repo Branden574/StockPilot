@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { BundlesService } from '@/server/services/bundles';
@@ -15,7 +15,9 @@ export const dynamic = 'force-dynamic';
  * refresh from the bundles tab.
  */
 export async function GET(req: NextRequest) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }

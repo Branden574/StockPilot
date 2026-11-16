@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { refuseSetUpOwedRead } from '@/server/lib/api-read-context';
 import { ServiceError, serviceErrorStatus, type ServiceContext } from '@/server/services/context';
 
 /**
@@ -54,6 +55,11 @@ export async function returnsContext(
       ),
     };
   }
+  // A READ (by method, whatever `kind` names) by a member who must set up an
+  // authenticator first: the 403 every /api/v1 read gives them, before the
+  // rate limit (server/lib/api-read-context.ts). A write is never held here.
+  const setUpOwed = refuseSetUpOwedRead(req, ctx);
+  if (setUpOwed) return { response: setUpOwed };
   const limit = kind === 'read' ? READ_LIMIT : WRITE_LIMIT;
   const rl = await checkRateLimit(`returns-${kind}:${ctx.userId}`, limit, 60_000);
   if (!rl.allowed) {

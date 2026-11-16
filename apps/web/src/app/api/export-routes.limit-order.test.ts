@@ -452,13 +452,15 @@ describe('every route that calls the export limiter is covered', () => {
   // Static half of "handed the request the route was given", for every
   // limiter route (the report routes with their own tests included): the
   // limiter's first argument is the identifier the same file hands
-  // withApiContext, which test/cookie-write-routes.guard.test.ts holds to the
-  // handler's own request parameter.
+  // withApiContext, or the read wrapper that hands it on
+  // (server/lib/api-read-context.ts), which
+  // test/cookie-write-routes.guard.test.ts holds to the handler's own request
+  // parameter.
   it('every limiter call is handed the request the file hands withApiContext', () => {
     for (const rel of limiterRoutes) {
       const src = readFileSync(join(API, rel), 'utf8');
       const contextArgs = new Set(
-        [...src.matchAll(/withApiContext\(\s*(\w+)\s*\)/g)].map((m) => m[1]),
+        [...src.matchAll(/(?:withApiContext|apiReadContext)\(\s*(\w+)\s*\)/g)].map((m) => m[1]),
       );
       const limiterArgs = [...src.matchAll(/exportRateLimited\(\s*([^,()]*?)\s*,/g)].map(
         (m) => m[1],

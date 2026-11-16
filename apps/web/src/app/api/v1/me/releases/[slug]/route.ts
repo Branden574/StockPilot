@@ -1,4 +1,4 @@
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { answerModuleState } from '@/server/lib/api-error-response';
 import { getReleaseFor } from '@/server/services/releases';
 
@@ -16,7 +16,9 @@ export async function GET(
   req: Request,
   context: { params: Promise<{ slug: string }> },
 ): Promise<Response> {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return Response.json({ error: 'unauthorized' }, { status: 401, headers: NO_STORE });
   const { slug } = await context.params;
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || slug.length > 80) {

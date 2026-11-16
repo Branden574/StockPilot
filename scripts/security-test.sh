@@ -1201,6 +1201,18 @@ WEB_TESTS=(
   # a kind, a reason and the writes it makes (a sweep on the syntax tree, with
   # a mutation table that takes each gate out and expects it reported).
   src/test/authenticator-write.guard.test.ts
+  # A member who owes authenticator set-up reads no organization data through
+  # /api/v1: every GET handler there answers them 403 `forbidden` with core's
+  # sentence and reason `mfa_required`, before any read of its own, through
+  # the read wrapper or the returns routes' two shared gates, or is on a
+  # reviewed open list (their own sign-in email, the public token links). A
+  # member who owes nothing gets exactly the context withApiContext gives; a
+  # write is never held by this rule. The sweep reads the syntax tree; the
+  # matrix runs the real context on both sign-in paths and both reads.
+  src/test/authenticator-read.guard.test.ts
+  src/server/lib/api-read-context.test.ts
+  src/server/lib/api-read-context.set-up-reads.test.ts
+  src/app/api/v1/set-up-owed-reads.routes.test.ts
   # A member who owes authenticator set-up is sent to it by every page and
   # action through requireOrgContext(); only Security and Profile open; no
   # layout reaches that check or redirects to a path under itself, and only

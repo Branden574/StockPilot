@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
   manageError,
@@ -27,7 +27,9 @@ export const dynamic = 'force-dynamic';
  * Shares the list's read limit (order-catalog-manage:<user>, 120 a minute).
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ groupId: string }> }) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return manageUnauthenticated();
 
   const rl = await checkRateLimit(`order-catalog-manage:${ctx.userId}`, 120, 60_000);

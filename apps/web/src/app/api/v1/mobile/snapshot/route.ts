@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { can, isManagerOrAbove } from '@stockpilot/core';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { countReadFilter, countReadScope } from '@/lib/auth/count-read-scope';
 import { getWarehouseAccess, type WarehouseAccess } from '@/lib/auth/warehouse';
@@ -221,7 +221,9 @@ export const GET = handler;
  * (never "remove everything").
  */
 async function snapshotGET(req: NextRequest) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }

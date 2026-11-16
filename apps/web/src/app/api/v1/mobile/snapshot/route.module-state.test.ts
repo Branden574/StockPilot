@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { AUTHENTICATOR_SET_UP_OWED_COPY } from '@stockpilot/core';
+
 /**
  * The phone's sync when the organization's module state cannot be read.
  *
@@ -38,6 +40,7 @@ import { reportError } from '@/lib/error-reporter';
 import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
+  legacyBearerToken,
   legacyContextClient,
   legacyContextWorld,
   legacyPhoneHeaders,
@@ -57,18 +60,31 @@ beforeEach(() => {
   refs.client = legacyContextClient(world);
 });
 
+// A member with an authenticator sends a token at aal2, as a phone does once
+// the code was entered.
 const pull = () =>
   GET(
     new NextRequest('https://app.example.test/api/v1/mobile/snapshot', {
-      headers: legacyPhoneHeaders(),
+      headers: legacyPhoneHeaders(
+        world.authenticator ? { authorization: `Bearer ${legacyBearerToken('aal2')}` } : {},
+      ),
     }),
   );
 
 describe('GET /api/v1/mobile/snapshot with the module state unreadable', () => {
   it.each<[string, Partial<LegacyContextWorld>]>([
     ['the rows read failed', { moduleRowsFail: true }],
-    ['the comp flag read failed', { organizationFail: true, moduleRows: ['orders'] }],
-    ['the organization row read back hidden', { organizationHidden: true, moduleRows: ['orders'] }],
+    // The organization row itself could not be read, so its authenticator
+    // policy is held to the strictest: a member with an authenticator at aal2
+    // passes it and meets the module state; one without is held first (below).
+    [
+      'the comp flag read failed',
+      { organizationFail: true, moduleRows: ['orders'], authenticator: true },
+    ],
+    [
+      'the organization row read back hidden',
+      { organizationHidden: true, moduleRows: ['orders'], authenticator: true },
+    ],
     ['the rows read answered no list', { moduleRowsNoList: true }],
     [
       'the organization row answered without its comp flag',
@@ -96,6 +112,27 @@ describe('GET /api/v1/mobile/snapshot with the module state unreadable', () => {
       expect(context).toEqual(
         expect.objectContaining({ tag: 'mobile.snapshot.module_state', level: 'warning' }),
       );
+    },
+  );
+
+  it.each<[string, Partial<LegacyContextWorld>]>([
+    ['the comp flag read failed', { organizationFail: true, moduleRows: ['orders'] }],
+    ['the organization row read back hidden', { organizationHidden: true, moduleRows: ['orders'] }],
+  ])(
+    '%s, for a member with no authenticator: held by the strictest policy first, 403 with no read and nothing reported',
+    async (_what, failure) => {
+      Object.assign(world, failure);
+      const res = await pull();
+      expect(res.status).toBe(403);
+      expect(res.headers.get('cache-control')).toBe('private, no-store');
+      expect(await res.json()).toEqual({
+        error: 'forbidden',
+        message: AUTHENTICATOR_SET_UP_OWED_COPY,
+        details: { reason: 'mfa_required' },
+      });
+      expect(checkRateLimit).not.toHaveBeenCalled();
+      expect(routeWork(world)).toEqual([]);
+      expect(reportError).not.toHaveBeenCalled();
     },
   );
 
@@ -182,8 +219,17 @@ describe('GET /api/v1/mobile/snapshot: module-gated lists with the module state 
 
   it.each<[string, Partial<LegacyContextWorld>]>([
     ['the rows read failed', { moduleRowsFail: true }],
-    ['the comp flag read failed', { organizationFail: true, moduleRows: ['orders'] }],
-    ['the organization row read back hidden', { organizationHidden: true, moduleRows: ['orders'] }],
+    // The organization row itself could not be read, so its authenticator
+    // policy is held to the strictest: a member with an authenticator at aal2
+    // passes it and meets the module state; one without is held first (below).
+    [
+      'the comp flag read failed',
+      { organizationFail: true, moduleRows: ['orders'], authenticator: true },
+    ],
+    [
+      'the organization row read back hidden',
+      { organizationHidden: true, moduleRows: ['orders'], authenticator: true },
+    ],
     ['the rows read answered no list', { moduleRowsNoList: true }],
     [
       'the organization row answered without its comp flag',
