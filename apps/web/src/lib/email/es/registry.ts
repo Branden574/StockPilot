@@ -251,6 +251,29 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
     motionAsset: 'pulse',
     footer: 'ess',
   }),
+  // Outside the design package (2026-11-15): the code that confirms deleting
+  // an account with no authenticator. The code is in the body only, never in
+  // the subject or the preheader (a dry-run send logs the subject).
+  d({
+    id: 'account-delete-code',
+    family: 'security',
+    name: 'Account Deletion Code',
+    status: 'live',
+    category: 'ess',
+    tag: 'Security',
+    trigger: 'A person with no authenticator asks for a code to confirm deleting their account',
+    to: 'Account holder (current address)',
+    from: 'StockPilot Security <security@stockpilotusa.com>',
+    replyTo: 'Not monitored — support link inside',
+    subject: () => 'Your code to delete your StockPilot account',
+    preheader: (p: { codeExpiry: string }) =>
+      `Enter this code to confirm deleting your account. It works for ${p.codeExpiry}. If you did not ask, nothing happens unless the code is used.`,
+    badge: { variant: 'sec', label: () => 'Delete account' },
+    cta: 'Contact support',
+    motionNote: 'None',
+    motionAsset: null,
+    footer: 'ess',
+  }),
 
   // ── Invitations ───────────────────────────────────────────────────
   d({

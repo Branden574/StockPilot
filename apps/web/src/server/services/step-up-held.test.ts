@@ -40,10 +40,17 @@ beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
-async function outcome(): Promise<'passed' | { code: string; message: string; details: unknown }> {
+async function outcome(
+  noFactorRefusal?: ServiceError,
+): Promise<'authenticator' | 'no_factor' | { code: string; message: string; details: unknown }> {
   try {
-    await assertStepUpHeld({ supabase: supabase as never, admin: admin as never, userId: USER });
-    return 'passed';
+    // What held: the caller records it (account deletion's audit row).
+    return await assertStepUpHeld({
+      supabase: supabase as never,
+      admin: admin as never,
+      userId: USER,
+      ...(noFactorRefusal ? { noFactorRefusal } : {}),
+    });
   } catch (e) {
     expect(e).toBeInstanceOf(ServiceError);
     const err = e as ServiceError;
@@ -130,23 +137,60 @@ describe('assertStepUpHeld', () => {
     });
   });
 
-  it('an authenticator and an aal2 session: passes', async () => {
+  it('an authenticator and an aal2 session: passes, and answers authenticator', async () => {
     session = { sub: USER, aal: 'aal2' };
     factorsRead = { data: { factors: [VERIFIED] }, error: null };
-    expect(await outcome()).toBe('passed');
+    expect(await outcome()).toBe('authenticator');
   });
 
-  it('no authenticator: passes at aal1', async () => {
-    expect(await outcome()).toBe('passed');
+  it('no authenticator: passes at aal1, and answers no_factor', async () => {
+    expect(await outcome()).toBe('no_factor');
+  });
+
+  it('no authenticator at aal2: still no_factor (the level claim is not a factor)', async () => {
+    session = { sub: USER, aal: 'aal2' };
+    expect(await outcome()).toBe('no_factor');
   });
 
   it('a factor that was never verified is not an authenticator', async () => {
     factorsRead = { data: { factors: [{ ...VERIFIED, status: 'unverified' }] }, error: null };
-    expect(await outcome()).toBe('passed');
+    expect(await outcome()).toBe('no_factor');
   });
 
   it("reads the validated account's factors, by its id", async () => {
     await outcome();
     expect(listFactors).toHaveBeenCalledWith({ userId: USER });
+  });
+
+  describe('with a refusal for an account with no authenticator (account deletion)', () => {
+    const REFUSAL = new ServiceError('forbidden', 'Confirm again.', {
+      reason: 'credential_required',
+    });
+
+    it('no authenticator now, even at aal2: the refusal is thrown', async () => {
+      session = { sub: USER, aal: 'aal2' };
+      expect(await outcome(REFUSAL)).toEqual({
+        code: 'forbidden',
+        message: 'Confirm again.',
+        details: { reason: 'credential_required' },
+      });
+    });
+
+    it('an unverified factor only: the refusal is thrown', async () => {
+      session = { sub: USER, aal: 'aal2' };
+      factorsRead = { data: { factors: [{ ...VERIFIED, status: 'unverified' }] }, error: null };
+      expect(await outcome(REFUSAL)).toMatchObject({ details: { reason: 'credential_required' } });
+    });
+
+    it('an authenticator at aal2: passes, and answers authenticator', async () => {
+      session = { sub: USER, aal: 'aal2' };
+      factorsRead = { data: { factors: [VERIFIED] }, error: null };
+      expect(await outcome(REFUSAL)).toBe('authenticator');
+    });
+
+    it('an authenticator at aal1: the code answer comes first', async () => {
+      factorsRead = { data: { factors: [VERIFIED] }, error: null };
+      expect(await outcome(REFUSAL)).toMatchObject({ details: { reason: 'aal2_required' } });
+    });
   });
 });

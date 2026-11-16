@@ -24,8 +24,11 @@ export const AUTHENTICATOR_SET_UP_URL = `${AUTHENTICATOR_SET_UP_PAGE}?enroll=1`;
  *   - the security settings page: set up and verify an authenticator, and
  *     everything on its shell (sign out, switch organization);
  *   - the profile page: it opens and its appearance setting works; its own
- *     actions (name, avatar, sign-in email, deleting the account) reach their
- *     own authenticator check, which answers that one is required.
+ *     actions (name, avatar, sign-in email) reach their own authenticator
+ *     check, which answers that one is required. Deleting the account is
+ *     confirmed by its own rule instead (the account's password or a code
+ *     emailed to it, server/lib/account-deletion-credential), so a member can
+ *     delete their account before setting one up.
  */
 export const OPEN_BEFORE_AUTHENTICATOR_SET_UP: readonly string[] = [
   AUTHENTICATOR_SET_UP_PAGE,

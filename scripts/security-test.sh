@@ -1680,6 +1680,15 @@ WEB_TESTS=(
   src/app/api/v1/account/delete/route.test.ts
   src/server/services/order-requests.deleted-requester-email.test.ts
 
+  # How a deletion is confirmed, on the web and the phone: an account with an
+  # authenticator needs aal2; one with none its password (checked on a
+  # separate client) or a six-digit code emailed to its current address, ten
+  # minutes, for that account and address only; each with its own per-account
+  # limit, never reported. The last check before the delete reads the factors
+  # again. Without either, the phone route answers by the policy as before.
+  src/lib/auth/account-delete-code.test.ts
+  src/server/lib/account-deletion-credential.test.ts
+
   # One create path, no duplicate order (0391, phone ordering PO-2). The
   # service gates (Orders module, the MFA step-up, orders:request) come before
   # anything is read; the body's placer goes to place_order_request unchanged

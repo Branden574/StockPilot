@@ -9,7 +9,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * The page an action is made from is the proxy-set path. From the security
  * page and the profile page, the actions on them run: setting up an
  * authenticator, switching organization, and the profile's own actions,
- * which reach their own authenticator check. From any other page, an action
+ * which reach their own authenticator check, except deleting the account,
+ * which the account's password (or an emailed code) confirms, so it
+ * completes before set-up. From any other page, an action
  * that builds on the member's context is answered with the redirect to
  * set-up, and reads and writes nothing.
  *
@@ -57,13 +59,62 @@ vi.mock('@/lib/error-reporter', async (importOriginal) => ({
 vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: vi.fn(async () => ({ allowed: true, remaining: 4 })),
 }));
+// Account deletion: the account's own factors and address by its id, the
+// password check on its separate client, and the database's dry run and the
+// delete. Only the network is faked; the action's own rule is real.
+const deletion = vi.hoisted(() => ({
+  deleteUser: vi.fn(async (_id: string) => ({ error: null })),
+}));
+vi.mock('@/lib/supabase/admin', async () => {
+  const f = await import('@/test/step-up-session-fixture');
+  return {
+    createAdminClient: () => ({
+      auth: {
+        admin: {
+          getUserById: async (id: string) => ({
+            data: { user: { id, email: f.EMAIL } },
+            error: null,
+          }),
+          deleteUser: deletion.deleteUser,
+          mfa: {
+            listFactors: async () => ({
+              data: {
+                factors: f.world.factors.map((x, i) => ({
+                  id: `f${i}`,
+                  factor_type: 'totp',
+                  ...x,
+                })),
+              },
+              error: null,
+            }),
+          },
+        },
+      },
+    }),
+  };
+});
+vi.mock('@/lib/auth/verify-password', () => ({
+  verifyPasswordSideChannel: vi.fn(async () => ({ ok: true })),
+}));
+vi.mock('@/server/lib/account-deletion', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/lib/account-deletion')>()),
+  soleOwnedOrganizationsWithMembers: vi.fn(async () => ({ ok: true, organizations: [] })),
+  checkAccountDeletable: vi.fn(async () => ({ ok: true })),
+  readDeletionReviewFacts: vi.fn(async () => ({
+    createdStillActive: null,
+    soloPaidOrganizationIds: [],
+  })),
+  reportDeletionReviewFacts: vi.fn(),
+  removeAvatarObjects: vi.fn(async () => {}),
+  auditAccountDeleted: vi.fn(async () => {}),
+}));
 
-import { ORG, ORG_2, resetWorld, world } from '@/test/step-up-session-fixture';
+import { ORG, ORG_2, USER, resetWorld, world } from '@/test/step-up-session-fixture';
 
 import { enrollFactorAction } from './mfa';
 import { updateNotificationPreferencesAction } from './notification-preferences';
 import { switchOrganizationAction } from './org-switcher';
-import { updateProfileNameAction } from './profile';
+import { deleteOwnAccountAction, updateProfileNameAction } from './profile';
 
 const SECURITY = '/dashboard/settings/security';
 const PROFILE = '/dashboard/settings/profile';
@@ -77,6 +128,7 @@ const tableCalls = () => world.calls.filter((c) => c.startsWith('from:'));
 
 beforeEach(() => {
   resetWorld();
+  deletion.deleteUser.mockClear();
   world.policy = 'admins_required';
   world.role = 'admin';
   world.orgs = [ORG, ORG_2];
@@ -120,6 +172,27 @@ describe('from the profile page', () => {
       }),
     });
     expect(tableCalls()).toEqual([]);
+  });
+
+  it('deleting the account is the one profile action that runs: with the password, the account is deleted', async () => {
+    const result = await deleteOwnAccountAction({
+      confirm: 'DELETE',
+      password: 'example-password-1',
+    });
+    expect(result).toEqual({ ok: true, data: undefined });
+    expect(deletion.deleteUser).toHaveBeenCalledWith(USER);
+  });
+
+  it('deleting the account without a password or a code asks for one, not for set-up, and deletes nothing', async () => {
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    expect(result).toEqual({
+      ok: false,
+      error: expect.objectContaining({
+        code: 'forbidden',
+        details: expect.objectContaining({ reason: 'credential_required' }),
+      }),
+    });
+    expect(deletion.deleteUser).not.toHaveBeenCalled();
   });
 });
 
