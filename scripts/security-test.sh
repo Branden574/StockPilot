@@ -920,6 +920,14 @@ PGTAP_TESTS=(
   # production's with its added lines removed. The lock footprint is
   # scripts/db-concurrency/0466_migration_lock_footprint.sh.
   supabase/tests/0466_retry_keys_written_by_their_functions.test.sql
+  # Changes the database records itself (0467): a change of a member's role
+  # and of an organization's sign-in policy each get their audit row from a
+  # trigger, in the transaction of the change (actor from the token, before,
+  # after, source, made_as, aal), and the app's own row for a recorded change
+  # is not stored a second time; no stored audit row is ever changed. The
+  # two-session proof is scripts/db-concurrency/0467_app_row_race.sh; the lock
+  # footprint is scripts/db-concurrency/0467_migration_lock_footprint.sh.
+  supabase/tests/0467_role_and_sign_in_policy_changes_recorded_by_database.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
