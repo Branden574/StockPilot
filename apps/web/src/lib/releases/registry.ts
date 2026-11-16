@@ -134,7 +134,10 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was:
     // '2026-11-16T04:03:00Z'): the Integrations and schedule event release below is dated
     // 2026-11-16T09:39:00Z, so the placeholder is that same minute.
-    publishedAt: '2026-11-16T09:39:00Z',
+    // Moved again by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was:
+    // '2026-11-16T09:39:00Z'): the emptied fields and schedule completion release below is dated
+    // 2026-11-16T12:33:00Z, so the placeholder is that same minute.
+    publishedAt: '2026-11-16T12:33:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -223,6 +226,157 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    id: 'emptied-fields-and-schedule-completion-2026-11',
+    revision: 1,
+    // Two web changes, no phone update and no migration:
+    // - #595 (squash c05cf8ffa), live in production since 2026-11-16
+    //   12:10:47Z (its GitHub deployment status, Production, success, is
+    //   stamped 12:10:31Z).
+    // - #597 (squash 0a6215d57), live in production since 2026-11-16
+    //   12:32:17Z (its deployment status is stamped 12:32:00Z).
+    // publishedAt is the whole minute after both. #597 went live after #591,
+    // so this release sits above the Integrations and schedule event release
+    // and is the newest published release.
+    // Claims checked against the code at 0a6215d57 (paths under apps/web/src):
+    // - The four field entries: lib/edited-optional-text.ts
+    //   editedOptionalText sends an emptied field whose record had text as
+    //   '', and leaves out an empty field whose record had none; update() in
+    //   server/services/{suppliers,charters,warehouses,locations,categories}.ts
+    //   stores '' as null and keeps a column whose key is left out. The
+    //   fields named are the ones each edit dialog sends through the helper:
+    //   components/suppliers/suppliers-manager.tsx (Contact name, Phone,
+    //   Email, Website, Notes), components/admin/charters-manager.tsx (Code,
+    //   Description, the Contact name, email and phone boxes, Internal
+    //   notes), components/admin/warehouses-manager.tsx (the Contact name,
+    //   email and phone boxes, Notes), components/locations/
+    //   locations-manager.tsx (Notes), components/categories/
+    //   categories-manager.tsx (Description). The charter address and a
+    //   category's colour are not sent through it and are not named. Each
+    //   dialog's edit button reads Save changes.
+    // - Who is told about the fields, one entry per gate, so nobody is told
+    //   of a dialog they cannot open: suppliers/page.tsx checks the suppliers
+    //   module and passes canManage (suppliers:manage) for Edit, and
+    //   SuppliersService.update asserts both; admin/layout.tsx sends anyone
+    //   without organization:update away from admin/charters and
+    //   admin/warehouses, and both services' update() assert it; Edit on
+    //   locations/page.tsx needs locations:manage and on categories/page.tsx
+    //   categories:manage, which LocationsService.update and
+    //   CategoriesService.update assert (neither page nor service checks a
+    //   module).
+    // - The schedule entry: server/services/schedule.ts update(). A save that
+    //   moves an event from in progress to completed, with no hand-out yet,
+    //   whose kit (bundle, quantity and kit warehouse, the patch over the
+    //   stored row) has a kit warehouse the patch does not name, checks write
+    //   access to that warehouse before anything is written, and a refusal is
+    //   the ServiceError 'forbidden' with SCHEDULE_COMPLETE_KIT_WAREHOUSE_
+    //   REFUSED. Mark complete (components/schedule/schedule-status-actions.tsx,
+    //   shown for an in progress event) sends only { status: 'completed' },
+    //   so that is the check it meets; it shows the result's message as an
+    //   error toast, and the event keeps its status. The event page shows the
+    //   buttons with canManage (schedule:manage) and checks the schedule
+    //   module (schedule/[id]/page.tsx), and its Linked bundle line says how
+    //   many kits will be distributed from which warehouse when the event is
+    //   marked complete. The Edit and New event form
+    //   (components/schedule/schedule-event-form.tsx) sends the event's
+    //   warehouse and, with a bundle, its Distribute from warehouse, so its
+    //   refusals are SCHEDULE_EVENT_WAREHOUSE_REFUSED and
+    //   SCHEDULE_KIT_WAREHOUSE_REFUSED (create() and update() through
+    //   assertWarehouseWrite). An update that comes back with no row is
+    //   SCHEDULE_EVENT_UPDATE_REFUSED. server/actions/schedule.ts answers
+    //   each through actionErrorResult, which keeps a ServiceError's words.
+    //   The entry says only that the warehouse access case is refused before
+    //   anything is saved: it does not say that completing always hands a kit
+    //   out, nor that a completed event always has its hand-out. The phone
+    //   has no Mark complete (apps/mobile/app/(drawer)/schedule.tsx lists
+    //   events; apps/mobile/app/schedule/new.tsx inserts through its own
+    //   path).
+    // - Not told: #595's charter and warehouse edit payloads leave the status
+    //   out (an edit keeps it), and a blank charter code is stored as null on
+    //   create too; #597's four API routes that answer 403 when their module
+    //   is off. None changes what a page shows.
+    status: 'published',
+    title:
+      'Emptying a field and saving clears it, and clearer messages when a schedule event is not saved',
+    summary:
+      "On the website, emptying an optional field when you edit a supplier, charter, warehouse, location or category, and saving, now clears it. Mark complete on a schedule event whose kits come from a warehouse you don't have write access to now says so before anything is saved, and the event stays In progress. The mobile app is unchanged.",
+    // #595 is live in production since 2026-11-16 12:10:47Z, #597 since 12:32:17Z.
+    publishedAt: '2026-11-16T12:33:00Z',
+    entries: [
+      {
+        id: 'schedule-complete-kit-warehouse-refused',
+        category: 'improved',
+        area: 'Schedule',
+        title:
+          "Mark complete says right away when an event's kits come from a warehouse you don't have write access to",
+        whatChanged:
+          "On the website, when you choose Mark complete on a schedule event whose kits will be distributed from a warehouse you don't have write access to, the event is not completed and StockPilot says: You can't complete this event because you don't have write access to the warehouse its kit comes from. Ask a manager to complete it, or to give you access to that warehouse.",
+        whyItMatters: 'You find out before anything is saved, and the event stays In progress.',
+        howItAffectsYou:
+          "Saving an event on New event or Edit with a warehouse you don't have write access to now says: You don't have write access to the warehouse set for this event, so nothing was saved. Choose a warehouse you work in, or ask a manager. For the Distribute from warehouse, the message says the warehouse this event's kit comes from. A change to an event you may not change says: You can't change this event. Ask a manager. Nothing is saved in each case. The mobile app is unchanged.",
+        whatToDo:
+          'If you see one of these messages, choose a warehouse you work in, or ask a manager to make the change or to give you access to that warehouse.',
+        audience: { anyPermission: ['schedule:manage'], modules: ['schedule'] },
+      },
+      {
+        id: 'supplier-emptied-field-cleared',
+        category: 'fixed',
+        area: 'Suppliers',
+        title: 'Emptying a field on a supplier and saving clears it',
+        whatChanged:
+          'On the website, when you edit a supplier, empty its Contact name, Phone, Email, Website or Notes and choose Save changes, that field is now cleared.',
+        whyItMatters:
+          'You can remove a contact detail or a note that is out of date without typing something in its place.',
+        howItAffectsYou:
+          'The fields you leave as they are keep what they hold. The mobile app is unchanged.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/suppliers', label: 'Open Suppliers' },
+        audience: { anyPermission: ['suppliers:manage'], modules: ['suppliers'] },
+      },
+      {
+        id: 'charter-warehouse-emptied-field-cleared',
+        category: 'fixed',
+        area: 'Charters and warehouses',
+        title: 'Emptying a field on a charter or a warehouse and saving clears it',
+        whatChanged:
+          'On the website, when you edit a charter and empty its Code, Description, contact name, email or phone, or Internal notes, or edit a warehouse and empty its contact name, email or phone, or Notes, then choose Save changes, that field is now cleared.',
+        whyItMatters:
+          'You can remove a contact detail or a note that is out of date without typing something in its place.',
+        howItAffectsYou:
+          'The fields you leave as they are keep what they hold. The mobile app is unchanged.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['organization:update'] },
+      },
+      {
+        id: 'location-emptied-notes-cleared',
+        category: 'fixed',
+        area: 'Locations',
+        title: "Emptying a location's notes and saving clears them",
+        whatChanged:
+          'On the website, when you edit a location, empty its Notes and choose Save changes, the notes are now cleared.',
+        whyItMatters:
+          'You can remove a note that is out of date without typing something in its place.',
+        howItAffectsYou: 'The other fields keep what they hold. The mobile app is unchanged.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/locations', label: 'Open Locations' },
+        audience: { anyPermission: ['locations:manage'] },
+      },
+      {
+        id: 'category-emptied-description-cleared',
+        category: 'fixed',
+        area: 'Categories',
+        title: "Emptying a category's description and saving clears it",
+        whatChanged:
+          'On the website, when you edit a category, empty its Description and choose Save changes, the description is now cleared.',
+        whyItMatters:
+          'You can remove a description that is out of date without typing something in its place.',
+        howItAffectsYou: 'The other fields keep what they hold. The mobile app is unchanged.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/categories', label: 'Open Categories' },
+        audience: { anyPermission: ['categories:manage'] },
+      },
+    ],
+  },
+  {
     id: 'connection-and-schedule-messages-2026-11',
     revision: 1,
     // Two web changes, no phone update and no migration:
@@ -253,16 +407,23 @@ export const RELEASES: Release[] = [
     // - Entry 2: server/services/schedule.ts create() assertWarehouseWrite
     //   throws assertWarehouseAccess's ForbiddenError as it is when
     //   accessUnreadable is set (the caller's own access could not be read),
-    //   and keeps the ServiceError 'forbidden' with the check's words for a
-    //   real refusal. server/actions/schedule.ts createScheduleEventAction
+    //   and answers a real refusal with the ServiceError 'forbidden' and a
+    //   sentence of its own. server/actions/schedule.ts createScheduleEventAction
     //   answers through server/lib/action-error-result.ts actionErrorResult,
     //   which gives ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY (packages/core
     //   guards/db-guard-copy.ts: "Your warehouse access couldn't be checked
     //   just now, so nothing was changed. Try again.") as a retryable
     //   conflict; components/schedule/schedule-event-form.tsx shows the
     //   result's message as an error toast and keeps the form as it was. A
-    //   real refusal keeps the words of lib/auth/warehouse.ts ("User does not
-    //   have write access to warehouse" and the id). Told to whoever can
+    //   real refusal reads SCHEDULE_EVENT_WAREHOUSE_REFUSED or
+    //   SCHEDULE_KIT_WAREHOUSE_REFUSED ("You don't have write access to the
+    //   warehouse set for this event, so nothing was saved. ..." and the kit
+    //   version), which name no warehouse id. (Re-read by
+    //   docs/whats-new-emptied-fields-and-schedule-completion, 2026-11-16,
+    //   against 0a6215d57 (#597), which gave a real refusal these sentences;
+    //   at 7bbbbd33f it kept the words of lib/auth/warehouse.ts. The reader
+    //   text, about the access that could not be checked, holds at both.)
+    //   Told to whoever can
     //   open New event (schedule/new/page.tsx checks schedule:manage) with the
     //   schedule module on. The phone's New event (apps/mobile/app/schedule/
     //   new.tsx) writes through its own path and is unchanged. No link: a
