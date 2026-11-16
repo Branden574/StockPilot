@@ -142,8 +142,10 @@ const factors = new Map<string, AccountFactors>();
 
 /**
  * Each queued row's kept refusal: `${userId}\u0000${orgId}\u0000${rowKey}` ->
- * its number. `rowKey` is the row's idempotency key, which no other row has,
- * so a mark only ever answers for its own row.
+ * its number. `rowKey` is the row's idempotency key. Two live rows never
+ * share one, and the drains delete a row's mark when the row leaves the
+ * queue (forgetRowRefusal), so a key queued again later starts with none and
+ * the map holds only rows still queued.
  */
 const refusals = new Map<string, number>();
 
@@ -423,6 +425,24 @@ export function noteKeptRefusal(
     pending !== undefined && account?.readSeq != null && account.readSeq > pending;
   if (pending === undefined || answeredSince) refusals.set(key, beginSetUpRead());
   requestSetUpInputsRead(Date.now());
+}
+
+/**
+ * The row left the queue (acked, or parked): its mark goes, whichever
+ * account and workspace it was kept under. A row queued later with the same
+ * key starts with no mark.
+ */
+export function forgetRowRefusal(rowKey: string | null | undefined): void {
+  if (!rowKey) return;
+  const suffix = `\u0000${rowKey}`;
+  for (const key of [...refusals.keys()]) {
+    if (key.endsWith(suffix)) refusals.delete(key);
+  }
+}
+
+/** Tests only: how many row marks are kept. */
+export function keptRefusalCountForTests(): number {
+  return refusals.size;
 }
 
 // ── Reads asked for ──────────────────────────────────────────────────────

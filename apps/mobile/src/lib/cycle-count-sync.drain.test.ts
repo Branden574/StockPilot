@@ -4,6 +4,7 @@ import { cycleCountSync } from './cycle-count-sync';
 import { OutboxSessionChangedError, REPLACED_BY_LATER_COUNT } from './outbox-scope';
 import {
   beginSetUpRead,
+  keptRefusalCountForTests,
   noteServerReadUser,
   recordMembershipInputs,
   resetSetUpInputsForTests,
@@ -665,6 +666,53 @@ describe('a queued count waits while an authenticator is being set up', () => {
       `api:${recordPath('l1')}`,
       'outboxAck:2',
     ]);
+  });
+});
+
+describe('a count line refused with module_disabled, and the mark of a row that leaves', () => {
+  beforeEach(() => resetSetUpInputsForTests());
+  afterEach(() => resetSetUpInputsForTests());
+
+  it('403 module_disabled with no details.reason is final at once: parked, no check', async () => {
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      throw Object.assign(new Error('Module not enabled for this organization: cycle_counts'), {
+        status: 403,
+        code: 'module_disabled',
+      });
+    });
+    cacheMock.rows = [countRow(1, 'l1', { org: 'org-a', user: 'u1' })];
+    await cycleCountSync.forceSync();
+    expect(calls.log).toEqual(['outboxMarkSending:1', `api:${recordPath('l1')}`, 'outboxReject:1']);
+    expect(keptRefusalCountForTests()).toBe(0);
+  });
+
+  it('a kept count that then lands, or is parked, takes its mark with it', async () => {
+    let refuse = true;
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      if (refuse) {
+        throw Object.assign(new Error('Missing permission: cycle_counts:count'), { status: 403, code: 'forbidden' });
+      }
+    });
+    cacheMock.rows = [countRow(1, 'l1', { org: 'org-a', user: 'u1' })];
+    await cycleCountSync.forceSync();
+    expect(keptRefusalCountForTests()).toBe(1);
+    refuse = false;
+    await cycleCountSync.forceSync();
+    expect(cacheMock.outboxAck).toHaveBeenCalledWith(1);
+    expect(keptRefusalCountForTests()).toBe(0);
+
+    // Kept, then superseded by a newer count of the line: settled, and its mark goes.
+    refuse = true;
+    cacheMock.rows = [countRow(2, 'l2', { org: 'org-a', user: 'u1' })];
+    await cycleCountSync.forceSync();
+    expect(keptRefusalCountForTests()).toBe(1);
+    refuse = false;
+    cacheMock.rows = [countRow(2, 'l2', { org: 'org-a', user: 'u1' }), countRow(3, 'l2', { org: 'org-a', user: 'u1' })];
+    await cycleCountSync.forceSync();
+    expect(cacheMock.outboxAck).toHaveBeenCalledWith(2);
+    expect(keptRefusalCountForTests()).toBe(0);
   });
 });
 

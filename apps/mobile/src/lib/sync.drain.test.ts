@@ -9,6 +9,7 @@ import { adjustSendGate, UNCONFIRMED_ADJUST_PREFIX } from './adjust-outbox';
 import { OutboxSessionChangedError } from './outbox-scope';
 import {
   beginSetUpRead,
+  keptRefusalCountForTests,
   noteServerReadUser,
   recordMembershipInputs,
   registerSetUpInputsSource,
@@ -1400,6 +1401,82 @@ describe('drainQueue — a queued change waits while an authenticator is being s
     } finally {
       now.mockRestore();
     }
+  });
+
+  it('a queued hand-out refused 403 module_disabled with no details.reason is final at once, with no check', async () => {
+    const OWN_BUNDLE: Row = { ...BUNDLE, organizationId: 'org-a', userId: 'u1' };
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      throw Object.assign(new Error('Module not enabled for this organization: bundles'), {
+        status: 403,
+        code: 'module_disabled',
+      });
+    });
+    pending([OWN_BUNDLE]);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 1 });
+    expect(calls.log).toEqual(['markSending:3', 'api:/api/v1/bundles/b1/distribute', 'markRejected:3']);
+    await checkAnswered();
+    expect(setUpReads.count).toBe(0);
+  });
+
+  it('a key queued again after its row was acked starts with no mark: its first 403 with no reason is kept', async () => {
+    // The kit screen keeps one key per request shape and can queue it again.
+    const KIT: Row = { ...BUNDLE, organizationId: 'org-a', userId: 'u1' };
+    let refuse = true;
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      if (refuse) throw httpError(403, 'Missing permission: bundles:distribute');
+    });
+    pending([KIT]);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+    await checkAnswered();
+    expect(keptRefusalCountForTests()).toBe(1);
+    refuse = false;
+    expect(await drainQueue()).toEqual({ ok: 1, failed: 0, rejected: 0 });
+    expect(keptRefusalCountForTests()).toBe(0);
+
+    // The same key, a new row (the acked one was deleted), refused with no reason.
+    refuse = true;
+    pending([{ ...KIT, id: 8 }]);
+    calls.log = [];
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+    expect(calls.log).toEqual(['markSending:8', 'api:/api/v1/bundles/b1/distribute', 'markFailed:8']);
+    expect(queueMock.markRejected).not.toHaveBeenCalled();
+  });
+
+  it('the marks are empty after a kept row is parked', async () => {
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      throw httpError(403, 'Missing permission: stock:receive');
+    });
+    pending([OWN_RECEIPT]);
+    await drainQueue();
+    await checkAnswered();
+    expect(keptRefusalCountForTests()).toBe(1);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 1 });
+    expect(keptRefusalCountForTests()).toBe(0);
+  });
+
+  it('a kept adjustment that is parked takes its mark with it', async () => {
+    const ADJ: Row = {
+      id: 51,
+      kind: 'adjust_stock',
+      idempotencyKey: 'k51',
+      organizationId: 'org-a',
+      userId: 'u1',
+      payload: { itemId: 'item-1', quantityChange: 1, itemLabel: 'Polo S (POLO-S)' },
+    };
+    apiMock.api.mockImplementation(async (path: string, opts?: { onSend?: () => void }) => {
+      calls.log.push(`api:${path}`);
+      opts?.onSend?.();
+      throw httpError(403, 'Missing permission: stock:adjust');
+    });
+    pending([ADJ]);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+    await checkAnswered();
+    expect(keptRefusalCountForTests()).toBe(1);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 1 });
+    expect(keptRefusalCountForTests()).toBe(0);
   });
 
   it('a kept row is sent again only once its backoff has passed, at most once per 5 minutes', async () => {

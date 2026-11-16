@@ -27,6 +27,7 @@ import {
 import { countRejected, countUnconfirmedAdjust, markHeld } from './queue';
 import { liveOutboxScope } from './session-scope';
 import {
+  forgetRowRefusal,
   noteKeptRefusal,
   requestSetUpInputsRead,
   setUpAnswerAfterRefusal,
@@ -310,6 +311,8 @@ class CycleCountSyncEngine {
         if (heldForSetUp(stale, staleScope)) continue;
         if (isOwnedBy(stale, staleScope.userId)) await outboxAck(stale.id);
         else await outboxReject(stale.id, REPLACED_BY_LATER_COUNT);
+        // Out of the queue: its kept-refusal mark goes with it.
+        forgetRowRefusal(stale.idempotencyKey);
       }
 
       for (const row of send) {
@@ -347,6 +350,7 @@ class CycleCountSyncEngine {
             createdAt: row.createdAt ?? null,
           });
           await outboxAck(row.id);
+          forgetRowRefusal(row.idempotencyKey);
         } catch (e) {
           // The account changed between the decision and the moment api()
           // read the bearer: nothing was sent. Back in the queue, untouched.
@@ -371,6 +375,7 @@ class CycleCountSyncEngine {
           if (outcome === 'rejected') {
             anyRejected = true;
             await outboxReject(row.id, msg);
+            forgetRowRefusal(row.idempotencyKey);
           } else {
             // A 403 kept for that check: noted, and the inputs read again.
             if (keptForSetUpCheck(e)) {

@@ -122,7 +122,7 @@ export async function POST(
         );
       }
       const status =
-        e.code === 'forbidden'
+        e.code === 'forbidden' || e.code === 'module_disabled'
           ? 403
           : e.code === 'not_found'
             ? 404

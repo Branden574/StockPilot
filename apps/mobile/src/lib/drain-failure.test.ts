@@ -139,21 +139,29 @@ describe('classifyDrainFailure: a 403 and the authenticator policy', () => {
       details: { reason: 'assigned_elsewhere' },
     },
     'a 403 with no JSON body': { status: 403, message: 'You do not have access to this.' },
+    'module off, as the code, no details': {
+      status: 403,
+      code: 'module_disabled',
+      message: 'Module not enabled for this organization: bundles',
+    },
   } as const;
 
+  const FINAL_AT_ONCE: readonly string[] = ['another reason in details', 'module off, as the code, no details'];
+
   it.each(
-    Object.entries(shapes).filter(([name]) => name !== 'another reason in details'),
+    Object.entries(shapes).filter(([name]) => !FINAL_AT_ONCE.includes(name)),
   )('%s: kept while the check is owed or unknown', (_name, err) => {
     for (const setUp of ['owed', 'unknown'] as const) {
       expect(classifyDrainFailure(err, { accountDisabled: false, setUp })).toBe('failed');
     }
   });
 
-  it('a refusal that names another reason is final whatever the check says', () => {
+  it.each([
+    'another reason in details',
+    'module off, as the code, no details',
+  ] as const)('%s: final whatever the check says', (name) => {
     for (const setUp of ['owed', 'unknown', 'clear'] as const) {
-      expect(classifyDrainFailure(shapes['another reason in details'], { accountDisabled: false, setUp })).toBe(
-        'rejected',
-      );
+      expect(classifyDrainFailure(shapes[name], { accountDisabled: false, setUp })).toBe('rejected');
     }
   });
 

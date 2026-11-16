@@ -46,7 +46,9 @@
  * change itself: the same row lands once the account has an authenticator.
  * So a 403 is 'rejected' only when
  *   - it names a reason, in `details.reason`, that is not the authenticator
- *     one: the route judged the change itself; or
+ *     one, or its code is 'module_disabled' (the organization has that
+ *     module off, which no authenticator set-up changes): the route judged
+ *     the change itself; or
  *   - it names no reason, and the phone, from a read that STARTED after this
  *     row's own kept refusal and returned the row's workspace, finds this
  *     account owes no set-up there (`setUp` 'clear': set-up-inputs.ts
@@ -116,7 +118,7 @@ export function classifyDrainFailure(
     const reason = detailsReason(e?.details);
     if (reason !== null && AUTHENTICATOR_REASONS.has(reason)) return 'failed';
     if (typeof e?.code === 'string' && AUTHENTICATOR_REASONS.has(e.code)) return 'failed';
-    if (reason !== null) return 'rejected';
+    if (reason !== null || e?.code === 'module_disabled') return 'rejected';
     return opts.setUp === 'clear' ? 'rejected' : 'failed';
   }
   if (DEFINITIVE_REFUSALS.has(status)) return 'rejected';
