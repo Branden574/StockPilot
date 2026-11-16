@@ -56,7 +56,9 @@ const WITH_ADDRESS = {
   },
 };
 
-function renderManager(rows = [NO_ADDRESS, WITH_ADDRESS]) {
+function renderManager(
+  rows: Parameters<typeof ChartersManager>[0]['initial'] = [NO_ADDRESS, WITH_ADDRESS],
+) {
   return render(
     <ChartersManager
       initial={rows}
@@ -156,5 +158,93 @@ describe('ChartersManager', () => {
     fireEvent.click(create);
     await new Promise((r) => setTimeout(r, 50));
     expect(actions.create).not.toHaveBeenCalled();
+  });
+
+  const FILLED = {
+    ...WITH_ADDRESS,
+    description: 'East side campus',
+    notes: 'Gate code at the desk',
+    contact_name: 'Dana Example',
+    contact_email: 'dana@example.com',
+    contact_phone: '555-010-0123',
+  };
+
+  it('Edit sends emptied fields as cleared, keeps the others, and drops an emptied address line', async () => {
+    actions.update.mockResolvedValue({ ok: true });
+    renderManager([FILLED]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText(/Code/), { target: { value: '' } });
+    fireEvent.change(within(dialog).getByLabelText(/Internal notes/), { target: { value: '' } });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Contact name' }), {
+      target: { value: '' },
+    });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Postal code' }), {
+      target: { value: '' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(actions.update).toHaveBeenCalledTimes(1));
+    expect(actions.update).toHaveBeenCalledWith('c2', {
+      name: 'Ridge',
+      code: '',
+      description: 'East side campus',
+      notes: '',
+      address: {
+        line1: '1200 A Very Long Industrial Parkway Building 7',
+        line2: undefined,
+        city: 'Fresno',
+        region: 'CA',
+        postalCode: undefined,
+        country: 'USA',
+      },
+      contactName: '',
+      contactEmail: 'dana@example.com',
+      contactPhone: '555-010-0123',
+    });
+    // An edit never sets the record's status.
+    expect('status' in actions.update.mock.calls[0]![1]).toBe(false);
+  });
+
+  it('Edit leaves out an optional field that was empty and stayed empty', async () => {
+    actions.update.mockResolvedValue({ ok: true });
+    renderManager([NO_ADDRESS]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(actions.update).toHaveBeenCalledTimes(1));
+    const [, payload] = actions.update.mock.calls[0]!;
+    for (const key of [
+      'code',
+      'description',
+      'notes',
+      'contactName',
+      'contactEmail',
+      'contactPhone',
+    ]) {
+      expect(payload[key]).toBeUndefined();
+    }
+  });
+
+  it('New sends an empty optional field as left out', async () => {
+    actions.create.mockResolvedValue({ ok: true, data: { id: 'c9' } });
+    renderManager([NO_ADDRESS]);
+    fireEvent.click(screen.getByRole('button', { name: 'New region' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Harbor East' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create region' }));
+    await waitFor(() => expect(actions.create).toHaveBeenCalledTimes(1));
+    const [payload] = actions.create.mock.calls[0]!;
+    expect(payload.name).toBe('Harbor East');
+    expect(payload.status).toBe('active');
+    for (const key of [
+      'code',
+      'description',
+      'notes',
+      'contactName',
+      'contactEmail',
+      'contactPhone',
+    ]) {
+      expect(payload[key]).toBeUndefined();
+    }
   });
 });
