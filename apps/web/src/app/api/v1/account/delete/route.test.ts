@@ -9,6 +9,7 @@ import { audit, insertAuditRowReported } from '@/server/services/audit';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 import { ACCOUNT_DELETE_LAST_OWNER_COPY_MOBILE } from '@/server/lib/account-deletion';
 import { ACCOUNT_DELETE_CODE_SEND_FAILED_COPY } from '@/server/lib/account-deletion-credential';
+import { DELETE_ACCOUNT_CONFIRM_COPY } from '@/components/settings/delete-account-copy';
 import { makeSupabaseStub, type SupabaseStub } from '@/test/supabase-mock';
 
 import { POST as POST_CODE } from './code/route';
@@ -1182,6 +1183,7 @@ describe('POST /api/v1/account/delete/code', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; challenge: string; expiresAt: number; message: string };
     expect(body.ok).toBe(true);
+    expect(body.message).toBe(DELETE_ACCOUNT_CONFIRM_COPY.codeSent);
     expect(body.expiresAt - before).toBeGreaterThanOrEqual(599);
     expect(body.expiresAt - before).toBeLessThanOrEqual(601);
     const m = (sendEmail.mock.calls[0]![0].text ?? '').match(/\n([0-9]{6})\n/);
@@ -1198,11 +1200,15 @@ describe('POST /api/v1/account/delete/code', () => {
     expect(sendEmail).not.toHaveBeenCalled();
   });
 
-  it('429 past the send limit, nothing sent', async () => {
+  it('429 past the send limit, nothing sent, in words about codes', async () => {
     checkRateLimit.mockResolvedValue({ allowed: false, count: 6, resetAt: 0 });
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(happyStub()) as never);
     const res = await POST_CODE(codeRequest());
     expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({
+      error: 'rate_limited',
+      message: 'Too many codes requested. Try again in a few minutes, or enter your password.',
+    });
     expect(sendEmail).not.toHaveBeenCalled();
   });
 

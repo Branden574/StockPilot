@@ -61,6 +61,15 @@ export function DeleteAccountButton({
   const [code, setCode] = React.useState('');
   const [challenge, setChallenge] = React.useState<string | null>(null);
   const [sending, setSending] = React.useState(false);
+  // Where keyboard focus goes once the answer is shown: the code field after
+  // a code was sent or a code was refused, the password field after a
+  // password was refused or asked for. The fields are disabled while a
+  // request runs, so the focus waits for the render that enables them. Each
+  // refusal is read out by the dialog's role="alert" line, which is removed
+  // on every try and shown again with the answer.
+  const passwordRef = React.useRef<HTMLInputElement>(null);
+  const codeRef = React.useRef<HTMLInputElement>(null);
+  const focusNext = React.useRef<'password' | 'code' | null>(null);
 
   function openChange(next: boolean) {
     if (next) {
@@ -83,6 +92,7 @@ export function DeleteAccountButton({
       setRefusal({ message: res.error.message, lastOwner: false });
       return;
     }
+    focusNext.current = 'code';
     setChallenge(res.data.challenge);
     setCode('');
     setMethod('code');
@@ -106,9 +116,18 @@ export function DeleteAccountButton({
     setPending(false);
     if (!res.ok) {
       const reason = (res.error.details as { reason?: unknown } | undefined)?.reason;
-      if (reason === 'credential_required') setAskCredential(true);
-      if (reason === 'password_refused') setPassword('');
-      if (reason === 'code_refused') setCode('');
+      if (reason === 'credential_required') {
+        setAskCredential(true);
+        focusNext.current = method;
+      }
+      if (reason === 'password_refused') {
+        setPassword('');
+        focusNext.current = 'password';
+      }
+      if (reason === 'code_refused') {
+        setCode('');
+        focusNext.current = 'code';
+      }
       setRefusal({ message: res.error.message, lastOwner: reason === 'last_owner' });
       return;
     }
@@ -130,18 +149,28 @@ export function DeleteAccountButton({
     (method === 'password' ? password.length === 0 : !CODE_RE.test(code) || !challenge);
   const busy = pending || sending;
 
+  React.useEffect(() => {
+    if (busy || !focusNext.current) return;
+    const field = focusNext.current === 'code' ? codeRef.current : passwordRef.current;
+    if (!field) return;
+    focusNext.current = null;
+    field.focus();
+  }, [busy, method, askCredential, refusal]);
+
   const credentialFields = !askCredential ? null : method === 'password' ? (
     <div className="space-y-1.5">
       <Label htmlFor="delete-account-password">{DELETE_ACCOUNT_CONFIRM_COPY.passwordLabel}</Label>
       <Input
+        ref={passwordRef}
         id="delete-account-password"
+        aria-describedby="delete-account-password-hint"
         type="password"
         autoComplete="current-password"
         value={password}
         onChange={(e) => setPassword(e.target.value)}
         disabled={busy}
       />
-      <p className="text-muted-foreground text-[12px]">
+      <p id="delete-account-password-hint" className="text-muted-foreground text-[12px]">
         {DELETE_ACCOUNT_CONFIRM_COPY.passwordHint}
       </p>
       <Button
@@ -159,7 +188,9 @@ export function DeleteAccountButton({
     <div className="space-y-1.5">
       <Label htmlFor="delete-account-code">{DELETE_ACCOUNT_CONFIRM_COPY.codeLabel}</Label>
       <Input
+        ref={codeRef}
         id="delete-account-code"
+        aria-describedby="delete-account-code-hint"
         type="text"
         inputMode="numeric"
         autoComplete="one-time-code"
@@ -169,7 +200,9 @@ export function DeleteAccountButton({
         disabled={busy}
         className="font-mono"
       />
-      <p className="text-muted-foreground text-[12px]">{DELETE_ACCOUNT_CONFIRM_COPY.codeSent}</p>
+      <p id="delete-account-code-hint" className="text-muted-foreground text-[12px]">
+        {DELETE_ACCOUNT_CONFIRM_COPY.codeSent}
+      </p>
       <div className="flex flex-wrap gap-x-4">
         <Button
           type="button"

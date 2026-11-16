@@ -42,6 +42,7 @@ import {
   ACCOUNT_DELETE_CODE_NOT_OFFERED_COPY,
   ACCOUNT_DELETE_CODE_REFUSED_COPY,
   ACCOUNT_DELETE_CODE_SEND_FAILED_COPY,
+  ACCOUNT_DELETE_CODE_SEND_PAUSED_COPY,
   ACCOUNT_DELETE_CREDENTIAL_CHECK_FAILED_COPY,
   ACCOUNT_DELETE_CREDENTIAL_PAUSED_COPY,
   ACCOUNT_DELETE_CREDENTIAL_REQUIRED_COPY,
@@ -534,7 +535,7 @@ export async function requestAccountDeletionCodeAction(): Promise<
       case 'not_offered':
         return err('conflict', ACCOUNT_DELETE_CODE_NOT_OFFERED_COPY, { reason: 'not_offered' });
       case 'rate_limited':
-        return err('rate_limited', ACCOUNT_DELETE_CREDENTIAL_PAUSED_COPY);
+        return err('rate_limited', ACCOUNT_DELETE_CODE_SEND_PAUSED_COPY);
       case 'gone':
         throw sessionChangedError();
       default:

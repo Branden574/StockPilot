@@ -18,6 +18,11 @@ import { checkRateLimit } from '@/lib/rate-limit';
 
 import { stepUpOwed } from '@stockpilot/core';
 
+import {
+  DELETE_ACCOUNT_CODE_SEND_PAUSED_COPY,
+  DELETE_ACCOUNT_CONFIRM_COPY,
+} from '@/components/settings/delete-account-copy';
+
 /**
  * How a person confirms deleting their own account, on the web and the phone.
  *
@@ -71,8 +76,10 @@ export const ACCOUNT_DELETE_CREDENTIAL_CHECK_FAILED_COPY =
   'Could not check that just now. Nothing was deleted. Try again in a minute.';
 export const ACCOUNT_DELETE_AAL2_COPY =
   'Enter your authenticator code before deleting your account. Nothing was deleted.';
-export const ACCOUNT_DELETE_CODE_SENT_COPY =
-  'We sent a six-digit code to your sign-in email. It works for 10 minutes.';
+/** The dialog's own sentence (components/settings/delete-account-copy.ts). */
+export const ACCOUNT_DELETE_CODE_SENT_COPY = DELETE_ACCOUNT_CONFIRM_COPY.codeSent;
+/** Too many codes asked for (the send limit); the try limit says PAUSED_COPY. */
+export const ACCOUNT_DELETE_CODE_SEND_PAUSED_COPY = DELETE_ACCOUNT_CODE_SEND_PAUSED_COPY;
 export const ACCOUNT_DELETE_CODE_NOT_OFFERED_COPY =
   'Your account has an authenticator, so deleting it is confirmed with your authenticator code.';
 export const ACCOUNT_DELETE_CODE_SEND_FAILED_COPY =

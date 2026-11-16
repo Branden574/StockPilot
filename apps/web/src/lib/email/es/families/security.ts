@@ -40,6 +40,7 @@ import {
   statusPill,
 } from '../components';
 import { esEmailById } from '../registry';
+import { DELETE_ACCOUNT_NEWEST_CODE_ONLY_COPY } from '@/components/settings/delete-account-copy';
 import { ES_LIGHT, ES_MONO_INLINE, esAssetUrl } from '../tokens';
 
 const L = ES_LIGHT;
@@ -66,6 +67,12 @@ export interface RenderedEsEmail {
 function greeting(firstName: string | null | undefined): string {
   const name = firstName?.trim();
   return name ? `Hi ${escapeHtml(name)} ` : 'Hi ';
+}
+
+/** greeting() for a plain-text part: the same words, not escaped. */
+function greetingText(firstName: string | null | undefined): string {
+  const name = firstName?.trim();
+  return name ? `Hi ${name} ` : 'Hi ';
 }
 
 function marketingUrls(appUrl: string) {
@@ -658,7 +665,7 @@ export function renderAccountDeleteCodeEmail(params: AccountDeleteCodeEmailParam
         '0 36px 24px',
         card(
           `<div class="ink" style="font-family:${ES_MONO_INLINE};font-size:30px;font-weight:600;letter-spacing:0.3em;color:${L.ink};text-align:center">${code}</div>
-        <div class="ink3" style="font-size:12px;color:${L.ink3};text-align:center;margin-top:8px">This code works for <strong class="ink2" style="font-weight:600;color:${L.ink2}">${escapeHtml(codeExpiry)}</strong>. Deleting an account cannot be undone.</div>`,
+        <div class="ink3" style="font-size:12px;color:${L.ink3};text-align:center;margin-top:8px">This code works for <strong class="ink2" style="font-weight:600;color:${L.ink2}">${escapeHtml(codeExpiry)}</strong>. ${escapeHtml(DELETE_ACCOUNT_NEWEST_CODE_ONLY_COPY)} Deleting an account cannot be undone.</div>`,
           { pad: '20px 20px' },
         ),
       ),
@@ -681,11 +688,11 @@ export function renderAccountDeleteCodeEmail(params: AccountDeleteCodeEmailParam
   const text = [
     'Your code to delete your StockPilot account.',
     '',
-    `Someone asked to delete the StockPilot account for ${params.email}. If that was you, enter this code where you asked for it to confirm:`,
+    `${greetingText(params.firstName)}— someone asked to delete the StockPilot account for ${params.email}. If that was you, enter this code where you asked for it to confirm:`,
     '',
     params.code,
     '',
-    `This code works for ${codeExpiry}. Deleting an account cannot be undone.`,
+    `This code works for ${codeExpiry}. ${DELETE_ACCOUNT_NEWEST_CODE_ONLY_COPY} Deleting an account cannot be undone.`,
     '',
     `Didn’t ask for this? Nothing happens unless the code is used. Do not share it with anyone. If someone else may be signed in to your account, change your password and tell support: ${urls.support}`,
   ].join('\n');

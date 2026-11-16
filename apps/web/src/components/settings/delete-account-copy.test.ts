@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DELETE_ACCOUNT_CARD_COPY,
+  DELETE_ACCOUNT_CODE_SEND_PAUSED_COPY,
+  DELETE_ACCOUNT_CONFIRM_COPY,
   DELETE_ACCOUNT_DIALOG_COPY,
+  DELETE_ACCOUNT_NEWEST_CODE_ONLY_COPY,
 } from './delete-account-copy';
 
 /**
@@ -56,5 +59,32 @@ describe('the delete-account consent text (web dialog and Settings card)', () =>
       'If you are the only owner of an organization with other members, transfer ownership on the Team page first.',
     );
     for (const s of all) expect(s).not.toMatch(/make another member the owner/i);
+  });
+});
+
+describe('the words around a deletion code', () => {
+  it('after a code is sent, says that only the newest code works', () => {
+    expect(DELETE_ACCOUNT_CONFIRM_COPY.codeSent).toBe(
+      'We sent a six-digit code to your sign-in email. It works for 10 minutes. If you ask again, only the newest code works.',
+    );
+    expect(DELETE_ACCOUNT_CONFIRM_COPY.codeSent).toContain(DELETE_ACCOUNT_NEWEST_CODE_ONLY_COPY);
+  });
+
+  it('the send limit speaks of codes, not tries', () => {
+    expect(DELETE_ACCOUNT_CODE_SEND_PAUSED_COPY).toBe(
+      'Too many codes requested. Try again in a few minutes, or enter your password.',
+    );
+    expect(DELETE_ACCOUNT_CODE_SEND_PAUSED_COPY).not.toMatch(/tries/i);
+  });
+
+  it('no exclamation mark and no emoji', () => {
+    for (const s of [
+      ...Object.values(DELETE_ACCOUNT_CONFIRM_COPY),
+      DELETE_ACCOUNT_CODE_SEND_PAUSED_COPY,
+      DELETE_ACCOUNT_NEWEST_CODE_ONLY_COPY,
+    ]) {
+      expect(s).not.toContain('!');
+      expect(s).not.toMatch(/\p{Extended_Pictographic}/u);
+    }
   });
 });

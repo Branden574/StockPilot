@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { DELETE_ACCOUNT_NEWEST_CODE_ONLY_COPY } from '@/components/settings/delete-account-copy';
+
 import { esEmailById } from '../registry';
 import { ES_MAX_HTML_BYTES } from '../tokens';
 import {
@@ -427,6 +429,26 @@ describe('account-delete-code (renderAccountDeleteCodeEmail)', () => {
     expect(res.text).not.toMatch(/\p{Extended_Pictographic}/u);
     expect(res.text).not.toContain('!');
     expect(res.subject).not.toContain('!');
+  });
+
+  it('says that only the newest code works, in the HTML and the plain text, with the dialog\'s own sentence', () => {
+    const res = render();
+    expect(DELETE_ACCOUNT_NEWEST_CODE_ONLY_COPY).toBe('If you ask again, only the newest code works.');
+    expect(res.html).toContain(DELETE_ACCOUNT_NEWEST_CODE_ONLY_COPY);
+    expect(res.text).toContain(DELETE_ACCOUNT_NEWEST_CODE_ONLY_COPY);
+  });
+
+  it('the plain text opens with the same greeting as the HTML', () => {
+    const res = render();
+    expect(res.html).toContain('Hi Carsten — someone asked to delete the StockPilot account for');
+    const lines = res.text.split('\n').filter((l) => l.length > 0);
+    expect(lines[1]).toMatch(/^Hi Carsten — someone asked to delete the StockPilot account for /);
+  });
+
+  it('with no first name, both parts say "Hi —"', () => {
+    const res = renderAccountDeleteCodeEmail({ email: SEED.email, code: '000001', firstName: null });
+    expect(res.html).toContain('Hi — someone asked');
+    expect(res.text).toContain('Hi — someone asked');
   });
 
   it('escapes the address in the markup', () => {

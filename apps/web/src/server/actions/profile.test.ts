@@ -1852,7 +1852,13 @@ describe('deleteOwnAccountAction', () => {
             ? { allowed: false, count: 6, resetAt: 0 }
             : { allowed: true, count: 1, resetAt: 0 }) as never);
         const sent = await requestAccountDeletionCodeAction();
-        expect(sent).toMatchObject({ ok: false, error: { code: 'rate_limited' } });
+        expect(sent).toMatchObject({
+          ok: false,
+          error: {
+            code: 'rate_limited',
+            message: 'Too many codes requested. Try again in a few minutes, or enter your password.',
+          },
+        });
         expect(sendEmailMock).not.toHaveBeenCalled();
       });
 

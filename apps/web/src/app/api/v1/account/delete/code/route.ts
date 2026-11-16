@@ -6,8 +6,8 @@ import { internalErrorResponse } from '@/server/lib/api-error-response';
 import {
   ACCOUNT_DELETE_CODE_NOT_OFFERED_COPY,
   ACCOUNT_DELETE_CODE_SEND_FAILED_COPY,
+  ACCOUNT_DELETE_CODE_SEND_PAUSED_COPY,
   ACCOUNT_DELETE_CODE_SENT_COPY,
-  ACCOUNT_DELETE_CREDENTIAL_PAUSED_COPY,
   sendDeletionCode,
 } from '@/server/lib/account-deletion-credential';
 
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
         );
       case 'rate_limited':
         return NextResponse.json(
-          { error: 'rate_limited', message: ACCOUNT_DELETE_CREDENTIAL_PAUSED_COPY },
+          { error: 'rate_limited', message: ACCOUNT_DELETE_CODE_SEND_PAUSED_COPY },
           { status: 429 },
         );
       case 'gone':
