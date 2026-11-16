@@ -16,6 +16,7 @@ import {
   PERMISSIONS,
   PLATFORM_MANAGED_PERMISSIONS,
   ROLE_PERMISSIONS,
+  roleCanHandOutKits,
   withoutPlatformManaged,
   type Permission,
 } from './permissions';
@@ -267,6 +268,26 @@ describe('canDistributeBundles', () => {
   it('a manager whose bundles:distribute was revoked is not offered it', () => {
     const revoked = effectivePermissions('manager', [{ permission: 'bundles:distribute', granted: false }]);
     expect(canDistributeBundles({ role: 'manager', permissions: revoked })).toBe(false);
+  });
+});
+
+describe('roleCanHandOutKits', () => {
+  // The role floor of every kit hand-out (distribute_bundle's body and the
+  // bundles_update USING its FOR UPDATE read is filtered by): manager or above.
+  it('is true for owner, admin and manager, and false for staff and viewer', () => {
+    for (const role of ['owner', 'admin', 'manager'] as const) {
+      expect(roleCanHandOutKits(role), role).toBe(true);
+    }
+    for (const role of ['staff', 'viewer'] as const) {
+      expect(roleCanHandOutKits(role), role).toBe(false);
+    }
+  });
+
+  it('is the role half of canDistributeBundles for every role', () => {
+    for (const role of ['owner', 'admin', 'manager', 'staff', 'viewer'] as const) {
+      const granted = effectivePermissions(role, [{ permission: 'bundles:distribute', granted: true }]);
+      expect(canDistributeBundles({ role, permissions: granted }), role).toBe(roleCanHandOutKits(role));
+    }
   });
 });
 
