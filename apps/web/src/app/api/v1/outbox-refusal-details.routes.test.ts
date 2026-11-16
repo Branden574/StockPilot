@@ -20,11 +20,11 @@ import { POST as eventsPOST } from './size-counts/[id]/events/route';
  * Security invariant: the routes the phone's outbox sends queued changes to,
  * when the service refuses: a count, a cleared count, a receipt line, a kit
  * distribution and a size-count batch (the adjust route has its own tests).
- * Each answer carries the refusal's `details` as the adjust route's does, so
- * the phone can tell the authenticator answers ('mfa_required': set one up;
- * 'aal2_required': enter its code) apart from a missing permission, which is
- * a 403 'forbidden' too. An internal error keeps its fixed sentence and
- * carries no details.
+ * Each answer carries `details: { reason }` when the refusal's details hold a
+ * string reason, and nothing else from them, so the phone can tell the
+ * authenticator answers ('mfa_required': set one up; 'aal2_required': enter
+ * its code) apart from a missing permission, which is a 403 'forbidden' too.
+ * An internal error keeps its fixed sentence and carries no details.
  *
  * The real routes and the real services: the authenticator and permission
  * refusals come from the services' own gate (assertPermission), which runs
@@ -258,6 +258,40 @@ describe.each(ROUTES)('the outbox route: $name', (route) => {
     expect(JSON.stringify(body)).not.toContain('example_table');
   });
 
+  it('details with other fields: only the reason is carried', async () => {
+    route.failWith(
+      new ServiceError('forbidden', 'Example refusal sentence.', {
+        reason: 'example_reason',
+        itemId: ITEM,
+        name: 'Example item name',
+      }),
+    );
+    const { status, body } = await answer({
+      mfaRequired: false,
+      mfaSatisfied: true,
+      mfaEnrolled: false,
+    });
+    expect(status).toBe(403);
+    expect(body).toEqual({
+      error: 'forbidden',
+      message: 'Example refusal sentence.',
+      details: { reason: 'example_reason' },
+    });
+  });
+
+  it('a reason that is not a string: no details key at all', async () => {
+    route.failWith(
+      new ServiceError('forbidden', 'Example refusal sentence.', { reason: 7, itemId: ITEM }),
+    );
+    const { status, body } = await answer({
+      mfaRequired: false,
+      mfaSatisfied: true,
+      mfaEnrolled: false,
+    });
+    expect(status).toBe(403);
+    expect(body).toEqual({ error: 'forbidden', message: 'Example refusal sentence.' });
+  });
+
   it("another refusal's own reason is carried the same way, with its status and sentence", async () => {
     route.failWith(
       new ServiceError('forbidden', 'Example refusal sentence.', { reason: 'example_reason' }),
@@ -272,6 +306,24 @@ describe.each(ROUTES)('the outbox route: $name', (route) => {
       error: 'forbidden',
       message: 'Example refusal sentence.',
       details: { reason: 'example_reason' },
+    });
+  });
+});
+
+describe.each([ROUTES[0]!, ROUTES[1]!])('the count route: $name', (route) => {
+  it("a count assigned to another member: 403 with details.reason 'assigned_to_another_user'", async () => {
+    const message =
+      'This cycle count is assigned to another employee. A manager must release or reassign it before you can count.';
+    route.failWith(new ServiceError('forbidden', message, { reason: 'assigned_to_another_user' }));
+    vi.mocked(withApiContext).mockResolvedValueOnce(
+      context({ mfaRequired: false, mfaSatisfied: true, mfaEnrolled: false }) as never,
+    );
+    const res = await route.send();
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: 'forbidden',
+      message,
+      details: { reason: 'assigned_to_another_user' },
     });
   });
 });

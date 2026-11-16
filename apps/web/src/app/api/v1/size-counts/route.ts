@@ -5,6 +5,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { forbiddenOrInternalResponse } from '@/server/lib/api-error-response';
+import { refusalReasonDetails } from '@/server/lib/refusal-reason';
 import { SizeCountsService } from '@/server/services/size-counts';
 import { ServiceError } from '@/server/services/context';
 
@@ -98,11 +99,11 @@ const GENERIC_500_MESSAGE = 'An internal error occurred. Please try again.';
  * own access could not be read. Everything else keeps the S13 500, with the
  * same body, tag and level.
  *
- * `forwardDetails` (the outbox's append route): a refusal also carries the
- * ServiceError's `details`, as the adjust route's answer does. They are
- * app-authored for every code but internal_error, which returns above without
- * them; they carry `reason` from the authenticator gate (mfaGateError), the
- * one field that tells the phone that answer apart from a missing permission.
+ * `forwardDetails` (the outbox's append route): a refusal also carries
+ * `details: { reason }` when the ServiceError's details hold a string reason,
+ * and nothing else from them (server/lib/refusal-reason.ts). The authenticator
+ * gate's reason is what tells the phone that answer apart from a missing
+ * permission. The other size-count handlers do not pass it.
  */
 export function sizeCountError(
   e: unknown,
@@ -138,7 +139,7 @@ export function sizeCountError(
       {
         error: e.code,
         message: e.message,
-        ...(opts.forwardDetails && e.details ? { details: e.details } : {}),
+        ...(opts.forwardDetails ? refusalReasonDetails(e) : {}),
       },
       { status },
     );

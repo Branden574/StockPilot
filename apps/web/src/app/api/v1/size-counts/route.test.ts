@@ -157,3 +157,88 @@ describe('sizeCountError — a warehouse refusal is not an internal error (B73)'
     });
   });
 });
+
+/**
+ * Only the outbox's append route passes `forwardDetails`; every other
+ * size-count handler answers a refusal with its code and message alone, even
+ * when the ServiceError's details carry a reason.
+ */
+describe('sizeCountError: the other size-count handlers answer no details', () => {
+  const SESSION = '11111111-0000-4000-8000-0000000000aa';
+  const refusal = () =>
+    new ServiceError('forbidden', 'Example refusal sentence.', { reason: 'mfa_required' });
+  const EXPECTED = { error: 'forbidden', message: 'Example refusal sentence.' };
+
+  it('the helper with no options', async () => {
+    const res = sizeCountError(refusal());
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(EXPECTED);
+  });
+
+  it.each([
+    ['POST /api/v1/size-counts', async () => (await import('./route')).POST(buildRequest({}))],
+    [
+      'GET /api/v1/size-counts/[id]',
+      async () =>
+        (await import('./[id]/route')).GET(
+          new Request(`https://test.local/api/v1/size-counts/${SESSION}`) as never,
+          { params: Promise.resolve({ id: SESSION }) },
+        ),
+    ],
+    [
+      'POST /api/v1/size-counts/[id]/complete',
+      async () =>
+        (await import('./[id]/complete/route')).POST(
+          new Request(`https://test.local/api/v1/size-counts/${SESSION}/complete`, {
+            method: 'POST',
+          }) as never,
+          { params: Promise.resolve({ id: SESSION }) },
+        ),
+    ],
+    [
+      'POST /api/v1/size-counts/[id]/scan',
+      async () =>
+        (await import('./[id]/scan/route')).POST(
+          new Request(`https://test.local/api/v1/size-counts/${SESSION}/scan`, {
+            method: 'POST',
+          }) as never,
+          { params: Promise.resolve({ id: SESSION }) },
+        ),
+    ],
+    [
+      'GET /api/v1/size-counts/training',
+      async () =>
+        (await import('./training/route')).GET(
+          new Request('https://test.local/api/v1/size-counts/training') as never,
+        ),
+    ],
+    [
+      'GET /api/v1/size-counts/training/samples',
+      async () =>
+        (await import('./training/samples/route')).GET(
+          new Request('https://test.local/api/v1/size-counts/training/samples') as never,
+        ),
+    ],
+    [
+      'DELETE /api/v1/size-counts/training/samples/[id]',
+      async () =>
+        (await import('./training/samples/[id]/route')).DELETE(
+          new Request(`https://test.local/api/v1/size-counts/training/samples/${SESSION}`, {
+            method: 'DELETE',
+          }) as never,
+          { params: Promise.resolve({ id: SESSION }) },
+        ),
+    ],
+  ])('%s: 403 with exactly the code and message', async (_name, send) => {
+    const refuse = vi.fn(async () => {
+      throw refusal();
+    });
+    vi.mocked(SizeCountsService).mockImplementation(function () {
+      return new Proxy({}, { get: () => refuse }) as unknown as SizeCountsService;
+    });
+    const res = await send();
+    expect(refuse).toHaveBeenCalled();
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(EXPECTED);
+  });
+});

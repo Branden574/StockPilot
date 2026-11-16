@@ -2070,12 +2070,14 @@ WEB_TESTS=(
 
   # The routes the phone's outbox sends queued changes to (record and clear a
   # count, receive a PO line, distribute a kit, append size-count events): a
-  # refusal carries the ServiceError's `details` as the adjust route's does,
-  # so the authenticator answers ('mfa_required', 'aal2_required') are told
-  # apart from a missing permission; an internal error keeps its fixed
-  # sentence with no details and none of the raw text. The suite carries the
-  # "Security invariant" marker.
+  # refusal carries only a string `details.reason` from the ServiceError
+  # (server/lib/refusal-reason.ts), so the authenticator answers
+  # ('mfa_required', 'aal2_required') are told apart from a missing
+  # permission; no other field of `details` is forwarded; an internal error
+  # keeps its fixed sentence with no details and none of the raw text. Both
+  # files carry the "Security invariant" marker.
   src/app/api/v1/outbox-refusal-details.routes.test.ts
+  src/server/lib/refusal-reason.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
