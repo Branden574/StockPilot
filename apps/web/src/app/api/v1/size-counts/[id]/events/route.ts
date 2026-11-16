@@ -71,6 +71,6 @@ export async function POST(
     const result = await svc.appendEvents(id, parsed.data.events);
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
-    return sizeCountError(e);
+    return sizeCountError(e, { forwardDetails: true });
   }
 }
