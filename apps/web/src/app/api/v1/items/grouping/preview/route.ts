@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { GROUPING_ERROR_TABLE, GROUPING_ERROR_WORDS } from '@stockpilot/core';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
@@ -24,7 +24,9 @@ export const dynamic = 'force-dynamic';
  * 400 validation_error; 401; 403 (permission, MFA); 429; 500.
  */
 export async function POST(req: NextRequest) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req, 'read');
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) {
     return NextResponse.json(
       { error: 'unauthenticated', message: GROUPING_ERROR_WORDS.unauthenticated },

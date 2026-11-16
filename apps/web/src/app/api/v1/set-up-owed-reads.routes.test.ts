@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AUTHENTICATOR_SET_UP_OWED_COPY, CONTEXT_UNAVAILABLE_COPY } from '@stockpilot/core';
 
@@ -11,9 +11,11 @@ import { heldHandlers, shippedSources } from '@/test/authenticator-read-tree';
  * server/lib/api-read-context.set-up-reads.test.ts) labelled as set-up owed,
  * and every held handler answers 403 `forbidden` with core's sentence and
  * `details.reason: 'mfa_required'`, not stored, before any work of its own:
- * no table, no service client, no rate-limit slot. The handlers are every GET
- * under /api (the website's exports and searches too) and the reads by POST
- * under /api/v1, read from the source tree by the guard's own reading.
+ * no table, no service client, no cookie client, no outside call (`fetch`),
+ * no rate-limit slot. The handlers are every GET under /api (the website's
+ * exports and searches too) and every handler there by another method that
+ * writes nothing (the exports' and their previews' POSTs, the assistant's
+ * chat, the lookups), read from the source tree by the guard's own reading.
  *
  * When the organization's policy could not be read (the context carries the
  * mark withApiContext gives it), the same handlers answer the retryable 503
@@ -21,8 +23,8 @@ import { heldHandlers, shippedSources } from '@/test/authenticator-read-tree';
  *
  * The writes in the same files (a POST, PATCH or DELETE beside the GET) and
  * the returns writes are not held by this answer: they reach their own
- * handling as before. The sign-in email status (account/email) is not held
- * either: a member reads their own email before setting up an authenticator.
+ * handling. The sign-in email status (account/email) is not held either: a
+ * member reads their own email before setting up an authenticator.
  */
 
 const h = vi.hoisted(() => ({ ctx: null as unknown, calls: [] as string[] }));
@@ -45,6 +47,12 @@ vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => {
     h.calls.push('service client');
     throw new Error('service client used');
+  },
+}));
+vi.mock('@/lib/supabase/server', () => ({
+  createClient: async () => {
+    h.calls.push('cookie client');
+    throw new Error('cookie client used');
   },
 }));
 
@@ -158,6 +166,17 @@ beforeEach(() => {
   for (const level of ['info', 'warn', 'error'] as const) {
     vi.spyOn(console, level).mockImplementation(() => {});
   }
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => {
+      h.calls.push('fetch');
+      throw new Error('fetch used');
+    }),
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 async function expectHeld(res: Response) {
@@ -174,15 +193,26 @@ async function expectHeld(res: Response) {
 
 describe('a read by a member who must set up an authenticator first', () => {
   it('reads the held handlers from the tree', () => {
-    // 81 on 2026-11-16: 54 GETs under /api/v1, 2 POSTs there, and 25 GETs
+    // 89 on 2026-11-16: 54 GETs under /api/v1, 6 POSTs there, 25 GETs
     // elsewhere under /api (the order signature image is held at both of its
-    // addresses).
-    expect(HELD.length).toBeGreaterThan(75);
+    // addresses), and 4 POSTs elsewhere (the export and its preview, the
+    // assistant's chat, the ISBN photo reading).
+    expect(HELD.length).toBeGreaterThan(85);
     expect(HELD).toContainEqual({ route: 'v1/mobile/snapshot', method: 'GET' });
     expect(HELD).toContainEqual({ route: 'v1/orders/[id]/return-request/options', method: 'POST' });
     expect(HELD).toContainEqual({ route: 'v1/orders/signature-lookup', method: 'POST' });
     expect(HELD).toContainEqual({ route: 'items/search', method: 'GET' });
     expect(HELD).toContainEqual({ route: 'inventory/export.csv', method: 'GET' });
+    expect(HELD).toContainEqual({ route: 'inventory/export', method: 'POST' });
+    expect(HELD).toContainEqual({ route: 'inventory/export/preview', method: 'POST' });
+    expect(HELD).toContainEqual({ route: 'ai/chat', method: 'POST' });
+  });
+
+  it('records the cookie client and an outside call, so a read through either is seen', async () => {
+    const { createClient } = await import('@/lib/supabase/server');
+    await expect(createClient()).rejects.toThrow('cookie client used');
+    await expect(fetch('https://elsewhere.test/')).rejects.toThrow('fetch used');
+    expect(h.calls).toEqual(['cookie client', 'fetch']);
   });
 
   it.each(HELD)(

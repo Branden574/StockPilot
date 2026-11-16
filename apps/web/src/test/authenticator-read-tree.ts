@@ -129,6 +129,22 @@ export function unreadableRouteFiles(sources: Sources): string[] {
     .sort();
 }
 
+/**
+ * Files served as endpoints outside READ_SCOPE: every route file under app/
+ * whose address is not under /api (any extension), and every file under
+ * pages/api. The read rule does not read their handlers, so the guard holds
+ * them to building no member context at all.
+ */
+export function routeFilesOutsideScope(sources: Sources): string[] {
+  return [...sources.keys()]
+    .filter(
+      (f) =>
+        (ANY_ROUTE_FILE.test(path.posix.basename(f)) && servedPath(f) !== null && !servesApi(f)) ||
+        f.startsWith('pages/api/'),
+    )
+    .sort();
+}
+
 /* ────────────────────────── a handler's first call ────────────────────────── */
 
 const FUNCTION_KINDS = (n: ts.Node): n is ts.FunctionLikeDeclaration =>
@@ -201,63 +217,70 @@ function readGateImports(sf: ts.SourceFile, file: string): Map<string, string> {
 }
 
 /**
- * Is this call a step the function waits on: awaited, returned, or the
- * expression body of the arrow function itself (through parentheses)?
+ * Is the gate call a statement of its own that always runs: `const x = await
+ * gate(...)`, `x = await gate(...)`, `return gate(...)` (awaited or not), or
+ * the arrow function's expression body; and is that statement reached on
+ * every path, through blocks and a `try` block only (never an `if`, a loop, a
+ * `switch`, a `catch` or a `finally`)?
  */
-function isStep(call: ts.CallExpression, fn: ts.FunctionLikeDeclaration): boolean {
-  // Building an answer (`return NextResponse.json({ ... }, { status: 400 })`
-  // for a malformed id) is no work; a call inside its arguments still is.
-  const callee = call.expression;
-  if (
-    ts.isPropertyAccessExpression(callee) &&
-    callee.name.text === 'json' &&
-    ts.isIdentifier(callee.expression) &&
-    (callee.expression.text === 'NextResponse' || callee.expression.text === 'Response')
-  ) {
-    return false;
-  }
+function isUnconditionalGateStep(call: ts.CallExpression, fn: ts.FunctionLikeDeclaration): boolean {
   let n: ts.Node = call;
   while (ts.isParenthesizedExpression(n.parent)) n = n.parent;
+  if (ts.isArrowFunction(fn) && fn.body === n) return true;
+  if (ts.isAwaitExpression(n.parent)) {
+    n = n.parent;
+    while (ts.isParenthesizedExpression(n.parent)) n = n.parent;
+  }
   const p = n.parent;
-  return (
-    ts.isAwaitExpression(p) || ts.isReturnStatement(p) || (ts.isArrowFunction(fn) && fn.body === n)
-  );
-}
-
-/**
- * The first step in a function's body, in source order, outside the functions
- * it declares: the first call it awaits or returns. Awaiting a value that is
- * no call (the route's `params`) is not a step.
- */
-function firstCall(fn: ts.FunctionLikeDeclaration): ts.CallExpression | null {
-  let found: ts.CallExpression | null = null;
-  const visit = (n: ts.Node): void => {
-    if (found) return;
-    if (n !== fn && FUNCTION_KINDS(n)) return;
-    if (ts.isCallExpression(n) && isStep(n, fn)) {
-      found = n;
-      return;
-    }
-    ts.forEachChild(n, visit);
-  };
-  if (fn.body) visit(fn.body);
-  return found;
+  let statement: ts.Node;
+  if (ts.isReturnStatement(p)) statement = p;
+  else if (ts.isVariableDeclaration(p) && p.initializer === n) {
+    const list = p.parent;
+    if (!ts.isVariableDeclarationList(list) || !ts.isVariableStatement(list.parent)) return false;
+    statement = list.parent;
+  } else if (
+    ts.isBinaryExpression(p) &&
+    p.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+    p.right === n &&
+    ts.isExpressionStatement(p.parent)
+  ) {
+    statement = p.parent;
+  } else return false;
+  // Up to the function's body: blocks, and the block of a `try`.
+  let child: ts.Node = statement;
+  for (let up = statement.parent; up && up !== fn; child = up, up = up.parent) {
+    if (ts.isBlock(up)) continue;
+    if (ts.isTryStatement(up) && up.tryBlock === child) continue;
+    return false;
+  }
+  return true;
 }
 
 export interface FirstStep {
-  /** The read gate the handler calls first, or null. */
+  /** The read gate the handler reaches as its first step, or null. */
   gate: string | null;
   /** The handler hands the gate the string 'read' (a read by another method). */
   asksRead: boolean;
-  /** What it calls first instead, as written, when that is not a read gate. */
+  /** What it calls first instead, as written, when no read gate comes first. */
   instead: string | null;
+  /**
+   * Every call made before the gate, in the order it runs (a call's callee and
+   * arguments before the call itself), awaited or not, as written with its
+   * whitespace collapsed; the file's own functions are read through. Every
+   * `new X(...)` is here too (`new URL(...)`, `new NextResponse(...)`), and so
+   * is every answer built in place (`NextResponse.json(...)`). The guard holds each handler to its reviewed list (PRE_GATE).
+   */
+  before: string[];
 }
 
+const normalized = (n: ts.Node, sf: ts.SourceFile) => n.getText(sf).replace(/\s+/g, ' ');
+
 /**
- * The first call a handler makes, following the file's own functions it
- * calls first (`export const GET = (req) => load(req)`). Awaiting the route's
- * params is no call. Anything else first (a limiter, a read, a parse) is
- * `instead`.
+ * Walks a handler in the order it runs, up to its read gate. The gate counts
+ * only as a statement that always runs (isUnconditionalGateStep); a call to
+ * one of the file's own functions is read through, its calls in place. The
+ * functions it declares (callbacks) are not entered: a call that hands one on
+ * is itself in `before`.
  */
 function firstStepOf(
   fn: ts.FunctionLikeDeclaration,
@@ -265,26 +288,52 @@ function firstStepOf(
   gates: Map<string, string>,
   locals: Map<string, ts.FunctionLikeDeclaration>,
   seen = new Set<ts.Node>(),
+  before: string[] = [],
 ): FirstStep {
-  const call = firstCall(fn);
-  if (!call) return { gate: null, asksRead: false, instead: '(no call)' };
-  if (ts.isIdentifier(call.expression)) {
-    const gate = gates.get(call.expression.text);
-    if (gate) {
-      const asksRead = call.arguments.some((a) => ts.isStringLiteralLike(a) && a.text === 'read');
-      return { gate, asksRead, instead: null };
+  let found: { gate: string; asksRead: boolean } | null = null;
+  const visit = (n: ts.Node, within: ts.FunctionLikeDeclaration): void => {
+    if (found) return;
+    if (n !== within && FUNCTION_KINDS(n)) return;
+    if (ts.isCallExpression(n)) {
+      visit(n.expression, within);
+      for (const a of n.arguments) visit(a, within);
+      if (found) return;
+      const name = ts.isIdentifier(n.expression) ? n.expression.text : null;
+      const gate = name ? gates.get(name) : undefined;
+      if (gate && isUnconditionalGateStep(n, within)) {
+        const asksRead = n.arguments.some((a) => ts.isStringLiteralLike(a) && a.text === 'read');
+        found = { gate, asksRead };
+        return;
+      }
+      const local = name ? locals.get(name) : undefined;
+      if (local && !seen.has(local)) {
+        seen.add(local);
+        if (local.body) visit(local.body, local);
+        // A gate inside the file's own function holds the handler only when
+        // the call to that function is itself a step that always runs.
+        if (found && !isUnconditionalGateStep(n, within)) {
+          found = null;
+          before.push(normalized(n, sf));
+        }
+        return;
+      }
+      before.push(normalized(n, sf));
+      return;
     }
-    const local = locals.get(call.expression.text);
-    if (local && !seen.has(local)) {
-      seen.add(local);
-      return firstStepOf(local, sf, gates, locals, seen);
+    if (ts.isNewExpression(n)) {
+      visit(n.expression, within);
+      for (const a of n.arguments ?? []) visit(a, within);
+      if (!found) before.push(normalized(n, sf));
+      return;
     }
-  }
-  return {
-    gate: null,
-    asksRead: false,
-    instead: call.getText(sf).replace(/\s+/g, ' ').slice(0, 80),
+    ts.forEachChild(n, (c) => visit(c, within));
   };
+  if (fn.body) visit(fn.body, fn);
+  if (found) {
+    const f = found as { gate: string; asksRead: boolean };
+    return { gate: f.gate, asksRead: f.asksRead, instead: null, before };
+  }
+  return { gate: null, asksRead: false, instead: before[0] ?? '(no call)', before };
 }
 
 /** One handler a route file exports, read for the read rule. */
@@ -297,6 +346,8 @@ export interface ReadHandler {
   first: FirstStep | null;
   /** For a re-export: the route file it comes from, or null when none is found. */
   from?: string | null;
+  /** The route file whose code the handler is (the re-export's target, or the file itself). */
+  at: string;
 }
 
 const ROUTE_EXTS = ['.ts', '.tsx'];
@@ -336,6 +387,7 @@ export function readHandlersOf(
         reaches: next?.reaches ?? false,
         first: next?.first ?? null,
         from: next ? target! : null,
+        at: next?.at ?? file,
       });
       continue;
     }
@@ -345,6 +397,7 @@ export function readHandlersOf(
       method: h.method,
       reaches: h.gates.length > 0,
       first: fn ? firstStepOf(fn, sf, gates, locals) : null,
+      at: file,
     });
   }
   return out;

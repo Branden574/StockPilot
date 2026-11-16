@@ -3,7 +3,7 @@ import { Readable } from 'node:stream';
 import { NextResponse, type NextRequest } from 'next/server';
 import { renderToStream } from '@react-pdf/renderer';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
 import {
@@ -73,7 +73,9 @@ async function collectExportImageBytes(
  */
 export async function POST(request: NextRequest) {
   try {
-    const ctx = await withApiContext(request);
+    const read = await apiReadContext(request, 'read');
+    if ('response' in read) return read.response;
+    const ctx = read.ctx;
     if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     if (!can(ctx, 'items:export')) {
       // Words with the code (B68): the export dialog and a link opened in the

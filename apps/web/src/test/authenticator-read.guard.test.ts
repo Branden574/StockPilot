@@ -16,6 +16,7 @@ import {
   READ_METHODS,
   readHandlersOf,
   REFUSAL,
+  routeFilesOutsideScope,
   servedPath,
   servesV1,
   SHARED_GATES,
@@ -42,8 +43,9 @@ import {
  * with core's sentence and `details.reason: 'mfa_required'` (or, when their
  * organization's policy could not be read, the retryable 503 `check_failed`)
  * before it does anything else, or is listed here as open with its reason.
- * So does every POST, PUT, PATCH and DELETE under /api/v1 that writes nothing,
- * unless another rule holds it (listed here with that rule).
+ * So does every POST, PUT, PATCH and DELETE under /api that writes nothing,
+ * unless it is listed here with its reason. No endpoint served outside /api
+ * builds a member context.
  *
  * How the answer is given. withApiContext (lib/auth/api-context.ts) labels a
  * context that owes set-up (core authenticatorSetUpOwed). The read wrapper
@@ -57,12 +59,14 @@ import {
  * shipped source file under apps/web/src (test/authenticator-read-tree.ts):
  *
  *   1. every GET and HEAD handler of a route file served under /api (route
- *      groups and slots left out of the address) calls a read gate as its
- *      first step: the first call it awaits or returns, following the file's
- *      own functions it calls first and the handler it re-exports from
+ *      groups and slots left out of the address) reaches a read gate in a
+ *      statement that always runs (`const x = await gate(...)`, `x = await
+ *      gate(...)`, `return gate(...)`, an arrow's body; inside blocks and a
+ *      `try` block only, never an `if`, a `?:`, a loop or a `catch`),
+ *      following the file's own functions (a call to one counts only when
+ *      that call is such a statement too) and the handler it re-exports from
  *      another route file. Otherwise its file is on OPEN_READS with a kind
- *      and a reason (the cron folder is open as a whole). A handler that calls
- *      a gate later, after other work, fails. A route file this reading cannot
+ *      and a reason (the cron folder is open as a whole). A route file this reading cannot
  *      parse (route.js, .jsx, .mjs, .cjs) fails, and so does an export shape
  *      it cannot follow. Every OPEN_READS entry is current (the file exists,
  *      exports a GET, is not held), and an entry that says it reads no session
@@ -74,17 +78,28 @@ import {
  *      the API context gate, which gives no set-up answer, is on OPEN_READS;
  *   3. core's AUTHENTICATOR_SET_UP_OWED_COPY is used in the web app only by
  *      server/lib/api-read-context.ts: one place builds the answer;
- *   4. every POST, PUT, PATCH and DELETE handler under /api/v1 that the write
+ *   1b. a held handler (rule 1, or rule 4's 'read') calls nothing before its
+ *      gate, in the order the code runs, awaited or not, in a `?:`, in the
+ *      gate's own arguments, and builds no answer (`NextResponse.json(...)`,
+ *      `new X(...)`), except exactly the calls its PRE_GATE entry lists: the
+ *      reviewed checks of its own address and their 400s. Every entry is
+ *      current and has a reason;
+ *   4. every POST, PUT, PATCH and DELETE handler under /api that the write
  *      reading (test/gate-reach.ts writeGate, as the write guard reads it)
  *      finds writing nothing hands a read gate 'read' as its first step, or is
  *      on OTHER_READS with the rule that holds it and a reason. Every entry is
  *      current (it exists, still writes nothing, is not held); a 'no-session'
- *      entry reads no session.
+ *      entry reads no session;
+ *   5. no handler of a route file served outside /api reaches, through the
+ *      call graph (test/gate-reach.ts), a function that builds a member
+ *      context, and there is no file under pages/api.
  *
- * WHAT IT IS NOT. A call the handler starts without awaiting or returning it
- * (a sync check, `void work()`) may come before the gate; the route sweep
- * (app/api/v1/set-up-owed-reads.routes.test.ts) calls every held handler with
- * a recording client and fails on any read before the answer.
+ * WHAT IT IS NOT. It reads where the gate is, not what the handler does with
+ * its answer: a handler that keeps the answer and goes on is caught by the
+ * route sweep (app/api/v1/set-up-owed-reads.routes.test.ts), which calls every
+ * held handler with recording clients (the service client, the cookie client
+ * and `fetch`) and fails on any use before the answer. A read reached through
+ * a getter or a module's top-level code is not a call this reading sees.
  *
  * The self-test at the bottom plants a violation of each rule, so this cannot
  * pass by reading nothing.
@@ -204,25 +219,25 @@ const CRON_OPEN: Open = {
  * and are not held by the read answer, by `<route file> <METHOD>`.
  */
 const OTHER_READS: Record<string, Open> = {
-  'app/api/v1/items/grouping/preview/route.ts POST': {
-    kind: 'service-gate',
+  'app/api/appearance/account/route.ts POST': {
+    kind: 'own-account',
     reason:
-      "ItemGroupingService.previewGroup calls gate() first (server/services/item-grouping.ts: assertPermission(ctx, 'items:update')), which gives the authenticator answer before the preview is read.",
+      "Saves the caller's own appearance choice on their own account row; it reads and returns no organization data.",
   },
-  'app/api/v1/items/ungroup-selected/preview/route.ts POST': {
-    kind: 'service-gate',
+  'app/api/appearance/style/route.ts POST': {
+    kind: 'no-session',
     reason:
-      'UngroupSelectedService.preview calls assertGroupingPermission first (server/services/ungroup-selected.ts), the same assertPermission gate, before the preview is read.',
+      "Sets the browser's own appearance cookie from a same-origin page: no session is read and no organization data is served.",
   },
-  'app/api/v1/po-imports/[id]/line-matches/route.ts POST': {
-    kind: 'service-gate',
+  'app/api/books/extract-isbns/route.ts POST': {
+    kind: 'no-org-data',
     reason:
-      "PoImportsService.findDuplicatesForLines asserts the module and then assertPermission(ctx, 'purchase_orders:manage') before it reads any line (server/services/po-imports.ts).",
+      "Reads ISBNs out of the caller's own uploaded file in memory; no organization's data is read or returned.",
   },
-  'app/api/v1/size-counts/[id]/scan/route.ts POST': {
-    kind: 'service-gate',
+  'app/api/client-error/route.ts POST': {
+    kind: 'no-org-data',
     reason:
-      "SizeCountsService.getScanContext asserts the modules and then assertPermission(ctx, 'stock:adjust') before its first read (server/services/size-counts.ts).",
+      "The website's error beacon: it reports what the browser sent and returns no organization data.",
   },
   'app/api/v1/account/delete/code/route.ts POST': {
     kind: 'own-account',
@@ -238,6 +253,50 @@ const OTHER_READS: Record<string, Open> = {
     kind: 'no-session',
     reason:
       "The public return page's exchange sizes behind the order's own return token: no session is read, so there is no member to hold.",
+  },
+};
+
+/**
+ * What a held handler may do before its read gate, by `<route file> <METHOD>`
+ * (the file whose code it is): every call it makes first, in the order it
+ * runs, as written (whitespace collapsed). Each is a check of the request's
+ * own address that reads nothing, with the 400 it answers. Anything else
+ * before the gate (a read, a limiter, a call started and not awaited, a
+ * cached answer) fails rule 1b.
+ */
+const PRE_GATE: Record<string, { calls: readonly string[]; reason: string }> = {
+  'app/api/reports/[slug]/csv/route.ts GET': {
+    calls: ['new URL(request.url)'],
+    reason: 'Parses its own address into a URL; the query is read after the gate.',
+  },
+  'app/api/reports/[slug]/pdf/route.tsx GET': {
+    calls: ['new URL(request.url)'],
+    reason: 'Parses its own address into a URL; the query is read after the gate.',
+  },
+  'app/api/reports/item-cost-history/xlsx/route.ts GET': {
+    calls: ['new URL(request.url)'],
+    reason: 'Parses its own address into a URL; the query is read after the gate.',
+  },
+  'app/api/v1/items/[id]/barcode/route.ts GET': {
+    calls: ['new URL(req.url)', "url.searchParams.get('type')", "url.searchParams.get('value')"],
+    reason: 'Reads the requested barcode type and value from its own address; nothing else.',
+  },
+  'app/api/v1/orders/[id]/exchange-candidates/route.ts GET': {
+    calls: [
+      'UUID_RE.test(id)',
+      "NextResponse.json( { error: 'validation_error', message: 'That order id is not valid.', details: { reason: 'return_invalid' } }, { status: 400, headers: NO_STORE }, )",
+    ],
+    reason: 'A malformed order id in its own address is the 400 before anything is read.',
+  },
+  'app/api/v1/returns/[id]/route.ts GET': {
+    calls: ['invalidReturnId(id)'],
+    reason:
+      'A malformed return id in its own address is the 400 (invalidReturnId builds it, reading nothing).',
+  },
+  'app/api/v1/returns/[id]/candidates/route.ts GET': {
+    calls: ['invalidReturnId(id)'],
+    reason:
+      'A malformed return id in its own address is the 400 (invalidReturnId builds it, reading nothing).',
   },
 };
 
@@ -310,6 +369,100 @@ function openReadFindings(sources: Sources, open: Record<string, Open>): string[
       found.push(`${file}: a GET is never open as ${entry.kind}`);
     }
     if (entry.reason.length <= 40) found.push(`${file}: no reason given`);
+  }
+  return found.sort();
+}
+
+/**
+ * Rule 1b: every held handler (a GET or HEAD held first, or a handler by
+ * another method that hands a read gate 'read') makes exactly the calls its
+ * PRE_GATE entry lists before the gate, and every entry is current.
+ */
+function preGateFindings(
+  sources: Sources,
+  preGate: Record<string, { calls: readonly string[]; reason: string }>,
+): string[] {
+  const found: string[] = [];
+  const used = new Set<string>();
+  for (const file of apiRouteFiles(sources)) {
+    const held = [
+      ...readHandlersOf(file, sources, READ_METHODS).filter(isHeldRead),
+      ...readHandlersOf(file, sources, OTHER_METHODS).filter(isHeldByAskingRead),
+    ];
+    for (const h of held) {
+      const key = `${h.at} ${h.method}`;
+      const before = h.first!.before;
+      const entry = preGate[key];
+      if (entry) used.add(key);
+      const allowed = entry?.calls ?? [];
+      if (JSON.stringify(before) !== JSON.stringify(allowed)) {
+        found.push(
+          `${key}: before its read gate it calls [${before.join(' | ')}], reviewed: [${allowed.join(' | ')}]`,
+        );
+      }
+    }
+  }
+  for (const [key, entry] of Object.entries(preGate)) {
+    if (!used.has(key)) found.push(`${key}: on PRE_GATE but not a held handler`);
+    if (entry.reason.length <= 40) found.push(`${key}: no reason given`);
+  }
+  return [...new Set(found)].sort();
+}
+
+/**
+ * Rule 5: an endpoint served outside /api (a route file elsewhere under app/)
+ * builds no member context: no handler it exports reaches, through any chain
+ * of calls the call graph follows (test/gate-reach.ts), a function that
+ * builds one. Such a handler would be outside every rule above. Any file
+ * under pages/api is a finding of its own.
+ */
+const MEMBER_CONTEXT_BUILDERS: readonly string[] = [
+  'lib/auth/api-context.ts#withApiContext',
+  'server/services/context.ts#withContext',
+  'lib/auth/session.ts#requireOrgContext',
+  'lib/auth/session.ts#requireOrgContextForLayout',
+  'server/services/portal.ts#resolvePortalContext',
+  'server/lib/api-read-context.ts#apiReadContext',
+  'server/lib/api-context-gate.ts#apiContextGate',
+];
+
+const HANDLER_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
+
+/**
+ * The call graph over every source, with every call counted. gate-reach.ts
+ * leaves out a call inside a `try` whose `catch` keeps the error (its
+ * question is whether a redirect gets out); here any call builds the
+ * context, so each module is read the way it reads a 'use server' module,
+ * where every call counts: the directive is put in front of each source for
+ * this reading only.
+ */
+function graphOf(sources: Sources) {
+  return buildCallGraph(
+    [...sources].map(([rel, text]) => ({
+      path: path.join(WEB_SRC, rel),
+      text: `'use server';\n${text}`,
+    })),
+    WEB_SRC,
+  );
+}
+
+function outsideScopeFindings(sources: Sources, graph = graphOf(sources)): string[] {
+  const found: string[] = [];
+  const abs = (key: string) => path.join(WEB_SRC, key);
+  const reach = graph.reach(MEMBER_CONTEXT_BUILDERS.map(abs));
+  for (const file of routeFilesOutsideScope(sources)) {
+    if (file.startsWith('pages/api/')) {
+      found.push(`${file}: a pages/api endpoint, outside every rule of this guard`);
+      continue;
+    }
+    for (const method of HANDLER_METHODS) {
+      const chain = reach.pathToTarget(abs(file), method);
+      if (chain) {
+        found.push(
+          `${file} ${method}: served outside /api, but builds a member context (${chain.at(-1)})`,
+        );
+      }
+    }
   }
   return found.sort();
 }
@@ -483,7 +636,7 @@ function copyFindings(sources: Sources): string[] {
 /** Does the write reading find the handler writing? Null when it cannot read it as one function. */
 type WritesOf = (file: string, method: string) => boolean | null;
 
-/** Rule 4: v1 handlers by another method that write nothing, are not held and are not listed; stale entries. */
+/** Rule 4: handlers by another method that write nothing, are not held and are not listed; stale entries. */
 function otherReadFindings(
   sources: Sources,
   writesOf: WritesOf,
@@ -491,7 +644,7 @@ function otherReadFindings(
 ): string[] {
   const found: string[] = [];
   const seen = new Set<string>();
-  for (const file of apiRouteFiles(sources).filter(servesV1)) {
+  for (const file of apiRouteFiles(sources)) {
     for (const h of readHandlersOf(file, sources, OTHER_METHODS)) {
       const key = `${file} ${h.method}`;
       seen.add(key);
@@ -587,11 +740,22 @@ describe('every API read holds a member who must set up an authenticator first',
     expect(gets.length).toBeGreaterThan(100);
     expect(gets.filter(isHeldRead).length).toBeGreaterThan(75);
     expect(servedPath('app/(x)/api/v1/y/route.ts')).toBe('api/v1/y');
-    expect(heldHandlers(SHIPPED)).toContain('v1/orders/signature-lookup POST');
+    const held = heldHandlers(SHIPPED);
+    expect(held).toContain('v1/orders/signature-lookup POST');
+    expect(held).toContain('ai/chat POST');
+    expect(held).toContain('inventory/export POST');
+    expect(held).toContain('inventory/export/preview POST');
+    // The endpoints served outside /api are read for rule 5.
+    expect(routeFilesOutsideScope(SHIPPED)).toContain('app/auth/callback/route.ts');
+    expect(routeFilesOutsideScope(SHIPPED)).not.toContain('app/api/health/route.ts');
   });
 
   it('1. every GET handler under /api is held first or listed as open, and every listed one is current', () => {
     expect(openReadFindings(SHIPPED, OPEN_READS)).toEqual([]);
+  });
+
+  it('1b. a held handler does nothing before its gate but the reviewed checks of its own address', () => {
+    expect(preGateFindings(SHIPPED, PRE_GATE)).toEqual([]);
   });
 
   it('2. the shared gates and the wrapper give the answer with their own kind; a GET through the API context gate is listed', () => {
@@ -603,16 +767,30 @@ describe('every API read holds a member who must set up an authenticator first',
   });
 
   it(
-    '4. every /api/v1 handler by another method that writes nothing is held as a read or listed with its rule',
+    '4. every /api handler by another method that writes nothing is held as a read or listed with its rule',
     SCAN,
     () => {
       const writesOf = realWritesOf();
       // The reading reads real handlers: a write writes, a lookup does not.
       expect(writesOf('app/api/v1/orders/[id]/return-request/route.ts', 'POST')).toBe(true);
       expect(writesOf('app/api/v1/orders/signature-lookup/route.ts', 'POST')).toBe(false);
+      expect(writesOf('app/api/inventory/export/preview/route.ts', 'POST')).toBe(false);
       expect(otherReadFindings(SHIPPED, writesOf, OTHER_READS)).toEqual([]);
     },
   );
+
+  it('5. no endpoint served outside /api builds a member context', () => {
+    const graph = graphOf(SHIPPED);
+    // The reading follows real chains: an /api handler that builds one is seen.
+    const reach = graph.reach(MEMBER_CONTEXT_BUILDERS.map((k) => path.join(WEB_SRC, k)));
+    expect(
+      reach.pathToTarget(path.join(WEB_SRC, 'app/api/v1/items/route.ts'), 'POST'),
+    ).not.toBeNull();
+    expect(
+      reach.pathToTarget(path.join(WEB_SRC, 'app/api/reports/[slug]/csv/route.ts'), 'GET'),
+    ).not.toBeNull();
+    expect(outsideScopeFindings(SHIPPED, graph)).toEqual([]);
+  });
 });
 
 /* ───────────────────── self-test: each rule can fail ───────────────────── */
@@ -691,6 +869,11 @@ describe('self-test: a planted violation of each rule is reported', () => {
           const read = await apiReadContext(req);
           return read;
         }`,
+      'app/api/v1/local-in-if/route.ts': `import { apiReadContext } from '@/server/lib/api-read-context';
+        async function load(req: Request) { return apiReadContext(req); }
+        export async function GET(req: Request) { if (req.url) return load(req); return null; }`,
+      'app/api/v1/gate-in-ternary/route.ts': `import { apiReadContext } from '@/server/lib/api-read-context';
+        export async function GET(req: Request) { const read = req.url ? await apiReadContext(req) : null; return read; }`,
       'app/api/v1/namesake/route.ts': `async function apiReadContext(req: Request) { return req; }
         export async function GET(req: Request) { return apiReadContext(req); }`,
       'app/api/v1/through-local/route.ts': `import { returnsContext } from '../returns/http';
@@ -728,7 +911,6 @@ describe('self-test: a planted violation of each rule is reported', () => {
         'app/api/cron/job/route.ts: says it reads no session, but imports createClient from @/lib/supabase/server',
         'app/api/not-v1/route.ts GET: calls none of apiReadContext, returnsContext, memberRequesterGate first and is not on OPEN_READS (first: withApiContext(req))',
         'app/api/v1/as-jsx/route.jsx: a route file this guard does not read',
-        "app/api/v1/late/route.ts GET: reaches a read gate, but its first step is createAdminClient().from('items').select('id').eq('id', id)",
         'app/api/v1/listed-as-service-gate/route.ts: a GET is never open as service-gate',
         'app/api/v1/listed-but-held/route.ts GET: is held, so it leaves OPEN_READS',
         'app/api/v1/listed-no-get/route.ts: no reason given',
@@ -737,7 +919,8 @@ describe('self-test: a planted violation of each rule is reported', () => {
         'app/api/v1/listed-reads-session/route.ts: says it reads no session, but reaches a context gate',
         'app/api/v1/missing/route.ts: on OPEN_READS but not found',
         'app/api/v1/namesake/route.ts GET: calls none of apiReadContext, returnsContext, memberRequesterGate first and is not on OPEN_READS (first: (no call))',
-        'app/api/v1/read-in-answer/route.ts GET: reaches a read gate, but its first step is loadItems()',
+        'app/api/v1/local-in-if/route.ts GET: reaches a read gate, but its first step is load(req)',
+        'app/api/v1/gate-in-ternary/route.ts GET: reaches a read gate, but its first step is apiReadContext(req)',
         'app/api/v1/plain/route.ts GET: calls none of apiReadContext, returnsContext, memberRequesterGate first and is not on OPEN_READS (first: withApiContext(req))',
         'app/api/v1/reexport-loop/route.ts GET: calls none of apiReadContext, returnsContext, memberRequesterGate first and is not on OPEN_READS (first: not a function this reading can read)',
         'app/api/v1/reexport-missing/route.ts GET: calls none of apiReadContext, returnsContext, memberRequesterGate first and is not on OPEN_READS (first: a re-export this reading cannot find)',
@@ -751,10 +934,76 @@ describe('self-test: a planted violation of each rule is reported', () => {
       'v1/after-params GET',
       'v1/answer-first GET',
       'v1/held GET',
+      'v1/late GET',
       'v1/listed-but-held GET',
+      'v1/read-in-answer GET',
       'v1/reexport GET',
       'v1/through-local GET',
     ]);
+  });
+
+  it("1b. work before the gate: late, not awaited, in a ternary, in the gate's arguments, an answer first; the reviewed list current", () => {
+    const tree = base({
+      'app/api/v1/held/route.ts': HELD_ROUTE,
+      'app/api/v1/late/route.ts': `import { apiReadContext } from '@/server/lib/api-read-context';
+        import { createAdminClient } from '@/lib/supabase/admin';
+        export async function GET(req: Request) {
+          await createAdminClient().from('items').select('id');
+          const read = await apiReadContext(req);
+          return read;
+        }`,
+      'app/api/v1/not-awaited/route.ts': `import { apiReadContext } from '@/server/lib/api-read-context';
+        import { warm } from '@/server/lib/items';
+        export async function GET(req: Request) { void warm(req); const read = await apiReadContext(req); return read; }`,
+      'app/api/v1/in-ternary/route.ts': `import { apiReadContext } from '@/server/lib/api-read-context';
+        import { loadItems } from '@/server/lib/items';
+        export async function GET(req: Request) {
+          const items = req.url ? await loadItems() : null;
+          const read = await apiReadContext(req);
+          return [read, items];
+        }`,
+      'app/api/v1/in-arguments/route.ts': `import { apiReadContext } from '@/server/lib/api-read-context';
+        import { loadItems } from '@/server/lib/items';
+        export async function POST(req: Request) { const read = await apiReadContext((await loadItems()) as Request, 'read'); return read; }`,
+      'app/api/v1/answer-first/route.ts': `import { NextResponse } from 'next/server';
+        import { apiReadContext } from '@/server/lib/api-read-context';
+        export async function GET(req: Request) {
+          if (!req.url) return NextResponse.json({ error: 'validation_error' }, { status: 400 });
+          const read = await apiReadContext(req);
+          return read;
+        }`,
+      'app/api/v1/reviewed/route.ts': `import { NextResponse } from 'next/server';
+        import { apiReadContext } from '@/server/lib/api-read-context';
+        export async function GET(req: Request) {
+          if (!req.url) return NextResponse.json({ error: 'validation_error' }, { status: 400 });
+          const read = await apiReadContext(req);
+          return read;
+        }`,
+      'app/api/v1/reviewed-changed/route.ts': `import { apiReadContext } from '@/server/lib/api-read-context';
+        export async function GET(req: Request) { const url = new URL(req.url); url.searchParams.get('q'); const read = await apiReadContext(req); return read; }`,
+    });
+    const reason = 'x'.repeat(50);
+    expect(
+      preGateFindings(tree, {
+        'app/api/v1/reviewed/route.ts GET': {
+          calls: ["NextResponse.json({ error: 'validation_error' }, { status: 400 })"],
+          reason,
+        },
+        'app/api/v1/reviewed-changed/route.ts GET': { calls: ['new URL(req.url)'], reason },
+        'app/api/v1/gone/route.ts GET': { calls: [], reason: 'short' },
+      }),
+    ).toEqual(
+      [
+        "app/api/v1/answer-first/route.ts GET: before its read gate it calls [NextResponse.json({ error: 'validation_error' }, { status: 400 })], reviewed: []",
+        'app/api/v1/gone/route.ts GET: no reason given',
+        'app/api/v1/gone/route.ts GET: on PRE_GATE but not a held handler',
+        'app/api/v1/in-arguments/route.ts POST: before its read gate it calls [loadItems()], reviewed: []',
+        'app/api/v1/in-ternary/route.ts GET: before its read gate it calls [loadItems()], reviewed: []',
+        "app/api/v1/late/route.ts GET: before its read gate it calls [createAdminClient() | createAdminClient().from('items') | createAdminClient().from('items').select('id')], reviewed: []",
+        'app/api/v1/not-awaited/route.ts GET: before its read gate it calls [warm(req)], reviewed: []',
+        "app/api/v1/reviewed-changed/route.ts GET: before its read gate it calls [new URL(req.url) | url.searchParams.get('q')], reviewed: [new URL(req.url)]",
+      ].sort(),
+    );
   });
 
   it('2. a shared gate or the wrapper with no answer, its kind dropped, its answer not returned, a limit first; a GET through the API context gate', () => {
@@ -814,6 +1063,35 @@ describe('self-test: a planted violation of each rule is reported', () => {
     ]);
   });
 
+  it('5. an endpoint outside /api that builds a member context, directly or through other files; a pages/api file', () => {
+    const tree = base({
+      'lib/auth/api-context.ts': `export async function withApiContext(req: Request) { return req; }`,
+      'server/services/context.ts': `import { cache } from 'react';
+        export const withContext = cache(async () => 1);`,
+      'app/auth/direct/route.ts': `import { withApiContext } from '@/lib/auth/api-context';
+        export async function GET(req: Request) { return withApiContext(req); }`,
+      'app/auth/through/route.ts': `import { helper } from '@/server/lib/helper';
+        export async function POST() { return helper(); }`,
+      'server/lib/helper.ts': `import { withContext } from '@/server/services/context';
+        export async function helper() { try { return await withContext(); } catch { return null; } }`,
+      'app/(site)/plain/route.ts': `import { NextResponse } from 'next/server';
+        import { assertPermission } from '@/server/services/context';
+        export async function GET() { return NextResponse.json({ assertPermission: typeof assertPermission }); }`,
+      'app/api/inside/route.ts': `import { withApiContext } from '@/lib/auth/api-context';
+        export async function GET(req: Request) { return withApiContext(req); }`,
+      'pages/api/legacy.ts': `export default function handler() { return null; }`,
+    });
+    const found = outsideScopeFindings(tree);
+    expect(found.map((f) => f.replace(/ \(.*\)$/, ''))).toEqual(
+      [
+        'app/auth/direct/route.ts GET: served outside /api, but builds a member context',
+        'app/auth/through/route.ts POST: served outside /api, but builds a member context',
+        'pages/api/legacy.ts: a pages/api endpoint, outside every rule of this guard',
+      ].sort(),
+    );
+    expect(found.join('\n')).toContain('server/services/context.ts#withContext');
+  });
+
   it('4. a read by POST held by nothing, one held through a gate, stale and unreasoned entries, a public entry that reads a session', () => {
     const tree = base({
       'app/api/v1/lookup/route.ts': `import { withApiContext } from '@/lib/auth/api-context';
@@ -854,6 +1132,7 @@ describe('self-test: a planted violation of each rule is reported', () => {
         'app/api/v1/listed-public/route.ts POST: says it reads no session, but imports withApiContext from @/lib/auth/api-context',
         'app/api/v1/listed-public/route.ts POST: says it reads no session, but reaches a context gate',
         'app/api/v1/listed-writes/route.ts PUT: writes (or cannot be read), so it leaves OTHER_READS',
+        "app/api/not-v1/route.ts POST: writes nothing, so it is a read: hand a read gate 'read' as its first step (first: (no call)), or list it on OTHER_READS",
       ].sort(),
     );
     expect(heldHandlers(tree)).toEqual([

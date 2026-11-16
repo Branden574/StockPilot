@@ -20,12 +20,11 @@ export async function GET(req: Request) {
   const ctx = read.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
-  // A member who must set up an authenticator first (the API context decides
-  // it with policyRequiresAuthenticator from @stockpilot/core, the rule the
-  // pages ask), including a session whose token says the code was entered but
-  // that has no verified authenticator left. Nothing is searched for them: the
-  // palette on the pages open before set-up shows no results. A session that
-  // owes its code never gets here: withApiContext answers it (401 above).
+  // The read wrapper above answers a member who must set up an authenticator
+  // first (server/lib/api-read-context.ts); the palette on the pages open
+  // before set-up shows no results for any refusal. A session that owes its
+  // code gets withApiContext's 401. This check refuses any other context whose
+  // requirement is not met, so nothing is searched for one.
   if (ctx.mfaRequired && !ctx.mfaSatisfied) {
     return NextResponse.json({ error: 'mfa_required' }, { status: 403 });
   }
