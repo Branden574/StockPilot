@@ -1203,6 +1203,18 @@ WEB_TESTS=(
   # layout reaches that check or redirects to a path under itself, and only
   # dashboard layouts use the resolver without it.
   src/lib/auth/authenticator-set-up.guard.test.ts
+  # The same rule through the real session loader: requireOrgContext() sends
+  # such a member to set-up on every page and policy, and the layouts' own
+  # answer (authenticatorSetUpOwedForLayout) is the page's, with no redirect;
+  # the dashboard, settings and purchase-order layouts render for them and
+  # never redirect.
+  src/lib/auth/session.authenticator-set-up.test.ts
+  'src/app/(dashboard)/layouts.set-up.test.tsx'
+  # A layout that shows a panel in place of its pages (the purchase orders
+  # access panel, the PO imports manager-only panel) renders the page for such
+  # a member, so the page's own rule sends them to set-up, and redirects nobody.
+  'src/app/(dashboard)/dashboard/purchase-orders/layout.test.tsx'
+  'src/app/(dashboard)/dashboard/purchase-orders/imports/layout.test.tsx'
   # The sign-in email change gives such a member the answer the profile's
   # name and avatar give (set up an authenticator first), on the website
   # through the real session loader and on the phone's request and resend
@@ -1213,6 +1225,15 @@ WEB_TESTS=(
   src/server/actions/email-change.test.ts
   src/app/api/v1/account/email/set-up-first.routes.test.ts
   src/app/api/v1/account/email/set-up-first.real-context.test.ts
+  # The phone's four email change routes answer the try-again 503 through the
+  # API context gate when the caller's access cannot be read, before anything
+  # is spent, checked, minted, sent or recorded.
+  src/app/api/v1/account/email/context-unavailable.routes.test.ts
+  # The Audit log shows an API key row's stored name and scopes as its details,
+  # from a list named one by one per event: no listed field is named like a
+  # key, a secret, a hash or a token, and such a field in a row is never shown.
+  src/lib/audit/format.test.ts
+  src/components/audit/metadata-diff.test.tsx
   # The phone's sign-in and sign-out notes (S5a), the other two routes on the
   # AAL1 allowlist: an aal1 session of an account with an authenticator writes
   # the sign-in row (code owed) and the device note, and its sign-out revokes

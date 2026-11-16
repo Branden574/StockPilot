@@ -165,9 +165,16 @@ const CORE_MARKER_FILE = 'auth/context-unavailable.ts';
  * and customer status routes call it first too: the gate's answer
  * comes before any work, so sending the request again after it is safe; a
  * serial number sent twice is refused by name, and the same status twice
- * changes nothing.
+ * changes nothing. The four sign-in email change routes (status, request,
+ * resend, cancel) call it as their first statement too; the gate's 503 comes
+ * before any limit is spent, any password is checked and any link is minted
+ * or sent, so sending one again starts from nothing.
  */
 const GATED_ROUTES = [
+  'app/api/v1/account/email/cancel/route.ts',
+  'app/api/v1/account/email/request/route.ts',
+  'app/api/v1/account/email/resend/route.ts',
+  'app/api/v1/account/email/route.ts',
   'app/api/v1/customers/[id]/status/route.ts',
   'app/api/v1/exceptions/[id]/escalate/route.ts',
   'app/api/v1/items/[id]/adjust/route.ts',
@@ -531,7 +538,7 @@ describe('a route that uses the gate calls it first, and only the reviewed route
       `export async function later(req: Request) { const { apiContextGate } = await import('@/server/lib/api-context-gate'); return apiContextGate(req); }`,
     );
     expect(firstStatementFindings(web)).toEqual([
-      'the gate is loaded by [app/api/v1/customers/[id]/status/route.ts, app/api/v1/exceptions/[id]/escalate/route.ts, app/api/v1/items/[id]/adjust/route.ts, app/api/v1/items/[id]/serials/route.ts, app/api/v1/members/[id]/category-access/route.ts, app/api/v1/members/[id]/role/route.ts, app/api/v1/other/route.ts, app/api/v1/rentals/route.ts, app/api/v1/schedule/route.ts, app/api/v1/serials/[id]/route.ts, server/lib/wraps-the-gate.ts], reviewed: [app/api/v1/customers/[id]/status/route.ts, app/api/v1/exceptions/[id]/escalate/route.ts, app/api/v1/items/[id]/adjust/route.ts, app/api/v1/items/[id]/serials/route.ts, app/api/v1/members/[id]/category-access/route.ts, app/api/v1/members/[id]/role/route.ts, app/api/v1/rentals/route.ts, app/api/v1/schedule/route.ts, app/api/v1/serials/[id]/route.ts]',
+      'the gate is loaded by [app/api/v1/account/email/cancel/route.ts, app/api/v1/account/email/request/route.ts, app/api/v1/account/email/resend/route.ts, app/api/v1/account/email/route.ts, app/api/v1/customers/[id]/status/route.ts, app/api/v1/exceptions/[id]/escalate/route.ts, app/api/v1/items/[id]/adjust/route.ts, app/api/v1/items/[id]/serials/route.ts, app/api/v1/members/[id]/category-access/route.ts, app/api/v1/members/[id]/role/route.ts, app/api/v1/other/route.ts, app/api/v1/rentals/route.ts, app/api/v1/schedule/route.ts, app/api/v1/serials/[id]/route.ts, server/lib/wraps-the-gate.ts], reviewed: [app/api/v1/account/email/cancel/route.ts, app/api/v1/account/email/request/route.ts, app/api/v1/account/email/resend/route.ts, app/api/v1/account/email/route.ts, app/api/v1/customers/[id]/status/route.ts, app/api/v1/exceptions/[id]/escalate/route.ts, app/api/v1/items/[id]/adjust/route.ts, app/api/v1/items/[id]/serials/route.ts, app/api/v1/members/[id]/category-access/route.ts, app/api/v1/members/[id]/role/route.ts, app/api/v1/rentals/route.ts, app/api/v1/schedule/route.ts, app/api/v1/serials/[id]/route.ts]',
       'app/api/v1/items/[id]/adjust/route.ts POST: the first statement is not `const gate = await apiContextGate(<its request>)`',
       'app/api/v1/other/route.ts DELETE: the first statement is not `const gate = await g(<its request>)`',
       'app/api/v1/other/route.ts PUT: the first statement is not `const gate = await g(<its request>)`',

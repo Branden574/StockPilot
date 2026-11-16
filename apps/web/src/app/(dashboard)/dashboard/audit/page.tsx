@@ -22,7 +22,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { formatAuditEvent, formatEntityType, shortId } from '@/lib/audit/format';
+import {
+  formatAuditEvent,
+  formatEntityType,
+  recordedDetailFields,
+  shortId,
+} from '@/lib/audit/format';
 import { requireOrgContext } from '@/lib/auth/session';
 import { effectiveNavLabel } from '@/lib/nav-labels';
 import { auditActorName } from '@/lib/people/deleted-person-labels';
@@ -146,11 +151,11 @@ export default async function AuditLogPage({
 
   const activeCategory =
     AUDIT_CATEGORIES.find((c) => c.slug === (params.category ?? 'all'))?.slug ?? 'all';
-  const eventPrefix = AUDIT_CATEGORIES.find((c) => c.slug === activeCategory)?.prefix ?? undefined;
+  const eventPrefixes = AUDIT_CATEGORIES.find((c) => c.slug === activeCategory)?.prefixes ?? [];
 
   const filters = {
     event: trim(params.event),
-    eventPrefix,
+    eventPrefixes: eventPrefixes.length > 0 ? eventPrefixes : undefined,
     userId: trim(params.userId),
     entityType: trim(params.entityType),
     entityId: trim(params.entityId),
@@ -176,7 +181,7 @@ export default async function AuditLogPage({
   const hasPrev = page > 1;
   const hasNext = page < totalPages;
   const hasActiveFilters = Boolean(
-    eventPrefix ||
+    eventPrefixes.length > 0 ||
     filters.event ||
     filters.userId ||
     filters.entityType ||
@@ -320,11 +325,12 @@ export default async function AuditLogPage({
                 // Precomputed (rather than letting <MetadataDiff> decide
                 // internally) so we know whether to render the extra diff
                 // row at all — an always-rendered empty row would leave
-                // stray padding on every event with no before/after or
-                // changed_keys (most create-only events).
+                // stray padding on every event with no before/after,
+                // changed_keys or stored details (most create-only events).
                 const hasDiffContent =
                   diffMetadataFields(meta.before, meta.after).length > 0 ||
-                  (Array.isArray(meta.changed_keys) && meta.changed_keys.length > 0);
+                  (Array.isArray(meta.changed_keys) && meta.changed_keys.length > 0) ||
+                  recordedDetailFields(row.event, meta).length > 0;
                 return (
                   <Fragment key={row.id}>
                     <TableRow
@@ -383,7 +389,7 @@ export default async function AuditLogPage({
                     {hasDiffContent && (
                       <TableRow className="hover:bg-transparent">
                         <TableCell colSpan={5} className="pt-0">
-                          <MetadataDiff metadata={meta} />
+                          <MetadataDiff metadata={meta} event={row.event} />
                         </TableCell>
                       </TableRow>
                     )}

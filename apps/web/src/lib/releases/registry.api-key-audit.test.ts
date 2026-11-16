@@ -14,7 +14,12 @@ import {
 
 import { AUDIT_CATEGORIES } from '@/components/admin/audit-categories';
 import { diffMetadataFields } from '@/components/audit/metadata-diff';
-import { formatAuditEvent, formatEntityType, shortId } from '@/lib/audit/format';
+import {
+  formatAuditEvent,
+  formatEntityType,
+  recordedDetailFields,
+  shortId,
+} from '@/lib/audit/format';
 
 import { buildReleaseList, legacyAnnouncementsFor, visibleReleases } from './logic';
 import { RELEASES } from './registry';
@@ -247,7 +252,8 @@ describe('the API key audit release: the code the words rest on', () => {
     expect(keys).toContain(
       "{ event: 'api_key.revoked', entityType: 'api_key', entityId: id, extra: { name } },",
     );
-    // The two audit calls name no before or after, so the rows carry no details.
+    // The two audit calls name no before or after: the rows' details are the
+    // name and scopes they store (recordedDetailFields), and never the key.
     expect(keys).not.toMatch(/audit\(\s*\{[^}]*\b(before|after|key|prefix|hash)\b\s*[:,]/);
   });
 
@@ -259,17 +265,26 @@ describe('the API key audit release: the code the words rest on', () => {
     expect(panel).toContain('API keys');
   });
 
-  it('the rows read Api Key · Created and Api Key · Revoked, under All events, with no details', () => {
-    expect(formatAuditEvent('api_key.created')).toBe('Api Key · Created');
-    expect(formatAuditEvent('api_key.revoked')).toBe('Api Key · Revoked');
-    expect(formatEntityType('api_key')).toBe('Api Key');
+  it('the rows read API key · Created and API key · Revoked, under the Team chip, with the name and scopes as details', () => {
+    expect(formatAuditEvent('api_key.created')).toBe('API key · Created');
+    expect(formatAuditEvent('api_key.revoked')).toBe('API key · Revoked');
+    expect(formatEntityType('api_key')).toBe('API key');
     expect(shortId('0123456789abcdef')).toBe('01234567');
     expect(
-      AUDIT_CATEGORIES.filter((c) => c.prefix && 'api_key.created'.startsWith(c.prefix)),
-    ).toEqual([]);
-    expect(AUDIT_CATEGORIES.find((c) => c.prefix === null)?.label).toBe('All events');
-    // audit() writes before and after as null when the caller names neither.
+      AUDIT_CATEGORIES.filter((c) => c.prefixes.some((p) => 'api_key.created'.startsWith(p))),
+    ).toEqual([expect.objectContaining({ slug: 'user', label: 'Team' })]);
+    expect(AUDIT_CATEGORIES.find((c) => c.prefixes.length === 0)?.label).toBe('All events');
+    // audit() writes before and after as null when the caller names neither;
+    // the details are the stored name and scopes, named one by one.
     expect(diffMetadataFields(null, null)).toEqual([]);
+    const stored = { before: null, after: null, name: 'Example key', scopes: ['items:read'] };
+    expect(recordedDetailFields('api_key.created', stored)).toEqual([
+      { field: 'name', value: 'Example key' },
+      { field: 'scopes', value: ['items:read'] },
+    ]);
+    expect(recordedDetailFields('api_key.revoked', { name: 'Example key' })).toEqual([
+      { field: 'name', value: 'Example key' },
+    ]);
     const page = source('apps/web/src/app/(dashboard)/dashboard/audit/page.tsx');
     expect(page).toContain('<Label htmlFor="event">Event</Label>');
     expect(page).toContain('Apply');

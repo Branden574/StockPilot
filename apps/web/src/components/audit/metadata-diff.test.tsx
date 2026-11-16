@@ -194,3 +194,74 @@ describe('MetadataDiff', () => {
     ).not.toThrow();
   });
 });
+
+/**
+ * An API key row stores the key's name and scopes beside an empty
+ * before/after (server/services/api-keys.ts). They are its details; anything
+ * else the metadata might hold is not shown, whatever it is called.
+ */
+describe('MetadataDiff for an API key row', () => {
+  const KEY_LIKE_FIELDS = {
+    key: 'sp_live_made_up_value',
+    secret: 'made-up-secret-value',
+    key_hash: 'made-up-hash-value',
+    prefix: 'sp_live_made',
+    token: 'made-up-token-value',
+    api_key: 'made-up-api-key-value',
+  };
+  const stored = (extra: Record<string, unknown> = {}) => ({
+    entity_type: 'api_key',
+    entity_id: '00000000-0000-4000-8000-000000000001',
+    before: null,
+    after: null,
+    reason: null,
+    ...extra,
+  });
+
+  it('shows the name and scopes of a created key as its details', () => {
+    render(
+      <MetadataDiff
+        event="api_key.created"
+        metadata={stored({ name: 'Warehouse sync', scopes: ['items:read', 'stock:read'] })}
+      />,
+    );
+    expect(screen.getByText('Show details')).toBeInTheDocument();
+    expect(screen.getByText('Name:')).toBeInTheDocument();
+    expect(screen.getByText('Warehouse sync')).toBeInTheDocument();
+    expect(screen.getByText('Scopes:')).toBeInTheDocument();
+    expect(screen.getByText('items:read, stock:read')).toBeInTheDocument();
+  });
+
+  it('shows the name of a revoked key', () => {
+    render(<MetadataDiff event="api_key.revoked" metadata={stored({ name: 'Warehouse sync' })} />);
+    expect(screen.getByText('Name:')).toBeInTheDocument();
+    expect(screen.getByText('Warehouse sync')).toBeInTheDocument();
+    expect(screen.queryByText('Scopes:')).toBeNull();
+  });
+
+  it('never shows a field named like a key, a secret, a hash or a token, even when the row holds one', () => {
+    const { container } = render(
+      <MetadataDiff
+        event="api_key.created"
+        metadata={stored({ name: 'Warehouse sync', scopes: ['items:read'], ...KEY_LIKE_FIELDS })}
+      />,
+    );
+    const text = container.textContent ?? '';
+    for (const [field, value] of Object.entries(KEY_LIKE_FIELDS)) {
+      expect(text, field).not.toContain(value);
+      expect(text, field).not.toContain(`${humanizeFieldName(field)}:`);
+    }
+    expect(container.querySelectorAll('dt')).toHaveLength(2);
+  });
+
+  it('shows nothing for a row with none of its fields, or with no event', () => {
+    const { container: noFields } = render(
+      <MetadataDiff event="api_key.created" metadata={stored(KEY_LIKE_FIELDS)} />,
+    );
+    expect(noFields).toBeEmptyDOMElement();
+    const { container: noEvent } = render(
+      <MetadataDiff metadata={stored({ name: 'Warehouse sync', scopes: ['items:read'] })} />,
+    );
+    expect(noEvent).toBeEmptyDOMElement();
+  });
+});

@@ -284,7 +284,7 @@ describe('the invitation audit release: the code the words rest on', () => {
     expect(AUDIT_CATEGORIES.find((c) => c.slug === 'user')).toEqual({
       slug: 'user',
       label: 'Team',
-      prefix: 'user.',
+      prefixes: ['user.', 'api_key.'],
     });
   });
 
