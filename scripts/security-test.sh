@@ -1711,6 +1711,10 @@ WEB_TESTS=(
   # again. Without either, the phone route answers by the policy as before.
   src/lib/auth/account-delete-code.test.ts
   src/server/lib/account-deletion-credential.test.ts
+  # The web's delete-account words and its authenticator policy rule are
+  # core's own values, and core's reading of the two delete routes' answers
+  # (for the phone) has a row for every answer they give.
+  src/app/api/v1/account/delete/answers.core.test.ts
 
   # One create path, no duplicate order (0391, phone ordering PO-2). The
   # service gates (Orders module, the MFA step-up, orders:request) come before
@@ -2290,6 +2294,14 @@ CORE_TESTS=(
   # S43a: the one rule for "this session still owes its authenticator code"
   # (web API context now; the phone's code gate next).
   src/auth/step-up.test.ts
+  # The policy a reader enforces from an organization row as read: a missing
+  # or odd value, a hidden row and an empty embed are held to all_required;
+  # both embed shapes (object, array of one) read the same policy.
+  src/auth/step-up.enforced-policy.test.ts
+  # The set-up address and words, and the phone's reading of the delete
+  # routes' answers: every code, an unknown code, 401 and no answer.
+  src/auth/set-up-copy.test.ts
+  src/account/delete-account-copy.test.ts
   src/schemas/inventory.test.ts
   src/signature/signature.test.ts
   # The one item-images path builder (web presign and thumbnail, phone
