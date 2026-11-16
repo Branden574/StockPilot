@@ -8,6 +8,7 @@ import { Pill } from '@/components/ui/pill';
 import { Toggle } from '@/components/ui/toggle';
 import { Body, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
+import { changeCustomerStatus, type CustomerStatusOutcome } from '@/lib/customer-status';
 import { createSequenceGuard } from '@/lib/debounced-list-load';
 import { supabase } from '@/lib/supabase';
 import { retryWorkspace, useWorkspace } from '@/lib/use-workspace';
@@ -38,8 +39,11 @@ const ACCOUNTS_LOAD_FAILED = {
 /**
  * B2B customers — mobile twin of /dashboard/customers (read + activate/archive;
  * price lists, catalogs, and invites stay web-side where the editors live).
- * Direct Supabase under the 0250 RLS floor (member read, manager-or-
- * customers:manage write); the drawer entry is gated to customers:manage.
+ * The list is read directly under the 0250 RLS floor (member read). Archive
+ * and restore go through PATCH /api/v1/customers/[id]/status
+ * (lib/customer-status.ts), which checks the module, customers:manage and the
+ * authenticator rule and records the change. The drawer entry is gated to
+ * customers:manage.
  */
 export default function CustomersScreen() {
   const { user } = useAuth();
@@ -63,7 +67,11 @@ export default function CustomersScreen() {
   const [loadFailed, setLoadFailed] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
-  const [busyId, setBusyId] = React.useState<string | null>(null);
+  // The rows whose change is out: drawn as busy, and held in a ref too, so a
+  // second press before the next render, or on a row waiting for its answer
+  // while another answers, sends nothing.
+  const [busyIds, setBusyIds] = React.useState<ReadonlySet<string>>(() => new Set());
+  const inFlight = React.useRef(new Set<string>());
 
   const load = React.useCallback(async () => {
     const token = guard.current.next();
@@ -95,6 +103,14 @@ export default function CustomersScreen() {
     void load();
   }, [load]);
 
+  // The newest load, for a change whose answer comes after a render: a
+  // workspace switch while it was out gives a new load, and the tapped
+  // render's one would read the previous workspace over this one's list.
+  const latestLoad = React.useRef(load);
+  React.useEffect(() => {
+    latestLoad.current = load;
+  }, [load]);
+
   // No workspace could be loaded: the read never starts, so say so (a pull
   // loads the workspace again), never a spinner that does not end.
   const noWorkspace = !activeOrgId && !workspaceLoading;
@@ -109,32 +125,46 @@ export default function CustomersScreen() {
   }
 
   async function setStatus(row: CustomerRow, active: boolean) {
-    setBusyId(row.id);
-    // Await the builder + row-hit check (bug patterns #22 + fail-open update).
-    const { error, data } = await supabase
-      .from('customers')
-      .update({ status: active ? 'active' : 'archived' })
-      .eq('id', row.id)
-      .eq('organization_id', activeOrgId ?? '')
-      .select('id')
-      .maybeSingle();
-    setBusyId(null);
-    if (error || !data) {
-      Alert.alert(
-        'Could not update',
-        error?.message ?? 'You need manager access to change accounts.',
+    // The workspace and account whose list is on screen: the change is sent
+    // under them, and its answer goes only into that list.
+    const changedIn = activeOrgId;
+    const changedBy = userId;
+    if (!changedIn || !changedBy) return;
+    // One change per row at a time.
+    if (inFlight.current.has(row.id)) return;
+    inFlight.current.add(row.id);
+    setBusyIds((prev) => new Set(prev).add(row.id));
+    let outcome: CustomerStatusOutcome;
+    try {
+      outcome = await changeCustomerStatus(
+        row.id,
+        active ? 'active' : 'archived',
+        changedIn,
+        changedBy,
       );
+    } finally {
+      inFlight.current.delete(row.id);
+      setBusyIds((prev) => {
+        const next = new Set(prev);
+        next.delete(row.id);
+        return next;
+      });
+    }
+    if (outcome.kind === 'refused') {
+      // The row keeps the status it had. Where the answer leaves the account
+      // unknown (removed, changed meanwhile, no clear answer), the list is
+      // read again, for the workspace on screen when the answer comes.
+      Alert.alert(outcome.title, outcome.message);
+      if (outcome.reload) void latestLoad.current();
       return;
     }
-    // Only into the list of the workspace the change was made in.
-    const changedIn = activeOrgId;
+    // The status the server answered: the one asked for, or the one the
+    // account already had when nothing changed.
     setList((prev) =>
       prev !== null && prev.orgId === changedIn && prev.userId === userId
         ? {
             ...prev,
-            rows: prev.rows.map((r) =>
-              r.id === row.id ? { ...r, status: active ? 'active' : 'archived' } : r,
-            ),
+            rows: prev.rows.map((r) => (r.id === row.id ? { ...r, status: outcome.status } : r)),
           }
         : prev,
     );
@@ -171,7 +201,7 @@ export default function CustomersScreen() {
       renderItem={(c) => (
         <CustomerCard
           row={c}
-          busy={busyId === c.id}
+          busy={busyIds.has(c.id)}
           onToggle={(active) => void setStatus(c, active)}
         />
       )}
