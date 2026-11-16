@@ -176,6 +176,10 @@ const config: ExpoConfig = {
     // The launch screen is part of the app binary, so a change here reaches
     // phones only with a new store build, never with a phone update; the
     // restart screen follows the installed binary (src/lib/launch-look.ts).
+    // That choice reads the binary's runtime version, so a binary built from
+    // this tree while `version` above is still 1.4.0 has this plain launch
+    // screen but shows the icon restart screen; the plain restart screen
+    // first runs on a build whose version is above 1.4.0.
     // app-config.native-contract.test.ts pins the colour and the image.
     [
       'expo-splash-screen',
