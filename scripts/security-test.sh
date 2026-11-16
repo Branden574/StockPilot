@@ -2241,6 +2241,18 @@ MOBILE_TESTS=(
   src/lib/mfa-reconcile.test.ts
   src/lib/code-gate-wiring.test.ts
 
+  # Deleting your own account from the phone: an account with no authenticator
+  # confirms with its current password or a six-digit code emailed to it, and
+  # one with an authenticator with the typed word, as the website's dialog
+  # does. Every answer is read through core's accountDeleteAnswer; the phone
+  # signs out and discards the account's queued work only when the delete
+  # route answered that the account is gone (an empty or unparseable answer is
+  # never "deleted", a 401 is left to the account probe); only the newest
+  # emailed-code challenge is sent; the password field uses secure entry, and
+  # nothing typed is logged, stored or kept after a cancel.
+  src/lib/account-delete.test.ts
+  src/lib/delete-account-confirm-sheet-structure.test.ts
+
   # The saved workspace records the account that saved it, and only that
   # account's requests, queued work and workspace load use it: another
   # account's, left by a fallback sign-out or a session the server ended, is
