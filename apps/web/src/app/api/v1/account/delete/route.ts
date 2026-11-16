@@ -128,10 +128,10 @@ export async function POST(req: NextRequest) {
     : async () => (await readVerifiedSessionClaimsOf(await createClient(), ctx.userId))?.aal ?? null;
 
   if (supplied === null) {
-    if (!ctx.mfaEnrolled) {
+    if (!ctx.mfaEnrolled && body.confirm === 'DELETE') {
       logUnconfirmedRequest(
         bearer ? 'bearer' : 'cookie',
-        ctx.mfaRequired ? 'mfa_required' : 'word_only',
+        ctx.mfaRequired ? 'mfa_required' : 'policy_optional',
       );
     }
     // No password and no code: the organization's policy decides, with the
@@ -401,18 +401,19 @@ export async function POST(req: NextRequest) {
 }
 
 /**
- * One info line per request that sent neither a password nor a code from an
- * account with no authenticator, so the runtime logs can count how many such
- * requests still arrive. Info, not a report: it is an expected request. Fixed
- * words, which way the session came (bearer or cookie) and what this route
- * answers such a request (mfa_required, or the typed word alone is enough):
- * never an id, an address, a token, a header or anything from the body. The
- * method, path, status and time are on the platform's own request record. A
- * failure to write it never changes the answer.
+ * One info line per request with the typed word that sent neither a password
+ * nor a code, from an account with no authenticator, so the runtime logs can
+ * count such requests. Info, not a report: it is an expected request. Fixed
+ * words, which way the session came (bearer or cookie) and what the
+ * organization's policy answers such a request (mfa_required when it requires
+ * an authenticator of this member, policy_optional when it does not): never an
+ * id, an address, a token, a header or anything from the body. The method,
+ * path, status and time are on the platform's own request record. A failure
+ * to write it never changes the answer.
  */
 function logUnconfirmedRequest(
   via: 'bearer' | 'cookie',
-  answer: 'mfa_required' | 'word_only',
+  answer: 'mfa_required' | 'policy_optional',
 ): void {
   try {
     console.info(

@@ -1297,13 +1297,13 @@ describe('POST /api/v1/account/delete: the count line for a request with no pass
     info.mockRestore();
   });
 
-  it('a phone with no authenticator, Optional organization: one line (bearer, word_only), and the deletion as before', async () => {
+  it('a phone with no authenticator, Optional organization: one line (bearer, policy_optional), and the deletion as before', async () => {
     vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(happyStub()) as never);
     const res = await POST(buildRequest({ confirm: 'DELETE' }, 'aal1'));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
     expect(deleteUser).toHaveBeenCalledWith(USER_ID);
-    expect(countLines()).toEqual([[LINE, { via: 'bearer', answer: 'word_only' }]]);
+    expect(countLines()).toEqual([[LINE, { via: 'bearer', answer: 'policy_optional' }]]);
   });
 
   it('a phone with no authenticator, an organization that requires one: one line (bearer, mfa_required), the same 403', async () => {
@@ -1341,6 +1341,33 @@ describe('POST /api/v1/account/delete: the count line for a request with no pass
         ?.metadata?.confirmed_by,
     ).toBe('none');
     expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an Optional organization', 'policy_optional'],
+    ['an organization that requires one', 'mfa_required'],
+  ] as const)(
+    'with no typed word, %s: no line, and the answer as before; with the typed word, exactly one',
+    async (_kind, answer) => {
+      const ctxFor = () =>
+        answer === 'mfa_required' ? requiring(happyStub()) : buildCtx(happyStub());
+      vi.mocked(withApiContext).mockResolvedValueOnce(ctxFor() as never);
+      const refused = await POST(buildRequest({}, 'aal1'));
+      expect(refused.status).toBe(answer === 'mfa_required' ? 403 : 400);
+      expect(countLines()).toEqual([]);
+
+      vi.mocked(withApiContext).mockResolvedValueOnce(ctxFor() as never);
+      await POST(buildRequest({ confirm: 'DELETE' }, 'aal1'));
+      expect(countLines()).toEqual([[LINE, { via: 'bearer', answer }]]);
+    },
+  );
+
+  it('no line for a typed word other than DELETE', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx(happyStub()) as never);
+    const res = await POST(buildRequest({ confirm: 'delete' }, 'aal1'));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'validation_error', message: 'Type DELETE to confirm.' });
+    expect(countLines()).toEqual([]);
   });
 
   it.each([
