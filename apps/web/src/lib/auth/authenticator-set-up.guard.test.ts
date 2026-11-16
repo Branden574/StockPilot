@@ -31,8 +31,11 @@ import {
  *      (authenticatorSetUpIsOwed, on the core rule). Every dashboard page asks
  *      requireOrgContext() first (test/page-step-up.guard.test.ts).
  *   2. requireOrgContextForLayout(), the same context without the set-up
- *      redirect, is used by layout.tsx files under app/(dashboard) and by
- *      nothing else, and it still asks the authenticator-code rule.
+ *      redirect, and authenticatorSetUpOwedForLayout(), the set-up answer
+ *      without the redirect, are used by layout.tsx files under
+ *      app/(dashboard) and by nothing else. The first still asks the
+ *      authenticator-code rule; the second asks the set-up question the page
+ *      asks (setUpOwedOnThisPage) and redirects to nothing itself.
  *   3. No layout.tsx under app/ reaches requireOrgContext(), by a call or by
  *      a component it renders.
  *   4. No layout.tsx under app/ calls redirect() or permanentRedirect() to a
@@ -78,6 +81,9 @@ const REAL = treeOf(shippedSourceFiles(WEB_SRC, fs), WEB_SRC);
 const SESSION = 'lib/auth/session.ts';
 const GATE = 'requireOrgContext';
 const LAYOUT_GATE = 'requireOrgContextForLayout';
+const LAYOUT_SET_UP_QUESTION = 'authenticatorSetUpOwedForLayout';
+/** The session.ts exports only dashboard layouts may use. */
+const LAYOUT_ONLY = [LAYOUT_GATE, LAYOUT_SET_UP_QUESTION];
 
 /** The text without comments, so a mention in prose is not a use. */
 const code = (text: string) =>
@@ -95,11 +101,11 @@ const COMPUTED_LAYOUT_REDIRECTS: Record<string, string> = {
     'The authenticator code page, /signin/mfa, carrying the page to come back to: outside the dashboard layout.',
 };
 
-/** Rule 2: files other than dashboard layouts and session.ts that use the layout context. */
+/** Rule 2: files other than dashboard layouts and session.ts that use a layout-only export. */
 function layoutContextOutsideLayouts(tree: Tree): string[] {
   return [...tree.files]
     .filter(([rel]) => rel !== SESSION && !dashboardLayout(rel))
-    .filter(([, text]) => new RegExp(`\\b${LAYOUT_GATE}\\b`).test(code(text)))
+    .filter(([, text]) => new RegExp(`\\b(${LAYOUT_ONLY.join('|')})\\b`).test(code(text)))
     .map(([rel]) => rel)
     .sort();
 }
@@ -224,6 +230,14 @@ function layoutRedirectsUnderThemselves(tree: Tree, reviewed: Record<string, str
   return problems.sort();
 }
 
+/** The body of `function name(...) {...}` up to its closing brace at the start of a line. */
+function functionBody(text: string, name: string): string {
+  const start = text.search(new RegExp(`\\bfunction ${name}\\b`));
+  expect(start, `${name} exists`).toBeGreaterThanOrEqual(0);
+  const end = text.indexOf('\n}\n', start);
+  return text.slice(start, end === -1 ? undefined : end + 2);
+}
+
 /** The body of `export const name = cache(...)` up to the next top-level statement. */
 function constBody(text: string, name: string): string {
   const start = text.indexOf(`const ${name} = `);
@@ -261,6 +275,37 @@ describe('authenticator set-up comes first, and no layout redirects for it', () 
     expect(users).toContain('app/(dashboard)/dashboard/settings/layout.tsx');
     const code_ = REAL.graph.reach([`${REAL.abs('lib/auth/step-up-gate.ts')}#stepUpIsOwed`]);
     expect(code_.exportReaches(REAL.abs(SESSION), LAYOUT_GATE)).toBe(true);
+  });
+
+  it('2b. the layout set-up answer asks the page question, redirects to nothing and never reaches requireOrgContext()', () => {
+    const session = code(REAL.files.get(SESSION)!);
+    const helper = constBody(session, LAYOUT_SET_UP_QUESTION).replace(/\s+/g, ' ');
+    expect(helper).toMatch(
+      /const ctx = await requireOrgContextForLayout\(\); return setUpOwedOnThisPage\(startStepUpReads\(\), ctx\); \}\);$/,
+    );
+    const question = functionBody(session, 'setUpOwedOnThisPage');
+    for (const [name, body] of [
+      [LAYOUT_SET_UP_QUESTION, helper],
+      ['setUpOwedOnThisPage', question],
+    ] as const) {
+      expect(redirectCalls(body), `${name} redirects`).toEqual([]);
+      expect(body, name).not.toMatch(/\b(sendToSetUpWhenOwed|requireOrgContext)\(/);
+    }
+    // The page's wrapper asks the same question.
+    expect(functionBody(session, 'sendToSetUpWhenOwed')).toMatch(
+      /if \(await setUpOwedOnThisPage\(reads, ctx\)\) redirect\(AUTHENTICATOR_SET_UP_URL\);/,
+    );
+    const gate = REAL.graph.reach([`${REAL.abs(SESSION)}#${GATE}`]);
+    expect(gate.exportReaches(REAL.abs(SESSION), LAYOUT_SET_UP_QUESTION)).toBe(false);
+    const rule = REAL.graph.reach([
+      `${REAL.abs('lib/auth/step-up-gate.ts')}#authenticatorSetUpIsOwed`,
+    ]);
+    expect(rule.exportReaches(REAL.abs(SESSION), LAYOUT_SET_UP_QUESTION)).toBe(true);
+    const users = [...REAL.files.keys()].filter((rel) =>
+      new RegExp(`\\b${LAYOUT_SET_UP_QUESTION}\\b`).test(code(REAL.files.get(rel)!)),
+    );
+    expect(users).toContain('app/(dashboard)/dashboard/purchase-orders/imports/layout.tsx');
+    expect(users).toContain('app/(dashboard)/dashboard/purchase-orders/layout.tsx');
   });
 
   it('3. no layout reaches requireOrgContext(), by a call or a component it renders', () => {
@@ -366,7 +411,7 @@ describe('self-test: a planted violation is reported', () => {
       ROOT,
     );
 
-  it('2. a page or a component that uses the layout context is reported; a layout is not', () => {
+  it('2. a page or a component that uses a layout-only export is reported; a layout is not', () => {
     const t = tree({
       'app/(dashboard)/layout.tsx': `
         import { requireOrgContextForLayout } from '@/lib/auth/session';
@@ -377,9 +422,16 @@ describe('self-test: a planted violation is reported', () => {
       'components/bar.tsx': `
         import { requireOrgContextForLayout } from '@/lib/auth/session';
         export async function Bar() { await requireOrgContextForLayout(); return null; }`,
+      'app/(dashboard)/dashboard/y/page.tsx': `
+        import { authenticatorSetUpOwedForLayout } from '@/lib/auth/session';
+        export default async function Page() { return (await authenticatorSetUpOwedForLayout()) ? null : <p>y</p>; }`,
+      'app/(dashboard)/dashboard/y/layout.tsx': `
+        import { authenticatorSetUpOwedForLayout } from '@/lib/auth/session';
+        export default async function L({ children }) { await authenticatorSetUpOwedForLayout(); return children; }`,
     });
     expect(layoutContextOutsideLayouts(t)).toEqual([
       'app/(dashboard)/dashboard/x/page.tsx',
+      'app/(dashboard)/dashboard/y/page.tsx',
       'components/bar.tsx',
     ]);
   });

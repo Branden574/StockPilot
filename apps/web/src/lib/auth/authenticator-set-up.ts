@@ -10,14 +10,16 @@
  * pages' check cannot see (see the layout; the page below still runs).
  */
 
-/** The security settings page, where an authenticator is set up. */
-export const AUTHENTICATOR_SET_UP_PAGE = '/dashboard/settings/security';
+import { AUTHENTICATOR_SET_UP_PAGE } from '@stockpilot/core';
 
 /**
- * The redirect target. `?enroll=1` is the parameter the security page reads to
- * show its "Enroll to continue" callout, and the one the banner's button uses.
+ * The security settings page, where an authenticator is set up, and the
+ * redirect target (`?enroll=1`, the parameter the security page reads to show
+ * its "Enroll to continue" callout, and the one the banner's button uses).
+ * Both live in @stockpilot/core (auth/set-up-copy.ts), so the phone opens the
+ * same address on the website.
  */
-export const AUTHENTICATOR_SET_UP_URL = `${AUTHENTICATOR_SET_UP_PAGE}?enroll=1`;
+export { AUTHENTICATOR_SET_UP_PAGE, AUTHENTICATOR_SET_UP_URL } from '@stockpilot/core';
 
 /**
  * The pages a member who owes set-up may still open, each a personal page:

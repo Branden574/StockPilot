@@ -5,6 +5,7 @@ import { isUuid } from '@stockpilot/core';
 import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { forbiddenOrInternalResponse } from '@/server/lib/api-error-response';
+import { refusalReasonDetails } from '@/server/lib/refusal-reason';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 
@@ -63,7 +64,13 @@ export async function POST(
       // with its code, which the phone's drain treats as final; anything else
       // is a 5xx it sends again. An internal error's message is generic (S13).
       return NextResponse.json(
-        { error: e.code, message: e.message },
+        {
+          error: e.code,
+          message: e.message,
+          // Only a string `details.reason`, and never for an internal_error
+          // (server/lib/refusal-reason.ts).
+          ...refusalReasonDetails(e),
+        },
         { status: serviceErrorStatus(e.code) },
       );
     }

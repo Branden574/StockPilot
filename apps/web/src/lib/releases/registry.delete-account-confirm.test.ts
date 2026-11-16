@@ -33,6 +33,8 @@ const ID = 'delete-account-confirm-2026-11';
 const ENTRY_ID = 'delete-account-password-or-emailed-code';
 const AUTH_SET_UP_ID = 'authenticator-set-up-first-2026-11';
 const API_KEY_AUDIT_ID = 'api-key-audit-2026-11';
+// Added by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16): the Integrations and schedule event release, published later, at the top, below the Liquid Glass draft and above this one.
+const CONNECTION_SCHEDULE_ID = 'connection-and-schedule-messages-2026-11';
 const PUBLISHED_AT = '2026-11-16T04:03:00Z';
 const LIVE_AT = '2026-11-16T04:00:00Z';
 const LINK = { href: '/dashboard/settings/profile', label: 'Open Profile settings' };
@@ -74,28 +76,36 @@ function readerText(r: Release): string[] {
 }
 
 describe('the delete account release: order, status and date', () => {
-  it('is published once, as revision 1, directly below the Liquid Glass draft and above the authenticator set-up release, the newest published release', () => {
+  // Renamed by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: "is published once, as revision 1, directly below the Liquid Glass draft and above the authenticator set-up release, the newest published release"): the Integrations and schedule event release is published later, directly below the draft and above this one. Claim kept: published once, as revision 1, directly above the authenticator set-up release.
+  it('is published once, as revision 1, directly below the Integrations and schedule event release (published later, below the Liquid Glass draft at the top) and above the authenticator set-up release', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
-    expect(RELEASES.slice(0, 4).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: every pinned position one place higher): the Integrations and schedule event release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES.slice(0, 5).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: without it): the Integrations and schedule event release is published later, at the top, directly below the Liquid Glass draft.
+      [CONNECTION_SCHEDULE_ID, 'published'],
       [ID, 'published'],
       [AUTH_SET_UP_ID, 'published'],
       [API_KEY_AUDIT_ID, 'published'],
     ]);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: ID): the Integrations and schedule event release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(CONNECTION_SCHEDULE_ID);
   });
 
-  it('is dated on a whole minute after #587 went live, in the past, with the draft placeholder at the same minute and every release below it older', () => {
+  // Renamed by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: "is dated on a whole minute after #587 went live, in the past, with the draft placeholder at the same minute and every release below it older"): the Integrations and schedule event release above is dated later, and the draft placeholder moved to its minute. Claim kept: a whole minute after #587 went live, in the past, every release below it older.
+  it('is dated on a whole minute after #587 went live, in the past, with the draft placeholder at or after it and every release below it older', () => {
     expect(release().publishedAt).toBe(PUBLISHED_AT);
     const at = Date.parse(release().publishedAt);
     expect(at % 60_000).toBe(0);
     expect(at).toBeGreaterThan(Date.parse(LIVE_AT));
     expect(at).toBeLessThanOrEqual(Date.now());
-    expect(RELEASES[0]!.publishedAt).toBe(release().publishedAt);
-    for (const r of RELEASES.slice(2)) {
+    // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: RELEASES[0]!.publishedAt toBe this minute): the draft placeholder moved to the minute of the Integrations and schedule event release, published later, directly above this one.
+    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
+    // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: every pinned position one place higher): the Integrations and schedule event release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(3)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });

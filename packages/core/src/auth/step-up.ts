@@ -26,14 +26,83 @@ export function stepUpOwed(
 /** An organization's authenticator policy (organizations.mfa_policy). */
 export type OrganizationMfaPolicy = 'optional' | 'admins_required' | 'all_required';
 
+/** What an organization whose row could not be read is held to: the strictest policy. */
+export const UNREADABLE_ORG_MFA_POLICY: OrganizationMfaPolicy = 'all_required';
+
+/**
+ * The authenticator policy to ENFORCE, given an organization row as it was
+ * read.
+ *
+ * `organizations.mfa_policy` is NOT NULL with a CHECK on the three values
+ * (default 'admins_required'). So a missing or unrecognised value is never the
+ * organization's real policy: it means the row could not be read. Row level
+ * security hides it (`organizations_select` requires an accepted membership,
+ * an account that is not disabled, and no expired impersonation grant), or it
+ * went away mid-request. Unknown is held to the strictest policy an
+ * organization can have: a session at aal2 still passes, any other is stopped.
+ * Every accepted, enabled member can read their own organization's row, so
+ * for them this never fires.
+ *
+ * Read errors are not handled here: a caller that gets an error back throws
+ * or denies on its own. This is for the row that came back empty or odd.
+ *
+ * A row read through an embed (`organizations:organization_id (...)`) can come
+ * back as an object or as an array; pass it through unwrapOrganizationEmbed
+ * first, because an array has no `mfa_policy` of its own.
+ */
+export function enforcedMfaPolicy(
+  org: { mfa_policy?: unknown } | null | undefined,
+): OrganizationMfaPolicy {
+  const policy = org?.mfa_policy;
+  return policy === 'optional' || policy === 'admins_required' || policy === 'all_required'
+    ? policy
+    : UNREADABLE_ORG_MFA_POLICY;
+}
+
+/**
+ * The organization row of a membership read with an embed
+ * (`organizations:organization_id (...)`). PostgREST answers a to-one embed
+ * as an object, and some client typings and older answers as an array of
+ * one. Answers the object; for an array, its FIRST element (a to-one embed
+ * returned as an array answers its first element, whatever follows it); null
+ * for anything else (no row, an empty array, a first element that is not an
+ * object, a value that is not an object).
+ */
+export function unwrapOrganizationEmbed<T extends object>(
+  field: T | readonly T[] | null | undefined,
+): T | null {
+  const one: unknown = Array.isArray(field) ? (field as readonly unknown[])[0] : field;
+  return one !== null && typeof one === 'object' && !Array.isArray(one) ? (one as T) : null;
+}
+
+/**
+ * The organization's policy AS READ, or null when it was not read: the row or
+ * the embed is missing, empty or not an object, or its `mfa_policy` is not one
+ * of the three values. Takes the row or the embed field (unwrapped with
+ * unwrapOrganizationEmbed). A caller tells "read: all_required" from "not
+ * read" with this; what to ENFORCE for null is enforcedMfaPolicy's answer,
+ * the strictest policy, so `enforcedMfaPolicy(unwrapOrganizationEmbed(x))`
+ * always equals `readOrganizationMfaPolicy(x) ?? UNREADABLE_ORG_MFA_POLICY`.
+ */
+export function readOrganizationMfaPolicy(
+  field: { mfa_policy?: unknown } | readonly ({ mfa_policy?: unknown } | null)[] | null | undefined,
+): OrganizationMfaPolicy | null {
+  const row = unwrapOrganizationEmbed<{ mfa_policy?: unknown }>(
+    field as { mfa_policy?: unknown } | readonly { mfa_policy?: unknown }[] | null | undefined,
+  );
+  const value = row?.mfa_policy;
+  return value === 'optional' || value === 'admins_required' || value === 'all_required'
+    ? value
+    : null;
+}
+
 /**
  * Does the organization's policy require an authenticator of a member in this
  * role? Everyone under 'all_required'; owners and admins under
  * 'admins_required'; no one under 'optional'.
  *
- * The caller passes the policy it ENFORCES: on the web, a row that could not
- * be read is held to 'all_required' before it gets here
- * (apps/web/src/lib/auth/mfa-policy.ts).
+ * The caller passes the policy it ENFORCES: a row that could not be read is
+ * held to 'all_required' before it gets here (enforcedMfaPolicy above).
  */
 export function policyRequiresAuthenticator(policy: OrganizationMfaPolicy, role: string): boolean {
   if (policy === 'all_required') return true;

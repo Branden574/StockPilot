@@ -5,16 +5,22 @@
 export interface AuditCategory {
   slug: string;
   label: string;
-  prefix: string | null;
+  /**
+   * The event-name prefixes the chip lists (any of them). Empty for All
+   * events, which filters nothing.
+   */
+  prefixes: readonly string[];
 }
 
 export const AUDIT_CATEGORIES: AuditCategory[] = [
-  { slug: 'all', label: 'All events', prefix: null },
-  { slug: 'stock', label: 'Stock', prefix: 'stock.' },
-  { slug: 'inventory', label: 'Inventory', prefix: 'inventory.' },
-  { slug: 'po', label: 'Purchase orders', prefix: 'po_import.' },
-  { slug: 'cycle', label: 'Cycle counts', prefix: 'cycle_count.' },
-  { slug: 'bundles', label: 'Bundles', prefix: 'bundle.' },
-  { slug: 'user', label: 'Team', prefix: 'user.' },
-  { slug: 'warehouse', label: 'Warehouse', prefix: 'warehouse' },
+  { slug: 'all', label: 'All events', prefixes: [] },
+  { slug: 'stock', label: 'Stock', prefixes: ['stock.'] },
+  { slug: 'inventory', label: 'Inventory', prefixes: ['inventory.'] },
+  { slug: 'po', label: 'Purchase orders', prefixes: ['po_import.'] },
+  { slug: 'cycle', label: 'Cycle counts', prefixes: ['cycle_count.'] },
+  { slug: 'bundles', label: 'Bundles', prefixes: ['bundle.'] },
+  // Team: the people side of the organization and its access (sign-ins,
+  // passwords, sessions, roles, invitations), and the organization's API keys.
+  { slug: 'user', label: 'Team', prefixes: ['user.', 'api_key.'] },
+  { slug: 'warehouse', label: 'Warehouse', prefixes: ['warehouse'] },
 ];

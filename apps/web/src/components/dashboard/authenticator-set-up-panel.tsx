@@ -2,6 +2,8 @@ import { StatePanel } from '@/components/patterns/state-panel';
 import { buttonVariants } from '@/components/ui/button';
 import { AUTHENTICATOR_SET_UP_URL } from '@/lib/auth/authenticator-set-up';
 
+import { AUTHENTICATOR_SET_UP_TITLE } from '@stockpilot/core';
+
 /**
  * A prompt the dashboard layout shows where the page would be, on a full page
  * load or a refresh, for a session whose token says the code was entered but
@@ -24,7 +26,7 @@ export function AuthenticatorSetUpPanel() {
         kind="forbidden"
         size="page"
         headingLevel={1}
-        title="Set up an authenticator to continue"
+        title={AUTHENTICATOR_SET_UP_TITLE}
         description="Your organization requires two-factor authentication. Set up your authenticator app in Security settings, then come back."
         action={
           <a href={AUTHENTICATOR_SET_UP_URL} className={buttonVariants({ size: 'sm' })}>

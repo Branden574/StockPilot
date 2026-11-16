@@ -1,3 +1,5 @@
+import { recordedDetailFields } from '@/lib/audit/format';
+
 /**
  * Shared before/after diff renderer for audit-log metadata.
  *
@@ -9,6 +11,11 @@
  * NOWHERE — this is the one place that turns that jsonb into something a
  * human can read, shared by the global audit log page and `ActivityFeed`'s
  * audit rows.
+ *
+ * A few events store what they are about beside an empty before/after (an
+ * API key's name and scopes). Those fields are named one by one in
+ * lib/audit/format.ts (recordedDetailFields) and shown as the row's details;
+ * no other stored field is shown.
  *
  * Contract: never throws on weird/arbitrary jsonb. `before`/`after` are
  * `unknown` end to end (Postgres jsonb has no static shape), so every branch
@@ -160,7 +167,10 @@ function isStringArray(value: unknown): value is string[] {
  *  2. A compact "Fields changed: a, b" chip when there's no before/after but
  *     `metadata.changed_keys` is a non-empty string array (item update,
  *     category archive, notification-preferences).
- *  3. Nothing, when neither is present (most create-only / no-diff events).
+ *  3. A `<details>` "Show details" drawer with the fields the event's row
+ *     stores for it (recordedDetailFields), when there is no diff: an API
+ *     key's name and scopes.
+ *  4. Nothing, when none is present (most create-only / no-diff events).
  *
  * Plain `<details>/<summary>` — no client-side state needed, so this stays a
  * Server Component and drops straight into the (also-server) global audit
@@ -168,8 +178,11 @@ function isStringArray(value: unknown): value is string[] {
  */
 export function MetadataDiff({
   metadata,
+  event,
 }: {
   metadata: Record<string, unknown> | null | undefined;
+  /** The row's event: picks the stored fields shown as its details. */
+  event?: string | null;
 }) {
   const meta = metadata ?? {};
   const rows = diffMetadataFields(meta.before, meta.after);
@@ -192,6 +205,27 @@ export function MetadataDiff({
                 <span className="line-through">{r.before}</span>
                 <span className="mx-1">→</span>
                 <span className="text-foreground">{r.after}</span>
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </details>
+    );
+  }
+
+  const details = recordedDetailFields(event, meta);
+  if (details.length > 0) {
+    return (
+      <details className="mt-1.5">
+        <summary className="text-muted-foreground hover:text-foreground w-fit cursor-pointer select-none text-xs underline-offset-2 hover:underline">
+          Show details
+        </summary>
+        <dl className="border-border bg-sunk mt-1.5 space-y-1 rounded-md border px-2.5 py-2">
+          {details.map((d) => (
+            <div key={d.field} className="flex flex-wrap items-baseline gap-x-1.5 text-xs">
+              <dt className="text-foreground font-medium">{humanizeFieldName(d.field)}:</dt>
+              <dd className="text-foreground min-w-0 break-words">
+                {stringifyMetadataValue(d.value)}
               </dd>
             </div>
           ))}

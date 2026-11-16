@@ -372,7 +372,8 @@ describe('every withApiContext call is handed the request it judges', () => {
     }
     expect(bad).toEqual([]);
     // The returns routes call their two shared gates (18 calls on 2026-10-24),
-    // and five routes call the API context gate (docket S26): 23.
+    // and nine routes call the API context gate in ten handlers (docket S26):
+    // 28.
     expect(sharedGateCalls).toBeGreaterThan(15);
   });
 
