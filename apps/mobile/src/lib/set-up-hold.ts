@@ -81,7 +81,7 @@ export function subscribeSetUpHold(fn: () => void): () => void {
 }
 
 /**
- * use-workspace.ts: the workspace it now shows for this account (null: none
+ * use-workspace.ts: the workspace it shows for this account (null: none
  * shown). A switch from one workspace to another for the same account also
  * reads the inputs again (the new workspace's policy may have changed since
  * the memberships were read).

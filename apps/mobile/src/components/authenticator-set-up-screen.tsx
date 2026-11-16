@@ -52,7 +52,7 @@ import {
  *
  * Check again reads the set-up inputs at once (readSetUpInputsForHold). Its
  * answer goes to the same store the queue asks, so queued rows follow it; a
- * workspace that no longer holds the account lets the app in, and an
+ * workspace whose policy does not hold the account lets the app in, and an
  * authenticator added on the website brings the code screen up first.
  *
  * Classic look only. VoiceOver: the title is a header and takes focus when

@@ -290,7 +290,7 @@ describe('root layout: RootGate keeps its order, its hooks and its timing', () =
   const gate = functionText(ROOT_LAYOUT, 'RootGate');
   const layout = functionText(ROOT_LAYOUT, 'RootLayout');
 
-  it('the gates return in this order: disabled (no session needed), then MFA, then the biometric lock, then authenticator set-up, then the app', () => {
+  it('the gates return in this order: disabled (no session needed), then the code screen, then the biometric lock, then authenticator set-up, then the app', () => {
     const disabled = gate.indexOf(
       "if (!loading && accountGate.state === 'disabled') { return <AccountDisabledScreen />;",
     );
@@ -324,8 +324,8 @@ describe('root layout: RootGate keeps its order, its hooks and its timing', () =
   it('every shell hook is still mounted in RootGate, before the gates', () => {
     // The four hooks that read, send or register for the account's data take
     // dataUser: nobody until the session has entered its authenticator code
-    // (docket S43b), and nobody while the authenticator set-up screen holds
-    // the app. The account gate and the revocation listener keep the session.
+    // (docket S43b). The account gate and the revocation listener keep the
+    // session. Nobody either while the authenticator set-up screen holds the app.
     expect(gate).toContain(
       'const dataUser = session && !mfaRequired && !setUpHold ? session.user : null;',
     );
