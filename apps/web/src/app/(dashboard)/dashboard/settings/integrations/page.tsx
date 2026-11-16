@@ -13,6 +13,7 @@ import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav'
 import { Button } from '@/components/ui/button';
 import { WebhooksPanel } from '@/components/settings/webhooks-panel';
 import { env } from '@/lib/env';
+import { AUTHENTICATOR_SET_UP_PAGE } from '@/lib/auth/authenticator-set-up';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
@@ -34,7 +35,11 @@ export const metadata: Metadata = { title: 'Integrations — Settings' };
 // per run — allow it past the default function timeout.
 export const maxDuration = 300;
 
-export default async function IntegrationsSettingsPage() {
+export default async function IntegrationsSettingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string | string[] }>;
+}) {
   const ctx = await requireOrgContext();
 
   // This page hosts TWO independently-gated cards:
@@ -103,6 +108,17 @@ export default async function IntegrationsSettingsPage() {
     if (showQbo || showEasyPost) failedSyncs = (await svc.listFailedSyncs()).rows;
   }
 
+  // What a QuickBooks or Sage Intacct connection comes back with when it was
+  // refused: ?error=forbidden (api/integrations/{quickbooks,sage_intacct}/
+  // callback). Those callbacks answer `forbidden` before the code is exchanged
+  // when the organization requires an authenticator the session has not met,
+  // and also when the member may not manage integrations. The line shows only
+  // with the accounting cards (the module on and Manage integrations held), so
+  // someone refused for the permission is not pointed at Settings > Security.
+  // Any other value says nothing here.
+  const { error: returnedError } = await searchParams;
+  const connectRefused = showQbo && returnedError === 'forbidden';
+
   // Webhooks & alerts live under the same `integrations` module + manage perm as
   // the QBO card. Only load endpoints when the caller can see the panel.
   const showWebhooks = integrationsAccess.enabled && can(ctx, 'integrations:manage');
@@ -138,6 +154,20 @@ export default async function IntegrationsSettingsPage() {
           <PageHeaderBackLink href="/dashboard/settings">← Back to settings</PageHeaderBackLink>
         }
       />
+
+      {connectRefused ? (
+        <p role="status" className="bg-sunk rounded-lg border px-4 py-3 text-[13px]">
+          <span className="font-medium">The connection was not finished.</span> Connecting an
+          accounting system needs an authenticator on your account. Check{' '}
+          <Link
+            href={AUTHENTICATOR_SET_UP_PAGE}
+            className="text-foreground underline underline-offset-2"
+          >
+            Settings &gt; Security
+          </Link>
+          , then connect again.
+        </p>
+      ) : null}
 
       {exportsSwitchedOff ? (
         <div
