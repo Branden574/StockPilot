@@ -59,9 +59,9 @@ beforeEach(() => {
 });
 
 // Every row of: View purchase orders held or not, set-up owed or not, the
-// purchase orders module on or off. Only "not held, set-up owed" differs from
-// what the layout always did, and only in that the page runs (and sends the
-// member to set-up) instead of the panel.
+// purchase orders module on or off. A member without the permission gets the
+// panel, except one who owes set-up: for them the page runs (and sends the
+// member to set-up).
 const MATRIX = [
   { view: true, owed: false, shows: 'page' },
   { view: true, owed: true, shows: 'page' },
