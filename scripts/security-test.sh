@@ -2258,14 +2258,16 @@ MOBILE_TESTS=(
 
   # Queued work while an organization requires an authenticator the account
   # has not set up: no queued change is parked for that answer. A 403 on a
-  # queued send is final only when it is not the authenticator answer and a
-  # read made after it finds no set-up owed in the row's own workspace; until
-  # then the row is kept, and while its workspace owes set-up it is held (per
-  # row and per workspace, from the policy as read, the role and the server's
-  # factor list; an organization row that cannot be read is never read as a
-  # policy) and sent once, with its own key, after set-up. The inputs are
-  # saved, never the answer, under an account-scoped key. A row already
-  # parked for that answer is not sent again and reads a plain sentence.
+  # queued send is final at once when it names another reason; with no
+  # reason, only when a read that started after that row's own kept refusal
+  # returned the row's workspace and finds no set-up owed there. Until then
+  # the row is kept (sent again after a backoff), and while its workspace
+  # owes set-up it is held (per row and per workspace, from the policy as
+  # read, the role and the server's factor list; an organization row that
+  # cannot be read is never read as a policy) and sent once, with its own
+  # key, after set-up. The inputs are saved, never the answer, under an
+  # account-scoped key. A row in Unsent work whose stored message is the
+  # server's sentence for that answer is not sent and reads a plain sentence.
   # (The drains themselves: sync.drain.test.ts and
   # cycle-count-sync.drain.test.ts, listed under the outbox above.)
   src/lib/set-up-inputs.test.ts

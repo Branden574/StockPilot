@@ -404,7 +404,20 @@ describe('the authenticator code release (S43a, release 1)', () => {
     expect(drain).toContain(
       "if (status === 401) return opts.accountDisabled ? 'rejected' : 'failed';",
     );
-    expect(drain).toContain('  if (status === 403) {\n');
+    // The whole 403 branch, in order: the authenticator answer (in
+    // details.reason or as the code) keeps the row; another named reason
+    // parks it; no reason parks it only on a check that found nothing owed.
+    expect(drain).toContain(
+      [
+        '  if (status === 403) {',
+        '    const reason = detailsReason(e?.details);',
+        "    if (reason !== null && AUTHENTICATOR_REASONS.has(reason)) return 'failed';",
+        "    if (typeof e?.code === 'string' && AUTHENTICATOR_REASONS.has(e.code)) return 'failed';",
+        "    if (reason !== null) return 'rejected';",
+        "    return opts.setUp === 'clear' ? 'rejected' : 'failed';",
+        '  }',
+      ].join('\n'),
+    );
     expect(drain).toContain(
       'const DEFINITIVE_REFUSALS: ReadonlySet<number> = new Set([400, 409, 422]);',
     );

@@ -133,6 +133,8 @@ type Row = {
   payload: Record<string, unknown>;
   organizationId?: string | null;
   userId?: string | null;
+  attempts?: number;
+  lastAttemptAt?: number | null;
 };
 
 function httpError(status: number, message = 'boom'): Error {
@@ -1327,14 +1329,165 @@ describe('drainQueue — a queued change waits while an authenticator is being s
       throw setUpRefusal(false);
     });
     pending([OWN_RECEIPT]);
-    for (let pass = 0; pass < 2; pass += 1) {
-      calls.log = [];
-      expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
-      expect(calls.log).toEqual(['markSending:1', 'api:/api/v1/po/po1/receive-line', 'markFailed:1']);
-      await checkAnswered();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      for (let pass = 0; pass < 3; pass += 1) {
+        calls.log = [];
+        expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+        expect(calls.log).toEqual(['markSending:1', 'api:/api/v1/po/po1/receive-line', 'markFailed:1']);
+        await checkAnswered();
+        // The next pass comes a minute later, past the read interval.
+        now.mockReturnValue(1_000_000 + (pass + 1) * 60_000);
+      }
+      expect(setUpReads.count).toBe(3);
+    } finally {
+      now.mockRestore();
     }
-    expect(setUpReads.count).toBeGreaterThanOrEqual(2);
     expect(queueMock.markRejected).not.toHaveBeenCalled();
+  });
+
+  it('per row: after one row is kept then parked, a later row\'s first 403 with no reason is kept, not parked', async () => {
+    const ROW_A: Row = { ...BUNDLE, organizationId: 'org-a', userId: 'u1' };
+    const ROW_B: Row = { ...RECEIPT, id: 7, idempotencyKey: 'k7', organizationId: 'org-a', userId: 'u1' };
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      throw httpError(403, 'Missing permission: stock:receive');
+    });
+    // Row A: kept, read (org-a Optional), then parked on its second 403.
+    pending([ROW_A]);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+    await checkAnswered();
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 1 });
+    expect(queueMock.markRejected).toHaveBeenCalledTimes(1);
+
+    // Row B, later in the same run, same workspace: that read started before
+    // B's refusal, so B's first refusal is kept.
+    pending([ROW_B]);
+    calls.log = [];
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+    expect(calls.log).toEqual(['markSending:7', 'api:/api/v1/po/po1/receive-line', 'markFailed:7']);
+    expect(queueMock.markRejected).toHaveBeenCalledTimes(1);
+  });
+
+  it('many rows kept in one pass ask for one read; the next read waits out the interval', async () => {
+    const rows: Row[] = [1, 2, 3, 4].map((id) => ({
+      ...RECEIPT,
+      id,
+      idempotencyKey: `k${id}`,
+      organizationId: 'org-a',
+      userId: 'u1',
+    }));
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      throw setUpRefusal(true);
+    });
+    pending(rows);
+    const now = vi.spyOn(Date, 'now').mockReturnValue(2_000_000);
+    try {
+      expect(await drainQueue()).toEqual({ ok: 0, failed: 4, rejected: 0 });
+      await checkAnswered();
+      expect(setUpReads.count).toBe(1);
+      // A pass within the interval asks for none.
+      now.mockReturnValue(2_000_000 + 10_000);
+      await drainQueue();
+      await checkAnswered();
+      expect(setUpReads.count).toBe(1);
+      // Past it: one more, however many rows are kept.
+      now.mockReturnValue(2_000_000 + 60_000);
+      await drainQueue();
+      await checkAnswered();
+      expect(setUpReads.count).toBe(2);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('a kept row is sent again only once its backoff has passed, at most once per 5 minutes', async () => {
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      throw setUpRefusal(true);
+    });
+    const t0 = 3_000_000;
+    const now = vi.spyOn(Date, 'now').mockReturnValue(t0);
+    try {
+      pending([{ ...OWN_RECEIPT, attempts: 0, lastAttemptAt: null }]);
+      expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+      // Kept: 3 attempts, the last one at t0; 2^3 s = 8 s to wait.
+      pending([{ ...OWN_RECEIPT, attempts: 3, lastAttemptAt: t0 }]);
+      calls.log = [];
+      now.mockReturnValue(t0 + 7_999);
+      expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 0 });
+      expect(calls.log).toEqual([]);
+      now.mockReturnValue(t0 + 8_000);
+      expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+      // Many attempts: the wait stops growing at 5 minutes.
+      pending([{ ...OWN_RECEIPT, attempts: 40, lastAttemptAt: t0 }]);
+      calls.log = [];
+      now.mockReturnValue(t0 + 5 * 60_000 - 1);
+      expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 0 });
+      expect(calls.log).toEqual([]);
+      now.mockReturnValue(t0 + 5 * 60_000);
+      expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('a kept adjustment waiting out its backoff holds the later adjustments of its workspace', async () => {
+    const ADJ = (id: number, extra: Partial<Row> = {}): Row => ({
+      id,
+      kind: 'adjust_stock',
+      idempotencyKey: `k${id}`,
+      organizationId: 'org-a',
+      userId: 'u1',
+      payload: { itemId: 'item-1', quantityChange: 1, itemLabel: 'Polo S (POLO-S)' },
+      ...extra,
+    });
+    apiMock.api.mockImplementation(async (path: string, opts?: { onSend?: () => void }) => {
+      calls.log.push(`api:${path}`);
+      opts?.onSend?.();
+      throw setUpRefusal(true);
+    });
+    const t0 = 4_000_000;
+    const now = vi.spyOn(Date, 'now').mockReturnValue(t0);
+    try {
+      pending([ADJ(41)]);
+      expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+      pending([ADJ(41, { attempts: 2, lastAttemptAt: t0 }), ADJ(42)]);
+      calls.log = [];
+      now.mockReturnValue(t0 + 1_000);
+      expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 0 });
+      expect(calls.log).toEqual([]);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('a row never kept is sent every pass, as the backoff is only for kept rows', async () => {
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      throw httpError(500);
+    });
+    pending([{ ...OWN_RECEIPT, attempts: 9, lastAttemptAt: Date.now() }]);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+  });
+
+  it('a reader that throws as it is called cannot leave the row "sending": it is marked failed', async () => {
+    resetSetUpInputsForTests();
+    void registerSetUpInputsSource({
+      storage: { getAllKeys: async () => [], getItem: async () => null, setItem: async () => {} },
+      read: (): Promise<void> => {
+        throw new Error('not ready');
+      },
+    });
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      throw setUpRefusal(true);
+    });
+    pending([OWN_RECEIPT]);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+    expect(calls.log).toEqual(['markSending:1', 'api:/api/v1/po/po1/receive-line', 'markFailed:1']);
   });
 
   it('a 403 whose code is the authenticator answer, with no details, is kept even when the check says clear', async () => {

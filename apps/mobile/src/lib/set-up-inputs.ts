@@ -20,9 +20,10 @@ import {
  *   - the outbox send decision (outbox-scope.ts): a queued row whose own
  *     workspace answers 'owed' is held, left exactly as it is, until the
  *     account has an authenticator;
- *   - the drain rule (drain-failure.ts): a 403 on a queued send is final only
- *     when this store, from reads made AFTER that refusal, answers 'clear'
- *     for the row's workspace (setUpAnswerAfterRefusal).
+ *   - the drain rule (drain-failure.ts): a 403 on a queued send that names no
+ *     reason is final only when this store, from reads that STARTED after
+ *     that row's own kept refusal, answers 'clear' for the row's workspace
+ *     (setUpAnswerAfterRefusal).
  *
  * Answers:
  *   'owed'    the policy, as read, requires an authenticator of this role and
@@ -38,8 +39,8 @@ import {
  *             no verified factor.
  *
  * A LEAF: core only. AsyncStorage and the reads are handed in by
- * use-workspace.ts (registerSetUpInputsSource), so the drains and the send
- * decision import nothing native.
+ * set-up-inputs-source.ts (registerSetUpInputsSource), so the drains and the
+ * send decision import nothing native.
  */
 
 export type SetUpAnswer = 'owed' | 'clear' | 'unknown';
@@ -90,7 +91,10 @@ export function setUpInputsStorageKey(userId: string): string {
   return `${SET_UP_INPUTS_STORAGE_PREFIX}${userId}`;
 }
 
-/** At most one read asked for by held rows per this many milliseconds. */
+/**
+ * At most one read asked for by the drains per this many milliseconds, for
+ * held rows and kept refusals alike, however many rows asked.
+ */
 export const SET_UP_READ_MIN_INTERVAL_MS = 30_000;
 
 // ── State (this app run) ─────────────────────────────────────────────────
@@ -110,14 +114,29 @@ interface AccountMemberships {
 
 const memberships = new Map<string, AccountMemberships>();
 
-interface AccountFactors {
+interface FactorList {
   hasVerified: boolean;
   readSeq: number;
 }
 
+interface AccountFactors {
+  /** The newest list, however it was numbered: what the hold decides by. */
+  latest: FactorList;
+  /**
+   * The newest list from a read that took its number as it STARTED (the
+   * store's own read). Only this one can answer for a refusal: a list
+   * numbered on arrival may come from a read that started before it.
+   */
+  started: FactorList | null;
+}
+
 const factors = new Map<string, AccountFactors>();
 
-/** The refusal each account and workspace is waiting for a check of: `${userId}\u0000${orgId}` -> its number. */
+/**
+ * Each queued row's kept refusal: `${userId}\u0000${orgId}\u0000${rowKey}` ->
+ * its number. `rowKey` is the row's idempotency key, which no other row has,
+ * so a mark only ever answers for its own row.
+ */
 const refusals = new Map<string, number>();
 
 let storage: SetUpInputsStorage | null = null;
@@ -133,7 +152,8 @@ let forgottenAt = 0;
 /** Bumped by forgetSetUpInputs: a load of saved inputs started earlier brings nothing back. */
 let forgetCount = 0;
 
-const refusalKey = (userId: string, orgId: string) => `${userId}\u0000${orgId}`;
+const refusalKey = (userId: string, orgId: string, rowKey: string) =>
+  `${userId}\u0000${orgId}\u0000${rowKey}`;
 
 // ── Recording what was read ──────────────────────────────────────────────
 
@@ -186,7 +206,9 @@ export function recordMembershipInputs(
 /**
  * A user the app read from the server. Its factor list replaces the one kept
  * for that account. `readSeq` is the number the read took at its start, when
- * the caller has it; otherwise the next one (the answer is at least that new).
+ * the caller has it; otherwise the next one, taken on arrival (such a list
+ * decides the hold, never a refusal). A factor list that is not a list is
+ * not read: nothing is recorded.
  */
 export function noteServerReadUser(
   user: ServerReadUser | null | undefined,
@@ -194,14 +216,21 @@ export function noteServerReadUser(
 ): void {
   const id = user?.id;
   if (typeof id !== 'string' || !id) return;
+  const list: unknown = user?.factors ?? [];
+  if (!Array.isArray(list)) return;
   const at = readSeq ?? beginSetUpRead();
   if (at <= forgottenAt) return;
-  const current = factors.get(id);
-  if (current && current.readSeq > at) return;
-  factors.set(id, {
-    hasVerified: (user?.factors ?? []).some((factor) => factor?.status === 'verified'),
+  const read: FactorList = {
+    hasVerified: list.some(
+      (factor: { status?: unknown } | null | undefined) => factor?.status === 'verified',
+    ),
     readSeq: at,
-  });
+  };
+  const current = factors.get(id);
+  const latest = current && current.latest.readSeq > at ? current.latest : read;
+  let started = current?.started ?? null;
+  if (readSeq !== undefined && (!started || started.readSeq <= at)) started = read;
+  factors.set(id, { latest, started });
 }
 
 // ── Answers ──────────────────────────────────────────────────────────────
@@ -220,7 +249,8 @@ function answer(userId: string | null, orgId: string | null, after: number | nul
   // as the organization's own (core readOrganizationMfaPolicy).
   const policy = inputs.policy === 'hidden' ? UNREADABLE_ORG_MFA_POLICY : inputs.policy;
   if (!policyRequiresAuthenticator(policy, inputs.role)) return 'clear';
-  const list = factors.get(userId);
+  const kept = factors.get(userId);
+  const list = after === null ? kept?.latest : kept?.started;
   if (!list) return 'unknown';
   if (after !== null && list.readSeq <= after) return 'unknown';
   const owed = authenticatorSetUpOwed(
@@ -238,41 +268,69 @@ export function setUpOwedIn(userId: string | null, orgId: string | null): SetUpA
 }
 
 /**
- * For a 403 on a queued send: the answer from reads that STARTED after the
- * last refusal kept for this account and workspace (noteKeptRefusal), else
- * 'unknown'. So the first refusal is never final: it is kept, the inputs are
- * read again, and only the next send's refusal can be.
+ * For a 403 on a queued send: the answer from reads that STARTED after THIS
+ * row's kept refusal (noteKeptRefusal), else 'unknown'. A row with no kept
+ * refusal answers 'unknown', so each row's first refusal is never final: it
+ * is kept, the inputs are read again, and only a later refusal of that row
+ * can be. Another row's refusal, and any read that started before this
+ * row's, never answer for it.
  */
-export function setUpAnswerAfterRefusal(userId: string | null, orgId: string | null): SetUpAnswer {
-  if (!userId || !orgId) return 'unknown';
-  const refusedAt = refusals.get(refusalKey(userId, orgId));
+export function setUpAnswerAfterRefusal(
+  userId: string | null,
+  orgId: string | null,
+  rowKey: string | null,
+): SetUpAnswer {
+  if (!userId || !orgId || !rowKey) return 'unknown';
+  const refusedAt = refusals.get(refusalKey(userId, orgId, rowKey));
   if (refusedAt === undefined) return 'unknown';
   return answer(userId, orgId, refusedAt);
 }
 
+/** Whether this row has a refusal kept for a check this app run (the drain backs it off). */
+export function keptRefusalNoted(
+  userId: string | null,
+  orgId: string | null,
+  rowKey: string | null,
+): boolean {
+  if (!userId || !orgId || !rowKey) return false;
+  return refusals.has(refusalKey(userId, orgId, rowKey));
+}
+
 /**
- * A 403 on a queued send was kept for a check. Records it (unless an earlier
- * one is still waiting for a read made after it: moving that mark on would
- * let a burst of refusals outrun every read) and asks for a read.
+ * A 403 on a queued row was kept for a check. Records the row's mark: its
+ * first kept refusal, moved on to a later one only once a membership read
+ * that started after the mark has answered (until then the read already
+ * asked for still counts). Then asks for a read, under the same minimum
+ * interval as held rows, so one pass with many kept rows asks for one.
  */
-export function noteKeptRefusal(userId: string | null, orgId: string | null): void {
-  if (!userId || !orgId) return;
-  const key = refusalKey(userId, orgId);
+export function noteKeptRefusal(
+  userId: string | null,
+  orgId: string | null,
+  rowKey: string | null,
+): void {
+  if (!userId || !orgId || !rowKey) return;
+  const key = refusalKey(userId, orgId, rowKey);
   const pending = refusals.get(key);
   const account = memberships.get(userId);
   const answeredSince =
     pending !== undefined && account?.readSeq != null && account.readSeq > pending;
   if (pending === undefined || answeredSince) refusals.set(key, beginSetUpRead());
-  startRead(Date.now());
+  requestSetUpInputsRead(Date.now());
 }
 
 // ── Reads asked for ──────────────────────────────────────────────────────
 
-/** One read at a time; nothing when no reader is registered. Never throws. */
+/** One read at a time; nothing when no reader is registered. Never throws, even when the reader does. */
 function startRead(now: number): void {
   if (!reader || readInFlight) return;
   lastReadAskedAt = now;
-  readInFlight = reader()
+  let started: Promise<void>;
+  try {
+    started = reader();
+  } catch {
+    return;
+  }
+  readInFlight = Promise.resolve(started)
     .catch(() => undefined)
     .finally(() => {
       readInFlight = null;
@@ -280,11 +338,12 @@ function startRead(now: number): void {
 }
 
 /**
- * Ask for the inputs to be read again (the user and the membership read), for
- * rows held while set-up is owed: that read is what releases them once the
- * account has an authenticator or the policy changed. At most one per
- * SET_UP_READ_MIN_INTERVAL_MS, since every drain pass asks. A refusal kept
- * for a check asks through noteKeptRefusal, without that wait.
+ * Ask for the inputs to be read again (the user and the membership read): for
+ * rows held while set-up is owed, that read is what releases them once the
+ * account has an authenticator or the policy changed; for a kept refusal
+ * (noteKeptRefusal), it is the check the row's next refusal is judged on. At
+ * most one per SET_UP_READ_MIN_INTERVAL_MS, since every drain pass and every
+ * kept row asks.
  */
 export function requestSetUpInputsRead(now: number = Date.now()): void {
   if (now - lastReadAskedAt < SET_UP_READ_MIN_INTERVAL_MS) return;

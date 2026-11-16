@@ -668,7 +668,7 @@ describe('a queued count waits while an authenticator is being set up', () => {
   });
 });
 
-describe('another account’s superseded count is parked as before while this account owes set-up', () => {
+describe('another account’s superseded count is parked with the replaced sentence while this account owes set-up', () => {
   beforeEach(() => resetSetUpInputsForTests());
   afterEach(() => resetSetUpInputsForTests());
 

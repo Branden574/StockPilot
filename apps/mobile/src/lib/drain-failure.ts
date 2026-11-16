@@ -47,14 +47,17 @@
  * So a 403 is 'rejected' only when
  *   - it names a reason, in `details.reason`, that is not the authenticator
  *     one: the route judged the change itself; or
- *   - it names no reason, and the phone, from reads made after that refusal
- *     that returned the row's workspace, finds this account owes no set-up
- *     there (`setUp` 'clear': set-up-inputs.ts setUpAnswerAfterRefusal; a
- *     workspace missing from a read answers 'unknown', never 'clear').
+ *   - it names no reason, and the phone, from a read that STARTED after this
+ *     row's own kept refusal and returned the row's workspace, finds this
+ *     account owes no set-up there (`setUp` 'clear': set-up-inputs.ts
+ *     setUpAnswerAfterRefusal; a row with no kept refusal, and a workspace
+ *     missing from a read, answer 'unknown', never 'clear'). So each row's
+ *     first such refusal is kept.
  * Anything else keeps the row ('failed'): the drain notes the refusal and the
  * inputs are read again (keptForSetUpCheck, set-up-inputs.ts
  * noteKeptRefusal), and while the row's workspace owes set-up the send
- * decision holds it (outbox-scope.ts). The authenticator answer itself
+ * decision holds it (outbox-scope.ts). A row kept this way is sent again
+ * only once its backoff has passed (keptRowDue). The authenticator answer itself
  * ('mfa_required' or 'aal2_required', in `details.reason` or as the code) is
  * never final, even when the phone's read says nothing is owed: the server
  * holds a member whose policy it could not read to the strictest one.
@@ -101,7 +104,7 @@ export function classifyDrainFailure(
   err: unknown,
   opts: {
     accountDisabled: boolean;
-    /** The row workspace's answer from reads made after its last kept refusal. */
+    /** The row workspace's answer from reads that started after this row's kept refusal. */
     setUp: SetUpAnswer;
   },
 ): DrainOutcome {
@@ -129,4 +132,24 @@ export function classifyDrainFailure(
  */
 export function keptForSetUpCheck(err: unknown): boolean {
   return (err as { status?: unknown } | null | undefined)?.status === 403;
+}
+
+/** The longest wait between two sends of a row kept for that check. */
+export const KEPT_ROW_MAX_BACKOFF_MS = 5 * 60 * 1000;
+
+/**
+ * Whether a row kept for the authenticator check may be sent again: the
+ * delay the count drain gives every retried row (cycle-count-cache.ts isDue),
+ * 2^attempts seconds after its last attempt, at most KEPT_ROW_MAX_BACKOFF_MS.
+ * The count drain applies that to its own rows; sync.ts applies this to its
+ * kept rows, so a long refusal sends each at most once per that cap.
+ */
+export function keptRowDue(
+  attempts: number | null | undefined,
+  lastAttemptAt: number | null | undefined,
+  now: number,
+): boolean {
+  if (!lastAttemptAt) return true;
+  const delay = Math.min(2 ** (attempts ?? 0) * 1000, KEPT_ROW_MAX_BACKOFF_MS);
+  return now - lastAttemptAt >= delay;
 }

@@ -4,6 +4,7 @@ import { accountScopedStorageKeys } from './account-eviction';
 import {
   beginSetUpRead,
   forgetSetUpInputs,
+  keptRefusalNoted,
   noteKeptRefusal,
   noteServerReadUser,
   parseSavedSetUpInputs,
@@ -139,9 +140,28 @@ describe('setUpOwedIn: the rule, from the inputs', () => {
     expect(setUpOwedIn('u1', 'org')).toBe('clear');
     expect(setUpOwedIn('u1', 'left')).toBe('unknown');
     // Nor after a refusal: only a read that returned the workspace can clear it.
-    noteKeptRefusal('u1', 'left');
+    noteKeptRefusal('u1', 'left', 'row-a');
     readMemberships([row('org', { mfa_policy: 'optional' })]);
-    expect(setUpAnswerAfterRefusal('u1', 'left')).toBe('unknown');
+    expect(setUpAnswerAfterRefusal('u1', 'left', 'row-a')).toBe('unknown');
+  });
+
+  it('a factor list that is not a list is not read: nothing recorded, nothing thrown', () => {
+    readMemberships([row('org', { mfa_policy: 'all_required' })]);
+    for (const factors of [{ status: 'verified' }, 'verified', 7]) {
+      expect(() =>
+        noteServerReadUser({ id: 'u1', factors } as unknown as Parameters<
+          typeof noteServerReadUser
+        >[0]),
+      ).not.toThrow();
+    }
+    expect(setUpOwedIn('u1', 'org')).toBe('unknown');
+    // An account with no factors at all comes with none listed: that is a list, empty.
+    noteServerReadUser({ id: 'u1' });
+    expect(setUpOwedIn('u1', 'org')).toBe('owed');
+    noteServerReadUser({ id: 'u1', factors: { length: 1 } } as unknown as Parameters<
+      typeof noteServerReadUser
+    >[0]);
+    expect(setUpOwedIn('u1', 'org')).toBe('owed');
   });
 
   it('per account: another account on the phone never answers for this one', () => {
@@ -162,56 +182,104 @@ describe('setUpOwedIn: the rule, from the inputs', () => {
   });
 });
 
-describe('setUpAnswerAfterRefusal: only reads made after the refusal count', () => {
-  it('no refusal noted: unknown, whatever is known', () => {
+describe("setUpAnswerAfterRefusal: only reads that started after THIS row's kept refusal count", () => {
+  /** A factor list from a read that took its number as it started (the store's own read). */
+  const startedFactors = (verified: boolean, userId = 'u1') =>
+    noteServerReadUser(
+      { id: userId, factors: verified ? [{ status: 'verified' }] : [] },
+      beginSetUpRead(),
+    );
+
+  it('no refusal noted for the row: unknown, whatever is known', () => {
     readMemberships([row('org', { mfa_policy: 'optional' })]);
     expect(setUpOwedIn('u1', 'org')).toBe('clear');
-    expect(setUpAnswerAfterRefusal('u1', 'org')).toBe('unknown');
+    expect(setUpAnswerAfterRefusal('u1', 'org', 'row-a')).toBe('unknown');
+    expect(setUpAnswerAfterRefusal('u1', 'org', null)).toBe('unknown');
   });
 
   it('reads from before the refusal do not count; reads after it do', () => {
     readMemberships([row('org', { mfa_policy: 'all_required' })]);
-    noteServerReadUser({ id: 'u1', factors: [] });
-    noteKeptRefusal('u1', 'org');
-    expect(setUpAnswerAfterRefusal('u1', 'org')).toBe('unknown');
+    startedFactors(false);
+    noteKeptRefusal('u1', 'org', 'row-a');
+    expect(setUpAnswerAfterRefusal('u1', 'org', 'row-a')).toBe('unknown');
 
     readMemberships([row('org', { mfa_policy: 'all_required' })]);
     // The policy asks this role, so the factor list must be newer too.
-    expect(setUpAnswerAfterRefusal('u1', 'org')).toBe('unknown');
-    noteServerReadUser({ id: 'u1', factors: [] });
-    expect(setUpAnswerAfterRefusal('u1', 'org')).toBe('owed');
+    expect(setUpAnswerAfterRefusal('u1', 'org', 'row-a')).toBe('unknown');
+    startedFactors(false);
+    expect(setUpAnswerAfterRefusal('u1', 'org', 'row-a')).toBe('owed');
+  });
+
+  it('a read that STARTED before the refusal and answered after it does not count', () => {
+    const membershipRead = beginSetUpRead();
+    const userRead = beginSetUpRead();
+    noteKeptRefusal('u1', 'org', 'row-a');
+    // Both answer after the refusal.
+    noteServerReadUser({ id: 'u1', factors: [{ status: 'verified' }] }, userRead);
+    recordMembershipInputs('u1', [row('org', { mfa_policy: 'all_required' })], membershipRead);
+    expect(setUpAnswerAfterRefusal('u1', 'org', 'row-a')).toBe('unknown');
+  });
+
+  it('a factor list numbered on arrival decides the hold, never a refusal', () => {
+    noteKeptRefusal('u1', 'org', 'row-a');
+    readMemberships([row('org', { mfa_policy: 'all_required' })]);
+    // As the code gate's reconcile hands it over: no start number, so it may
+    // come from a read that started before the refusal.
+    noteServerReadUser({ id: 'u1', factors: [{ status: 'verified' }] });
+    expect(setUpOwedIn('u1', 'org')).toBe('clear');
+    expect(setUpAnswerAfterRefusal('u1', 'org', 'row-a')).toBe('unknown');
+    startedFactors(true);
+    expect(setUpAnswerAfterRefusal('u1', 'org', 'row-a')).toBe('clear');
   });
 
   it('a policy that does not ask this role, read after the refusal, is clear without a factor list', () => {
-    noteKeptRefusal('u1', 'org');
+    noteKeptRefusal('u1', 'org', 'row-a');
     readMemberships([row('org', { mfa_policy: 'admins_required' })]);
-    expect(setUpAnswerAfterRefusal('u1', 'org')).toBe('clear');
+    expect(setUpAnswerAfterRefusal('u1', 'org', 'row-a')).toBe('clear');
   });
 
-  it('a burst of refusals before the read answers does not move the mark past that read', () => {
-    noteKeptRefusal('u1', 'org');
-    const read = beginSetUpRead(); // the read asked for, under way
-    noteKeptRefusal('u1', 'org'); // a second row of the same workspace refused meanwhile
-    recordMembershipInputs('u1', [row('org', { mfa_policy: 'optional' })], read);
-    expect(setUpAnswerAfterRefusal('u1', 'org')).toBe('clear');
-  });
-
-  it('a refusal after a read has answered sets a new mark', () => {
-    noteKeptRefusal('u1', 'org');
+  it("per row: an earlier row's kept refusal and the read after it never answer for a later row", () => {
+    // Row A: kept, read, then judged clear (and parked by the drain).
+    noteKeptRefusal('u1', 'org', 'row-a');
     readMemberships([row('org', { mfa_policy: 'optional' })]);
-    expect(setUpAnswerAfterRefusal('u1', 'org')).toBe('clear');
-    noteKeptRefusal('u1', 'org');
-    expect(setUpAnswerAfterRefusal('u1', 'org')).toBe('unknown');
+    expect(setUpAnswerAfterRefusal('u1', 'org', 'row-a')).toBe('clear');
+    // Row B, later in the same run, same workspace: its first refusal is
+    // judged on nothing, so it is kept.
+    expect(setUpAnswerAfterRefusal('u1', 'org', 'row-b')).toBe('unknown');
+    noteKeptRefusal('u1', 'org', 'row-b');
+    expect(setUpAnswerAfterRefusal('u1', 'org', 'row-b')).toBe('unknown');
+    readMemberships([row('org', { mfa_policy: 'optional' })]);
+    expect(setUpAnswerAfterRefusal('u1', 'org', 'row-b')).toBe('clear');
   });
 
-  it('per workspace: a refusal in one workspace sets no mark in another', () => {
-    noteKeptRefusal('u1', 'org-a');
+  it('a row refused again before the read answers keeps its mark, so that read still counts', () => {
+    noteKeptRefusal('u1', 'org', 'row-a');
+    const read = beginSetUpRead(); // the read asked for, under way
+    noteKeptRefusal('u1', 'org', 'row-a');
+    recordMembershipInputs('u1', [row('org', { mfa_policy: 'optional' })], read);
+    expect(setUpAnswerAfterRefusal('u1', 'org', 'row-a')).toBe('clear');
+  });
+
+  it('a row refused again after a read has answered gets a new mark', () => {
+    noteKeptRefusal('u1', 'org', 'row-a');
+    readMemberships([row('org', { mfa_policy: 'optional' })]);
+    expect(setUpAnswerAfterRefusal('u1', 'org', 'row-a')).toBe('clear');
+    noteKeptRefusal('u1', 'org', 'row-a');
+    expect(setUpAnswerAfterRefusal('u1', 'org', 'row-a')).toBe('unknown');
+  });
+
+  it('per workspace and per account: a mark answers only its own row there', () => {
+    noteKeptRefusal('u1', 'org-a', 'row-a');
     readMemberships([
       row('org-a', { mfa_policy: 'optional' }),
       row('org-b', { mfa_policy: 'optional' }),
     ]);
-    expect(setUpAnswerAfterRefusal('u1', 'org-a')).toBe('clear');
-    expect(setUpAnswerAfterRefusal('u1', 'org-b')).toBe('unknown');
+    expect(setUpAnswerAfterRefusal('u1', 'org-a', 'row-a')).toBe('clear');
+    expect(setUpAnswerAfterRefusal('u1', 'org-b', 'row-a')).toBe('unknown');
+    expect(setUpAnswerAfterRefusal('u2', 'org-a', 'row-a')).toBe('unknown');
+    expect(keptRefusalNoted('u1', 'org-a', 'row-a')).toBe(true);
+    expect(keptRefusalNoted('u1', 'org-a', 'row-b')).toBe(false);
+    expect(keptRefusalNoted('u1', 'org-b', 'row-a')).toBe(false);
   });
 });
 
@@ -225,13 +293,29 @@ describe('reads asked for', () => {
         }),
     );
     await registerSetUpInputsSource({ storage: memoryStorage(), read });
-    noteKeptRefusal('u1', 'org');
-    noteKeptRefusal('u1', 'org');
+    noteKeptRefusal('u1', 'org', 'row-a');
+    noteKeptRefusal('u1', 'org', 'row-b');
     expect(read).toHaveBeenCalledTimes(1);
     release();
     await setUpInputsReadInFlight();
-    noteKeptRefusal('u1', 'org');
-    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('kept refusals ask under the same minimum interval as held rows, however many rows', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    try {
+      const read = vi.fn(async () => undefined);
+      await registerSetUpInputsSource({ storage: memoryStorage(), read });
+      noteKeptRefusal('u1', 'org', 'row-a');
+      await setUpInputsReadInFlight();
+      for (const key of ['row-b', 'row-c', 'row-d']) noteKeptRefusal('u1', 'org', key);
+      requestSetUpInputsRead(1_000 + SET_UP_READ_MIN_INTERVAL_MS - 1);
+      expect(read).toHaveBeenCalledTimes(1);
+      now.mockReturnValue(1_000 + SET_UP_READ_MIN_INTERVAL_MS);
+      noteKeptRefusal('u1', 'org', 'row-e');
+      expect(read).toHaveBeenCalledTimes(2);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it('a held row asks at most once per interval', async () => {
@@ -250,13 +334,25 @@ describe('reads asked for', () => {
       throw new Error('offline');
     });
     await registerSetUpInputsSource({ storage: memoryStorage(), read });
-    expect(() => noteKeptRefusal('u1', 'org')).not.toThrow();
+    expect(() => noteKeptRefusal('u1', 'org', 'row-a')).not.toThrow();
     await setUpInputsReadInFlight();
     expect(setUpInputsReadInFlight()).toBeNull();
   });
 
+  it('a reader that throws before it returns a promise: nothing throws to the drain, the mark is kept', async () => {
+    const read = vi.fn((): Promise<void> => {
+      throw new Error('not ready');
+    });
+    await registerSetUpInputsSource({ storage: memoryStorage(), read });
+    expect(() => noteKeptRefusal('u1', 'org', 'row-a')).not.toThrow();
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(setUpInputsReadInFlight()).toBeNull();
+    expect(keptRefusalNoted('u1', 'org', 'row-a')).toBe(true);
+    expect(() => requestSetUpInputsRead(10 ** 12)).not.toThrow();
+  });
+
   it('with no reader registered nothing is asked and nothing throws', () => {
-    expect(() => noteKeptRefusal('u1', 'org')).not.toThrow();
+    expect(() => noteKeptRefusal('u1', 'org', 'row-a')).not.toThrow();
     expect(() => requestSetUpInputsRead()).not.toThrow();
     expect(setUpInputsReadInFlight()).toBeNull();
   });
@@ -408,9 +504,9 @@ describe('saved inputs', () => {
     // Saved, not read this run: a workspace missing from it is not known.
     expect(setUpOwedIn('u1', 'other')).toBe('unknown');
     // Never "after a refusal".
-    noteKeptRefusal('u1', 'org');
-    noteServerReadUser({ id: 'u1', factors: [] });
-    expect(setUpAnswerAfterRefusal('u1', 'org')).toBe('unknown');
+    noteKeptRefusal('u1', 'org', 'row-a');
+    noteServerReadUser({ id: 'u1', factors: [] }, beginSetUpRead());
+    expect(setUpAnswerAfterRefusal('u1', 'org', 'row-a')).toBe('unknown');
 
     readMemberships([row('org', { mfa_policy: 'optional' })]);
     expect(setUpOwedIn('u1', 'org')).toBe('clear');

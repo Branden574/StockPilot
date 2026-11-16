@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import { contextUnavailableBody } from '@stockpilot/core';
 
-import { ACCOUNT_DISABLED_REJECTION, classifyDrainFailure, keptForSetUpCheck } from './drain-failure';
+import {
+  ACCOUNT_DISABLED_REJECTION,
+  classifyDrainFailure,
+  KEPT_ROW_MAX_BACKOFF_MS,
+  keptForSetUpCheck,
+  keptRowDue,
+} from './drain-failure';
 
 /**
  * The outbox verdict. Two classes are terminal — see drain-failure.ts:
@@ -184,7 +190,7 @@ describe('classifyDrainFailure: a 403 and the authenticator policy', () => {
     }
   });
 
-  it('a 401 is decided as before, whatever the check says', () => {
+  it('a 401 is decided by the account rule, whatever the check says', () => {
     for (const setUp of ['owed', 'unknown', 'clear'] as const) {
       expect(classifyDrainFailure({ status: 401 }, { accountDisabled: false, setUp })).toBe('failed');
       expect(classifyDrainFailure({ status: 401 }, { accountDisabled: true, setUp })).toBe('rejected');
@@ -197,6 +203,23 @@ describe('classifyDrainFailure: a 403 and the authenticator policy', () => {
     for (const other of [{ status: 401 }, { status: 400 }, { status: 500 }, { status: '403' }, null, new Error('x')]) {
       expect(keptForSetUpCheck(other)).toBe(false);
     }
+  });
+});
+
+describe('keptRowDue: the backoff of a row kept for the authenticator check', () => {
+  it('2^attempts seconds after the last attempt, at most 5 minutes', () => {
+    expect(KEPT_ROW_MAX_BACKOFF_MS).toBe(5 * 60 * 1000);
+    expect(keptRowDue(1, 10_000, 11_999)).toBe(false);
+    expect(keptRowDue(1, 10_000, 12_000)).toBe(true);
+    expect(keptRowDue(4, 10_000, 25_999)).toBe(false);
+    expect(keptRowDue(4, 10_000, 26_000)).toBe(true);
+    expect(keptRowDue(30, 10_000, 10_000 + KEPT_ROW_MAX_BACKOFF_MS - 1)).toBe(false);
+    expect(keptRowDue(30, 10_000, 10_000 + KEPT_ROW_MAX_BACKOFF_MS)).toBe(true);
+  });
+
+  it('a row never attempted is due', () => {
+    expect(keptRowDue(0, null, 0)).toBe(true);
+    expect(keptRowDue(undefined, undefined, 0)).toBe(true);
   });
 });
 

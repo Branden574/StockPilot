@@ -9,12 +9,12 @@ import {
 /**
  * WHAT UNSENT WORK SAYS FOR A ROW PARKED ON THE AUTHENTICATOR ANSWER.
  *
- * A queued change the server refused because the organization requires an
- * authenticator the account had not set up may already be in Settings >
- * Unsent work from an earlier version of the app. It is not sent again: most
- * kinds are relative (receive N more, move N, add or remove N), and sending
- * one days later would apply it on top of whatever the person entered since.
- * That is a decision for a person with the current facts.
+ * A row in Settings > Unsent work whose stored message is the server's
+ * sentence for the authenticator answer (the organization requires an
+ * authenticator the account had not set up) is not sent: most kinds are
+ * relative (receive N more, move N, add or remove N), and sending one days
+ * later would apply it on top of whatever the person entered since. That is
+ * a decision for a person with the current facts. These words say so.
  *
  * Such a row stored only the server's sentence, no code, so this is the one
  * place a stored message is matched, EXACTLY, against the sentences the

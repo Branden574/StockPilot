@@ -9,9 +9,9 @@ import { refusedQueuedAdjustMessage } from './adjust-outbox';
 import { PARKED_FOR_AUTHENTICATOR_COPY, shownLastError } from './parked-set-up-words';
 
 /**
- * A row already in Settings > Unsent work because the server answered that
- * the organization requires an authenticator is not sent again (a person
- * decides with the current facts). What the reader shows for it is a plain
+ * A row in Settings > Unsent work whose stored message is the server's
+ * sentence for the authenticator answer is not sent (a person decides with
+ * the current facts). What the reader shows for it is a plain
  * sentence saying so, chosen by an exact match on the stored message: no
  * code was stored for those rows. Only what is displayed changes.
  */

@@ -83,22 +83,35 @@ describe('both drains: the hold, the check after a kept 403, and the read that r
       `const decision = outboxSendDecision(${rowName}, await liveOutboxScope()); if (!decision.send) { if (decision.reason === 'set-up-owed') requestSetUpInputsRead(); continue; }`,
     );
     expect(src).toContain(
-      'classifyDrainFailure(e, { accountDisabled: getAccountDisabled(), setUp: setUpAnswerAfterRefusal(decision.userId, decision.orgId), });',
+      `classifyDrainFailure(e, { accountDisabled: getAccountDisabled(), setUp: setUpAnswerAfterRefusal(decision.userId, decision.orgId, ${rowName}.idempotencyKey), });`,
     );
     const kept = src.indexOf(
-      'if (keptForSetUpCheck(e)) noteKeptRefusal(decision.userId, decision.orgId);',
+      `if (keptForSetUpCheck(e)) { noteKeptRefusal(decision.userId, decision.orgId, ${rowName}.idempotencyKey); }`,
     );
     expect(kept).toBeGreaterThan(-1);
     expect(src.indexOf(keep, kept)).toBeGreaterThan(kept);
   });
 
+  it('sync.ts sends a kept row again only once its backoff has passed, and a waiting adjustment holds its scope', () => {
+    const src = code('sync.ts');
+    const decided = src.indexOf(
+      'const decision = outboxSendDecision(action, await liveOutboxScope());',
+    );
+    const waits = src.indexOf(
+      'if ( keptRefusalNoted(decision.userId, decision.orgId, action.idempotencyKey) && !keptRowDue(action.attempts, action.lastAttemptAt, Date.now()) ) { if (action.kind === ADJUST_STOCK_KIND) heldScopes.add(scopeOf(decision)); continue; }',
+    );
+    expect(decided).toBeGreaterThan(-1);
+    expect(waits).toBeGreaterThan(decided);
+    expect(src.indexOf('await markSending(action.id', waits)).toBeGreaterThan(waits);
+  });
+
   it('the adjustment verdict carries the same answer, and a kept one holds its scope', () => {
     const src = code('sync.ts');
     expect(src).toContain(
-      'handedOff: handedOffAt !== null, setUp: setUpAnswerAfterRefusal(decision.userId, decision.orgId), });',
+      'handedOff: handedOffAt !== null, setUp: setUpAnswerAfterRefusal(decision.userId, decision.orgId, action.idempotencyKey), });',
     );
     expect(src).toContain(
-      "} else if (verdict === 'held-for-set-up') { noteKeptRefusal(decision.userId, decision.orgId); heldScopes.add(scopeOf(decision)); await markFailed(action.id, msg); failed += 1; }",
+      "} else if (verdict === 'held-for-set-up') { noteKeptRefusal(decision.userId, decision.orgId, action.idempotencyKey); heldScopes.add(scopeOf(decision)); await markFailed(action.id, msg); failed += 1; }",
     );
   });
 

@@ -362,18 +362,20 @@ class CycleCountSyncEngine {
           // is re-enabled. outboxReject parks it and clears the line's dirty
           // flag in one transaction so the screen does not strand a line as
           // permanently unsynced with no row left to sync it.
-          // A 403 is terminal only after a check of the workspace's
-          // authenticator policy made since it (drain-failure.ts).
+          // A 403 is terminal only on evidence that it is not about the
+          // authenticator (drain-failure.ts).
           const outcome = classifyDrainFailure(e, {
             accountDisabled: getAccountDisabled(),
-            setUp: setUpAnswerAfterRefusal(decision.userId, decision.orgId),
+            setUp: setUpAnswerAfterRefusal(decision.userId, decision.orgId, row.idempotencyKey),
           });
           if (outcome === 'rejected') {
             anyRejected = true;
             await outboxReject(row.id, msg);
           } else {
             // A 403 kept for that check: noted, and the inputs read again.
-            if (keptForSetUpCheck(e)) noteKeptRefusal(decision.userId, decision.orgId);
+            if (keptForSetUpCheck(e)) {
+              noteKeptRefusal(decision.userId, decision.orgId, row.idempotencyKey);
+            }
             anyFailed = true;
             await outboxBumpFailure(row.id, msg);
           }
