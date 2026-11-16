@@ -8,6 +8,14 @@ import { contextUnavailableBody } from '@stockpilot/core';
 import { adjustSendGate, UNCONFIRMED_ADJUST_PREFIX } from './adjust-outbox';
 import { OutboxSessionChangedError } from './outbox-scope';
 import {
+  beginSetUpRead,
+  noteServerReadUser,
+  recordMembershipInputs,
+  registerSetUpInputsSource,
+  resetSetUpInputsForTests,
+  setUpInputsReadInFlight,
+} from './set-up-inputs';
+import {
   drainQueue,
   pauseSyncForRestart,
   syncAfterRunning,
@@ -158,7 +166,42 @@ beforeEach(() => {
   adjustSendGate.resetForTests();
   adjustSendGate.serverAnswered();
   unconfirmedStock.resetForTests();
+  // The check a refusal asks for (set-up-inputs.ts): by default it finds
+  // every workspace Optional, so a refusal is judged on its own after it.
+  setUpReads.policies = { 'org-live': 'optional', 'org-a': 'optional', 'org-b': 'optional' };
+  setUpReads.verified = false;
+  setUpReads.count = 0;
+  resetSetUpInputsForTests();
+  void registerSetUpInputsSource({
+    storage: { getItem: async () => null, setItem: async () => {} },
+    read: async () => {
+      setUpReads.count += 1;
+      const at = beginSetUpRead();
+      noteServerReadUser({ id: 'u1', factors: setUpReads.verified ? [{ status: 'verified' }] : [] }, at);
+      recordMembershipInputs(
+        'u1',
+        Object.entries(setUpReads.policies).map(([organizationId, mfa_policy]) => ({
+          organizationId,
+          role: 'staff',
+          organization: { name: organizationId, mfa_policy },
+        })),
+        at,
+      );
+    },
+  });
 });
+
+/** What the check a kept refusal asks for reads: each workspace's policy, and the account's factors. */
+const setUpReads: {
+  policies: Record<string, 'optional' | 'admins_required' | 'all_required'>;
+  verified: boolean;
+  count: number;
+} = { policies: {}, verified: false, count: 0 };
+
+/** The check a kept refusal asked for has answered (and the next one may start). */
+async function checkAnswered(): Promise<void> {
+  await setUpInputsReadInFlight();
+}
 
 function pending(rows: Row[]) {
   queueMock.listPending.mockResolvedValue(rows);
@@ -224,19 +267,24 @@ describe('drainQueue — the state machine, executed', () => {
     expect(res).toEqual({ ok: 0, failed: 1, rejected: 0 });
   });
 
-  it('a definitive refusal (403) is TERMINAL — markRejected, not another retry', async () => {
+  it('a refusal (403) is kept for one check of the authenticator policy, then TERMINAL — markRejected, not another retry', async () => {
     apiMock.api.mockImplementation(async (path: string) => {
       calls.log.push(`api:${path}`);
       throw httpError(403, 'forbidden');
     });
     pending([BUNDLE]);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+    expect(calls.log).toEqual(['markSending:3', 'api:/api/v1/bundles/b1/distribute', 'markFailed:3']);
+    await checkAnswered();
+    expect(setUpReads.count).toBe(1);
+
+    calls.log = [];
     const res = await drainQueue();
     expect(calls.log).toEqual([
       'markSending:3',
       'api:/api/v1/bundles/b1/distribute',
       'markRejected:3',
     ]);
-    expect(queueMock.markFailed).not.toHaveBeenCalled();
     expect(res).toEqual({ ok: 0, failed: 0, rejected: 1 });
   });
 
@@ -570,6 +618,13 @@ describe('drainQueue — adjust_stock: the same route as an online tap, AT MOST 
       });
       pending([ADJUST]);
 
+      if (status === 403) {
+        // Kept for one check of the authenticator policy first.
+        expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+        expect(queueMock.markRejected).not.toHaveBeenCalled();
+        await checkAnswered();
+        queueMock.markFailed.mockClear();
+      }
       expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 1 });
       expect(queueMock.markFailed).not.toHaveBeenCalled();
       expect(lastErrorOf(9)).toBe(
@@ -1184,5 +1239,149 @@ describe('Restart now pauses the drain (B44)', () => {
     }
     await syncNow();
     expect(calls.log).toContain('markSending:1');
+  });
+});
+
+/**
+ * Authenticator set-up (set-up-inputs.ts, drain-failure.ts). The server
+ * refuses a queued change with 403 while the workspace's policy requires an
+ * authenticator the account has not set up. The row is never parked for it:
+ * it is kept, held while its own workspace owes set-up, and sent once after.
+ */
+describe('drainQueue — a queued change waits while an authenticator is being set up', () => {
+  const SET_UP_SENTENCE =
+    'Multi-factor authentication required. Enroll in MFA before performing this action.';
+  /** The refusal as api() throws it, with or without the reason in details. */
+  function setUpRefusal(withDetails: boolean): Error {
+    return Object.assign(new Error(SET_UP_SENTENCE), {
+      status: 403,
+      code: 'forbidden',
+      ...(withDetails ? { details: { reason: 'mfa_required' } } : {}),
+    });
+  }
+  const OWN_RECEIPT: Row = { ...RECEIPT, organizationId: 'org-a', userId: 'u1' };
+
+  /** The receipt route refuses while set-up is owed; any other path answers. */
+  function receiptRefusedUntilSetUp(withDetails: boolean) {
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      if (path.includes('receive-line') && !setUpReads.verified) throw setUpRefusal(withDetails);
+    });
+  }
+
+  it.each([
+    ['with the reason in details', true],
+    ['from a route that sends no details', false],
+  ])('%s: kept, then held, then sent once after set-up', async (_name, withDetails) => {
+    setUpReads.policies['org-a'] = 'all_required';
+    receiptRefusedUntilSetUp(withDetails);
+    pending([OWN_RECEIPT]);
+
+    // First send: refused, kept (never rejected), and a check is asked for.
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+    expect(calls.log).toEqual(['markSending:1', 'api:/api/v1/po/po1/receive-line', 'markFailed:1']);
+    await checkAnswered();
+
+    // The check finds set-up owed in the row's own workspace: held, untouched.
+    calls.log = [];
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 0 });
+    expect(calls.log).toEqual([]);
+
+    // The account sets up an authenticator; the next server read shows it.
+    setUpReads.verified = true;
+    noteServerReadUser({ id: 'u1', factors: [{ status: 'verified' }] });
+    calls.log = [];
+    expect(await drainQueue()).toEqual({ ok: 1, failed: 0, rejected: 0 });
+    expect(calls.log).toEqual(['markSending:1', 'api:/api/v1/po/po1/receive-line', 'markOk:1']);
+    // Sent with its own key every time, so the server applies it once.
+    const sends = apiMock.api.mock.calls.filter(([p]) => String(p).includes('receive-line'));
+    expect(sends).toHaveLength(2);
+    for (const [, opts] of sends) {
+      expect(opts).toMatchObject({ body: { idempotencyKey: 'k1' }, orgId: 'org-a', asUserId: 'u1' });
+    }
+    expect(queueMock.markRejected).not.toHaveBeenCalled();
+  });
+
+  it('the authenticator answer is never final, even when the check finds nothing owed', async () => {
+    // The server's own policy read can fail and hold the member to the
+    // strictest policy; the phone's read says Optional.
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      throw setUpRefusal(true);
+    });
+    pending([OWN_RECEIPT]);
+    for (let pass = 0; pass < 3; pass += 1) {
+      expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+      await checkAnswered();
+    }
+    expect(queueMock.markRejected).not.toHaveBeenCalled();
+  });
+
+  it('a policy turned on after a check said clear: the next refusal is kept, never parked', async () => {
+    // Read earlier this run: Optional.
+    recordMembershipInputs(
+      'u1',
+      [{ organizationId: 'org-a', role: 'staff', organization: { name: 'A', mfa_policy: 'optional' } }],
+      beginSetUpRead(),
+    );
+    noteServerReadUser({ id: 'u1', factors: [] });
+    // Then turned on; the route sends no details.
+    setUpReads.policies['org-a'] = 'all_required';
+    receiptRefusedUntilSetUp(false);
+    pending([OWN_RECEIPT]);
+
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+    await checkAnswered();
+    calls.log = [];
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 0 });
+    expect(calls.log).toEqual([]);
+    expect(queueMock.markRejected).not.toHaveBeenCalled();
+  });
+
+  it('held per row by its own workspace: the Optional one is sent, the requiring one waits', async () => {
+    recordMembershipInputs(
+      'u1',
+      [
+        { organizationId: 'org-a', role: 'staff', organization: { name: 'A', mfa_policy: 'all_required' } },
+        { organizationId: 'org-b', role: 'staff', organization: { name: 'B', mfa_policy: 'optional' } },
+      ],
+      beginSetUpRead(),
+    );
+    noteServerReadUser({ id: 'u1', factors: [] });
+    live.orgId = 'org-b';
+    const OPTIONAL_ROW: Row = { ...BUNDLE, organizationId: 'org-b', userId: 'u1' };
+    pending([OWN_RECEIPT, OPTIONAL_ROW]);
+    expect(await drainQueue()).toEqual({ ok: 1, failed: 0, rejected: 0 });
+    expect(calls.log).toEqual(['markSending:3', 'api:/api/v1/bundles/b1/distribute', 'markOk:3']);
+  });
+
+  it('a queued adjustment refused for set-up is kept, not parked "Not confirmed", and the ones behind it wait', async () => {
+    setUpReads.policies['org-a'] = 'all_required';
+    const ADJ = (id: number): Row => ({
+      id,
+      kind: 'adjust_stock',
+      idempotencyKey: `k${id}`,
+      organizationId: 'org-a',
+      userId: 'u1',
+      payload: { itemId: 'item-1', quantityChange: 1, itemLabel: 'Polo S (POLO-S)' },
+    });
+    apiMock.api.mockImplementation(async (path: string, opts?: { onSend?: () => void }) => {
+      calls.log.push(`api:${path}`);
+      opts?.onSend?.();
+      throw setUpRefusal(true);
+    });
+    pending([ADJ(41), ADJ(42)]);
+
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+    // The first is kept; the second is not handed off in this pass.
+    expect(calls.log).toEqual(['markSending:41', 'api:/api/v1/items/item-1/adjust', 'markFailed:41']);
+    expect(queueMock.markRejected).not.toHaveBeenCalled();
+    expect(unconfirmedStock.get('item-1')).toBeNull();
+    await checkAnswered();
+
+    // Then both are held while set-up is owed.
+    calls.log = [];
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 0 });
+    expect(calls.log).toEqual([]);
   });
 });

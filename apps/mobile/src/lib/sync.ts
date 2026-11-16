@@ -42,7 +42,7 @@ import {
   parseBundleRefill,
   serializeBundleRefill,
 } from './bundle-refill';
-import { classifyDrainFailure } from './drain-failure';
+import { classifyDrainFailure, keptForSetUpCheck } from './drain-failure';
 import {
   ENABLED_MODULES_META_KEY,
   refreshEnabledModules,
@@ -57,6 +57,11 @@ import { OutboxSessionChangedError, OWNED_BY_USER_SQL, outboxSendDecision } from
 import { clearPhotoCaches, wipeWithPhotoCaches } from './photo-cache-wipe';
 import { listPending, markFailed, markHeld, markOk, markRejected, markSending } from './queue';
 import { liveOutboxScope } from './session-scope';
+import {
+  noteKeptRefusal,
+  requestSetUpInputsRead,
+  setUpAnswerAfterRefusal,
+} from './set-up-inputs';
 import { unconfirmedStock } from './unconfirmed-stock';
 import { refreshCacheOwner } from './use-cache-owner';
 import { WAREHOUSE_SCOPE_META_KEY, refreshWarehouseScope } from './warehouse-scope';
@@ -900,7 +905,12 @@ export async function drainQueue(): Promise<{
     // of its own while this account's is not saved yet, is HELD: skipped and
     // left exactly as it is, neither failed nor rejected.
     const decision = outboxSendDecision(action, await liveOutboxScope());
-    if (!decision.send) continue;
+    if (!decision.send) {
+      // Held while its workspace owes authenticator set-up: the inputs are
+      // read again from time to time, which is what lets it go.
+      if (decision.reason === 'set-up-owed') requestSetUpInputsRead();
+      continue;
+    }
 
     // A stock adjustment cannot be retried once it has left the phone
     // (adjust-outbox.ts), so it is handed off only while the link is known to
@@ -961,8 +971,17 @@ export async function drainQueue(): Promise<{
         const verdict = adjustDrainVerdict(e, {
           accountDisabled: getAccountDisabled(),
           handedOff: handedOffAt !== null,
+          setUp: setUpAnswerAfterRefusal(decision.userId, decision.orgId),
         });
         if (verdict === 'failed') {
+          await markFailed(action.id, msg);
+          failed += 1;
+        } else if (verdict === 'held-for-set-up') {
+          // Refused at the permission check, before any write: kept for the
+          // authenticator check (drain-failure.ts), and this scope's later
+          // adjustments wait behind it, as below.
+          noteKeptRefusal(decision.userId, decision.orgId);
+          heldScopes.add(scopeOf(decision));
           await markFailed(action.id, msg);
           failed += 1;
         } else if (verdict === 'refused-before-write') {
@@ -995,14 +1014,20 @@ export async function drainQueue(): Promise<{
         }
         continue;
       }
-      // 4xx (bad payload, validation) and 5xx / network errors both stay in
-      // 'failed' and are re-read next tick. The ONE terminal case is a 401 on a
-      // known-disabled account: that write must never replay after re-enable.
-      const outcome = classifyDrainFailure(e, { accountDisabled: getAccountDisabled() });
+      // A definitive refusal is terminal (drain-failure.ts), a 403 only after
+      // a check of the workspace's authenticator policy made since it; 5xx /
+      // network errors stay in 'failed' and are re-read next tick, and a 401
+      // is terminal only on a known-disabled account.
+      const outcome = classifyDrainFailure(e, {
+        accountDisabled: getAccountDisabled(),
+        setUp: setUpAnswerAfterRefusal(decision.userId, decision.orgId),
+      });
       if (outcome === 'rejected') {
         await markRejected(action.id, msg);
         rejected += 1;
       } else {
+        // A 403 kept for that check: noted, and the inputs read again.
+        if (keptForSetUpCheck(e)) noteKeptRefusal(decision.userId, decision.orgId);
         await markFailed(action.id, msg);
         failed += 1;
       }

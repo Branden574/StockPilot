@@ -15,9 +15,10 @@ import {
 import { clearCountPath, isClearCountPayload } from './cycle-count-clear';
 import { recordCountBody } from './cycle-count-record-body';
 import { latestRowsPerLine } from './outbox-order';
-import { classifyDrainFailure } from './drain-failure';
+import { classifyDrainFailure, keptForSetUpCheck } from './drain-failure';
 import {
   canSettleOutbox,
+  heldForSetUp,
   isOwnedBy,
   OutboxSessionChangedError,
   outboxSendDecision,
@@ -25,6 +26,11 @@ import {
 } from './outbox-scope';
 import { countRejected, countUnconfirmedAdjust, markHeld } from './queue';
 import { liveOutboxScope } from './session-scope';
+import {
+  noteKeptRefusal,
+  requestSetUpInputsRead,
+  setUpAnswerAfterRefusal,
+} from './set-up-inputs';
 
 /**
  * Cycle-count sync engine.
@@ -300,6 +306,8 @@ class CycleCountSyncEngine {
       // it is until the code is entered.
       const staleScope = await liveOutboxScope();
       for (const stale of canSettleOutbox(staleScope) ? superseded : []) {
+        // Nor a row held while its workspace owes authenticator set-up.
+        if (heldForSetUp(stale, staleScope)) continue;
         if (isOwnedBy(stale, staleScope.userId)) await outboxAck(stale.id);
         else await outboxReject(stale.id, REPLACED_BY_LATER_COUNT);
       }
@@ -320,7 +328,12 @@ class CycleCountSyncEngine {
         // this account's is not saved yet, is HELD: skipped, neither failed
         // nor rejected.
         const decision = outboxSendDecision(row, await liveOutboxScope());
-        if (!decision.send) continue;
+        if (!decision.send) {
+          // Held while its workspace owes authenticator set-up: the inputs
+          // are read again from time to time, which is what lets it go.
+          if (decision.reason === 'set-up-owed') requestSetUpInputsRead();
+          continue;
+        }
         // A restart into an update is waiting (pauseForRestart): this row and
         // the rest stay queued, untouched, for the next drain.
         if (this.restartPaused) break;
@@ -349,13 +362,18 @@ class CycleCountSyncEngine {
           // is re-enabled. outboxReject parks it and clears the line's dirty
           // flag in one transaction so the screen does not strand a line as
           // permanently unsynced with no row left to sync it.
+          // A 403 is terminal only after a check of the workspace's
+          // authenticator policy made since it (drain-failure.ts).
           const outcome = classifyDrainFailure(e, {
             accountDisabled: getAccountDisabled(),
+            setUp: setUpAnswerAfterRefusal(decision.userId, decision.orgId),
           });
           if (outcome === 'rejected') {
             anyRejected = true;
             await outboxReject(row.id, msg);
           } else {
+            // A 403 kept for that check: noted, and the inputs read again.
+            if (keptForSetUpCheck(e)) noteKeptRefusal(decision.userId, decision.orgId);
             anyFailed = true;
             await outboxBumpFailure(row.id, msg);
           }

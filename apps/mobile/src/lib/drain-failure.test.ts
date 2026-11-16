@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { contextUnavailableBody } from '@stockpilot/core';
 
-import { ACCOUNT_DISABLED_REJECTION, classifyDrainFailure } from './drain-failure';
+import { ACCOUNT_DISABLED_REJECTION, classifyDrainFailure, keptForSetUpCheck } from './drain-failure';
 
 /**
  * The outbox verdict. Two classes are terminal — see drain-failure.ts:
@@ -13,11 +13,11 @@ import { ACCOUNT_DISABLED_REJECTION, classifyDrainFailure } from './drain-failur
 
 describe('classifyDrainFailure — account disabled (original rule)', () => {
   it('rejects a 401 while the account is known disabled', () => {
-    expect(classifyDrainFailure({ status: 401 }, { accountDisabled: true })).toBe('rejected');
+    expect(classifyDrainFailure({ status: 401 }, { accountDisabled: true, setUp: 'clear' })).toBe('rejected');
   });
 
   it('keeps a 401 retryable when the account is NOT disabled — that is a token blip', () => {
-    expect(classifyDrainFailure({ status: 401 }, { accountDisabled: false })).toBe('failed');
+    expect(classifyDrainFailure({ status: 401 }, { accountDisabled: false, setUp: 'clear' })).toBe('failed');
   });
 });
 
@@ -25,36 +25,38 @@ describe('classifyDrainFailure — definitive refusals are terminal (SP-006 / SP
   // Before this rule these rows were re-sent every 60 s forever, and one of
   // them blocked posting every count on the device ("Sync first").
   it.each([400, 403, 409, 422])('rejects a %i whether or not the account is disabled', (status) => {
-    expect(classifyDrainFailure({ status }, { accountDisabled: false })).toBe('rejected');
-    expect(classifyDrainFailure({ status }, { accountDisabled: true })).toBe('rejected');
+    // A 403 here is one a check made after the refusal found no authenticator
+    // set-up owed in the row's workspace (setUp 'clear'); see the next block.
+    expect(classifyDrainFailure({ status }, { accountDisabled: false, setUp: 'clear' })).toBe('rejected');
+    expect(classifyDrainFailure({ status }, { accountDisabled: true, setUp: 'clear' })).toBe('rejected');
   });
 
   it('rejects a 404 that carries a JSON error code — the route judged the resource', () => {
-    expect(classifyDrainFailure({ status: 404, code: 'not_found' }, { accountDisabled: false })).toBe('rejected');
+    expect(classifyDrainFailure({ status: 404, code: 'not_found' }, { accountDisabled: false, setUp: 'clear' })).toBe('rejected');
   });
 
   it('keeps a bare 404 retryable — a framework 404 (deploy skew, older binary) is not a verdict', () => {
-    expect(classifyDrainFailure({ status: 404 }, { accountDisabled: false })).toBe('failed');
-    expect(classifyDrainFailure({ status: 404, code: '' }, { accountDisabled: false })).toBe('failed');
+    expect(classifyDrainFailure({ status: 404 }, { accountDisabled: false, setUp: 'clear' })).toBe('failed');
+    expect(classifyDrainFailure({ status: 404, code: '' }, { accountDisabled: false, setUp: 'clear' })).toBe('failed');
   });
 });
 
 describe('classifyDrainFailure — transient failures stay retryable', () => {
   it.each([408, 429, 500, 502, 503])('keeps a %i retryable', (status) => {
-    expect(classifyDrainFailure({ status }, { accountDisabled: true })).toBe('failed');
+    expect(classifyDrainFailure({ status }, { accountDisabled: true, setUp: 'clear' })).toBe('failed');
   });
 
   it('never rejects a network error or a timeout, even while disabled', () => {
-    expect(classifyDrainFailure(new Error('Network request failed'), { accountDisabled: true })).toBe('failed');
+    expect(classifyDrainFailure(new Error('Network request failed'), { accountDisabled: true, setUp: 'clear' })).toBe('failed');
     expect(
-      classifyDrainFailure(new Error('Request timed out. Check your connection and try again.'), { accountDisabled: true }),
+      classifyDrainFailure(new Error('Request timed out. Check your connection and try again.'), { accountDisabled: true, setUp: 'clear' }),
     ).toBe('failed');
   });
 
   it('tolerates null, undefined and non-object throws', () => {
-    expect(classifyDrainFailure(null, { accountDisabled: true })).toBe('failed');
-    expect(classifyDrainFailure(undefined, { accountDisabled: true })).toBe('failed');
-    expect(classifyDrainFailure('401', { accountDisabled: true })).toBe('failed');
+    expect(classifyDrainFailure(null, { accountDisabled: true, setUp: 'clear' })).toBe('failed');
+    expect(classifyDrainFailure(undefined, { accountDisabled: true, setUp: 'clear' })).toBe('failed');
+    expect(classifyDrainFailure('401', { accountDisabled: true, setUp: 'clear' })).toBe('failed');
   });
 
   it('keys off the numeric status only — never a human sentence in the message', () => {
@@ -63,10 +65,10 @@ describe('classifyDrainFailure — transient failures stay retryable', () => {
     expect(
       classifyDrainFailure(
         { message: 'Your account has been disabled.', code: 'user_banned' },
-        { accountDisabled: true },
+        { accountDisabled: true, setUp: 'clear' },
       ),
     ).toBe('failed');
-    expect(classifyDrainFailure({ status: '403' }, { accountDisabled: true })).toBe('failed');
+    expect(classifyDrainFailure({ status: '403' }, { accountDisabled: true, setUp: 'clear' })).toBe('failed');
   });
 });
 
@@ -77,8 +79,101 @@ describe('classifyDrainFailure — the refusal marked as before any write', () =
   it('is retryable, like every 5xx', () => {
     const body = contextUnavailableBody();
     const marker = { status: 503, code: body.error, details: body.details };
-    expect(classifyDrainFailure(marker, { accountDisabled: false })).toBe('failed');
-    expect(classifyDrainFailure(marker, { accountDisabled: true })).toBe('failed');
+    expect(classifyDrainFailure(marker, { accountDisabled: false, setUp: 'clear' })).toBe('failed');
+    expect(classifyDrainFailure(marker, { accountDisabled: true, setUp: 'clear' })).toBe('failed');
+  });
+});
+
+/**
+ * A 403 on a queued send is final only when it is not the authenticator
+ * answer AND a check made after the refusal found that this account owes no
+ * authenticator set-up in the row's workspace (set-up-inputs.ts
+ * setUpAnswerAfterRefusal). Every other 403 keeps the row: it is sent again
+ * once the account has an authenticator, or judged again after the check.
+ */
+describe('classifyDrainFailure: a 403 and the authenticator policy', () => {
+  const SET_UP_SENTENCE =
+    'Multi-factor authentication required. Enroll in MFA before performing this action.';
+  /** Each 403 a queued send can meet, as api() throws it. */
+  const shapes = {
+    'set-up answer with details': {
+      status: 403,
+      code: 'forbidden',
+      message: SET_UP_SENTENCE,
+      details: { reason: 'mfa_required' },
+    },
+    'code answer with details': {
+      status: 403,
+      code: 'forbidden',
+      message: 'Re-authenticate with MFA before performing this action.',
+      details: { reason: 'aal2_required' },
+    },
+    'set-up answer from a route that sends no details': {
+      status: 403,
+      code: 'forbidden',
+      message: SET_UP_SENTENCE,
+    },
+    'missing permission': { status: 403, code: 'forbidden', message: 'Missing permission: stock:adjust' },
+    'another reason in details': {
+      status: 403,
+      code: 'forbidden',
+      message: 'This count is assigned to someone else.',
+      details: { reason: 'assigned_elsewhere' },
+    },
+    'a 403 with no JSON body': { status: 403, message: 'You do not have access to this.' },
+  } as const;
+
+  it.each(Object.entries(shapes))('%s: kept while the check is owed or unknown', (_name, err) => {
+    for (const setUp of ['owed', 'unknown'] as const) {
+      expect(classifyDrainFailure(err, { accountDisabled: false, setUp })).toBe('failed');
+    }
+  });
+
+  it.each([
+    'set-up answer with details',
+    'code answer with details',
+  ] as const)('%s: kept even when the check says clear', (name) => {
+    // The server's own policy read can fail and hold the member to the
+    // strictest policy, so its authenticator answer is never final here.
+    expect(classifyDrainFailure(shapes[name], { accountDisabled: false, setUp: 'clear' })).toBe('failed');
+    expect(classifyDrainFailure(shapes[name], { accountDisabled: true, setUp: 'clear' })).toBe('failed');
+  });
+
+  it.each([
+    'set-up answer from a route that sends no details',
+    'missing permission',
+    'another reason in details',
+    'a 403 with no JSON body',
+  ] as const)('%s: final once the check says clear', (name) => {
+    expect(classifyDrainFailure(shapes[name], { accountDisabled: false, setUp: 'clear' })).toBe('rejected');
+  });
+
+  it('the other refusals are final whatever the check says', () => {
+    for (const status of [400, 409, 422]) {
+      for (const setUp of ['owed', 'unknown', 'clear'] as const) {
+        expect(classifyDrainFailure({ status }, { accountDisabled: false, setUp })).toBe('rejected');
+      }
+    }
+    for (const setUp of ['owed', 'unknown', 'clear'] as const) {
+      expect(classifyDrainFailure({ status: 404, code: 'not_found' }, { accountDisabled: false, setUp })).toBe(
+        'rejected',
+      );
+    }
+  });
+
+  it('a 401 is decided as before, whatever the check says', () => {
+    for (const setUp of ['owed', 'unknown', 'clear'] as const) {
+      expect(classifyDrainFailure({ status: 401 }, { accountDisabled: false, setUp })).toBe('failed');
+      expect(classifyDrainFailure({ status: 401 }, { accountDisabled: true, setUp })).toBe('rejected');
+    }
+  });
+
+  it('keptForSetUpCheck names exactly the 403s that were kept', () => {
+    expect(keptForSetUpCheck(shapes['missing permission'])).toBe(true);
+    expect(keptForSetUpCheck(shapes['set-up answer with details'])).toBe(true);
+    for (const other of [{ status: 401 }, { status: 400 }, { status: 500 }, { status: '403' }, null, new Error('x')]) {
+      expect(keptForSetUpCheck(other)).toBe(false);
+    }
   });
 });
 

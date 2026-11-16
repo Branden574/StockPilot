@@ -36,11 +36,18 @@ const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*
 /** Collapse formatting so a prettier line-break cannot fail a wiring pin. */
 const flat = (src: string) => code(src).replace(/\s+/g, ' ');
 
-/** The one call both engines must make, however the formatter wraps it. */
-const CLASSIFY_CALL = 'classifyDrainFailure(e, { accountDisabled: getAccountDisabled(), })';
+/**
+ * The one call both engines must make, however the formatter wraps it: the
+ * live account state, and the row workspace's authenticator set-up answer
+ * from reads made since its last kept 403 (set-up-inputs.ts).
+ */
+const CLASSIFY_CALL =
+  'classifyDrainFailure(e, { accountDisabled: getAccountDisabled(), setUp: setUpAnswerAfterRefusal(decision.userId, decision.orgId), })';
 const classifies = (src: string) =>
   flat(src).includes(CLASSIFY_CALL) ||
-  flat(src).includes('classifyDrainFailure(e, { accountDisabled: getAccountDisabled() })');
+  flat(src).includes(
+    'classifyDrainFailure(e, { accountDisabled: getAccountDisabled(), setUp: setUpAnswerAfterRefusal(decision.userId, decision.orgId) })',
+  );
 
 const sync = read('./sync.ts');
 const cycleSync = read('./cycle-count-sync.ts');
@@ -65,7 +72,9 @@ const drainOutbox = (() => {
 
 describe('engine 1 — sync.ts drainQueue', () => {
   it('classifies every drain failure against the live account state', () => {
-    expect(sync).toContain("import { classifyDrainFailure } from './drain-failure'");
+    expect(sync).toContain(
+      "import { classifyDrainFailure, keptForSetUpCheck } from './drain-failure'",
+    );
     expect(sync).toContain("import { getAccountDisabled } from './account-disabled-state'");
     expect(classifies(sync)).toBe(true);
   });
@@ -89,7 +98,9 @@ describe('engine 1 — sync.ts drainQueue', () => {
 
 describe('engine 2 — CycleCountSyncEngine (the flagship offline flow)', () => {
   it('classifies its failures with the SAME predicate as engine 1', () => {
-    expect(cycleSync).toContain("import { classifyDrainFailure } from './drain-failure'");
+    expect(cycleSync).toContain(
+      "import { classifyDrainFailure, keptForSetUpCheck } from './drain-failure'",
+    );
     expect(cycleSync).toContain("import { getAccountDisabled } from './account-disabled-state'");
     expect(classifies(cycleSync)).toBe(true);
   });

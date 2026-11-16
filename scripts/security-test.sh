@@ -2256,6 +2256,23 @@ MOBILE_TESTS=(
   src/lib/mfa-reconcile.test.ts
   src/lib/code-gate-wiring.test.ts
 
+  # Queued work while an organization requires an authenticator the account
+  # has not set up: no queued change is parked for that answer. A 403 on a
+  # queued send is final only when it is not the authenticator answer and a
+  # read made after it finds no set-up owed in the row's own workspace; until
+  # then the row is kept, and while its workspace owes set-up it is held (per
+  # row and per workspace, from the policy as read, the role and the server's
+  # factor list; an organization row that cannot be read is never read as a
+  # policy) and sent once, with its own key, after set-up. The inputs are
+  # saved, never the answer, under an account-scoped key. A row already
+  # parked for that answer is not sent again and reads a plain sentence.
+  # (The drains themselves: sync.drain.test.ts and
+  # cycle-count-sync.drain.test.ts, listed under the outbox above.)
+  src/lib/set-up-inputs.test.ts
+  src/lib/set-up-inputs.wiring.test.ts
+  src/lib/drain-failure.test.ts
+  src/lib/parked-set-up-words.test.ts
+
   # The saved workspace records the account that saved it, and only that
   # account's requests, queued work and workspace load use it: another
   # account's, left by a fallback sign-out or a session the server ended, is

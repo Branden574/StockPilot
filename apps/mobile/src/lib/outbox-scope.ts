@@ -42,13 +42,23 @@
  *     sent either (docket S43b): every row is HELD, left exactly as it is,
  *     and goes out once the code is entered. A password alone sends nothing
  *     from this phone, and the queued work is not refused by the server and
- *     parked in the meantime.
+ *     parked in the meantime;
+ *   - while the row's OWN workspace (its organization, else the one it would
+ *     be sent under) requires an authenticator this account has not set up,
+ *     that row is HELD the same way (set-up-inputs.ts setUpOwedIn, from the
+ *     workspace's policy, the account's role there and the server's factor
+ *     list). It is decided per row and per workspace, not per session: a row
+ *     queued in a requiring workspace is held while an Optional one is
+ *     active, and rows of other workspaces still go. It goes out once the
+ *     account has an authenticator (or the policy does not ask it of this role).
  *
  * The SQL fragments below are the same rule for queries. `IS` / `IS NOT` are
  * SQLite's null-safe comparisons, so OWNED and HELD are exact complements for
  * every row and every live user, the signed-out case (live user NULL)
  * included. outbox-scope.test.ts runs both against a real SQLite.
  */
+
+import { setUpOwedIn } from './set-up-inputs';
 
 /** Who a queued row belongs to, as stored. NULL = queued by an older binary. */
 export interface OutboxRowOwner {
@@ -84,7 +94,7 @@ export type OutboxSendDecision =
     }
   | {
       send: false;
-      reason: 'signed-out' | 'step-up-owed' | 'other-account' | 'workspace-loading';
+      reason: 'signed-out' | 'step-up-owed' | 'other-account' | 'workspace-loading' | 'set-up-owed';
     };
 
 /** Is this row the live user's work (or legacy work anyone may adopt)? */
@@ -106,6 +116,9 @@ export function outboxSendDecision(row: OutboxRowOwner, live: LiveScope): Outbox
   // No workspace of its own, and the live account's own is not saved yet:
   // HELD (left as it is, pending), never sent without a workspace.
   if (!orgId) return { send: false, reason: 'workspace-loading' };
+  // That workspace requires an authenticator this account has not set up:
+  // HELD, left as it is, never sent to be refused and parked.
+  if (setUpOwedIn(live.userId, orgId) === 'owed') return { send: false, reason: 'set-up-owed' };
   return {
     send: true,
     orgId,
@@ -123,6 +136,18 @@ export function outboxSendDecision(row: OutboxRowOwner, live: LiveScope): Outbox
  */
 export function canSettleOutbox(live: LiveScope): boolean {
   return Boolean(live.userId) && !live.stepUpOwed;
+}
+
+/**
+ * Is this row held because its own workspace owes authenticator set-up (the
+ * same check outboxSendDecision makes)? The count drain settles nothing it
+ * holds: a superseded count of such a row is neither acked nor parked until
+ * the hold ends.
+ */
+export function heldForSetUp(row: OutboxRowOwner, live: LiveScope): boolean {
+  if (!live.userId) return false;
+  const orgId = row.organizationId || live.orgId;
+  return Boolean(orgId) && setUpOwedIn(live.userId, orgId) === 'owed';
 }
 
 /**

@@ -1,7 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { cycleCountSync } from './cycle-count-sync';
 import { OutboxSessionChangedError, REPLACED_BY_LATER_COUNT } from './outbox-scope';
+import {
+  beginSetUpRead,
+  noteServerReadUser,
+  recordMembershipInputs,
+  resetSetUpInputsForTests,
+} from './set-up-inputs';
 
 /**
  * The cycle-count drain (engine 2), EXECUTED — the twin of sync.drain.test.ts.
@@ -600,6 +606,64 @@ describe('Restart now pauses the count drain (B44)', () => {
       'outboxMarkSending:3',
       `api:${recordPath('l3')}`,
       'outboxAck:3',
+    ]);
+  });
+});
+
+/**
+ * Authenticator set-up (set-up-inputs.ts, drain-failure.ts): a count the
+ * server refuses while its workspace requires an authenticator the account
+ * has not set up is kept for another try, never parked, and held while its
+ * own workspace owes set-up: not sent, and not settled.
+ */
+describe('a queued count waits while an authenticator is being set up', () => {
+  const refusal = () =>
+    Object.assign(
+      new Error('Multi-factor authentication required. Enroll in MFA before performing this action.'),
+      { status: 403, code: 'forbidden', details: { reason: 'mfa_required' } },
+    );
+
+  beforeEach(() => resetSetUpInputsForTests());
+  afterEach(() => resetSetUpInputsForTests());
+
+  it('a refused count is kept for another try (backoff), never parked', async () => {
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      throw refusal();
+    });
+    cacheMock.rows = [countRow(1, 'l1', { org: 'org-a', user: 'u1' })];
+
+    await cycleCountSync.forceSync();
+
+    expect(calls.log).toEqual(['outboxMarkSending:1', `api:${recordPath('l1')}`, 'outboxBumpFailure:1']);
+    expect(cacheMock.outboxReject).not.toHaveBeenCalled();
+  });
+
+  it('held while its own workspace owes set-up: not sent, and a superseded one is not settled', async () => {
+    recordMembershipInputs(
+      'u1',
+      [{ organizationId: 'org-a', role: 'staff', organization: { name: 'A', mfa_policy: 'all_required' } }],
+      beginSetUpRead(),
+    );
+    noteServerReadUser({ id: 'u1', factors: [] });
+    live.orgId = 'org-b';
+    cacheMock.rows = [
+      countRow(1, 'l1', { org: 'org-a', user: 'u1' }),
+      countRow(2, 'l1', { org: 'org-a', user: 'u1' }),
+    ];
+
+    await cycleCountSync.forceSync();
+    expect(apiMock.api).not.toHaveBeenCalled();
+    expect(calls.log).toEqual([]);
+
+    // An authenticator is set up: the same drain settles and sends, once.
+    noteServerReadUser({ id: 'u1', factors: [{ status: 'verified' }] });
+    await cycleCountSync.forceSync();
+    expect(calls.log).toEqual([
+      'outboxAck:1',
+      'outboxMarkSending:2',
+      `api:${recordPath('l1')}`,
+      'outboxAck:2',
     ]);
   });
 });
