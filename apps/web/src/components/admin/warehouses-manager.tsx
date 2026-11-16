@@ -415,11 +415,11 @@ function WarehouseDialog({
       contactEmail: editedOptionalText(values.contactEmail, editing?.contact_email),
       contactPhone: editedOptionalText(values.contactPhone, editing?.contact_phone),
       notes: editedOptionalText(values.notes, editing?.notes),
-      status: 'active' as const,
     };
+    // A new warehouse starts active; an edit leaves the status as it is.
     const res = editing
       ? await updateWarehouseAction(editing.id, payload)
-      : await createWarehouseAction(payload);
+      : await createWarehouseAction({ ...payload, status: 'active' });
     if (!res.ok) {
       toast.error(res.error.message);
       return;

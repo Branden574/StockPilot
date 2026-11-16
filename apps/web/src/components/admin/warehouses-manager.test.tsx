@@ -116,8 +116,9 @@ describe('WarehousesManager edit and create payloads', () => {
       contactEmail: 'dana@example.com',
       contactPhone: '555-010-0123',
       notes: '',
-      status: 'active',
     });
+    // An edit never sets the record's status.
+    expect('status' in actions.update.mock.calls[0]![1]).toBe(false);
   });
 
   it('Edit leaves out an optional field that was empty and stayed empty', async () => {
@@ -143,7 +144,7 @@ describe('WarehousesManager edit and create payloads', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create depot' }));
     await waitFor(() => expect(actions.create).toHaveBeenCalledTimes(1));
     const [payload] = actions.create.mock.calls[0]!;
-    expect(payload).toMatchObject({ name: 'South DC', code: 'SDC' });
+    expect(payload).toMatchObject({ name: 'South DC', code: 'SDC', status: 'active' });
     for (const key of ['contactName', 'contactEmail', 'contactPhone', 'notes']) {
       expect(payload[key]).toBeUndefined();
     }
@@ -243,7 +244,6 @@ describe('WarehousesManager', () => {
         name: 'North DC',
         code: 'NDC',
         charterIds: ['c2'],
-        status: 'active',
       }),
     );
   });

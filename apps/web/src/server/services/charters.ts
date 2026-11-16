@@ -201,7 +201,8 @@ export class ChartersService {
       .insert({
         organization_id: this.ctx.organizationId,
         name: input.name,
-        code: input.code ?? null,
+        // A code is unique per organization when present, so a blank one is null.
+        code: input.code || null,
         description: input.description ?? null,
         notes: input.notes ?? null,
         status: input.status,

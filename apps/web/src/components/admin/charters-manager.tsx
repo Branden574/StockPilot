@@ -425,7 +425,6 @@ function CharterDialog({
       code: editedOptionalText(values.code, editing?.code),
       description: editedOptionalText(values.description, editing?.description),
       notes: editedOptionalText(values.notes, editing?.notes),
-      status: 'active' as const,
       // The address is saved whole, so an emptied line is left out of it.
       address: {
         line1: values.addressLine1 || undefined,
@@ -439,9 +438,10 @@ function CharterDialog({
       contactEmail: editedOptionalText(values.contactEmail, editing?.contact_email),
       contactPhone: editedOptionalText(values.contactPhone, editing?.contact_phone),
     };
+    // A new charter starts active; an edit leaves the status as it is.
     const res = editing
       ? await updateCharterAction(editing.id, payload)
-      : await createCharterAction(payload);
+      : await createCharterAction({ ...payload, status: 'active' });
     if (!res.ok) {
       toast.error(res.error.message);
       return;

@@ -6,7 +6,7 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 import { audit } from './audit';
 import { CategoriesService, updateCategorySchema } from './categories';
-import { ChartersService, updateCharterSchema } from './charters';
+import { ChartersService, createCharterSchema, updateCharterSchema } from './charters';
 import { LocationsService, updateLocationSchema } from './locations';
 import { SuppliersService, updateSupplierSchema } from './suppliers';
 import { updateWarehouseSchema, WarehousesService } from './warehouses';
@@ -14,8 +14,9 @@ import { updateWarehouseSchema, WarehousesService } from './warehouses';
 /**
  * An edit form sends an emptied optional text field as '' (the update schemas
  * accept '' and refuse null), and the service stores it as NULL: cleared, never
- * an empty string (a charter code is unique per organization when present, and
- * '' would count as present). A key the patch leaves out is not written.
+ * an empty string. A key the patch leaves out is not written. A charter code is
+ * unique per organization when present and '' would count as present, so a
+ * blank code is stored as null on create and on update.
  */
 
 const ID = '00000000-0000-4000-8000-000000000001';
@@ -114,6 +115,31 @@ describe('ChartersService.update', () => {
       name: 'North Campus',
       notes: 'Gate code at the desk',
     });
+  });
+});
+
+describe('ChartersService.create', () => {
+  /** The row the service handed to `.insert(...)`. */
+  async function inserted(input: unknown) {
+    const stub = makeSupabaseStub({
+      'charters.insert': { data: [{ id: ID }], error: null },
+    });
+    await new ChartersService(svcCtx(stub.client)).create(createCharterSchema.parse(input));
+    const all = stub.chainArgsAll.get('charters.insert') ?? [];
+    expect(all).toHaveLength(1);
+    return all[0]![0]![0] as Record<string, unknown>;
+  }
+
+  it('stores a code of only spaces as null', async () => {
+    expect((await inserted({ name: 'North Campus', code: '   ' })).code).toBeNull();
+  });
+
+  it('stores a real code as typed, trimmed', async () => {
+    expect((await inserted({ name: 'North Campus', code: ' NC ' })).code).toBe('NC');
+  });
+
+  it('stores no code as null', async () => {
+    expect((await inserted({ name: 'North Campus' })).code).toBeNull();
   });
 });
 

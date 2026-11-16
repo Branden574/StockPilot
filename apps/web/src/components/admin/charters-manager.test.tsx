@@ -189,7 +189,6 @@ describe('ChartersManager', () => {
       code: '',
       description: 'East side campus',
       notes: '',
-      status: 'active',
       address: {
         line1: '1200 A Very Long Industrial Parkway Building 7',
         line2: undefined,
@@ -202,6 +201,8 @@ describe('ChartersManager', () => {
       contactEmail: 'dana@example.com',
       contactPhone: '555-010-0123',
     });
+    // An edit never sets the record's status.
+    expect('status' in actions.update.mock.calls[0]![1]).toBe(false);
   });
 
   it('Edit leaves out an optional field that was empty and stayed empty', async () => {
@@ -234,6 +235,7 @@ describe('ChartersManager', () => {
     await waitFor(() => expect(actions.create).toHaveBeenCalledTimes(1));
     const [payload] = actions.create.mock.calls[0]!;
     expect(payload.name).toBe('Harbor East');
+    expect(payload.status).toBe('active');
     for (const key of [
       'code',
       'description',
