@@ -1111,6 +1111,9 @@ WEB_TESTS=(
   # holds every route handler under src/app to the rule or to a reviewed list
   # (core's stepUpOwed truth table is in MANIFEST 4).
   src/lib/auth/api-context.step-up.test.ts
+  # The factor list is read before the organization's policy: a list that
+  # cannot be read throws before any organization read.
+  src/lib/auth/api-context.factor-list-order.test.ts
   # The level those refusals and the MFA label read is the validated user's
   # own (S43a review round 1): a cookie carrying another account's refresh
   # token, timed to refresh after getUser(), reads as not aal2. The real server
@@ -1732,6 +1735,10 @@ WEB_TESTS=(
   # again. Without either, the phone route answers by the policy as before.
   src/lib/auth/account-delete-code.test.ts
   src/server/lib/account-deletion-credential.test.ts
+  # The web's delete-account words and its authenticator policy rule are
+  # core's own values, and core's reading of the two delete routes' answers
+  # (for the phone) has a row for every answer they give.
+  src/app/api/v1/account/delete/answers.core.test.ts
 
   # One create path, no duplicate order (0391, phone ordering PO-2). The
   # service gates (Orders module, the MFA step-up, orders:request) come before
@@ -2336,6 +2343,23 @@ CORE_TESTS=(
   # S43a: the one rule for "this session still owes its authenticator code"
   # (web API context now; the phone's code gate next).
   src/auth/step-up.test.ts
+  # The policy a reader enforces from an organization row as read: a missing
+  # or odd value, a hidden row and an empty embed are held to all_required;
+  # both embed shapes (object, array of one) read the same policy.
+  src/auth/step-up.enforced-policy.test.ts
+  # The set-up address and words, and the phone's reading of the delete
+  # routes' answers: every code, an unknown code, 401 and no answer.
+  src/auth/set-up-copy.test.ts
+  src/account/delete-account-copy.test.ts
+  # The exact text of the delete-account words and the set-up address and
+  # title the website and the API show, written out in the test.
+  src/shared-words.literals.test.ts
+  # Who owes authenticator set-up (the policy requires one of the role and the
+  # account has no verified factor), the rule the API context decides with.
+  src/auth/step-up.set-up.test.ts
+  # The one "refused before any write" marker: only the API context gate's
+  # exact body is read as nothing written.
+  src/auth/context-unavailable.test.ts
   src/schemas/inventory.test.ts
   src/signature/signature.test.ts
   # The one item-images path builder (web presign and thumbnail, phone
