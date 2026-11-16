@@ -125,7 +125,10 @@ export const RELEASES: Release[] = [
     // invitation audit release below is dated 2026-11-15T17:39:00Z, so the placeholder is that same minute.
     // Moved again by docs/whats-new-api-key-audit (2026-11-15; was: '2026-11-15T17:39:00Z'): the API key
     // audit release below is dated 2026-11-15T21:37:00Z, so the placeholder is that same minute.
-    publishedAt: '2026-11-15T21:37:00Z',
+    // Moved again by docs/whats-new-authenticator-set-up-first (2026-11-15; was: '2026-11-15T21:37:00Z'):
+    // the authenticator set-up release below is dated 2026-11-15T23:48:00Z, so the placeholder is that
+    // same minute.
+    publishedAt: '2026-11-15T23:48:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -210,6 +213,69 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'authenticator-set-up-first-2026-11',
+    revision: 1,
+    // #582 (squash ab57012e1), web only: no phone update and no migration.
+    // Live in production since 2026-11-15 23:29:54Z; publishedAt is the
+    // minute this release was committed. It went live after #580, so it
+    // sits above the API key audit release and is the newest published
+    // release.
+    // Claims checked against the code at ab57012e1 (paths under apps/web/src
+    // unless named):
+    // - Who owes set-up: packages/core/src/auth/step-up.ts
+    //   policyRequiresAuthenticator (everyone under all_required; owner and
+    //   admin under admins_required; no one under optional) and
+    //   authenticatorSetUpOwed (that, and no verified authenticator).
+    // - The labels: components/settings/mfa-policy-editor.tsx ("Optional",
+    //   "Required for admins" described as "Owners and Super Admins must have
+    //   MFA enrolled.", "Required for everyone"); packages/core
+    //   constants/terminology.ts labels the admin role "Super Admin".
+    // - Every other page sends them to set-up: lib/auth/session.ts
+    //   requireOrgContext (sendToSetUpWhenOwed) redirects to
+    //   AUTHENTICATOR_SET_UP_URL, /dashboard/settings/security?enroll=1; the
+    //   open pages are lib/auth/authenticator-set-up.ts
+    //   OPEN_BEFORE_AUTHENTICATOR_SET_UP (Security and Profile). No dashboard
+    //   layout redirects, so the landing after sign-in, after switching
+    //   organization and after accepting an invitation is the Security page.
+    // - The callout: app/(dashboard)/dashboard/settings/security/page.tsx
+    //   with ?enroll=1 and no verified authenticator, "Enroll to continue";
+    //   the button "Set up authenticator app" is components/settings
+    //   mfa-enrollment.tsx, which opens /dashboard once one is verified.
+    // - The search: app/api/search/route.ts answers 403 mfa_required for
+    //   them; the command palette then lists no results.
+    // - The policy panel, "Organization MFA policy", is on the Security page
+    //   for owners and admins (page.tsx isAdmin).
+    // Who is told: every member (no audience). The rule turns on the
+    // organization's policy, which an audience cannot name, and the policy
+    // is chosen by owners and Super Admins. The one link is
+    // /dashboard/settings/security, which checks only requireOrgContext()
+    // (every member) and is one of the two pages open before set-up, so
+    // registry.test.ts lists it as open to every member.
+    status: 'published',
+    title: 'The website opens Security first until a required authenticator is set up',
+    summary:
+      'On the website, a member whose organization requires an authenticator and who has not set one up is taken to Settings, Security right after signing in, and only Security and Profile open until they set one up. In organizations set to Required for admins this applies to owners and Super Admins, and in organizations set to Required for everyone to every member. No app update is needed.',
+    // #582 is live in production since 2026-11-15 23:29:54Z.
+    publishedAt: '2026-11-15T23:48:00Z',
+    entries: [
+      {
+        id: 'authenticator-set-up-before-other-pages',
+        category: 'improved',
+        area: 'Account',
+        title: 'Setting up a required authenticator comes first on the website',
+        whatChanged:
+          'On the website, a member whose organization requires an authenticator and who has not set one up is taken to Settings, Security right after signing in, after switching organization and after accepting an invitation, where the page shows Enroll to continue. Until they set one up, only Settings, Security and Settings, Profile open: every other page takes them to Settings, Security, and the search in the top bar finds no items, purchase orders, suppliers or warehouses.',
+        whyItMatters:
+          'Settings, Security is where an authenticator is set up, so a member who has to set one up starts there, with the reason on the page.',
+        howItAffectsYou:
+          'In organizations set to Required for admins, this applies to owners and Super Admins. In organizations set to Required for everyone, it applies to every member. In organizations set to Optional, and for members who already have an authenticator, nothing changes. Until you have set one up, Profile opens but your name, avatar and sign-in email cannot be changed there. Once you have set one up, StockPilot opens the dashboard and your pages open as usual. Owners and Super Admins choose the setting under Organization MFA policy in Settings, Security.',
+        whatToDo:
+          'If you are an owner or Super Admin in an organization set to Required for admins, or any member in one set to Required for everyone, and you have not set up an authenticator, open Settings, Security, choose Set up authenticator app and follow the steps. Everyone else: no action needed.',
+        link: { href: '/dashboard/settings/security', label: 'Open Security settings' },
       },
     ],
   },
