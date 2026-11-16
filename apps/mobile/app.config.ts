@@ -55,8 +55,7 @@ const config: ExpoConfig = {
   // from ExpoConfig AND from @expo/prebuild-config (grep the installed
   // @expo/prebuild-config@56 build output — it contains no splash handling at
   // all), so leaving it would silently produce a default white launch screen.
-  // The identical configuration now lives in the 'expo-splash-screen' plugin
-  // below.
+  // The launch screen is now set by the 'expo-splash-screen' plugin below.
   ios: {
     // Universal app: runs natively on iPhone + iPad, and on Apple-Silicon Macs
     // as a "Designed for iPad" app (enabled via a checkbox in App Store Connect
@@ -159,21 +158,35 @@ const config: ExpoConfig = {
     // app/_layout.tsx; giving the plugin a `style` here would bake a
     // launch-time value into the native project and fight that.
     'expo-status-bar',
-    // Replaces the root-level `splash` key that SDK 56 removed (see the note
-    // where it used to live). Values are carried over 1:1 from it. The
-    // plugin's own defaults are NOT equivalent to the old key — it centres the
-    // image at imageWidth 100 — so `enableFullScreenImage_legacy: true` is
-    // load-bearing: it is Expo's documented compatibility switch that keeps
-    // rendering the icon full-screen-contained exactly as the 1.1.0 build on
-    // the App Store does today. Do not drop it without deciding you WANT the
-    // new centred-logo look.
+    // The launch screen: what iOS (and Android) draw from the tap until the
+    // app's first frame, about half a second. It is a plain ground in exactly
+    // the colour of the loading animation's ground (palette('dark').paper in
+    // src/lib/theme.ts: the ground app/_layout.tsx holds while the fonts load,
+    // and the one cold-launch-splash.tsx draws its grid and beam on). With the
+    // two colours equal, the launch runs straight from the launch screen into
+    // the animation with no logo frame and no colour step.
+    //
+    // The image is one fully transparent pixel drawn 1 point wide, so nothing
+    // shows. It is there because the plugin writes the background colour into
+    // the iOS storyboard only when an image is set; with no image the
+    // storyboard keeps the template's system background (white in light mode,
+    // black in dark mode). One `backgroundColor` and no `dark` entry: the same
+    // colour in light and dark mode, because the animation is always dark.
+    //
+    // The launch screen is part of the app binary, so a change here reaches
+    // phones only with a new store build, never with a phone update; the
+    // restart screen follows the installed binary (src/lib/launch-look.ts).
+    // That choice reads the binary's runtime version, so a binary built from
+    // this tree while `version` above is still 1.4.0 has this plain launch
+    // screen but shows the icon restart screen; the plain restart screen
+    // first runs on a build whose version is above 1.4.0.
+    // app-config.native-contract.test.ts pins the colour and the image.
     [
       'expo-splash-screen',
       {
-        image: './assets/icon.png',
-        resizeMode: 'contain',
-        backgroundColor: '#0a0f1f',
-        enableFullScreenImage_legacy: true,
+        image: './assets/launch-clear.png',
+        imageWidth: 1,
+        backgroundColor: '#0c0d0a',
       },
     ],
     // Registers the native push module + adds the iOS `aps-environment`
