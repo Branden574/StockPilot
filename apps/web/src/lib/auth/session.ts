@@ -663,12 +663,37 @@ const resolveOrgContext = cache(
  * without one, the request-cached organization row the layout reads too).
  */
 async function sendToSetUpWhenOwed<T extends OrgContext>(reads: StepUpReads, ctx: T): Promise<T> {
-  if (openBeforeAuthenticatorSetUp((await headers()).get('x-pathname'))) return ctx;
-  if (await authenticatorSetUpIsOwed(reads, ctx, heldMembership(ctx))) {
-    redirect(AUTHENTICATOR_SET_UP_URL);
-  }
+  if (await setUpOwedOnThisPage(reads, ctx)) redirect(AUTHENTICATOR_SET_UP_URL);
   return ctx;
 }
+
+/**
+ * The set-up question itself, for requireOrgContext() above and for the
+ * layouts (authenticatorSetUpOwedForLayout below): owed, and the page asked
+ * for is not open before set-up. Checked on the page first, so an open page
+ * reads nothing for it.
+ */
+async function setUpOwedOnThisPage(reads: StepUpReads, ctx: OrgContext): Promise<boolean> {
+  if (openBeforeAuthenticatorSetUp((await headers()).get('x-pathname'))) return false;
+  return authenticatorSetUpIsOwed(reads, ctx, heldMembership(ctx));
+}
+
+/**
+ * FOR THE DASHBOARD'S LAYOUTS ONLY: will the page below send this member to
+ * set up an authenticator? The same answer requireOrgContext() acts on, asked
+ * without the redirect: the layout's context, the same question
+ * (setUpOwedOnThisPage) and the same request-cached reads (the claims and the
+ * factor list behind startStepUpReads), so the layout and its page agree.
+ *
+ * For a layout that shows a panel in place of its pages, such as a rank
+ * panel: for a member this answers true for, the layout renders its page
+ * instead, and the page's own rule sends them to set-up. No layout redirects
+ * for it (requireOrgContextForLayout above).
+ */
+export const authenticatorSetUpOwedForLayout = cache(async (): Promise<boolean> => {
+  const ctx = await requireOrgContextForLayout();
+  return setUpOwedOnThisPage(startStepUpReads(), ctx);
+});
 
 /**
  * Effective permissions = static role defaults + the organization's overrides
