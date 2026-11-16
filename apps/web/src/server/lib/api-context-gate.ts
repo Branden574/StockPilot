@@ -8,6 +8,7 @@ import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { withApiContext } from '@/lib/auth/api-context';
 import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { MembershipUnavailableError } from '@/lib/auth/membership-unavailable';
+import { mfaPolicyWasUnread } from '@/lib/auth/mfa-policy';
 import { moduleStateUnreadable } from '@/lib/modules/module-state';
 import type { ServiceContext } from '@/server/services/context';
 
@@ -62,6 +63,15 @@ import type { ServiceContext } from '@/server/services/context';
  * refused for the module state, so the stock adjustment, which reads none,
  * does not fail more often.
  *
+ * A POLICY THAT COULD NOT BE READ. When withApiContext could not read the
+ * organization's authenticator policy, it holds the member to the strictest
+ * one and marks the context (lib/auth/mfa-policy.ts). A write (any method
+ * but GET and HEAD) from a member in that state with no verified
+ * authenticator gets the gate's retryable answer, before the route does
+ * anything: nothing was written, send it again. A member whose policy was
+ * read keeps the route's own answer, and so does a member with a verified
+ * authenticator.
+ *
  * Shape as returnsContext (app/api/v1/returns/http.ts): `{ response }` to
  * answer at once, or `{ ctx }`, where a null ctx is the route's own 401.
  * Registered in GATE_MODULES (test/route-write-handlers.ts), so the cookie
@@ -88,7 +98,28 @@ export async function apiContextGate(
   if (ctx && opts?.modules?.some((id) => moduleStateUnreadable(ctx.enabledModules, id))) {
     return refusedBeforeAnyWork('ModulesUnavailableError');
   }
+  if (ctx && policyUnreadForWrite(req, ctx)) {
+    return refusedBeforeAnyWork('MfaPolicyUnread');
+  }
   return { ctx };
+}
+
+/**
+ * A write by a member the context holds to the strictest policy because the
+ * organization's policy could not be read, and who has no verified
+ * authenticator: the labels the service gate refuses as set-up owed
+ * (mfaGateError, server/services/context.ts), on the object withApiContext
+ * marked.
+ */
+function policyUnreadForWrite(req: Request, ctx: ServiceContext): boolean {
+  const method = req.method.toUpperCase();
+  if (method === 'GET' || method === 'HEAD') return false;
+  return (
+    mfaPolicyWasUnread(ctx) &&
+    ctx.mfaRequired === true &&
+    ctx.mfaSatisfied !== true &&
+    ctx.mfaEnrolled !== true
+  );
 }
 
 /** The marker, and one log line that names the class and never a message. */

@@ -3,14 +3,14 @@ import { z } from 'zod';
 
 import { isUuid } from '@stockpilot/core';
 
-import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { ModulesUnavailableError } from '@/lib/modules/module-state';
+import { apiContextGate } from '@/server/lib/api-context-gate';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { refusalReasonDetails } from '@/server/lib/refusal-reason';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { ReceivingService } from '@/server/services/receiving';
-import { ServiceError } from '@/server/services/context';
+import { assertModuleEnabled, assertPermission, ServiceError } from '@/server/services/context';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -55,7 +55,12 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const ctx = await withApiContext(req);
+  // First, before anything else: a context that could not be built because
+  // the caller's access could not be checked answers the 503 the phone may
+  // send again (server/lib/api-context-gate.ts).
+  const gate = await apiContextGate(req);
+  if ('response' in gate) return gate.response;
+  const ctx = gate.ctx;
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
@@ -78,6 +83,15 @@ export async function POST(
     );
   }
   const { itemId, qty, idempotencyKey } = parsed.data;
+
+  // The module and the permission the receipt needs (ReceivingService
+  // postReceipt checks the same two), before the order is read.
+  try {
+    assertModuleEnabled(ctx, 'receiving');
+    assertPermission(ctx, 'stock:adjust');
+  } catch (e) {
+    return refusedBeforeTheOrder(e, ctx.organizationId);
+  }
 
   const { data: po, error: poErr } = await ctx.supabase
     .from('purchase_orders')
@@ -250,6 +264,25 @@ export async function POST(
     });
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
+}
+
+/**
+ * The answer to a refusal of the module or permission check: the same status
+ * and body the receipt's own refusal of that check gives (403 with the
+ * refusal's code, message and reason), and the fixed try-again answer for a
+ * module state that could not be read.
+ */
+function refusedBeforeTheOrder(e: unknown, organizationId: string): NextResponse {
+  if (e instanceof ServiceError) {
+    return NextResponse.json(
+      { error: e.code, message: e.message, ...refusalReasonDetails(e) },
+      { status: 403 },
+    );
+  }
+  if (e instanceof ModulesUnavailableError) {
+    return internalErrorResponse(e, 'po.receive-line.module_state', { organizationId });
+  }
+  throw e;
 }
 
 async function resolveWarehouseFromLocation(

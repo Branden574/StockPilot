@@ -168,22 +168,31 @@ const CORE_MARKER_FILE = 'auth/context-unavailable.ts';
  * changes nothing. The four sign-in email change routes (status, request,
  * resend, cancel) call it as their first statement too; the gate's 503 comes
  * before any limit is spent, any password is checked and any link is minted
- * or sent, so sending one again starts from nothing.
+ * or sent, so sending one again starts from nothing. The writes the phone
+ * sends from its outbox (a purchase order line received, a bundle handed
+ * out, size count events, a count line cleared) call it as their first
+ * statement too, and each is safe to send again: the first two carry the
+ * queued row's idempotency key, size count events are taken once per event
+ * key, and a line cleared a second time stays cleared.
  */
 const GATED_ROUTES = [
   'app/api/v1/account/email/cancel/route.ts',
   'app/api/v1/account/email/request/route.ts',
   'app/api/v1/account/email/resend/route.ts',
   'app/api/v1/account/email/route.ts',
+  'app/api/v1/bundles/[id]/distribute/route.ts',
   'app/api/v1/customers/[id]/status/route.ts',
+  'app/api/v1/cycle-counts/[id]/lines/[lineId]/clear/route.ts',
   'app/api/v1/exceptions/[id]/escalate/route.ts',
   'app/api/v1/items/[id]/adjust/route.ts',
   'app/api/v1/items/[id]/serials/route.ts',
   'app/api/v1/members/[id]/category-access/route.ts',
   'app/api/v1/members/[id]/role/route.ts',
+  'app/api/v1/po/[id]/receive-line/route.ts',
   'app/api/v1/rentals/route.ts',
   'app/api/v1/schedule/route.ts',
   'app/api/v1/serials/[id]/route.ts',
+  'app/api/v1/size-counts/[id]/events/route.ts',
 ];
 
 const SOURCE_FILE = /\.(ts|tsx|mts)$/;
@@ -538,7 +547,7 @@ describe('a route that uses the gate calls it first, and only the reviewed route
       `export async function later(req: Request) { const { apiContextGate } = await import('@/server/lib/api-context-gate'); return apiContextGate(req); }`,
     );
     expect(firstStatementFindings(web)).toEqual([
-      'the gate is loaded by [app/api/v1/account/email/cancel/route.ts, app/api/v1/account/email/request/route.ts, app/api/v1/account/email/resend/route.ts, app/api/v1/account/email/route.ts, app/api/v1/customers/[id]/status/route.ts, app/api/v1/exceptions/[id]/escalate/route.ts, app/api/v1/items/[id]/adjust/route.ts, app/api/v1/items/[id]/serials/route.ts, app/api/v1/members/[id]/category-access/route.ts, app/api/v1/members/[id]/role/route.ts, app/api/v1/other/route.ts, app/api/v1/rentals/route.ts, app/api/v1/schedule/route.ts, app/api/v1/serials/[id]/route.ts, server/lib/wraps-the-gate.ts], reviewed: [app/api/v1/account/email/cancel/route.ts, app/api/v1/account/email/request/route.ts, app/api/v1/account/email/resend/route.ts, app/api/v1/account/email/route.ts, app/api/v1/customers/[id]/status/route.ts, app/api/v1/exceptions/[id]/escalate/route.ts, app/api/v1/items/[id]/adjust/route.ts, app/api/v1/items/[id]/serials/route.ts, app/api/v1/members/[id]/category-access/route.ts, app/api/v1/members/[id]/role/route.ts, app/api/v1/rentals/route.ts, app/api/v1/schedule/route.ts, app/api/v1/serials/[id]/route.ts]',
+      'the gate is loaded by [app/api/v1/account/email/cancel/route.ts, app/api/v1/account/email/request/route.ts, app/api/v1/account/email/resend/route.ts, app/api/v1/account/email/route.ts, app/api/v1/bundles/[id]/distribute/route.ts, app/api/v1/customers/[id]/status/route.ts, app/api/v1/cycle-counts/[id]/lines/[lineId]/clear/route.ts, app/api/v1/exceptions/[id]/escalate/route.ts, app/api/v1/items/[id]/adjust/route.ts, app/api/v1/items/[id]/serials/route.ts, app/api/v1/members/[id]/category-access/route.ts, app/api/v1/members/[id]/role/route.ts, app/api/v1/other/route.ts, app/api/v1/po/[id]/receive-line/route.ts, app/api/v1/rentals/route.ts, app/api/v1/schedule/route.ts, app/api/v1/serials/[id]/route.ts, app/api/v1/size-counts/[id]/events/route.ts, server/lib/wraps-the-gate.ts], reviewed: [app/api/v1/account/email/cancel/route.ts, app/api/v1/account/email/request/route.ts, app/api/v1/account/email/resend/route.ts, app/api/v1/account/email/route.ts, app/api/v1/bundles/[id]/distribute/route.ts, app/api/v1/customers/[id]/status/route.ts, app/api/v1/cycle-counts/[id]/lines/[lineId]/clear/route.ts, app/api/v1/exceptions/[id]/escalate/route.ts, app/api/v1/items/[id]/adjust/route.ts, app/api/v1/items/[id]/serials/route.ts, app/api/v1/members/[id]/category-access/route.ts, app/api/v1/members/[id]/role/route.ts, app/api/v1/po/[id]/receive-line/route.ts, app/api/v1/rentals/route.ts, app/api/v1/schedule/route.ts, app/api/v1/serials/[id]/route.ts, app/api/v1/size-counts/[id]/events/route.ts]',
       'app/api/v1/items/[id]/adjust/route.ts POST: the first statement is not `const gate = await apiContextGate(<its request>)`',
       'app/api/v1/other/route.ts DELETE: the first statement is not `const gate = await g(<its request>)`',
       'app/api/v1/other/route.ts PUT: the first statement is not `const gate = await g(<its request>)`',
