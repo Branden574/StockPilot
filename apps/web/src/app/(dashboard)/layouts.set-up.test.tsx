@@ -72,6 +72,7 @@ vi.mock('@/lib/error-reporter', async (importOriginal) => ({
 import { resetWorld, world } from '@/test/step-up-session-fixture';
 
 import PoImportsLayout from './dashboard/purchase-orders/imports/layout';
+import PurchaseOrdersLayout from './dashboard/purchase-orders/layout';
 import SettingsLayout from './dashboard/settings/layout';
 import DashboardLayout from './layout';
 
@@ -199,6 +200,52 @@ describe('the PO imports layout, for someone without Manage purchase orders', ()
       expect(findByTypeName(tree, 'PageBelow')).toBeNull();
     },
   );
+});
+
+/**
+ * The purchase orders layout shows its access panel in place of the pages to
+ * someone whose View purchase orders was taken away. Such a member who must
+ * set up an authenticator first gets the page instead, whose own rule sends
+ * them to set-up; the layout never redirects.
+ */
+describe('the purchase orders layout, for someone without View purchase orders', () => {
+  const ORDERS = '/dashboard/purchase-orders';
+  beforeEach(() => {
+    world.userOverrides = [{ permission: 'purchase_orders:read', granted: false }];
+    world.pathname = ORDERS;
+  });
+
+  it.each(['staff', 'viewer'] as const)(
+    'a %s with no authenticator under Required for everyone: the page, never a redirect',
+    async (role) => {
+      world.policy = 'all_required';
+      world.role = role;
+      const tree = await PurchaseOrdersLayout({ children: <PageBelow /> });
+      expect(findByTypeName(tree, 'PageBelow')).not.toBeNull();
+      expect(findByTypeName(tree, 'PoAccessDenied')).toBeNull();
+    },
+  );
+
+  it.each(['staff', 'viewer'] as const)(
+    'a %s who owes no set-up (Required for admins): the access panel, not the page',
+    async (role) => {
+      world.policy = 'admins_required';
+      world.role = role;
+      const tree = await PurchaseOrdersLayout({ children: <PageBelow /> });
+      expect(findByTypeName(tree, 'PoAccessDenied')).not.toBeNull();
+      expect(findByTypeName(tree, 'PageBelow')).toBeNull();
+    },
+  );
+
+  it('control: with View purchase orders, the page whatever is owed', async () => {
+    world.userOverrides = [];
+    for (const policy of ['all_required', 'admins_required'] as const) {
+      world.policy = policy;
+      world.role = 'staff';
+      const tree = await PurchaseOrdersLayout({ children: <PageBelow /> });
+      expect(findByTypeName(tree, 'PageBelow'), policy).not.toBeNull();
+    }
+  });
 });
 
 describe('control: a Manager under Required for admins', () => {

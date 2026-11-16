@@ -176,15 +176,16 @@ describe('Settings > Integrations with both modules on', () => {
 // ?error=forbidden (api/integrations/{quickbooks,sage_intacct}/callback). The
 // page says why, and where to go, to the people the accounting cards show to.
 describe('Settings > Integrations after a refused accounting connection', () => {
+  // True of every reason the callbacks answer forbidden for, and says what to
+  // do when an authenticator is the reason.
   const SENTENCE =
-    'Connecting an accounting system needs an authenticator on your account. Check Settings > Security, then connect again.';
+    'The connection was not finished because your access could not be confirmed. If your organization requires an authenticator, set one up in Settings > Security, then connect again.';
 
-  it('error=forbidden: says the connection was not finished and points to Settings > Security', async () => {
+  it('error=forbidden: says the access could not be confirmed and points to Settings > Security', async () => {
     as('admin', ['integrations:manage', 'shipping:manage']);
     render(await IntegrationsSettingsPage(returnedWith({ error: 'forbidden' })));
     const line = screen.getByRole('status');
-    expect(line).toHaveTextContent('The connection was not finished.');
-    expect(line).toHaveTextContent(SENTENCE);
+    expect(line.textContent?.replace(/\s+/g, ' ').trim()).toBe(SENTENCE);
     expect(screen.getByRole('link', { name: 'Settings > Security' })).toHaveAttribute(
       'href',
       '/dashboard/settings/security',

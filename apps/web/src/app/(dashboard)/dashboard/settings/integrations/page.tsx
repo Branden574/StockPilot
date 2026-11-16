@@ -110,12 +110,17 @@ export default async function IntegrationsSettingsPage({
 
   // What a QuickBooks or Sage Intacct connection comes back with when it was
   // refused: ?error=forbidden (api/integrations/{quickbooks,sage_intacct}/
-  // callback). Those callbacks answer `forbidden` before the code is exchanged
-  // when the organization requires an authenticator the session has not met,
-  // and also when the member may not manage integrations. The line shows only
-  // with the accounting cards (the module on and Manage integrations held), so
-  // someone refused for the permission is not pointed at Settings > Security.
-  // Any other value says nothing here.
+  // callback). Those callbacks answer `forbidden`, before the code is
+  // exchanged, for five reasons: the session has not entered its
+  // authenticator code; the account is disabled (this page then sends the
+  // person to the disabled screen); no membership could be read in the
+  // connection's organization; that organization requires an authenticator
+  // the session has not met; or the member does not hold Manage integrations
+  // there. The connection's organization can be another one than the person
+  // is in on return, so the line says only what is true of all five, and
+  // what to do when an authenticator is the reason. It shows with the
+  // accounting cards (the module on and Manage integrations held here). Any
+  // other value says nothing here.
   const { error: returnedError } = await searchParams;
   const connectRefused = showQbo && returnedError === 'forbidden';
 
@@ -157,8 +162,10 @@ export default async function IntegrationsSettingsPage({
 
       {connectRefused ? (
         <p role="status" className="bg-sunk rounded-lg border px-4 py-3 text-[13px]">
-          <span className="font-medium">The connection was not finished.</span> Connecting an
-          accounting system needs an authenticator on your account. Check{' '}
+          <span className="font-medium">
+            The connection was not finished because your access could not be confirmed.
+          </span>{' '}
+          If your organization requires an authenticator, set one up in{' '}
           <Link
             href={AUTHENTICATOR_SET_UP_PAGE}
             className="text-foreground underline underline-offset-2"
