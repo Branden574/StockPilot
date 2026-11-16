@@ -5,7 +5,7 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 // AuditLogService gates on the EFFECTIVE activity_logs:read (can(), not the
 // static hasPermission) — the whole point of the grantable audit console is
 // that a viewer granted the permission via the matrix can read. These tests
-// pin that, plus the eventPrefix filter driving the category chips.
+// pin that, plus the eventPrefixes filter driving the category chips.
 
 const ctxHolder = vi.hoisted(() => ({ current: null as unknown }));
 
@@ -58,14 +58,14 @@ describe('AuditLogService.list permission gate', () => {
   });
 });
 
-describe('AuditLogService.list eventPrefix filter (category chips)', () => {
-  it('applies like(event, prefix%) when eventPrefix is set', async () => {
+describe('AuditLogService.list eventPrefixes filter (category chips)', () => {
+  it('applies like(event, prefix%) for one prefix', async () => {
     const stub = makeSupabaseStub({
       'audit_logs.select': { data: [], error: null, count: 0 },
     });
     ctxHolder.current = makeServiceContext(stub.client, { role: 'admin' });
     const svc = await AuditLogService.forCurrentUser();
-    await svc.list({ eventPrefix: 'stock.' });
+    await svc.list({ eventPrefixes: ['stock.'] });
     const chain = stub.chains.get('audit_logs.select') ?? [];
     const args = stub.chainArgs.get('audit_logs.select') ?? [];
     const likeIdx = chain.indexOf('like');
@@ -79,15 +79,46 @@ describe('AuditLogService.list eventPrefix filter (category chips)', () => {
     });
     ctxHolder.current = makeServiceContext(stub.client, { role: 'admin' });
     const svc = await AuditLogService.forCurrentUser();
-    await svc.list({ event: 'stock.adjusted', eventPrefix: 'stock.' });
+    await svc.list({ event: 'stock.adjusted', eventPrefixes: ['stock.'] });
     const chain = stub.chains.get('audit_logs.select') ?? [];
     expect(chain).not.toContain('like');
+    expect(chain).not.toContain('or');
     const args = stub.chainArgs.get('audit_logs.select') ?? [];
     const eqIdx = chain.indexOf('eq');
     // First eq is organization_id; find the event eq.
     const eventEq = args.filter((a, i) => chain[i] === 'eq' && a[0] === 'event');
     expect(eqIdx).toBeGreaterThan(-1);
     expect(eventEq).toEqual([['event', 'stock.adjusted']]);
+  });
+});
+
+describe('AuditLogService.list with several prefixes (the Team chip)', () => {
+  it('matches any of them in one or(), with no like() of its own', async () => {
+    const stub = makeSupabaseStub({
+      'audit_logs.select': { data: [], error: null, count: 0 },
+    });
+    ctxHolder.current = makeServiceContext(stub.client, { role: 'admin' });
+    const svc = await AuditLogService.forCurrentUser();
+    await svc.list({ eventPrefixes: ['user.', 'api_key.'] });
+    const chain = stub.chains.get('audit_logs.select') ?? [];
+    const args = stub.chainArgs.get('audit_logs.select') ?? [];
+    expect(chain).not.toContain('like');
+    expect(chain.filter((m) => m === 'or')).toHaveLength(1);
+    expect(args[chain.indexOf('or')]).toEqual(['event.like.user.%,event.like.api_key.%']);
+    // Still this organization's rows only.
+    expect(args[chain.indexOf('eq')]).toEqual(['organization_id', expect.any(String)]);
+  });
+
+  it('an empty list filters nothing', async () => {
+    const stub = makeSupabaseStub({
+      'audit_logs.select': { data: [], error: null, count: 0 },
+    });
+    ctxHolder.current = makeServiceContext(stub.client, { role: 'admin' });
+    const svc = await AuditLogService.forCurrentUser();
+    await svc.list({ eventPrefixes: [] });
+    const chain = stub.chains.get('audit_logs.select') ?? [];
+    expect(chain).not.toContain('like');
+    expect(chain).not.toContain('or');
   });
 });
 

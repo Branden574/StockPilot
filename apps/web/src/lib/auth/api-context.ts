@@ -21,7 +21,12 @@ import {
 } from '@/lib/auth/request-context-bundle';
 
 import type { Role, Database, ModuleId, Permission } from '@stockpilot/core';
-import { effectivePermissions, policyRequiresAuthenticator, stepUpOwed } from '@stockpilot/core';
+import {
+  authenticatorSetUpOwed,
+  effectivePermissions,
+  policyRequiresAuthenticator,
+  stepUpOwed,
+} from '@stockpilot/core';
 
 import {
   enforcedMfaPolicy,
@@ -67,20 +72,26 @@ type SessionAal = 'aal1' | 'aal2' | null;
  */
 type SessionLevelReader = () => Promise<SessionAal>;
 
+/** A GoTrue user's factors, as getUser() returns them; only `status` is read. */
+type UserFactors = Array<{ status?: string }> | null | undefined;
+
 async function resolveApiMfaState(
   supabase: any,
   organizationId: string,
   role: Role,
-  // True when the (already validated) user has a verified TOTP factor —
-  // read off the GoTrue user object both paths have in hand, so it costs
-  // no extra auth round-trip. Enrollment escalates: an enrolled factor
-  // must be satisfied regardless of org policy (HI-6), and it decides the
-  // gate's error shape ('aal2_required' vs 'mfa_required').
-  hasVerifiedFactor: boolean,
+  // The (already validated) user's factors — read off the GoTrue user
+  // object both paths have in hand, so it costs no extra auth round-trip.
+  // A verified one escalates: an enrolled factor must be satisfied
+  // regardless of org policy, and it decides the gate's error shape
+  // ('aal2_required' vs 'mfa_required').
+  factors: UserFactors,
   // The session's level, read only when MFA is required. Couldn't read
   // (null, or a throw) → fail closed.
   level: SessionLevelReader,
 ): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean; mfaEnrolled: boolean }> {
+  // The factor list is read first: a list that cannot be read throws here,
+  // before the organization's policy is read.
+  userHasVerifiedFactor({ factors });
   let policy: MfaPolicy;
   try {
     const { data: org, error } = await supabase
@@ -122,7 +133,7 @@ async function resolveApiMfaState(
     console.error('[resolveApiMfaState] failed:', err);
     policy = UNREADABLE_ORG_MFA_POLICY;
   }
-  return mfaFromPolicy(policy, role, hasVerifiedFactor, level);
+  return mfaFromPolicy(policy, role, factors, level);
 }
 
 /**
@@ -133,9 +144,10 @@ async function resolveApiMfaState(
 async function mfaFromPolicy(
   policy: MfaPolicy,
   role: Role,
-  hasVerifiedFactor: boolean,
+  factors: UserFactors,
   level: SessionLevelReader,
 ): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean; mfaEnrolled: boolean }> {
+  const hasVerifiedFactor = userHasVerifiedFactor({ factors });
   let mfaRequired = false;
   let mfaSatisfied = false;
   try {
@@ -148,10 +160,10 @@ async function mfaFromPolicy(
     // AAL1 untouched.
     mfaRequired = policyRequired || hasVerifiedFactor;
     // A policy that requires an authenticator is met only by an account that
-    // has one: the same answer resolveMfaState() in services/context.ts gives
-    // pages and Server Actions ('mfa_required', set one up first), with no
-    // level read.
-    if (policyRequired && !hasVerifiedFactor) {
+    // has one (the core rule, authenticatorSetUpOwed): the same answer
+    // resolveMfaState() in services/context.ts gives pages and Server Actions
+    // ('mfa_required', set one up first), with no level read.
+    if (authenticatorSetUpOwed(policy, role, factors)) {
       return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false };
     }
     if (mfaRequired) {
@@ -316,7 +328,7 @@ async function resolveApiContextFromBundle(
  * A missing `factors` array reads as unenrolled — identical to the
  * pre-HI-6 behavior for that user, never wider.
  */
-function userHasVerifiedFactor(user: { factors?: Array<{ status?: string }> | null }): boolean {
+function userHasVerifiedFactor(user: { factors?: UserFactors }): boolean {
   return (user.factors ?? []).some((f) => f.status === 'verified');
 }
 
@@ -408,7 +420,7 @@ export async function cookieSessionMfaState(
   organizationId: string,
   role: Role,
 ): Promise<SessionMfaState> {
-  return resolveApiMfaState(supabase, organizationId, role, userHasVerifiedFactor(user), () =>
+  return resolveApiMfaState(supabase, organizationId, role, user.factors, () =>
     cookieSessionLevel(supabase, user.id),
   );
 }
@@ -856,12 +868,7 @@ export async function withApiContext(
           role: fast.role,
           permissions: fast.permissions,
           supabase,
-          ...(await mfaFromPolicy(
-            fast.mfaPolicy,
-            fast.role,
-            userHasVerifiedFactor(userRes.user),
-            level,
-          )),
+          ...(await mfaFromPolicy(fast.mfaPolicy, fast.role, userRes.user.factors, level)),
           enabledModules: fast.enabledModules,
         },
         fast.held,
@@ -878,7 +885,7 @@ export async function withApiContext(
       supabase,
       member.organization_id as string,
       member.role as Role,
-      userHasVerifiedFactor(userRes.user),
+      userRes.user.factors,
       level,
     );
     const enabledModules = await resolveApiEnabledModules(
@@ -972,7 +979,7 @@ export async function withApiContext(
         role: fast.role,
         permissions: fast.permissions,
         supabase,
-        ...(await mfaFromPolicy(fast.mfaPolicy, fast.role, userHasVerifiedFactor(user), level)),
+        ...(await mfaFromPolicy(fast.mfaPolicy, fast.role, user.factors, level)),
         enabledModules: fast.enabledModules,
       },
       fast.held,
@@ -988,7 +995,7 @@ export async function withApiContext(
     supabase,
     member.organization_id as string,
     member.role as Role,
-    userHasVerifiedFactor(user),
+    user.factors,
     level,
   );
   const enabledModules = await resolveApiEnabledModules(supabase, member.organization_id as string);

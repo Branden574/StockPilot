@@ -5,6 +5,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { forbiddenOrInternalResponse } from '@/server/lib/api-error-response';
+import { refusalReasonDetails } from '@/server/lib/refusal-reason';
 import { SizeCountsService } from '@/server/services/size-counts';
 import { ServiceError } from '@/server/services/context';
 
@@ -97,8 +98,17 @@ const GENERIC_500_MESSAGE = 'An internal error occurred. Please try again.';
  * reported; a 503 with Retry-After, reported as a warning, when the caller's
  * own access could not be read. Everything else keeps the S13 500, with the
  * same body, tag and level.
+ *
+ * `forwardDetails` (the outbox's append route): a refusal also carries
+ * `details: { reason }` when the ServiceError's details hold a string reason,
+ * and nothing else from them (server/lib/refusal-reason.ts). The authenticator
+ * gate's reason is what tells the phone that answer apart from a missing
+ * permission. The other size-count handlers do not pass it.
  */
-export function sizeCountError(e: unknown): NextResponse {
+export function sizeCountError(
+  e: unknown,
+  opts: { forwardDetails?: boolean } = {},
+): NextResponse {
   if (e instanceof ServiceError) {
     // `internal_error` already arrives sanitized (the constructor swapped the
     // public message and stashed the raw text in internalDetail) — report that
@@ -125,7 +135,14 @@ export function sizeCountError(e: unknown): NextResponse {
               : e.code === 'module_disabled'
                 ? 403
                 : 500;
-    return NextResponse.json({ error: e.code, message: e.message }, { status });
+    return NextResponse.json(
+      {
+        error: e.code,
+        message: e.message,
+        ...(opts.forwardDetails ? refusalReasonDetails(e) : {}),
+      },
+      { status },
+    );
   }
   return forbiddenOrInternalResponse(e, 'size-counts.api', { message: GENERIC_500_MESSAGE });
 }

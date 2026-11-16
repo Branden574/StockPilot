@@ -3479,7 +3479,11 @@ describe('a refused account deletion says why, and is published with the account
     // integrity refusal (which should no longer happen) is now the support
     // sentence below, and the A3 release (account-deletion-everyone-2026-10,
     // published 2026-10-05 once 0393 shipped) supersedes this release's claim.
-    const copy = readFileSync(resolve(__dirname, '../../server/lib/account-deletion.ts'), 'utf8');
+    // The sentence lives in core, shared by the web and the phone's routes.
+    const copy = readFileSync(
+      resolve(__dirname, '../../../../../packages/core/src/account/delete-account-copy.ts'),
+      'utf8',
+    );
     expect(copy).not.toContain(`"${BLOCKED}"`);
     expect(copy).toContain(
       "'Your account could not be deleted because it is linked to a record that could not be released. Nothing was changed. Contact StockPilot support.'",

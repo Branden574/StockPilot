@@ -46,6 +46,8 @@ export interface World {
   /** The member's organizations, default first. Empty: no membership. */
   orgs: string[];
   disabled: boolean;
+  /** The member's own permission overrides in every organization (none by default). */
+  userOverrides: Array<{ permission: string; granted: boolean }>;
   /** Every network call, in order: `rpc:<name>`, `from:<table>`, `auth:<method>`. */
   calls: string[];
 }
@@ -64,12 +66,13 @@ const START: Omit<World, 'calls'> = {
   role: 'staff',
   orgs: [ORG],
   disabled: false,
+  userOverrides: [],
 };
 
-export const world: World = { ...START, factors: [], orgs: [ORG], calls: [] };
+export const world: World = { ...START, factors: [], orgs: [ORG], userOverrides: [], calls: [] };
 
 export function resetWorld(): void {
-  Object.assign(world, START, { factors: [], orgs: [ORG], calls: [] });
+  Object.assign(world, START, { factors: [], orgs: [ORG], userOverrides: [], calls: [] });
 }
 
 export const VERIFIED_FACTOR = [{ status: 'verified' }];
@@ -116,7 +119,7 @@ function bundle() {
         all_modules_comp: false,
       },
       role_overrides: [],
-      user_overrides: [],
+      user_overrides: world.userOverrides,
       enabled_modules: [],
     })),
   };
