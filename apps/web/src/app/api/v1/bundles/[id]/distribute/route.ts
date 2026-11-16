@@ -81,7 +81,7 @@ export async function POST(
       const status =
         e.code === 'validation_error'
           ? 400
-          : e.code === 'forbidden'
+          : e.code === 'forbidden' || e.code === 'module_disabled'
             ? 403
             : e.code === 'not_found'
               ? 404
