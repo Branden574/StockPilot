@@ -484,6 +484,13 @@ export async function auditAccountDeleted(args: {
   userId: string;
   organizationId: string | null;
   reason: 'self_deletion' | 'self_deletion_mobile';
+  /**
+   * How the deletion was confirmed (server/lib/account-deletion-credential):
+   * the authenticator code, the password, the emailed code, or none (the
+   * phone route's request that carried neither). Only the way, never the
+   * password or the code.
+   */
+  confirmedBy: 'authenticator' | 'password' | 'emailed_code' | 'none';
   /** O-A3-5: what the person created in this organization that keeps working
    *  (read before the delete by readDeletionReviewFacts); omitted when unread. */
   createdStillActive?: CreatedStillActive | null;
@@ -510,6 +517,7 @@ export async function auditAccountDeleted(args: {
       before: null,
       after: null,
       reason: args.reason,
+      confirmed_by: args.confirmedBy,
       ...(args.createdStillActive
         ? {
             created_still_active: {

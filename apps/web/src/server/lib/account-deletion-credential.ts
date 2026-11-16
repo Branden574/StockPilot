@@ -245,6 +245,32 @@ export async function confirmDeletionCredential(args: {
   }
 }
 
+/**
+ * The greeting's first name: the first word of the account's profile name,
+ * the name the profile action sanitises and every other security email uses
+ * (services/email-change.ts), read by the account id with the service role.
+ * None when it is empty or cannot be read: the email then says "Hi". Never
+ * throws.
+ */
+async function profileFirstName(
+  admin: Pick<SupabaseClient, 'from'>,
+  userId: string,
+): Promise<string | null> {
+  try {
+    const { data, error } = await admin
+      .from('user_profiles')
+      .select('full_name')
+      .eq('id', userId)
+      .maybeSingle();
+    if (error) return null;
+    const fullName =
+      ((data as { full_name?: unknown } | null)?.full_name as string | null)?.trim() ?? '';
+    return fullName ? fullName.split(/\s+/)[0]! : null;
+  } catch {
+    return null;
+  }
+}
+
 export type DeletionCodeSendResult =
   | { ok: true; challenge: string; expiresAt: number }
   | {
@@ -252,7 +278,8 @@ export type DeletionCodeSendResult =
       /**
        *  - not_offered: the account has an authenticator (its code confirms instead);
        *  - rate_limited: too many codes sent in the window;
-       *  - send_failed: the factors or the address could not be read, or the email did not go;
+       *  - send_failed: the factors or the address could not be read, or the code could not
+       *    be signed (an email the service did not accept is reported and answered as sent);
        *  - gone: the account no longer exists.
        */
       kind: 'not_offered' | 'rate_limited' | 'send_failed' | 'gone';
@@ -265,7 +292,7 @@ export type DeletionCodeSendResult =
  * except in the email.
  */
 export async function sendDeletionCode(args: {
-  admin: Pick<SupabaseClient, 'auth'>;
+  admin: Pick<SupabaseClient, 'auth' | 'from'>;
   userId: string;
   now?: Date;
 }): Promise<DeletionCodeSendResult> {
@@ -305,14 +332,11 @@ export async function sendDeletionCode(args: {
       return { ok: false, kind: 'send_failed' };
     }
 
-    const meta = (data?.user?.user_metadata ?? {}) as Record<string, unknown>;
-    const fullName =
-      typeof meta.full_name === 'string' && meta.full_name.trim() ? meta.full_name : null;
     const message = renderAccountDeleteCodeEmail({
       email,
       code,
       codeExpiry: `${ACCOUNT_DELETE_CODE_TTL_S / 60} minutes`,
-      firstName: fullName ? fullName.trim().split(/\s+/)[0] : null,
+      firstName: await profileFirstName(admin, userId),
       appUrl: env.NEXT_PUBLIC_APP_URL,
     });
     const sent = await sendEmail({
@@ -322,12 +346,19 @@ export async function sendDeletionCode(args: {
       text: message.text,
       from: message.from,
     });
-    if (!sent.ok) {
-      void reportError(new Error('the deletion code email was not accepted'), {
-        tag: 'account.delete.code_send_failed',
-        level: 'warning',
-      });
-      return { ok: false, kind: 'send_failed' };
+    // An email the service did not accept, or a deployment with no email key
+    // (sendEmail then sends nothing and answers ok with the id 'dryrun'):
+    // reported, never with the code or the address, and answered as a sent
+    // code, so the answer says nothing about the mailbox or the deployment.
+    if (!sent.ok || sent.id === 'dryrun') {
+      void reportError(
+        new Error(
+          sent.ok
+            ? 'the deletion code email was not sent: no email key'
+            : 'the deletion code email was not accepted',
+        ),
+        { tag: 'account.delete.code_send_failed', level: 'warning' },
+      );
     }
     return { ok: true, challenge: signed.challenge, expiresAt: signed.expiresAt };
   } catch (e) {

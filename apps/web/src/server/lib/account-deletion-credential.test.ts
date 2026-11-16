@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { sendEmail, verifyPassword, checkRateLimit, reportError } = vi.hoisted(() => ({
   sendEmail: vi.fn(async (_m: { to: string; subject: string; html: string; text: string }) => ({
     ok: true as boolean,
+    id: 'email-1' as string | undefined,
   })),
   verifyPassword: vi.fn(
     async (
@@ -60,6 +61,9 @@ const world = {
   factorsError: null as null | { message: string; status?: number; code?: string },
   email: EMAIL as string | null,
   newEmail: null as string | null,
+  /** The profile's (sanitised) name, and the auth user's own metadata name. */
+  profileName: null as string | null,
+  metadataName: null as string | null,
 };
 
 const admin = {
@@ -73,10 +77,27 @@ const admin = {
         ),
       },
       getUserById: vi.fn(async (id: string) => ({
-        data: { user: { id, email: world.email, new_email: world.newEmail, user_metadata: {} } },
+        data: {
+          user: {
+            id,
+            email: world.email,
+            new_email: world.newEmail,
+            user_metadata: world.metadataName ? { full_name: world.metadataName } : {},
+          },
+        },
         error: null,
       })),
     },
+  },
+  // The profile row, read by the account id for the greeting.
+  from: (table: string) => {
+    if (table !== 'user_profiles') throw new Error(`unexpected table ${table}`);
+    const builder = {
+      select: () => builder,
+      eq: () => builder,
+      maybeSingle: async () => ({ data: { full_name: world.profileName }, error: null }),
+    };
+    return builder;
   },
 } as never;
 
@@ -88,7 +109,9 @@ beforeEach(() => {
   world.factorsError = null;
   world.email = EMAIL;
   world.newEmail = null;
-  sendEmail.mockImplementation(async () => ({ ok: true }));
+  world.profileName = null;
+  world.metadataName = null;
+  sendEmail.mockImplementation(async () => ({ ok: true, id: 'email-1' }));
   verifyPassword.mockImplementation(async () => ({ ok: true }));
   checkRateLimit.mockImplementation(async () => ({ allowed: true, count: 1, resetAt: 0 }));
 });
@@ -352,13 +375,48 @@ describe('the emailed code', () => {
     expect(checkRateLimit).not.toHaveBeenCalled();
   });
 
-  it('an email that did not go: send_failed, and the code is not reported', async () => {
-    sendEmail.mockImplementation(async () => ({ ok: false }));
-    expect(await sendDeletionCode({ admin, userId: USER })).toEqual({
-      ok: false,
-      kind: 'send_failed',
+  it('an email the service did not accept: answered as a sent code, reported without the code or the address', async () => {
+    sendEmail.mockImplementation(async () => ({ ok: false, id: undefined }));
+    const sent = await sendDeletionCode({ admin, userId: USER });
+    expect(sent.ok).toBe(true);
+    expect(reportError).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'account.delete.code_send_failed',
+      level: 'warning',
     });
-    noSecretReported(codeFromLastEmail());
+    noSecretReported(codeFromLastEmail(), EMAIL);
+  });
+
+  it('a deployment with no email key (nothing sent): answered as a sent code, reported', async () => {
+    sendEmail.mockImplementation(async () => ({ ok: true, id: 'dryrun' }));
+    const sent = await sendDeletionCode({ admin, userId: USER });
+    expect(sent.ok).toBe(true);
+    expect(reportError).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'account.delete.code_send_failed',
+      level: 'warning',
+    });
+    noSecretReported(codeFromLastEmail(), EMAIL);
+  });
+
+  it('a sent email is not reported', async () => {
+    await sendDeletionCode({ admin, userId: USER });
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it("greets with the first word of the profile's name, never the auth user's metadata name", async () => {
+    world.profileName = 'Pat Example';
+    world.metadataName = 'https://elsewhere.example.test';
+    await sendDeletionCode({ admin, userId: USER });
+    const text = sendEmail.mock.calls.at(-1)![0].html;
+    expect(text).toContain('Hi Pat ');
+    expect(text).not.toContain('elsewhere.example.test');
+  });
+
+  it('no profile name: no name in the greeting, and still not the metadata name', async () => {
+    world.metadataName = 'Someone';
+    await sendDeletionCode({ admin, userId: USER });
+    const html = sendEmail.mock.calls.at(-1)![0].html;
+    expect(html).not.toContain('Someone');
+    expect(html).toContain('Hi —');
   });
 
   it('no current address: nothing sent', async () => {

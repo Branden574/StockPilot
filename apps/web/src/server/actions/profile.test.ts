@@ -1647,6 +1647,41 @@ describe('deleteOwnAccountAction', () => {
       expect(adminAuth.deleteUser).not.toHaveBeenCalled();
     });
 
+    describe('the audit row says how the deletion was confirmed, never with what', () => {
+      const confirmedBy = () =>
+        (insertAuditRowReportedMock.mock.calls[0]?.[0] as { metadata?: Record<string, unknown> })
+          ?.metadata?.confirmed_by;
+
+      it('authenticator', async () => {
+        mfaState.totp = [{ status: 'verified' }];
+        mfaState.currentLevel = 'aal2';
+        expect((await deleteOwnAccountAction({ confirm: 'DELETE' })).ok).toBe(true);
+        expect(confirmedBy()).toBe('authenticator');
+      });
+
+      it('password, and the password is not in the row', async () => {
+        expect((await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD })).ok).toBe(
+          true,
+        );
+        expect(confirmedBy()).toBe('password');
+        expect(JSON.stringify(insertAuditRowReportedMock.mock.calls)).not.toContain(PASSWORD);
+      });
+
+      it('emailed_code, and the code and challenge are not in the row', async () => {
+        const sent = await requestAccountDeletionCodeAction();
+        if (!sent.ok) throw new Error('not sent');
+        const code = codeFromEmail();
+        expect(
+          (await deleteOwnAccountAction({ confirm: 'DELETE', code, challenge: sent.data.challenge }))
+            .ok,
+        ).toBe(true);
+        expect(confirmedBy()).toBe('emailed_code');
+        const rows = JSON.stringify(insertAuditRowReportedMock.mock.calls);
+        expect(rows).not.toContain(sent.data.challenge);
+        expect(rows).not.toMatch(new RegExp(`"${code}"`));
+      });
+    });
+
     describe('the emailed code', () => {
       afterEach(() => {
         vi.useRealTimers();

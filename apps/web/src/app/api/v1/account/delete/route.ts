@@ -379,6 +379,7 @@ export async function POST(req: NextRequest) {
         userId: ctx.userId,
         organizationId,
         reason: 'self_deletion_mobile',
+        confirmedBy: confirmedBy ?? 'none',
         createdStillActive: review.createdStillActive,
       });
     }

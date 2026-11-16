@@ -822,6 +822,7 @@ export async function deleteOwnAccountAction(input: {
         userId: session.userId,
         organizationId: auditOrganizationId,
         reason: 'self_deletion',
+        confirmedBy: confirmation.by,
         createdStillActive,
       });
     }
