@@ -6,8 +6,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * written, and keeps two refusals apart:
  *
  *   - the caller's real scope does not include the warehouse: the
- *     ServiceError 'forbidden' with the check's words; the web action answers
- *     it as forbidden, POST /api/v1/schedule as 403;
+ *     ServiceError 'forbidden' with a sentence that names no warehouse id
+ *     (one for the event's warehouse, one for a linked kit's); the web action
+ *     answers it as forbidden, POST /api/v1/schedule as 403;
  *   - the check could not read the caller's own access (ForbiddenError's
  *     accessUnreadable): the ForbiddenError itself, so the web action answers
  *     the shared "could not check" sentence as a retryable conflict, and the
@@ -48,6 +49,11 @@ import { ScheduleService } from './schedule';
 const WAREHOUSE = '3c1d2e4f-0000-4000-8000-000000000051';
 const KIT_WAREHOUSE = '3c1d2e4f-0000-4000-8000-000000000052';
 const KIT = '4d4d4d4d-0000-4000-8000-000000000053';
+
+const EVENT_WAREHOUSE_REFUSED =
+  "You don't have write access to the warehouse set for this event, so nothing was saved. Choose a warehouse you work in, or ask a manager.";
+const KIT_WAREHOUSE_REFUSED =
+  "You don't have write access to the warehouse this event's kit comes from, so nothing was saved. Choose a warehouse you work in, or ask a manager.";
 
 const input = {
   title: 'Science night setup',
@@ -95,15 +101,29 @@ beforeEach(() => {
 });
 
 describe('ScheduleService.create: the warehouse check', () => {
-  it("a warehouse outside the caller's scope is the ServiceError forbidden, with the check's words", async () => {
+  it("a warehouse outside the caller's scope is the ServiceError forbidden, with a sentence that names no id", async () => {
     const ctx = signIn();
     vi.mocked(assertWarehouseAccess).mockRejectedValueOnce(outOfScope());
     const err = await new ScheduleService(ctx as never).create(input).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ServiceError);
-    expect(err).toMatchObject({
-      code: 'forbidden',
-      message: `User does not have write access to warehouse ${WAREHOUSE}.`,
+    expect(err).toMatchObject({ code: 'forbidden', message: EVENT_WAREHOUSE_REFUSED });
+    expect((err as Error).message).not.toContain(WAREHOUSE);
+    expect(stub.fromCalls).toEqual([]);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("a linked kit's warehouse outside the caller's scope is refused with the kit sentence", async () => {
+    const ctx = signIn();
+    vi.mocked(assertWarehouseAccess).mockImplementation(async (id) => {
+      if (id === KIT_WAREHOUSE) {
+        throw new ForbiddenError(`User does not have write access to warehouse ${KIT_WAREHOUSE}.`);
+      }
     });
+    const err = await new ScheduleService(ctx as never)
+      .create({ ...input, bundleId: KIT, bundleQuantity: 2, bundleWarehouseId: KIT_WAREHOUSE })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ServiceError);
+    expect(err).toMatchObject({ code: 'forbidden', message: KIT_WAREHOUSE_REFUSED });
     expect(stub.fromCalls).toEqual([]);
     expect(audit).not.toHaveBeenCalled();
   });
@@ -154,15 +174,13 @@ describe('the answers of the web action and the route', () => {
     expect(audit).not.toHaveBeenCalled();
   });
 
-  it('the web action answers forbidden with the words for a warehouse outside the scope', async () => {
+  it('the web action answers forbidden with the sentence for a warehouse outside the scope', async () => {
     signIn();
     vi.mocked(assertWarehouseAccess).mockRejectedValueOnce(outOfScope());
     const res = await createScheduleEventAction(input);
     expect(res.ok).toBe(false);
     expect(!res.ok && res.error.code).toBe('forbidden');
-    expect(!res.ok && res.error.message).toBe(
-      `User does not have write access to warehouse ${WAREHOUSE}.`,
-    );
+    expect(!res.ok && res.error.message).toBe(EVENT_WAREHOUSE_REFUSED);
   });
 
   it('the route answers the retryable 503 check_failed when the access could not be read', async () => {
@@ -179,14 +197,14 @@ describe('the answers of the web action and the route', () => {
     expect(audit).not.toHaveBeenCalled();
   });
 
-  it('the route answers 403 with the words for a warehouse outside the scope', async () => {
+  it('the route answers 403 with the sentence for a warehouse outside the scope', async () => {
     signIn();
     vi.mocked(assertWarehouseAccess).mockRejectedValueOnce(outOfScope());
     const res = await POST(routeRequest());
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({
       error: 'forbidden',
-      message: `User does not have write access to warehouse ${WAREHOUSE}.`,
+      message: EVENT_WAREHOUSE_REFUSED,
     });
     expect(audit).not.toHaveBeenCalled();
   });

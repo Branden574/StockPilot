@@ -2144,14 +2144,19 @@ WEB_TESTS=(
   # refuses the change. A warehouse check on a new event that could not read
   # the caller's own access keeps that apart from a real refusal: the web
   # action answers the shared "could not check" sentence and the route the
-  # retryable 503, where a warehouse outside the scope is forbidden. All six
-  # files carry the "Security invariant" marker.
+  # retryable 503, where a warehouse outside the scope is forbidden. A change
+  # to an event checks every warehouse it depends on before anything is
+  # written, the kit's warehouse too when the change completes the event, with
+  # the same two answers and sentences that name no warehouse id; an update
+  # the row policy refuses is a plain forbidden. All seven files carry the
+  # "Security invariant" marker.
   src/app/api/v1/schedule/route.test.ts
   'src/app/api/v1/items/[id]/serials/route.test.ts'
   'src/app/api/v1/serials/[id]/route.test.ts'
   'src/app/api/v1/customers/[id]/status/route.test.ts'
   src/app/api/v1/change-routes.audit-rows.test.ts
   src/server/services/schedule.create-warehouse-check.test.ts
+  src/server/services/schedule.complete-warehouse-check.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

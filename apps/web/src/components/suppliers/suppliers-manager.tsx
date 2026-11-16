@@ -31,6 +31,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { editedOptionalText } from '@/lib/edited-optional-text';
 import {
   archiveSupplierAction,
   createSupplierAction,
@@ -307,11 +308,11 @@ function SupplierDialog({
   const onSubmit = handleSubmit(async (values) => {
     const payload = {
       name: values.name,
-      contactName: values.contactName || undefined,
-      email: values.email || undefined,
-      phone: values.phone || undefined,
-      website: values.website || undefined,
-      notes: values.notes || undefined,
+      contactName: editedOptionalText(values.contactName, editing?.contact_name),
+      email: editedOptionalText(values.email, editing?.email),
+      phone: editedOptionalText(values.phone, editing?.phone),
+      website: editedOptionalText(values.website, editing?.website),
+      notes: editedOptionalText(values.notes, editing?.notes),
     };
     const res = editing
       ? await updateSupplierAction(editing.id, payload)
