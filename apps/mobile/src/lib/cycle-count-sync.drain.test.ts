@@ -667,3 +667,30 @@ describe('a queued count waits while an authenticator is being set up', () => {
     ]);
   });
 });
+
+describe('another account’s superseded count is parked as before while this account owes set-up', () => {
+  beforeEach(() => resetSetUpInputsForTests());
+  afterEach(() => resetSetUpInputsForTests());
+
+  it('parked with the replaced sentence; this account’s own superseded count is held', async () => {
+    recordMembershipInputs(
+      'u1',
+      [{ organizationId: 'org-a', role: 'staff', organization: { name: 'A', mfa_policy: 'all_required' } }],
+      beginSetUpRead(),
+    );
+    noteServerReadUser({ id: 'u1', factors: [] });
+    cacheMock.rows = [
+      countRow(1, 'l1', { org: 'org-a', user: 'u1' }), // own, superseded by 3
+      countRow(2, 'l2', { org: 'org-a', user: 'u9' }), // another account's, superseded by 4
+      countRow(3, 'l1', { org: 'org-a', user: 'u1' }),
+      countRow(4, 'l2', { org: 'org-a', user: 'u1' }),
+    ];
+
+    await cycleCountSync.forceSync();
+
+    expect(cacheMock.outboxReject).toHaveBeenCalledWith(2, REPLACED_BY_LATER_COUNT);
+    expect(cacheMock.outboxAck).not.toHaveBeenCalled();
+    expect(apiMock.api).not.toHaveBeenCalled();
+    expect(calls.log).toEqual(['outboxReject:2']);
+  });
+});

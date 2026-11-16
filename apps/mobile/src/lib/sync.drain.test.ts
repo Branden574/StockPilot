@@ -173,7 +173,7 @@ beforeEach(() => {
   setUpReads.count = 0;
   resetSetUpInputsForTests();
   void registerSetUpInputsSource({
-    storage: { getItem: async () => null, setItem: async () => {} },
+    storage: { getAllKeys: async () => [], getItem: async () => null, setItem: async () => {} },
     read: async () => {
       setUpReads.count += 1;
       const at = beginSetUpRead();

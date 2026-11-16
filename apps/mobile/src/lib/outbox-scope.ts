@@ -140,12 +140,14 @@ export function canSettleOutbox(live: LiveScope): boolean {
 
 /**
  * Is this row held because its own workspace owes authenticator set-up (the
- * same check outboxSendDecision makes)? The count drain settles nothing it
- * holds: a superseded count of such a row is neither acked nor parked until
- * the hold ends.
+ * same check outboxSendDecision makes, after the same owner check)? Only the
+ * live account's own rows and legacy ones: another account's row is never
+ * held for this account's set-up. The count drain settles nothing it holds:
+ * a superseded count of such a row is neither acked nor parked until the
+ * hold ends.
  */
 export function heldForSetUp(row: OutboxRowOwner, live: LiveScope): boolean {
-  if (!live.userId) return false;
+  if (!live.userId || !isOwnedBy(row, live.userId)) return false;
   const orgId = row.organizationId || live.orgId;
   return Boolean(orgId) && setUpOwedIn(live.userId, orgId) === 'owed';
 }

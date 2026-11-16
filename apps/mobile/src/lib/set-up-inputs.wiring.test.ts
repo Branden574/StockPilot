@@ -108,3 +108,30 @@ describe('both drains: the hold, the check after a kept 403, and the read that r
     );
   });
 });
+
+describe('the sign-out and the eviction forget the inputs beside the wipe of the account keys', () => {
+  it.each(['auth-context.tsx', 'use-account-gate.ts'])('%s', (file) => {
+    const src = code(file);
+    expect(src).toContain("import { forgetSetUpInputs } from './set-up-inputs';");
+    const step = src.slice(src.indexOf('clearAccountStorage: async () => {'));
+    const forget = step.indexOf('await forgetSetUpInputs();');
+    const wipe = step.indexOf(
+      'const keys = accountScopedStorageKeys(await AsyncStorage.getAllKeys()); if (keys.length > 0) await AsyncStorage.multiRemove(keys);',
+    );
+    expect(forget).toBeGreaterThan(-1);
+    expect(wipe).toBeGreaterThan(forget);
+    expect(src.match(/forgetSetUpInputs\(\)/g)).toHaveLength(1);
+  });
+
+  it('every key the store writes is under the account-scoped prefix and names its account', () => {
+    const store = code('set-up-inputs.ts');
+    expect(store).toContain(
+      "export const SET_UP_INPUTS_STORAGE_PREFIX = 'workspace.setUpInputs.';",
+    );
+    expect(store).toContain(
+      'export function setUpInputsStorageKey(userId: string): string { return `${SET_UP_INPUTS_STORAGE_PREFIX}${userId}`; }',
+    );
+    expect(store.match(/\.setItem\(/g)).toHaveLength(1);
+    expect(store).toContain('.setItem(setUpInputsStorageKey(userId),');
+  });
+});

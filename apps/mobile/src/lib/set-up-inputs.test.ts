@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { accountScopedStorageKeys } from './account-eviction';
 import {
   beginSetUpRead,
+  forgetSetUpInputs,
   noteKeptRefusal,
   noteServerReadUser,
   parseSavedSetUpInputs,
@@ -9,7 +11,8 @@ import {
   registerSetUpInputsSource,
   requestSetUpInputsRead,
   resetSetUpInputsForTests,
-  SET_UP_INPUTS_STORAGE_KEY,
+  SET_UP_INPUTS_STORAGE_PREFIX,
+  setUpInputsStorageKey,
   SET_UP_READ_MIN_INTERVAL_MS,
   setUpAnswerAfterRefusal,
   setUpInputsReadInFlight,
@@ -42,11 +45,17 @@ function memoryStorage(initial: Record<string, string> = {}) {
   const items = new Map(Object.entries(initial));
   return {
     items,
+    getAllKeys: vi.fn(async () => [...items.keys()]),
     getItem: vi.fn(async (k: string) => items.get(k) ?? null),
     setItem: vi.fn(async (k: string, v: string) => {
       items.set(k, v);
     }),
   };
+}
+
+/** What the sign-out and eviction wipe removes: every account-scoped key (account-eviction.ts). */
+function wipeAccountScopedKeys(storage: ReturnType<typeof memoryStorage>): void {
+  for (const key of accountScopedStorageKeys([...storage.items.keys()])) storage.items.delete(key);
 }
 
 beforeEach(() => resetSetUpInputsForTests());
@@ -248,7 +257,7 @@ describe('reads asked for', () => {
 });
 
 describe('saved inputs', () => {
-  it('saves the inputs per account and workspace, never the answer', async () => {
+  it('saves the inputs under a key of the account’s own, never the answer', async () => {
     const storage = memoryStorage();
     await registerSetUpInputsSource({ storage, read: async () => undefined });
     readMemberships([
@@ -257,29 +266,135 @@ describe('saved inputs', () => {
     ]);
     noteServerReadUser({ id: 'u1', factors: [] });
     await vi.waitFor(() => expect(storage.setItem).toHaveBeenCalled());
-    const saved = JSON.parse(storage.items.get(SET_UP_INPUTS_STORAGE_KEY) ?? 'null');
+    expect([...storage.items.keys()]).toEqual([setUpInputsStorageKey('u1')]);
+    const saved = JSON.parse(storage.items.get(setUpInputsStorageKey('u1')) ?? 'null');
+    // Workspace ids, the policy as read, the role and the workspace name.
     expect(saved).toEqual({
       v: 1,
-      accounts: {
-        u1: {
-          org: { policy: 'all_required', role: 'staff', name: 'Org' },
-          hid: { policy: 'hidden', role: 'admin', name: null },
-        },
+      orgs: {
+        org: { policy: 'all_required', role: 'staff', name: 'Org' },
+        hid: { policy: 'hidden', role: 'admin', name: null },
       },
     });
     expect(JSON.stringify(saved)).not.toMatch(/owed|clear|verified|factor/);
   });
 
-  it('the key is account-scoped: a sign-out and an eviction remove it', () => {
-    expect(SET_UP_INPUTS_STORAGE_KEY.startsWith('workspace.')).toBe(true);
+  it('each account writes only its own key', async () => {
+    const storage = memoryStorage();
+    await registerSetUpInputsSource({ storage, read: async () => undefined });
+    readMemberships([row('org-a', { mfa_policy: 'optional' })], 'u1');
+    readMemberships([row('org-b', { mfa_policy: 'all_required' })], 'u2');
+    await vi.waitFor(() => expect(storage.setItem).toHaveBeenCalledTimes(2));
+    expect(storage.setItem.mock.calls.map(([k]) => k)).toEqual([
+      setUpInputsStorageKey('u1'),
+      setUpInputsStorageKey('u2'),
+    ]);
+    expect(JSON.parse(storage.items.get(setUpInputsStorageKey('u2')) ?? 'null').orgs).toEqual({
+      'org-b': { policy: 'all_required', role: 'staff', name: null },
+    });
+  });
+
+  it('every key is account-scoped: the sign-out and eviction wipe removes it', () => {
+    expect(SET_UP_INPUTS_STORAGE_PREFIX.startsWith('workspace.')).toBe(true);
+    expect(accountScopedStorageKeys([setUpInputsStorageKey('u1'), 'whatsnew.seen'])).toEqual([
+      setUpInputsStorageKey('u1'),
+    ]);
+  });
+
+  it('after a sign-out the account’s inputs are gone, and the next account’s save cannot bring them back', async () => {
+    const storage = memoryStorage();
+    await registerSetUpInputsSource({ storage, read: async () => undefined });
+    readMemberships([row('org-a', { name: 'A', mfa_policy: 'all_required' })], 'u1');
+    noteServerReadUser({ id: 'u1', factors: [] });
+    expect(setUpOwedIn('u1', 'org-a')).toBe('owed');
+    // A read of u1's that started before the sign-out and answers after it.
+    const lateRead = beginSetUpRead();
+
+    // The sign-out: forget, then the wipe beside it.
+    await forgetSetUpInputs();
+    wipeAccountScopedKeys(storage);
+    expect(setUpOwedIn('u1', 'org-a')).toBe('unknown');
+
+    recordMembershipInputs(
+      'u1',
+      [row('org-a', { name: 'A', mfa_policy: 'all_required' })],
+      lateRead,
+    );
+    noteServerReadUser({ id: 'u1', factors: [] }, lateRead);
+    // The next account signs in and its membership read is saved.
+    readMemberships([row('org-b', { name: 'B', mfa_policy: 'optional' })], 'u2');
+    await vi.waitFor(() => expect(storage.items.has(setUpInputsStorageKey('u2'))).toBe(true));
+
+    expect([...storage.items.keys()]).toEqual([setUpInputsStorageKey('u2')]);
+    expect(storage.items.get(setUpInputsStorageKey('u2'))).not.toMatch(/org-a|"A"/);
+    expect(setUpOwedIn('u1', 'org-a')).toBe('unknown');
+  });
+
+  it('a save still waiting at the sign-out lands before forgetSetUpInputs returns, so the wipe after it removes it', async () => {
+    let release!: () => void;
+    const storage = memoryStorage();
+    const slow = vi.fn(
+      (k: string, v: string) =>
+        new Promise<void>((resolve) => {
+          release = () => {
+            storage.items.set(k, v);
+            resolve();
+          };
+        }),
+    );
+    await registerSetUpInputsSource({
+      storage: { ...storage, setItem: slow },
+      read: async () => undefined,
+    });
+    readMemberships([row('org-a', { mfa_policy: 'all_required' })], 'u1');
+    let forgotten = false;
+    const forgetting = forgetSetUpInputs().then(() => {
+      forgotten = true;
+    });
+    await Promise.resolve();
+    expect(forgotten).toBe(false);
+    await vi.waitFor(() => expect(slow).toHaveBeenCalled());
+    release();
+    await forgetting;
+    wipeAccountScopedKeys(storage);
+    expect(storage.items.size).toBe(0);
+  });
+
+  it('a load of saved inputs that finishes after a sign-out brings nothing back', async () => {
+    let answerLoad!: (v: string | null) => void;
+    const storage = memoryStorage({
+      [setUpInputsStorageKey('u1')]: JSON.stringify({
+        v: 1,
+        orgs: { org: { policy: 'all_required', role: 'staff', name: null } },
+      }),
+    });
+    const loaded = registerSetUpInputsSource({
+      storage: {
+        ...storage,
+        getItem: vi.fn(
+          () =>
+            new Promise<string | null>((resolve) => {
+              answerLoad = resolve;
+            }),
+        ),
+      },
+      read: async () => undefined,
+    });
+    await vi.waitFor(() => expect(answerLoad).toBeTypeOf('function'));
+    await forgetSetUpInputs();
+    answerLoad(storage.items.get(setUpInputsStorageKey('u1')) ?? null);
+    await loaded;
+    noteServerReadUser({ id: 'u1', factors: [] });
+    expect(setUpOwedIn('u1', 'org')).toBe('unknown');
   });
 
   it('an earlier run’s saved inputs answer until this run reads, and never override a read', async () => {
     const storage = memoryStorage({
-      [SET_UP_INPUTS_STORAGE_KEY]: JSON.stringify({
+      [setUpInputsStorageKey('u1')]: JSON.stringify({
         v: 1,
-        accounts: { u1: { org: { policy: 'all_required', role: 'staff', name: 'Org' } } },
+        orgs: { org: { policy: 'all_required', role: 'staff', name: 'Org' } },
       }),
+      'workspace.savedOrg': JSON.stringify({ orgId: 'org', ownerId: 'u1' }),
     });
     await registerSetUpInputsSource({ storage, read: async () => undefined });
     noteServerReadUser({ id: 'u1', factors: [] });
@@ -298,6 +413,7 @@ describe('saved inputs', () => {
   it('a read this run is not replaced by a load that finishes after it', async () => {
     let answerLoad!: (v: string) => void;
     const storage = {
+      getAllKeys: vi.fn(async () => [setUpInputsStorageKey('u1')]),
       getItem: vi.fn(
         () =>
           new Promise<string | null>((resolve) => {
@@ -308,10 +424,11 @@ describe('saved inputs', () => {
     };
     const loaded = registerSetUpInputsSource({ storage, read: async () => undefined });
     readMemberships([row('org', { mfa_policy: 'optional' })]);
+    await vi.waitFor(() => expect(answerLoad).toBeTypeOf('function'));
     answerLoad(
       JSON.stringify({
         v: 1,
-        accounts: { u1: { org: { policy: 'all_required', role: 'staff', name: null } } },
+        orgs: { org: { policy: 'all_required', role: 'staff', name: null } },
       }),
     );
     await loaded;
@@ -319,44 +436,37 @@ describe('saved inputs', () => {
   });
 
   it('a storage that fails is read as nothing saved and never throws', async () => {
-    const storage = {
-      getItem: vi.fn(async () => {
-        throw new Error('disk');
-      }),
-      setItem: vi.fn(async () => {
-        throw new Error('disk');
-      }),
+    const fail = async () => {
+      throw new Error('disk');
     };
+    const storage = { getAllKeys: vi.fn(fail), getItem: vi.fn(fail), setItem: vi.fn(fail) };
     await expect(
       registerSetUpInputsSource({ storage, read: async () => undefined }),
     ).resolves.toBeUndefined();
     expect(() => readMemberships([row('org', { mfa_policy: 'optional' })])).not.toThrow();
+    await expect(forgetSetUpInputs()).resolves.toBeUndefined();
   });
 
   it.each([
     ['nothing', null],
     ['not JSON', '{'],
-    ['another version', JSON.stringify({ v: 2, accounts: {} })],
-    ['no accounts', JSON.stringify({ v: 1 })],
+    ['another version', JSON.stringify({ v: 2, orgs: {} })],
+    ['no workspaces', JSON.stringify({ v: 1 })],
   ])('parse: %s is nothing saved', (_name, raw) => {
-    expect(parseSavedSetUpInputs(raw).size).toBe(0);
+    expect(parseSavedSetUpInputs(raw)).toBeNull();
   });
 
   it('parse: drops a workspace with an unknown policy or no role, keeps the rest', () => {
     const parsed = parseSavedSetUpInputs(
       JSON.stringify({
         v: 1,
-        accounts: {
-          u1: {
-            good: { policy: 'admins_required', role: 'admin', name: 'G' },
-            badPolicy: { policy: 'sometimes', role: 'staff' },
-            noRole: { policy: 'optional' },
-          },
+        orgs: {
+          good: { policy: 'admins_required', role: 'admin', name: 'G' },
+          badPolicy: { policy: 'sometimes', role: 'staff' },
+          noRole: { policy: 'optional' },
         },
       }),
     );
-    expect(parsed.get('u1')).toEqual({
-      good: { policy: 'admins_required', role: 'admin', name: 'G' },
-    });
+    expect(parsed).toEqual({ good: { policy: 'admins_required', role: 'admin', name: 'G' } });
   });
 });

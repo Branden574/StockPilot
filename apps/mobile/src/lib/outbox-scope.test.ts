@@ -348,6 +348,10 @@ describe('a row whose own workspace owes authenticator set-up is held', () => {
     expect(heldForSetUp({ organizationId: 'org-optional', userId: 'u1' }, live)).toBe(false);
     expect(heldForSetUp({ organizationId: null, userId: 'u1' }, { ...live, orgId: 'org-all' })).toBe(true);
     expect(heldForSetUp({ organizationId: 'org-all', userId: 'u1' }, { ...live, userId: null })).toBe(false);
+    // Only the live account's own rows (and legacy ones) are held for its
+    // set-up: another account's row takes the path it always took.
+    expect(heldForSetUp({ organizationId: 'org-all', userId: 'u2' }, live)).toBe(false);
+    expect(heldForSetUp({ organizationId: 'org-all', userId: null }, live)).toBe(true);
   });
 });
 
