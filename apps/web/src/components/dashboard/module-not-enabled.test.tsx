@@ -7,7 +7,11 @@ const session = vi.hoisted(() => ({
   ctx: null as null | { role: Role; permissions: ReadonlySet<Permission> },
 }));
 
-vi.mock('@/lib/auth/session', () => ({ requireOrgContextForLayout: async () => session.ctx }));
+vi.mock('@/lib/auth/session', () => ({
+  requireOrgContextForLayout: async () => session.ctx,
+  // A member who owes no authenticator set-up (purchase-orders/imports/layout.test.tsx has the rest).
+  authenticatorSetUpOwedForLayout: async () => false,
+}));
 vi.mock('next/link', () => ({
   default: ({ href, children, ...rest }: { href: string; children: React.ReactNode }) => (
     <a href={href} {...rest}>

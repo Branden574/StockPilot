@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiContextGate } from '@/server/lib/api-context-gate';
 import { emailChangeErrorResponse, mfaPostureFromContext } from '@/server/lib/email-change-api';
 import { requestEmailChange } from '@/server/services/email-change';
 
@@ -13,13 +13,19 @@ export const runtime = 'nodejs';
  *   body: { newEmail, currentPassword }
  *   200: { pendingEmail, sentAt, expiresAt }
  *   400 validation_error · 403 forbidden | aal2_required | mfa_required · 409 conflict · 429 rate_limited
+ *   503 check_failed (context_unavailable): the caller's access could not be read, so nothing ran
  * withApiContext already refused disabled accounts with a 401; the service
  * repeats that check (plus deleted_at) before anything is spent. A member
  * whose organization requires an authenticator they have not set up gets
  * mfa_required, before anything is spent (mfaPostureFromContext).
  */
 export async function POST(req: NextRequest) {
-  const ctx = await withApiContext(req);
+  // First, before the body or anything else: a context that could not be
+  // built because the caller's access could not be read answers the 503 the
+  // phone may send again (server/lib/api-context-gate.ts).
+  const gate = await apiContextGate(req);
+  if ('response' in gate) return gate.response;
+  const ctx = gate.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
   let body: unknown = {};

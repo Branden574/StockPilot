@@ -1206,6 +1206,18 @@ WEB_TESTS=(
   # layout reaches that check or redirects to a path under itself, and only
   # dashboard layouts use the resolver without it.
   src/lib/auth/authenticator-set-up.guard.test.ts
+  # The same rule through the real session loader: requireOrgContext() sends
+  # such a member to set-up on every page and policy, and the layouts' own
+  # answer (authenticatorSetUpOwedForLayout) is the page's, with no redirect;
+  # the dashboard, settings and purchase-order layouts render for them and
+  # never redirect.
+  src/lib/auth/session.authenticator-set-up.test.ts
+  'src/app/(dashboard)/layouts.set-up.test.tsx'
+  # A layout that shows a panel in place of its pages (the purchase orders
+  # access panel, the PO imports manager-only panel) renders the page for such
+  # a member, so the page's own rule sends them to set-up, and redirects nobody.
+  'src/app/(dashboard)/dashboard/purchase-orders/layout.test.tsx'
+  'src/app/(dashboard)/dashboard/purchase-orders/imports/layout.test.tsx'
   # The sign-in email change gives such a member the answer the profile's
   # name and avatar give (set up an authenticator first), on the website
   # through the real session loader and on the phone's request and resend
@@ -1216,6 +1228,15 @@ WEB_TESTS=(
   src/server/actions/email-change.test.ts
   src/app/api/v1/account/email/set-up-first.routes.test.ts
   src/app/api/v1/account/email/set-up-first.real-context.test.ts
+  # The phone's four email change routes answer the try-again 503 through the
+  # API context gate when the caller's access cannot be read, before anything
+  # is spent, checked, minted, sent or recorded.
+  src/app/api/v1/account/email/context-unavailable.routes.test.ts
+  # The Audit log shows an API key row's stored name and scopes as its details,
+  # from a list named one by one per event: no listed field is named like a
+  # key, a secret, a hash or a token, and such a field in a row is never shown.
+  src/lib/audit/format.test.ts
+  src/components/audit/metadata-diff.test.tsx
   # The phone's sign-in and sign-out notes (S5a), the other two routes on the
   # AAL1 allowlist: an aal1 session of an account with an authenticator writes
   # the sign-in row (code owed) and the device note, and its sign-out revokes
@@ -2074,6 +2095,31 @@ WEB_TESTS=(
   src/server/services/user-categories.single-grant.test.ts
   src/server/services/team.update-member-role.test.ts
   src/server/actions/mfa.policy-unchanged.test.ts
+
+  # Schedule events, serial numbers and customer status over /api/v1 (cookie
+  # or Bearer). POST /api/v1/schedule, POST
+  # /api/v1/items/[id]/serials, PATCH and DELETE /api/v1/serials/[id] and
+  # PATCH /api/v1/customers/[id]/status each build their context with
+  # withApiContext, through the API context gate, and call the service the
+  # website calls (ScheduleService.create, SerialsService.add, updateSerial and
+  # remove, CustomersService.setStatus), so the module, the permission, the
+  # organization's authenticator rule and the reads in the caller's
+  # organization are the website's own, and the service writes the one audit
+  # row with the caller's organization and account. A refused request writes
+  # nothing and no audit row. The parity suite runs the real audit writer: a
+  # route's row and the website action's row for the same change are the same
+  # but for the user agent, and a row the database refuses never undoes or
+  # refuses the change. A warehouse check on a new event that could not read
+  # the caller's own access keeps that apart from a real refusal: the web
+  # action answers the shared "could not check" sentence and the route the
+  # retryable 503, where a warehouse outside the scope is forbidden. All six
+  # files carry the "Security invariant" marker.
+  src/app/api/v1/schedule/route.test.ts
+  'src/app/api/v1/items/[id]/serials/route.test.ts'
+  'src/app/api/v1/serials/[id]/route.test.ts'
+  'src/app/api/v1/customers/[id]/status/route.test.ts'
+  src/app/api/v1/change-routes.audit-rows.test.ts
+  src/server/services/schedule.create-warehouse-check.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

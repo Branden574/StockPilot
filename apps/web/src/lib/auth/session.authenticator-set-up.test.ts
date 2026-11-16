@@ -136,7 +136,7 @@ import {
   type Policy,
 } from '@/test/step-up-session-fixture';
 
-import { requireOrgContext } from './session';
+import { authenticatorSetUpOwedForLayout, requireOrgContext } from './session';
 
 const SET_UP = '/dashboard/settings/security?enroll=1';
 const ROLES: Role[] = ['owner', 'admin', 'manager', 'staff', 'viewer'];
@@ -371,5 +371,52 @@ describe('without the one-round-trip context read (the session loader takes its 
     expect(await redirectOf(() => requireOrgContext())).toBe(SET_UP);
     as('optional', 'viewer');
     expect((await requireOrgContext()).organizationId).toBe(ORG);
+  });
+});
+
+describe("authenticatorSetUpOwedForLayout(): the page's answer, for a layout, with no redirect", () => {
+  /** What requireOrgContext() does on this request: sent to set-up or not. */
+  const pageSendsToSetUp = async () => (await redirectOf(() => requireOrgContext())) === SET_UP;
+
+  it.each(MATRIX)(
+    '%s, %s with no authenticator: the same answer on every page',
+    async (policy, role) => {
+      for (const page of [...PAGES, ...OPEN_PAGES, ...NOT_OPEN]) {
+        as(policy, role, page);
+        const expected = await pageSendsToSetUp();
+        redirect.mockClear();
+        expect(await authenticatorSetUpOwedForLayout(), page).toBe(expected);
+        expect(redirect, page).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each(MATRIX)(
+    '%s, %s with a verified authenticator at aal2: never owed',
+    async (policy, role) => {
+      world.factors = VERIFIED;
+      world.aal = 'aal2';
+      as(policy, role, '/dashboard/purchase-orders/imports');
+      expect(await authenticatorSetUpOwedForLayout()).toBe(false);
+      expect(redirect).not.toHaveBeenCalled();
+    },
+  );
+
+  it('with no path header: owed, as the page sends the member to set-up', async () => {
+    as('admins_required', 'admin', null);
+    expect(await pageSendsToSetUp()).toBe(true);
+    redirect.mockClear();
+    expect(await authenticatorSetUpOwedForLayout()).toBe(true);
+    expect(redirect).not.toHaveBeenCalled();
+  });
+
+  // The gate's reads are the request-cached claims and factor list
+  // (startStepUpReads), shared with the page in a render; outside one,
+  // cache() is a pass-through, so only the table reads are counted here.
+  it('reads no table: the one context read and the gate reads only', async () => {
+    as('all_required', 'viewer', '/dashboard/purchase-orders/imports');
+    expect(await authenticatorSetUpOwedForLayout()).toBe(true);
+    expect(count('rpc:get_request_context')).toBe(1);
+    expect(world.calls.filter((c) => c.startsWith('from:'))).toEqual([]);
   });
 });

@@ -2,7 +2,7 @@
 // feature (P2) so an admin can grant Read-Only Auditors import access. Until then
 // it shows a clear access message (no longer a silent bounce to home).
 import { StatePanel } from '@/components/patterns/state-panel';
-import { requireOrgContextForLayout } from '@/lib/auth/session';
+import { authenticatorSetUpOwedForLayout, requireOrgContextForLayout } from '@/lib/auth/session';
 
 import { can } from '@stockpilot/core';
 
@@ -17,11 +17,18 @@ import { can } from '@stockpilot/core';
  * the home screen" for no reason. Show a clear access-denied message instead:
  * P2.6's StatePanel (kind forbidden, page size, its title the page's only h1),
  * inside the page's gutters, as PoAccessDenied draws it.
+ *
+ * A member who must set up an authenticator first is sent to set-up by the
+ * page they asked for (requireOrgContext()), and a layout never redirects for
+ * it. So for such a member the layout renders the page, whose rule sends them
+ * there, instead of this panel (authenticatorSetUpOwedForLayout gives the
+ * page's own answer).
  */
 export default async function PoImportsLayout({ children }: { children: React.ReactNode }) {
   // The layout's context: no set-up redirect from a layout (lib/auth/session.ts).
   const ctx = await requireOrgContextForLayout();
   if (!can(ctx, 'purchase_orders:manage')) {
+    if (await authenticatorSetUpOwedForLayout()) return <>{children}</>;
     return (
       <div className="w-full px-4 py-16 sm:px-8 sm:py-24">
         <StatePanel
