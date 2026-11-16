@@ -257,7 +257,9 @@ describe('the Integrations and schedule event release: the code the words rest o
     );
     const service = source('apps/web/src/server/services/schedule.ts');
     expect(service).toContain('if (e instanceof ForbiddenError && !e.accessUnreadable) {');
-    expect(service).toContain('await this.assertWarehouseWrite(input.warehouseId);');
+    expect(service).toContain(
+      'await this.assertWarehouseWrite(input.warehouseId, SCHEDULE_EVENT_WAREHOUSE_REFUSED);',
+    );
     const actions = source('apps/web/src/server/actions/schedule.ts');
     expect(actions).toContain("return actionErrorResult(error, 'actions.schedule');");
     expect(actions).toContain('const ev = await svc.create(parsed.data);');
