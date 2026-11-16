@@ -2075,9 +2075,13 @@ WEB_TESTS=(
   # ('mfa_required', 'aal2_required') are told apart from a missing
   # permission; no other field of `details` is forwarded; an internal error
   # keeps its fixed sentence with no details and none of the raw text. Both
-  # files carry the "Security invariant" marker.
+  # files carry the "Security invariant" marker. The reason is forwarded only
+  # when it is a fixed lower-case word of at most 64 characters. The size-count
+  # suite pins that the other size-count handlers answer the code and message
+  # alone, with no details.
   src/app/api/v1/outbox-refusal-details.routes.test.ts
   src/server/lib/refusal-reason.test.ts
+  src/app/api/v1/size-counts/route.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

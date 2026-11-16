@@ -6,9 +6,10 @@ import { refusalReasonDetails } from './refusal-reason';
 
 /**
  * Security invariant: the queued-change routes forward from a refused
- * ServiceError's `details` only a string `reason`, as `{ details: { reason } }`.
- * No other field (an id, a name) and nothing at all for an internal_error or
- * for details without a string reason.
+ * ServiceError's `details` only a `reason` that is a fixed lower-case word of
+ * at most 64 characters, as `{ details: { reason } }`. No other field (an id,
+ * a name), and nothing at all for an internal_error or for details without
+ * such a reason.
  */
 describe('refusalReasonDetails', () => {
   it.each([
@@ -48,6 +49,26 @@ describe('refusalReasonDetails', () => {
       itemId: '11111111-0000-4000-8000-000000000001',
     });
     expect(refusalReasonDetails(e)).toEqual({});
+  });
+
+  it.each([
+    ['an empty string', ''],
+    ['a 65-character word', `a${'b'.repeat(64)}`],
+    ['a sentence with spaces', 'the policy requires an authenticator'],
+    ['a word with upper case', 'Mfa_required'],
+    ['markup', '<b>mfa_required</b>'],
+    ['a leading digit', '2fa_required'],
+    ['a trailing newline', 'mfa_required\n'],
+  ])('forwards nothing when the reason is %s', (_kind, reason) => {
+    const e = new ServiceError('forbidden', 'Example sentence.', { reason });
+    expect(refusalReasonDetails(e)).toEqual({});
+  });
+
+  it('forwards a word of exactly 64 characters', () => {
+    const reason = `a${'b'.repeat(63)}`;
+    expect(reason).toHaveLength(64);
+    const e = new ServiceError('forbidden', 'Example sentence.', { reason });
+    expect(refusalReasonDetails(e)).toEqual({ details: { reason } });
   });
 
   it('forwards nothing for details without a reason, or no details', () => {
