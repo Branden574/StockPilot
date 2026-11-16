@@ -3,8 +3,8 @@
 import { z } from 'zod';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
-import { createClient } from '@/lib/supabase/server';
 import { audit } from '@/server/services/audit';
+import { withContext } from '@/server/services/context';
 
 const schema = z.object({
   orderId: z.string().uuid(),
@@ -26,24 +26,27 @@ const schema = z.object({
  * `included_cc_recipient` record the fact without copying the addresses into a
  * second store.
  *
- * The actor and the organisation come from the audit service's own context, not
- * from the caller, so a client cannot attribute a draft to somebody else.
+ * The actor and the organisation come from the caller's context, never from the
+ * input, so a client cannot attribute a draft to somebody else.
+ *
+ * Under a policy that requires an authenticator, a session that has not
+ * satisfied it records nothing, as recordReturnRequestDrafted does for a
+ * return request draft.
  *
  * Before writing anything, this confirms `orderId` actually names a row the
- * CALLER can see: a plain `createClient()` (the same cookie-bound, user-authed
- * client every other server action in this directory uses for a scoped read —
- * deliberately NOT `requireOrgContext()`/`withContext()`, which `redirect()` on
- * a missing session/org and would hijack navigation out from under an employee
- * for what is supposed to be invisible background bookkeeping) reads
- * `order_requests` by id. RLS (migration 0044) already scopes that SELECT to
- * the caller's own organization, so one round trip answers both "does it
- * exist" and "can this caller see it." A well-formed but unknown or
- * not-visible id is a silent no-op, same as a failed zod parse — it is not an
- * error, just nothing worth auditing.
+ * CALLER can see in the ACTIVE organization: the context's cookie-bound,
+ * user-authed client reads `order_requests` by id and the context's
+ * organization, under RLS (migration 0044). A member of two organizations
+ * therefore records a draft only for an order of the organization the row is
+ * filed under. A well-formed but unknown, not-visible or other-organization id
+ * is a silent no-op, same as a failed zod parse — it is not an error, just
+ * nothing worth auditing.
  *
- * Best-effort and never throws: it is called AFTER window.open, and a logging
- * failure — the existence check included — must never surface as a broken
- * action to an employee who has already got their draft.
+ * Best-effort: it is called AFTER window.open, and a logging failure — the
+ * existence check included — must never surface as a broken action to an
+ * employee who has already got their draft. It never rejects, except for a
+ * redirect (the session ended), which the router is already following, as
+ * recordReturnRequestDraftedAction does.
  */
 export async function recordDeliveryRequestDraftedAction(input: {
   orderId: string;
@@ -53,24 +56,29 @@ export async function recordDeliveryRequestDraftedAction(input: {
   if (!parsed.success) return;
 
   try {
-    const supabase = await createClient();
-    const { data: order } = await supabase
+    const ctx = await withContext();
+    if (ctx.mfaRequired && !ctx.mfaSatisfied) return;
+    const { data: order } = await ctx.supabase
       .from('order_requests')
       .select('id')
+      .eq('organization_id', ctx.organizationId)
       .eq('id', parsed.data.orderId)
       .maybeSingle();
     if (!order) return;
 
-    await audit({
-      event: 'order.delivery_request_drafted',
-      entityType: 'order_request',
-      entityId: parsed.data.orderId,
-      extra: {
-        recipient_type: 'dc4-delivery-request',
-        included_cc_recipient: true,
-        is_condensed: parsed.data.isCondensed,
+    await audit(
+      {
+        event: 'order.delivery_request_drafted',
+        entityType: 'order_request',
+        entityId: parsed.data.orderId,
+        extra: {
+          recipient_type: 'dc4-delivery-request',
+          included_cc_recipient: true,
+          is_condensed: parsed.data.isCondensed,
+        },
       },
-    });
+      ctx,
+    );
   } catch (e) {
     rethrowControlFlow(e);
     // audit() is already best-effort; this is belt and braces so the client

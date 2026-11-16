@@ -1,7 +1,7 @@
 import 'server-only';
 import { unstable_rethrow } from 'next/navigation';
 
-import { requireOrgContext } from '@/lib/auth/session';
+import { requireOrgContext, type OrgContext } from '@/lib/auth/session';
 import { readModulesForRequest, type ModulesRead } from '@/lib/dashboard/request-cache';
 import { MODULE_REGISTRY, type ModuleId } from '@stockpilot/core';
 
@@ -71,6 +71,19 @@ export interface ModuleAccess {
  */
 export async function checkModuleAccess(moduleId: ModuleId): Promise<ModuleAccess> {
   const ctx = await requireOrgContext();
+  return checkModuleAccessFor(moduleId, ctx);
+}
+
+/**
+ * checkModuleAccess() for a caller that already holds its context, with no
+ * fallback: it never asks requireOrgContext(). The settings layout's
+ * navigation uses it with the layout's context (a layout must not ask
+ * requireOrgContext(), whose set-up redirect no layout may throw).
+ */
+export async function checkModuleAccessFor(
+  moduleId: ModuleId,
+  ctx: Pick<OrgContext, 'role' | 'organizationId'>,
+): Promise<ModuleAccess> {
   const canManage = ctx.role === 'owner' || ctx.role === 'admin';
   if (MODULE_REGISTRY[moduleId].tier === 'core') return { enabled: true, canManage };
   let read: ModulesRead;

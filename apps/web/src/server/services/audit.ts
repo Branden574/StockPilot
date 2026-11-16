@@ -448,6 +448,11 @@ export type AuditEvent =
   // tears the connection down and destroys the Vault secret.
   | 'integration.connected'
   | 'integration.disconnected'
+  // An organization API key was created or revoked (services/api-keys.ts).
+  // entity api_key: the key's id; extra: its name, and its scopes on create.
+  // Never the key, its prefix or its hash.
+  | 'api_key.created'
+  | 'api_key.revoked'
   // An operator re-queued a dead-lettered/errored connector export from the
   // Integrations settings dead-letter view (reset to status='pending').
   | 'integration.sync_replayed'

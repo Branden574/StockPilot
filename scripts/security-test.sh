@@ -1192,6 +1192,17 @@ WEB_TESTS=(
   src/server/services/portal.step-up.test.ts
   src/test/action-step-up.guard.test.ts
   src/test/page-step-up.guard.test.ts
+  # Under a policy that requires an authenticator, every Server Action, every
+  # write handler under app/api/v1 and every writing service method gives the
+  # authenticator answer before its first write, or is on a reviewed list with
+  # a kind, a reason and the writes it makes (a sweep on the syntax tree, with
+  # a mutation table that takes each gate out and expects it reported).
+  src/test/authenticator-write.guard.test.ts
+  # A member who owes authenticator set-up is sent to it by every page and
+  # action through requireOrgContext(); only Security and Profile open; no
+  # layout reaches that check or redirects to a path under itself, and only
+  # dashboard layouts use the resolver without it.
+  src/lib/auth/authenticator-set-up.guard.test.ts
   # The phone's sign-in and sign-out notes (S5a), the other two routes on the
   # AAL1 allowlist: an aal1 session of an account with an authenticator writes
   # the sign-in row (code owed) and the device note, and its sign-out revokes
@@ -1681,6 +1692,15 @@ WEB_TESTS=(
   src/server/lib/account-deletion.test.ts
   src/app/api/v1/account/delete/route.test.ts
   src/server/services/order-requests.deleted-requester-email.test.ts
+
+  # How a deletion is confirmed, on the web and the phone: an account with an
+  # authenticator needs aal2; one with none its password (checked on a
+  # separate client) or a six-digit code emailed to its current address, ten
+  # minutes, for that account and address only; each with its own per-account
+  # limit, never reported. The last check before the delete reads the factors
+  # again. Without either, the phone route answers by the policy as before.
+  src/lib/auth/account-delete-code.test.ts
+  src/server/lib/account-deletion-credential.test.ts
 
   # One create path, no duplicate order (0391, phone ordering PO-2). The
   # service gates (Orders module, the MFA step-up, orders:request) come before

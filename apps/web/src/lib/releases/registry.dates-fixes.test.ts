@@ -169,6 +169,10 @@ describe('the dates fixes release is published', () => {
       // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: without them): the settings and module check releases are published later, at the top; the module check release reaches every member and the settings release reaches whoever can open the settings pages and panels it names, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: without it): the navigation release is published later, at the top, and reaches owners and admins who can open Settings, Navigation, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: without it): the invitation audit release is published later, at the top, and reaches whoever can view the audit log (owners, admins and managers by default), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+      // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, and reaches whoever can view the audit log (owners, admins and managers by default), as the invitation audit release does, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+      // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member (its entry has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+      'authenticator-set-up-first-2026-11',
+      'api-key-audit-2026-11',
       'invitation-audit-2026-11',
       'navigation-keeps-choices-2026-11',
       'settings-not-loaded-2026-11',
@@ -248,6 +252,10 @@ describe('the dates fixes release is published', () => {
       // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: without them): the settings and module check releases are published later, at the top; the module check release reaches every member and the settings release reaches whoever can open the settings pages and panels it names, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: without it): the navigation release is published later, at the top, and reaches owners and admins who can open Settings, Navigation, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: without it): the invitation audit release is published later, at the top, and reaches whoever can view the audit log (owners, admins and managers by default), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+      // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, and reaches whoever can view the audit log (owners, admins and managers by default), as the invitation audit release does, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+      // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member (its entry has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+      'authenticator-set-up-first-2026-11',
+      'api-key-audit-2026-11',
       'invitation-audit-2026-11',
       'navigation-keeps-choices-2026-11',
       'settings-not-loaded-2026-11',
@@ -312,7 +320,9 @@ describe('the dates fixes release is published', () => {
       // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: redesignRead.slice(0, 25)): the reads of the settings and module check releases sit first, so the slice takes two more.
       // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: redesignRead.slice(0, 27)): the read of the navigation release sits first, so the slice takes one more.
       // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: redesignRead.slice(0, 28)): the read of the invitation audit release sits first, so the slice takes one more.
-      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 29), null).latestUnread?.id,
+      // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: redesignRead.slice(0, 29)): the read of the API key audit release sits first, so the slice takes one more.
+      // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: redesignRead.slice(0, 30)): the read of the authenticator set-up release sits first, so the slice takes one more.
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 31), null).latestUnread?.id,
     ).toBe('export-fixes-2026-10');
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: redesignRead.slice(0, 6)): the reads of the Export items, phone update, clearer web messages and QW1 releases sit first, so the slice takes four more.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: redesignRead.slice(0, 10)): the read of the S2 release sits first, so the slice takes one more.
@@ -330,7 +340,9 @@ describe('the dates fixes release is published', () => {
       // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: redesignRead.slice(0, 25)): the reads of the settings and module check releases sit first, so the slice takes two more.
       // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: redesignRead.slice(0, 27)): the read of the navigation release sits first, so the slice takes one more.
       // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: redesignRead.slice(0, 28)): the read of the invitation audit release sits first, so the slice takes one more.
-      buildReleaseList(RELEASES, member, redesignRead.slice(0, 29), null).latestUnread?.id,
+      // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: redesignRead.slice(0, 29)): the read of the API key audit release sits first, so the slice takes one more.
+      // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: redesignRead.slice(0, 30)): the read of the authenticator set-up release sits first, so the slice takes one more.
+      buildReleaseList(RELEASES, member, redesignRead.slice(0, 31), null).latestUnread?.id,
     ).toBe('small-fixes-8-2026-10');
     // Added by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31): once the release at the top
     // (its read sits first in redesignRead) is read, the owner is told the small-fixes-8 release.
@@ -356,7 +368,9 @@ describe('the dates fixes release is published', () => {
       // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: redesignRead.slice(0, 26)): the reads of the settings and module check releases sit first, so the slice takes two more.
       // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: redesignRead.slice(0, 28)): the read of the navigation release sits first, so the slice takes one more.
       // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: redesignRead.slice(0, 29)): the read of the invitation audit release sits first, so the slice takes one more.
-      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 30), null).latestUnread?.id,
+      // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: redesignRead.slice(0, 30)): the read of the API key audit release sits first, so the slice takes one more.
+      // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: redesignRead.slice(0, 31)): the read of the authenticator set-up release sits first, so the slice takes one more.
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 32), null).latestUnread?.id,
     ).toBe('small-fixes-8-2026-10');
     // Added by docs/whats-new-small-fixes-8 (2026-10-31): once the release at the top (its read sits first in
     // redesignRead) is read, both are told the manage-order-items-and-app-fixes release.
@@ -384,7 +398,9 @@ describe('the dates fixes release is published', () => {
       // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: redesignRead.slice(0, 27)): the reads of the settings and module check releases sit first, so the slice takes two more.
       // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: redesignRead.slice(0, 29)): the read of the navigation release sits first, so the slice takes one more.
       // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: redesignRead.slice(0, 30)): the read of the invitation audit release sits first, so the slice takes one more.
-      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 31), null).latestUnread?.id,
+      // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: redesignRead.slice(0, 31)): the read of the API key audit release sits first, so the slice takes one more.
+      // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: redesignRead.slice(0, 32)): the read of the authenticator set-up release sits first, so the slice takes one more.
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 33), null).latestUnread?.id,
     ).toBe('manage-order-items-and-app-fixes-2026-10');
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: redesignRead.slice(0, 8)): the reads of the Export items, phone update, clearer web messages and QW1 releases sit first, so the slice takes four more.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: redesignRead.slice(0, 12)): the read of the S2 release sits first, so the slice takes one more.
@@ -402,7 +418,9 @@ describe('the dates fixes release is published', () => {
       // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: redesignRead.slice(0, 27)): the reads of the settings and module check releases sit first, so the slice takes two more.
       // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: redesignRead.slice(0, 29)): the read of the navigation release sits first, so the slice takes one more.
       // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: redesignRead.slice(0, 30)): the read of the invitation audit release sits first, so the slice takes one more.
-      buildReleaseList(RELEASES, member, redesignRead.slice(0, 31), null).latestUnread?.id,
+      // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: redesignRead.slice(0, 31)): the read of the API key audit release sits first, so the slice takes one more.
+      // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: redesignRead.slice(0, 32)): the read of the authenticator set-up release sits first, so the slice takes one more.
+      buildReleaseList(RELEASES, member, redesignRead.slice(0, 33), null).latestUnread?.id,
     ).toBe('manage-order-items-and-app-fixes-2026-10');
     // Added by docs/whats-new-2026-10-30 (2026-10-30): once the release at the top (its read sits first in
     // redesignRead) is read, both are told the ended-session-group-page-fixes release.
@@ -432,7 +450,9 @@ describe('the dates fixes release is published', () => {
       // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: redesignRead.slice(0, 28)): the reads of the settings and module check releases sit first, so the slice takes two more.
       // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: redesignRead.slice(0, 30)): the read of the navigation release sits first, so the slice takes one more.
       // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: redesignRead.slice(0, 31)): the read of the invitation audit release sits first, so the slice takes one more.
-      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 32), null).latestUnread?.id,
+      // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: redesignRead.slice(0, 32)): the read of the API key audit release sits first, so the slice takes one more.
+      // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: redesignRead.slice(0, 33)): the read of the authenticator set-up release sits first, so the slice takes one more.
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 34), null).latestUnread?.id,
     ).toBe('ended-session-group-page-fixes-2026-10');
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: redesignRead.slice(0, 9)): the reads of the Export items, phone update, clearer web messages and QW1 releases sit first, so the slice takes four more.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: redesignRead.slice(0, 13)): the read of the S2 release sits first, so the slice takes one more.
@@ -450,7 +470,9 @@ describe('the dates fixes release is published', () => {
       // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: redesignRead.slice(0, 28)): the reads of the settings and module check releases sit first, so the slice takes two more.
       // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: redesignRead.slice(0, 30)): the read of the navigation release sits first, so the slice takes one more.
       // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: redesignRead.slice(0, 31)): the read of the invitation audit release sits first, so the slice takes one more.
-      buildReleaseList(RELEASES, member, redesignRead.slice(0, 32), null).latestUnread?.id,
+      // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: redesignRead.slice(0, 32)): the read of the API key audit release sits first, so the slice takes one more.
+      // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: redesignRead.slice(0, 33)): the read of the authenticator set-up release sits first, so the slice takes one more.
+      buildReleaseList(RELEASES, member, redesignRead.slice(0, 34), null).latestUnread?.id,
     ).toBe('ended-session-group-page-fixes-2026-10');
     // Once the release at the top (its read sits first in redesignRead) is read, both are told
     // the unsubscribe-rack-question-fixes release.
@@ -482,7 +504,9 @@ describe('the dates fixes release is published', () => {
       // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: redesignRead.slice(0, 29)): the reads of the settings and module check releases sit first, so the slice takes two more.
       // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: redesignRead.slice(0, 31)): the read of the navigation release sits first, so the slice takes one more.
       // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: redesignRead.slice(0, 32)): the read of the invitation audit release sits first, so the slice takes one more.
-      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 33), null).latestUnread?.id,
+      // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: redesignRead.slice(0, 33)): the read of the API key audit release sits first, so the slice takes one more.
+      // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: redesignRead.slice(0, 34)): the read of the authenticator set-up release sits first, so the slice takes one more.
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 35), null).latestUnread?.id,
     ).toBe('unsubscribe-rack-question-fixes-2026-10');
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: redesignRead.slice(0, 10)): the reads of the Export items, phone update, clearer web messages and QW1 releases sit first, so the slice takes four more.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: redesignRead.slice(0, 14)): the read of the S2 release sits first, so the slice takes one more.
@@ -500,7 +524,9 @@ describe('the dates fixes release is published', () => {
       // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: redesignRead.slice(0, 29)): the reads of the settings and module check releases sit first, so the slice takes two more.
       // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: redesignRead.slice(0, 31)): the read of the navigation release sits first, so the slice takes one more.
       // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: redesignRead.slice(0, 32)): the read of the invitation audit release sits first, so the slice takes one more.
-      buildReleaseList(RELEASES, member, redesignRead.slice(0, 33), null).latestUnread?.id,
+      // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: redesignRead.slice(0, 33)): the read of the API key audit release sits first, so the slice takes one more.
+      // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: redesignRead.slice(0, 34)): the read of the authenticator set-up release sits first, so the slice takes one more.
+      buildReleaseList(RELEASES, member, redesignRead.slice(0, 35), null).latestUnread?.id,
     ).toBe('unsubscribe-rack-question-fixes-2026-10');
     // Once the newest release (its read sits first in redesignRead) is read, both are told
     // redesign-2026-10, as before.
@@ -534,7 +560,9 @@ describe('the dates fixes release is published', () => {
       // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: redesignRead.slice(0, 30)): the reads of the settings and module check releases sit first, so the slice takes two more.
       // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: redesignRead.slice(0, 32)): the read of the navigation release sits first, so the slice takes one more.
       // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: redesignRead.slice(0, 33)): the read of the invitation audit release sits first, so the slice takes one more.
-      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 34), null).latestUnread?.id,
+      // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: redesignRead.slice(0, 34)): the read of the API key audit release sits first, so the slice takes one more.
+      // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: redesignRead.slice(0, 35)): the read of the authenticator set-up release sits first, so the slice takes one more.
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 36), null).latestUnread?.id,
     ).toBe('redesign-2026-10');
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: redesignRead.slice(0, 11)): the reads of the Export items, phone update, clearer web messages and QW1 releases sit first, so the slice takes four more.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: redesignRead.slice(0, 15)): the read of the S2 release sits first, so the slice takes one more.
@@ -552,7 +580,9 @@ describe('the dates fixes release is published', () => {
       // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: redesignRead.slice(0, 30)): the reads of the settings and module check releases sit first, so the slice takes two more.
       // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: redesignRead.slice(0, 32)): the read of the navigation release sits first, so the slice takes one more.
       // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: redesignRead.slice(0, 33)): the read of the invitation audit release sits first, so the slice takes one more.
-      buildReleaseList(RELEASES, member, redesignRead.slice(0, 34), null).latestUnread?.id,
+      // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: redesignRead.slice(0, 34)): the read of the API key audit release sits first, so the slice takes one more.
+      // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: redesignRead.slice(0, 35)): the read of the authenticator set-up release sits first, so the slice takes one more.
+      buildReleaseList(RELEASES, member, redesignRead.slice(0, 36), null).latestUnread?.id,
     ).toBe('redesign-2026-10');
     expect(buildReleaseList(RELEASES, member, redesignRead, null).latestUnread?.id).toBe(
       'group-selected-2026-10',
@@ -609,6 +639,10 @@ describe('the dates fixes release is published', () => {
         // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: without them): the settings and module check releases are published later, at the top; the module check release reaches every member and the settings release reaches whoever can open the settings pages and panels it names, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
         // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: without it): the navigation release is published later, at the top, and reaches owners and admins who can open Settings, Navigation, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
         // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: without it): the invitation audit release is published later, at the top, and reaches whoever can view the audit log (owners, admins and managers by default), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, and reaches whoever can view the audit log (owners, admins and managers by default), as the invitation audit release does, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member (its entry has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        'authenticator-set-up-first-2026-11': true,
+        'api-key-audit-2026-11': true,
         'invitation-audit-2026-11': true,
         'navigation-keeps-choices-2026-11': true,
         'settings-not-loaded-2026-11': true,
@@ -649,6 +683,10 @@ describe('the dates fixes release is published', () => {
         // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: without them): the settings and module check releases are published later, at the top; the module check release reaches every member and the settings release reaches whoever can open the settings pages and panels it names, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
         // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: without it): the navigation release is published later, at the top, and reaches owners and admins who can open Settings, Navigation, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
         // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: without it): the invitation audit release is published later, at the top, and reaches whoever can view the audit log (owners, admins and managers by default), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, and reaches whoever can view the audit log (owners, admins and managers by default), as the invitation audit release does, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member (its entry has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        'authenticator-set-up-first-2026-11': true,
+        'api-key-audit-2026-11': true,
         'invitation-audit-2026-11': true,
         'navigation-keeps-choices-2026-11': true,
         'settings-not-loaded-2026-11': true,
@@ -690,6 +728,10 @@ describe('the dates fixes release is published', () => {
         // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: without them): the settings and module check releases are published later, at the top; the module check release reaches every member and the settings release reaches whoever can open the settings pages and panels it names, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
         // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: without it): the navigation release is published later, at the top, and reaches owners and admins who can open Settings, Navigation, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
         // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: without it): the invitation audit release is published later, at the top, and reaches whoever can view the audit log (owners, admins and managers by default), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, and reaches whoever can view the audit log (owners, admins and managers by default), as the invitation audit release does, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member (its entry has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        'authenticator-set-up-first-2026-11': true,
+        'api-key-audit-2026-11': true,
         'invitation-audit-2026-11': true,
         'navigation-keeps-choices-2026-11': true,
         'settings-not-loaded-2026-11': true,
@@ -732,6 +774,10 @@ describe('the dates fixes release is published', () => {
         // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: without them): the settings and module check releases are published later, at the top; the module check release reaches every member and the settings release reaches whoever can open the settings pages and panels it names, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
         // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: without it): the navigation release is published later, at the top, and reaches owners and admins who can open Settings, Navigation, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
         // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: without it): the invitation audit release is published later, at the top, and reaches whoever can view the audit log (owners, admins and managers by default), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, and reaches whoever can view the audit log (owners, admins and managers by default), as the invitation audit release does, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member (its entry has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        'authenticator-set-up-first-2026-11': true,
+        'api-key-audit-2026-11': true,
         'invitation-audit-2026-11': true,
         'navigation-keeps-choices-2026-11': true,
         'settings-not-loaded-2026-11': true,
@@ -775,6 +821,10 @@ describe('the dates fixes release is published', () => {
         // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: without them): the settings and module check releases are published later, at the top; the module check release reaches every member and the settings release reaches whoever can open the settings pages and panels it names, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
         // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: without it): the navigation release is published later, at the top, and reaches owners and admins who can open Settings, Navigation, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
         // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: without it): the invitation audit release is published later, at the top, and reaches whoever can view the audit log (owners, admins and managers by default), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, and reaches whoever can view the audit log (owners, admins and managers by default), as the invitation audit release does, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member (its entry has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        'authenticator-set-up-first-2026-11': true,
+        'api-key-audit-2026-11': true,
         'invitation-audit-2026-11': true,
         'navigation-keeps-choices-2026-11': true,
         'settings-not-loaded-2026-11': true,
@@ -819,6 +869,10 @@ describe('the dates fixes release is published', () => {
         // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: without them): the settings and module check releases are published later, at the top; the module check release reaches every member and the settings release reaches whoever can open the settings pages and panels it names, an owner with every permission and module included, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
         // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: without it): the navigation release is published later, at the top, and reaches owners and admins who can open Settings, Navigation, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
         // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: without it): the invitation audit release is published later, at the top, and reaches whoever can view the audit log (owners, admins and managers by default), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, and reaches whoever can view the audit log (owners, admins and managers by default), as the invitation audit release does, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member (its entry has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        'authenticator-set-up-first-2026-11': true,
+        'api-key-audit-2026-11': true,
         'invitation-audit-2026-11': true,
         'navigation-keeps-choices-2026-11': true,
         'settings-not-loaded-2026-11': true,
@@ -950,7 +1004,9 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: 46): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: 47): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(at).toBe(48);
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: 48): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: 49): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(at).toBe(50);
     // Re-pinned by docs/whats-new-ungroup-follow-ups (2026-10-12): the Ungroup follow-ups release is published at the top, above Group selected's, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-pages-keep-groups-whole (2026-10-12; was: the Ungroup follow-ups release at 0, the public link release at 7): the pages-keep-groups-whole release is published at the top, above the Ungroup follow-ups release, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-redesign-2026-10 (2026-10-20; was: the pages-keep-groups-whole release at 0, the public link release at 8): the three redesign releases and the parked ai-search-finds-every-item release (#367) are published at the top, above the pages-keep-groups-whole release, so every position below them moves down by four.
@@ -974,13 +1030,21 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[26]?.id).toBe('authenticator-code-requests-2026-11');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[28]?.id).toBe('authenticator-code-requests-2026-11');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[26]?.status).toBe('published');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[28]?.status).toBe('published');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[27]?.id).toBe('integration-retries-2026-11');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[29]?.id).toBe('integration-retries-2026-11');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[27]?.status).toBe('published');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[29]?.status).toBe('published');
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: every pinned position one place higher): the order request alerts release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -989,13 +1053,21 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[28]?.id).toBe('lists-delivery-sites-and-fixes-2026-11');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[30]?.id).toBe('lists-delivery-sites-and-fixes-2026-11');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[28]?.status).toBe('published');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[30]?.status).toBe('published');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[29]?.id).toBe('update-ready-and-fixes-2026-11');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[31]?.id).toBe('update-ready-and-fixes-2026-11');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[29]?.status).toBe('published');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[31]?.status).toBe('published');
     // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -1006,9 +1078,13 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[30]?.id).toBe('export-fixes-2026-10');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[32]?.id).toBe('export-fixes-2026-10');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[30]?.status).toBe('published');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[32]?.status).toBe('published');
     // Re-pinned by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: one place higher): the export fixes release is published at the top, above the small-fixes-8 release, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -1019,13 +1095,21 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[31]?.id).toBe('small-fixes-8-2026-10');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[33]?.id).toBe('small-fixes-8-2026-10');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[31]?.status).toBe('published');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[33]?.status).toBe('published');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[32]?.id).toBe('manage-order-items-and-app-fixes-2026-10');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[34]?.id).toBe('manage-order-items-and-app-fixes-2026-10');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[32]?.status).toBe('published');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[34]?.status).toBe('published');
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: every pinned position one place higher): the order request alerts release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -1034,13 +1118,17 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[33]?.id).toBe('ended-session-group-page-fixes-2026-10');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[35]?.id).toBe('ended-session-group-page-fixes-2026-10');
     // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[33]?.status).toBe('published');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[35]?.status).toBe('published');
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: every pinned position one place higher): the order request alerts release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -1049,11 +1137,17 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[34]?.id).toBe('unsubscribe-rack-question-fixes-2026-10');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[36]?.id).toBe('unsubscribe-rack-question-fixes-2026-10');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[34]?.status).toBe('published');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[36]?.status).toBe('published');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES.slice(35, 39).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES.slice(37, 41).map((r) => [r.id, r.status])).toEqual([
       ['redesign-2026-10', 'published'],
       ['redesign-mobile-app-2026-10', 'published'],
       ['redesign-web-fixes-2026-10', 'published'],
@@ -1073,30 +1167,21 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[39]?.id).toBe('pages-keep-groups-whole-2026-10');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[41]?.id).toBe('pages-keep-groups-whole-2026-10');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[39]?.status).toBe('published');
-    // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[40]?.id).toBe('ungroup-follow-ups-2026-10');
-    // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[40]?.status).toBe('published');
-    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: every pinned position one place higher): the order request alerts release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: every pinned position one place higher): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: every pinned position two places higher): the count read rule and email change releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[41]?.id).toBe('group-selected-2026-10');
-    // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     expect(RELEASES[41]?.status).toBe('published');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[42]?.id).toBe('ungroup-2026-10');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[42]?.id).toBe('ungroup-follow-ups-2026-10');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     expect(RELEASES[42]?.status).toBe('published');
-    // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: every pinned position one place higher): the order request alerts release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -1105,28 +1190,21 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[43]?.id).toBe('returns-history-hand-over-2026-10');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[43]?.id).toBe('group-selected-2026-10');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     expect(RELEASES[43]?.status).toBe('published');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[44]?.id).toBe('returns-close-rest-2026-10');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[44]?.id).toBe('ungroup-2026-10');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     expect(RELEASES[44]?.status).toBe('published');
-    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: every pinned position one place higher): the order request alerts release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: every pinned position one place higher): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: every pinned position two places higher): the count read rule and email change releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
-    // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[45]?.id).toBe('returns-requester-exchange-2026-10');
-    // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[45]?.status).toBe('published');
-    // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[46]?.id).toBe('returns-exchange-2026-10');
-    // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[46]?.status).toBe('published');
     // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -1137,11 +1215,65 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[47]?.id).toBe('public-link-sent-request-2026-10');
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[45]?.id).toBe('returns-history-hand-over-2026-10');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[45]?.status).toBe('published');
+    // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[46]?.id).toBe('returns-close-rest-2026-10');
+    // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[46]?.status).toBe('published');
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: every pinned position one place higher): the order request alerts release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: every pinned position one place higher): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: every pinned position two places higher): the count read rule and email change releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[47]?.id).toBe('returns-requester-exchange-2026-10');
+    // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     expect(RELEASES[47]?.status).toBe('published');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(Date.parse(RELEASES[47]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[48]?.id).toBe('returns-exchange-2026-10');
+    // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[48]?.status).toBe('published');
+    // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: every pinned position two places higher): the phone authenticator code and access check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: every pinned position one place higher): the order request alerts release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: every pinned position one place higher): the phone screens by access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: every pinned position two places higher): the count read rule and email change releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
+    // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[49]?.id).toBe('public-link-sent-request-2026-10');
+    // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[49]?.status).toBe('published');
+    // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(Date.parse(RELEASES[49]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
     for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }

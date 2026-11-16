@@ -1106,3 +1106,56 @@ describe('listResolutionProofProxyPhotos (Task 6 — the resolution email\'s pho
     expect(args[orderIndices[1]!]).toEqual(['created_at', { ascending: true }]);
   });
 });
+
+/**
+ * The authenticator answer: issueLink refuses with the answer assertPermission
+ * gives (mfaGateError) when the organization's policy requires an
+ * authenticator and the session has not satisfied it, on the requester's own
+ * request as on a manager's, before it reads or writes anything.
+ */
+describe('issueLink gives the authenticator answer first', () => {
+  const OWN_REQUEST = {
+    'maintenance_requests.select': {
+      data: { id: REQ_ID, requester_user_id: 'user-test' },
+      error: null,
+    },
+  };
+  const LINK_WRITES = {
+    'maintenance_request_share_links.update': { data: null, error: null },
+    'maintenance_request_share_links.insert': { data: null, error: null },
+  };
+
+  it.each([
+    ['the requester of their own request', new Set(['maintenance_requests:submit'])],
+    ['a manager', new Set(['maintenance_requests:manage'])],
+  ])(
+    '%s, required and not satisfied: mfa_required, nothing read or written',
+    async (_who, permissions) => {
+      const { stub, ctx } = build(OWN_REQUEST, {
+        permissions,
+        mfaRequired: true,
+        mfaSatisfied: false,
+      });
+      const adminStub = buildAdmin(LINK_WRITES);
+      await expect(new MaintenanceShareLinksService(ctx).issueLink(REQ_ID)).rejects.toMatchObject({
+        code: 'forbidden',
+        details: { reason: 'mfa_required' },
+      });
+      expect(stub.fromCalls).toEqual([]);
+      expect(adminStub.fromCalls).toEqual([]);
+      expect(audit).not.toHaveBeenCalled();
+    },
+  );
+
+  it('the requester of their own request, required and satisfied: a link is minted', async () => {
+    const { ctx } = build(OWN_REQUEST, {
+      permissions: new Set(['maintenance_requests:submit']),
+      mfaRequired: true,
+      mfaSatisfied: true,
+    });
+    const adminStub = buildAdmin(LINK_WRITES);
+    const res = await new MaintenanceShareLinksService(ctx).issueLink(REQ_ID);
+    expect(res.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(adminStub.chainArgs.get('maintenance_request_share_links.insert')).toBeDefined();
+  });
+});

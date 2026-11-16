@@ -3,6 +3,7 @@ import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 
+import { AuthenticatorSetUpPanel } from '@/components/dashboard/authenticator-set-up-panel';
 import { DashboardShell } from '@/components/dashboard/dashboard-shell';
 import { MfaRequiredBanner } from '@/components/dashboard/mfa-required-banner';
 import { ModulesUnreadBanner } from '@/components/dashboard/modules-unread-banner';
@@ -17,7 +18,7 @@ import {
 import { ImpersonationBanner } from '@/components/platform/impersonation-banner';
 import { currentUserIsPlatformAdminFromRequestHeader } from '@/lib/auth/platform-admin';
 import { InventoryRealtime } from '@/components/realtime/inventory-realtime';
-import { getSessionMemberships, requireOrgContext } from '@/lib/auth/session';
+import { getSessionMemberships, requireOrgContextForLayout } from '@/lib/auth/session';
 import {
   getMfaFactorsForRequest,
   getModulesForRequest,
@@ -27,13 +28,14 @@ import {
 import { factorsOf } from '@/lib/auth/mfa-factors';
 import { moduleSetUnreadable } from '@/lib/modules/module-state';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
+import { openBeforeAuthenticatorSetUp } from '@/lib/auth/authenticator-set-up';
 import { orSessionEnded } from '@/lib/auth/session-ended';
 import { getVerifiedSessionClaimsForRequest } from '@/lib/auth/verified-claims';
 import { userMenuRoleLabel } from '@/lib/auth/user-menu-role';
-import { getWarehouseAccess } from '@/lib/auth/warehouse';
-import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
+import { getWarehouseAccessFor } from '@/lib/auth/warehouse';
+import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
 
-import { resolveTerminology } from '@stockpilot/core';
+import { authenticatorSetUpOwed, resolveTerminology } from '@stockpilot/core';
 import { ActivityBeacon } from '@/components/activity-beacon';
 
 // Override the root layout's marketing title for everything under
@@ -85,7 +87,17 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const claimsRead = getVerifiedSessionClaimsForRequest();
   // Cached: this resolves with the same data the page will use in the
   // same render — zero extra DB round trips beyond the page's own.
-  const ctx = await requireOrgContext();
+  //
+  // The layout's context: every rule of requireOrgContext() except the set-up
+  // redirect (lib/auth/session.ts, requireOrgContextForLayout). NO LAYOUT MAY
+  // REDIRECT TO A PAGE UNDER ITSELF: rendered for a client-side navigation
+  // (the landing after sign-in, an organization switch, an invitation
+  // accepted), a redirect thrown here is kept by the browser as this layout's
+  // answer, and the security page, which shares this layout, renders it again
+  // and again. The page below asks requireOrgContext(), and its redirect to
+  // set-up is caught below this layout. Everything the layout reads below is
+  // handed this same context, so nothing it calls asks requireOrgContext().
+  const ctx = await requireOrgContextForLayout();
   // Gates the "Platform admin" link in the account menu. Header-based on
   // purpose (perf plan 2026-07-02 P1d): the previous
   // `currentUserIsPlatformAdmin()` made a SECOND GoTrue `auth.getUser()`
@@ -127,8 +139,8 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     warehousesList,
     enabledModuleSet,
   ] = await Promise.all([
-    getWarehouseAccess(),
-    getActiveWarehouseFilter(),
+    getWarehouseAccessFor(ctx),
+    getActiveWarehouseFilterFor(ctx),
     getOrgRowForRequest(ctx.organizationId),
     // An ENDED session goes to sign-in; any other failure still fails closed.
     orSessionEnded(mfaFactorsRead),
@@ -172,18 +184,9 @@ export default async function DashboardLayout({ children }: { children: ReactNod
     .sort((a, b) => a.name.localeCompare(b.name));
 
   // ── MFA enforcement ────────────────────────────────────────────────
-  // Banner instead of redirect: the previous redirect-on-every-page-load
-  // approach raced with Chrome's prefetch behavior and triggered the
-  // "Throttling navigation to prevent the browser from hanging" warning,
-  // which renders as a black/blank screen on certain sections (a manager
-  // on Chrome, no MFA enrolled). The banner is always visible above the
-  // page content until the user enrolls; can't loop, can't throttle,
-  // and behaves the same across browsers.
   // An org row this member cannot read is held to the strictest policy, not
   // 'optional' (lib/auth/mfa-policy.ts).
   const policy = enforcedMfaPolicy(orgRow);
-  const isAdmin = ctx.role === 'owner' || ctx.role === 'admin';
-  const mfaRequired = policy === 'all_required' || (policy === 'admins_required' && isAdmin);
   // Whether this member has an authenticator comes from THEIR factor list only
   // (S43a, review round s43ar). The list is a read of the cookie session, like
   // the claims the gate below reads, so a load of the session can refresh it
@@ -194,22 +197,24 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const ownFactors = factorsOf(mfaFactors, ctx.userId);
   if (!ownFactors) redirect(await mfaChallengePath());
   const hasVerifiedFactor = ownFactors.some((f) => f.status === 'verified');
-  const showMfaBanner = mfaRequired && !hasVerifiedFactor;
-
-  // Hard gate for the strictest policy: when policy === 'all_required'
-  // and the user has no verified factor, the banner alone isn't enough
-  // — they can still navigate. Redirect to security settings (which is
-  // exempt from the gate so enrollment still works) instead of showing
-  // the full dashboard. assertPermission in services already blocks
-  // mutating actions at AAL1, but this prevents read-only data leakage
-  // across the rest of the dashboard until they enroll.
-  if (policy === 'all_required' && !hasVerifiedFactor) {
-    const h = await headers();
-    const pathname = h.get('x-pathname') ?? '';
-    if (!pathname.startsWith('/dashboard/settings/security')) {
-      redirect('/dashboard/settings/security?mfa=required');
-    }
-  }
+  // The policy requires an authenticator of this member's role and they have
+  // none verified (@stockpilot/core). They see the banner on the pages open to
+  // them before set-up; every other page sends them there itself
+  // (requireOrgContext()), so this layout never redirects for it.
+  const setUpOwed = authenticatorSetUpOwed(policy, ctx.role, ownFactors);
+  // A session whose token says the code was entered but that has no verified
+  // authenticator left: the pages answer aal2 from the token alone, with no
+  // factor read. This layout has the factor list in hand, so on a full page
+  // load or a refresh it shows that session a set-up prompt where the page
+  // would be (its button loads the security page as a new document). It is a
+  // prompt, not a data stop: the page below still runs and is in the response;
+  // that session's reads and writes are refused where the services ask for an
+  // authenticator. Rendered, never a redirect. The claims are awaited only
+  // here, for a member who owes set-up on a page that is not open to them.
+  const setUpPanel =
+    setUpOwed &&
+    !openBeforeAuthenticatorSetUp((await headers()).get('x-pathname')) &&
+    (await claimsRead.then((c) => c?.userId === ctx.userId && c.aal === 'aal2'));
 
   // Hard gate for ENROLLED users (HI-6): a verified TOTP factor must be
   // satisfied regardless of org policy — otherwise an attacker with only
@@ -285,9 +290,9 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         warehouseFilter={warehouseFilter}
       >
         <ImpersonationBanner />
-        {showMfaBanner && <MfaRequiredBanner />}
+        {setUpOwed && <MfaRequiredBanner />}
         {moduleStateUnknown && <ModulesUnreadBanner />}
-        {children}
+        {setUpPanel ? <AuthenticatorSetUpPanel /> : children}
         {/* "Last seen" for the platform console (mig 0352). Scope keeps one account or
             organization from throttling another on a shared device; it never leaves
             the browser, and the server stamps the session's own user and org. */}

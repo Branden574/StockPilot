@@ -3,7 +3,7 @@ import 'server-only';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 import { isAtLeast, isManagerOrAbove, type Role } from '@stockpilot/core';
 
-import { ServiceError, withContext, type ServiceContext } from './context';
+import { mfaGateError, ServiceError, withContext, type ServiceContext } from './context';
 
 import type { ItemListSort } from './inventory';
 
@@ -114,6 +114,13 @@ function sanitizeState(raw: unknown): SavedViewState {
   return out;
 }
 
+export interface SavedViewInput {
+  scope: SavedViewScope;
+  name: string;
+  state: SavedViewState;
+  isShared?: boolean;
+}
+
 export class SavedViewsService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -187,12 +194,31 @@ export class SavedViewsService {
       });
   }
 
-  async create(input: {
-    scope: SavedViewScope;
-    name: string;
-    state: SavedViewState;
-    isShared?: boolean;
-  }): Promise<SavedView> {
+  /**
+   * Save a view. A private view is the caller's own; a shared one is shown to
+   * every member of the organization, so it goes through createShared().
+   */
+  async create(input: SavedViewInput): Promise<SavedView> {
+    if (input.isShared) return this.createShared(input);
+    return this.insertView(input, false);
+  }
+
+  /**
+   * Save a view shared with the organization. Under a policy that requires an
+   * authenticator, a session that has not satisfied it gets the authenticator
+   * answer first, as for any change every member sees.
+   */
+  async createShared(input: SavedViewInput): Promise<SavedView> {
+    this.gateOrganizationChange();
+    return this.insertView(input, true);
+  }
+
+  /** The authenticator answer assertPermission gives, for a change every member of the organization sees. */
+  private gateOrganizationChange(): void {
+    if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) throw mfaGateError(this.ctx);
+  }
+
+  private async insertView(input: SavedViewInput, isShared: boolean): Promise<SavedView> {
     const name = input.name.trim();
     if (name.length === 0 || name.length > 80) {
       throw new ServiceError('validation_error', 'View name must be 1–80 characters.');
@@ -206,7 +232,7 @@ export class SavedViewsService {
         scope: input.scope,
         name,
         state: sanitized,
-        is_shared: input.isShared ?? false,
+        is_shared: isShared,
       })
       .select(VIEW_COLUMNS)
       .single();
@@ -224,12 +250,14 @@ export class SavedViewsService {
   }
 
   /**
-   * Owner-only: flip whether a view is shared with the org. Proves a row
-   * changed (recurring pattern 2): RLS answers a view that is not the
-   * caller's, or is gone, with 0 rows and no error, which used to read as
-   * success.
+   * Owner-only: flip whether a view is shared with the org. Sharing and
+   * unsharing change what every member sees, so a session that has not
+   * satisfied a policy that requires an authenticator gets the authenticator
+   * answer first. Proves a row changed (recurring pattern 2): RLS answers a
+   * view that is not the caller's, or is gone, with 0 rows and no error.
    */
   async setSharing(id: string, isShared: boolean): Promise<void> {
+    this.gateOrganizationChange();
     const { data, error } = await this.ctx.supabase
       .from('saved_views')
       .update({ is_shared: isShared })
@@ -247,30 +275,56 @@ export class SavedViewsService {
   }
 
   /**
-   * Delete a view: the caller's own, or (an admin or owner only) a shared view
-   * whose owner deleted their account (B23), which nobody else can ever
-   * remove. Each delete is scoped to this organization and proves a row went
-   * (recurring pattern 2); RLS still decides both.
+   * Delete a view: the caller's own private one, the caller's own shared one
+   * (removeOwnShared), or (an admin or owner only) a shared view whose owner
+   * deleted their account (B23), which nobody else can ever remove. Each
+   * delete is scoped to this organization and proves a row went (recurring
+   * pattern 2); RLS still decides each.
    */
   async remove(id: string): Promise<void> {
-    if (await this.deleteWhere(id, 'own')) return;
-    if (this.isOrgAdmin() && (await this.deleteWhere(id, 'orphan'))) return;
+    if (await this.deleteWhere(id, 'own-private')) return;
+    if (await this.removeOwnShared(id)) return;
+    if (this.isOrgAdmin() && (await this.removeOwnerless(id))) return;
     throw new ServiceError(
       'not_found',
       'This view could not be deleted. It may have been deleted already, or only the person who saved it can delete it.',
     );
   }
 
-  private async deleteWhere(id: string, whose: 'own' | 'orphan'): Promise<boolean> {
+  /**
+   * The caller deletes their own view that is shared with the organization:
+   * every member stops seeing it, as when it is unshared, so the authenticator
+   * answer comes first. True when a row went.
+   */
+  async removeOwnShared(id: string): Promise<boolean> {
+    this.gateOrganizationChange();
+    return this.deleteWhere(id, 'own-shared');
+  }
+
+  /**
+   * An admin or owner deletes a shared view whose owner deleted their account:
+   * the organization's view, so the authenticator answer comes first. True
+   * when a row went; false for anyone else, or when no such view is left.
+   */
+  async removeOwnerless(id: string): Promise<boolean> {
+    this.gateOrganizationChange();
+    if (!this.isOrgAdmin()) return false;
+    return this.deleteWhere(id, 'orphan');
+  }
+
+  private async deleteWhere(
+    id: string,
+    whose: 'own-private' | 'own-shared' | 'orphan',
+  ): Promise<boolean> {
     let q = this.ctx.supabase
       .from('saved_views')
       .delete()
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id);
     q =
-      whose === 'own'
-        ? q.eq('user_id', this.ctx.userId)
-        : q.is('user_id', null).eq('is_shared', true);
+      whose === 'orphan'
+        ? q.is('user_id', null).eq('is_shared', true)
+        : q.eq('user_id', this.ctx.userId).eq('is_shared', whose === 'own-shared');
     const { data, error } = await q.select('id');
     if (error) throw new ServiceError('internal_error', error.message);
     return Array.isArray(data) && data.length > 0;

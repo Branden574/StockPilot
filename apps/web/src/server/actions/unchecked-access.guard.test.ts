@@ -350,10 +350,6 @@ const REVIEWED: Record<string, { count: number; why: string }> = {
     count: 2,
     why: 'around creating the service client, and one account of a clean-up loop (counted and reported): the platform console, no organization context',
   },
-  'profile.ts#resolveSessionMfaPosture': {
-    count: 1,
-    why: "around the read of the account's own factor list alone: an unreadable list is held as MFA required",
-  },
   'profile.ts#removeOrphanAvatar': {
     count: 1,
     why: 'a best-effort storage clean-up that logs and returns nothing',

@@ -7,6 +7,7 @@ import { EmailSettingsCard } from '@/components/settings/email-settings-card';
 import { ProfileNameEditor } from '@/components/settings/profile-name-editor';
 import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
 import { liquidGlassRollout } from '@/components/theme/appearance-flag';
+import { deletionConfirmMethod } from '@/lib/auth/deletion-confirm-method';
 import { requireOrgContext } from '@/lib/auth/session';
 import { reportError } from '@/lib/error-reporter';
 import { createClient } from '@/lib/supabase/server';
@@ -52,6 +53,8 @@ export default async function ProfileSettingsPage({
   } catch (e) {
     void reportError(e, { tag: 'settings.profile.email_status_failed', level: 'warning' });
   }
+
+  const confirmWith = await deletionConfirmMethod(supabase, session.userId);
 
   const fullName = (profile?.full_name as string | null) ?? null;
   const avatarUrl = (profile?.avatar_url as string | null) ?? null;
@@ -120,7 +123,7 @@ export default async function ProfileSettingsPage({
       {/* The danger zone: set apart below the everyday cards, destructive in
           its edge, its title and its button, and in its words. */}
       <SettingsPanel tone="danger" title="Delete account" description={DELETE_ACCOUNT_CARD_COPY}>
-        <DeleteAccountButton />
+        <DeleteAccountButton confirmWith={confirmWith} />
       </SettingsPanel>
     </SettingsPage>
   );

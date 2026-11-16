@@ -123,7 +123,12 @@ export const RELEASES: Release[] = [
     // navigation release below is dated 2026-11-15T04:45:00Z, so the placeholder is that same minute.
     // Moved again by docs/whats-new-invitation-audit (2026-11-15; was: '2026-11-15T04:45:00Z'): the
     // invitation audit release below is dated 2026-11-15T17:39:00Z, so the placeholder is that same minute.
-    publishedAt: '2026-11-15T17:39:00Z',
+    // Moved again by docs/whats-new-api-key-audit (2026-11-15; was: '2026-11-15T17:39:00Z'): the API key
+    // audit release below is dated 2026-11-15T21:37:00Z, so the placeholder is that same minute.
+    // Moved again by docs/whats-new-authenticator-set-up-first (2026-11-15; was: '2026-11-15T21:37:00Z'):
+    // the authenticator set-up release below is dated 2026-11-15T23:48:00Z, so the placeholder is that
+    // same minute.
+    publishedAt: '2026-11-15T23:48:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -208,6 +213,127 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'authenticator-set-up-first-2026-11',
+    revision: 1,
+    // #582 (squash ab57012e1), web only: no phone update and no migration.
+    // Live in production since 2026-11-15 23:29:54Z; publishedAt is the
+    // minute this release was committed. It went live after #580, so it
+    // sits above the API key audit release and is the newest published
+    // release.
+    // Claims checked against the code at ab57012e1 (paths under apps/web/src
+    // unless named):
+    // - Who owes set-up: packages/core/src/auth/step-up.ts
+    //   policyRequiresAuthenticator (everyone under all_required; owner and
+    //   admin under admins_required; no one under optional) and
+    //   authenticatorSetUpOwed (that, and no verified authenticator).
+    // - The labels: components/settings/mfa-policy-editor.tsx ("Optional",
+    //   "Required for admins" described as "Owners and Super Admins must have
+    //   MFA enrolled.", "Required for everyone"); packages/core
+    //   constants/terminology.ts labels the admin role "Super Admin".
+    // - Every other page sends them to set-up: lib/auth/session.ts
+    //   requireOrgContext (sendToSetUpWhenOwed) redirects to
+    //   AUTHENTICATOR_SET_UP_URL, /dashboard/settings/security?enroll=1; the
+    //   open pages are lib/auth/authenticator-set-up.ts
+    //   OPEN_BEFORE_AUTHENTICATOR_SET_UP (Security and Profile). No dashboard
+    //   layout redirects, so the landing after sign-in, after switching
+    //   organization and after accepting an invitation is the Security page.
+    // - The callout: app/(dashboard)/dashboard/settings/security/page.tsx
+    //   with ?enroll=1 and no verified authenticator, "Enroll to continue";
+    //   the button "Set up authenticator app" is components/settings
+    //   mfa-enrollment.tsx, which opens /dashboard once one is verified.
+    // - The search: app/api/search/route.ts answers 403 mfa_required for
+    //   them; the command palette then lists no results.
+    // - The policy panel, "Organization MFA policy", is on the Security page
+    //   for owners and admins (page.tsx isAdmin).
+    // Who is told: every member (no audience). The rule turns on the
+    // organization's policy, which an audience cannot name, and the policy
+    // is chosen by owners and Super Admins. The one link is
+    // /dashboard/settings/security, which checks only requireOrgContext()
+    // (every member) and is one of the two pages open before set-up, so
+    // registry.test.ts lists it as open to every member.
+    status: 'published',
+    title: 'The website opens Security first until a required authenticator is set up',
+    summary:
+      'On the website, a member whose organization requires an authenticator and who has not set one up is taken to Settings, Security right after signing in, and only Security and Profile open until they set one up. In organizations set to Required for admins this applies to owners and Super Admins, and in organizations set to Required for everyone to every member. No app update is needed.',
+    // #582 is live in production since 2026-11-15 23:29:54Z.
+    publishedAt: '2026-11-15T23:48:00Z',
+    entries: [
+      {
+        id: 'authenticator-set-up-before-other-pages',
+        category: 'improved',
+        area: 'Account',
+        title: 'Setting up a required authenticator comes first on the website',
+        whatChanged:
+          'On the website, a member whose organization requires an authenticator and who has not set one up is taken to Settings, Security right after signing in, after switching organization and after accepting an invitation, where the page shows Enroll to continue. Until they set one up, only Settings, Security and Settings, Profile open: every other page takes them to Settings, Security, and the search in the top bar finds no items, purchase orders, suppliers or warehouses.',
+        whyItMatters:
+          'Settings, Security is where an authenticator is set up, so a member who has to set one up starts there, with the reason on the page.',
+        howItAffectsYou:
+          'In organizations set to Required for admins, this applies to owners and Super Admins. In organizations set to Required for everyone, it applies to every member. In organizations set to Optional, and for members who already have an authenticator, nothing changes. Until you have set one up, Profile opens but your name, avatar and sign-in email cannot be changed there. Once you have set one up, StockPilot opens the dashboard and your pages open as usual. Owners and Super Admins choose the setting under Organization MFA policy in Settings, Security.',
+        whatToDo:
+          'If you are an owner or Super Admin in an organization set to Required for admins, or any member in one set to Required for everyone, and you have not set up an authenticator, open Settings, Security, choose Set up authenticator app and follow the steps. Everyone else: no action needed.',
+        link: { href: '/dashboard/settings/security', label: 'Open Security settings' },
+      },
+    ],
+  },
+  {
+    id: 'api-key-audit-2026-11',
+    revision: 1,
+    // #580 (squash 4712b6918), web only: no phone update and no migration.
+    // Live in production since 2026-11-15 21:18:47Z; publishedAt is the
+    // minute this release was committed. It went live after #579, so it
+    // sits above the invitation audit release and is the newest published
+    // release.
+    // Claims checked against the code at 4712b6918 (paths under apps/web/src):
+    // - The rows: server/services/api-keys.ts. Creating a key writes
+    //   api_key.created once the key is stored, entity api_key (the key's
+    //   id), extra { name, scopes }; revoking writes api_key.revoked once
+    //   the key is marked revoked, entity api_key, extra { name }. Neither
+    //   row is given the key, its prefix or its hash.
+    // - Where keys are made: app/(dashboard)/dashboard/settings/integrations
+    //   page.tsx, the API keys panel (components/settings/api-keys-panel.tsx),
+    //   shown with the api_access module on and an owner or admin role.
+    // - The labels: lib/audit/format.ts formatAuditEvent gives
+    //   "Api Key · Created" and "Api Key · Revoked" (no subject override for
+    //   api_key), and formatEntityType gives "Api Key" for the Entity column,
+    //   above the first 8 characters of the key's id (shortId).
+    // - The chip: components/admin/audit-categories.ts has no chip whose
+    //   prefix matches api_key., so the rows are under All events only.
+    // - The details: app/(dashboard)/dashboard/audit/page.tsx renders a
+    //   details row only when before/after differ or changed_keys is set;
+    //   these rows have neither (audit() writes before and after as null),
+    //   so no details show and the name and scopes are not on the page.
+    // - The Event filter: an exact match on the event (audit-log.ts eq).
+    // - The phone: apps/mobile/app/(drawer)/admin/audit.tsx shows row.event
+    //   as written, with no details.
+    // Who is told: whoever can open the page. /dashboard/audit redirects
+    // anyone without activity_logs:read ("View audit log"; owner, admin and
+    // manager by default, grantable to others) and checks no module: its
+    // sidebar link belongs to admin_tools, a core module that is always on.
+    status: 'published',
+    title: 'Creating and revoking an API key now show in the Audit log',
+    summary:
+      'The Audit log now has a row when an API key is created and when one is revoked, with who did it and when. People who can view the audit log see them. No app update is needed.',
+    // #580 is live in production since 2026-11-15 21:18:47Z.
+    publishedAt: '2026-11-15T21:37:00Z',
+    entries: [
+      {
+        id: 'api-keys-in-audit-log',
+        category: 'improved',
+        area: 'Audit log',
+        title: 'Creating and revoking an API key now show in the Audit log',
+        whatChanged:
+          'The Audit log now has an Api Key · Created row each time an API key is created and an Api Key · Revoked row each time one is revoked, under API keys in Settings, Integrations.',
+        whyItMatters: 'The Audit log shows who created or revoked an API key, and when.',
+        howItAffectsYou:
+          'On the web, both rows are under All events, with Api Key and a short record id in the Entity column. That id is not part of the key, and the page does not show the key name. People who can view the audit log see them: owners, admins and managers by default, and anyone given View audit log. The Audit log in the mobile app lists them among its recent events as api_key.created and api_key.revoked.',
+        whatToDo:
+          'No action needed. To see only one kind on the web, open the Audit log, type api_key.created or api_key.revoked in the Event filter and choose Apply.',
+        link: { href: '/dashboard/audit', label: 'Open the Audit log' },
+        audience: { anyPermission: ['activity_logs:read'] },
       },
     ],
   },

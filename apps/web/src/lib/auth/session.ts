@@ -13,6 +13,7 @@ import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
 import { safeRedirectPath } from '@/lib/auth/safe-redirect';
 import {
   bundleMembership,
+  heldMembership,
   holdMembership,
   resolveRequestContext,
   type RequestContextBundle,
@@ -22,7 +23,16 @@ import {
   resolveAccountStatus,
   type AccountStatusRow,
 } from '@/lib/auth/account-status';
-import { startStepUpReads, stepUpIsOwed } from '@/lib/auth/step-up-gate';
+import {
+  authenticatorSetUpIsOwed,
+  startStepUpReads,
+  stepUpIsOwed,
+  type StepUpReads,
+} from '@/lib/auth/step-up-gate';
+import {
+  AUTHENTICATOR_SET_UP_URL,
+  openBeforeAuthenticatorSetUp,
+} from '@/lib/auth/authenticator-set-up';
 
 import { effectivePermissions, type Permission, type Role } from '@stockpilot/core';
 
@@ -428,104 +438,195 @@ export const requireSession = cache(async (): Promise<ServerSession> => {
  * rule the dashboard layout applies to a page load, here for every caller, so
  * a Server Action and a request for one page segment are held to it too.
  *
+ * And once the organization and the role are resolved, a member whose
+ * organization's policy requires an authenticator of their role, and who has
+ * none verified, goes to the security settings page to set one up
+ * (sendToSetUpWhenOwed below). Only the security page and the profile page
+ * are open to them (lib/auth/authenticator-set-up), with the Server Actions
+ * made from those pages: on the security page setting up an authenticator and
+ * switching organization run; on the profile page the page opens and the
+ * appearance setting works, while the profile's own actions (name, avatar,
+ * email) reach their own authenticator check, which answers that one is
+ * required. Deleting the account asks for the session only and is confirmed
+ * by its own rule (server/lib/account-deletion-credential).
+ *
+ * ONE EXIT. The context is resolved by resolveOrgContext() below, and this is
+ * the only place its answer is handed to a page or an action, always through
+ * sendToSetUpWhenOwed() (authenticator-set-up.guard.test.ts pins the shape).
+ *
  * requireSession() above does NOT ask for the code, on purpose: the code page
  * itself, the recovery code, enrolling a first authenticator and signing out
  * all run on a session that has not entered one.
  */
 export const requireOrgContext = cache(async (orgId?: string): Promise<OrgContext> => {
-  // Started before the context resolves, so the gate's reads run alongside it.
-  // Not for a request with no identity header: the loader finds no session
-  // there, and nothing is read about one that is not there.
-  const stepUp = (await headers()).get(SESSION_HEADER_USER_ID) ? startStepUpReads() : null;
-  const { session, orgRole, orgId: defaultOrgId, orgName, bundle } = await loadSessionAndContext();
-  if (!session) redirect(await signInPath());
+  const { ctx, reads } = await resolveOrgContext(orgId);
+  return sendToSetUpWhenOwed(reads, ctx);
+});
 
-  // ═══ THE AUTHENTICATOR CODE COMES FIRST ═══
-  //
-  // Before the organization, the role or a permission is resolved. Safe to
-  // redirect from here for the same reason as the account-status gate in the
-  // loader: an /api route has no proxy-set header and is sent to sign-in
-  // above, and a client that sends the header itself gets here only as its
-  // own verified session, so it redirects only its own request. The /api
-  // routes answer such a session themselves (lib/auth/api-context).
-  if (await stepUpIsOwed(stepUp ?? startStepUpReads(), session.userId)) {
-    redirect(await codePagePath());
-  }
+/**
+ * FOR THE DASHBOARD'S LAYOUTS ONLY: the same context as requireOrgContext(),
+ * with every rule but the set-up redirect (sign-in, a disabled account, the
+ * authenticator code, no organization: their pages are outside these layouts).
+ *
+ * NO LAYOUT MAY REDIRECT TO A PAGE UNDER ITSELF. When a layout is rendered for
+ * a client-side navigation or a refresh (the landing after sign-in, an
+ * organization switch, accepting an invitation), a redirect thrown by it is
+ * kept by the browser as that layout's answer; the target shares the layout,
+ * so the server does not send the layout again, and the browser renders the
+ * kept redirect again and again. The security page is under the dashboard's
+ * layouts, so they take this context, and the pages below them ask
+ * requireOrgContext(), whose redirect is caught below the layouts.
+ *
+ * Only layout.tsx files under app/(dashboard) may use it
+ * (authenticator-set-up.guard.test.ts). The same cached resolve serves both,
+ * so a layout and its page read the context once.
+ */
+export const requireOrgContextForLayout = cache(
+  async (orgId?: string): Promise<OrgContext> => (await resolveOrgContext(orgId)).ctx,
+);
 
-  // ═══ THE ORG MUST COME FROM A MEMBERSHIP, NEVER FROM A PREFERENCE ═══
-  //
-  // `defaultOrgId` is the org of the membership the loader RESOLVED above: it
-  // already prefers the profile's `default_organization_id` when that is a
-  // real, accepted membership, and falls back to another one when it is not.
-  //
-  // Reading `session.defaultOrganizationId` here instead re-introduced the raw
-  // preference AFTER that resolution. Nothing clears the column when a member
-  // is removed (TeamService.removeMember only deletes membership + assignment
-  // rows), so a user removed from org A while still belonging to org B got a
-  // context with organizationId = A and the role, name and permissions of B.
-  // RLS blocks most reads for a non-member, but every service-role path scopes
-  // by ctx.organizationId — so writes were aimed at an org the user had been
-  // removed from, with a role they held somewhere else.
-  const targetOrgId = orgId ?? defaultOrgId;
-  if (!targetOrgId) redirect('/onboarding');
+/** The context and the code gate's reads, before the set-up rule (requireOrgContext above). */
+const resolveOrgContext = cache(
+  async (orgId?: string): Promise<{ ctx: OrgContext; reads: StepUpReads }> => {
+    // Started before the context resolves, so the gate's reads run alongside it.
+    // Not for a request with no identity header: the loader finds no session
+    // there, and nothing is read about one that is not there.
+    const stepUp = (await headers()).get(SESSION_HEADER_USER_ID) ? startStepUpReads() : null;
+    const {
+      session,
+      orgRole,
+      orgId: defaultOrgId,
+      orgName,
+      bundle,
+    } = await loadSessionAndContext();
+    if (!session) redirect(await signInPath());
+    const reads = stepUp ?? startStepUpReads();
 
-  if (orgId && orgId !== defaultOrgId) {
-    // The bundle already holds EVERY accepted membership of this user, so an
-    // explicit org is answered from it: present means member (with that role),
-    // absent means not a member, which is the same redirect the read below ends
-    // in. Only without a bundle does the legacy membership read run.
-    if (bundle) {
-      const held = bundleMembership(bundle, orgId);
-      if (!held) redirect('/onboarding');
-      // Carried on the context so withContext() takes the org row and modules
-      // from this same membership instead of asking again (see holdMembership).
-      return holdMembership(
-        {
+    // ═══ THE AUTHENTICATOR CODE COMES FIRST ═══
+    //
+    // Before the organization, the role or a permission is resolved. Safe to
+    // redirect from here for the same reason as the account-status gate in the
+    // loader: an /api route has no proxy-set header and is sent to sign-in
+    // above, and a client that sends the header itself gets here only as its
+    // own verified session, so it redirects only its own request. The /api
+    // routes answer such a session themselves (lib/auth/api-context).
+    if (await stepUpIsOwed(reads, session.userId)) {
+      redirect(await codePagePath());
+    }
+
+    // ═══ THE ORG MUST COME FROM A MEMBERSHIP, NEVER FROM A PREFERENCE ═══
+    //
+    // `defaultOrgId` is the org of the membership the loader RESOLVED above: it
+    // already prefers the profile's `default_organization_id` when that is a
+    // real, accepted membership, and falls back to another one when it is not.
+    //
+    // Reading `session.defaultOrganizationId` here instead re-introduced the raw
+    // preference AFTER that resolution. Nothing clears the column when a member
+    // is removed (TeamService.removeMember only deletes membership + assignment
+    // rows), so a user removed from org A while still belonging to org B got a
+    // context with organizationId = A and the role, name and permissions of B.
+    // RLS blocks most reads for a non-member, but every service-role path scopes
+    // by ctx.organizationId — so writes were aimed at an org the user had been
+    // removed from, with a role they held somewhere else.
+    const targetOrgId = orgId ?? defaultOrgId;
+    if (!targetOrgId) redirect('/onboarding');
+
+    if (orgId && orgId !== defaultOrgId) {
+      // The bundle already holds EVERY accepted membership of this user, so an
+      // explicit org is answered from it: present means member (with that role),
+      // absent means not a member, which is the same redirect the read below ends
+      // in. Only without a bundle does the legacy membership read run.
+      if (bundle) {
+        const held = bundleMembership(bundle, orgId);
+        if (!held) redirect('/onboarding');
+        // Carried on the context so withContext() takes the org row and modules
+        // from this same membership instead of asking again (see holdMembership).
+        return {
+          reads,
+          ctx: holdMembership(
+            {
+              ...session,
+              organizationId: orgId,
+              organizationName: held.organization?.name ?? 'Workspace',
+              role: held.role,
+              permissions: await resolvePermissions(bundle, orgId, session.userId, held.role),
+            },
+            held,
+          ),
+        };
+      }
+      const supabase = await createClient();
+      const { data: member } = await supabase
+        .from('organization_members')
+        .select('role, organizations:organization_id (name)')
+        .eq('organization_id', orgId)
+        .eq('user_id', session.userId)
+        .not('accepted_at', 'is', null)
+        .maybeSingle();
+      if (!member) redirect('/onboarding');
+      const orgs = (member as { organizations: { name: string } | { name: string }[] | null })
+        .organizations;
+      const role = (member as { role: Role }).role;
+      return {
+        reads,
+        ctx: {
           ...session,
           organizationId: orgId,
-          organizationName: held.organization?.name ?? 'Workspace',
-          role: held.role,
-          permissions: await resolvePermissions(bundle, orgId, session.userId, held.role),
+          organizationName: pickOrgName(orgs) ?? 'Workspace',
+          role,
+          permissions: await loadEffectivePermissions(supabase, orgId, session.userId, role),
         },
-        held,
-      );
+      };
     }
-    const supabase = await createClient();
-    const { data: member } = await supabase
-      .from('organization_members')
-      .select('role, organizations:organization_id (name)')
-      .eq('organization_id', orgId)
-      .eq('user_id', session.userId)
-      .not('accepted_at', 'is', null)
-      .maybeSingle();
-    if (!member) redirect('/onboarding');
-    const orgs = (member as { organizations: { name: string } | { name: string }[] | null })
-      .organizations;
-    const role = (member as { role: Role }).role;
+
+    if (!orgRole) redirect('/onboarding');
+
+    // Legacy reads (no bundle) attach nothing, and withContext() then reads the
+    // org row and modules the way it always has.
     return {
-      ...session,
-      organizationId: orgId,
-      organizationName: pickOrgName(orgs) ?? 'Workspace',
-      role,
-      permissions: await loadEffectivePermissions(supabase, orgId, session.userId, role),
+      reads,
+      ctx: holdMembership(
+        {
+          ...session,
+          organizationId: targetOrgId,
+          organizationName: orgName ?? 'Workspace',
+          role: orgRole,
+          permissions: await resolvePermissions(bundle, targetOrgId, session.userId, orgRole),
+        },
+        bundleMembership(bundle, targetOrgId),
+      ),
     };
+  },
+);
+
+/**
+ * ═══ AUTHENTICATOR SET-UP COMES BEFORE EVERY OTHER PAGE ═══
+ *
+ * `ctx` when the member owes no set-up, or the request is for a page open to
+ * them before set-up; otherwise a redirect to the security settings page with
+ * its "Enroll to continue" callout.
+ *
+ * The page is `x-pathname`. The proxy (lib/supabase/middleware) sets it,
+ * replacing any value the client sent, on the routes its matcher covers, which
+ * include every dashboard page and every Server Action posted to one (there it
+ * is the page the action was made from). On a route outside the matcher the
+ * header is whatever the client sent. With no path the member is sent to
+ * set-up. The security page and the profile page do not redirect, no dashboard
+ * layout redirects to set-up (requireOrgContextForLayout above), and the
+ * sign-in pages never ask requireOrgContext() (page-step-up.guard.test.ts).
+ *
+ * Checked on the page first, so an open page reads nothing for it. The answer
+ * itself (authenticatorSetUpIsOwed, lib/auth/step-up-gate) reads nothing at
+ * aal2, and otherwise only the gate's own factor list and the membership (or,
+ * without one, the request-cached organization row the layout reads too).
+ */
+async function sendToSetUpWhenOwed<T extends OrgContext>(reads: StepUpReads, ctx: T): Promise<T> {
+  if (openBeforeAuthenticatorSetUp((await headers()).get('x-pathname'))) return ctx;
+  if (await authenticatorSetUpIsOwed(reads, ctx, heldMembership(ctx))) {
+    redirect(AUTHENTICATOR_SET_UP_URL);
   }
-
-  if (!orgRole) redirect('/onboarding');
-
-  // Legacy reads (no bundle) attach nothing, and withContext() then reads the
-  // org row and modules the way it always has.
-  return holdMembership(
-    {
-      ...session,
-      organizationId: targetOrgId,
-      organizationName: orgName ?? 'Workspace',
-      role: orgRole,
-      permissions: await resolvePermissions(bundle, targetOrgId, session.userId, orgRole),
-    },
-    bundleMembership(bundle, targetOrgId),
-  );
-});
+  return ctx;
+}
 
 /**
  * Effective permissions = static role defaults + the organization's overrides

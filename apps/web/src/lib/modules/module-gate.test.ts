@@ -62,6 +62,7 @@ const newRequest = () => pass.memo.clear();
 vi.mock('@/lib/auth/step-up-gate', () => ({
   startStepUpReads: () => ({}),
   stepUpIsOwed: async () => false,
+  authenticatorSetUpIsOwed: async () => false,
 }));
 
 vi.mock('next/headers', () => ({

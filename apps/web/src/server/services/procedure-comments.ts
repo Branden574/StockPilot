@@ -7,7 +7,14 @@ import type {
 import { isAdminRole } from '@stockpilot/core';
 
 import { audit } from './audit';
-import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import {
+  assertModuleEnabled,
+  assertPermission,
+  mfaGateError,
+  ServiceError,
+  withContext,
+  type ServiceContext,
+} from './context';
 
 export interface ProcedureCommentAuthor {
   id: string | null;
@@ -200,6 +207,9 @@ export class ProcedureCommentsService {
 
   async update(id: string, input: UpdateProcedureCommentInput): Promise<void> {
     assertModuleEnabled(this.ctx, 'procedures');
+    // The authenticator answer first (mfaGateError, as assertPermission gives
+    // it), for the author and for an admin alike.
+    if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) throw mfaGateError(this.ctx);
     const row = await this.fetchOwnedOrAdmin(id);
     if (row.deleted_at) {
       throw new ServiceError('validation_error', 'Cannot edit a deleted comment');
@@ -232,6 +242,8 @@ export class ProcedureCommentsService {
    */
   async delete(id: string): Promise<void> {
     assertModuleEnabled(this.ctx, 'procedures');
+    // The authenticator answer first, as in update().
+    if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) throw mfaGateError(this.ctx);
     const row = await this.fetchOwnedOrAdmin(id);
     if (row.deleted_at) return; // idempotent
     const { error } = await this.ctx.supabase

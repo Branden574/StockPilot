@@ -6,10 +6,12 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { audit } from '@/server/services/audit';
 import { putConnectionSecret } from '@/server/connectors/secret-store';
 import { exchangeCode } from '@/server/connectors/quickbooks/oauth';
-import { makeSupabaseStub, type QueryResult } from '@/test/supabase-mock';
+import { makeSupabaseStub, type QueryResult, type SupabaseStub } from '@/test/supabase-mock';
 import { verifiedSessionAuth } from '@/test/verified-session-stub';
 
 import { GET } from './route';
+
+import type { Role } from '@stockpilot/core';
 
 // Pin the base URL so we can assert exact redirect targets. The route reads
 // env.NEXT_PUBLIC_APP_URL to build every redirect.
@@ -92,6 +94,10 @@ function userClient(
     },
     // The comp flag, read beside the row. Not comped by default.
     'organizations.select': { data: [{ all_modules_comp: false }], error: null },
+    // The organization's authenticator policy, read on its own (maybeSingle).
+    // Optional by default, so the tests below that are not about the policy
+    // keep the member they always had: an admin with no authenticator.
+    'organizations.select.maybeSingle': { data: [{ mfa_policy: 'optional' }], error: null },
     'organization_members.select': {
       data: [{ role: 'admin' }],
       error: null,
@@ -311,6 +317,145 @@ describe('GET /api/integrations/quickbooks/callback', () => {
     expect(location(res).searchParams.get('connected')).toBe('quickbooks');
     expect(exchangeCode).toHaveBeenCalledWith('auth-code', REALM_ID);
     expect(putConnectionSecret).toHaveBeenCalledTimes(1);
+  });
+
+  // ── The organization's authenticator policy ───────────────────────────────
+  // The same answer pages and the API give (cookieSessionMfaState): when the
+  // organization's policy requires an authenticator of this member and the
+  // session has not met it, the callback answers with its `forbidden` redirect
+  // before the code is exchanged or anything is written.
+  describe("the organization's authenticator policy", () => {
+    type Policy = 'optional' | 'admins_required' | 'all_required';
+    type Shape = 'no authenticator' | 'authenticator, aal2' | 'factor removed, token at aal2';
+
+    function policyClient(
+      policy: Policy | QueryResult,
+      role: Role,
+      shape: Shape,
+      overrides: Record<string, QueryResult> = {},
+    ) {
+      const enrolled = shape === 'authenticator, aal2';
+      const stub = userClient(
+        {
+          'organizations.select.maybeSingle':
+            typeof policy === 'string' ? { data: [{ mfa_policy: policy }], error: null } : policy,
+          'organization_members.select': { data: [{ role }], error: null },
+          ...overrides,
+        },
+        { id: USER_ID, factors: enrolled ? [{ status: 'verified' }] : [] },
+      );
+      Object.assign(
+        stub.client.auth,
+        verifiedSessionAuth(() => ({
+          sub: USER_ID,
+          aal: shape === 'no authenticator' ? 'aal1' : 'aal2',
+        })),
+      );
+      vi.mocked(createClient).mockResolvedValueOnce(stub.client as never);
+      return stub;
+    }
+
+    // A manager holds integrations:manage only when it is granted to them.
+    const GRANTED = {
+      'user_permission_overrides.select': {
+        data: [{ permission: 'integrations:manage', granted: true }],
+        error: null,
+      },
+    };
+
+    function expectRefusedBeforeAnyExchangeOrWrite(res: Response, stub: SupabaseStub) {
+      expect(res.status).toBe(302);
+      expect(location(res).pathname).toBe(SETTINGS_PATH);
+      expect(location(res).searchParams.get('error')).toBe('forbidden');
+      expect(location(res).searchParams.has('connected')).toBe(false);
+      expect(exchangeCode).not.toHaveBeenCalled();
+      expect(putConnectionSecret).not.toHaveBeenCalled();
+      expect(createAdminClient).not.toHaveBeenCalled();
+      expect(audit).not.toHaveBeenCalled();
+      expect(stub.chainsAll.has('org_connections.update')).toBe(false);
+    }
+
+    it.each([
+      ['admins_required', 'admin', {}],
+      ['admins_required', 'owner', {}],
+      ['all_required', 'admin', {}],
+      ['all_required', 'owner', {}],
+      ['all_required', 'manager', GRANTED],
+    ] as Array<[Policy, Role, Record<string, QueryResult>]>)(
+      '%s, %s with no authenticator: forbidden, before any exchange or write',
+      async (policy, role, overrides) => {
+        const stub = policyClient(policy, role, 'no authenticator', overrides);
+
+        const res = await GET(callbackUrl({ code: 'auth-code', state: STATE, realmId: REALM_ID }));
+
+        expectRefusedBeforeAnyExchangeOrWrite(res, stub);
+      },
+    );
+
+    // The account has no verified factor any more, while the session's token
+    // still says aal2: the policy is met only by an account that has one.
+    it.each([
+      ['admins_required', 'admin'],
+      ['admins_required', 'owner'],
+      ['all_required', 'admin'],
+    ] as Array<[Policy, Role]>)(
+      '%s, %s whose factor was removed while the token is still at aal2: forbidden, before any exchange or write',
+      async (policy, role) => {
+        const stub = policyClient(policy, role, 'factor removed, token at aal2');
+
+        const res = await GET(callbackUrl({ code: 'auth-code', state: STATE, realmId: REALM_ID }));
+
+        expectRefusedBeforeAnyExchangeOrWrite(res, stub);
+      },
+    );
+
+    it.each([
+      ['hidden from the member', { data: [], error: null }],
+      ['unreadable', { data: null, error: { message: 'timeout', code: '57014' } }],
+    ] as Array<[string, QueryResult]>)(
+      'a policy %s is held to the strictest one: an admin with no authenticator is refused',
+      async (_how, answer) => {
+        vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        const stub = policyClient(answer, 'admin', 'no authenticator');
+
+        const res = await GET(callbackUrl({ code: 'auth-code', state: STATE, realmId: REALM_ID }));
+
+        expectRefusedBeforeAnyExchangeOrWrite(res, stub);
+      },
+    );
+
+    it.each([
+      ['optional', 'admin', 'no authenticator', {}, false, true, false],
+      ['optional', 'admin', 'authenticator, aal2', {}, true, true, true],
+      ['admins_required', 'manager', 'no authenticator', GRANTED, false, true, false],
+      ['admins_required', 'admin', 'authenticator, aal2', {}, true, true, true],
+      ['admins_required', 'owner', 'authenticator, aal2', {}, true, true, true],
+      ['all_required', 'admin', 'authenticator, aal2', {}, true, true, true],
+    ] as Array<[Policy, Role, Shape, Record<string, QueryResult>, boolean, boolean, boolean]>)(
+      '%s, %s, %s: connects, and the context handed to audit carries the real authenticator state',
+      async (policy, role, shape, overrides, mfaRequired, mfaSatisfied, mfaEnrolled) => {
+        const admin = adminClient();
+        vi.mocked(createAdminClient).mockReturnValue(admin.client as never);
+        policyClient(policy, role, shape, overrides);
+
+        const res = await GET(callbackUrl({ code: 'auth-code', state: STATE, realmId: REALM_ID }));
+
+        expect(location(res).searchParams.get('connected')).toBe('quickbooks');
+        expect(exchangeCode).toHaveBeenCalledWith('auth-code', REALM_ID);
+        expect(putConnectionSecret).toHaveBeenCalledTimes(1);
+        expect(admin.updates[0]).toMatchObject({ status: 'active' });
+        expect(audit).toHaveBeenCalledTimes(1);
+        const [, auditCtx] = vi.mocked(audit).mock.calls[0]!;
+        expect(auditCtx).toMatchObject({
+          organizationId: ORG_ID,
+          userId: USER_ID,
+          role,
+          mfaRequired,
+          mfaSatisfied,
+          mfaEnrolled,
+        });
+      },
+    );
   });
 
   it('redirects with error=access_denied when the user declined consent', async () => {

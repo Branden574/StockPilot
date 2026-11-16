@@ -15,7 +15,13 @@ import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { audit } from './audit';
-import { assertModuleEnabled, assertPermission, ServiceError, type ServiceContext } from './context';
+import {
+  assertModuleEnabled,
+  assertPermission,
+  mfaGateError,
+  ServiceError,
+  type ServiceContext,
+} from './context';
 
 // Same fallback the rest of the app uses when building an absolute app URL
 // server-side (maintenance-requests.ts's own APP_URL, order-requests.ts:
@@ -314,6 +320,9 @@ export class MaintenanceShareLinksService {
    */
   async issueLink(requestId: string): Promise<MaintenanceShareLink> {
     assertModuleEnabled(this.ctx, 'maintenance_requests');
+    // The authenticator answer first (mfaGateError, as assertPermission gives
+    // it), on the requester's own request as on a manager's.
+    if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) throw mfaGateError(this.ctx);
 
     const { data: parent, error } = await this.ctx.supabase
       .from('maintenance_requests')

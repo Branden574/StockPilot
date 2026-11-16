@@ -229,3 +229,53 @@ describe('confirmPhysicalSignature: the requester is reached at their own addres
     );
   });
 });
+
+describe('confirmPhysicalSignature gives the authenticator answer first, for a manager and for the assigned driver', () => {
+  function serviceWith(role: 'manager' | 'staff', userId: string, mfaSatisfied: boolean) {
+    const stub = makeSupabaseStub({
+      'order_request_lines.select': {
+        data: [{ quantity_requested: 5, quantity_fulfilled: 5 }],
+        error: null,
+      },
+      'rpc:confirm_physical_signature': {
+        data: { ...ROW, status: 'completed', order_number: 49 },
+        error: null,
+      },
+      'order_requests.select.maybeSingle': { data: { id: 'ord-1' }, error: null },
+    });
+    const svc = new (OrderRequestsService as unknown as new (ctx: unknown) => OrderRequestsService)(
+      makeServiceContext(stub.client, {
+        role,
+        userId,
+        enabledModules: new Set<ModuleId>(['orders']),
+        mfaRequired: true,
+        mfaSatisfied,
+      }),
+    );
+    return { stub, svc };
+  }
+
+  it.each([
+    ['a manager', 'manager', 'mgr-1'],
+    ['the assigned driver', 'staff', 'driver-1'],
+  ] as const)(
+    '%s, required and not satisfied: mfa_required, nothing read or recorded',
+    async (_who, role, userId) => {
+      const { stub, svc } = serviceWith(role, userId, false);
+      await expect(svc.confirmPhysicalSignature('ord-1', 'Pat')).rejects.toMatchObject({
+        code: 'forbidden',
+        details: { reason: 'mfa_required' },
+      });
+      expect(stub.fromCalls).toEqual([]);
+      expect(stub.rpcCalls).toEqual([]);
+    },
+  );
+
+  it('the assigned driver, required and satisfied: the signature is recorded', async () => {
+    const { stub, svc } = serviceWith('staff', 'driver-1', true);
+    await expect(svc.confirmPhysicalSignature('ord-1', 'Pat')).resolves.toMatchObject({
+      id: 'ord-1',
+    });
+    expect(stub.rpcCalls.map((c) => c.name)).toContain('confirm_physical_signature');
+  });
+});

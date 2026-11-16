@@ -800,6 +800,11 @@ export class BooksImportService {
     failed: number;
     scanned: number;
   }> {
+    // It adds photos to the organization's books: items:create, the
+    // permission the Books page shows its button for and the one execute()
+    // (which rehosts covers too) asks for. assertPermission gives the
+    // authenticator answer before it.
+    assertPermission(this.ctx, 'items:create');
     const limit = Math.min(options.limit ?? 200, 500);
     const stats = {
       rehosted: 0,

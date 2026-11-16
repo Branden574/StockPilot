@@ -17,7 +17,10 @@ const redirect = vi.fn((to: string) => {
 });
 vi.mock('next/navigation', () => ({ redirect: (to: string) => redirect(to) }));
 vi.mock('next/headers', () => ({
-  headers: vi.fn(async () => new Headers({ 'x-stockpilot-user-id': 'u1', 'x-stockpilot-user-email': 'u1@example.com' })),
+  headers: vi.fn(
+    async () =>
+      new Headers({ 'x-stockpilot-user-id': 'u1', 'x-stockpilot-user-email': 'u1@example.com' }),
+  ),
   cookies: vi.fn(async () => ({ get: () => undefined, set: () => {}, delete: () => {} })),
 }));
 vi.mock('@/lib/auth/effective-permissions', () => ({
@@ -39,12 +42,18 @@ const memberRows = [
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: async () => ({
-    auth: { getUser: async () => ({ data: { user: { id: 'u1', email: 'u1@example.com' } }, error: null }) },
+    auth: {
+      getUser: async () => ({ data: { user: { id: 'u1', email: 'u1@example.com' } }, error: null }),
+    },
     from: (table: string) => {
+      // The organization row's policy: an authenticator is optional, so the
+      // member's context is handed out (the set-up rule has its own suite).
       const result =
         table === 'user_profiles'
           ? { data: profileRow, error: null }
-          : { data: memberRows, error: null };
+          : table === 'organizations'
+            ? { data: { mfa_policy: 'optional' }, error: null }
+            : { data: memberRows, error: null };
       const builder: Record<string, unknown> = {};
       for (const m of ['select', 'eq', 'not', 'is', 'order', 'limit']) {
         builder[m] = () => builder;
