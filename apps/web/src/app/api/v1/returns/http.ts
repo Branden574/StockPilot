@@ -55,10 +55,11 @@ export async function returnsContext(
       ),
     };
   }
-  // A READ (by method, whatever `kind` names) by a member who must set up an
-  // authenticator first: the 403 every /api/v1 read gives them, before the
-  // rate limit (server/lib/api-read-context.ts). A write is never held here.
-  const setUpOwed = refuseSetUpOwedRead(req, ctx);
+  // A READ (a GET or HEAD, or this gate's `kind` 'read') by a member who must
+  // set up an authenticator first: the answer every API read gives them,
+  // before the rate limit (server/lib/api-read-context.ts). A write is never
+  // held here.
+  const setUpOwed = refuseSetUpOwedRead(req, ctx, kind);
   if (setUpOwed) return { response: setUpOwed };
   const limit = kind === 'read' ? READ_LIMIT : WRITE_LIMIT;
   const rl = await checkRateLimit(`returns-${kind}:${ctx.userId}`, limit, 60_000);

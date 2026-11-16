@@ -30,9 +30,21 @@ import {
 
 import {
   enforcedMfaPolicy,
+  markMfaPolicyUnread,
+  mfaPolicyWasUnread,
+  readOrganizationMfaPolicy,
   UNREADABLE_ORG_MFA_POLICY,
   type MfaPolicy,
 } from '@/lib/auth/mfa-policy';
+
+/**
+ * The context, marked when the organization's authenticator policy behind it
+ * was not read (lib/auth/mfa-policy.ts markMfaPolicyUnread). The same object,
+ * with the same fields and values, either way.
+ */
+function withPolicyMark<T extends object>(ctx: T, policyUnread: boolean): T {
+  return policyUnread ? markMfaPolicyUnread(ctx) : ctx;
+}
 
 /**
  * Mirror of resolveMfaState() in context.ts but parameterized over an
@@ -93,6 +105,9 @@ async function resolveApiMfaState(
   // before the organization's policy is read.
   userHasVerifiedFactor({ factors });
   let policy: MfaPolicy;
+  // Not read: the read failed, or the row came back hidden or with no policy
+  // it knows. The labels below are then marked (withPolicyMark).
+  let policyUnread = false;
   try {
     const { data: org, error } = await supabase
       .from('organizations')
@@ -118,6 +133,7 @@ async function resolveApiMfaState(
     // policy instead of 'optional' (lib/auth/mfa-policy.ts).
     if (error) throw new Error(`mfa_policy unreadable: ${error.code || 'unknown'}`);
     policy = enforcedMfaPolicy(org);
+    policyUnread = readOrganizationMfaPolicy(org) === null;
   } catch (err) {
     // Fail CLOSED: a read that errors is held to the STRICTEST policy, exactly
     // like a hidden row, never to a lesser one. A flaky org lookup must NOT
@@ -132,8 +148,9 @@ async function resolveApiMfaState(
     // resolveMfaState() in services/context.ts.
     console.error('[resolveApiMfaState] failed:', err);
     policy = UNREADABLE_ORG_MFA_POLICY;
+    policyUnread = true;
   }
-  return mfaFromPolicy(policy, role, factors, level);
+  return withPolicyMark(await mfaFromPolicy(policy, role, factors, level), policyUnread);
 }
 
 /**
@@ -861,17 +878,20 @@ export async function withApiContext(
     const fast = await resolveApiContextFromBundle(supabase, userRes.user.id, requestedOrgId);
     if (fast) {
       if (!fast.ok) return null;
-      return holdMembership<ServiceContext>(
-        {
-          organizationId: fast.organizationId,
-          userId: userRes.user.id,
-          role: fast.role,
-          permissions: fast.permissions,
-          supabase,
-          ...(await mfaFromPolicy(fast.mfaPolicy, fast.role, userRes.user.factors, level)),
-          enabledModules: fast.enabledModules,
-        },
-        fast.held,
+      return withPolicyMark(
+        holdMembership<ServiceContext>(
+          {
+            organizationId: fast.organizationId,
+            userId: userRes.user.id,
+            role: fast.role,
+            permissions: fast.permissions,
+            supabase,
+            ...(await mfaFromPolicy(fast.mfaPolicy, fast.role, userRes.user.factors, level)),
+            enabledModules: fast.enabledModules,
+          },
+          fast.held,
+        ),
+        readOrganizationMfaPolicy(fast.held.organization) === null,
       );
     }
 
@@ -898,17 +918,20 @@ export async function withApiContext(
       userRes.user.id,
       member.role as Role,
     );
-    return {
-      organizationId: member.organization_id as string,
-      userId: userRes.user.id,
-      role: member.role as Role,
-      permissions,
-      supabase,
-      mfaRequired: mfa.mfaRequired,
-      mfaSatisfied: mfa.mfaSatisfied,
-      mfaEnrolled: mfa.mfaEnrolled,
-      enabledModules,
-    };
+    return withPolicyMark(
+      {
+        organizationId: member.organization_id as string,
+        userId: userRes.user.id,
+        role: member.role as Role,
+        permissions,
+        supabase,
+        mfaRequired: mfa.mfaRequired,
+        mfaSatisfied: mfa.mfaSatisfied,
+        mfaEnrolled: mfa.mfaEnrolled,
+        enabledModules,
+      },
+      mfaPolicyWasUnread(mfa),
+    );
   }
 
   // Cookie path (existing web flow). Mirrors the bearer path's
@@ -972,17 +995,20 @@ export async function withApiContext(
   const fast = await resolveApiContextFromBundle(supabase, user.id, requestedOrgId);
   if (fast) {
     if (!fast.ok) return null;
-    return holdMembership<ServiceContext>(
-      {
-        organizationId: fast.organizationId,
-        userId: user.id,
-        role: fast.role,
-        permissions: fast.permissions,
-        supabase,
-        ...(await mfaFromPolicy(fast.mfaPolicy, fast.role, user.factors, level)),
-        enabledModules: fast.enabledModules,
-      },
-      fast.held,
+    return withPolicyMark(
+      holdMembership<ServiceContext>(
+        {
+          organizationId: fast.organizationId,
+          userId: user.id,
+          role: fast.role,
+          permissions: fast.permissions,
+          supabase,
+          ...(await mfaFromPolicy(fast.mfaPolicy, fast.role, user.factors, level)),
+          enabledModules: fast.enabledModules,
+        },
+        fast.held,
+      ),
+      readOrganizationMfaPolicy(fast.held.organization) === null,
     );
   }
 
@@ -1005,15 +1031,18 @@ export async function withApiContext(
     user.id,
     member.role as Role,
   );
-  return {
-    organizationId: member.organization_id as string,
-    userId: user.id,
-    role: member.role as Role,
-    permissions,
-    supabase,
-    mfaRequired: mfa.mfaRequired,
-    mfaSatisfied: mfa.mfaSatisfied,
-    mfaEnrolled: mfa.mfaEnrolled,
-    enabledModules,
-  };
+  return withPolicyMark(
+    {
+      organizationId: member.organization_id as string,
+      userId: user.id,
+      role: member.role as Role,
+      permissions,
+      supabase,
+      mfaRequired: mfa.mfaRequired,
+      mfaSatisfied: mfa.mfaSatisfied,
+      mfaEnrolled: mfa.mfaEnrolled,
+      enabledModules,
+    },
+    mfaPolicyWasUnread(mfa),
+  );
 }

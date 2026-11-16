@@ -1,25 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { AUTHENTICATOR_SET_UP_OWED_COPY } from '@stockpilot/core';
+import { AUTHENTICATOR_SET_UP_OWED_COPY, CONTEXT_UNAVAILABLE_COPY } from '@stockpilot/core';
 
 /**
- * The /api/v1 read wrapper over the REAL API context: a read by a member who
- * must set up an authenticator first.
+ * The API read wrapper over the REAL API context: a read by a member who must
+ * set up an authenticator first.
  *
  * withApiContext builds the context as before on every path and labels a
  * member who owes set-up (core authenticatorSetUpOwed: the organization's
  * policy requires an authenticator of the member's role and the account has
- * no verified one; a policy that could not be read is held to the strictest).
- * apiReadContext (server/lib/api-read-context.ts) answers such a GET or HEAD
- * 403 with core's sentence and reason `mfa_required`.
+ * no verified one; a policy that could not be read is held to the strictest,
+ * and the context marked). apiReadContext (server/lib/api-read-context.ts)
+ * answers such a GET or HEAD, or a POST its caller hands 'read', 403 with
+ * core's sentence and reason `mfa_required`; when the policy was not read,
+ * the retryable 503 `check_failed` instead.
  *
  * Every session shape (policy x role x authenticator x level) on both sign-in
  * paths (bearer and cookie) and both ways the context is read (one round trip
  * and the separate reads), for a GET, a HEAD and a POST:
  *   - a session that owes its code: withApiContext's null, before anything is
  *     read, as before, whatever the method;
- *   - a member who owes set-up: the 403 for a GET and a HEAD; for a POST, the
- *     context withApiContext gives, labelled as before;
+ *   - a member who owes set-up: the 403 for a GET, a HEAD and a POST handed
+ *     'read'; for any other POST, the context withApiContext gives, labelled
+ *     as before;
  *   - everyone else: exactly the context withApiContext gives.
  */
 
@@ -41,6 +44,7 @@ vi.mock('@/lib/supabase/server', () => ({ createClient: async () => refs.client 
 import { verifiedSessionAuth } from '@/test/verified-session-stub';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { mfaPolicyWasUnread } from '@/lib/auth/mfa-policy';
 
 import { apiReadContext } from './api-read-context';
 
@@ -54,6 +58,7 @@ type Aal = 'aal1' | 'aal2';
 type Path = 'bearer' | 'cookie';
 type Read = 'one round trip' | 'separate reads';
 type Method = 'GET' | 'HEAD' | 'POST';
+type Org = 'read' | 'hidden' | 'error' | 'odd';
 
 interface Session {
   policy: Policy;
@@ -64,8 +69,8 @@ interface Session {
 
 const state: Session & {
   rpc: boolean;
-  /** The organization row: as read, hidden (no row), or a failed read. */
-  org: 'read' | 'hidden' | 'error';
+  /** The organization row: as read, hidden (no row), a failed read, or a policy value it does not know. */
+  org: Org;
   calls: string[];
 } = {
   policy: 'optional',
@@ -135,13 +140,13 @@ function bundle() {
         organization_id: ORG_ID,
         role: state.role,
         organization:
-          state.org === 'read'
+          state.org === 'read' || state.org === 'odd'
             ? {
                 id: ORG_ID,
                 name: 'Example Goods',
                 logo_url: null,
                 terminology: null,
-                mfa_policy: state.policy,
+                mfa_policy: state.org === 'odd' ? 'something_else' : state.policy,
                 timezone: null,
                 nav_overrides: null,
                 dashboard_layout: null,
@@ -170,7 +175,10 @@ function makeClient() {
       if (name === 'organizations') {
         if (state.org === 'error') return table(name, null, [], { code: '57014' });
         if (state.org === 'hidden') return row(name, null);
-        return row(name, { mfa_policy: state.policy, all_modules_comp: false });
+        return row(name, {
+          mfa_policy: state.org === 'odd' ? 'something_else' : state.policy,
+          all_modules_comp: false,
+        });
       }
       if (name === 'organization_members')
         return row(name, { organization_id: ORG_ID, role: state.role });
@@ -220,7 +228,7 @@ function request(
   return new Request(`https://app.test${at}`, { method, headers });
 }
 
-function arrange(s: Session, read: Read, org: 'read' | 'hidden' | 'error' = 'read') {
+function arrange(s: Session, read: Read, org: Org = 'read') {
   Object.assign(state, s, { rpc: read === 'one round trip', org, calls: [] });
   refs.client = makeClient();
 }
@@ -283,8 +291,12 @@ describe.each(PATHS)('apiReadContext over withApiContext (%s)', (path) => {
             satisfied: plain?.mfaSatisfied,
             enrolled: plain?.mfaEnrolled,
           }).toEqual({ required: true, satisfied: false, enrolled: false });
+          expect(mfaPolicyWasUnread(plain!)).toBe(false);
           if (method === 'POST') {
             expect('ctx' in wrapped && shape(wrapped.ctx)).toEqual(shape(plain));
+            // The same POST from a caller that says it reads: held.
+            arrange(s, read);
+            await expectHeld(await apiReadContext(request(path, method), 'read'), method);
           } else {
             await expectHeld(wrapped, method);
           }
@@ -298,19 +310,46 @@ describe.each(PATHS)('apiReadContext over withApiContext (%s)', (path) => {
   });
 });
 
-describe('an organization policy that could not be read is held to the strictest', () => {
-  const staff: Session = { policy: 'optional', role: 'staff', authenticator: false, aal: 'aal2' };
+/** The retryable answer for a policy that was not read. */
+async function expectCouldNotCheck(read: Awaited<ReturnType<typeof apiReadContext>>) {
+  expect('response' in read).toBe(true);
+  const res = (read as { response: Response }).response;
+  expect(res.status).toBe(503);
+  expect(res.headers.get('retry-after')).toBe('5');
+  expect(res.headers.get('cache-control')).toBe('private, no-store');
+  expect(await res.json()).toEqual({
+    error: 'check_failed',
+    message: CONTEXT_UNAVAILABLE_COPY,
+    details: { reason: 'context_unavailable', retryable: true },
+  });
+}
 
-  it.each([
+describe('an organization policy that could not be read: held to the strictest, told to try again', () => {
+  const staff: Session = { policy: 'optional', role: 'staff', authenticator: false, aal: 'aal2' };
+  const CASES = [
     ['the row is hidden, through the one round trip', 'one round trip', 'hidden'],
     ['the row is hidden, through the separate reads', 'separate reads', 'hidden'],
     ['the read failed, through the separate reads', 'separate reads', 'error'],
-  ] as const)(
-    '%s: a read by a staff member with no authenticator is held',
+    [
+      'the row has a policy value it does not know, through the one round trip',
+      'one round trip',
+      'odd',
+    ],
+    [
+      'the row has a policy value it does not know, through the separate reads',
+      'separate reads',
+      'odd',
+    ],
+  ] as const;
+
+  it.each(CASES)(
+    '%s: a read by a staff member with no authenticator is the 503 check_failed, never the set-up sentence',
     async (_n, read, org) => {
       for (const path of PATHS) {
         arrange(staff, read, org);
-        await expectHeld(await apiReadContext(request(path, 'GET')), 'GET');
+        await expectCouldNotCheck(await apiReadContext(request(path, 'GET')));
+        arrange(staff, read, org);
+        await expectCouldNotCheck(await apiReadContext(request(path, 'POST'), 'read'));
         arrange(staff, read, org);
         const write = await apiReadContext(request(path, 'POST'));
         expect('ctx' in write && write.ctx?.mfaEnrolled, path).toBe(false);
@@ -318,10 +357,31 @@ describe('an organization policy that could not be read is held to the strictest
     },
   );
 
+  it.each(CASES)(
+    '%s: withApiContext gives the same labelled context as before, marked as not read',
+    async (_n, read, org) => {
+      for (const path of PATHS) {
+        arrange(staff, read, org);
+        const ctx = await withApiContext(request(path, 'GET'));
+        expect(ctx?.userId, path).toBe(USER_ID);
+        expect([ctx?.mfaRequired, ctx?.mfaSatisfied, ctx?.mfaEnrolled]).toEqual([
+          true,
+          false,
+          false,
+        ]);
+        expect(mfaPolicyWasUnread(ctx!)).toBe(true);
+        // A copy carries no mark: only the object withApiContext returned does.
+        expect(mfaPolicyWasUnread({ ...ctx! })).toBe(false);
+      }
+    },
+  );
+
   it('the same member with an authenticator at aal2 still reads', async () => {
-    arrange({ ...staff, authenticator: true }, 'separate reads', 'error');
-    const read = await apiReadContext(request('bearer', 'GET'));
-    expect('ctx' in read && read.ctx?.userId).toBe(USER_ID);
+    for (const [, read, org] of CASES) {
+      arrange({ ...staff, authenticator: true }, read, org);
+      const got = await apiReadContext(request('bearer', 'GET'));
+      expect('ctx' in got && got.ctx?.userId).toBe(USER_ID);
+    }
   });
 });
 

@@ -1201,13 +1201,18 @@ WEB_TESTS=(
   # a kind, a reason and the writes it makes (a sweep on the syntax tree, with
   # a mutation table that takes each gate out and expects it reported).
   src/test/authenticator-write.guard.test.ts
-  # A member who owes authenticator set-up reads no organization data through
-  # /api/v1: every GET handler there answers them 403 `forbidden` with core's
-  # sentence and reason `mfa_required`, before any read of its own, through
-  # the read wrapper or the returns routes' two shared gates, or is on a
-  # reviewed open list (their own sign-in email, the public token links). A
-  # member who owes nothing gets exactly the context withApiContext gives; a
-  # write is never held by this rule. The sweep reads the syntax tree; the
+  # Every GET handler under /api/v1, and every handler there by another method
+  # that writes nothing, answers a member who owes authenticator set-up 403
+  # `forbidden` with core's sentence and reason `mfa_required` as its first
+  # step, before any read of its own (or, when their organization's policy
+  # could not be read, the retryable 503 `check_failed`), through the read
+  # wrapper or the returns routes' two shared gates; or it is on a reviewed
+  # list with its reason (their own account, the public token links, the AI
+  # photo match, and the reads by POST a service gate answers). Reads straight
+  # from the database and the website's own routes under /api are not covered
+  # here. A member who owes nothing gets exactly the context withApiContext
+  # gives; a write is never held by this rule. The guard reads the syntax
+  # tree; the route sweep calls every handler the guard counts as held; the
   # matrix runs the real context on both sign-in paths and both reads.
   src/test/authenticator-read.guard.test.ts
   src/server/lib/api-read-context.test.ts

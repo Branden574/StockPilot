@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { AUTHENTICATOR_SET_UP_OWED_COPY } from '@stockpilot/core';
+import { AUTHENTICATOR_SET_UP_OWED_COPY, CONTEXT_UNAVAILABLE_COPY } from '@stockpilot/core';
 
 /**
  * The phone's sync when the organization's module state cannot be read.
@@ -75,8 +75,9 @@ describe('GET /api/v1/mobile/snapshot with the module state unreadable', () => {
   it.each<[string, Partial<LegacyContextWorld>]>([
     ['the rows read failed', { moduleRowsFail: true }],
     // The organization row itself could not be read, so its authenticator
-    // policy is held to the strictest: a member with an authenticator at aal2
-    // passes it and meets the module state; one without is held first (below).
+    // policy was not read either and is held to the strictest: a member with
+    // an authenticator at aal2 passes it and meets the module state; one
+    // without is told to try again first (below).
     [
       'the comp flag read failed',
       { organizationFail: true, moduleRows: ['orders'], authenticator: true },
@@ -119,17 +120,20 @@ describe('GET /api/v1/mobile/snapshot with the module state unreadable', () => {
     ['the comp flag read failed', { organizationFail: true, moduleRows: ['orders'] }],
     ['the organization row read back hidden', { organizationHidden: true, moduleRows: ['orders'] }],
   ])(
-    '%s, for a member with no authenticator: held by the strictest policy first, 403 with no read and nothing reported',
+    '%s, for a member with no authenticator: the policy was not read either, so a retryable 503 check_failed, never the set-up sentence, with no read and nothing reported',
     async (_what, failure) => {
       Object.assign(world, failure);
       const res = await pull();
-      expect(res.status).toBe(403);
+      expect(res.status).toBe(503);
+      expect(res.headers.get('retry-after')).toBe('5');
       expect(res.headers.get('cache-control')).toBe('private, no-store');
-      expect(await res.json()).toEqual({
-        error: 'forbidden',
-        message: AUTHENTICATOR_SET_UP_OWED_COPY,
-        details: { reason: 'mfa_required' },
+      const body = await res.json();
+      expect(body).toEqual({
+        error: 'check_failed',
+        message: CONTEXT_UNAVAILABLE_COPY,
+        details: { reason: 'context_unavailable', retryable: true },
       });
+      expect(JSON.stringify(body)).not.toContain(AUTHENTICATOR_SET_UP_OWED_COPY);
       expect(checkRateLimit).not.toHaveBeenCalled();
       expect(routeWork(world)).toEqual([]);
       expect(reportError).not.toHaveBeenCalled();
@@ -220,8 +224,9 @@ describe('GET /api/v1/mobile/snapshot: module-gated lists with the module state 
   it.each<[string, Partial<LegacyContextWorld>]>([
     ['the rows read failed', { moduleRowsFail: true }],
     // The organization row itself could not be read, so its authenticator
-    // policy is held to the strictest: a member with an authenticator at aal2
-    // passes it and meets the module state; one without is held first (below).
+    // policy was not read either and is held to the strictest: a member with
+    // an authenticator at aal2 passes it and meets the module state; one
+    // without is told to try again first (below).
     [
       'the comp flag read failed',
       { organizationFail: true, moduleRows: ['orders'], authenticator: true },

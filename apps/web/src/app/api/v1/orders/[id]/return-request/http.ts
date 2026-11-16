@@ -64,11 +64,11 @@ export async function memberRequesterGate(
       ),
     };
   }
-  // A READ (by method: the options POST passes kind 'read' and is a write
-  // here) by a member who must set up an authenticator first: the 403 every
-  // /api/v1 read gives them, before the rate limit
+  // A READ (a GET or HEAD, or this gate's `kind` 'read', which the options
+  // POST asks for) by a member who must set up an authenticator first: the
+  // answer every API read gives them, before the rate limit
   // (server/lib/api-read-context.ts). A write is never held here.
-  const setUpOwed = refuseSetUpOwedRead(req, ctx);
+  const setUpOwed = refuseSetUpOwedRead(req, ctx, kind);
   if (setUpOwed) return { response: setUpOwed };
   const limit = kind === 'read' ? MEMBER_READS_PER_HOUR : MEMBER_WRITES_PER_HOUR;
   const rl = await checkRateLimit(`return-request-${kind}:${ctx.userId}`, limit, ONE_HOUR_MS, 'closed');

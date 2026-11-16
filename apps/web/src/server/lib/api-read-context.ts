@@ -2,30 +2,47 @@ import 'server-only';
 
 import { NextResponse } from 'next/server';
 
-import { AUTHENTICATOR_SET_UP_OWED_COPY } from '@stockpilot/core';
+import {
+  AUTHENTICATOR_SET_UP_OWED_COPY,
+  CONTEXT_UNAVAILABLE_COPY,
+  CONTEXT_UNAVAILABLE_REASON,
+} from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { bearerTokenFrom } from '@/lib/auth/cross-site-request';
+import { mfaPolicyWasUnread } from '@/lib/auth/mfa-policy';
 import type { ServiceContext } from '@/server/services/context';
 
 /**
- * withApiContext for an /api/v1 GET handler: a member who must set up an
- * authenticator first reads no organization data, and is told so.
+ * withApiContext for an API read: a member who must set up an authenticator
+ * first reads no organization data, and is told so.
  *
  * WHO. The organization's policy requires an authenticator of the member's
- * role and the account has no verified one (core authenticatorSetUpOwed; a
- * policy that could not be read is held to the strictest). withApiContext
- * applies that rule once, in mfaFromPolicy (lib/auth/api-context.ts), and the
- * context carries the answer as its labels: required, not satisfied, not
- * enrolled. Nothing else gives that set of labels (owesAuthenticatorSetUp).
+ * role and the account has no verified one (core authenticatorSetUpOwed).
+ * withApiContext applies that rule once, in mfaFromPolicy
+ * (lib/auth/api-context.ts), and the context carries the answer as its
+ * labels: required, not satisfied, not enrolled. Nothing else gives that set
+ * of labels (owesAuthenticatorSetUp).
  *
- * THE ANSWER. For a GET or HEAD: 403 with `{ error: 'forbidden', message,
- * details: { reason: 'mfa_required' } }`, not stored, before the route reads
- * anything or spends a rate-limit slot. The message is core's
- * AUTHENTICATOR_SET_UP_OWED_COPY, the sentence the phone's set-up screen
- * shares. The phone and the web decide by status and `details.reason`, never
- * by the message: it is the shape the service gate (mfaGateError) already
- * gives a member who must set one up.
+ * WHAT IS A READ. A GET or a HEAD, whatever the route; and any method when
+ * the caller says so (`kind` 'read'): a POST that only looks something up
+ * (the returns routes' shared gates hand their own `kind` on, and
+ * orders/signature-lookup asks for 'read').
+ *
+ * THE ANSWER, before the route reads anything or spends a rate-limit slot:
+ *   - 403 `{ error: 'forbidden', message, details: { reason: 'mfa_required' } }`,
+ *     not stored. The message is core's AUTHENTICATOR_SET_UP_OWED_COPY, the
+ *     sentence the phone's set-up screen shares. The phone and the web decide
+ *     by status and `details.reason`, never by the message: it is the shape
+ *     the service gate (mfaGateError) already gives such a member.
+ *   - When the organization's policy could not be read (withApiContext held it
+ *     to the strictest one and marked the context: lib/auth/mfa-policy.ts),
+ *     the labels look the same, but the sentence may be untrue. That member is
+ *     told their access could not be checked: 503 `check_failed`, core's
+ *     CONTEXT_UNAVAILABLE_COPY, `details: { reason: 'context_unavailable',
+ *     retryable: true }`, Retry-After 5, not stored. It carries no "nothing
+ *     was written" flag: the API context gate (server/lib/api-context-gate.ts)
+ *     is the one place that answers with that marker, and a read needs none.
  *
  * EVERYONE ELSE. `{ ctx }` with exactly what withApiContext gave (the same
  * object, or null for the route's own 401), so the route answers as it does
@@ -35,19 +52,19 @@ import type { ServiceContext } from '@/server/services/context';
  * session that still owes its code keeps the 401 withApiContext gives it. A
  * write is never held by this rule: the service gates answer it.
  *
- * Shape as apiContextGate (server/lib/api-context-gate.ts): `{ response }` to
- * answer at once, or `{ ctx }`. Registered in GATE_MODULES
- * (test/route-write-handlers.ts), so the step-up and cross-site guards read
- * its routes as reaching withApiContext with their own request, and
- * src/test/authenticator-read.guard.test.ts holds every /api/v1 GET handler to
- * it (or to the returns routes' two shared gates, which give the same answer
- * through refuseSetUpOwedRead).
+ * Shape as apiContextGate: `{ response }` to answer at once, or `{ ctx }`.
+ * Registered in GATE_MODULES (test/route-write-handlers.ts), so the step-up
+ * and cross-site guards read its routes as reaching withApiContext with their
+ * own request, and src/test/authenticator-read.guard.test.ts holds every API
+ * read to it (or to the returns routes' two shared gates, which give the same
+ * answers through refuseSetUpOwedRead), as the handler's first awaited call.
  */
 export async function apiReadContext(
   req: Request,
+  kind?: 'read',
 ): Promise<{ ctx: ServiceContext | null } | { response: NextResponse }> {
   const ctx = await withApiContext(req);
-  const refused = ctx ? refuseSetUpOwedRead(req, ctx) : null;
+  const refused = ctx ? refuseSetUpOwedRead(req, ctx, kind) : null;
   if (refused) return { response: refused };
   return { ctx };
 }
@@ -56,23 +73,44 @@ export async function apiReadContext(
  * The answer to a read by a member who must set up an authenticator first,
  * or null for anything else (a write, or a member who owes nothing). For a
  * caller that has just built the context with withApiContext: apiReadContext
- * above and the returns routes' shared gates. One info line when it answers.
+ * above and the returns routes' shared gates, which hand on their own `kind`.
+ * One log line when it answers.
  */
-export function refuseSetUpOwedRead(req: Request, ctx: ServiceContext): NextResponse | null {
-  if (!isReadMethod(req.method) || !owesAuthenticatorSetUp(ctx)) return null;
-  logSetUpOwedRead(req);
+export function refuseSetUpOwedRead(
+  req: Request,
+  ctx: ServiceContext,
+  kind?: 'read' | 'write',
+): NextResponse | null {
+  if (!(isReadMethod(req.method) || kind === 'read') || !owesAuthenticatorSetUp(ctx)) return null;
+  if (mfaPolicyWasUnread(ctx)) {
+    logHeldRead(req, 'the authenticator policy could not be read');
+    return NextResponse.json(policyUnreadBody(), {
+      status: 503,
+      headers: { 'Retry-After': '5', 'Cache-Control': 'private, no-store' },
+    });
+  }
+  logHeldRead(req, 'a member who must set up an authenticator first');
   return NextResponse.json(setUpOwedReadBody(), {
     status: 403,
     headers: { 'Cache-Control': 'private, no-store' },
   });
 }
 
-/** The body of that answer. A new object every call. */
+/** The body of the set-up answer. A new object every call. */
 export function setUpOwedReadBody() {
   return {
     error: 'forbidden',
     message: AUTHENTICATOR_SET_UP_OWED_COPY,
     details: { reason: 'mfa_required' },
+  } as const;
+}
+
+/** The body of the could-not-check answer. A new object every call. */
+export function policyUnreadBody() {
+  return {
+    error: 'check_failed',
+    message: CONTEXT_UNAVAILABLE_COPY,
+    details: { reason: CONTEXT_UNAVAILABLE_REASON, retryable: true },
   } as const;
 }
 
@@ -88,32 +126,22 @@ export function owesAuthenticatorSetUp(
   return ctx.mfaRequired === true && ctx.mfaSatisfied !== true && ctx.mfaEnrolled !== true;
 }
 
-/** GET and HEAD read; every other method can write, and the service gates answer it. */
+/** GET and HEAD read; every other method can write, unless its caller says it reads. */
 export function isReadMethod(method: string): boolean {
   const m = method.toUpperCase();
   return m === 'GET' || m === 'HEAD';
 }
 
 /**
- * One info line per read held for set-up, so a real person's held phone or
- * tab shows in the runtime logs. Info, not a report: a phone that is not
- * updated yet makes a few of these a minute, and that is the rule working.
- * The method, the path and which way the session came: never the query
- * string, a token, a cookie or an address.
+ * One info line per held read, so a real person's held phone or tab shows in
+ * the runtime logs. Info, not a report: a phone that is not updated yet makes
+ * a few of these a minute, and that is the rule working. The method and which
+ * way the session came: never the path (it can carry an order id, an item id
+ * or a submission key), the query string, a token, a cookie or an address.
  */
-function logSetUpOwedRead(req: Request): void {
-  let path = '(unreadable)';
-  try {
-    path = new URL(req.url).pathname;
-  } catch {
-    // Keep the placeholder.
-  }
-  console.info(
-    '[api-read-context] held a read for a member who must set up an authenticator first',
-    {
-      method: req.method,
-      path,
-      via: bearerTokenFrom(req) ? 'bearer' : 'cookie',
-    },
-  );
+function logHeldRead(req: Request, why: string): void {
+  console.info(`[api-read-context] held a read: ${why}`, {
+    method: req.method,
+    via: bearerTokenFrom(req) ? 'bearer' : 'cookie',
+  });
 }

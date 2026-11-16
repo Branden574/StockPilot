@@ -1,23 +1,28 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { AUTHENTICATOR_SET_UP_OWED_COPY } from '@stockpilot/core';
+import { AUTHENTICATOR_SET_UP_OWED_COPY, CONTEXT_UNAVAILABLE_COPY } from '@stockpilot/core';
+
+import { heldHandlers, shippedSources } from '@/test/authenticator-read-tree';
 
 /**
- * Every /api/v1 GET handler that serves organization data, for a member who
- * must set up an authenticator first: the context is withApiContext's
- * (mocked here; the real one is server/lib/api-read-context.set-up-reads.test.ts)
- * labelled as set-up owed, and every handler answers 403 `forbidden` with
- * core's sentence and `details.reason: 'mfa_required'`, not stored, before
- * any read of its own: no table, no service client, no rate-limit slot.
+ * Every API read, for a member who must set up an authenticator first: the
+ * context is withApiContext's (mocked here; the real one is
+ * server/lib/api-read-context.set-up-reads.test.ts) labelled as set-up owed,
+ * and every held handler answers 403 `forbidden` with core's sentence and
+ * `details.reason: 'mfa_required'`, not stored, before any work of its own:
+ * no table, no service client, no rate-limit slot. The handlers are every GET
+ * and every read by POST under /api/v1, read from the source tree by the
+ * guard's own reading.
+ *
+ * When the organization's policy could not be read (the context carries the
+ * mark withApiContext gives it), the same handlers answer the retryable 503
+ * `check_failed` instead, with nothing read either.
  *
  * The writes in the same files (a POST, PATCH or DELETE beside the GET) and
  * the returns writes are not held by this answer: they reach their own
  * handling as before. The sign-in email status (account/email) is not held
  * either: a member reads their own email before setting up an authenticator.
- *
- * test/authenticator-read.guard.test.ts keeps this list complete from the
- * source tree: every GET handler under /api/v1 is held or listed as open.
  */
 
 const h = vi.hoisted(() => ({ ctx: null as unknown, calls: [] as string[] }));
@@ -46,9 +51,17 @@ vi.mock('@/lib/supabase/admin', () => ({
 import { NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { markMfaPolicyUnread } from '@/lib/auth/mfa-policy';
 
 const ID = '5e5e5e5e-6f6f-4a7a-8b8b-9c9c9c9c9c9c';
-const PARAMS = { id: ID, slug: 'a-release', groupId: ID, key: 'k-0123456789abcdef', itemId: ID };
+const PARAMS = {
+  id: ID,
+  slug: 'a-release',
+  groupId: ID,
+  key: 'k-0123456789abcdef',
+  itemId: ID,
+  sessionId: ID,
+};
 
 /** A client that records any use and answers nothing. */
 function recordingClient(): unknown {
@@ -94,87 +107,41 @@ function owedCtx() {
   };
 }
 
-/** The GET handlers held by the answer (app/api/v1/<route>/route.ts or .tsx). */
-const HELD_READS = [
-  'books/isbn-lookup',
-  'bundles',
-  'cycle-counts',
-  'cycle-counts/[id]/exceptions',
-  'exceptions',
-  'exceptions/[id]',
-  'integrations/connections',
-  'integrations/sync-log',
-  'inventory/staging',
-  'items/[id]/barcode',
-  'items/[id]/history',
-  'items/[id]/verification',
-  'items/lookup',
-  'items/upc-lookup',
-  'locations/[id]/verification',
-  'maintenance-requests',
-  'maintenance-requests/[id]',
-  'maintenance-requests/[id]/notes',
-  'maintenance-requests/members',
-  'me/announcements',
-  'me/permissions',
-  'me/releases',
-  'me/releases/[slug]',
-  'mobile/snapshot',
-  'orders/[id]',
-  'orders/[id]/drivers',
-  'orders/[id]/exchange-candidates',
-  'orders/[id]/return-request',
-  'orders/[id]/return-request-email',
-  'orders/[id]/shipping',
-  'orders/[id]/signature',
-  'orders/catalog',
-  'orders/catalog-visibility',
-  'orders/catalog-visibility/family/[groupId]',
-  'orders/catalog/photos',
-  'orders/storefront',
-  'orders/submissions/[key]',
-  'product-groups',
-  'product-groups/[id]/variants',
-  'product-groups/linking',
-  'rentals/borrowers',
-  'reports/book-order-totals',
-  'reports/book-order-totals/covers',
-  'reports/book-order-totals/export',
-  'reports/book-order-totals/items/[itemId]/orders',
-  'reports/book-order-totals/options',
-  'returns',
-  'returns/[id]',
-  'returns/[id]/candidates',
-  'returns/exchange-switch',
-  'size-counts/[id]',
-  'size-counts/training',
-  'size-counts/training/samples',
-  'zendesk/connection',
-];
+/**
+ * Every handler the read rule holds, as `<route folder under app/api> <METHOD>`,
+ * read from the source tree by the guard's own reading
+ * (test/authenticator-read-tree.ts heldHandlers): every GET and HEAD under
+ * /api/v1 whose first step is a read gate, and every handler by another method
+ * that hands a read gate 'read'. A handler the guard counts as held is called
+ * here, so the two cannot drift apart.
+ */
+const HELD = heldHandlers(shippedSources()).map((entry) => {
+  const [route, method] = entry.split(' ') as [string, string];
+  return { route, method };
+});
 
 /** Writes in files that also export a GET, and two returns writes through the shared gates. */
 const WRITES: Array<[string, string]> = [
-  ['cycle-counts', 'POST'],
-  ['maintenance-requests', 'POST'],
-  ['maintenance-requests/[id]', 'PATCH'],
-  ['maintenance-requests/[id]/notes', 'POST'],
-  ['me/announcements', 'POST'],
-  ['orders/[id]/return-request', 'POST'],
-  ['orders/[id]/return-request/options', 'POST'],
-  ['orders/catalog-visibility', 'POST'],
-  ['product-groups/linking', 'POST'],
-  ['product-groups/linking', 'DELETE'],
-  ['returns/[id]/cancel', 'POST'],
-  ['size-counts/training', 'POST'],
+  ['v1/cycle-counts', 'POST'],
+  ['v1/maintenance-requests', 'POST'],
+  ['v1/maintenance-requests/[id]', 'PATCH'],
+  ['v1/maintenance-requests/[id]/notes', 'POST'],
+  ['v1/me/announcements', 'POST'],
+  ['v1/orders/[id]/return-request', 'POST'],
+  ['v1/orders/catalog-visibility', 'POST'],
+  ['v1/product-groups/linking', 'POST'],
+  ['v1/product-groups/linking', 'DELETE'],
+  ['v1/returns/[id]/cancel', 'POST'],
+  ['v1/size-counts/training', 'POST'],
 ];
 
 type Handler = (req: NextRequest, ctx: { params: Promise<typeof PARAMS> }) => Promise<Response>;
 
 async function call(route: string, method: string): Promise<Response> {
-  const mod = (await import(`./${route}/route`)) as Record<string, Handler>;
+  const mod = (await import(`../${route}/route`)) as Record<string, Handler>;
   const handler = mod[method === 'HEAD' ? 'GET' : method];
   expect(handler, `${route} exports ${method}`).toBeTypeOf('function');
-  const url = `https://app.test/api/v1/${route.replace(/\[[a-zA-Z]+\]/g, ID)}?q=ab`;
+  const url = `https://app.test/api/${route.replace(/\[[a-zA-Z]+\]/g, ID)}?q=ab`;
   const init: { method: string; headers: Record<string, string>; body?: string } = {
     method,
     headers: { authorization: 'Bearer t', 'content-type': 'application/json' },
@@ -204,31 +171,60 @@ async function expectHeld(res: Response) {
   expect(withApiContext).toHaveBeenCalledTimes(1);
 }
 
-describe('a GET by a member who must set up an authenticator first', () => {
-  it.each(HELD_READS)(
-    '%s: 403, core sentence, mfa_required, not stored, nothing read',
-    async (route) => {
-      await expectHeld(await call(route, 'GET'));
+describe('a read by a member who must set up an authenticator first', () => {
+  it('reads the held handlers from the tree', () => {
+    // 56 on 2026-11-16: 54 GETs and 2 POSTs.
+    expect(HELD.length).toBeGreaterThan(50);
+    expect(HELD).toContainEqual({ route: 'v1/mobile/snapshot', method: 'GET' });
+    expect(HELD).toContainEqual({ route: 'v1/orders/[id]/return-request/options', method: 'POST' });
+    expect(HELD).toContainEqual({ route: 'v1/orders/signature-lookup', method: 'POST' });
+  });
+
+  it.each(HELD)(
+    '$route $method: 403, core sentence, mfa_required, not stored, nothing read',
+    async ({ route, method }) => {
+      await expectHeld(await call(route, method));
     },
   );
 
   it('a HEAD is held the same way', async () => {
-    expect((await call('mobile/snapshot', 'HEAD')).status).toBe(403);
+    expect((await call('v1/mobile/snapshot', 'HEAD')).status).toBe(403);
     expect(h.calls).toEqual([]);
   });
 
   it('a null context stays each route its own 401 (snapshot, returns, a member return)', async () => {
     h.ctx = null;
-    for (const route of ['mobile/snapshot', 'returns', 'orders/[id]/return-request']) {
+    for (const route of ['v1/mobile/snapshot', 'v1/returns', 'v1/orders/[id]/return-request']) {
       expect((await call(route, 'GET')).status, route).toBe(401);
     }
   });
 
   it('the sign-in email status is not held: the member reads their own email', async () => {
-    const res = await call('account/email', 'GET');
+    const res = await call('v1/account/email', 'GET');
     expect(res.status).not.toBe(403);
     expect(h.calls).toContain('service client');
   });
+});
+
+describe('a read when the organization policy could not be read', () => {
+  it.each(HELD)(
+    '$route $method: the retryable 503 check_failed, never the set-up sentence, nothing read',
+    async ({ route, method }) => {
+      h.ctx = markMfaPolicyUnread(owedCtx());
+      const res = await call(route, method);
+      expect(res.status).toBe(503);
+      expect(res.headers.get('retry-after')).toBe('5');
+      expect(res.headers.get('cache-control')).toBe('private, no-store');
+      const body = await res.json();
+      expect(body).toEqual({
+        error: 'check_failed',
+        message: CONTEXT_UNAVAILABLE_COPY,
+        details: { reason: 'context_unavailable', retryable: true },
+      });
+      expect(JSON.stringify(body)).not.toContain(AUTHENTICATOR_SET_UP_OWED_COPY);
+      expect(h.calls).toEqual([]);
+    },
+  );
 });
 
 describe('a write in the same files is not held by the read answer', () => {

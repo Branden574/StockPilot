@@ -3,10 +3,10 @@ import { z } from 'zod';
 
 import { orderLineItemName } from '@stockpilot/core';
 
-import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { answerModuleState } from '@/server/lib/api-error-response';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { resolveSignatureToken, SIGNATURE_TOKEN_RE } from '@/server/lib/order-secrets';
 import { isModuleEnabled } from '@/server/services/context';
 
@@ -39,7 +39,13 @@ function notFound() {
 }
 
 export async function POST(req: NextRequest) {
-  const ctx = await withApiContext(req);
+  // A read by POST (the token rides in the body): a member who must set up an
+  // authenticator first is held before the body is read
+  // (server/lib/api-read-context.ts). Only a signed-in member reaches this
+  // route; anyone else is the 401 below.
+  const read = await apiReadContext(req, 'read');
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
   let body: unknown;
