@@ -97,8 +97,17 @@ const GENERIC_500_MESSAGE = 'An internal error occurred. Please try again.';
  * reported; a 503 with Retry-After, reported as a warning, when the caller's
  * own access could not be read. Everything else keeps the S13 500, with the
  * same body, tag and level.
+ *
+ * `forwardDetails` (the outbox's append route): a refusal also carries the
+ * ServiceError's `details`, as the adjust route's answer does. They are
+ * app-authored for every code but internal_error, which returns above without
+ * them; they carry `reason` from the authenticator gate (mfaGateError), the
+ * one field that tells the phone that answer apart from a missing permission.
  */
-export function sizeCountError(e: unknown): NextResponse {
+export function sizeCountError(
+  e: unknown,
+  opts: { forwardDetails?: boolean } = {},
+): NextResponse {
   if (e instanceof ServiceError) {
     // `internal_error` already arrives sanitized (the constructor swapped the
     // public message and stashed the raw text in internalDetail) — report that
@@ -125,7 +134,14 @@ export function sizeCountError(e: unknown): NextResponse {
               : e.code === 'module_disabled'
                 ? 403
                 : 500;
-    return NextResponse.json({ error: e.code, message: e.message }, { status });
+    return NextResponse.json(
+      {
+        error: e.code,
+        message: e.message,
+        ...(opts.forwardDetails && e.details ? { details: e.details } : {}),
+      },
+      { status },
+    );
   }
   return forbiddenOrInternalResponse(e, 'size-counts.api', { message: GENERIC_500_MESSAGE });
 }

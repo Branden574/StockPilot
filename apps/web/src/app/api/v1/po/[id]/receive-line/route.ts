@@ -225,7 +225,19 @@ export async function POST(
                 : e.code === 'unauthenticated'
                   ? 401
                   : 500;
-      return NextResponse.json({ error: e.code, message: e.message }, { status });
+      return NextResponse.json(
+        {
+          error: e.code,
+          message: e.message,
+          // `details` is app-authored for every code except internal_error (whose
+          // detail can be raw database text), the rule the adjust route applies. It
+          // carries `reason` from the authenticator gate (mfaGateError): 'mfa_required'
+          // or 'aal2_required'. A missing permission is a 403 'forbidden' too, with no
+          // details; only this field tells the phone's outbox which answer it got.
+          ...(e.code !== 'internal_error' && e.details ? { details: e.details } : {}),
+        },
+        { status },
+      );
     }
     // A module state that could not be read (docket S81): the fixed
     // try-again answer at warning level, which the phone's outbox sends again.

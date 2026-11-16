@@ -88,7 +88,19 @@ export async function POST(
               : e.code === 'conflict'
                 ? 409
                 : 500;
-      return NextResponse.json({ error: e.code, message: e.message }, { status });
+      return NextResponse.json(
+        {
+          error: e.code,
+          message: e.message,
+          // `details` is app-authored for every code except internal_error (whose
+          // detail can be raw database text), the rule the adjust route applies. It
+          // carries `reason` from the authenticator gate (mfaGateError): 'mfa_required'
+          // or 'aal2_required'. A missing permission is a 403 'forbidden' too, with no
+          // details; only this field tells the phone's outbox which answer it got.
+          ...(e.code !== 'internal_error' && e.details ? { details: e.details } : {}),
+        },
+        { status },
+      );
     }
     // The warehouse gate's refusal (assertWarehouseAccess, a ForbiddenError)
     // is a 403: the phone shows it and does not queue it. As a 500 the phone
