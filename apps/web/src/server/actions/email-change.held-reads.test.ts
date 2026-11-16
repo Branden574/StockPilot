@@ -75,6 +75,20 @@ vi.mock('@/lib/email/es/families/security', () => {
   };
 });
 vi.mock('@/server/services/audit', () => ({ insertAuditRowReported: vi.fn(async () => true) }));
+// Which organization applies: none here (an account with no organization),
+// so a member with no authenticator owes no set-up. The set-up rule itself
+// runs over the real session loader in email-change.set-up.actions.test.ts.
+vi.mock('@/lib/auth/session', async (importOriginal) => {
+  const f = await import('@/test/auth-session-fixture');
+  return {
+    ...(await importOriginal<typeof import('@/lib/auth/session')>()),
+    readSessionOrganization: async () => ({
+      ok: true,
+      userId: f.FIXTURE_USER_ID,
+      organization: null,
+    }),
+  };
+});
 vi.mock('@/lib/supabase/admin', async () => {
   const f = await import('@/test/auth-session-fixture');
   const profileRow = {

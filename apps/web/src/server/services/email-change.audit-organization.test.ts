@@ -328,7 +328,7 @@ const WRITERS: Array<{
         userId: USER_ID,
         newEmail: NEW,
         currentPassword: 'test-only-current-password',
-        mfa: { enrolled: false, aal2: false },
+        mfa: { enrolled: false, aal2: false, setUpOwed: false },
         source: 'web',
       }).catch(() => undefined),
   },
@@ -341,7 +341,7 @@ const WRITERS: Array<{
         userId: USER_ID,
         newEmail: NEW,
         currentPassword: 'test-only-current-password',
-        mfa: { enrolled: false, aal2: false },
+        mfa: { enrolled: false, aal2: false, setUpOwed: false },
         source: 'web',
       }),
   },
@@ -351,7 +351,7 @@ const WRITERS: Array<{
     arrange: () => {
       getUserById.mockResolvedValue(authUser({ new_email: NEW, email_change_sent_at: new Date().toISOString() }));
     },
-    run: () => resendEmailChange({ userId: USER_ID, mfa: { enrolled: false, aal2: false }, source: 'mobile' }),
+    run: () => resendEmailChange({ userId: USER_ID, mfa: { enrolled: false, aal2: false, setUpOwed: false }, source: 'mobile' }),
   },
   {
     name: 'cancel',

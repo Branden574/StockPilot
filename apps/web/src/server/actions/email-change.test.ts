@@ -19,6 +19,7 @@ const listFactors = vi.fn();
 const getAuthenticatorAssuranceLevel = vi.fn();
 const cookie: { session: StubbedCookieSession } = { session: { sub: 'u-1', aal: 'aal1' } };
 const maybeSingle = vi.fn();
+const orgMaybeSingle = vi.fn();
 const requestEmailChange = vi.fn();
 const resendEmailChange = vi.fn();
 const cancelEmailChange = vi.fn();
@@ -35,8 +36,20 @@ vi.mock('@/lib/supabase/server', () => ({
       ...verifiedSessionAuth(() => cookie.session),
       mfa: { listFactors, getAuthenticatorAssuranceLevel },
     },
-    from: () => ({ select: () => ({ eq: () => ({ maybeSingle }) }) }),
+    // The account status read (user_profiles), and the organization row read
+    // when the membership does not carry it (organizations).
+    from: (table: string) => ({
+      select: () => ({
+        eq: () => ({ maybeSingle: table === 'organizations' ? orgMaybeSingle : maybeSingle }),
+      }),
+    }),
   }),
+}));
+// Which organization applies to this request (lib/auth/session.ts). By
+// default the account has none; the set-up cases below name one.
+const readSessionOrganization = vi.fn();
+vi.mock('@/lib/auth/session', () => ({
+  readSessionOrganization: () => readSessionOrganization(),
 }));
 vi.mock('@/server/services/email-change', () => ({
   requestEmailChange: (...a: unknown[]) => requestEmailChange(...a),
@@ -64,6 +77,7 @@ beforeEach(() => {
   });
   resendEmailChange.mockResolvedValue({ pendingEmail: 'new@example.com', sentAt: 'x', expiresAt: 'y' });
   cancelEmailChange.mockResolvedValue({ cancelled: true });
+  readSessionOrganization.mockResolvedValue({ ok: true, userId: 'u-1', organization: null });
 });
 
 describe('requestEmailChangeAction — identity funnel', () => {
@@ -121,7 +135,7 @@ describe('requestEmailChangeAction — identity funnel', () => {
     const res = await requestEmailChangeAction(INPUT);
     expect(res.ok).toBe(true);
     expect(requestEmailChange).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'u-1', newEmail: 'new@example.com', mfa: { enrolled: true, aal2: true }, source: 'web' }),
+      expect.objectContaining({ userId: 'u-1', newEmail: 'new@example.com', mfa: { enrolled: true, aal2: true, setUpOwed: false }, source: 'web' }),
     );
     expect(listFactors).not.toHaveBeenCalled();
     expect(getAuthenticatorAssuranceLevel).not.toHaveBeenCalled();
@@ -134,7 +148,7 @@ describe('requestEmailChangeAction — identity funnel', () => {
     cookie.session = { sub: 'u-2', aal: 'aal2' };
     await requestEmailChangeAction(INPUT);
     expect(requestEmailChange).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'u-1', mfa: { enrolled: true, aal2: false } }),
+      expect.objectContaining({ userId: 'u-1', mfa: { enrolled: true, aal2: false, setUpOwed: false } }),
     );
   });
 
@@ -145,7 +159,7 @@ describe('requestEmailChangeAction — identity funnel', () => {
     cookie.session = { sub: 'u-1', aal: 'aal2', read: 'error' };
     await resendEmailChangeAction();
     expect(resendEmailChange).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'u-1', mfa: { enrolled: true, aal2: false } }),
+      expect.objectContaining({ userId: 'u-1', mfa: { enrolled: true, aal2: false, setUpOwed: false } }),
     );
   });
 
@@ -161,7 +175,7 @@ describe('requestEmailChangeAction — identity funnel', () => {
     });
     await requestEmailChangeAction(INPUT);
     expect(requestEmailChange).toHaveBeenCalledWith(
-      expect.objectContaining({ mfa: { enrolled: false, aal2: false } }),
+      expect.objectContaining({ mfa: { enrolled: false, aal2: false, setUpOwed: false } }),
     );
   });
 
@@ -198,5 +212,151 @@ describe('resend / cancel actions', () => {
     const res = await resendEmailChangeAction();
     expect(res.ok).toBe(false);
     expect(resendEmailChange).not.toHaveBeenCalled();
+  });
+});
+
+describe('authenticator set-up in the current organization (request and resend)', () => {
+  const ORG = 'aaaaaaaa-1111-4111-8111-111111111111';
+  /** The membership get_request_context() answered with, carrying the organization's policy. */
+  const held = (mfaPolicy: string, role = 'staff') => ({
+    organization_id: ORG,
+    role,
+    organization: { id: ORG, name: 'Example Org', mfa_policy: mfaPolicy },
+  });
+  const inOrg = (mfaPolicy: string | null, role = 'staff') => ({
+    ok: true,
+    userId: 'u-1',
+    organization: {
+      organizationId: ORG,
+      role,
+      held: mfaPolicy === null ? null : held(mfaPolicy, role),
+    },
+  });
+  const COULD_NOT_CHECK = {
+    ok: false,
+    error: { code: 'internal_error', message: 'Your access could not be checked. Please try again.' },
+  };
+
+  it('a member with no authenticator under all_required owes set-up: the service is told so on request and resend', async () => {
+    readSessionOrganization.mockResolvedValue(inOrg('all_required'));
+    await requestEmailChangeAction(INPUT);
+    expect(requestEmailChange).toHaveBeenCalledWith(
+      expect.objectContaining({ mfa: { enrolled: false, aal2: false, setUpOwed: true } }),
+    );
+    await resendEmailChangeAction();
+    expect(resendEmailChange).toHaveBeenCalledWith(
+      expect.objectContaining({ mfa: { enrolled: false, aal2: false, setUpOwed: true } }),
+    );
+  });
+
+  it('admins_required: an admin owes set-up, a staff member does not', async () => {
+    readSessionOrganization.mockResolvedValue(inOrg('admins_required', 'admin'));
+    await requestEmailChangeAction(INPUT);
+    expect(requestEmailChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ mfa: expect.objectContaining({ setUpOwed: true }) }),
+    );
+    readSessionOrganization.mockResolvedValue(inOrg('admins_required', 'staff'));
+    await requestEmailChangeAction(INPUT);
+    expect(requestEmailChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ mfa: expect.objectContaining({ setUpOwed: false }) }),
+    );
+  });
+
+  it('an optional policy owes nothing', async () => {
+    readSessionOrganization.mockResolvedValue(inOrg('optional'));
+    await requestEmailChangeAction(INPUT);
+    expect(requestEmailChange).toHaveBeenCalledWith(
+      expect.objectContaining({ mfa: expect.objectContaining({ setUpOwed: false }) }),
+    );
+  });
+
+  it('a factor that was never verified still owes set-up', async () => {
+    getUser.mockResolvedValue({
+      data: {
+        user: { id: 'u-1', email: 'old@example.com', factors: [{ ...VERIFIED_TOTP, status: 'unverified' }] },
+      },
+    });
+    readSessionOrganization.mockResolvedValue(inOrg('all_required'));
+    await requestEmailChangeAction(INPUT);
+    expect(requestEmailChange).toHaveBeenCalledWith(
+      expect.objectContaining({ mfa: { enrolled: false, aal2: false, setUpOwed: true } }),
+    );
+  });
+
+  it('an organization row that came back empty is held to the strictest policy', async () => {
+    readSessionOrganization.mockResolvedValue(inOrg(null));
+    orgMaybeSingle.mockResolvedValue({ data: null, error: null });
+    await requestEmailChangeAction(INPUT);
+    expect(requestEmailChange).toHaveBeenCalledWith(
+      expect.objectContaining({ mfa: expect.objectContaining({ setUpOwed: true }) }),
+    );
+  });
+
+  it('an organization row that could not be read: the access could not be checked, and the service is never asked', async () => {
+    readSessionOrganization.mockResolvedValue(inOrg(null));
+    orgMaybeSingle.mockResolvedValue({ data: null, error: { code: '57014', message: 'timeout' } });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(await requestEmailChangeAction(INPUT)).toEqual(COULD_NOT_CHECK);
+    expect(await resendEmailChangeAction()).toEqual(COULD_NOT_CHECK);
+    expect(requestEmailChange).not.toHaveBeenCalled();
+    expect(resendEmailChange).not.toHaveBeenCalled();
+  });
+
+  it('memberships that could not be read, no verified session, or a session of another account: the access could not be checked, reported with which', async () => {
+    const { reportError } = await import('@/lib/error-reporter');
+    readSessionOrganization.mockResolvedValue({ ok: false, reason: 'memberships_unreadable' });
+    expect(await requestEmailChangeAction(INPUT)).toEqual(COULD_NOT_CHECK);
+    readSessionOrganization.mockResolvedValue({ ok: false, reason: 'no_verified_session' });
+    expect(await requestEmailChangeAction(INPUT)).toEqual(COULD_NOT_CHECK);
+    readSessionOrganization.mockResolvedValue({ ok: true, userId: 'u-2', organization: null });
+    expect(await resendEmailChangeAction()).toEqual(COULD_NOT_CHECK);
+    expect(requestEmailChange).not.toHaveBeenCalled();
+    expect(resendEmailChange).not.toHaveBeenCalled();
+    const reasons = vi
+      .mocked(reportError)
+      .mock.calls.map((c) => (c[1] as { extra?: { reason?: string } } | undefined)?.extra?.reason);
+    expect(reasons).toEqual(['memberships_unreadable', 'no_verified_session', 'another_account']);
+  });
+
+  it('an account with no organization owes nothing and keeps working as before', async () => {
+    readSessionOrganization.mockResolvedValue({ ok: true, userId: 'u-1', organization: null });
+    expect((await requestEmailChangeAction(INPUT)).ok).toBe(true);
+    expect((await resendEmailChangeAction()).ok).toBe(true);
+    expect((await cancelEmailChangeAction()).ok).toBe(true);
+    expect(requestEmailChange).toHaveBeenCalledWith(
+      expect.objectContaining({ mfa: { enrolled: false, aal2: false, setUpOwed: false } }),
+    );
+  });
+
+  it('an account with a verified authenticator is not asked: it keeps its own rule (aal2)', async () => {
+    getUser.mockResolvedValue({
+      data: { user: { id: 'u-1', email: 'old@example.com', factors: [VERIFIED_TOTP] } },
+    });
+    readSessionOrganization.mockResolvedValue(inOrg('all_required'));
+    await requestEmailChangeAction(INPUT);
+    expect(readSessionOrganization).not.toHaveBeenCalled();
+    expect(requestEmailChange).toHaveBeenCalledWith(
+      expect.objectContaining({ mfa: { enrolled: true, aal2: false, setUpOwed: false } }),
+    );
+  });
+
+  it('cancel does not ask: it only removes a pending change', async () => {
+    readSessionOrganization.mockResolvedValue({ ok: false, reason: 'memberships_unreadable' });
+    expect(await cancelEmailChangeAction()).toEqual({ ok: true, data: { cancelled: true } });
+    expect(readSessionOrganization).not.toHaveBeenCalled();
+  });
+
+  it('the service refusal reaches the page as the name and avatar answer it, details kept', async () => {
+    readSessionOrganization.mockResolvedValue(inOrg('all_required'));
+    const { mfaGateError } = await import('@/server/services/context');
+    requestEmailChange.mockRejectedValue(mfaGateError({ mfaEnrolled: false }));
+    expect(await requestEmailChangeAction(INPUT)).toEqual({
+      ok: false,
+      error: {
+        code: 'forbidden',
+        message: 'Multi-factor authentication required. Enroll in MFA before performing this action.',
+        details: { reason: 'mfa_required' },
+      },
+    });
   });
 });

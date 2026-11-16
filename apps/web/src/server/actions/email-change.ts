@@ -10,7 +10,11 @@ import {
 } from '@stockpilot/core';
 
 import { loadAccountStatus, noteDisabledAccountBlocked } from '@/lib/auth/account-status';
+import { OrganizationRowUnavailableError } from '@/lib/auth/organization-row-unavailable';
+import { readSessionOrganization } from '@/lib/auth/session';
+import { authenticatorSetUpIsOwedByUser } from '@/lib/auth/step-up-gate';
 import { readVerifiedSessionClaimsOf } from '@/lib/auth/verified-claims';
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { createClient } from '@/lib/supabase/server';
 import { uncheckedAccessResult } from '@/server/lib/action-error-result';
 import { ServiceError } from '@/server/services/context';
@@ -31,6 +35,11 @@ import {
  * themselves, BEFORE anything is spent, with 'unreadable' kept distinct from
  * 'disabled' (a failed read denies but must not tell a healthy user their
  * account was disabled).
+ *
+ * Request and resend also ask whether the account must set up an
+ * authenticator first in its current organization (setUpOwedInOrganization
+ * below); the service then gives the answer the profile's name and avatar
+ * give. Cancel does not ask: it only removes a pending change.
  */
 
 interface Principal {
@@ -38,8 +47,46 @@ interface Principal {
   mfa: MfaPosture;
 }
 
+/** Why the organization that applies could not be told: the label its report carries. */
+type SetUpUnchecked = 'no_verified_session' | 'another_account' | 'memberships_unreadable';
+
+/**
+ * Does this account owe authenticator set-up in its current organization, the
+ * one requireOrgContext() resolves for this request (readSessionOrganization)?
+ * The rule requireOrgContext() applies before every page but the security and
+ * profile pages, asked here because the profile page is open to such a member
+ * (authenticatorSetUpIsOwedByUser, on core's authenticatorSetUpOwed).
+ *
+ * Called only for an account with no verified factor in its getUser() answer:
+ * one with a verified factor cannot owe set-up, and keeps its own rule (aal2).
+ * No organization: nothing is owed, as before. An organization row that came
+ * back empty is held to the strictest policy; a row read that failed throws
+ * OrganizationRowUnavailableError. When the organization that applies cannot
+ * be told (no verified session for this request, a session of another
+ * account, memberships that did not answer) the answer is `unchecked` with
+ * that label. Either way the caller says the access could not be checked, and
+ * nothing is changed.
+ */
+async function setUpOwedInOrganization(user: {
+  id: string;
+  factors?: ReadonlyArray<{ readonly status?: string | null }> | null;
+}): Promise<{ owed: boolean } | { unchecked: SetUpUnchecked }> {
+  const read = await readSessionOrganization();
+  if (!read.ok) return { unchecked: read.reason };
+  if (read.userId !== user.id) return { unchecked: 'another_account' };
+  if (!read.organization) return { owed: false };
+  return {
+    owed: await authenticatorSetUpIsOwedByUser(
+      read.organization,
+      read.organization.held,
+      user.factors,
+    ),
+  };
+}
+
 async function resolvePrincipal(
   path: string,
+  opts: { askSetUp: boolean },
 ): Promise<{ ok: true; principal: Principal } | { ok: false; result: ActionResult<never> }> {
   const supabase = await createClient();
   const {
@@ -74,7 +121,31 @@ async function resolvePrincipal(
     const claims = await readVerifiedSessionClaimsOf(supabase, user.id);
     aal2 = claims?.aal === 'aal2';
   }
-  return { ok: true, principal: { userId: user.id, mfa: { enrolled, aal2 } } };
+  let setUpOwed = false;
+  if (opts.askSetUp && !enrolled) {
+    let answer: Awaited<ReturnType<typeof setUpOwedInOrganization>>;
+    try {
+      answer = await setUpOwedInOrganization(user);
+    } catch (e) {
+      // Next control flow (the session load's redirect for a disabled
+      // account) is Next's to act on.
+      rethrowControlFlow(e);
+      return { ok: false, result: fromServiceError(e) };
+    }
+    if ('unchecked' in answer) {
+      // The "could not be checked" sentence, reported with what could not be told.
+      const unchecked = new OrganizationRowUnavailableError();
+      const extra = { reason: answer.unchecked };
+      return {
+        ok: false,
+        result:
+          uncheckedAccessResult(unchecked, 'actions.email_change', { extra }) ??
+          fromServiceError(unchecked),
+      };
+    }
+    setUpOwed = answer.owed;
+  }
+  return { ok: true, principal: { userId: user.id, mfa: { enrolled, aal2, setUpOwed } } };
 }
 
 function fromServiceError(e: unknown): ActionResult<never> {
@@ -96,7 +167,7 @@ export async function requestEmailChangeAction(
   if (!parsed.success) {
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   }
-  const principal = await resolvePrincipal('requestEmailChangeAction');
+  const principal = await resolvePrincipal('requestEmailChangeAction', { askSetUp: true });
   if (!principal.ok) return principal.result;
 
   try {
@@ -116,7 +187,7 @@ export async function requestEmailChangeAction(
 export async function resendEmailChangeAction(): Promise<
   ActionResult<{ pendingEmail: string; sentAt: string; expiresAt: string }>
 > {
-  const principal = await resolvePrincipal('resendEmailChangeAction');
+  const principal = await resolvePrincipal('resendEmailChangeAction', { askSetUp: true });
   if (!principal.ok) return principal.result;
   try {
     const result = await resendEmailChange({
@@ -131,7 +202,7 @@ export async function resendEmailChangeAction(): Promise<
 }
 
 export async function cancelEmailChangeAction(): Promise<ActionResult<{ cancelled: boolean }>> {
-  const principal = await resolvePrincipal('cancelEmailChangeAction');
+  const principal = await resolvePrincipal('cancelEmailChangeAction', { askSetUp: false });
   if (!principal.ok) return principal.result;
   try {
     const result = await cancelEmailChange({ userId: principal.principal.userId, source: 'web' });
