@@ -29,6 +29,12 @@ import {
 } from '@/lib/inventory/instant-mode';
 import { listFilterActive, otherWarehouseHintApplies } from '@/lib/inventory/list-filter-active';
 import {
+  packInventoryClientRows,
+  toInventoryClientRows,
+  withoutFlatTrends,
+  type InventoryClientRow,
+} from '@/lib/inventory/client-row';
+import {
   ALL_WAREHOUSES_KEY,
   canUseSharedInventoryCaches,
   deriveInventoryTrends,
@@ -419,7 +425,7 @@ async function booksTableSection({
   // byte-identical to today. (Books never split placement rows, so no
   // placement is passed.)
   let instantData: {
-    items: InventoryListItemRow[];
+    items: InventoryClientRow<InventoryListItemRow>[];
     lookups: InventoryListLookups;
     trends: Map<string, { qtySeries: number[]; moveSeries: number[] }>;
   } | null = null;
@@ -439,15 +445,28 @@ async function booksTableSection({
       ]);
       if (dataset) {
         // Paths → signed URLs per request, through the same shared
-        // 25-day per-path cache as every other list surface.
-        const items = await resolveInventoryListImages(sessionCtx.organizationId, dataset.items);
+        // 25-day per-path cache as every other list surface. A cover with a
+        // thumb ships the thumb and its blur placeholder; the full-size cover
+        // (hover preview and lightbox only) is fetched when hovered, as on
+        // the Items page. Only the columns the table reads.
+        const items = toInventoryClientRows(
+          await resolveInventoryListImages(sessionCtx.organizationId, dataset.items, {
+            payloadDiet: true,
+            keepLqip: true,
+          }),
+        );
         instantData = {
           items,
           lookups,
-          // Full-dataset trends from the org-wide buckets — pure CPU.
-          trends: deriveInventoryTrends(
-            items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
-            trendBuckets,
+          // Full-dataset trends from the org-wide buckets — pure CPU. A flat,
+          // unmoved trend is left out: the table draws a row without one the
+          // same way.
+          trends: withoutFlatTrends(
+            deriveInventoryTrends(
+              items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
+              trendBuckets,
+            ),
+            items,
           ),
         };
       }
@@ -477,7 +496,9 @@ async function booksTableSection({
     if (emptyState) return <PerfUseful>{emptyState}</PerfUseful>;
     return (
       <BooksInventoryTable
-        items={instantItems}
+        // The derived page's rows: in instant mode the table reads the
+        // dataset below, and `items` only stands in when there is none.
+        items={derived.pageItems}
         total={derived.total}
         valueOnHand={derived.valueOnHand}
         lookups={{
@@ -510,7 +531,7 @@ async function booksTableSection({
         savedViewScope="books"
         activeWarehouseId={warehouseFilter}
         currentUserId={sessionCtx.userId}
-        instant={{ items: instantItems, view: 'books' }}
+        instant={{ items: packInventoryClientRows(instantItems), view: 'books' }}
         initialView={initialView}
       />
     );
@@ -747,7 +768,9 @@ async function booksTableSection({
   }
 
   const savedViews = await savedViewsPromise;
-  const itemsWithImages = data.items;
+  // Only the columns the table reads (lib/inventory/client-row.ts), the same
+  // shape the instant dataset carries.
+  const itemsWithImages = toInventoryClientRows(data.items);
 
   const lookups = {
     categories: new Map(data.categories.map((c) => [c.id, { name: c.name, color: c.color }])),

@@ -781,6 +781,46 @@ describe('resolveInventoryListImages payloadDiet (rank 5 — instant dataset onl
     expect(rows[0]!.image_thumb_url).toBeNull();
   });
 
+  it('keepLqip (the Books dataset): a cover with a thumb keeps its blur placeholder, ships no master, and signs only the thumb', async () => {
+    signedUrlsMock.mockResolvedValue(new Map([['p/thumb.webp', 'https://signed/thumb']]));
+
+    const rows = await resolveInventoryListImages(
+      'org-1',
+      [
+        cachedRow({
+          image_storage_path: 'p/master.jpg',
+          image_thumb_path: 'p/thumb.webp',
+          image_lqip: 'blur',
+        }),
+      ],
+      { payloadDiet: true, keepLqip: true },
+    );
+
+    expect(signedUrlsMock).toHaveBeenCalledWith(['p/thumb.webp']);
+    expect(rows[0]!.image_url).toBeNull();
+    expect(rows[0]!.image_thumb_url).toBe('https://signed/thumb');
+    expect(rows[0]!.image_lqip).toBe('blur');
+  });
+
+  it('keepLqip drops the placeholder when the thumb did not sign (no photo shown, no blur)', async () => {
+    signedUrlsMock.mockResolvedValue(new Map());
+
+    const rows = await resolveInventoryListImages(
+      'org-1',
+      [
+        cachedRow({
+          image_storage_path: 'p/master.jpg',
+          image_thumb_path: 'p/thumb.webp',
+          image_lqip: 'blur',
+        }),
+      ],
+      { payloadDiet: true, keepLqip: true },
+    );
+
+    expect(rows[0]!.image_thumb_url).toBeNull();
+    expect(rows[0]!.image_lqip).toBeNull();
+  });
+
   it('default (no opts) stays full-fidelity — the 30-row payload and every server-mode path are unchanged', async () => {
     signedUrlsMock.mockResolvedValue(
       new Map([

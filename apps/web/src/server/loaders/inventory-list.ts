@@ -1655,13 +1655,18 @@ export function deriveInventoryTrends(
  * 25-day per-path cache → same stable URL). Rows WITHOUT a thumb keep
  * their master/cfThumb inline — it's their only image. The default view's
  * cached page-1 payload and every server-mode path stay full-fidelity.
+ *
+ * `opts.keepLqip` (Books instant dataset): the diet rows keep their LQIP, so
+ * a cover still paints its blur placeholder while the thumb loads; only the
+ * master URL is left to the on-demand route.
  */
 export async function resolveInventoryListImages(
   organizationId: string,
   rows: InventoryListCachedRow[],
-  opts: { payloadDiet?: boolean } = {},
+  opts: { payloadDiet?: boolean; keepLqip?: boolean } = {},
 ): Promise<InventoryListItemRow[]> {
   const diet = opts.payloadDiet === true;
+  const keepLqip = opts.keepLqip === true;
   const paths = new Set<string>();
   for (const r of rows) {
     // Diet: don't even request a master sign for thumb-carrying rows —
@@ -1692,7 +1697,9 @@ export async function resolveInventoryListImages(
         // path would for a failed master.
         image_url: thumbUrl ? null : cfThumb,
         image_thumb_url: thumbUrl,
-        image_lqip: null,
+        // The placeholder belongs to the photo shown: kept only beside a
+        // signed thumb, and only when asked for.
+        image_lqip: keepLqip && thumbUrl ? image_lqip : null,
       };
     }
     const masterUrl = image_storage_path ? (urlByPath.get(image_storage_path) ?? null) : null;
