@@ -928,6 +928,12 @@ PGTAP_TESTS=(
   # two-session proof is scripts/db-concurrency/0467_app_row_race.sh; the lock
   # footprint is scripts/db-concurrency/0467_migration_lock_footprint.sh.
   supabase/tests/0467_role_and_sign_in_policy_changes_recorded_by_database.test.sql
+  # 0490: the inventory list's value total runs as the caller (SECURITY
+  # INVOKER), so row level security bounds it: a member of one organization
+  # asking for another's id, a staff member naming a warehouse they cannot
+  # read, and a viewer naming a category they are not granted all get 0;
+  # anon may execute neither function.
+  supabase/tests/0490_inventory_list_totals_in_database.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -937,6 +943,11 @@ PGTAP_TESTS=(
 # MANIFEST 2 — apps/web vitest, paths relative to apps/web/
 # ═══════════════════════════════════════════════════════════════════════════
 WEB_TESTS=(
+  # 0490: the inventory list's value total takes the list's own scope (the
+  # caller's readable warehouses, a chosen warehouse only for a manager, a
+  # viewer's category grants) and every row filter; a filter added later
+  # cannot be left out of it (the drift guard).
+  src/server/services/inventory.list-value-filters.test.ts
   # Storage path traversal (HI-8) and upload content verification.
   src/lib/storage-path.test.ts
   src/server/services/storage-path-traversal.test.ts

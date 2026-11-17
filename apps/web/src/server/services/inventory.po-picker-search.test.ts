@@ -55,6 +55,8 @@ function buildSupabaseStub(rows: Array<Record<string, unknown>> = []) {
   };
   return {
     from: () => chain,
+    // list() asks inventory_list_value (0490) for its value total.
+    rpc: async () => ({ data: 0, error: null }),
     _eqCalls: eqCalls,
     _inCalls: inCalls,
     _isCalls: isCalls,
@@ -170,13 +172,18 @@ describe('InventoryService.list — ISBN-variant matching (opt-in)', () => {
     expect(stub._orCalls.some((c) => c.includes('barcode.in.'))).toBe(false);
   });
 
-  it('the parallel value-footer sum query gets the SAME clause (both builders record it)', async () => {
+  it('the value total gets the SAME search term and ISBN forms as the page clause', async () => {
     const stub = buildSupabaseStub();
+    const rpc = vi.fn(async () => ({ data: 0, error: null }));
+    (stub as { rpc: unknown }).rpc = rpc;
     await makeSvc(stub).list({
       q: '0142407333',
       isbnVariants: ['0142407333'],
     });
-    const withIsbn = stub._orCalls.filter((c) => c.includes('barcode.in.("0142407333")'));
-    expect(withIsbn.length).toBeGreaterThanOrEqual(2);
+    expect(stub._orCalls.filter((c) => c.includes('barcode.in.("0142407333")'))).toHaveLength(1);
+    expect(rpc).toHaveBeenCalledTimes(1);
+    const args = (rpc.mock.calls[0] as unknown[])[1] as { p_filters: Record<string, unknown> };
+    expect(args.p_filters.search).toBe('0142407333');
+    expect(args.p_filters.search_isbn_variants).toEqual(['0142407333']);
   });
 });

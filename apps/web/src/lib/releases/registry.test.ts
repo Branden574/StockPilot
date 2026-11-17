@@ -18921,13 +18921,17 @@ describe('the pages-keep-groups-whole release (Phase 2, #364)', () => {
     expect(words()).not.toMatch(/under (the|these|a rack's) list/i);
   });
 
-  // list()'s page query, its value scan and the plan scan take every filter
-  // from applyContentFilters; the value scan used to skip the rack filter,
-  // and with stock=low list() counts and pages from that scan. A fixed Low +
-  // critical page is 30 records that pass the low pre-filter, filtered again
-  // after they are read; the plan scan filters the whole view first, so every
-  // low record is planned onto a page.
-  it('rests the rack totals on the one filter method the page, the value scan and the plan scan share, and plans every Low + critical record', () => {
+  // list()'s page query and the plan scan take every filter from
+  // applyContentFilters, and the value total takes the same filters from
+  // buildItemListValueFilters; the value scan used to skip the rack filter.
+  // As this release shipped, a fixed Low + critical page was 30 records that
+  // passed the low pre-filter, filtered again after they were read, and the
+  // plan scan filtered the whole view first, so every low record was planned
+  // onto a page. Since migration 0490 the database applies the whole low rule
+  // (is_low_stock) to the page, its count and the plan scan alike, so every
+  // fixed page is full too, and the 2,000 cap counts the low records
+  // themselves. The words below are the release as it was published.
+  it('rests the rack totals on the filters the page, the value total and the plan scan share, and plans every Low + critical record', () => {
     const svc = source('server/services/inventory.ts');
     const at = (marker: string) => {
       const i = svc.indexOf(marker);
@@ -18936,29 +18940,25 @@ describe('the pages-keep-groups-whole release (Phase 2, #364)', () => {
     };
     const filters = svc.slice(at('private applyContentFilters('), at('private filteredScanPage('));
     expect(filters).toContain('if (filters.rack && filters.rack.trim()) {');
+    expect(filters).toContain("query = query.eq('is_low_stock', true);");
     const scan = svc.slice(at('private filteredScanPage('), at('async listPlanRows('));
     expect(scan).toContain('sumQuery = this.applyContentFilters(sumQuery, filters);');
     const plan = svc.slice(at('async listPlanRows('), at('async list(filters'));
     expect(plan).toContain('this.filteredScanPage(filters, access, PLAN_ROW_COLUMNS');
     expect(plan).toContain('if (first.count > INSTANT_MODE_MAX_ROWS) return null;');
-    expect(plan).toContain(
-      'rows = rows.filter((r) => r.quantity_on_hand <= r.reorder_point || r.quantity_on_hand <= 0);',
-    );
+    expect(plan).not.toContain('quantity_on_hand <= r.reorder_point');
     const list = svc.slice(at('async list(filters'), at('async listByIdsForExport('));
     expect(list).toContain('query = this.applyContentFilters(query, filters);');
-    expect(list).toContain('this.filteredScanPage(');
-    expect(list).toContain('totalCount = sumRows.length;');
-    // The fixed page is cut from the query before the rows are filtered.
+    expect(list).toContain("this.ctx.supabase.rpc('inventory_list_value', {");
+    expect(list).toContain('p_filters: buildItemListValueFilters(filters, {');
+    expect(list).not.toContain('quantity_on_hand <= r.reorder_point');
     expect(list).toContain('.range(offset, offset + limit - 1);');
-    expect(list.indexOf('.range(offset, offset + limit - 1);')).toBeLessThan(
-      list.indexOf('const filtered = rows.filter('),
+    const builder = svc.slice(
+      at('export function buildItemListValueFilters('),
+      at('export interface PlanRow'),
     );
+    expect(builder).toContain('const rack = rackFilterParts(filters.rack, filters.itemType);');
     const [pages, rack] = release().entries;
-    // The cap is checked on the low pre-filter's count, before the low rule.
-    expect(filters).toContain("query = query.or('reorder_point.gt.0,quantity_on_hand.lte.0');");
-    expect(plan.indexOf('if (first.count > INSTANT_MODE_MAX_ROWS) return null;')).toBeLessThan(
-      plan.indexOf('if (filters.lowStock) {'),
-    );
     expect(pages!.howItAffectsYou).toContain(
       '(for Low + critical, the 2,000 counts every record with a reorder point or no stock)',
     );
