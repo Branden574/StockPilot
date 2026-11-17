@@ -78,7 +78,7 @@ import 'server-only';
 //     cached figure serves only the default view, whose filters it
 //     mirrors exactly.
 
-import { unstable_cache } from 'next/cache';
+import { refresh, unstable_cache } from 'next/cache';
 
 import {
   inventoryDefaultLifecycle,
@@ -156,11 +156,11 @@ export { inventoryListTag, revalidateInventoryList };
  * succeeded, and a failed invalidation only means up to 60s of
  * staleness, which must not turn a successful action into an error.
  *
- * Resolves true only when the tag really was invalidated. Write actions can
- * ignore it; the realtime watcher cannot (revalidateInventoryViewAction):
- * inside a Server Action, an invalidation is also what makes Next re-render
- * the current page into the action's response, so false means "nothing will
- * refresh unless you do it yourself".
+ * Resolves true only when the tag really was invalidated. Inside a Server
+ * Action, an invalidation is also what makes Next re-render the current page
+ * into the action's response. (The realtime watcher uses
+ * refreshInventoryViewForCurrentOrg below, which expires only where it can
+ * matter.)
  */
 export async function revalidateInventoryListForCurrentOrg(): Promise<boolean> {
   try {
@@ -169,6 +169,55 @@ export async function revalidateInventoryListForCurrentOrg(): Promise<boolean> {
     return true;
   } catch (err) {
     console.warn('[inventory-list] revalidate skipped:', err);
+    return false;
+  }
+}
+
+/** The two pages that read the org-shared list caches. */
+export function isInventoryListView(view: unknown): view is InventoryListView {
+  return view === 'items' || view === 'books';
+}
+
+/**
+ * The realtime watcher's refresh (revalidateInventoryViewAction), called once
+ * per change transaction by each visible tab. Re-renders the caller's page
+ * into the action's response, and expires the organization's shared list
+ * caches ONLY where that can matter: the tab is on Items or Books (`view`, the
+ * one thing the client says) AND the caller may read those caches
+ * (canUseSharedInventoryCaches: manager and above with items:read; nobody
+ * else's page reads them). The organization is the session's (withContext),
+ * never the client's.
+ *
+ * Why not always expire, as before: every write path that goes through this
+ * server already expires the tag itself (invalidateInventoryListAfterWrite,
+ * enforced by inventory-list-invalidation.guard.test.ts), the phone writes
+ * stock through /api/v1, so the watcher's expiry only covers writes that
+ * bypass the server (SQL, platform tooling). A staff tab, or any tab on
+ * another page, expired a cache its page never reads, once per tab per event,
+ * and the next manager on Items paid for the rebuild. A manager's Items or
+ * Books tab keeps the expiry, so it is never left on data from before a write.
+ *
+ * Both branches re-render the page in the action's response, one round trip:
+ * the list expiry (a tag expired with { expire: 0 }) and refresh() each set
+ * workStore.pathWasRevalidated (next 16.4.3 revalidate.js, pinned by
+ * revalidate-inventory-view.contract.test.ts). refresh() leaves every cache
+ * alone.
+ *
+ * Resolves true when a re-render is coming, false when the context could not
+ * be read (signed out, an authenticator code owed, a failed read): nothing
+ * was marked, and the caller refreshes by itself. Never throws.
+ */
+export async function refreshInventoryViewForCurrentOrg(view: unknown): Promise<boolean> {
+  try {
+    const ctx = await withContext();
+    if (isInventoryListView(view) && canUseSharedInventoryCaches(ctx)) {
+      revalidateInventoryList(ctx.organizationId);
+    } else {
+      refresh();
+    }
+    return true;
+  } catch (err) {
+    console.warn('[inventory-list] realtime refresh skipped:', err);
     return false;
   }
 }
