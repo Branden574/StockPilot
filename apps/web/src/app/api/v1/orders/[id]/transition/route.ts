@@ -1,4 +1,3 @@
-import { revalidateTag } from 'next/cache';
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
@@ -9,6 +8,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { invalidPathIdResponse } from '@/server/lib/path-id';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
+import { expireOrdersCatalogAfterOrderWrite } from '@/server/services/lib/orders-catalog-expiry';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
 import { HOLD_FAILED_COPY } from '@stockpilot/core';
@@ -190,9 +190,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         break;
       case 'hold_stock': {
         // Holds move availability: bust the storefront catalog like every
-        // reserve/release transition, and answer what was held.
+        // reserve/release transition, and answer what was held. The answer
+        // carries no order row, so the organization's catalog is expired.
         const hold = await svc.holdStock(id);
-        revalidateTag('orders-new-v2-catalog', 'max');
+        expireOrdersCatalogAfterOrderWrite(ctx.organizationId);
         return NextResponse.json({ hold });
       }
     }
@@ -206,8 +207,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }
     // Every transition can move availability (reserve/release/decrement) —
     // bust the storefront catalog so "avail" pills update near-instantly
-    // (mobile transitions must refresh the web Place-an-Order page too).
-    revalidateTag('orders-new-v2-catalog', 'max');
+    // (mobile transitions must refresh the web Place-an-Order page too). Only
+    // the catalog of the order's warehouse, from the row the service answered,
+    // expired now so the next read recomputes (orders-catalog-expiry.ts).
+    expireOrdersCatalogAfterOrderWrite(ctx.organizationId, order);
     return NextResponse.json({ order });
   } catch (e) {
     if (e instanceof ServiceError) {

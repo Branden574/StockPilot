@@ -284,7 +284,9 @@ describe('Group selected: apply', () => {
     ]);
     expect(res.outcome).toMatchObject({ outcome: 'applied', created: true, group: { id: G } });
     expect(h.invalidate).toHaveBeenCalledWith(ORG, 'item.grouping');
-    expect(h.revalidateTag).toHaveBeenCalledWith('orders-new-v2-catalog', 'max');
+    // This organization's order catalog (it shows SKUs), expired now so the
+    // next read shows the new SKUs; never every organization's.
+    expect(h.revalidateTag.mock.calls).toEqual([[`orders-new-v2-catalog:${ORG}`, { expire: 0 }]]);
   });
 
   it('a no-op wrote nothing and refreshes nothing', async () => {

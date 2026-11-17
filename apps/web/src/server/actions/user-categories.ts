@@ -4,6 +4,7 @@ import { revalidatePath, revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
 import { withContext } from '@/server/services/context';
+import { ordersCatalogTag } from '@/server/services/lib/order-catalog-hidden';
 import { UserCategoriesService } from '@/server/services/user-categories';
 import { actionErrorResult } from '@/server/lib/action-error-result';
 
@@ -34,13 +35,14 @@ export async function setUserCategoryAccessAction(
     const svc = new UserCategoriesService(ctx);
     await svc.setUserCategoryAccess(parsed.data.userId, parsed.data.categoryIds);
 
-    // Cache invalidation: the orders/new picker caches catalog
-    // payloads keyed by (orgId, warehouseId, accessKey). updateTag is
-    // Next 16's read-your-own-writes API — purges entries tagged
-    // 'orders-new-v2-catalog' so the next read (including the admin's
-    // own follow-up render) sees the new visibility. The 30s TTL on
-    // these entries refills the cache for unaffected users.
-    revalidateTag('orders-new-v2-catalog', 'max');
+    // The orders/new picker caches catalog payloads keyed by (orgId,
+    // warehouseId, accessKey). The new visibility does not depend on this
+    // mark: the access key is resolved live on every request from the
+    // member's grants (resolveCatalogScopeKey, never cached), so the
+    // member's next read already uses the entry for their new grants.
+    // This marks this organization's entries for a background refresh
+    // ('max', stale-while-revalidate), and only this organization's.
+    revalidateTag(ordersCatalogTag(ctx.organizationId), 'max');
 
     // Server-rendered pages that show inventory lists need a fresh
     // read for the target user on their next visit. Path-based
