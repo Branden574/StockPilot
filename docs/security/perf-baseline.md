@@ -189,10 +189,14 @@ every deploy.
 
 The suite is not a CI gate. It runs against a **local** production build of the
 app and a **local** Supabase stack only: every scenario and tool refuses an
-address that is not `127.0.0.1`, `localhost` or `[::1]` before its first request,
-and there is no default address and no override
+address that is not `127.0.0.1` or `[::1]` (not the name `localhost`, which a
+proxy setting can send elsewhere) before its first request, never follows a
+redirect, and there is no default address and no override
 (`load-tests/k6/lib/safety.js`; `apps/web/src/test/load-tests-safety.guard.test.ts`
-holds every scenario to it). Setup, seeding, the workload, thresholds and the
+holds every scenario to it). The app under test is built and served from a
+worktree with no `apps/web/.env*` file, with every outside-service key it reads
+set to empty, and the runner refuses an app whose Content-Security-Policy names
+any Supabase address but the local stack. Setup, seeding, the workload, thresholds and the
 report are described in `load-tests/README.md`. The one command:
 
 ```bash

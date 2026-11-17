@@ -2151,10 +2151,11 @@ WEB_TESTS=(
 
   # Load tests reach this machine only. Every k6 scenario imports the shared
   # guard (load-tests/k6/lib/safety.js) and calls it before any request, every
-  # request passes assertRequestUrl, no file of the suite holds an address that
-  # is not 127.0.0.1, localhost or [::1], and the guard refuses the parser
-  # tricks that make a remote address look local. The seeder, teardown and
-  # checks reach the database and Supabase only through the checked helpers.
+  # request passes assertRequestUrl, no scenario follows a redirect, no file of
+  # the suite holds an address that is not 127.0.0.1 or [::1], and the guard
+  # refuses the parser tricks that make a remote address look local. The Node
+  # tools fetch only with redirects refused, and the app env they write sets
+  # every outside-service key the app reads to empty.
   src/test/load-tests-safety.guard.test.ts
 )
 

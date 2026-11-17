@@ -2,44 +2,79 @@
 // Removes what seed.mjs made, from the LOCAL stack only.
 //
 //   node load-tests/k6/tools/teardown.mjs --manifest <manifest.json>
-//   node load-tests/k6/tools/teardown.mjs --all     every loadtest-* organization
-//                                                  and loadtest+* account
+//   node load-tests/k6/tools/teardown.mjs --all          lists what it would delete
+//   node load-tests/k6/tools/teardown.mjs --all --yes    and deletes it
+//
+// --all finds what the seeder makes and nothing else: organizations whose slug
+// is loadtest-<4-16 letters or digits> AND whose name is "Load Test Org <the
+// same id>", and accounts whose email is loadtest+<id>-<role>-<n>@example.com
+// that belong to no other organization. Without --yes it only lists them.
 //
 // Deletes every row of the organization from each public table that has an
 // organization_id (repeating passes until foreign keys stop refusing), the
 // organization, the rate-limit rows of its accounts, then the accounts
 // themselves (auth.users; their sessions and identities go with them). Ends by
-// counting what is left and fails if anything is.
+// counting what is left and fails if anything is. The database must be on
+// this machine (local.mjs refuses any other address).
 import { lit, parseArgs, psql, readJson } from './local.mjs';
 
-function orgIdsFor(args) {
+/** The seeder's shapes (seed.mjs). */
+const SLUG_RE = '^loadtest-[a-z0-9]{4,16}$';
+const EMAIL_RE = '^loadtest\\+[a-z0-9]{4,16}-[a-z-]+-[0-9]+@example\\.com$';
+const EMAIL_RE_JS = /^loadtest\+[a-z0-9]{4,16}-[a-z-]+-[0-9]+@example\.com$/;
+
+function lines(out) {
+  const t = out.trim();
+  return t ? t.split('\n') : [];
+}
+
+function orgsFor(args) {
   if (args.all) {
-    const out = psql(
-      `select id from public.organizations where slug::text like 'loadtest-%';`,
-    ).trim();
-    return out ? out.split('\n') : [];
+    return lines(
+      psql(`select id || '|' || slug || '|' || name from public.organizations
+             where slug::text ~ ${lit(SLUG_RE)}
+               and name = 'Load Test Org ' || substr(slug::text, 10)
+             order by slug;`),
+    ).map((l) => {
+      const [id, slug, name] = l.split('|');
+      return { id, slug, name };
+    });
   }
   if (!args.manifest) throw new Error('--manifest <path> or --all is required');
   const m = readJson(args.manifest);
   if (m.kind !== 'stockpilot-loadtest-manifest') throw new Error('not a seeder manifest');
-  return [m.organizationId];
+  return [{ id: m.organizationId, slug: m.slug, name: null }];
 }
 
-function userIdsFor(args) {
+function usersFor(args, orgIds) {
   if (args.all) {
-    const out = psql(`select id from auth.users where email like 'loadtest+%@example.com';`).trim();
-    return out ? out.split('\n') : [];
+    // Seeder accounts that belong to no organization but the load-test ones.
+    return lines(
+      psql(`select u.id || '|' || u.email from auth.users u
+             where u.email ~ ${lit(EMAIL_RE)}
+               and not exists (select 1 from public.organization_members om
+                                where om.user_id = u.id
+                                  and om.organization_id <> all(array[${orgIds.map(lit).join(',') || 'null'}]::uuid[]))
+             order by u.email;`),
+    ).map((l) => {
+      const [id, email] = l.split('|');
+      return { id, email };
+    });
   }
   const m = readJson(args.manifest);
   return Object.values(m.users)
     .flat()
-    .map((u) => u.id);
+    .filter((u) => EMAIL_RE_JS.test(String(u.email)))
+    .map((u) => ({ id: u.id, email: u.email }));
 }
 
 function teardownOrg(orgId) {
-  // Only organizations the seeder made: the slug says so.
-  const slug = psql(`select slug from public.organizations where id = ${lit(orgId)};`).trim();
-  if (slug && !slug.startsWith('loadtest-'))
+  // Only organizations the seeder made: the slug and the name say so.
+  const ok = psql(`select count(*) from public.organizations
+                    where id = ${lit(orgId)} and slug::text ~ ${lit(SLUG_RE)}
+                      and name = 'Load Test Org ' || substr(slug::text, 10);`).trim();
+  const exists = psql(`select count(*) from public.organizations where id = ${lit(orgId)};`).trim();
+  if (exists !== '0' && ok !== '1')
     throw new Error(`organization ${orgId} is not a load-test organization`);
   const report = psql(`
 set statement_timeout = 0;
@@ -91,8 +126,18 @@ select msg from _teardown;
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  const orgs = orgIdsFor(args);
-  const users = userIdsFor(args);
+  const orgRows = orgsFor(args);
+  const orgs = orgRows.map((o) => o.id);
+  const userRows = usersFor(args, orgs);
+  const users = userRows.map((u) => u.id);
+  if (args.all && !args.yes) {
+    console.log(`[teardown] --all would delete ${orgRows.length} organizations:`);
+    for (const o of orgRows) console.log(`  ${o.slug}  ${o.name}  ${o.id}`);
+    console.log(`[teardown] and ${userRows.length} accounts:`);
+    for (const u of userRows) console.log(`  ${u.email}`);
+    console.log('[teardown] Nothing deleted. Run again with --all --yes to delete them.');
+    return;
+  }
   for (const org of orgs) {
     const stuck = teardownOrg(org);
     if (stuck) console.log(`[teardown] could not delete (last pass):\n${stuck}`);
@@ -100,10 +145,15 @@ function main() {
   }
   if (users.length) {
     const ids = users.map(lit).join(',');
+    // Only these accounts' limiter rows (keys end in :<user id>), and only
+    // accounts with the seeder's email shape.
     psql(`
 begin;
-delete from public.rate_limit_buckets where ${users.map((u) => `key like ${lit(`%:${u}`)}`).join(' or ')};
-delete from auth.users where id in (${ids}) and email like 'loadtest+%@example.com';
+delete from public.rate_limit_buckets b
+ using auth.users u
+ where u.id in (${ids}) and u.email ~ ${lit(EMAIL_RE)}
+   and b.key like '%:' || u.id::text;
+delete from auth.users where id in (${ids}) and email ~ ${lit(EMAIL_RE)};
 commit;`);
     console.log(`[teardown] ${users.length} accounts removed`);
   }

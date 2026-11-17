@@ -12,6 +12,8 @@ import { assertRequestUrl, localTarget } from '../lib/safety.js';
 const { baseUrl } = localTarget(__ENV, { needSupabase: false });
 
 export const options = {
+  // A redirect is an answer to check, never followed off this machine.
+  maxRedirects: 0,
   stages: [
     { duration: '30s', target: 50 },
     { duration: '1m', target: 50 },

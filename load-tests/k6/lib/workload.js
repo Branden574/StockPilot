@@ -10,9 +10,14 @@
 // A / (mean think + mean answer), so "100 actors" means about 100 people
 // clicking at human speed.
 //
-// Every request carries the tags kind (ssr | api_read | write), role and
-// action. The thresholds below fail the run on any sign-in or correctness
-// fault, not only on slowness.
+// Every request carries the tags kind, role and action. The timed kinds, each
+// with its own p95 target, are ssr (a page), api_read (a read through the API)
+// and write (a write that changes data). Requests that are part of the run but
+// would distort those numbers have kinds of their own, reported but not timed
+// against a target: write_refused (a viewer's write, refused at once),
+// write_replay (a resent submission, answered from the stored result) and
+// probe (the warehouse-scope probes). The thresholds below fail the run on any
+// sign-in or correctness fault, not only on slowness.
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 import exec from 'k6/execution';
@@ -22,7 +27,16 @@ import { Counter, Rate, Trend } from 'k6/metrics';
 import { assertRequestUrl, localTarget } from './safety.js';
 import { mintSessions, proveSessions } from './auth.js';
 
+/** Kinds with a p95 target. */
 export const KINDS = ['ssr', 'api_read', 'write'];
+/** Kinds reported apart and not held to a target. */
+export const REPORTED_KINDS = ['write_refused', 'write_replay', 'probe'];
+/**
+ * The writes counted when sent and when answered, so the correctness check
+ * can allow for the ones a run's end cut off (sent, never answered: the
+ * server may or may not have committed them).
+ */
+export const COUNTED_WRITES = ['place_order', 'adjust_up', 'adjust_down', 'receive_line'];
 export const ALL_ROLES = ['owner', 'admin', 'manager', 'staff', 'viewer', 'staff_one_warehouse'];
 
 // ── Targets and manifest (init stage: refused here before any request) ──
@@ -76,6 +90,8 @@ const receiptsReplayed = new Counter('receipts_replayed');
 const adjustUp = new Counter('adjust_up_ok');
 const adjustDown = new Counter('adjust_down_ok');
 const responseBytes = new Trend('response_bytes');
+const writesSent = new Counter('writes_sent');
+const writesAnswered = new Counter('writes_answered');
 
 // ── Configuration ──
 function num(name, dflt) {
@@ -94,6 +110,9 @@ export const CONFIG = {
     write: num('LOADTEST_P95_WRITE_MS', 2000),
   },
   sessionsPerRole: num('LOADTEST_SESSIONS_PER_ROLE', 50),
+  // Iterations k6 could not start on time (no free VU): the offered load was
+  // not delivered. Percent of the planned iterations a run may drop.
+  maxDroppedPct: num('LOADTEST_MAX_DROPPED_PCT', 1),
   replayShare: num('LOADTEST_REPLAY_SHARE', 0.1),
 };
 
@@ -207,7 +226,14 @@ export const DEFAULT_ACTIONS = {
 
 const THINK = { web: [3, 8], phone: [1, 3] };
 /** A rough answer time, only used to size the arrival rate. */
-const EST_ANSWER_S = { ssr: 0.4, api_read: 0.15, write: 0.3 };
+const EST_ANSWER_S = {
+  ssr: 0.4,
+  api_read: 0.15,
+  write: 0.3,
+  write_refused: 0.1,
+  write_replay: 0.15,
+  probe: 0.3,
+};
 
 // ── Requests ──
 function pick(list) {
@@ -227,9 +253,10 @@ function jsonOf(res) {
 /**
  * One request as `who`. auth: 'bearer' (the phone, /api) or 'cookie' (the
  * browser). Records the sign-in signals for every answer: a redirect to
- * /signin, a 401, or an authenticator demand is an auth failure.
+ * /signin, a 401, or an authenticator demand is an auth failure. `write`
+ * names a counted write (COUNTED_WRITES): counted when sent and when answered.
  */
-function call(who, method, path, { auth, kind, action, body, expect = [200], name }) {
+function call(who, method, path, { auth, kind, action, body, expect = [200], name, write }) {
   const tags = {
     kind,
     role: who.role,
@@ -240,6 +267,7 @@ function call(who, method, path, { auth, kind, action, body, expect = [200], nam
   if (auth === 'bearer') headers.Authorization = `Bearer ${who.session.bearer}`;
   else headers.Cookie = who.session.cookie;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (write) writesSent.add(1, { write });
   const res = http.request(
     method,
     assertRequestUrl(`${TARGET.baseUrl}${path}`),
@@ -251,6 +279,8 @@ function call(who, method, path, { auth, kind, action, body, expect = [200], nam
       responseCallback: http.expectedStatuses(...expect),
     },
   );
+  // Status 0: no answer (timeout, reset, or the run's end cut it off).
+  if (write && res.status !== 0) writesAnswered.add(1, { write });
   const location = res.headers.Location || res.headers.location || '';
   const toSignin = res.status >= 300 && res.status < 400 && /\/signin/.test(location);
   const text = typeof res.body === 'string' ? res.body : '';
@@ -492,6 +522,7 @@ const ACTIONS = {
         action: 'place_order',
         body,
         expect: [201],
+        write: 'place_order',
       });
       const first = jsonOf(res);
       const created =
@@ -502,7 +533,7 @@ const ACTIONS = {
         // The phone resending the same submission: one order, answered again.
         const again = call(who, 'POST', '/api/v1/orders', {
           auth: 'bearer',
-          kind: 'write',
+          kind: 'write_replay',
           action: 'place_order_replay',
           body,
           expect: [200],
@@ -533,6 +564,7 @@ const ACTIONS = {
         kind: 'write',
         action: 'adjust_pair',
         body: { quantityChange: 1, reason: 'Load test +1' },
+        write: 'adjust_up',
       });
       const upOk = up.status === 200;
       if (upOk) adjustUp.add(1, { role: who.role });
@@ -544,6 +576,7 @@ const ACTIONS = {
         kind: 'write',
         action: 'adjust_pair',
         body: { quantityChange: -1, reason: 'Load test -1' },
+        write: 'adjust_down',
       });
       const downOk = down.status === 200;
       if (downOk) adjustDown.add(1, { role: who.role });
@@ -567,6 +600,7 @@ const ACTIONS = {
         kind: 'write',
         action: 'receive_line',
         body,
+        write: 'receive_line',
       });
       const first = jsonOf(res);
       const ok = res.status === 200 && !!first && typeof first.receiptId === 'string';
@@ -575,7 +609,7 @@ const ACTIONS = {
       if (ok && Math.random() < CONFIG.replayShare) {
         const again = call(who, 'POST', path, {
           auth: 'bearer',
-          kind: 'write',
+          kind: 'write_replay',
           action: 'receive_line_replay',
           body,
           name: 'POST /api/v1/po/[id]/receive-line (replay)',
@@ -590,12 +624,12 @@ const ACTIONS = {
   },
   viewer_write_denied: {
     surface: 'phone',
-    kind: 'write',
+    kind: 'write_refused',
     run(who) {
       const item = pick(POOLS.adjust);
       const res = call(who, 'POST', `/api/v1/items/${item.id}/adjust`, {
         auth: 'bearer',
-        kind: 'write',
+        kind: 'write_refused',
         action: 'viewer_write_denied',
         body: { quantityChange: 1, reason: 'Viewer must be refused' },
         expect: [403],
@@ -606,7 +640,7 @@ const ACTIONS = {
   },
   scope_probe: {
     surface: 'web',
-    kind: 'api_read',
+    kind: 'probe',
     run(who) {
       // Staff limited to the first warehouse must never see another
       // warehouse's items, by search, scan, page or list.
@@ -615,7 +649,7 @@ const ACTIONS = {
       if (probe === 0) {
         const res = call(who, 'GET', `/api/search?q=${encodeURIComponent(ORG.otherTerm)}`, {
           auth: 'cookie',
-          kind: 'api_read',
+          kind: 'probe',
           action: 'scope_probe',
           name: 'GET /api/search (other warehouse)',
         });
@@ -632,7 +666,7 @@ const ACTIONS = {
       } else if (probe === 1) {
         const res = call(who, 'GET', `/api/v1/items/lookup?code=${encodeURIComponent(other.sku)}`, {
           auth: 'bearer',
-          kind: 'api_read',
+          kind: 'probe',
           action: 'scope_probe',
           expect: [404],
           name: 'GET /api/v1/items/lookup (other warehouse)',
@@ -644,7 +678,7 @@ const ACTIONS = {
       } else if (probe === 2) {
         const res = call(who, 'GET', `/dashboard/inventory/${other.id}`, {
           auth: 'cookie',
-          kind: 'ssr',
+          kind: 'probe',
           action: 'scope_probe',
           expect: [200, 404],
           name: 'GET /dashboard/inventory/[id] (other warehouse)',
@@ -662,7 +696,7 @@ const ACTIONS = {
           `/dashboard/inventory?q=${encodeURIComponent(ORG.otherTerm)}`,
           {
             auth: 'cookie',
-            kind: 'ssr',
+            kind: 'probe',
             action: 'scope_probe',
             name: 'GET /dashboard/inventory?q=other',
           },
@@ -722,6 +756,7 @@ function parseDurationSeconds(d) {
  * defaults to every role with the default mix.
  */
 let BUILT_SCENARIOS = {};
+let PLANNED = { iterations: 0, maxDropped: 0, durationS: 0 };
 
 export function buildOptions(plan) {
   const durationS = parseDurationSeconds(CONFIG.duration);
@@ -742,29 +777,40 @@ export function buildOptions(plan) {
   };
   // setup()'s own requests to the app, so the report can count them apart.
   thresholds['http_reqs{kind:setup}'] = ['count>=0'];
-  for (const kind of KINDS) {
-    thresholds[`http_req_duration{kind:${kind}}`] = [`p(95)<${CONFIG.p95[kind]}`];
+  for (const kind of [...KINDS, ...REPORTED_KINDS]) {
+    thresholds[`http_req_duration{kind:${kind}}`] = KINDS.includes(kind)
+      ? [`p(95)<${CONFIG.p95[kind]}`]
+      : ['max>=0'];
     // Reporting only (a threshold is what makes k6 keep a tagged sub-metric).
     thresholds[`response_bytes{kind:${kind}}`] = ['max>=0'];
     thresholds[`http_reqs{kind:${kind}}`] = ['count>=0'];
   }
+  for (const write of COUNTED_WRITES) {
+    thresholds[`writes_sent{write:${write}}`] = ['count>=0'];
+    thresholds[`writes_answered{write:${write}}`] = ['count>=0'];
+  }
+  let plannedIterations = 0;
   for (const [role, p] of Object.entries(plan)) {
     const actors = CONFIG.actors * p.share;
     if (actors <= 0) continue;
     const iter = meanIterationSeconds(p.actions);
     const perMinute = Math.max(1, Math.round((actors * 60) / iter));
+    plannedIterations += (perMinute * durationS) / 60;
+    // About `actors` iterations are in flight at once; random think times
+    // make it burst above that. VUs started mid-run take time to start and
+    // drop iterations, so most are started up front.
     scenarios[role] = {
       executor: 'constant-arrival-rate',
       exec: 'iterate',
       rate: perMinute,
       timeUnit: '1m',
       duration: CONFIG.duration,
-      preAllocatedVUs: Math.max(2, Math.ceil(actors * 1.3)),
-      maxVUs: Math.max(4, Math.ceil(actors * 4)),
+      preAllocatedVUs: Math.max(4, Math.ceil(actors * 2)),
+      maxVUs: Math.max(8, Math.ceil(actors * 4)),
       gracefulStop: '15s',
       tags: { role },
     };
-    for (const kind of KINDS) {
+    for (const kind of [...KINDS, ...REPORTED_KINDS]) {
       thresholds[`http_req_duration{kind:${kind},role:${role}}`] = ['max>=0'];
     }
     for (const action of Object.keys(p.actions)) {
@@ -772,10 +818,18 @@ export function buildOptions(plan) {
       thresholds[`response_bytes{action:${action}}`] = ['max>=0'];
     }
   }
+  // The offered load must be delivered: a run that could not start its
+  // iterations on time measured a lighter load than it reports.
+  const maxDropped = Math.floor((plannedIterations * CONFIG.maxDroppedPct) / 100);
+  thresholds.dropped_iterations = [`count<=${maxDropped}`];
   BUILT_SCENARIOS = scenarios;
+  PLANNED = { iterations: Math.round(plannedIterations), maxDropped, durationS };
   return {
     scenarios,
     thresholds,
+    // Never follow a redirect: a redirect is an answer to record (to /signin,
+    // it is a sign-in failure), and following one could leave this machine.
+    maxRedirects: 0,
     summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max', 'count'],
     setupTimeout: '300s',
     userAgent: 'stockpilot-loadtest/1 (local)',
@@ -843,6 +897,9 @@ export function summarize(data) {
   clean.loadtest = {
     actors: CONFIG.actors,
     duration: CONFIG.duration,
+    durationSeconds: PLANNED.durationS,
+    plannedIterations: PLANNED.iterations,
+    maxDropped: PLANNED.maxDropped,
     p95: CONFIG.p95,
     scenarios: Object.fromEntries(
       Object.entries(BUILT_SCENARIOS).map(([r, sc]) => [
@@ -852,13 +909,13 @@ export function summarize(data) {
     ),
   };
   const lines = ['', 'StockPilot load test (local)', ''];
-  for (const kind of KINDS) {
+  for (const kind of [...KINDS, ...REPORTED_KINDS]) {
     const m = data.metrics[`http_req_duration{kind:${kind}}`];
     if (!m) continue;
     const v = m.values;
     const ok = m.thresholds ? Object.values(m.thresholds).every((t) => t.ok) : true;
     lines.push(
-      `  ${kind.padEnd(9)} n=${fmt(v.count)} p50=${fmt(v.med)}ms p95=${fmt(v['p(95)'])}ms p99=${fmt(v['p(99)'])}ms ${ok ? 'ok' : 'OVER TARGET'}`,
+      `  ${kind.padEnd(13)} n=${fmt(v.count)} p50=${fmt(v.med)}ms p95=${fmt(v['p(95)'])}ms p99=${fmt(v['p(99)'])}ms ${ok ? 'ok' : 'OVER TARGET'}`,
     );
   }
   const counters = [
@@ -878,6 +935,12 @@ export function summarize(data) {
   ];
   for (const c of counters) {
     if (data.metrics[c]) lines.push(`  ${c.padEnd(22)} ${fmt(data.metrics[c].values.count)}`);
+  }
+  for (const w of COUNTED_WRITES) {
+    const sent = data.metrics[`writes_sent{write:${w}}`];
+    const answered = data.metrics[`writes_answered{write:${w}}`];
+    const n = (sent ? sent.values.count : 0) - (answered ? answered.values.count : 0);
+    if (n) lines.push(`  unanswered ${w.padEnd(11)} ${n}`);
   }
   for (const r of ['checks', 'auth_ok', 'http_req_failed']) {
     if (data.metrics[r])

@@ -3,8 +3,10 @@
 //
 //   node load-tests/k6/tools/report.mjs --dir <run folder>
 //
-// Per step of the ladder: offered load, requests and throughput, failures and
-// checks, p50/p95/p99 by kind, by kind and role and by action, response bytes,
+// Per step of the ladder: offered load and the iterations k6 dropped, requests
+// and throughput (workload requests over the configured step time; setup()'s
+// sign-ins and the stop at the end are left out), failures and checks, writes
+// cut off unanswered at the end, p50/p95/p99 by kind, by kind and role and by action, response bytes,
 // database statements per request (pg_stat_statements before/after, by
 // database role), the slowest statements, connection counts, and the
 // correctness check.
@@ -13,7 +15,9 @@ import { join } from 'node:path';
 
 import { parseArgs } from './local.mjs';
 
-const KINDS = ['ssr', 'api_read', 'write'];
+// The timed kinds, then the ones reported apart (lib/workload.js).
+const KINDS = ['ssr', 'api_read', 'write', 'write_refused', 'write_replay', 'probe'];
+const COUNTED_WRITES = ['place_order', 'adjust_up', 'adjust_down', 'receive_line'];
 
 function readMaybe(path) {
   return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null;
@@ -66,7 +70,18 @@ function stepReport(dir, name) {
         .map((l) => JSON.parse(l))
         .filter((s) => !s.error)
     : [];
-  const durationS = summary.state.testRunDurationMs / 1000;
+  // The configured steady time: testRunDurationMs also holds setup() (sign-ins
+  // for every account) and the graceful stop.
+  const lt = summary.loadtest || {};
+  const durationS = lt.durationSeconds || summary.state.testRunDurationMs / 1000;
+  const count = (n) => (summary.metrics[n] ? summary.metrics[n].values.count : 0);
+  const unanswered = Object.fromEntries(
+    COUNTED_WRITES.map((w) => [
+      w,
+      Math.max(0, count(`writes_sent{write:${w}}`) - count(`writes_answered{write:${w}}`)),
+    ]),
+  );
+  const unansweredTotal = Object.values(unanswered).reduce((a, b) => a + b, 0);
   const counts = Object.fromEntries(
     [
       'signin_redirects',
@@ -183,6 +198,10 @@ function stepReport(dir, name) {
     name,
     exitCode,
     durationS,
+    plannedIterations: lt.plannedIterations ?? null,
+    maxDropped: lt.maxDropped ?? null,
+    unanswered,
+    unansweredTotal,
     appRequests,
     throughputPerS: appRequests / durationS,
     httpFailedRate: rate('http_req_failed'),
@@ -211,22 +230,33 @@ function markdown(run, steps) {
   );
   L.push('## Summary', '');
   L.push(
-    '| actors | requests | req/s | failed | checks | ssr p95 | api p95 | write p95 | PostgREST stmts/req | peak conns | correctness | k6 exit |',
+    '| actors | requests | req/s | dropped / planned | failed | checks | ssr p95 | api p95 | write p95 | unanswered writes | PostgREST stmts/req | peak conns | correctness | k6 exit |',
   );
-  L.push('|---|---|---|---|---|---|---|---|---|---|---|---|');
+  L.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
   for (const s of steps) {
     if (s.missing) {
-      L.push(`| ${s.name} | not run | | | | | | | | | | |`);
+      L.push(`| ${s.name} | not run | | | | | | | | | | | | |`);
       continue;
     }
     L.push(
-      `| ${s.name} | ${s.appRequests} | ${s.throughputPerS.toFixed(1)} | ${(s.httpFailedRate * 100).toFixed(2)}% | ${(s.checksRate * 100).toFixed(2)}% | ` +
+      `| ${s.name} | ${s.appRequests} | ${s.throughputPerS.toFixed(1)} | ${s.counts.dropped_iterations} / ${s.plannedIterations ?? '-'} | ` +
+        `${(s.httpFailedRate * 100).toFixed(2)}% | ${(s.checksRate * 100).toFixed(2)}% | ` +
         `${ms(s.byKind.ssr && s.byKind.ssr.p95)} | ${ms(s.byKind.api_read && s.byKind.api_read.p95)} | ${ms(s.byKind.write && s.byKind.write.p95)} | ` +
+        `${s.unansweredTotal} | ` +
         `${s.db && s.db.statementsPerRequest !== null ? s.db.statementsPerRequest.toFixed(1) : '-'} | ${s.connectionPeak.total} | ` +
         `${s.correctness ? (s.correctness.ok ? 'pass' : 'FAIL') : '-'} | ${s.exitCode} |`,
     );
   }
-  L.push('');
+  L.push(
+    '',
+    'req/s = workload requests over the configured step time (setup() sign-ins and the graceful stop left out). ' +
+      'dropped = iterations k6 could not start on time for want of a free VU (the step fails above ' +
+      'LOADTEST_MAX_DROPPED_PCT of the planned ones). unanswered writes = writes sent but cut off by the end of ' +
+      'the step; the correctness check allows each to have been committed or not. ' +
+      'The p95 columns hold the timed kinds only: refused viewer writes, resent submissions and scope probes are ' +
+      'reported apart below.',
+    '',
+  );
   for (const s of steps) {
     if (s.missing) continue;
     L.push(`## ${s.name} actors`, '');
@@ -234,7 +264,11 @@ function markdown(run, steps) {
       `Offered arrivals per minute by role: ${Object.entries(s.offeredPerMinute)
         .map(([r, v]) => `${r} ${v}`)
         .join(', ')}.` +
-        ` Ran ${s.durationS.toFixed(0)} s, ${s.counts.iterations} iterations, ${s.counts.dropped_iterations} dropped.`,
+        ` Ran ${s.durationS.toFixed(0)} s, ${s.counts.iterations} iterations of ${s.plannedIterations ?? '-'} planned,` +
+        ` ${s.counts.dropped_iterations} dropped (limit ${s.maxDropped ?? '-'}).` +
+        ` Writes cut off unanswered: ${Object.entries(s.unanswered)
+          .map(([w, n]) => `${w} ${n}`)
+          .join(', ')}.`,
       '',
     );
     L.push(

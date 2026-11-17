@@ -6,14 +6,16 @@
 //        [--project-id spload] [--port-base 58420]
 //   supabase start --workdir <folder> -x studio,imgproxy,edge-runtime,logflare,vector,supavisor,postgres-meta,mailpit
 //
-// Copies supabase/ (migrations, seed, config) into <folder>/supabase and edits
+// Copies supabase/ (migrations, seed, config) into <folder>/supabase, never
+// its .temp or .branches folders (a checkout linked to a hosted project keeps
+// the link there), checks the copy holds no link, and edits
 // the copy's config.toml: its own project_id, ports port-base+0..+4 (shadow,
 // API, database, studio, mail), studio and edge functions off, and the auth
 // rate limits raised: one machine mints hundreds of sessions in a run's
-// setup(), which the default limit of 30 verifications per 5 minutes refuses.
+// setup(), which the default limit of 30 sign-ins per 5 minutes refuses.
 // The repository's own config.toml is not touched. Never link this folder.
 import { cpSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 
 import { parseArgs } from './local.mjs';
 
@@ -45,7 +47,24 @@ if (existsSync(join(dir, 'supabase', '.temp', 'project-ref'))) {
   process.exit(2);
 }
 
-cpSync(join(repo, 'supabase'), join(dir, 'supabase'), { recursive: true });
+// The CLI's link state (project ref, pooler and API addresses of a hosted
+// project) lives in .temp; .branches holds branch state. Neither is copied.
+const LINK_FOLDERS = new Set(['.temp', '.branches']);
+cpSync(join(repo, 'supabase'), join(dir, 'supabase'), {
+  recursive: true,
+  filter: (src) => !LINK_FOLDERS.has(basename(src)),
+});
+// What `supabase link` leaves behind. (`supabase start` writes other files in
+// .temp and .branches of the stack folder; those are not a link.)
+const LINK_FILES = ['project-ref', 'pooler-url', 'linked-project.json'];
+for (const f of LINK_FILES) {
+  if (existsSync(join(dir, 'supabase', '.temp', f))) {
+    console.error(
+      `${join(dir, 'supabase', '.temp', f)} exists: the stack folder is linked to a hosted project. Refusing.`,
+    );
+    process.exit(2);
+  }
+}
 const cfgPath = join(dir, 'supabase', 'config.toml');
 let cfg = readFileSync(cfgPath, 'utf8');
 const swap = (from, to) => {

@@ -2,7 +2,7 @@
 //
 // The load tests run against a LOCAL build of the app and a LOCAL Supabase
 // stack only. Every address they are given must name this machine
-// (127.0.0.1, localhost or [::1]); anything else stops the run before the
+// (127.0.0.1 or [::1], written as those literal addresses); anything else stops the run before the
 // first request. There is no default address anywhere: a missing address is
 // refused the same way.
 //
@@ -10,7 +10,11 @@
 // and the vitest guard test import the same rules.
 
 /** The host names this machine answers to. Compared in lower case. */
-export const LOOPBACK_HOSTS = Object.freeze(['127.0.0.1', 'localhost', '[::1]']);
+// Literal addresses only. `localhost` is a name: an environment proxy
+// (Node's NODE_USE_ENV_PROXY with HTTP_PROXY) sends requests for it through the
+// proxy, where 127.0.0.1 goes direct, and a hosts file or a k6 `hosts` option
+// can point it anywhere. A name is never compared, so none of that applies.
+export const LOOPBACK_HOSTS = Object.freeze(['127.0.0.1', '[::1]']);
 
 // scheme://[userinfo@]host[:port][/?#...]  The userinfo part is matched only
 // so that the host after it is the one compared ("localhost@example.com" is
@@ -63,7 +67,7 @@ export function assertLoopbackUrl(name, value, schemes = ['http']) {
   }
   if (!isLoopbackUrl(v)) {
     throw new UnsafeTargetError(
-      `${name} does not point at this machine. The load tests run against 127.0.0.1, localhost or [::1] only.`,
+      `${name} does not point at this machine. The load tests run against 127.0.0.1 or [::1] only (not the name localhost).`,
     );
   }
   return v.replace(/\/+$/, '');

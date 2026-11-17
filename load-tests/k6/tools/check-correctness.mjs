@@ -20,6 +20,13 @@
 //   5. adjust movements by the load-test accounts since the run began = the
 //      200 answers (adjust_up_ok + adjust_down_ok), and their net change =
 //      up - down.
+// Writes the run's end cut off (sent, never answered: k6 stops a request still
+// in flight when gracefulStop runs out) may or may not have been committed. For
+// those the counts in 3-5 may be higher than the answers, by at most the
+// unanswered writes of that kind (writes_sent - writes_answered), and the
+// result names how many there were. Run this after the database has gone
+// quiet (run-scale.mjs waits for it), or a write still being committed counts
+// as a fault.
 // Exits 1 when any check fails.
 import { writeFileSync } from 'node:fs';
 
@@ -28,6 +35,24 @@ import { lit, parseArgs, psqlJson, readJson } from './local.mjs';
 function counter(summary, name) {
   const m = summary.metrics[name];
   return m ? Number(m.values.count || 0) : 0;
+}
+
+/** Sent and never answered, for one counted write (see workload.js COUNTED_WRITES). */
+function unanswered(summary, write) {
+  return Math.max(
+    0,
+    counter(summary, `writes_sent{write:${write}}`) -
+      counter(summary, `writes_answered{write:${write}}`),
+  );
+}
+
+/** answers <= database <= answers + cut off, with the words for the result. */
+function within(database, answers, cutOff) {
+  const d = Number(database);
+  return [
+    d >= answers && d <= answers + cutOff,
+    `database ${database}, answers ${answers}${cutOff ? `, cut off unanswered ${cutOff}` : ''}`,
+  ];
 }
 
 function main() {
@@ -105,6 +130,27 @@ select json_build_object(
     adjustUp: counter(summary, 'adjust_up_ok'),
     adjustDown: counter(summary, 'adjust_down_ok'),
   };
+  const cut = {
+    placeOrder: unanswered(summary, 'place_order'),
+    adjustUp: unanswered(summary, 'adjust_up'),
+    adjustDown: unanswered(summary, 'adjust_down'),
+    receiveLine: unanswered(summary, 'receive_line'),
+  };
+  const [ordersOk, ordersDetail] = within(db.ordersSince, k6.ordersCreated, cut.placeOrder);
+  const [receiptsOk, receiptsDetail] = within(
+    db.receiptsSince,
+    k6.receiptsCreated,
+    cut.receiveLine,
+  );
+  const [adjustOk, adjustDetail] = within(
+    db.adjustMovementsSince,
+    k6.adjustUp + k6.adjustDown,
+    cut.adjustUp + cut.adjustDown,
+  );
+  // Each adjust moves one unit: a cut-off +1 may add one, a cut-off -1 take one.
+  const net = Number(db.adjustNetSince);
+  const answeredNet = k6.adjustUp - k6.adjustDown;
+  const netOk = net >= answeredNet - cut.adjustDown && net <= answeredNet + cut.adjustUp;
   const checks = [
     [
       'on hand = sum of holdings (items touched this run)',
@@ -114,11 +160,7 @@ select json_build_object(
     ['on hand = sum of holdings (every item)', db.allMismatch === 0, `${db.allMismatch} differ`],
     ['no negative holding', db.negativeHoldings === 0, `${db.negativeHoldings}`],
     ['no negative on hand', db.negativeOnHand === 0, `${db.negativeOnHand}`],
-    [
-      'orders created = 201 answers',
-      db.ordersSince === k6.ordersCreated,
-      `database ${db.ordersSince}, answers ${k6.ordersCreated}`,
-    ],
+    ['orders created = 201 answers', ordersOk, ordersDetail],
     [
       'placed submissions = orders created',
       db.placedSubmissionsSince === db.ordersSince,
@@ -134,11 +176,7 @@ select json_build_object(
       db.placedWithoutOrder === 0,
       `${db.placedWithoutOrder}`,
     ],
-    [
-      'receipts = receive answers',
-      db.receiptsSince === k6.receiptsCreated,
-      `database ${db.receiptsSince}, answers ${k6.receiptsCreated}`,
-    ],
+    ['receipts = receive answers', receiptsOk, receiptsDetail],
     ['no idempotency key on two receipts', db.receiptKeysTwice === 0, `${db.receiptKeysTwice}`],
     ['one line per receipt', db.receiptsLineCountNotOne === 0, `${db.receiptsLineCountNotOne}`],
     [
@@ -151,15 +189,11 @@ select json_build_object(
       db.poLinesReceivedMismatch === 0,
       `${db.poLinesReceivedMismatch} lines differ`,
     ],
-    [
-      'adjust movements = adjust answers',
-      db.adjustMovementsSince === k6.adjustUp + k6.adjustDown,
-      `database ${db.adjustMovementsSince}, answers ${k6.adjustUp + k6.adjustDown}`,
-    ],
+    ['adjust movements = adjust answers', adjustOk, adjustDetail],
     [
       'adjust net change = up - down',
-      Number(db.adjustNetSince) === k6.adjustUp - k6.adjustDown,
-      `database ${db.adjustNetSince}, answers ${k6.adjustUp - k6.adjustDown}`,
+      netOk,
+      `database ${net}, answers ${answeredNet}${cut.adjustUp + cut.adjustDown ? ` (cut off: +1 x ${cut.adjustUp}, -1 x ${cut.adjustDown})` : ''}`,
     ],
   ];
   const ok = checks.every((c) => c[1]);
@@ -169,9 +203,12 @@ select json_build_object(
     checks: checks.map(([name, pass, detail]) => ({ name, pass, detail })),
     database: db,
     answers: k6,
+    unansweredWrites: cut,
   };
   for (const c of result.checks)
     console.log(`  ${c.pass ? 'ok  ' : 'FAIL'} ${c.name} (${c.detail})`);
+  const cutTotal = Object.values(cut).reduce((a, b) => a + b, 0);
+  console.log(`  unanswered writes (cut off at the end): ${cutTotal}`);
   if (args.out) writeFileSync(args.out, JSON.stringify(result, null, 1));
   if (!ok) process.exitCode = 1;
 }

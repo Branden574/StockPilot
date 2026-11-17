@@ -143,6 +143,8 @@ async function main() {
   const runId = String(args['run-id'] ?? randomUUID().slice(0, 8))
     .replace(/[^a-z0-9]/gi, '')
     .toLowerCase();
+  // teardown.mjs --all recognises a load-test organization by this shape.
+  if (!/^[a-z0-9]{4,16}$/.test(runId)) throw new Error('--run-id must be 4-16 letters or digits');
   const orgId = randomUUID();
   const t0 = Date.now();
   const log = (m) => console.log(`[seed ${((Date.now() - t0) / 1000).toFixed(1)}s] ${m}`);

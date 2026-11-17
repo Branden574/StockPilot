@@ -12,8 +12,17 @@
 //   LOADTEST_SUPABASE_ANON_KEY         its anon key
 //   LOADTEST_SUPABASE_SERVICE_ROLE_KEY its service key (seeding, and minting sessions in k6 setup())
 //   LOADTEST_DB_URL                    its database (postgresql://...@127.0.0.1:<port>/postgres)
-// Every one of them must name this machine; anything else is refused before
-// any connection is made.
+// Every one of them must name this machine (127.0.0.1 or [::1]); anything
+// else is refused before any connection is made.
+//
+// Before seeding it also refuses:
+//   - an apps/web/.env* file (other than *.example) in this checkout or in the
+//     folder the app's server runs from: Next.js reads those files, and a
+//     checkout's env file may hold real keys;
+//   - an app whose Content-Security-Policy connect-src names any Supabase
+//     address other than LOADTEST_SUPABASE_URL (a build made with another
+//     NEXT_PUBLIC_SUPABASE_URL, or with none, which falls back to the
+//     production project).
 //
 // Options:
 //   --items N             1000 | 10001 | 50000 ... (default 1000)
@@ -21,25 +30,156 @@
 //   --ladder a,b,c        concurrent people per step (default 25,50,100,250)
 //   --duration D          steady time per step, e.g. 3m (default 3m)
 //   --warmup D            one run at the first rate before the ladder, not reported (default 30s; 0 to skip)
-//   --scenario F          k6 scenario (default scenarios/10-roles-workload.js)
+//   --scenario F          k6 scenario, a file in load-tests/k6/scenarios/
+//                         (default scenarios/10-roles-workload.js)
 //   --manifest M          reuse an organization seeded earlier instead of seeding
 //   --keep                do not tear down at the end
 //   --continue-on-fail    run the next step even when a step failed its thresholds
 //   --out DIR             the run folder (default load-tests/results/<timestamp>)
 //
 // Each step: database time -> pg_stat_statements snapshot -> connection
-// sampler -> k6 -> snapshot -> correctness check. A step whose sign-in,
+// sampler -> k6 -> wait for the database to go quiet -> snapshot ->
+// correctness check. A step whose sign-in,
 // authenticator, scope or correctness checks failed stops the ladder.
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { localTarget } from './lib/safety.js';
+import { isLoopbackUrl, localTarget } from './lib/safety.js';
+import { isAppEnvFile } from './tools/app-env.mjs';
 import { localDb, localSupabase, parseArgs, psql, readJson } from './tools/local.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOOLS = join(HERE, 'tools');
+const SCENARIOS = join(HERE, 'scenarios');
+const CHECKOUT = resolve(HERE, '..', '..');
+
+/** apps/web/.env* files (not *.example) under `root`, or under `root` itself when it is apps/web. */
+function appEnvFilesIn(root) {
+  const found = [];
+  for (const dir of [root, join(root, 'apps', 'web')]) {
+    if (!existsSync(dir)) continue;
+    for (const name of readdirSync(dir)) if (isAppEnvFile(name)) found.push(join(dir, name));
+  }
+  return found;
+}
+
+/** The folder the process listening on `port` (this machine) runs from, via lsof. */
+function serverFolder(port) {
+  const pids = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
+    encoding: 'utf8',
+  });
+  const list = String(pids.stdout || '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => /^\d+$/.test(l));
+  const folders = new Set();
+  for (const pid of list) {
+    const res = spawnSync('lsof', ['-a', '-p', pid, '-d', 'cwd', '-Fn'], { encoding: 'utf8' });
+    for (const line of String(res.stdout || '').split('\n'))
+      if (line.startsWith('n/')) folders.add(line.slice(1));
+  }
+  return [...folders];
+}
+
+/** Refuses an app built with, or able to read, anything but the local stack. */
+async function checkAppIsLocal(target) {
+  const own = appEnvFilesIn(CHECKOUT);
+  if (own.length)
+    throw new Error(
+      `This checkout has app env files (${own.map((f) => f.slice(CHECKOUT.length + 1)).join(', ')}). ` +
+        'Build and run load tests only in a worktree with no apps/web/.env* file.',
+    );
+  const port = new URL(target.baseUrl).port;
+  if (!port) throw new Error('LOADTEST_BASE_URL must name its port (http://127.0.0.1:3600).');
+  const folders = serverFolder(port);
+  if (folders.length === 0)
+    throw new Error(
+      `No process on this machine is listening on port ${port} (or lsof could not see it).`,
+    );
+  for (const folder of folders) {
+    const files = appEnvFilesIn(folder);
+    if (files.length)
+      throw new Error(
+        `The app on port ${port} runs from ${folder}, which has app env files (${files.length}). ` +
+          'Serve it from a worktree with no apps/web/.env* file.',
+      );
+  }
+  // The build's Supabase address, as the browser is told it.
+  const res = await fetch(`${target.baseUrl}/signin`, { redirect: 'error' }).catch((e) => ({
+    status: `unreachable (${e.message})`,
+    headers: new Headers(),
+  }));
+  if (res.status !== 200)
+    throw new Error(
+      `The app at LOADTEST_BASE_URL answered /signin with ${res.status}. Build and start it first (see README).`,
+    );
+  const csp = res.headers.get('content-security-policy') || '';
+  const connect = /(?:^|;)\s*connect-src\s+([^;]*)/.exec(csp);
+  if (!connect) throw new Error('The app sent no Content-Security-Policy connect-src.');
+  const sources = connect[1].trim().split(/\s+/);
+  const local = new URL(target.supabaseUrl);
+  const wantHttp = local.origin;
+  const wantWs = `ws://${local.host}`;
+  for (const src of sources) {
+    if (/supabase/i.test(src))
+      throw new Error(
+        `The app's connect-src names ${src}: it was built for another Supabase project. Rebuild it with the local env file.`,
+      );
+    if (
+      /^(https?|wss?):\/\//i.test(src) &&
+      /:\d+$/.test(src) &&
+      !isLoopbackUrl(src.replace(/^ws/i, 'http'))
+    )
+      throw new Error(`The app's connect-src names ${src}, which is not on this machine.`);
+  }
+  if (!sources.includes(wantHttp) || !sources.includes(wantWs))
+    throw new Error(
+      "The app's connect-src does not name LOADTEST_SUPABASE_URL: it was built for another Supabase address. Rebuild it with the local env file.",
+    );
+}
+
+/** The scenario file, which must be a .js file in load-tests/k6/scenarios/. */
+function scenarioFile(arg) {
+  const file = resolve(HERE, String(arg ?? 'scenarios/10-roles-workload.js'));
+  const real = existsSync(file) ? realpathSync(file) : file;
+  if (!real.startsWith(realpathSync(SCENARIOS) + sep) || !real.endsWith('.js') || !existsSync(real))
+    throw new Error('--scenario must be a .js file in load-tests/k6/scenarios/.');
+  return real;
+}
+
+/**
+ * Waits until no request from the app is still running in the database (k6
+ * has stopped, but the server may still be finishing a request it was sent),
+ * so the snapshot and the correctness check see every committed write.
+ */
+function waitForQuietDatabase(maxSeconds = 60) {
+  const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  const deadline = Date.now() + maxSeconds * 1000;
+  let quietReads = 0;
+  while (Date.now() < deadline) {
+    const busy = Number(
+      psql(
+        "select count(*) from pg_stat_activity where backend_type = 'client backend' " +
+          "and pid <> pg_backend_pid() and usename in ('authenticator', 'supabase_auth_admin') " +
+          "and state <> 'idle';",
+      ).trim(),
+    );
+    quietReads = busy === 0 ? quietReads + 1 : 0;
+    if (quietReads >= 3) return true;
+    pause(1000);
+  }
+  console.log(`!! the database was still busy after ${maxSeconds} s; checking anyway.`);
+  return false;
+}
 
 function run(cmd, args, opts = {}) {
   const res = spawnSync(cmd, args, { stdio: 'inherit', env: process.env, ...opts });
@@ -49,6 +189,8 @@ function run(cmd, args, opts = {}) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  // Only the suite's own scenarios, before anything else.
+  const scenario = scenarioFile(args.scenario);
   // Every address, checked before anything connects.
   const target = localTarget(process.env);
   localSupabase();
@@ -65,19 +207,13 @@ async function main() {
     throw new Error('--ladder must be positive numbers');
   const duration = String(args.duration ?? '3m');
   const warmup = String(args.warmup ?? '30s');
-  const scenario = resolve(HERE, String(args.scenario ?? 'scenarios/10-roles-workload.js'));
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const out = resolve(String(args.out ?? join(HERE, '..', 'results', stamp)));
   mkdirSync(join(out, 'steps'), { recursive: true });
 
-  // The app answers on this machine.
-  const ping = await fetch(`${target.baseUrl}/signin`, { redirect: 'manual' }).catch((e) => ({
-    status: `unreachable (${e.message})`,
-  }));
-  if (ping.status !== 200)
-    throw new Error(
-      `The app at LOADTEST_BASE_URL answered /signin with ${ping.status}. Build and start it first (see README).`,
-    );
+  // The app answers on this machine, was built for the local stack, and has
+  // no checkout env file to read.
+  await checkAppIsLocal(target);
 
   let manifestPath = args.manifest ? resolve(String(args.manifest)) : join(out, 'manifest.json');
   if (!args.manifest) {
@@ -161,6 +297,7 @@ async function main() {
     stopSampler();
     process.removeListener('exit', stopSampler);
     writeFileSync(join(dir, 'k6-exit.txt'), String(code));
+    writeFileSync(join(dir, 'settled.txt'), String(waitForQuietDatabase()));
     run('node', [join(TOOLS, 'pgstat.mjs'), 'snapshot', '--out', join(dir, 'pg-after.json')]);
     let correctnessOk = false;
     if (existsSync(join(dir, 'summary.json'))) {

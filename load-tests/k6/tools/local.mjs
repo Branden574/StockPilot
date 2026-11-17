@@ -91,6 +91,8 @@ export async function authAdmin(sb, method, path, body) {
       'Content-Type': 'application/json',
     },
     body: body === undefined ? undefined : JSON.stringify(body),
+    // A redirect would carry the service key to wherever it points.
+    redirect: 'error',
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`auth ${method} ${path}: ${res.status} ${text.slice(0, 300)}`);

@@ -3,11 +3,13 @@
 // The app's sign-in is a Server Action that calls
 // supabase.auth.signInWithPassword, which posts to
 // {supabase}/auth/v1/token?grant_type=password. This measures that call on the
-// local stack. The seeded accounts have no password: give one local account
-// a password first (it is never one of a real person) and pass it here.
+// local stack, for one seeded account (a made-up loadtest+...@example.com).
+// Every seeded account's password is derived from the local stack's service
+// key and its email (lib/auth.js accountPassword); setup() derives it, so only
+// the email is needed:
 //
-//   LOADTEST_BASE_URL=http://127.0.0.1:3600 LOADTEST_SUPABASE_URL=http://127.0.0.1:58421 \
-//   LOADTEST_SUPABASE_ANON_KEY=... LOADTEST_SIGNIN_EMAIL=... LOADTEST_SIGNIN_PASSWORD=... \
+//   set -a; . <loadtest env file>; set +a   # LOADTEST_* for the local stack, never printed
+//   LOADTEST_SIGNIN_EMAIL=<a seeded account's email, from the manifest> \
 //     k6 run load-tests/k6/scenarios/02-signin.js
 //
 // The local stack's sign-in rate limit applies (config.toml [auth.rate_limit]
@@ -16,11 +18,14 @@
 import http from 'k6/http';
 import { check, fail, sleep } from 'k6';
 
+import { accountPassword } from '../lib/auth.js';
 import { assertRequestUrl, localTarget } from '../lib/safety.js';
 
 const { supabaseUrl } = localTarget(__ENV);
 
 export const options = {
+  // A redirect is never followed: it is not a sign-in answer.
+  maxRedirects: 0,
   stages: [
     { duration: '30s', target: 10 },
     { duration: '1m', target: 10 },
@@ -34,19 +39,29 @@ export const options = {
 };
 
 const EMAIL = __ENV.LOADTEST_SIGNIN_EMAIL;
-const PASSWORD = __ENV.LOADTEST_SIGNIN_PASSWORD;
 const ANON = __ENV.LOADTEST_SUPABASE_ANON_KEY;
-if (!EMAIL || !PASSWORD || !ANON) {
-  fail('Set LOADTEST_SIGNIN_EMAIL, LOADTEST_SIGNIN_PASSWORD (a local account) and LOADTEST_SUPABASE_ANON_KEY.');
+if (!EMAIL || !ANON) {
+  fail('Set LOADTEST_SIGNIN_EMAIL (a seeded account) and LOADTEST_SUPABASE_ANON_KEY.');
+}
+if (!/^loadtest\+[a-z0-9-]+@example\.com$/.test(EMAIL)) {
+  fail('LOADTEST_SIGNIN_EMAIL must be a seeded load-test account (loadtest+...@example.com).');
 }
 
-export default function () {
+// The service key is read here only, to derive the account's password.
+export function setup() {
+  const serviceKey = __ENV.LOADTEST_SUPABASE_SERVICE_ROLE_KEY;
+  if (!serviceKey) fail('LOADTEST_SUPABASE_SERVICE_ROLE_KEY is not set (the local stack service key).');
+  return { password: accountPassword(serviceKey, EMAIL) };
+}
+
+export default function (data) {
   const res = http.post(
     assertRequestUrl(`${supabaseUrl}/auth/v1/token?grant_type=password`),
-    JSON.stringify({ email: EMAIL, password: PASSWORD }),
+    JSON.stringify({ email: EMAIL, password: data.password }),
     {
+      redirects: 0,
       headers: { 'Content-Type': 'application/json', apikey: ANON },
-      tags: { name: 'POST auth/v1/token', kind: 'api_read', role: 'signin' },
+      tags: { name: 'POST auth/v1/token', kind: 'auth', role: 'signin' },
     },
   );
   check(res, {

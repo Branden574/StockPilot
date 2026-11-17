@@ -39,6 +39,9 @@ const fiveHundreds = new Counter('five_hundreds');
 const ok = new Rate('responses_ok');
 
 export const options = {
+  // Never follow a redirect: it is an answer to check, and following one
+  // could leave this machine.
+  maxRedirects: 0,
   // Stair-step ramp: each plateau is 30s so the system has time to
   // settle and metrics have enough samples to be meaningful.
   stages: [
@@ -72,13 +75,19 @@ export default function () {
   const roll = Math.random();
   if (roll < 0.4) {
     group('GET /', () => {
-      const r = http.get(assertRequestUrl(`${BASE_URL}/`), { tags: { route: 'home' } });
+      const r = http.get(assertRequestUrl(`${BASE_URL}/`), {
+        redirects: 0,
+        tags: { route: 'home' },
+      });
       homepageTrend.add(r.timings.duration);
       checkResult(r, 'home');
     });
   } else if (roll < 0.7) {
     group('GET /signin', () => {
-      const r = http.get(assertRequestUrl(`${BASE_URL}/signin`), { tags: { route: 'signin' } });
+      const r = http.get(assertRequestUrl(`${BASE_URL}/signin`), {
+        redirects: 0,
+        tags: { route: 'signin' },
+      });
       signinTrend.add(r.timings.duration);
       checkResult(r, 'signin');
     });
@@ -99,6 +108,7 @@ export default function () {
         assertRequestUrl(`${BASE_URL}/api/ai/chat`),
         JSON.stringify({ message: 'x' }),
         {
+          redirects: 0,
           headers: { 'Content-Type': 'application/json' },
           tags: { route: 'api-auth-gate' },
           // A 401 is the right answer here, not a failed request.
@@ -116,13 +126,15 @@ export default function () {
   sleep(Math.random() * 0.4 + 0.1);
 }
 
+// Both public pages answer 200 themselves: a redirect (not followed) means
+// the page moved or the app sent a visitor elsewhere, and counts as a fault.
 function checkResult(r, label) {
-  const isOk = r.status >= 200 && r.status < 400;
+  const isOk = r.status >= 200 && r.status < 300;
   ok.add(isOk);
   if (!isOk) errors.add(1, { label });
   if (r.status >= 500) fiveHundreds.add(1, { label });
   check(r, {
-    [`${label} 2xx/3xx`]: () => isOk,
+    [`${label} 2xx`]: () => isOk,
     [`${label} body present`]: () => r.body && r.body.length > 100,
   });
 }
