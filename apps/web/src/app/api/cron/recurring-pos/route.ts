@@ -65,6 +65,12 @@ function secretsEqual(a: string, b: string): boolean {
  * runDueTemplates advances it past now: one purchase order, not one per day
  * missed. Each organization is claimed as it starts, so a second delivery of
  * the tick skips it; the per-template claim on next_run_at stands behind that.
+ *
+ * ONE RUN PER ORGANIZATION PER 20 HOURS (DAILY_CLAIM_HOLD_MS). A manual run
+ * does nothing for an organization another run started in the last 20 hours,
+ * including one whose attempt failed (it waits for the next day's run), and a
+ * manual run late in the day makes the next scheduled run skip the
+ * organizations it started (they are reached the day after).
  */
 export async function GET(req: Request) {
   if (!env.CRON_SECRET) {
@@ -97,6 +103,7 @@ export async function GET(req: Request) {
     let posHeld = 0;
     let linesLeftOff = 0;
     let failures = 0;
+    let noActor = 0;
     let templatesSkipped = 0;
 
     const sweep = await sweepOrganizations(
@@ -109,7 +116,7 @@ export async function GET(req: Request) {
         slotMs: DAY_MS,
         holdMs: DAILY_CLAIM_HOLD_MS,
       },
-      async (orgId): Promise<{ result: 'success' | 'failure'; value: null }> => {
+      async (orgId): Promise<{ result: 'success' | 'failure' | 'neither'; value: null }> => {
         try {
           // Tier gate (Pro+ on the EFFECTIVE plan) — filter here so a downgraded
           // org stops auto-creating POs immediately on the next cron run.
@@ -125,8 +132,12 @@ export async function GET(req: Request) {
           }
 
           const ctx = await buildSystemContext(admin, orgId);
-          // no owner/admin to attribute to → skip safely
-          if (!ctx) return { result: 'failure', value: null };
+          // No owner/admin to attribute to → skip safely. Not a failure: it
+          // would count against the organization every day.
+          if (!ctx) {
+            noActor++;
+            return { result: 'neither', value: null };
+          }
 
           const summary = await new RecurringPoTemplatesService(ctx).runDueTemplates(new Date());
           orgsProcessed++;
@@ -166,6 +177,7 @@ export async function GET(req: Request) {
         posSent,
         posHeld,
         failures,
+        noActor,
         failed: sweep.failed,
         heldByAnotherRun: sweep.heldByAnotherRun,
         failingRepeatedly: sweep.failingRepeatedly,

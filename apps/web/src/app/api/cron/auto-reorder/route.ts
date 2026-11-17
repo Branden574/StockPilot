@@ -53,6 +53,12 @@ function secretsEqual(a: string, b: string): boolean {
  * (cron_sweep_attempts, job 'auto_reorder'), so a run cut by its deadline
  * leaves different organizations each day, and those go first the next day.
  * One log line per run says how many it left.
+ *
+ * ONE RUN PER ORGANIZATION PER 20 HOURS (DAILY_CLAIM_HOLD_MS). A manual run
+ * does nothing for an organization another run started in the last 20 hours,
+ * including one whose attempt failed (it waits for the next day's run), and a
+ * manual run late in the day makes the next scheduled run skip the
+ * organizations it started (they are reached the day after).
  */
 export async function GET(req: Request) {
   if (!env.CRON_SECRET) {
@@ -83,18 +89,15 @@ export async function GET(req: Request) {
 
     const candidates: Array<{ orgId: string; settings: AutoReorderSettings }> = [];
     for (const r of modRows) {
-      const bucket =
-        r.settings && typeof r.settings === 'object'
-          ? (r.settings as Record<string, unknown>).autoReorder
-          : undefined;
-      const settings = parseAutoReorderSettings(bucket);
+      const settings = parseAutoReorderSettings(autoReorderBucket(r));
       if (settings.enabled) candidates.push({ orgId: r.organization_id, settings });
     }
 
     let orgsProcessed = 0;
     let posCreated = 0;
     let posSent = 0;
-    const settingsByOrg = new Map(candidates.map((c) => [c.orgId, c.settings]));
+    let noActor = 0;
+    let turnedOff = 0;
 
     // Least recently reached first, each organization claimed as it starts
     // (sweepOrganizations, job 'auto_reorder'): a second delivery of this
@@ -111,9 +114,25 @@ export async function GET(req: Request) {
         slotMs: DAY_MS,
         holdMs: DAILY_CLAIM_HOLD_MS,
       },
-      async (orgId): Promise<{ result: 'success' | 'failure'; value: null }> => {
-        const settings = settingsByOrg.get(orgId)!;
+      async (orgId): Promise<{ result: 'success' | 'failure' | 'neither'; value: null }> => {
         try {
+          // The organization's settings as they are NOW: the list above was
+          // read at the start of the run, up to minutes ago, and an admin who
+          // has turned automatic reordering off since is respected.
+          const { data: modRow, error: modErr } = await admin
+            .from('organization_modules')
+            .select('settings')
+            .eq('organization_id', orgId)
+            .eq('module_id', 'purchase_orders')
+            .eq('enabled', true)
+            .maybeSingle();
+          if (modErr) throw new Error(modErr.message);
+          const settings = parseAutoReorderSettings(autoReorderBucket(modRow));
+          if (!settings.enabled) {
+            turnedOff++;
+            return { result: 'neither', value: null };
+          }
+
           // Tier gate (Pro+ on the EFFECTIVE plan).
           const { data: orgRow } = await admin
             .from('organizations')
@@ -127,8 +146,12 @@ export async function GET(req: Request) {
           }
 
           const ctx = await buildSystemContext(admin, orgId);
-          // no owner/admin to attribute to → skip safely
-          if (!ctx) return { result: 'failure', value: null };
+          // No owner/admin to attribute to → skip safely. Not a failure: it
+          // would count against the organization every day.
+          if (!ctx) {
+            noActor++;
+            return { result: 'neither', value: null };
+          }
 
           const summary = await new PurchaseOrdersService(ctx).runAutoReorder(settings);
           orgsProcessed++;
@@ -154,6 +177,8 @@ export async function GET(req: Request) {
         orgsProcessed,
         posCreated,
         posSent,
+        noActor,
+        turnedOff,
         failed: sweep.failed,
         heldByAnotherRun: sweep.heldByAnotherRun,
         failingRepeatedly: sweep.failingRepeatedly,
@@ -174,6 +199,14 @@ export async function GET(req: Request) {
   } catch (err) {
     return internalErrorResponse(err, 'cron.auto-reorder');
   }
+}
+
+/** The autoReorder part of an organization_modules row's settings. */
+function autoReorderBucket(row: { settings?: unknown } | null | undefined): unknown {
+  const settings = row?.settings;
+  return settings && typeof settings === 'object'
+    ? (settings as Record<string, unknown>).autoReorder
+    : undefined;
 }
 
 /**

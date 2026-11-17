@@ -265,9 +265,15 @@ export function cronAttemptRecorder(
   };
 }
 
-/** How long a once-a-day job's claim on an organization holds: a second
- *  delivery of the same tick, or a manual run the same day, finds it held.
- *  Shorter than a day so the next day's run is never refused. */
+/**
+ * How long a once-a-day job's claim on an organization holds: a second
+ * delivery of the same tick, or a manual run the same day, finds it held.
+ * Shorter than a day so the next day's run is never refused (4 hours of
+ * slack for a late delivery). The cost: a manual run does nothing for an
+ * organization started in the last 20 hours, a failed one included (it waits
+ * for the next day), and a manual run late in the day makes the next
+ * scheduled run skip what it started.
+ */
 export const DAILY_CLAIM_HOLD_MS = 20 * 60 * 60_000;
 
 function isUniqueViolation(error: { code?: string; message?: string }): boolean {
@@ -327,17 +333,15 @@ export function cronAttemptClaimer(
       const finish = async (result: CronAttemptResult): Promise<number> => {
         if (result === 'failure') return before + 1;
         const settled = result === 'success' ? 0 : before;
-        const { error } = await admin
-          .from('cron_sweep_attempts')
-          .upsert(
-            {
-              job,
-              organization_id: orgId,
-              last_attempt_at: attemptedAt,
-              consecutive_failures: settled,
-            },
-            { onConflict: 'job,organization_id' },
-          );
+        const { error } = await admin.from('cron_sweep_attempts').upsert(
+          {
+            job,
+            organization_id: orgId,
+            last_attempt_at: attemptedAt,
+            consecutive_failures: settled,
+          },
+          { onConflict: 'job,organization_id' },
+        );
         if (error) report(error, 'write');
         return settled;
       };
@@ -364,6 +368,27 @@ export function cronAttemptClaimer(
       return unrecorded;
     },
   };
+}
+
+/**
+ * `ordered` with the organizations whose last attempt is their FIRST in a row
+ * without success (consecutive_failures 1) moved to the front, in their
+ * order. Why: a run that starts every organization stamps them in its own
+ * order, so the next run's oldest-first order is the same, and an
+ * organization that does not fit in the time the others leave at the end
+ * would be killed at maxDuration every run, forever. A killed attempt keeps
+ * its provisional count (one more than before), so it is first next run, with
+ * the whole run's time. From the second failure in a row it goes back to the
+ * plain order, so one that never fits cannot take the front every day.
+ */
+export function retryFirstOnce(
+  ordered: readonly string[],
+  failures: ReadonlyMap<string, number>,
+): string[] {
+  const first = ordered.filter((id) => failures.get(id) === 1);
+  if (first.length === 0) return [...ordered];
+  const rest = ordered.filter((id) => failures.get(id) !== 1);
+  return [...first, ...rest];
 }
 
 /** One organization's work in sweepOrganizations: what to count, and how the
@@ -413,6 +438,10 @@ export const REPEATED_FAILURES = 3;
  * counted as a failure, and never stops the rest. One at a time, as these
  * jobs always ran: the fairness comes from the order, not from parallel work.
  *
+ * An organization whose last attempt did not end in success, once
+ * (retryFirstOnce), goes to the front: an attempt killed at maxDuration
+ * leaves exactly that, and at the front it gets the whole run.
+ *
  * When the attempt records cannot be read the run is reported
  * (`<tag>.attempts`) and goes in rotateByClock order (`slotMs`: the job's
  * cadence), so even then a cut does not fall on the same organizations every
@@ -441,10 +470,13 @@ export async function sweepOrganizations<V>(
       extra: { step: 'read' },
     });
   }
-  const ordered = sweepOrder(opts.orgIds, attempts?.lastAttempt ?? null, {
-    now: Date.now(),
-    slotMs: opts.slotMs,
-  });
+  const ordered = retryFirstOnce(
+    sweepOrder(opts.orgIds, attempts?.lastAttempt ?? null, {
+      now: Date.now(),
+      slotMs: opts.slotMs,
+    }),
+    attempts?.failures ?? new Map<string, number>(),
+  );
   const failuresBefore = attempts?.failures ?? new Map<string, number>();
   const reportTag = `${opts.tag}.attempts`;
   const claimer =

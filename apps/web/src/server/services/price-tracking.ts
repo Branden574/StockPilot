@@ -33,6 +33,8 @@ interface BookItem {
  * Fetch one item's Google Books data (if its barcode is an ISBN) and insert an
  * observation. Works with ANY supabase client — the user-scoped one (on-demand,
  * RLS) or the service-role admin client (cron). Returns whether a row was written.
+ * Every lookup stamps the book's rotation cursor (last_priced_at), with a price
+ * or without one.
  */
 export async function recordBookObservation(
   supabase: { from: (t: string) => any },
@@ -43,28 +45,13 @@ export async function recordBookObservation(
   if (!isLikelyIsbn(item.barcode)) return false;
   const json = await client.fetchVolumeByIsbn(item.barcode as string);
   const parsed = parseGoogleBooksVolume(json);
-  if (!parsed) return false;
-  const { error } = await supabase.from('item_price_observations').insert({
-    organization_id: orgId,
-    item_id: item.id,
-    source: 'google_books',
-    isbn: (item.barcode as string).replace(/[\s-]/g, ''),
-    list_price: parsed.listPrice,
-    retail_price: parsed.retailPrice,
-    currency: parsed.currency,
-    title: parsed.title,
-    authors: parsed.authors,
-    average_rating: parsed.averageRating,
-    ratings_count: parsed.ratingsCount,
-    categories: parsed.categories,
-    thumbnail_url: parsed.thumbnailUrl,
-    info_link: parsed.infoLink,
-    saleability: parsed.saleability,
-  });
-  if (error) throw new ServiceError('internal_error', error.message);
+  if (parsed) await insertObservation(supabase, orgId, item, parsed);
 
-  // Stamp the rotation cursor so the cron can fairly cycle catalogs >limit.
-  // Non-fatal: the price observation is already durably written, so a stamp
+  // Stamp the rotation cursor so the cron can fairly cycle catalogs >limit,
+  // after a lookup that gave no price too: a book Google does not know then
+  // goes to the back of the line instead of being asked for first on every
+  // run (and keeping the books after it from being reached).
+  // Non-fatal: an observation is already durably written by now, so a stamp
   // hiccup must never lose it — log and continue. Uses the SAME client, so it
   // works under both the admin (cron) and RLS (on-demand) paths. The stamp
   // does NOT fire the search-vector trigger (scoped to name/sku/barcode/desc).
@@ -84,7 +71,34 @@ export async function recordBookObservation(
     // it once.
     invalidateInventoryListAfterWrite(orgId, 'price.record_observation');
   }
-  return true;
+  return parsed !== null;
+}
+
+/** Inserts one observation of a looked-up book (throws on a failed insert). */
+async function insertObservation(
+  supabase: { from: (t: string) => any },
+  orgId: string,
+  item: BookItem,
+  parsed: NonNullable<ReturnType<typeof parseGoogleBooksVolume>>,
+): Promise<void> {
+  const { error } = await supabase.from('item_price_observations').insert({
+    organization_id: orgId,
+    item_id: item.id,
+    source: 'google_books',
+    isbn: (item.barcode as string).replace(/[\s-]/g, ''),
+    list_price: parsed.listPrice,
+    retail_price: parsed.retailPrice,
+    currency: parsed.currency,
+    title: parsed.title,
+    authors: parsed.authors,
+    average_rating: parsed.averageRating,
+    ratings_count: parsed.ratingsCount,
+    categories: parsed.categories,
+    thumbnail_url: parsed.thumbnailUrl,
+    info_link: parsed.infoLink,
+    saleability: parsed.saleability,
+  });
+  if (error) throw new ServiceError('internal_error', error.message);
 }
 
 const RECENT_MS = 20 * 60 * 60 * 1000; // skip items observed within ~20h
@@ -98,19 +112,22 @@ const DEFAULT_LIMIT = 300;
  * Skips items priced within RECENT_MS, throttles, caps at `limit`, and stops
  * gracefully at `deadlineMs` so a platform hard-kill never silently drops orgs.
  *
- * `maxWritten` stops once that many observations are written (the scheduled
- * job's share of its run), apart from `limit`, which bounds the read: books
- * that cannot be priced stay at the head of the order (they get no stamp), so
- * a small read window could be all of them. `tried` (the scheduled job's, per
+ * `maxLookups` stops once that many Google lookups are made (the scheduled
+ * job's share of its run), apart from `limit`, which bounds the read. A lookup
+ * that gives no price stamps the book's rotation cursor (last_priced_at) all
+ * the same (recordBookObservation), so a book Google does not know goes to the back of the line
+ * instead of being asked for first on every run (and keeping the books after
+ * it from ever being reached). `tried` (the scheduled job's, per
  * organization, kept across its rounds) skips the items already looked up in
  * this run without asking Google again, and records each item looked up now.
+ * `lookups` in the answer counts the calls to Google.
  */
 export async function refreshBookPricesForOrg(
   supabase: { from: (t: string) => any },
   orgId: string,
   client: GoogleBooksClient,
-  opts: { limit?: number; deadlineMs?: number; maxWritten?: number; tried?: Set<string> } = {},
-): Promise<{ scanned: number; written: number; skipped: number }> {
+  opts: { limit?: number; deadlineMs?: number; maxLookups?: number; tried?: Set<string> } = {},
+): Promise<{ scanned: number; written: number; skipped: number; lookups: number }> {
   const limit = opts.limit ?? DEFAULT_LIMIT;
   const { data: items, error } = await supabase
     .from('inventory_items')
@@ -126,12 +143,13 @@ export async function refreshBookPricesForOrg(
 
   let written = 0;
   let skipped = 0;
+  let lookups = 0;
   const list = (items ?? []) as BookItem[];
   for (const item of list) {
     // Graceful stop under the platform kill — better to return partial counts
     // than be hard-killed mid-loop with no result at all.
     if (opts.deadlineMs && Date.now() > opts.deadlineMs) break;
-    if (opts.maxWritten !== undefined && written >= opts.maxWritten) break;
+    if (opts.maxLookups !== undefined && lookups >= opts.maxLookups) break;
     if (opts.tried?.has(item.id)) continue;
     const priced = item.last_priced_at ? Date.now() - new Date(item.last_priced_at).getTime() : Infinity;
     if (priced < RECENT_MS || !isLikelyIsbn(item.barcode)) {
@@ -139,12 +157,13 @@ export async function refreshBookPricesForOrg(
       continue;
     }
     opts.tried?.add(item.id);
+    lookups += 1;
     const ok = await recordBookObservation(supabase, orgId, item, client);
     if (ok) written += 1;
     else skipped += 1;
     await new Promise((r) => setTimeout(r, 120)); // gentle throttle for Google's quota
   }
-  return { scanned: list.length, written, skipped };
+  return { scanned: list.length, written, skipped, lookups };
 }
 
 /**

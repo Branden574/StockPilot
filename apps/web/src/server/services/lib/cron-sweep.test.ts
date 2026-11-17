@@ -12,6 +12,7 @@ import {
   newestPerKey,
   oldestFirst,
   readCronAttempts,
+  retryFirstOnce,
   rotateByClock,
   sweepOrder,
   sweepOrganizations,
@@ -609,3 +610,75 @@ describe('sweepOrganizations', () => {
     );
   });
 });
+
+describe('retryFirstOnce (an attempt that did not finish goes to the front once)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('moves the organizations at one failure in a row to the front, in order; two or more stay put', () => {
+    const failures = new Map([
+      ['c', 1],
+      ['d', 2],
+      ['e', 1],
+    ]);
+    expect(retryFirstOnce(['a', 'b', 'c', 'd', 'e'], failures)).toEqual(['c', 'e', 'a', 'b', 'd']);
+    expect(retryFirstOnce(['a', 'b'], new Map())).toEqual(['a', 'b']);
+  });
+
+  it('40 organizations of 4 s and one of 150 s: the big one, killed at 300 s when it starts last, finishes the next run', async () => {
+    // The rules of the daily jobs: no start after 240 s, killed at 300 s, the
+    // attempt stamped as it starts. Without retryFirstOnce the big one, last
+    // by its start stamp, is killed on every run, forever.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const table = cronAttemptsTable();
+    const stub = makeSupabaseStub(table.results);
+    const small = ids(40);
+    const BIG = 'zz-big';
+    const outcomes: Array<{ completed: string[]; killed: string[] }> = [];
+    for (let day = 0; day < 4; day += 1) {
+      const runStart = Date.parse('2026-11-17T08:00:00.000Z') + day * DAY;
+      vi.setSystemTime(runStart);
+      const completed: string[] = [];
+      const killed: string[] = [];
+      let dead = false;
+      await sweepOrganizations(
+        stub.client,
+        {
+          job: 'auto_reorder',
+          tag: 'cron.test',
+          orgIds: [...small, BIG],
+          deadlineAt: runStart + 240_000,
+          slotMs: DAY,
+          holdMs: 20 * 60 * 60_000,
+          stopWhen: () => dead,
+        },
+        async (orgId) => {
+          const took = orgId === BIG ? 150_000 : 4_000;
+          if (Date.now() + took > runStart + 300_000) {
+            // maxDuration: the function is killed with this one in flight.
+            // Nothing after the stamp is written, as in a real kill.
+            dead = true;
+            killed.push(orgId);
+            throw new KilledRun();
+          }
+          vi.setSystemTime(Date.now() + took);
+          completed.push(orgId);
+          return { result: 'success', value: null };
+        },
+      );
+      // The sweep records a throw as a failure and writes nothing for it: the
+      // row keeps the provisional count of the stamp, exactly a kill's row.
+      outcomes.push({ completed, killed });
+    }
+    expect(outcomes[0]!.killed).toEqual([BIG]);
+    expect(outcomes[1]!.completed[0]).toBe(BIG);
+    expect(outcomes[1]!.killed).toEqual([]);
+    // Afterwards it is not killed again, and every small one keeps being reached.
+    expect(outcomes.slice(1).flatMap((o) => o.killed)).toEqual([]);
+    const reached = new Set(outcomes.slice(1).flatMap((o) => o.completed));
+    expect(reached.size).toBe(41);
+  });
+});
+
+class KilledRun extends Error {}

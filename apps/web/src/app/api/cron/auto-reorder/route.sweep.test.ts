@@ -51,6 +51,24 @@ vi.mock('@stockpilot/core', async (importOriginal) => {
 import { GET, maxDuration } from './route';
 
 const ORGS = ['org-1', 'org-2', 'org-3', 'org-4', 'org-5', 'org-6'];
+
+/** Each organization's settings as they are when its turn starts (the list
+ *  read at the start of the run always says on). */
+const turnedOffSince = new Set<string>();
+/** Organizations with no accepted owner or admin. */
+const noOwner = new Set<string>();
+const eqValue = (call: MockCall, col: string) =>
+  call.args.find((a, i) => call.methods[i] === 'eq' && a[0] === col)?.[1] as string | undefined;
+function settingsNow(call: MockCall) {
+  const orgId = eqValue(call, 'organization_id') ?? '';
+  return {
+    settings: {
+      autoReorder: turnedOffSince.has(orgId)
+        ? { enabled: false, mode: 'draft' }
+        : { enabled: true, mode: 'draft' },
+    },
+  };
+}
 const DAY = 24 * 60 * 60_000;
 
 function client(table: ReturnType<typeof cronAttemptsTable>) {
@@ -66,8 +84,16 @@ function client(table: ReturnType<typeof cronAttemptsTable>) {
             error: null,
           }
         : { data: [{ module_id: 'purchase_orders' }], error: null },
+    // The organization's settings read again as its turn starts.
+    'organization_modules.select.maybeSingle': (call: MockCall) => ({
+      data: settingsNow(call),
+      error: null,
+    }),
     'organizations.select': { data: { plan: 'pro' }, error: null },
-    'organization_members.select': { data: [{ user_id: 'admin-1', role: 'owner' }], error: null },
+    'organization_members.select': (call: MockCall) =>
+      noOwner.has(eqValue(call, 'organization_id') ?? '')
+        ? { data: [], error: null }
+        : { data: [{ user_id: 'admin-1', role: 'owner' }], error: null },
   }).client;
 }
 
@@ -81,6 +107,8 @@ const get = () =>
 let info: MockInstance<Console['info']>;
 beforeEach(() => {
   vi.clearAllMocks();
+  turnedOffSince.clear();
+  noOwner.clear();
   reorderRuns.length = 0;
   reorderCost.ms = 0;
   reorderCost.wait = false;
@@ -170,5 +198,27 @@ describe('GET /api/cron/auto-reorder reaches every organization', () => {
     }
     expect(new Set(firsts).size).toBeGreaterThan(1);
     expect(logLine()).toMatchObject({ orderedBy: 'clock' });
+  });
+
+  it("acts on each organization's settings as they are when its turn starts: one turned off since the run began is skipped", async () => {
+    adminHolder.client = client(cronAttemptsTable());
+    turnedOffSince.add('org-2');
+    await get();
+    expect(reorderRuns).toEqual(['org-1', 'org-3', 'org-4', 'org-5', 'org-6']);
+    expect(logLine()).toMatchObject({ candidates: 6, turnedOff: 1 });
+  });
+
+  it('an organization with no owner or admin is skipped, not a failure, and never counts as failing repeatedly', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const table = cronAttemptsTable();
+    noOwner.add('org-3');
+    for (let day = 0; day < 4; day += 1) {
+      vi.setSystemTime(Date.parse('2026-11-17T08:00:00.000Z') + day * 24 * 60 * 60_000);
+      adminHolder.client = client(table);
+      info.mockClear();
+      await get();
+      expect(logLine()).toMatchObject({ noActor: 1, failed: 0, failingRepeatedly: 0 });
+    }
+    expect(table.rows.find((r) => r.organization_id === 'org-3')!.consecutive_failures).toBe(0);
   });
 });

@@ -19,7 +19,7 @@ const adminHolder = { client: null as unknown };
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn(() => adminHolder.client) }));
 
 const mailed: string[] = [];
-const cost = { ms: 0, wait: false };
+const cost = { ms: 0, wait: false, pullMs: 0 };
 vi.mock('@/lib/email/resend', () => ({
   sendEmail: async (args: { to: string }) => {
     mailed.push(args.to);
@@ -74,27 +74,34 @@ function claimsTable() {
   };
 }
 
+/** The bulk recipient pull: one member in each organization. */
+const recipientsPage = {
+  data: Array.from({ length: N }, (_, i) => ({
+    id: `user-${i + 1}`,
+    email: mailOf(i + 1),
+    full_name: 'Sample Member',
+    digest_section_low_stock: true,
+    digest_section_open_pos: true,
+    digest_section_cycle_counts: true,
+    organization_members: [
+      {
+        organization_id: orgOf(i + 1),
+        accepted_at: '2026-01-01T00:00:00Z',
+        organizations: { id: orgOf(i + 1), name: `Sample ${i + 1}`, timezone: 'UTC' },
+      },
+    ],
+  })),
+  error: null,
+};
+
 function client(table: ReturnType<typeof cronAttemptsTable>) {
   return makeSupabaseStub({
     ...table.results,
     ...claimsTable(),
-    'user_profiles.select': {
-      data: Array.from({ length: N }, (_, i) => ({
-        id: `user-${i + 1}`,
-        email: mailOf(i + 1),
-        full_name: 'Sample Member',
-        digest_section_low_stock: true,
-        digest_section_open_pos: true,
-        digest_section_cycle_counts: true,
-        organization_members: [
-          {
-            organization_id: orgOf(i + 1),
-            accepted_at: '2026-01-01T00:00:00Z',
-            organizations: { id: orgOf(i + 1), name: `Sample ${i + 1}`, timezone: 'UTC' },
-          },
-        ],
-      })),
-      error: null,
+    'user_profiles.select': () => {
+      // The recipient pull, which can be slow (pullMs moves the clock).
+      if (cost.pullMs > 0) vi.setSystemTime(Date.now() + cost.pullMs);
+      return recipientsPage;
     },
     'user_profiles.select.maybeSingle': {
       data: { email_digest_optin: true, disabled_at: null },
@@ -120,6 +127,7 @@ beforeEach(() => {
   mailed.length = 0;
   cost.ms = 0;
   cost.wait = false;
+  cost.pullMs = 0;
   info = vi.spyOn(console, 'info').mockImplementation(() => {});
 });
 afterEach(() => {
@@ -167,5 +175,17 @@ describe('GET /api/cron/weekly-digest reaches every organization', () => {
     const bodies = [await a.json(), await b.json()];
     expect([...mailed].sort()).toEqual(Array.from({ length: N }, (_, i) => mailOf(i + 1)).sort());
     expect(bodies[0].sent + bodies[1].sent).toBe(N);
+  });
+
+  it('counts the deadline from the start of the request: a slow recipient pull is time spent', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-11-16T14:00:00.000Z'));
+    cost.pullMs = 100_000; // the pull ends at 100 s
+    cost.ms = 100_000; // each organization's send takes 100 s
+    adminHolder.client = client(cronAttemptsTable());
+
+    // Organizations start at 100 s and 200 s; the third would start at 300 s,
+    // past the 240 s deadline counted from the request (not from the pull).
+    expect(await (await get()).json()).toMatchObject({ sent: 2, leftForNextRun: 4 });
   });
 });

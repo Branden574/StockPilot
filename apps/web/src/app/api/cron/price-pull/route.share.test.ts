@@ -4,9 +4,10 @@ import { cronAttemptsTable } from '@/test/cron-attempts-table';
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
 /**
- * The daily price pull shares its 200 observations: each organization is
- * offered an equal part of what is left, least recently reached first, so an
- * organization with a big backlog cannot take the whole run, every day.
+ * The daily price pull shares its 200 Google lookups and its time: each
+ * organization is offered an equal part of what is left, least recently
+ * reached first, so an organization with a big backlog cannot take the whole
+ * run, every day, and neither can the first one when the deadline binds.
  */
 
 vi.mock('@/lib/env', () => ({ env: { CRON_SECRET: 'test-cron-secret' } }));
@@ -17,22 +18,38 @@ vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn(() => adminHol
 vi.mock('@/server/loaders/inventory-list', () => ({ revalidateInventoryList: vi.fn() }));
 vi.mock('@/server/pricing/google-books-client', () => ({ googleBooksClient: {} }));
 
-/** Unpriced books per organization; a refresh prices up to its limit. */
+/** Unpriced books per organization; a refresh looks up to its share, one
+ *  book at a time, stopping at its deadline as the service does. With
+ *  `cost.lookupMs` each lookup moves the (fake) clock; `unknown` books cost a
+ *  lookup and give no price. */
 const backlog = new Map<string, number>();
-const calls: Array<{ orgId: string; share: number; written: number }> = [];
-const cost = { wait: false };
+const unknown = new Map<string, number>();
+const calls: Array<{ orgId: string; share: number; written: number; lookups?: number }> = [];
+const cost = { wait: false, lookupMs: 0 };
 vi.mock('@/server/services/price-tracking', () => ({
   refreshBookPricesForOrg: async (
     _admin: unknown,
     orgId: string,
     _client: unknown,
-    opts: { limit: number; maxWritten: number },
+    opts: { limit: number; maxLookups: number; deadlineMs: number },
   ) => {
     if (cost.wait) await new Promise((r) => setTimeout(r, 1));
-    const written = Math.min(opts.maxWritten, backlog.get(orgId) ?? 0);
-    backlog.set(orgId, (backlog.get(orgId) ?? 0) - written);
-    calls.push({ orgId, share: opts.maxWritten, written });
-    return { scanned: written, written, skipped: 0 };
+    let lookups = 0;
+    let written = 0;
+    while (lookups < opts.maxLookups && !(Date.now() > opts.deadlineMs)) {
+      const unpriceable = unknown.get(orgId) ?? 0;
+      const priceable = backlog.get(orgId) ?? 0;
+      if (unpriceable + priceable === 0) break;
+      if (unpriceable > 0) unknown.set(orgId, unpriceable - 1);
+      else {
+        backlog.set(orgId, priceable - 1);
+        written += 1;
+      }
+      lookups += 1;
+      if (cost.lookupMs > 0) vi.setSystemTime(Date.now() + cost.lookupMs);
+    }
+    calls.push({ orgId, share: opts.maxLookups, written, lookups });
+    return { scanned: lookups, written, skipped: lookups - written, lookups };
   },
 }));
 
@@ -62,8 +79,10 @@ let info: MockInstance<Console['info']>;
 beforeEach(() => {
   vi.clearAllMocks();
   backlog.clear();
+  unknown.clear();
   calls.length = 0;
   cost.wait = false;
+  cost.lookupMs = 0;
   info = vi.spyOn(console, 'info').mockImplementation(() => {});
 });
 afterEach(() => {
@@ -101,7 +120,7 @@ describe('GET /api/cron/price-pull — a fair share of the run per organization'
     const body = await (await get()).json();
     // Round one: org-001 is offered a third, the other two use 5 each and
     // pass the rest on; round two: org-001 is offered what is left.
-    expect(calls).toEqual([
+    expect(calls.map(({ orgId, share, written }) => ({ orgId, share, written }))).toEqual([
       { orgId: 'org-001', share: 67, written: 67 },
       { orgId: 'org-002', share: 67, written: 5 },
       { orgId: 'org-003', share: 128, written: 5 },
@@ -116,9 +135,9 @@ describe('GET /api/cron/price-pull — a fair share of the run per organization'
     );
     // One result per organization, summed over the rounds.
     expect(body.results).toEqual([
-      { orgId: 'org-001', scanned: 190, written: 190, skipped: 0 },
-      { orgId: 'org-002', scanned: 5, written: 5, skipped: 0 },
-      { orgId: 'org-003', scanned: 5, written: 5, skipped: 0 },
+      { orgId: 'org-001', scanned: 190, written: 190, skipped: 0, lookups: 190 },
+      { orgId: 'org-002', scanned: 5, written: 5, skipped: 0, lookups: 5 },
+      { orgId: 'org-003', scanned: 5, written: 5, skipped: 0, lookups: 5 },
     ]);
   });
 
@@ -135,7 +154,13 @@ describe('GET /api/cron/price-pull — a fair share of the run per organization'
     expect(calls.every((c) => c.share === 1)).toBe(true);
     expect(day1).toMatchObject({ leftForNextRun: 100 });
     const log = JSON.parse(String(info.mock.calls.find((c) => c[0] === '[cron.price-pull]')?.[1]));
-    expect(log).toMatchObject({ orgs: 300, written: 200, leftForNextRun: 100 });
+    expect(log).toMatchObject({
+      orgs: 300,
+      lookups: 200,
+      lookupCap: 200,
+      written: 200,
+      leftForNextRun: 100,
+    });
 
     calls.length = 0;
     vi.setSystemTime(Date.parse('2026-11-18T09:00:00.000Z'));
@@ -155,5 +180,45 @@ describe('GET /api/cron/price-pull — a fair share of the run per organization'
     );
     // Each organization is priced by exactly one of the two runs.
     expect([...byRun[0]!, ...byRun[1]!].sort()).toEqual(orgs);
+  });
+
+  it('when the deadline binds, two organizations with backlogs each get about half of the run, every day', async () => {
+    // 0.4 s a lookup: the 50 s deadline allows about 125, under the 200 cap.
+    // A share of lookups alone gave the first organization its 100 and the
+    // second the 25 left, every day (the order repeats when both are reached).
+    vi.useFakeTimers({ toFake: ['Date'] });
+    cost.lookupMs = 400;
+    const orgs = orgIds(2);
+    backlog.set('org-001', 100_000);
+    backlog.set('org-002', 100_000);
+    const table = cronAttemptsTable();
+    const totals = new Map<string, number>();
+    for (let day = 0; day < 4; day += 1) {
+      vi.setSystemTime(Date.parse('2026-11-17T09:00:00.000Z') + day * 24 * 60 * 60_000);
+      adminHolder.client = client(table, orgs);
+      calls.length = 0;
+      await get();
+      const today = writtenBy();
+      const a = today.get('org-001') ?? 0;
+      const b = today.get('org-002') ?? 0;
+      expect(a + b).toBeGreaterThanOrEqual(120);
+      expect(Math.min(a, b) / Math.max(a, b)).toBeGreaterThan(0.9);
+      for (const [o, n] of today) totals.set(o, (totals.get(o) ?? 0) + n);
+    }
+    expect(totals.get('org-001')).toBeGreaterThan(0);
+    expect(Math.abs(totals.get('org-001')! - totals.get('org-002')!)).toBeLessThan(20);
+  });
+
+  it('counts Google lookups, not only prices, against the cap: books Google does not know cannot take more than the cap', async () => {
+    const orgs = orgIds(1);
+    unknown.set('org-001', 1000); // never priceable
+    backlog.set('org-001', 1000);
+    adminHolder.client = client(cronAttemptsTable(), orgs);
+
+    await get();
+    const lookups = calls.reduce((n, c) => n + (c.lookups ?? 0), 0);
+    expect(lookups).toBe(200);
+    const log = JSON.parse(String(info.mock.calls.find((c) => c[0] === '[cron.price-pull]')?.[1]));
+    expect(log).toMatchObject({ lookups: 200, lookupCap: 200, written: 0 });
   });
 });

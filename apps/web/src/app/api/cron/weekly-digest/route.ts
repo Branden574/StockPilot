@@ -249,6 +249,9 @@ export async function GET(req: Request) {
   if (!secretsEqual(auth, `Bearer ${env.CRON_SECRET}`)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
+  // The run's deadline counts from here, before the recipient pull: the time
+  // that pull takes is spent from the same maxDuration.
+  const requestStartedAt = Date.now();
   // The claim's signing key for this run (digestClaimKeyMaterial), computed
   // once; null claims unsigned, reported once per run.
   const claimKeyMaterial = digestClaimKeyMaterial(env.UNSUBSCRIBE_SECRET);
@@ -389,7 +392,7 @@ export async function GET(req: Request) {
         job: 'weekly_digest',
         tag: 'cron.weekly-digest',
         orgIds: [...byOrg.keys()],
-        deadlineAt: runStartedAt.getTime() + RUN_DEADLINE_MS,
+        deadlineAt: requestStartedAt + RUN_DEADLINE_MS,
         slotMs: WEEK_MS,
       },
       async (orgId): Promise<{ result: 'success' | 'failure'; value: null }> => {
@@ -624,7 +627,7 @@ export async function GET(req: Request) {
         failingRepeatedly: sweep.failingRepeatedly,
         orderedBy: sweep.orderedBy,
         leftForNextRun: sweep.leftForNextRun,
-        ms: Date.now() - runStartedAt.getTime(),
+        ms: Date.now() - requestStartedAt,
       }),
     );
 

@@ -73,6 +73,11 @@ function run(summary: RunSummary) {
             error: null,
           }
         : { data: [{ module_id: 'purchase_orders' }], error: null },
+    // The organization's settings read again as its turn starts.
+    'organization_modules.select.maybeSingle': {
+      data: { settings: { autoReorder: { enabled: true, mode: 'send', maxAutoSendCents: null } } },
+      error: null,
+    },
     'organizations.select': { data: { plan: 'pro' }, error: null },
     'organization_members.select': { data: [{ user_id: 'admin-1', role: 'owner' }], error: null },
   }).client;

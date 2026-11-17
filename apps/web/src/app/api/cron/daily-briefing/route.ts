@@ -54,6 +54,12 @@ function secretsEqual(a: string, b: string): boolean {
  * (cron_sweep_attempts, job 'daily_briefing'), so a run cut by its deadline
  * leaves different organizations each day, and those go first the next run.
  * One log line per run says how many it left.
+ *
+ * ONE RUN PER ORGANIZATION PER 20 HOURS (DAILY_CLAIM_HOLD_MS). A manual run
+ * does nothing for an organization another run started in the last 20 hours,
+ * including one whose attempt failed (it waits for the next day's run), and a
+ * manual run late in the day makes the next scheduled run skip the
+ * organizations it started (they are reached the day after).
  */
 export async function GET(req: NextRequest) {
   if (!env.CRON_SECRET) {
@@ -68,6 +74,7 @@ export async function GET(req: NextRequest) {
   const admin = createAdminClient();
   let orgsProcessed = 0;
   let briefingsSent = 0;
+  let noActor = 0;
 
   try {
     // Orgs with the ai module on — the same gate as the insights page.
@@ -96,11 +103,15 @@ export async function GET(req: NextRequest) {
         slotMs: DAY_MS,
         holdMs: DAILY_CLAIM_HOLD_MS,
       },
-      async (orgId): Promise<{ result: 'success' | 'failure'; value: null }> => {
+      async (orgId): Promise<{ result: 'success' | 'failure' | 'neither'; value: null }> => {
         try {
           const ctx = await buildSystemContext(admin, orgId);
-          // no owner/admin to attribute to
-          if (!ctx) return { result: 'failure', value: null };
+          // No owner/admin to attribute to: skipped, not a failure (it would
+          // count against the organization every day).
+          if (!ctx) {
+            noActor += 1;
+            return { result: 'neither', value: null };
+          }
           // The organization was picked because its ai module is on, so a set
           // without ai means its module read failed (buildSystemContext keeps
           // every cron copy's shape and drops that error, leaving an empty set)
@@ -256,6 +267,7 @@ export async function GET(req: NextRequest) {
         candidates: modRows.length,
         orgsProcessed,
         briefingsSent,
+        noActor,
         failed: sweep.failed,
         heldByAnotherRun: sweep.heldByAnotherRun,
         failingRepeatedly: sweep.failingRepeatedly,

@@ -66,7 +66,7 @@ describe('refreshBookPricesForOrg', () => {
     expect(client.fetchVolumeByIsbn).toHaveBeenCalledWith('9780306406157');
   });
 
-  it('stops at maxWritten (the scheduled share), apart from the read limit, and never asks again for an item already tried this run', async () => {
+  it('stops at maxLookups (the scheduled share of Google calls), apart from the read limit, and never asks again for an item already tried this run', async () => {
     const items = ['i1', 'i2', 'i3', 'i4'].map((id) => ({
       id,
       barcode: '9780306406157',
@@ -82,14 +82,39 @@ describe('refreshBookPricesForOrg', () => {
 
     const res = await refreshBookPricesForOrg(stub.client, 'org-1', client, {
       limit: 300,
-      maxWritten: 2,
+      maxLookups: 2,
       tried,
     });
 
-    expect(res.written).toBe(2);
+    expect(res).toMatchObject({ written: 2, lookups: 2 });
     expect(client.fetchVolumeByIsbn).toHaveBeenCalledTimes(2);
     expect([...tried].sort()).toEqual(['i1', 'i2', 'i3']);
     expect(stub.chainArgsAll.get('inventory_items.select')![0]).toContainEqual([300]);
+  });
+
+  it('a lookup that gives no price is counted as a lookup and stamps the book, so it goes to the back of the line', async () => {
+    const items = [
+      { id: 'unknown', barcode: '9780306406157', last_priced_at: null },
+      { id: 'not-isbn', barcode: 'NOTISBN', last_priced_at: null },
+    ];
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: items, error: null },
+      'inventory_items.update': { data: null, error: null },
+    });
+    const client = fakeClient({ totalItems: 0 }); // Google does not know it
+
+    const res = await refreshBookPricesForOrg(stub.client, 'org-1', client, { limit: 300 });
+
+    expect(res).toMatchObject({ written: 0, lookups: 1, skipped: 2 });
+    expect(client.fetchVolumeByIsbn).toHaveBeenCalledTimes(1);
+    const stamps = stub.chainArgsAll.get('inventory_items.update') ?? [];
+    // Only the book Google was asked about; a barcode that is no ISBN costs
+    // no lookup and is left as it was.
+    expect(stamps).toHaveLength(1);
+    expect(stamps[0]![0]![0]).toEqual({ last_priced_at: expect.any(String) });
+    expect(stamps[0]).toContainEqual(['organization_id', 'org-1']);
+    expect(stamps[0]).toContainEqual(['id', 'unknown']);
+    expect(stub.fromCalls).not.toContain('item_price_observations');
   });
 });
 

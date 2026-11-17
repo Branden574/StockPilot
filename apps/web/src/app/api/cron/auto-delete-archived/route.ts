@@ -55,6 +55,12 @@ function secretsEqual(a: string, b: string): boolean {
  * next day. Each organization is claimed as it starts: a second delivery of
  * the tick skips it (the row-level guards of purgeExpiredArchivedItems stand
  * behind that).
+ *
+ * ONE RUN PER ORGANIZATION PER 20 HOURS (DAILY_CLAIM_HOLD_MS). A manual run
+ * does nothing for an organization another run started in the last 20 hours,
+ * including one whose attempt failed (it waits for the next day's run), and a
+ * manual run late in the day makes the next scheduled run skip the
+ * organizations it started (they are reached the day after).
  */
 export async function GET(req: Request) {
   if (!env.CRON_SECRET) {
@@ -89,11 +95,7 @@ export async function GET(req: Request) {
 
     const candidates: Array<{ orgId: string; settings: AutoDeleteArchivedSettings }> = [];
     for (const r of modRows) {
-      const bucket =
-        r.settings && typeof r.settings === 'object'
-          ? (r.settings as Record<string, unknown>).autoDeleteArchived
-          : undefined;
-      const settings = parseAutoDeleteArchivedSettings(bucket);
+      const settings = parseAutoDeleteArchivedSettings(settingsBucket(r));
       if (settings.enabled) candidates.push({ orgId: r.organization_id, settings });
     }
 
@@ -103,7 +105,8 @@ export async function GET(req: Request) {
     let itemsSkipped = 0;
     let orgsTruncated = 0; // hit the per-run cap → backlog drains next run
 
-    const settingsByOrg = new Map(candidates.map((c) => [c.orgId, c.settings]));
+    let noActor = 0;
+    let turnedOff = 0;
     const sweep = await sweepOrganizations(
       admin,
       {
@@ -114,12 +117,31 @@ export async function GET(req: Request) {
         slotMs: DAY_MS,
         holdMs: DAILY_CLAIM_HOLD_MS,
       },
-      async (orgId): Promise<{ result: 'success' | 'failure'; value: null }> => {
-        const settings = settingsByOrg.get(orgId)!;
+      async (orgId): Promise<{ result: 'success' | 'failure' | 'neither'; value: null }> => {
         try {
+          // The organization's settings as they are NOW: the list above was
+          // read at the start of the run, up to minutes ago, and an admin who
+          // has turned auto-delete off, or changed its days, since is respected.
+          const { data: modRow, error: modErr } = await admin
+            .from('organization_modules')
+            .select('settings')
+            .eq('organization_id', orgId)
+            .eq('module_id', 'inventory')
+            .maybeSingle();
+          if (modErr) throw new Error(modErr.message);
+          const settings = parseAutoDeleteArchivedSettings(settingsBucket(modRow));
+          if (!settings.enabled) {
+            turnedOff++;
+            return { result: 'neither', value: null };
+          }
+
           const ctx = await buildSystemContext(admin, orgId);
-          // no owner/admin to attribute the deletions to → skip
-          if (!ctx) return { result: 'failure', value: null };
+          // No owner/admin to attribute the deletions to → skip. Not a failure:
+          // it would count against the organization every day.
+          if (!ctx) {
+            noActor++;
+            return { result: 'neither', value: null };
+          }
           const { deleted, truncated, skipped } = await purgeExpiredArchivedItems(
             ctx,
             settings.days,
@@ -160,6 +182,8 @@ export async function GET(req: Request) {
       '[cron.auto-delete-archived]',
       JSON.stringify({
         ...summary,
+        noActor,
+        turnedOff,
         failed: sweep.failed,
         failingRepeatedly: sweep.failingRepeatedly,
         orderedBy: sweep.orderedBy,
@@ -170,6 +194,14 @@ export async function GET(req: Request) {
   } catch (err) {
     return internalErrorResponse(err, 'cron.auto-delete-archived');
   }
+}
+
+/** The autoDeleteArchived part of an organization_modules row's settings. */
+function settingsBucket(row: { settings?: unknown } | null | undefined): unknown {
+  const settings = row?.settings;
+  return settings && typeof settings === 'object'
+    ? (settings as Record<string, unknown>).autoDeleteArchived
+    : undefined;
 }
 
 /**

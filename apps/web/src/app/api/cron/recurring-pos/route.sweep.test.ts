@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 import { cronAttemptsTable } from '@/test/cron-attempts-table';
-import { makeSupabaseStub } from '@/test/supabase-mock';
+import { makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
 
 import type { RecurringRunSummary } from '@/server/services/recurring-pos';
 
@@ -62,6 +62,11 @@ import { GET, maxDuration } from './route';
 
 const ORGS = ['org-1', 'org-2', 'org-3', 'org-4', 'org-5', 'org-6'];
 
+/** Organizations with no accepted owner or admin. */
+const noOwner = new Set<string>();
+const eqValue = (call: MockCall, col: string) =>
+  call.args.find((a, i) => call.methods[i] === 'eq' && a[0] === col)?.[1] as string | undefined;
+
 function client(table: ReturnType<typeof cronAttemptsTable>) {
   return makeSupabaseStub({
     ...table.results,
@@ -70,7 +75,10 @@ function client(table: ReturnType<typeof cronAttemptsTable>) {
         ? { data: ORGS.map((id) => ({ organization_id: id })), error: null }
         : { data: [{ module_id: 'purchase_orders' }], error: null },
     'organizations.select': { data: { plan: 'pro' }, error: null },
-    'organization_members.select': { data: [{ user_id: 'admin-1', role: 'owner' }], error: null },
+    'organization_members.select': (call: MockCall) =>
+      noOwner.has(eqValue(call, 'organization_id') ?? '')
+        ? { data: [], error: null }
+        : { data: [{ user_id: 'admin-1', role: 'owner' }], error: null },
   }).client;
 }
 
@@ -84,6 +92,7 @@ const get = () =>
 let info: MockInstance<Console['info']>;
 beforeEach(() => {
   vi.clearAllMocks();
+  noOwner.clear();
   ran.length = 0;
   cost.ms = 0;
   cost.wait = false;
@@ -134,5 +143,19 @@ describe('GET /api/cron/recurring-pos reaches every organization', () => {
     expect([...ran].sort()).toEqual(ORGS);
     expect(bodies[0].posCreated + bodies[1].posCreated).toBe(ORGS.length);
     expect(createNotification).toHaveBeenCalledTimes(ORGS.length);
+  });
+
+  it('an organization with no owner or admin is skipped, not a failure, and never counts as failing repeatedly', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const table = cronAttemptsTable();
+    noOwner.add('org-3');
+    for (let day = 0; day < 4; day += 1) {
+      vi.setSystemTime(Date.parse('2026-11-17T08:00:00.000Z') + day * 24 * 60 * 60_000);
+      adminHolder.client = client(table);
+      info.mockClear();
+      await get();
+      expect(logLine()).toMatchObject({ noActor: 1, failed: 0, failingRepeatedly: 0 });
+    }
+    expect(table.rows.find((r) => r.organization_id === 'org-3')!.consecutive_failures).toBe(0);
   });
 });
