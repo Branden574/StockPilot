@@ -18930,7 +18930,9 @@ describe('the pages-keep-groups-whole release (Phase 2, #364)', () => {
   // onto a page. Since migration 0490 the database applies the whole low rule
   // (is_low_stock) to the page, its count and the plan scan alike, so every
   // fixed page is full too, and the 2,000 cap counts the low records
-  // themselves. The words below are the release as it was published.
+  // themselves. The words below are the release as it was published, but for
+  // the sentence on what the 2,000 counts for Low + critical, corrected then
+  // (wording only, revision kept) because it was no longer true.
   it('rests the rack totals on the filters the page, the value total and the plan scan share, and plans every Low + critical record', () => {
     const svc = source('server/services/inventory.ts');
     const at = (marker: string) => {
@@ -18959,9 +18961,15 @@ describe('the pages-keep-groups-whole release (Phase 2, #364)', () => {
     );
     expect(builder).toContain('const rack = rackFilterParts(filters.rack, filters.itemType);');
     const [pages, rack] = release().entries;
+    // Re-pinned by perf/inventory-list-totals-in-database (2026-11-17; was: toContain
+    // '(for Low + critical, the 2,000 counts every record with a reorder point or no stock)'):
+    // the plan scan's 2,000 cap now counts the records the low rule keeps (is_low_stock in
+    // applyContentFilters, asserted above), so the published sentence was corrected.
     expect(pages!.howItAffectsYou).toContain(
-      '(for Low + critical, the 2,000 counts every record with a reorder point or no stock)',
+      '(for Low + critical, the 2,000 counts the low or critical records)',
     );
+    expect(pages!.howItAffectsYou).not.toMatch(/reorder point or no stock/);
+    expect(release().revision).toBe(1);
     expect(pages!.howItAffectsYou).toContain(
       'With Low + critical chosen, every low or critical record is now on a page',
     );

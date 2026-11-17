@@ -25,6 +25,16 @@
 --    when the reorder point is above 0; a null reorder point is low only when
 --    the quantity is 0 or less. The answer is never null.
 --    IMMUTABLE: it reads only the row it is given.
+--    Written so Postgres INLINES it: an SQL-standard body (RETURN) and no
+--    SET clause. A SET clause stops inlining, and a call that is not inlined
+--    builds each row's whole value first, which reads every out-of-line
+--    column, the 1536-dimension embedding (about 6 KB) included, on every
+--    row the filter judges. Inlined, it is the bare comparison of two
+--    columns. The SQL-standard body is parsed and every name in it bound when
+--    the function is created, so no caller's search_path ever applies (what a
+--    pinned search_path is for elsewhere); security_invariants allowlist N
+--    holds it to that shape (invoker, immutable, no SET, depends on no
+--    function, operator or whole table).
 --
 -- 2. public.inventory_list_value(p_organization_id uuid, p_filters jsonb)
 --    -> numeric
@@ -93,18 +103,16 @@
 -- Grants: is_low_stock to authenticated and service_role (a filter in their
 -- own requests); inventory_list_value to authenticated only (list() calls it
 -- with the signed-in member's client). Nothing for anon or PUBLIC.
--- search_path is pinned to '' and every name is schema-qualified.
+-- inventory_list_value pins search_path to '' and schema-qualifies every
+-- name; is_low_stock binds its names at creation (above).
 
 create or replace function public.is_low_stock(p_item public.inventory_items)
 returns boolean
 language sql
 immutable
-set search_path = ''
-as $$
-  select coalesce(p_item.quantity_on_hand <= 0, false)
-      or coalesce(p_item.reorder_point > 0
-                  and coalesce(p_item.quantity_on_hand, 0) <= p_item.reorder_point, false)
-$$;
+return coalesce(p_item.quantity_on_hand <= 0, false)
+    or coalesce(p_item.reorder_point > 0
+                and coalesce(p_item.quantity_on_hand, 0) <= p_item.reorder_point, false);
 
 comment on function public.is_low_stock(public.inventory_items) is
   'Computed field (0490): true when the record is out (quantity_on_hand <= 0) or at or under a positive reorder point. The rule the inventory list''s low-stock view uses; filterable in a request as is_low_stock=eq.true. Never null.';

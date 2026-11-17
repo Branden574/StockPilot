@@ -336,16 +336,28 @@ export function buildItemSearchClause(rawQ: string, isbnVariants?: string[]): st
   return `${clause},barcode.in.(${variants.map((v) => `"${v}"`).join(',')})`;
 }
 
+/** A UTF-16 surrogate half with no partner. */
+const LONE_SURROGATE_RE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
 /**
  * The search term as the `q` clause matches it ('%term%' on each field), or
  * null when nothing is left to search for. PostgREST's .or() takes a raw
  * filter string, so the characters that would let a term escape its clause
  * and fan out the filter tree (commas, parens, asterisks, percent signs)
- * become spaces, and the term is capped at 120 characters. Shared by
- * buildItemSearchClause and buildItemListValueFilters.
+ * become spaces, and the term is capped at 120 characters (code points).
+ * Shared by buildItemSearchClause and buildItemListValueFilters.
  */
 function itemSearchTerm(rawQ: string): string | null {
-  const term = rawQ.trim().slice(0, 120).replace(/[,()%*]/g, ' ');
+  // Cut on whole characters (code points), never between the two halves of
+  // one (an emoji), and turn any half left alone in the input into U+FFFD, as
+  // URLSearchParams does for the page request. A lone half would fail the
+  // value total's JSON body while the page request still searched.
+  const term = Array.from(rawQ.trim())
+    .slice(0, 120)
+    .join('')
+    .replace(LONE_SURROGATE_RE, '\uFFFD')
+    .replace(/[,()%*]/g, ' ');
   return term ? term : null;
 }
 
@@ -1693,8 +1705,9 @@ export class InventoryService {
    * warehouse scope and every one of its filters (applyContentFilters),
    * selecting only `columns`, ordered by id so the windows never overlap.
    * listPlanRows plans a group-aware page from it (list() asks the database
-   * for its value total instead: inventory_list_value). `narrow` adds a filter the caller needs (a viewer's category grants);
-   * `count` asks for the view's size with the window.
+   * for its value total instead: inventory_list_value). `narrow` adds a
+   * filter the caller needs (a viewer's category grants); `count` asks for
+   * the view's size with the window.
    */
   private filteredScanPage(
     filters: ItemListFilters,

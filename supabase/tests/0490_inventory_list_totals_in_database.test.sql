@@ -3,7 +3,10 @@
 -- inventory list's value total inventory_list_value.
 --
 -- S.  Structure and who may call them:
---     S1-S2  posture of each (language, volatility, invoker, search_path);
+--     S1-S2  posture of each (language, volatility, invoker, search_path;
+--            is_low_stock: an SQL-standard body and no SET clause, so it
+--            inlines); S1b a filter on it plans as the bare column
+--            comparison, never a call (the plan reads no whole row);
 --     S3     EXECUTE: is_low_stock for authenticated and service_role only;
 --            inventory_list_value for authenticated only; never anon or
 --            PUBLIC; S4 anon's call is refused (42501).
@@ -15,7 +18,9 @@
 -- V.  inventory_list_value as a manager of A: each filter on its own, the
 --     defaults the app sends, and combinations, each against the hand-listed
 --     records it must add up.
--- R.  Row level security: a staff member (their warehouse only), a viewer
+-- R.  Row level security: a staff member (their warehouse only), a staff
+--     member who may read only one charter's records in their warehouse
+--     (their total equals the sum over the rows they can read), a viewer
 --     with a category grant, a manager of B asking for A's id, and someone
 --     with no membership; narrowing never widens.
 -- E.  Refusals (22023): every malformed input the function checks.
@@ -26,7 +31,7 @@
 
 begin;
 
-select plan(95);
+select plan(101);
 
 \set orgA  '\'04900000-0000-0000-0000-00000000000a\''
 \set orgB  '\'04900000-0000-0000-0000-00000000000b\''
@@ -39,15 +44,17 @@ select plan(95);
 \set supA  '\'04900000-0000-0000-0000-0000000000d1\''
 \set locA  '\'04900000-0000-0000-0000-0000000000e1\''
 \set chA   '\'04900000-0000-0000-0000-0000000000f1\''
+\set chA2  '\'04900000-0000-0000-0000-0000000000f2\''
 \set mgrA  '\'04900000-0000-0000-0000-000000000101\''
 \set stfA  '\'04900000-0000-0000-0000-000000000102\''
 \set vwrA  '\'04900000-0000-0000-0000-000000000103\''
 \set mgrB  '\'04900000-0000-0000-0000-000000000104\''
 \set nobody '\'04900000-0000-0000-0000-000000000105\''
+\set stfC  '\'04900000-0000-0000-0000-000000000106\''
 
 insert into auth.users (id, email, raw_user_meta_data)
   select ('04900000-0000-0000-0000-00000000010' || g)::uuid, 'person' || g || '@t490.test', '{}'::jsonb
-    from generate_series(1, 5) g;
+    from generate_series(1, 6) g;
 insert into public.organizations (id, name, slug) values
   (:orgA, 'T490 Org A', 't490-org-a'),
   (:orgB, 'T490 Org B', 't490-org-b');
@@ -55,6 +62,7 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgA, :mgrA, 'manager', now()),
   (:orgA, :stfA, 'staff',   now()),
   (:orgA, :vwrA, 'viewer',  now()),
+  (:orgA, :stfC, 'staff',   now()),
   (:orgB, :mgrB, 'manager', now());
 insert into public.warehouses (id, organization_id, name, code, status) values
   (:whA1, :orgA, 'T490 Main',   'WH-T490A1', 'active'),
@@ -71,9 +79,15 @@ insert into public.suppliers (id, organization_id, name) values (:supA, :orgA, '
 insert into public.locations (id, organization_id, warehouse_id, name, type) values
   (:locA, :orgA, :whA1, 'T490 Aisle', 'room');
 insert into public.charters (id, organization_id, name, code, status) values
-  (:chA, :orgA, 'T490 Charter', 'T490-CH', 'active');
+  (:chA,  :orgA, 'T490 Charter',  'T490-CH',  'active'),
+  (:chA2, :orgA, 'T490 Charter 2', 'T490-CH2', 'active');
 insert into public.warehouse_charters (organization_id, warehouse_id, charter_id) values
-  (:orgA, :whA1, :chA);
+  (:orgA, :whA1, :chA),
+  (:orgA, :whA1, :chA2);
+-- A staff member who may read Main's records of one charter only (and Main's
+-- records with no charter, as every Main assignment may).
+insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, charter_id, is_primary) values
+  (:orgA, :stfC, :whA1, :chA, true);
 
 -- Org A's records. Each column default is the plain case: active product in
 -- Main, Shirts, not a rental, not a bundle, shown in Orders, received.
@@ -114,6 +128,8 @@ insert into fx (sku, name, barcode, warehouse_id, category_id, quantity_on_hand,
   ('T490-A12', 'Some novel', '9780306406157', :whA1, :catA1, 1, 0, 20, 'book');
 insert into fx (sku, name, warehouse_id, category_id, quantity_on_hand, reorder_point, unit_cost, status) values
   ('T490-A13', 'Plate', :whA2, :catA2, 5, 5, 6, 'discontinued');
+insert into fx (sku, name, warehouse_id, category_id, charter_id, quantity_on_hand, reorder_point, unit_cost, status, item_type) values
+  ('T490-C01', 'Spare fuse', :whA1, :catA2, :chA2, 2, 0, 50, 'discontinued', 'consumable');
 insert into fx (sku, name, warehouse_id, category_id, quantity_on_hand, reorder_point, unit_cost, org) values
   ('T490-B01', 'Desk lamp', :whB, :catB, 10, 0, 1000, :orgB);
 
@@ -160,6 +176,39 @@ create function pg_temp.sum_of(p_skus text[]) returns text language sql as $$
     from public.inventory_items where sku = any (p_skus)
 $$;
 
+-- The value of the live A records p_sub can READ (a plain select as
+-- authenticated, through row level security), always undone.
+create function pg_temp.readable_sum(p_sub uuid) returns text language plpgsql as $$
+declare v numeric; v_state text; v_msg text;
+begin
+  begin
+    perform set_config('request.jwt.claims', '', true);
+    perform set_config('request.jwt.claim.sub', p_sub::text, true);
+    perform set_config('request.jwt.claim.role', 'authenticated', true);
+    perform set_config('role', 'authenticated', true);
+    execute 'select coalesce(sum(coalesce(quantity_on_hand, 0) * coalesce(unit_cost, 0)), 0) from public.inventory_items where organization_id = $1 and deleted_at is null'
+      into v using '04900000-0000-0000-0000-00000000000a'::uuid;
+    perform set_config('role', 'none', true);
+    raise exception using errcode = 'XX490', message = v::text;
+  exception when others then
+    get stacked diagnostics v_state = returned_sqlstate, v_msg = message_text;
+  end;
+  if v_state = 'XX490' then
+    return v_msg;
+  end if;
+  return 'error ' || v_state;
+end $$;
+
+-- The plan of a statement, as text.
+create function pg_temp.plan_of(p_sql text) returns text language plpgsql as $$
+declare v_line text; v_out text := '';
+begin
+  for v_line in execute 'explain (verbose, costs off) ' || p_sql loop
+    v_out := v_out || v_line || chr(10);
+  end loop;
+  return v_out;
+end $$;
+
 -- A manager of A's value for p_filters.
 create function pg_temp.mgr(p_filters jsonb) returns text language sql as $$
   select pg_temp.value_as('04900000-0000-0000-0000-000000000101', '04900000-0000-0000-0000-00000000000a', p_filters)
@@ -173,9 +222,14 @@ $$;
 -- ══ S. Structure and privileges ═══════════════════════════════════════════
 select ok(
   (select p.prolang = (select oid from pg_language where lanname = 'sql') and p.provolatile = 'i'
-          and not p.prosecdef and p.proconfig @> array['search_path=""']
+          and not p.prosecdef and p.proconfig is null and p.prosqlbody is not null
+          and p.prorettype = 'boolean'::regtype
      from pg_proc p where p.oid = 'public.is_low_stock(public.inventory_items)'::regprocedure),
-  'S1 is_low_stock: SQL, IMMUTABLE, invoker, search_path pinned to empty');
+  'S1 is_low_stock: SQL, IMMUTABLE, invoker, an SQL-standard body (names bound at creation) and no SET clause, so it inlines');
+select ok(
+  (select x !~ 'is_low_stock' and x ~ 'quantity_on_hand' and x ~ 'reorder_point'
+     from pg_temp.plan_of('select count(*) from public.inventory_items i where i.is_low_stock') x),
+  'S1b a filter on is_low_stock plans as the column comparison itself: inlined, no call and no whole-row value');
 select ok(
   (select p.prolang = (select oid from pg_language where lanname = 'plpgsql') and p.provolatile = 's'
           and not p.prosecdef and p.proconfig @> array['search_path=""']
@@ -234,7 +288,7 @@ select is(
 
 -- ══ V. The value, filter by filter, as a manager of A ════════════════════
 select is(pg_temp.mgr('{}'),
-  pg_temp.sum_of(array['T490-A01','T490-A02','T490-A03','T490-A04','T490-A05','T490-A06','T490-A07','T490-A08','T490-A10','T490-A11','T490-A12','T490-A13']),
+  pg_temp.sum_of(array['T490-A01','T490-A02','T490-A03','T490-A04','T490-A05','T490-A06','T490-A07','T490-A08','T490-A10','T490-A11','T490-A12','T490-A13','T490-C01']),
   'V1 no filter: every live record of A (not the deleted one, nothing of B)');
 select is(pg_temp.mgr('{"status":"active","awaiting_first_receipt":false,"item_types":["product"],"is_rental":false}'),
   pg_temp.sum_of(array['T490-A01','T490-A02','T490-A07','T490-A10']),
@@ -258,22 +312,24 @@ select is(pg_temp.mgr('{"rack":{"number":"17","row":"B","label":"17-B","keys":"b
   pg_temp.sum_of(array['T490-A03']), 'V15 rack, book keys');
 select is(pg_temp.mgr('{"rack":{"number":"17","row":"B","label":"17-B","keys":"by_type"}}'),
   pg_temp.sum_of(array['T490-A03','T490-A07','T490-A10']), 'V16 rack by type: a book reads book keys, others rack keys');
-select is(pg_temp.mgr(format('{"category_ids":["%s"]}', :catA2)::jsonb), pg_temp.sum_of(array['T490-A02','T490-A13']), 'V17 category_ids');
+select is(pg_temp.mgr(format('{"category_ids":["%s"]}', :catA2)::jsonb), pg_temp.sum_of(array['T490-A02','T490-A13','T490-C01']), 'V17 category_ids');
 select is(pg_temp.mgr(format('{"location_ids":["%s"]}', :locA)::jsonb), pg_temp.sum_of(array['T490-A02']), 'V18 location_ids');
 select is(pg_temp.mgr(format('{"supplier_ids":["%s"]}', :supA)::jsonb), pg_temp.sum_of(array['T490-A02']), 'V19 supplier_ids');
 select is(pg_temp.mgr(format('{"charter_ids":["%s"]}', :chA)::jsonb), pg_temp.sum_of(array['T490-A03']), 'V20 charter_ids');
 select is(pg_temp.mgr('{"charter_generic":true}'),
   pg_temp.sum_of(array['T490-A01','T490-A02','T490-A04','T490-A05','T490-A06','T490-A07','T490-A08','T490-A10','T490-A11','T490-A12','T490-A13']),
   'V21 charter_generic alone: no charter');
-select is(pg_temp.mgr(format('{"charter_generic":true,"charter_ids":["%s"]}', :chA)::jsonb), pg_temp.mgr('{}'), 'V22 Generic plus a charter: either');
+select is(pg_temp.mgr(format('{"charter_generic":true,"charter_ids":["%s"]}', :chA)::jsonb),
+  pg_temp.sum_of(array['T490-A01','T490-A02','T490-A03','T490-A04','T490-A05','T490-A06','T490-A07','T490-A08','T490-A10','T490-A11','T490-A12','T490-A13']),
+  'V22 Generic plus a charter: either (not the other charter)');
 select is(pg_temp.mgr('{"out_of_stock":true}'), pg_temp.sum_of(array['T490-A03','T490-A05']), 'V23 out_of_stock: on hand 0 or less');
 select is(pg_temp.mgr('{"has_unit_cost":true}'),
-  pg_temp.sum_of(array['T490-A01','T490-A02','T490-A03','T490-A04','T490-A05','T490-A06','T490-A07','T490-A10','T490-A11','T490-A12','T490-A13']),
+  pg_temp.sum_of(array['T490-A01','T490-A02','T490-A03','T490-A04','T490-A05','T490-A06','T490-A07','T490-A10','T490-A11','T490-A12','T490-A13','T490-C01']),
   'V24 has_unit_cost: unit cost above 0');
 select is(pg_temp.mgr('{"low_stock":true}'), pg_temp.sum_of(array['T490-A02','T490-A03','T490-A04','T490-A05','T490-A13']), 'V25 low_stock');
 select is(pg_temp.mgr('{"item_types":["book","asset"]}'), pg_temp.sum_of(array['T490-A03','T490-A08','T490-A11','T490-A12']), 'V26 item_types');
 select is(pg_temp.mgr('{"exclude_bundles":true}'),
-  pg_temp.sum_of(array['T490-A01','T490-A02','T490-A03','T490-A04','T490-A05','T490-A06','T490-A08','T490-A10','T490-A11','T490-A12','T490-A13']),
+  pg_temp.sum_of(array['T490-A01','T490-A02','T490-A03','T490-A04','T490-A05','T490-A06','T490-A08','T490-A10','T490-A11','T490-A12','T490-A13','T490-C01']),
   'V27 exclude_bundles');
 select is(pg_temp.mgr('{"order_catalog_visible":false}'), pg_temp.sum_of(array['T490-A08']), 'V28 order_catalog_visible');
 select is(pg_temp.mgr('{"is_rental":true}'), pg_temp.sum_of(array['T490-A06']), 'V29 is_rental');
@@ -284,7 +340,7 @@ select is(pg_temp.mgr((select format('{"ids":["%s","%s"]}', min(id::text), max(i
                          from public.inventory_items where sku in ('T490-A01', 'T490-A02'))::jsonb),
   pg_temp.sum_of(array['T490-A01','T490-A02']), 'V33 ids');
 select is(pg_temp.mgr(format('{"warehouse_ids":["%s"]}', :whA2)::jsonb), pg_temp.sum_of(array['T490-A02','T490-A13']), 'V34 warehouse_ids');
-select is(pg_temp.mgr(format('{"category_grants":["%s"]}', :catA2)::jsonb), pg_temp.sum_of(array['T490-A02','T490-A13']), 'V35 category_grants');
+select is(pg_temp.mgr(format('{"category_grants":["%s"]}', :catA2)::jsonb), pg_temp.sum_of(array['T490-A02','T490-A13','T490-C01']), 'V35 category_grants');
 select is(pg_temp.mgr('{"status":"active","low_stock":true,"item_types":["product"]}'),
   pg_temp.sum_of(array['T490-A02','T490-A05']), 'V36 combined: active, low, products');
 select is(pg_temp.mgr('{"status":"active","awaiting_first_receipt":false,"is_rental":false,"low_stock":true,"item_types":["product","book"],"exclude_bundles":true}'),
@@ -299,7 +355,7 @@ select is(pg_temp.mgr('{"search":"%"}'), pg_temp.mgr('{}'), 'V41 the search text
 
 -- ══ R. Row level security ═════════════════════════════════════════════════
 select is(pg_temp.value_as(:stfA, :orgA, '{}'),
-  pg_temp.sum_of(array['T490-A01','T490-A03','T490-A04','T490-A05','T490-A06','T490-A07','T490-A08','T490-A10','T490-A11','T490-A12']),
+  pg_temp.sum_of(array['T490-A01','T490-A03','T490-A04','T490-A05','T490-A06','T490-A07','T490-A08','T490-A10','T490-A11','T490-A12','T490-C01']),
   'R1 staff of A: only the warehouse they are assigned');
 select is(pg_temp.value_as(:stfA, :orgA, format('{"warehouse_ids":["%s"]}', :whA2)::jsonb), '0',
   'R2 staff of A asking for a warehouse they cannot read: 0, never more');
@@ -315,6 +371,13 @@ select is(pg_temp.value_as(:mgrB, :orgB, '{}'), pg_temp.sum_of(array['T490-B01']
 select is(pg_temp.value_as(:mgrA, :orgB, '{}'), '0', 'R8 a manager of A asking for B: 0');
 select is(pg_temp.value_as(:nobody, :orgA, '{}'), '0', 'R9 someone with no membership: 0');
 select is(pg_temp.value_as(null, :orgA, '{}'), '0', 'R10 authenticated with no user: 0');
+select is(pg_temp.value_as(:stfC, :orgA, '{}'),
+  pg_temp.sum_of(array['T490-A01','T490-A03','T490-A04','T490-A05','T490-A06','T490-A07','T490-A08','T490-A10','T490-A11','T490-A12']),
+  'R11 staff who may read one charter in Main: Main''s records of that charter and of none, not the other charter''s');
+select is(pg_temp.value_as(:stfC, :orgA, '{}'), pg_temp.readable_sum(:stfC),
+  'R12 that staff member''s total equals the sum over the rows they can read');
+select is(pg_temp.value_as(:stfC, :orgA, format('{"charter_ids":["%s"]}', :chA2)::jsonb), '0',
+  'R13 that staff member naming the charter they cannot read: 0');
 
 -- ══ E. Refusals ═══════════════════════════════════════════════════════════
 select is(pg_temp.value_as(:mgrA, null, '{}'), 'error 22023', 'E1 no organization');
@@ -328,6 +391,10 @@ select is(pg_temp.mgr(format('{"ids":%s}', (select jsonb_agg(gen_random_uuid()) 
   'error 22023', 'E8 more than 1000 ids');
 select is(pg_temp.mgr('{"low_stock":"yes"}'), 'error 22023', 'E9 a switch that is not true or false');
 select is(pg_temp.mgr(format('{"search":"%s"}', repeat('x', 121))::jsonb), 'error 22023', 'E10 a search over 120 characters');
+select is(pg_temp.mgr(format('{"search":"%s"}', repeat('x', 119) || U&'\+01F600')::jsonb), '0',
+  'E10b 119 characters and an emoji is 120 characters (code points, as the app cuts it), accepted');
+select is(pg_temp.mgr(format('{"search":"%s"}', repeat('x', 120) || U&'\+01F600')::jsonb), 'error 22023',
+  'E10c 120 characters and an emoji is 121, refused');
 select is(pg_temp.mgr('{"search":""}'), 'error 22023', 'E11 an empty search');
 select is(pg_temp.mgr('{"search_isbn_variants":["0306406152"]}'), 'error 22023', 'E12 ISBN forms without a search');
 select is(pg_temp.mgr('{"search":"x","search_isbn_variants":["03064"]}'), 'error 22023', 'E13 an ISBN form of the wrong length');

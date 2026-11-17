@@ -7264,9 +7264,15 @@ export const RELEASES: Release[] = [
     //   fit, and a unit larger than 30 records fills a page of its own;
     // - limits: past INSTANT_MODE_MAX_ROWS (2000) records in the filtered view
     //   listPlanRows answers null and the page keeps fixed 30-record slices
-    //   (so does a failed scan); with stock=low the size it checks is the low
-    //   pre-filter's (a reorder point set, or no stock), counted before the
-    //   low rule, so the words say what the 2,000 counts there; a search in
+    //   (so does a failed scan); with stock=low the size it checked was the
+    //   low pre-filter's (a reorder point set, or no stock), counted before
+    //   the low rule, so the words said what the 2,000 counted there.
+    //   Corrected (wording only, revision kept) when migration 0490 moved
+    //   the whole low rule into the request (the computed field
+    //   is_low_stock, applied by applyContentFilters to the page, its count
+    //   and the plan scan): the 2,000 now counts the low or critical records
+    //   themselves, and the words say so (was: "for Low + critical, the
+    //   2,000 counts every record with a reorder point or no stock"); a search in
     //   the box shows /api/items/search's first pageSize (30) matches with no
     //   pager (the table's planned is null while q is set);
     // - the footer: a planned page prints "N SKUs" (distinctSkus) and, when it
@@ -7317,7 +7323,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           "Pages used to be cut every 30 records in the list's order, so a record that sorted far from the others under its header could sit alone on another page. A shirt's other sizes could show on page 1 while its XS sat alone on page 2, where it was easy to miss when ordering. On a list of more than one page, the header of a SKU or a group with two or more records also showed a * after its on hand figure, as other pages might hold more of it. With Low + critical chosen, a page used to show only the low or critical ones among 30 records, so it could show few or none, and some could be on no page.",
         howItAffectsYou:
-          "A page can end before 30 records so that a header's records are not cut in two, and a header of more than 30 records gets a page of its own. With Low + critical chosen, every low or critical record is now on a page. The count above the list now starts with the number of SKUs, then gives the number of items (rows on Books) when some SKUs have more than one record. Lists of more than 2,000 records are still cut every 30 records, as before (for Low + critical, the 2,000 counts every record with a reorder point or no stock), and a search typed into the search box still shows its first 30 matches.",
+          "A page can end before 30 records so that a header's records are not cut in two, and a header of more than 30 records gets a page of its own. With Low + critical chosen, every low or critical record is now on a page. The count above the list now starts with the number of SKUs, then gives the number of items (rows on Books) when some SKUs have more than one record. Lists of more than 2,000 records are still cut every 30 records, as before (for Low + critical, the 2,000 counts the low or critical records), and a search typed into the search box still shows its first 30 matches.",
         whatToDo: 'No action needed.',
         audience: { anyPermission: ['items:read'] },
       },

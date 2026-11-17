@@ -79,7 +79,7 @@
 
 begin;
 
-select plan(64);
+select plan(65);
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -501,6 +501,55 @@ insert into _sec_inv_flag_setter_allow (flag, fn, why) values
   ('stockpilot.idempotency_write', 'ledger.distribute_bundle', 'raises the flag (the transaction id) around its own retry key insert and update, and puts the previous value back (0464; also 0464 P6, F1)'),
   ('stockpilot.idempotency_write', 'public.start_targeted_recount',    'raises the flag (the transaction id) around its own retry key insert and update, and puts the previous value back; the idempotency_keys guard admits an API role''s write only under it (0466; also 0466 P3)'),
   ('stockpilot.idempotency_write', 'public.draft_order_shortfall_pos', 'raises the flag (the transaction id) around its own retry key insert and update, and puts the previous value back; the idempotency_keys guard admits an API role''s write only under it (0466; also 0466 P3)');
+
+-- ── N. Inlinable row predicates: an SQL-standard body and no SET clause
+--       (T23, 0490) ─────────────────────────────────────────────────────────
+--
+-- A SET clause stops Postgres inlining a SQL function. For a predicate that
+-- PostgREST filters on as a computed field, a call that is not inlined builds
+-- each row's whole value first, which reads every out-of-line column (an
+-- inventory record's 1536-dimension embedding, about 6 KB) on every row the
+-- filter judges. An entry here is exempt from INV-27 (no search_path pin) and
+-- from INV-27b's refusal of an SQL-standard body, only while all of these
+-- hold (the audit view below, read by INV-27 and INV-27b; INV-28c plants one
+-- inside and one outside them):
+--   * SECURITY INVOKER, LANGUAGE sql, IMMUTABLE, returns boolean;
+--   * an SQL-standard body (RETURN or BEGIN ATOMIC): Postgres parses it and
+--     binds every name in it when the function is created, so the caller's
+--     search_path never applies, which is what the pin is for;
+--   * no SET clause at all;
+--   * its recorded dependencies name no function, no operator, no whole
+--     relation and no column of any relation but the row types it is handed
+--     as arguments (a column read from a scanned table is recorded as that
+--     column, so a query over another table is refused too). So it reads no
+--     table and calls no first-party code (built-in operators and functions
+--     are pinned objects and record no dependency), and the text censuses,
+--     which cannot read such a body, have nothing in it to find.
+-- Keyed on the full signature, as allowlist J is.
+create temporary table _sec_inv_inline_predicate_allow (sig text primary key, why text not null);
+insert into _sec_inv_inline_predicate_allow (sig, why) values
+  ('public.is_low_stock(public.inventory_items)',
+   'the inventory list''s low-stock computed field (0490): PostgREST filters is_low_stock=eq.true on the page, its count and the plan scan, and inventory_list_value calls it per row; inlined, it is the bare comparison of two numeric columns and never reads the row''s embedding');
+
+create temporary view _sec_inv_inline_predicate_audit as
+  select a.sig, p.oid,
+         coalesce(not p.prosecdef
+                  and p.prolang = (select l.oid from pg_language l where l.lanname = 'sql')
+                  and p.provolatile = 'i'
+                  and p.prorettype = 'boolean'::regtype
+                  and p.prosqlbody is not null
+                  and p.proconfig is null
+                  and not exists (select 1 from pg_depend d
+                                   where d.classid = 'pg_proc'::regclass and d.objid = p.oid
+                                     and (d.refclassid in ('pg_proc'::regclass, 'pg_operator'::regclass)
+                                          or (d.refclassid = 'pg_class'::regclass
+                                              and (d.refobjsubid = 0
+                                                   or d.refobjid not in (select t.typrelid from pg_type t
+                                                                          where t.oid = any (p.proargtypes)
+                                                                            and t.typrelid <> 0))))),
+                  false) as in_terms
+    from _sec_inv_inline_predicate_allow a
+    left join pg_proc p on p.oid = to_regprocedure(a.sig);
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -1367,8 +1416,9 @@ select is(
 
 -- The sweep's detector (T23): first-party functions in public and ledger
 -- (ledger, 0359, is ours: authenticated holds USAGE and EXECUTE there), less
--- extension members, with no search_path in proconfig, less allowlist J; and
--- allowlist J's own audit.
+-- extension members, with no search_path in proconfig, less allowlist J and
+-- the allowlist-N entries within their terms; and allowlist J's and N's own
+-- audits.
 create temporary view _sec_inv_search_path_violations as
   with fp as (
     select p.oid, p.oid::regprocedure::text as sig, p.prosecdef,
@@ -1382,6 +1432,11 @@ create temporary view _sec_inv_search_path_violations as
     from fp
    where not fp.pinned
      and fp.oid not in (select j.oid from j where j.oid is not null)
+     and fp.oid not in (select i.oid from _sec_inv_inline_predicate_audit i where i.in_terms)
+  union all
+  select 'allowlist-N entry missing or outside its terms (see section N): ' || i.sig, i.sig
+    from _sec_inv_inline_predicate_audit i
+   where not i.in_terms
   union all
   select 'stale allowlist-J entry (no such first-party function, or pinned now): ' || j.sig, j.sig
     from j
@@ -1407,7 +1462,8 @@ create temporary view _sec_inv_search_path_violations as
 --   * a first-party function in public or ledger with an SQL-standard body
 --     (BEGIN ATOMIC, or RETURN with no AS string): its prosrc is empty, and
 --     every text census in this suite reads prosrc, so such a body would be
---     invisible to all of them;
+--     invisible to all of them (an allowlist-N predicate within its terms
+--     excepted: its dependencies show it reads and calls nothing);
 --   * a first-party function in public or ledger whose body the strip pass
 --     does not follow: one of the forms of _sec_inv_unread_re, a quote left
 --     once the pass is done, standard_conforming_strings in the function's
@@ -1430,6 +1486,7 @@ create temporary view _sec_inv_first_party_census as
      and p.prosqlbody is not null
      and not exists (select 1 from pg_depend d
                       where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
+     and p.oid not in (select i.oid from _sec_inv_inline_predicate_audit i where i.in_terms)
   union all
   select 'body the text censuses do not follow (' || u.form || '): ' || f.sig, f.nspname
     from _sec_inv_fn_scope f join _sec_inv_unread_re u on f.raw ~* u.re
@@ -1620,6 +1677,40 @@ drop function ledger._sec_inv_probe_unpinned_definer();
 drop function ledger._sec_inv_probe_atomic();
 drop function _sec_inv_probe_schema.f();
 drop schema _sec_inv_probe_schema;
+
+-- INV-28c. MUTATION CONTROL for allowlist N (0490). Two unpinned ledger
+-- predicates with SQL-standard bodies, both listed in N: one inside its terms
+-- (compares its argument with a constant) and one outside them (reads a
+-- column of a table it is not handed). The first must
+-- be named nowhere; the second must be named by N's audit, as unpinned and as
+-- an SQL-standard body. A third row names no function at all. Removed
+-- straight after.
+create function ledger._sec_inv_probe_inline_ok(p_n integer) returns boolean
+  language sql immutable
+  return p_n > 0;
+create function ledger._sec_inv_probe_inline_reads(p_n integer) returns boolean
+  language sql immutable
+  return exists (select 1 from public.organizations o where p_n > 0 and o.id is not null);
+revoke all on function ledger._sec_inv_probe_inline_ok(integer), ledger._sec_inv_probe_inline_reads(integer)
+  from public, anon;
+insert into _sec_inv_inline_predicate_allow (sig, why) values
+  ('ledger._sec_inv_probe_inline_ok(integer)',    'control probe: within the terms; deleted below'),
+  ('ledger._sec_inv_probe_inline_reads(integer)', 'control probe: reads a table; deleted below'),
+  ('ledger._sec_inv_probe_inline_absent()',       'control probe: no such function; deleted below');
+select is(
+  (select coalesce(string_agg(q.x, ' | ' order by q.x collate "C"), '') from (
+     select v.x from _sec_inv_search_path_violations v where v.sig like '%\_sec\_inv\_probe\_inline%'
+     union all
+     select c.x from _sec_inv_first_party_census c where c.x like '%\_sec\_inv\_probe\_inline%') q),
+  'allowlist-N entry missing or outside its terms (see section N): ledger._sec_inv_probe_inline_absent() | '
+  'allowlist-N entry missing or outside its terms (see section N): ledger._sec_inv_probe_inline_reads(integer) | '
+  'sql-standard body: ledger._sec_inv_probe_inline_reads(integer) | '
+  'unpinned: ledger._sec_inv_probe_inline_reads(integer)',
+  'INV-28c control: allowlist N exempts an unpinned SQL-standard predicate only within its terms (no other table, no function and no operator among its dependencies), and names a missing entry'
+);
+delete from _sec_inv_inline_predicate_allow where why like 'control probe:%';
+drop function ledger._sec_inv_probe_inline_ok(integer);
+drop function ledger._sec_inv_probe_inline_reads(integer);
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
