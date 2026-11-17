@@ -1,241 +1,259 @@
 # StockPilot load tests
 
-k6-based load tests for capacity planning. **Not** for CI gates — they
-push hundreds of MB of egress and thousands of DB hits per run, which
-is a real cost when run repeatedly.
-
-This suite tells you "at what concurrent user count does StockPilot
-start to degrade?" so you can decide when to scale Supabase compute,
-add a CDN tier, or rewrite a hot path.
+k6 load tests for capacity planning and before/after comparisons. They run
+against a **local** production build of the app and a **local** Supabase stack,
+signed in as real roles, doing real inventory and order work. They are not a CI
+gate.
 
 ---
 
 ## Hard rules
 
-1. **Never run against `https://stockpilotusa.com`** unless you've
-   explicitly chosen to. `run-all.sh` refuses to start when `BASE_URL`
-   contains the prod domain unless you pass `ALLOW_PROD=1`.
-2. **Default target is a Vercel preview URL.** Spin up a preview, point
-   the test at it.
-3. **Always have a test org and a test user.** Don't load-test against
-   your real org. Writes scenarios will create real DB rows.
-4. **Don't run scenario 02 (signin) against shared Supabase auth.**
-   Supabase rate-limits sign-ins per IP (~30 / 5 min default). A long
-   load test will trip the limiter and may briefly lock real users out.
+1. **This machine only.** Every scenario and every tool refuses an address that
+   is not `127.0.0.1`, `localhost` or `[::1]` (`k6/lib/safety.js`), before the
+   first request. There is no default address anywhere and no override. A
+   preview deploy or the production site cannot be a target.
+2. **Keys stay in the environment.** The env files live outside the repository
+   (mode 600) and are loaded without printing. The service key is read only by
+   the seeder and inside k6 `setup()`; it is never logged, tagged or written to
+   a summary. The k6 summary drops `setup_data`, which holds the session tokens.
+3. **Made-up data only.** The seeder makes a throwaway organization
+   (`loadtest-<id>`) with `loadtest+...@example.com` accounts; teardown removes
+   all of it and fails if a row is left.
+4. **A run fails loudly.** A redirect to sign-in, a 401, an authenticator
+   demand, another warehouse's item seen by one-warehouse staff, a viewer write
+   that is not refused, or a resend that does not replay stops or fails the run,
+   as does a correctness check on the data afterwards. Slowness fails the p95
+   targets.
+
+`apps/web/src/test/load-tests-safety.guard.test.ts` checks rules 1 and the
+session cookie on every CI run.
 
 ---
 
-## Install k6
+## Set up once
+
+You need Docker, the Supabase CLI (the version CI pins), k6 (`brew install k6`)
+and Node 22.
 
 ```bash
-# macOS (recommended)
-brew install k6
+STACK=~/Developer/stockpilot-work/loadtest-stack     # any folder OUTSIDE the repo
 
-# Linux
-sudo gpg -k
-sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
-echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
-sudo apt-get update && sudo apt-get install k6
+# 1. A separate local Supabase stack (own project id and ports 58420-58424).
+node load-tests/k6/tools/prepare-stack.mjs --dir "$STACK" --project-id spload --port-base 58420
+supabase start --workdir "$STACK" -x studio,imgproxy,edge-runtime,logflare,vector,supavisor,postgres-meta,mailpit
 
-# Docker (no install)
-docker run --rm -i grafana/k6 run - < load-tests/k6/scenarios/01-anon-marketing.js
+# 2. The env files, written from the stack's status without printing a value.
+supabase status -o env --workdir "$STACK" | \
+  node load-tests/k6/tools/local-env.mjs --app-env "$STACK/app.env" --loadtest-env "$STACK/loadtest.env" --port 3600
+
+# 3. Build and start the app against that stack (production build, port 3600).
+cd apps/web
+( set -a; . "$STACK/app.env"; set +a; pnpm build && exec npx next start -p 3600 -H 127.0.0.1 )
 ```
 
-Verify: `k6 version` (should show v1.x or higher).
-
-Artillery (optional, only needed if you want the YAML alternative):
-`npm install -g artillery` (do **not** add to package.json — it's a
-CLI tool, not a project dependency).
-
----
-
-## First-time setup
-
-1. **Spin up a preview deploy** on Vercel for the branch you want to
-   test. Note the URL — that's `BASE_URL`.
-
-2. **Create a test org and test user.** Use a throwaway email like
-   `loadtest+$(date +%s)@yourdomain.com`. Add a few inventory items,
-   a procedure, a shipment so the SSR pages have data to render.
-
-3. **Get an access token** (the Supabase JWT). Two ways:
-
-   - **(easy) Pre-issued JWT.** Sign in to the preview deploy in a
-     real browser. Open devtools → Application → Cookies. Find the
-     `sb-<project>-auth-token` cookie. Its value is a JSON-encoded
-     object — the `access_token` field inside is your JWT. Set
-     `SUPABASE_ACCESS_TOKEN=<that_jwt>`.
-
-   - **(automated) Programmatic sign-in.** Set
-     `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `TEST_EMAIL`,
-     `TEST_PASSWORD`. The k6 scripts will sign in once in `setup()`
-     and reuse the token. Won't work if the user has MFA enabled —
-     use the pre-issued JWT path instead.
-
-4. **Get a session cookie** (only needed for scenarios 03, 05, 07, 08
-   which hit SSR dashboard pages — k6 can't forge the cookies, you
-   have to paste them):
-
-   - Sign in via browser. In devtools, copy the full `Cookie:`
-     header from any authenticated request (Network tab → any
-     /dashboard/* request → Request Headers).
-   - Set `SUPABASE_AUTH_COOKIE='<paste here>'`. Should look like
-     `sb-xxx-auth-token=...; sb-xxx-auth-token.0=...; ...`.
-   - The cookie expires (~1 hour by default). Re-grab it if a run
-     fails with 100% redirects.
-
-5. **Stash env in a gitignored file** so you don't paste secrets into
-   shell history:
-
-   ```bash
-   # load-tests/.env.local.loadtest (gitignored)
-   export BASE_URL=https://preview-xxx.vercel.app
-   export SUPABASE_URL=https://abcd.supabase.co
-   export SUPABASE_ANON_KEY=eyJ...
-   export SUPABASE_ACCESS_TOKEN=eyJ...
-   export SUPABASE_AUTH_COOKIE='sb-xxx-auth-token=...; ...'
-   export TEST_EMAIL=loadtest@yourdomain.com
-   export TEST_PASSWORD='...'
-   export ITEM_IDS='uuid1,uuid2,uuid3'
-   export SHIPMENT_IDS='uuid1,uuid2'
-   # uncomment when you actually want to exercise these:
-   # export ENABLE_SIGNIN=1
-   # export ENABLE_WRITES=1
-   # export PO_ID=...
-   # export PO_LINE_ITEM_ID=...
-   ```
-
-   Then `source load-tests/.env.local.loadtest` before running.
+`prepare-stack.mjs` copies `supabase/` and changes only the copy's
+`config.toml`: its own project id and ports, studio and edge functions off, and
+GoTrue's rate limits raised (one machine mints hundreds of sessions in
+`setup()`; the default allows 30 verifications per 5 minutes). Rebuild the app
+whenever the code under test changes; restart the stack (`supabase stop
+--workdir "$STACK"`, then start) to begin from an empty database.
 
 ---
 
-## Running one scenario
+## Run a scale point
 
 ```bash
-source load-tests/.env.local.loadtest
-k6 run load-tests/k6/scenarios/03-inventory-list.js
+node --env-file="$STACK/loadtest.env" load-tests/k6/run-scale.mjs \
+  --items 10001 --users-per-role 40 \
+  --ladder 25,50,100,250 --duration 5m --warmup 60s \
+  --label "main abc1234" --out load-tests/results/main-10k
 ```
 
-Each script prints a summary on completion with p50/p95/p99 latency
-per request name, throughput (`http_reqs`), and error rate
-(`http_req_failed`). If a threshold trips, k6 exits non-zero.
+One command: seed, warm up, run each step of the ladder, check the data after
+each step, write `report.md` and `report.json` in `--out`, tear down.
 
-## Running all scenarios
+| Option | Default | Meaning |
+|---|---|---|
+| `--items` | 1000 | Items to seed: 1,000 / 10,001 / 50,000 are the scale points |
+| `--users-per-role` | 20 | Accounts per role; 40-50 for the 250 step so per-person limits are not the bottleneck |
+| `--ladder` | 25,50,100,250 | Concurrent people per step |
+| `--duration` | 3m | Steady time per step (at most 50m: sessions last an hour) |
+| `--warmup` | 30s | One run at the first step before the ladder, not reported (`0` skips it) |
+| `--manifest` | | Reuse an organization seeded earlier (no seeding, no teardown) |
+| `--keep` | | Keep the seeded organization at the end |
+| `--continue-on-fail` | | Run the next step even when a p95 target failed (a sign-in, scope or correctness failure always stops the ladder) |
+| `--scenario` | `scenarios/10-roles-workload.js` | Another scenario built on `lib/workload.js` |
+
+Other knobs, as environment variables: `LOADTEST_P95_SSR_MS` (1500),
+`LOADTEST_P95_API_READ_MS` (800), `LOADTEST_P95_WRITE_MS` (2000),
+`LOADTEST_MIX` (role shares as JSON, e.g. `{"staff":0.6,"viewer":0.4}`),
+`LOADTEST_SESSIONS_PER_ROLE` (50), `LOADTEST_REPLAY_SHARE` (0.1).
+
+For a before/after comparison, run the same command on both builds against
+freshly started stacks and compare the two `report.md` files.
+
+### Seed and tear down by hand
 
 ```bash
-source load-tests/.env.local.loadtest
-./load-tests/k6/run-all.sh
+node --env-file="$STACK/loadtest.env" load-tests/k6/tools/seed.mjs --items 1000 --users-per-role 20 --out /tmp/lt/manifest.json
+node --env-file="$STACK/loadtest.env" load-tests/k6/tools/teardown.mjs --manifest /tmp/lt/manifest.json
+node --env-file="$STACK/loadtest.env" load-tests/k6/tools/teardown.mjs --all     # every loadtest-* organization
 ```
 
-Summaries land in `load-tests/results/<scenario>-<timestamp>.json`
-(gitignored).
+What the seeder makes: one organization (enterprise plan, every module on,
+authenticator policy optional), accounts for owner, admin, manager, staff,
+viewer and staff limited to the first warehouse, two warehouses (70% of items
+in the first), 12 categories, 3 suppliers, N items with stock (the item insert
+trigger `tg_seed_initial_level` creates each holding in the warehouse's
+Unplaced location; an `initial` stock movement is written beside it, as the
+app's create does), 8 open purchase orders x 25 lines of 1,000,000 units, then
+`ANALYZE`. Writes go in transactions of at most ~36k rows (12k items, their
+holdings and their opening movements). The manifest lists the accounts and the
+id pools the workload draws from; it holds no keys or tokens.
 
 ---
 
-## Scenario index
+## The workload (`k6/scenarios/10-roles-workload.js`)
 
-| # | File | What it hits | Auth |
+Each role is a k6 scenario with a **constant arrival rate** (an open model: the
+offered load is the same however slow the build is). One iteration is one
+action by one signed-in person, then that person's think time: **3-8 s on the
+web, 1-3 s on the phone**. The rate for `A` concurrent people is `A / (mean
+think + mean answer)` per role, so "100 actors" means about 100 people working
+at human speed. Default shares: staff 45%, viewer 20%, manager 15%, one-warehouse
+staff 10%, admin 8%, owner 2%.
+
+| Action | Surface | Kind | Request |
+|---|---|---|---|
+| dashboard_home | web | ssr | `GET /dashboard` |
+| items_list | web | ssr | `GET /dashboard/inventory` pages 1-5, with status, low stock, sort or search |
+| low_stock | web | ssr | `GET /dashboard/inventory?stock=low` |
+| item_detail | web | ssr | `GET /dashboard/inventory/[id]` (must show the item's SKU) |
+| web_search | web | api_read | `GET /api/search?q=` with the session cookie |
+| orders_new | web | ssr | `GET /dashboard/orders/new` |
+| phone_permissions | phone | api_read | `GET /api/v1/me/permissions` |
+| phone_storefront | phone | api_read | `GET /api/v1/orders/storefront` |
+| phone_catalog | phone | api_read | `GET /api/v1/orders/catalog?warehouseId=` |
+| phone_lookup | phone | api_read | `GET /api/v1/items/lookup?code=` (barcode or SKU; must find the item) |
+| phone_history | phone | api_read | `GET /api/v1/items/[id]/history?limit=50` |
+| place_order | phone | write | `POST /api/v1/orders` (201); 10% resent with the same key must replay (200, same order) |
+| adjust_pair | phone | write | `POST /api/v1/items/[id]/adjust` +1 then -1 |
+| receive_line | phone | write | `POST /api/v1/po/[id]/receive-line` qty 1 (manager and above); 10% resent must answer the same receipt |
+| viewer_write_denied | phone | write | a viewer's adjust must be refused with 403 |
+| scope_probe | web/phone | ssr/api_read | one-warehouse staff search, scan, open and list the other warehouse's items and must see none |
+
+Every request is tagged `kind` (ssr, api_read, write), `role` and `action`.
+Pages are sent with the session cookie and `redirects: 0`; `/api/v1` with the
+bearer token, as the phone sends them.
+
+### Sessions
+
+In `setup()` (`k6/lib/auth.js`), for each seeded account: the local GoTrue
+admin `generate_link` (type magiclink, no email is sent), then
+`POST /auth/v1/verify {type:'magiclink', token_hash}`. The access token is the
+bearer; the same session encoded the way the installed `@supabase/ssr` stores it
+is the cookie (`k6/lib/cookie.js`: name `sb-<host's first label>-auth-token`,
+value `base64-` + base64url of the session JSON, split into `.0`, `.1`, ...
+past 3180 characters). `setup()` then checks every account's
+`/api/v1/me/permissions` answers its role (an `mfa_required` answer stops the
+run) and that one page per role opens with the cookie (200, not a redirect).
+Each VU keeps one session for the whole run.
+
+### What fails a run
+
+| Threshold | Fails when |
+|---|---|
+| `checks` | under 99% of checks pass |
+| `auth_ok` (abort) | any answer is a 401, a redirect to sign-in or an authenticator demand |
+| `signin_redirects`, `mfa_required` (abort) | any |
+| `scope_violations` (abort) | one-warehouse staff see any other-warehouse item |
+| `viewer_write_allowed` (abort) | a viewer write is not refused |
+| `replay_mismatch` | a resend with the same key does not replay |
+| `http_req_failed` | 1% or more of answers are not the expected status (2xx, or the 403/404 a probe expects; a 3xx counts as failed) |
+| `http_req_duration{kind:ssr / api_read / write}` | p95 over 1500 / 800 / 2000 ms (configurable) |
+
+After each step `tools/check-correctness.mjs` checks the data: on hand equals
+the sum of holdings (items touched, and every item), no negative holding or on
+hand, orders created equal the 201 answers with one order per submission key,
+receipts equal the receive answers with no key used twice and one line and one
+movement each, purchase order received quantities equal their receipt lines,
+and adjust movements equal the adjust answers with a net change of up minus
+down.
+
+### The report
+
+Per step: offered arrivals per role, requests, throughput, failures, checks,
+p50/p95/p99 by kind, by kind and role and by action, response size, database
+statements per request and the 15 costliest statements (pg_stat_statements
+before and after, by database role, top-level statements only), connection
+counts before, after and the sampled peak, and the correctness result.
+
+---
+
+## Single-purpose scenarios
+
+All need the same environment plus `LOADTEST_MANIFEST` (a seeded
+organization's manifest) except 01, 99 and 99b, which are signed out.
+
+| # | File | What it does | Auth |
 |---|------|--------------|------|
-| 01 | `01-anon-marketing.js` | `/`, `/pricing`, `/features` | none |
-| 02 | `02-signin.js` | Supabase `/auth/v1/token` | n/a (this IS sign-in) |
-| 03 | `03-inventory-list.js` | `/dashboard/inventory?...` with 15 filter combos | cookie |
-| 04 | `04-search-palette.js` | `/api/search?q=...` with 20-term corpus | bearer |
-| 05 | `05-item-detail.js` | `/dashboard/inventory/[id]` | cookie |
-| 06 | `06-inventory-write.js` | `/api/v1/po/[id]/receive-line` (see note) | bearer |
+| 01 | `01-anon-marketing.js` | `/` and `/pricing` | none |
+| 02 | `02-signin.js` | local Supabase `/auth/v1/token` password grant (a local account you give a password) | n/a |
+| 03 | `03-inventory-list.js` | items list pages, filters, low stock (staff, managers) | cookie |
+| 04 | `04-search-palette.js` | `/api/search` spread over every staff, viewer and manager account | cookie |
+| 05 | `05-item-detail.js` | item pages | cookie |
+| 06 | `06-inventory-write.js` | adjust pairs, receive lines, place orders | bearer |
 | 07 | `07-procedure-list.js` | `/dashboard/procedures` | cookie |
-| 08 | `08-shipment-detail.js` | `/dashboard/shipments/[id]` | cookie |
+| 10 | `10-roles-workload.js` | the full signed-in workload above | both |
+| 99 | `99-capacity-anon.js` | signed-out stair-step to 500 VUs | none |
+| 99b | `99b-sustained-250.js` | 250 signed-out VUs for 2 minutes | none |
 
-**Cookie vs bearer:** Next.js SSR pages read the Supabase session from
-cookies (`sb-*-auth-token`), which k6 can't forge — you have to paste
-a real cookie. API routes (`/api/*`) accept `Authorization: Bearer`
-via `withApiContext()`'s bearer path (see
-`apps/web/src/lib/auth/api-context.ts`). That's why the table splits.
+```bash
+set -a; . "$STACK/loadtest.env"; set +a
+LOADTEST_MANIFEST=/tmp/lt/manifest.json LOADTEST_ACTORS=25 LOADTEST_DURATION=2m \
+  k6 run --no-usage-report load-tests/k6/scenarios/03-inventory-list.js
+LOADTEST_MANIFEST=/tmp/lt/manifest.json ./load-tests/k6/run-all.sh   # 01 and 03-07 in a row
+```
 
-**Scenario 06 note:** The brief asked for `POST /api/v1/items` and
-`PATCH` for update — those endpoints **don't exist** in this codebase.
-Item create/update happens via Next.js Server Actions, which aren't
-callable from k6. The scenario uses the closest "real-write" public
-API endpoint (`POST /api/v1/po/[id]/receive-line`) as a proxy for
-write throughput. Same DB cost profile (single insert + trigger
-fan-out). Disabled by default — pass `ENABLE_WRITES=1` to enable.
+Run them against a stack you can throw away: 06 writes.
 
 ---
 
-## What thresholds mean
+## Capacity table
 
-Every scenario fails the run if:
+Measured with `run-scale.mjs` on a local production build and local stack
+(one machine: the app, the database and k6 share its CPU, so these are
+comparisons between builds, not production capacity). Fill in from
+`report.md`; leave a cell empty until a run measured it. The 1,000 item rows
+are the suite's proof run (10 accounts per role, 2 minutes per step, after a
+30 s warm-up, on an Apple silicon laptop that was also running the stack and
+k6).
 
-- `p(95) http_req_duration < 1000ms` — 95% of responses must be under 1s
-- `rate http_req_failed < 0.01` — fewer than 1% of requests can error
-
-Scenario 02 (signin) bumps `http_req_failed` to 5% because Supabase
-will throttle and that's expected, not a regression.
-
-Scenario 06 (writes) bumps the latency ceiling to 2s — writes are
-slower than reads and 1s is unrealistic for an insert + trigger.
-
----
-
-## Reading the results
-
-After a run, look at:
-
-1. **`http_req_duration` p95.** Under 1s = healthy. Over 2s = something's
-   slow — check the per-request breakdown to see which endpoint.
-2. **`http_req_failed` rate.** Should be near zero. If non-zero, check
-   `http_reqs{status:5xx}` in the summary — that's where errors are.
-3. **`vus` peak.** This is your concurrent-user count at peak. If p95
-   is fine at vus=50 but spikes at vus=100, your capacity ceiling for
-   this scenario is somewhere between.
-
-**Finding the breaking point:** Run a scenario, note p95. Edit the
-script's `stages` to peak at `target: 100`, run again. Then 200, 500.
-The VU count at which p95 climbs past 2s OR errors exceed 5% IS your
-concurrent-user capacity for that endpoint.
-
----
-
-## Capacity-planning summary
-
-Fill in after first run:
-
-| Scenario | VUs sustained at p95 < 1s | Breaking point (p95 > 2s) | Notes |
-|----------|---------------------------|---------------------------|-------|
-| 01 anon-marketing |  |  |  |
-| 02 signin |  |  | Supabase rate-limit hit at ___ |
-| 03 inventory-list |  |  |  |
-| 04 search-palette |  |  |  |
-| 05 item-detail |  |  |  |
-| 06 inventory-write |  |  |  |
-| 07 procedure-list |  |  |  |
-| 08 shipment-detail |  |  |  |
-
----
-
-## Cost warning
-
-Each full run (`run-all.sh`) is roughly:
-
-- **Vercel egress:** ~500 MB (8 scenarios x ~2 min x ~50 VUs x ~5 KB avg payload)
-- **Supabase requests:** ~50,000 DB queries
-- **Supabase auth calls:** ~5,000 sign-ins if scenario 02 is enabled
-
-Pro tiers absorb this fine but watch your monthly usage if you're
-running daily. Don't leave a load test running unattended.
+| Scale point | Actors | Requests/s | ssr p95 ms | api_read p95 ms | write p95 ms | Failed | Correctness | Build | Date |
+|---|---|---|---|---|---|---|---|---|---|
+| 1,000 items | 5 | 1.2 | 260 | 211 | 219 | 0.00% | pass | main d565102a7 | 2026-11-17 |
+| 1,000 items | 10 | 2.3 | 292 | 176 | 259 | 0.00% | pass | main d565102a7 | 2026-11-17 |
+| 1,000 items | 25 | 5.3 | 1480 | 779 | 905 | 0.00% | pass | main d565102a7 | 2026-11-17 |
+| 10,001 items | 25-250 | | | | | | | | |
+| 50,000 items | 25-250 | | | | | | | | |
 
 ---
 
 ## Troubleshooting
 
-- **"BASE_URL env var is required"** — set `export BASE_URL=...` or
-  pass it inline: `BASE_URL=... k6 run ...`.
-- **All 30x responses with `Location: /signin`** — your
-  `SUPABASE_AUTH_COOKIE` expired or is wrong. Re-grab it from a fresh
-  browser sign-in.
-- **All 401s on /api/search** — `SUPABASE_ACCESS_TOKEN` is invalid or
-  expired. JWTs from Supabase typically last 1 hour.
-- **Scenario 02 returns 429 immediately** — you hit Supabase auth
-  rate limit. Wait 5 min, lower the VU ceiling in `options.stages`.
-- **k6 inspect parses but k6 run errors at startup** — usually a
-  missing required env var. The scripts fail loudly via `fail()` so
-  read the first line of stderr.
+- **"LOADTEST_BASE_URL is not set" / "does not point at this machine"**: load
+  the env file (`node --env-file=...`, or `set -a; . file; set +a` for k6) and
+  use a `127.0.0.1` address.
+- **setup() stops with "answered /api/v1/me/permissions with 401"**: the app
+  was built against another stack. Rebuild with the stack's `app.env`.
+- **setup() stops with "did not open /dashboard: 307"**: the cookie was not
+  accepted; check `NEXT_PUBLIC_SUPABASE_URL` in the build is the same address
+  as `LOADTEST_SUPABASE_URL` (the cookie name comes from its host).
+- **`generate_link` or `verify` answers 429**: the stack was not prepared with
+  `prepare-stack.mjs` (GoTrue's default verification limit).
+- **`rate_limited` above 0**: more VUs than accounts in a role; seed more
+  `--users-per-role`.
+- **`dropped_iterations` above 0**: k6 needed more VUs than it had ready (it
+  starts more as needed); a large number means the app fell behind the offered
+  rate.

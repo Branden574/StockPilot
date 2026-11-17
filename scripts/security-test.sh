@@ -2148,6 +2148,14 @@ WEB_TESTS=(
   src/app/api/v1/change-routes.audit-rows.test.ts
   src/server/services/schedule.create-warehouse-check.test.ts
   src/server/services/schedule.complete-warehouse-check.test.ts
+
+  # Load tests reach this machine only. Every k6 scenario imports the shared
+  # guard (load-tests/k6/lib/safety.js) and calls it before any request, every
+  # request passes assertRequestUrl, no file of the suite holds an address that
+  # is not 127.0.0.1, localhost or [::1], and the guard refuses the parser
+  # tricks that make a remote address look local. The seeder, teardown and
+  # checks reach the database and Supabase only through the checked helpers.
+  src/test/load-tests-safety.guard.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

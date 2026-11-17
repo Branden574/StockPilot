@@ -1,42 +1,43 @@
-// Scenario 01 — anonymous marketing pages.
+// Scenario 01: anonymous marketing pages, / and /pricing.
 //
-// Hits the public-facing routes that any unauthenticated visitor can
-// reach. Tests landing-page render cost (App Router RSC + Tailwind
-// hydration). No auth.
+// The public pages any visitor reaches, signed out. LOCAL ONLY: the address
+// must be this machine (lib/safety.js). No manifest or keys needed.
 //
-// Run:
-//   BASE_URL=https://preview-xxx.vercel.app k6 run load-tests/k6/scenarios/01-anon-marketing.js
-
+//   LOADTEST_BASE_URL=http://127.0.0.1:3600 k6 run load-tests/k6/scenarios/01-anon-marketing.js
 import http from 'k6/http';
-import { check, sleep, group } from 'k6';
+import { check, group, sleep } from 'k6';
 
-import { DEFAULT_STAGES, DEFAULT_THRESHOLDS, requireBaseUrl } from '../lib/auth.js';
+import { assertRequestUrl, localTarget } from '../lib/safety.js';
+
+const { baseUrl } = localTarget(__ENV, { needSupabase: false });
 
 export const options = {
-  stages: DEFAULT_STAGES,
-  thresholds: DEFAULT_THRESHOLDS,
+  stages: [
+    { duration: '30s', target: 50 },
+    { duration: '1m', target: 50 },
+    { duration: '30s', target: 0 },
+  ],
+  thresholds: {
+    checks: ['rate>0.99'],
+    http_req_failed: ['rate<0.01'],
+    http_req_duration: ['p(95)<1000'],
+  },
 };
 
-const BASE_URL = requireBaseUrl(__ENV);
-
-// Note: there is no /features page in the current StockPilot codebase
-// (only / and /pricing under apps/web/src/app/(marketing)/). We still
-// probe /features to surface 404 latency — if it 404s consistently
-// that's fine, but the thresholds will tolerate it via this group's
-// own status check rather than http_req_failed.
-const PAGES = ['/', '/pricing', '/features'];
+const PAGES = ['/', '/pricing'];
 
 export default function () {
   group('marketing pages', () => {
     for (const path of PAGES) {
-      const res = http.get(`${BASE_URL}${path}`, {
-        tags: { name: `GET ${path}` },
+      const res = http.get(assertRequestUrl(`${baseUrl}${path}`), {
+        redirects: 0,
+        tags: { name: `GET ${path}`, kind: 'ssr', role: 'anonymous' },
       });
       check(res, {
-        [`${path} responded`]: (r) => r.status >= 200 && r.status < 500,
-        [`${path} has body`]: (r) => r.body && r.body.length > 100,
+        [`${path} 200`]: (r) => r.status === 200,
+        [`${path} has a page`]: (r) => typeof r.body === 'string' && r.body.length > 1000,
       });
-      sleep(Math.random() * 1 + 0.5); // 0.5-1.5s think time
+      sleep(Math.random() + 0.5);
     }
   });
 }

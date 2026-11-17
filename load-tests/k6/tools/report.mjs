@@ -1,0 +1,325 @@
+#!/usr/bin/env node
+// Builds report.md and report.json for a run-scale.mjs output folder.
+//
+//   node load-tests/k6/tools/report.mjs --dir <run folder>
+//
+// Per step of the ladder: offered load, requests and throughput, failures and
+// checks, p50/p95/p99 by kind, by kind and role and by action, response bytes,
+// database statements per request (pg_stat_statements before/after, by
+// database role), the slowest statements, connection counts, and the
+// correctness check.
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { parseArgs } from './local.mjs';
+
+const KINDS = ['ssr', 'api_read', 'write'];
+
+function readMaybe(path) {
+  return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null;
+}
+function ms(v) {
+  return v === undefined || v === null ? '-' : String(Math.round(v));
+}
+function kb(v) {
+  return v === undefined || v === null ? '-' : (v / 1024).toFixed(1);
+}
+
+function trend(summary, name) {
+  const m = summary.metrics[name];
+  return m ? m.values : null;
+}
+
+function statementDelta(before, after) {
+  const prev = new Map(before.statements.map((s) => [`${s.queryid}|${s.role}`, s]));
+  const rows = [];
+  for (const s of after.statements) {
+    const p = prev.get(`${s.queryid}|${s.role}`);
+    const calls = s.calls - (p ? p.calls : 0);
+    if (calls <= 0) continue;
+    rows.push({
+      role: s.role,
+      query: s.query,
+      calls,
+      totalMs: Number(s.total_ms) - (p ? Number(p.total_ms) : 0),
+      rows: s.rows - (p ? p.rows : 0),
+      read: s.read - (p ? p.read : 0),
+    });
+  }
+  return rows;
+}
+
+function stepReport(dir, name) {
+  const summary = readMaybe(join(dir, 'summary.json'));
+  if (!summary) return { name, missing: true };
+  const before = readMaybe(join(dir, 'pg-before.json'));
+  const after = readMaybe(join(dir, 'pg-after.json'));
+  const correctness = readMaybe(join(dir, 'correctness.json'));
+  const exitCode = existsSync(join(dir, 'k6-exit.txt'))
+    ? readFileSync(join(dir, 'k6-exit.txt'), 'utf8').trim()
+    : '?';
+  const samples = existsSync(join(dir, 'connections.jsonl'))
+    ? readFileSync(join(dir, 'connections.jsonl'), 'utf8')
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((l) => JSON.parse(l))
+        .filter((s) => !s.error)
+    : [];
+  const durationS = summary.state.testRunDurationMs / 1000;
+  const counts = Object.fromEntries(
+    [
+      'signin_redirects',
+      'mfa_required',
+      'scope_violations',
+      'viewer_write_allowed',
+      'replay_mismatch',
+      'rate_limited',
+      'orders_created',
+      'orders_replayed',
+      'receipts_created',
+      'receipts_replayed',
+      'adjust_up_ok',
+      'adjust_down_ok',
+      'dropped_iterations',
+      'iterations',
+    ].map((c) => [c, summary.metrics[c] ? summary.metrics[c].values.count : 0]),
+  );
+  const rate = (n) => (summary.metrics[n] ? summary.metrics[n].values.rate : null);
+  const byKind = {};
+  let appRequests = 0;
+  for (const k of KINDS) {
+    const d = trend(summary, `http_req_duration{kind:${k}}`);
+    const b = trend(summary, `response_bytes{kind:${k}}`);
+    const n = summary.metrics[`http_reqs{kind:${k}}`]
+      ? summary.metrics[`http_reqs{kind:${k}}`].values.count
+      : 0;
+    appRequests += n;
+    byKind[k] = d && {
+      count: n,
+      p50: d.med,
+      p95: d['p(95)'],
+      p99: d['p(99)'],
+      max: d.max,
+      bytesAvg: b && b.avg,
+      bytesP95: b && b['p(95)'],
+    };
+  }
+  const byKindRole = {};
+  const byAction = {};
+  for (const [key, m] of Object.entries(summary.metrics)) {
+    let mm = /^http_req_duration\{kind:([a-z_]+),role:([a-z_]+)\}$/.exec(key);
+    if (mm && m.values.count > 0) {
+      byKindRole[`${mm[1]} / ${mm[2]}`] = {
+        count: m.values.count,
+        p50: m.values.med,
+        p95: m.values['p(95)'],
+        p99: m.values['p(99)'],
+      };
+    }
+    mm = /^http_req_duration\{action:([a-z_]+)\}$/.exec(key);
+    if (mm && m.values.count > 0) {
+      const b = trend(summary, `response_bytes{action:${mm[1]}}`);
+      byAction[mm[1]] = {
+        count: m.values.count,
+        p50: m.values.med,
+        p95: m.values['p(95)'],
+        p99: m.values['p(99)'],
+        bytesAvg: b && b.avg,
+      };
+    }
+  }
+  let db = null;
+  if (before && after) {
+    const delta = statementDelta(before, after);
+    const byRole = {};
+    for (const r of delta) {
+      byRole[r.role] = byRole[r.role] || { calls: 0, totalMs: 0 };
+      byRole[r.role].calls += r.calls;
+      byRole[r.role].totalMs += r.totalMs;
+    }
+    // Statements the app's requests send through PostgREST (the roles it
+    // switches to), over every request the app answered in the step,
+    // setup()'s own included. The auth server's statements (role
+    // supabase_auth_admin) are shown apart: setup()'s sign-ins are most of them.
+    const setupRequests = summary.metrics['http_reqs{kind:setup}']
+      ? summary.metrics['http_reqs{kind:setup}'].values.count
+      : 0;
+    const POSTGREST_ROLES = new Set(['authenticated', 'anon', 'service_role', 'authenticator']);
+    const restCalls = delta
+      .filter((r) => POSTGREST_ROLES.has(r.role))
+      .reduce((a, r) => a + r.calls, 0);
+    db = {
+      byRole,
+      setupRequests,
+      statementsPerRequest:
+        appRequests + setupRequests ? restCalls / (appRequests + setupRequests) : null,
+      top: delta.sort((a, b) => b.totalMs - a.totalMs).slice(0, 15),
+      connectionsBefore: before.connections,
+      connectionsAfter: after.connections,
+      maxConnections: after.maxConnections,
+    };
+  }
+  const peak = samples.reduce(
+    (p, s) => ({
+      total: Math.max(p.total, s.total),
+      active: Math.max(p.active, s.active),
+      waitingOnLock: Math.max(p.waitingOnLock, s.waitingOnLock || 0),
+    }),
+    { total: 0, active: 0, waitingOnLock: 0 },
+  );
+  const failedThresholds = [];
+  for (const [n, m] of Object.entries(summary.metrics)) {
+    if (m.thresholds)
+      for (const [t, r] of Object.entries(m.thresholds))
+        if (!r.ok) failedThresholds.push(`${n}: ${t}`);
+  }
+  const offered = Object.fromEntries(
+    Object.entries(
+      summary.loadtest && summary.loadtest.scenarios ? summary.loadtest.scenarios : {},
+    ).map(([r, s]) => [r, s.ratePerMinute]),
+  );
+  return {
+    name,
+    exitCode,
+    durationS,
+    appRequests,
+    throughputPerS: appRequests / durationS,
+    httpFailedRate: rate('http_req_failed'),
+    checksRate: rate('checks'),
+    authOkRate: rate('auth_ok'),
+    counts,
+    byKind,
+    byKindRole,
+    byAction,
+    db,
+    connectionPeak: peak,
+    correctness,
+    failedThresholds,
+    offeredPerMinute: offered,
+  };
+}
+
+function markdown(run, steps) {
+  const L = [];
+  L.push(`# Load test report: ${run.label || run.startedAt}`, '');
+  L.push(
+    `Local only. App ${run.baseUrl}, database on this machine. Seeded ${run.items} items, ${run.usersPerRole} accounts per role` +
+      ` (organization ${run.organizationId}). Each step ran ${run.duration}` +
+      `${run.warmup && !/^0s?$/.test(run.warmup) ? `, after one ${run.warmup} warm-up run that is not reported` : ''}.`,
+    '',
+  );
+  L.push('## Summary', '');
+  L.push(
+    '| actors | requests | req/s | failed | checks | ssr p95 | api p95 | write p95 | PostgREST stmts/req | peak conns | correctness | k6 exit |',
+  );
+  L.push('|---|---|---|---|---|---|---|---|---|---|---|---|');
+  for (const s of steps) {
+    if (s.missing) {
+      L.push(`| ${s.name} | not run | | | | | | | | | | |`);
+      continue;
+    }
+    L.push(
+      `| ${s.name} | ${s.appRequests} | ${s.throughputPerS.toFixed(1)} | ${(s.httpFailedRate * 100).toFixed(2)}% | ${(s.checksRate * 100).toFixed(2)}% | ` +
+        `${ms(s.byKind.ssr && s.byKind.ssr.p95)} | ${ms(s.byKind.api_read && s.byKind.api_read.p95)} | ${ms(s.byKind.write && s.byKind.write.p95)} | ` +
+        `${s.db && s.db.statementsPerRequest !== null ? s.db.statementsPerRequest.toFixed(1) : '-'} | ${s.connectionPeak.total} | ` +
+        `${s.correctness ? (s.correctness.ok ? 'pass' : 'FAIL') : '-'} | ${s.exitCode} |`,
+    );
+  }
+  L.push('');
+  for (const s of steps) {
+    if (s.missing) continue;
+    L.push(`## ${s.name} actors`, '');
+    L.push(
+      `Offered arrivals per minute by role: ${Object.entries(s.offeredPerMinute)
+        .map(([r, v]) => `${r} ${v}`)
+        .join(', ')}.` +
+        ` Ran ${s.durationS.toFixed(0)} s, ${s.counts.iterations} iterations, ${s.counts.dropped_iterations} dropped.`,
+      '',
+    );
+    L.push(
+      `Sign-in redirects ${s.counts.signin_redirects}, authenticator demands ${s.counts.mfa_required}, other-warehouse items seen ${s.counts.scope_violations},` +
+        ` viewer writes allowed ${s.counts.viewer_write_allowed}, replay mismatches ${s.counts.replay_mismatch}, rate limited ${s.counts.rate_limited}.` +
+        ` Orders ${s.counts.orders_created} (+${s.counts.orders_replayed} replayed), receipts ${s.counts.receipts_created} (+${s.counts.receipts_replayed} replayed),` +
+        ` adjust +1 ${s.counts.adjust_up_ok} / -1 ${s.counts.adjust_down_ok}.`,
+      '',
+    );
+    if (s.failedThresholds.length)
+      L.push(`**Thresholds failed:** ${s.failedThresholds.join('; ')}`, '');
+    L.push(
+      '| kind | n | p50 ms | p95 ms | p99 ms | max ms | avg KB | p95 KB |',
+      '|---|---|---|---|---|---|---|---|',
+    );
+    for (const k of KINDS) {
+      const v = s.byKind[k];
+      if (v)
+        L.push(
+          `| ${k} | ${v.count} | ${ms(v.p50)} | ${ms(v.p95)} | ${ms(v.p99)} | ${ms(v.max)} | ${kb(v.bytesAvg)} | ${kb(v.bytesP95)} |`,
+        );
+    }
+    L.push('', '| kind / role | n | p50 | p95 | p99 |', '|---|---|---|---|---|');
+    for (const [k, v] of Object.entries(s.byKindRole).sort())
+      L.push(`| ${k} | ${v.count} | ${ms(v.p50)} | ${ms(v.p95)} | ${ms(v.p99)} |`);
+    L.push('', '| action | n | p50 | p95 | p99 | avg KB |', '|---|---|---|---|---|---|');
+    for (const [k, v] of Object.entries(s.byAction).sort())
+      L.push(
+        `| ${k} | ${v.count} | ${ms(v.p50)} | ${ms(v.p95)} | ${ms(v.p99)} | ${kb(v.bytesAvg)} |`,
+      );
+    if (s.db) {
+      L.push(
+        '',
+        `PostgREST statements per app request: ${s.db.statementsPerRequest === null ? '-' : s.db.statementsPerRequest.toFixed(1)}` +
+          ` (pg_stat_statements top-level statements of the roles authenticated, anon, service_role and authenticator, over` +
+          ` ${s.appRequests} workload and ${s.db.setupRequests} setup requests). All statements by role (supabase_auth_admin is` +
+          ` the auth server, mostly setup()'s sign-ins; postgres is these tools): ` +
+          `${Object.entries(s.db.byRole)
+            .map(([r, v]) => `${r} ${v.calls} calls / ${Math.round(v.totalMs)} ms`)
+            .join('; ')}.`,
+      );
+      L.push(
+        `Connections: before ${s.db.connectionsBefore.total}, after ${s.db.connectionsAfter.total}, peak sampled ${s.connectionPeak.total}` +
+          ` (active ${s.connectionPeak.active}, waiting on a lock ${s.connectionPeak.waitingOnLock}), max_connections ${s.db.maxConnections}.`,
+        '',
+      );
+      L.push('| role | calls | total ms | mean ms | statement |', '|---|---|---|---|---|');
+      for (const t of s.db.top) {
+        L.push(
+          `| ${t.role} | ${t.calls} | ${Math.round(t.totalMs)} | ${(t.totalMs / t.calls).toFixed(2)} | \`${t.query.slice(0, 160).replace(/\|/g, '\\|').replace(/`/g, "'")}\` |`,
+        );
+      }
+    }
+    if (s.correctness) {
+      L.push('', 'Correctness after the step:', '');
+      for (const c of s.correctness.checks)
+        L.push(`- ${c.pass ? 'ok' : '**FAIL**'}: ${c.name} (${c.detail})`);
+    }
+    L.push('');
+  }
+  return L.join('\n');
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const dir = args.dir;
+  if (!dir) throw new Error('--dir is required');
+  const run = JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8'));
+  const stepDir = join(dir, 'steps');
+  const names = existsSync(stepDir)
+    ? readdirSync(stepDir)
+        .filter((n) => /^\d+$/.test(n))
+        .sort((a, b) => Number(a) - Number(b))
+    : [];
+  const steps = names.map((n) => stepReport(join(stepDir, n), n));
+  writeFileSync(join(dir, 'report.json'), JSON.stringify({ run, steps }, null, 1));
+  const md = markdown(run, steps);
+  writeFileSync(join(dir, 'report.md'), md);
+  const parts = md.split('\n## ');
+  console.log([parts[0], parts[1]].filter(Boolean).join('\n## '));
+}
+
+try {
+  main();
+} catch (e) {
+  console.error(`[report] ${e.message}`);
+  process.exit(1);
+}

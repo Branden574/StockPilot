@@ -1,9 +1,9 @@
 // Scenario 99 — Capacity probe (anonymous routes only).
 //
 // Goal: find at what concurrent-user count the public surface starts
-// to degrade (p95 > 1s, error rate > 1%). Safe to run against prod —
-// only hits anon paths, NO writes, NO authenticated reads, NO Supabase
-// auth grants.
+// to degrade (p95 > 1s, error rate > 1%). Anonymous paths only, no writes.
+// LOCAL ONLY, like every scenario: the address must be this machine
+// (lib/safety.js) and there is no default.
 //
 // Hits four endpoints in a randomised mix to simulate real traffic
 // shape:
@@ -18,7 +18,7 @@
 // the ceiling).
 //
 // Run:
-//   BASE_URL=https://stockpilotusa.com k6 run \
+//   LOADTEST_BASE_URL=http://127.0.0.1:3600 k6 run \
 //     load-tests/k6/scenarios/99-capacity-anon.js \
 //     --summary-export=load-tests/results/99-capacity-anon.json
 
@@ -26,7 +26,9 @@ import http from 'k6/http';
 import { check, sleep, group } from 'k6';
 import { Trend, Counter, Rate } from 'k6/metrics';
 
-const BASE_URL = __ENV.BASE_URL || 'https://stockpilotusa.com';
+import { assertRequestUrl, localTarget } from '../lib/safety.js';
+
+const BASE_URL = localTarget(__ENV, { needSupabase: false }).baseUrl;
 
 const homepageTrend = new Trend('homepage_ms');
 const signinTrend = new Trend('signin_ms');
@@ -70,19 +72,19 @@ export default function () {
   const roll = Math.random();
   if (roll < 0.4) {
     group('GET /', () => {
-      const r = http.get(`${BASE_URL}/`, { tags: { route: 'home' } });
+      const r = http.get(assertRequestUrl(`${BASE_URL}/`), { tags: { route: 'home' } });
       homepageTrend.add(r.timings.duration);
       checkResult(r, 'home');
     });
   } else if (roll < 0.7) {
     group('GET /signin', () => {
-      const r = http.get(`${BASE_URL}/signin`, { tags: { route: 'signin' } });
+      const r = http.get(assertRequestUrl(`${BASE_URL}/signin`), { tags: { route: 'signin' } });
       signinTrend.add(r.timings.duration);
       checkResult(r, 'signin');
     });
   } else if (roll < 0.9) {
     group('GET /dashboard (anon redirect)', () => {
-      const r = http.get(`${BASE_URL}/dashboard`, {
+      const r = http.get(assertRequestUrl(`${BASE_URL}/dashboard`), {
         redirects: 0,
         tags: { route: 'dashboard-redirect' },
       });
@@ -94,11 +96,13 @@ export default function () {
   } else {
     group('POST /api/ai/chat (anon → 401)', () => {
       const r = http.post(
-        `${BASE_URL}/api/ai/chat`,
+        assertRequestUrl(`${BASE_URL}/api/ai/chat`),
         JSON.stringify({ message: 'x' }),
         {
           headers: { 'Content-Type': 'application/json' },
           tags: { route: 'api-auth-gate' },
+          // A 401 is the right answer here, not a failed request.
+          responseCallback: http.expectedStatuses(401),
         },
       );
       apiAuthGateTrend.add(r.timings.duration);

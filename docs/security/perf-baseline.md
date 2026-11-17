@@ -20,10 +20,11 @@ Read this before quoting anything below.
 
 - **There is no CI performance gate.** CI runs typecheck, tests, build, pgTAP and
   `pnpm security:test`. No timing assertion runs anywhere.
-- **There are no recorded load-test results.** `load-tests/` contains a complete
-  k6 suite with encoded thresholds, but the README's capacity-planning table is a
-  blank template and `load-tests/results/` is gitignored. **Zero k6 numbers exist
-  in this repository.**
+- **Load-test results are local and few.** `load-tests/` holds a signed-in k6
+  workload that runs against a local production build and a local Supabase stack
+  only (section 3.1). Its numbers compare one build with another on one machine;
+  they are not production capacity. `load-tests/results/` is gitignored; the
+  README's capacity table records what has been measured.
 - **There are no Lighthouse scores.** `BLUEPRINT.md` states a Lighthouse
   aspiration; no Lighthouse tooling is installed.
 - **There IS now a browser-measured baseline** (2026-09-20, section 6), taken
@@ -186,39 +187,42 @@ every deploy.
 
 ### 3.1 Load testing (k6)
 
-The suite exists and is not a CI gate by design: a full run pushes roughly 500 MB
-of Vercel egress and ~50,000 Supabase queries, which is real money to spend
-repeatedly.
+The suite is not a CI gate. It runs against a **local** production build of the
+app and a **local** Supabase stack only: every scenario and tool refuses an
+address that is not `127.0.0.1`, `localhost` or `[::1]` before its first request,
+and there is no default address and no override
+(`load-tests/k6/lib/safety.js`; `apps/web/src/test/load-tests-safety.guard.test.ts`
+holds every scenario to it). Setup, seeding, the workload, thresholds and the
+report are described in `load-tests/README.md`. The one command:
 
 ```bash
-brew install k6
-source load-tests/.env.local.loadtest          # gitignored, off-repo secrets
-k6 run load-tests/k6/scenarios/03-inventory-list.js
-./load-tests/k6/run-all.sh                     # summaries → load-tests/results/
+node --env-file=<loadtest env, outside the repo> load-tests/k6/run-scale.mjs \
+  --items 10001 --users-per-role 40 --ladder 25,50,100,250 --duration 5m --out load-tests/results/<name>
 ```
 
-`run-all.sh` refuses to target production unless `ALLOW_PROD=1` is set. Leave that
-guard alone.
+It seeds a throwaway organization (owner, admin, manager, staff, viewer and
+one-warehouse staff accounts; items with holdings; open purchase orders), signs
+every account in, runs the signed-in workload of `scenarios/10-roles-workload.js`
+at each step of the ladder (constant arrival rate, web think time 3-8 s, phone
+1-3 s), snapshots `pg_stat_statements` and connections before and after each
+step, checks the data (on hand against holdings, orders and receipts against
+the answers, no duplicate effect from a resend), writes `report.md`, and tears
+the organization down.
 
-Encoded thresholds — these are the numbers the suite fails on:
+What fails a run:
 
-| Scenario                      | Threshold                                                                         | File                                            |
-| ----------------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------- |
-| Default (most scenarios)      | `p(95)<1000`, `http_req_failed rate<0.01`; stages 30s→50 VU, 1m plateau, 30s down | `load-tests/k6/lib/auth.js`                     |
-| Sign-in                       | `rate<0.05` — Supabase throttling is expected; peak 10 VU                         | `load-tests/k6/scenarios/02-signin.js`          |
-| Inventory write               | `p(95)<2000` — writes are slower than reads; peak 25 VU                           | `load-tests/k6/scenarios/06-inventory-write.js` |
-| Anonymous capacity stair-step | `p(95)<1500`, `rate<0.05`, `abortOnFail: false`; 10→50→100→250→500 VU             | `load-tests/k6/scenarios/99-capacity-anon.js`   |
-| Sustained 250 VU              | **no thresholds block** — observation run only, and it defaults to production     | `load-tests/k6/scenarios/99b-sustained-250.js`  |
-| Artillery alternative         | `p95: 1000`, at least 99% HTTP 200                                                | `load-tests/artillery/basic.yml`                |
+| Threshold                                        | Fails when                                                                         | File                                                                  |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `auth_ok`, `signin_redirects`, `mfa_required`    | any 401, redirect to sign-in or authenticator demand (aborts the run)              | `load-tests/k6/lib/workload.js`                                       |
+| `scope_violations`, `viewer_write_allowed`       | one-warehouse staff see another warehouse's item; a viewer write passes            | `load-tests/k6/lib/workload.js`                                       |
+| `checks`, `http_req_failed`, `replay_mismatch`   | under 99% of checks; 1% or more unexpected statuses; a resend that does not replay | `load-tests/k6/lib/workload.js`                                       |
+| `http_req_duration{kind:ssr / api_read / write}` | p95 over 1500 / 800 / 2000 ms (configurable)                                       | `load-tests/k6/lib/workload.js`                                       |
+| Correctness after each step                      | any check in `tools/check-correctness.mjs` fails                                   | `load-tests/k6/tools/check-correctness.mjs`                           |
+| Anonymous stair-step, sustained 250              | p95 over 1500 ms, failures, checks                                                 | `load-tests/k6/scenarios/99-capacity-anon.js`, `99b-sustained-250.js` |
 
-Two things to know before running: scenario `08-shipment-detail` is indexed by
-`run-all.sh` and the README but **the script file does not exist**, so that entry
-prints a skip; and `99b` defaults to `https://stockpilotusa.com`, so read its
-`BASE_URL` before starting it.
-
-**Filling in the capacity table in `load-tests/README.md` is the single
-highest-value performance action available.** It converts this document from
-"tripwires from old plan docs" into a real baseline.
+The numbers are comparisons between builds on one machine (the app, the
+database and k6 share its CPU), not production capacity. Record them in the
+capacity table in `load-tests/README.md`.
 
 ### 3.2 Per-layer server timing
 
@@ -306,7 +310,9 @@ In value order.
    photo distribution and holding one account per role, is the precondition for
    any verdict on photo loading and for the role matrix. Seeding it in production
    needs the owner's explicit go.
-2. **Fill in `load-tests/README.md`'s capacity table** from one real run.
+2. **Fill in `load-tests/README.md`'s capacity table** at the 10,001 and 50,000
+   item scale points (`load-tests/k6/run-scale.mjs`; the 1,000 item point is the
+   suite's own proof run).
 3. **Emit `Server-Timing`** from the existing context hook so per-layer cost is
    observable in production without a log-scraping session.
 4. **Runs in the other server states** (`PERF_SERVER_STATE=post-deploy`,
