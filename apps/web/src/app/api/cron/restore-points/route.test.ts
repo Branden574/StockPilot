@@ -253,7 +253,7 @@ describe('GET /api/cron/restore-points: deadline', () => {
   });
 });
 
-describe('GET /api/cron/restore-points: attempts (cron_sweep_attempts, 0492)', () => {
+describe('GET /api/cron/restore-points: attempts (cron_sweep_attempts, 0469)', () => {
   it('records each attempt as the org starts, under job restore_points, before its snapshot', async () => {
     const s = stub({ orgs: ['a', 'b'] });
     const order: string[] = [];

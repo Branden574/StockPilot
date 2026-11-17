@@ -9,7 +9,7 @@ import { fetchAllRows } from './paginate';
 /**
  * Helpers for scheduled jobs that visit every organization: an order that
  * puts the organizations a job reached longest ago first, a record of each
- * job's attempts per organization (cron_sweep_attempts, 0492) that keeps
+ * job's attempts per organization (cron_sweep_attempts, 0469) that keeps
  * that order honest across runs, and a sweep that stops STARTING work at a
  * soft deadline and says how much it left.
  *
@@ -98,7 +98,7 @@ export async function sweepUntilDeadline<T, R>(
 }
 
 /**
- * The jobs that record their attempts in cron_sweep_attempts (0492). The
+ * The jobs that record their attempts in cron_sweep_attempts (0469). The
  * table's CHECK takes any short lower-case name; this union keeps the code to
  * the names in use.
  */
@@ -113,7 +113,7 @@ export interface CronAttempts {
 }
 
 /**
- * Reads one job's attempt records (cron_sweep_attempts, 0492), a page at a
+ * Reads one job's attempt records (cron_sweep_attempts, 0469), a page at a
  * time. Throws on a failed read: the caller orders without them and reports.
  */
 export async function readCronAttempts(

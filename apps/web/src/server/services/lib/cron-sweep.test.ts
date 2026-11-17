@@ -124,7 +124,7 @@ describe('sweepUntilDeadline', () => {
   });
 });
 
-describe('cron attempts (cron_sweep_attempts, 0492)', () => {
+describe('cron attempts (cron_sweep_attempts, 0469)', () => {
   it("reads one job's rows into last attempt and failures in a row", async () => {
     const stub = makeSupabaseStub({
       'cron_sweep_attempts.select': {

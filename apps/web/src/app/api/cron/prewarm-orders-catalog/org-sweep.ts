@@ -38,7 +38,7 @@ export const KNOWN_HOT_ORG_IDS = [
  *     for time in its response + a warning line.
  * Past the cap the rest of the orgs take turns (planOrgSweep): the ones
  * least recently warmed go first, by the time the cron last started each
- * (cron_sweep_attempts, job 'prewarm', 0492), and an org the deadline left
+ * (cron_sweep_attempts, job 'prewarm', 0469), and an org the deadline left
  * keeps its old time, so it goes first next run. With C orgs warmed per run
  * (ORG_SWEEP_WINDOW when no run is cut by its deadline, fewer when one is),
  * every active org is warmed within ceil(N / C) runs (N = active orgs other

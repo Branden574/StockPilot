@@ -1,4 +1,4 @@
--- 0492_cron_sweep_attempts.sql
+-- 0469_cron_sweep_attempts.sql
 -- ─────────────────────────────────────────────────────────────────────────────
 -- When a scheduled job last TRIED each organization, so its sweep can go
 -- least recently reached first. One table for every job that sweeps the
