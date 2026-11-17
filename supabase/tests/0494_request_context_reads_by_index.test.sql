@@ -1,0 +1,367 @@
+-- 0494: get_request_context() reads the caller's own rows by index, and its
+-- answer is exactly what 0413's body answered, under the same row level
+-- security, for every kind of caller.
+--
+-- The reference is 0413's body itself, copied below as a temporary SQL
+-- function with the same settings. Every comparison runs both, as the same
+-- role with the same claims, in one session that switches between callers,
+-- so a plan kept from one caller is shown never to answer for another.
+-- Made-up data only.
+begin;
+select plan(47);
+
+-- ── The reference: 0413's body, verbatim ───────────────────────────────────
+create function pg_temp.request_context_0413()
+returns jsonb
+language sql
+stable
+security invoker
+set search_path = public, pg_temp
+as $ref$
+  select jsonb_build_object(
+    'user_id', auth.uid(),
+    'profile', (
+      select jsonb_build_object(
+               'id', p.id,
+               'email', p.email,
+               'full_name', p.full_name,
+               'avatar_url', p.avatar_url,
+               'default_organization_id', p.default_organization_id,
+               'disabled_at', p.disabled_at)
+        from public.user_profiles p
+       where p.id = auth.uid()
+    ),
+    'memberships', coalesce((
+      select jsonb_agg(
+               jsonb_build_object(
+                 'organization_id', m.organization_id,
+                 'role', m.role,
+                 'organization', (
+                   select jsonb_build_object(
+                            'id', o.id,
+                            'name', o.name,
+                            'logo_url', o.logo_url,
+                            'terminology', o.terminology,
+                            'mfa_policy', o.mfa_policy,
+                            'timezone', o.timezone,
+                            'nav_overrides', o.nav_overrides,
+                            'dashboard_layout', o.dashboard_layout,
+                            'order_status_config', o.order_status_config,
+                            'all_modules_comp', o.all_modules_comp,
+                            'order_catalog_last_hide_at', o.order_catalog_last_hide_at)
+                     from public.organizations o
+                    where o.id = m.organization_id),
+                 'role_overrides', coalesce((
+                   select jsonb_agg(jsonb_build_object('permission', r.permission, 'granted', r.granted)
+                                    order by r.permission)
+                     from public.role_permission_overrides r
+                    where r.organization_id = m.organization_id
+                      and r.role = m.role), '[]'::jsonb),
+                 'user_overrides', coalesce((
+                   select jsonb_agg(jsonb_build_object('permission', u.permission, 'granted', u.granted)
+                                    order by u.permission)
+                     from public.user_permission_overrides u
+                    where u.organization_id = m.organization_id
+                      and u.user_id = m.user_id), '[]'::jsonb),
+                 'enabled_modules', coalesce((
+                   select jsonb_agg(om.module_id order by om.module_id)
+                     from public.organization_modules om
+                    where om.organization_id = m.organization_id
+                      and om.enabled), '[]'::jsonb)
+               )
+               order by m.created_at, m.organization_id)
+        from public.organization_members m
+       where m.user_id = auth.uid()
+         and m.accepted_at is not null
+    ), '[]'::jsonb)
+  );
+$ref$;
+
+-- Shared buffer reads of one call of `q`, run as the current role and claims.
+create function pg_temp.buffer_hits(q text)
+returns integer
+language plpgsql
+as $hits$
+declare
+  j json;
+begin
+  execute 'explain (analyze, buffers, format json) ' || q into j;
+  return (j -> 0 -> 'Plan' ->> 'Shared Hit Blocks')::integer;
+end
+$hits$;
+
+-- ── Fixture ────────────────────────────────────────────────────────────────
+-- Organizations: A..F, N (every nullable setting null, comped), and L, which
+-- gets 1,200 members in section 7 (a whole-table read is then easy to see).
+insert into public.organizations (id, name, slug, logo_url, nav_overrides, dashboard_layout, order_status_config, mfa_policy, all_modules_comp) values
+  ('c0494000-0000-0000-0000-00000000000a', 'Org A 0494', 'org-a-0494', 'https://example.test/a.png',
+     '{"v": 1, "hidden": ["/dashboard/reports"], "labels": {"/dashboard/inventory": "Stock"}}',
+     '{"v": 1, "widgets": [{"id": "stat-row"}, {"id": "analytics", "hidden": true}]}',
+     '{"pending": {"label": "Waiting", "color": "#aa5500", "sortOrder": 1}}', 'admins_required', false),
+  ('c0494000-0000-0000-0000-00000000000b', 'Org B 0494', 'org-b-0494', null, null, null, null, 'optional', false),
+  ('c0494000-0000-0000-0000-00000000000c', 'Org C 0494', 'org-c-0494', null, null, null, null, 'all_required', false),
+  ('c0494000-0000-0000-0000-00000000000d', 'Org D 0494', 'org-d-0494', null, '{"v": 1}', null, null, 'optional', false),
+  ('c0494000-0000-0000-0000-00000000000e', 'Org E 0494', 'org-e-0494', null, null, null, null, 'optional', false),
+  ('c0494000-0000-0000-0000-00000000000f', 'Org F 0494', 'org-f-0494', null, null, null, null, 'optional', false),
+  ('c0494000-0000-0000-0000-0000000000ee', 'Org N 0494', 'org-n-0494', null, null, null, null, 'optional', true),
+  ('c0494000-0000-0000-0000-0000000000ff', 'Org L 0494', 'org-l-0494', null, null, null, null, 'optional', false);
+update public.organizations set order_catalog_last_hide_at = '2026-11-01T10:00:00Z'
+ where id = 'c0494000-0000-0000-0000-00000000000a';
+
+insert into auth.users (id, email) values
+  ('c0494000-0000-0000-0000-0000000000a1', 'una-0494@example.test'),
+  ('c0494000-0000-0000-0000-0000000000b1', 'ben-0494@example.test'),
+  ('c0494000-0000-0000-0000-0000000000ad', 'ada-0494@example.test'),
+  ('c0494000-0000-0000-0000-0000000000d1', 'dee-0494@example.test'),
+  ('c0494000-0000-0000-0000-0000000000c1', 'sam-0494@example.test'),
+  ('c0494000-0000-0000-0000-0000000000e1', 'nia-0494@example.test'),
+  ('c0494000-0000-0000-0000-0000000000f1', 'tia-0494@example.test'),
+  ('c0494000-0000-0000-0000-000000000001', 'noa-0494@example.test'),
+  ('c0494000-0000-0000-0000-000000000002', 'gus-0494@example.test');
+-- gus has a sign-in account and no profile row.
+delete from public.user_profiles where id = 'c0494000-0000-0000-0000-000000000002';
+update public.user_profiles set default_organization_id = 'c0494000-0000-0000-0000-00000000000c',
+                                full_name = 'Una Example', avatar_url = 'https://example.test/una.png'
+ where id = 'c0494000-0000-0000-0000-0000000000a1';
+
+insert into public.organization_members (organization_id, user_id, role, accepted_at, created_at, impersonation_expires_at) values
+  -- una: manager in A (oldest), viewer in C, staff in D; invited to B, not accepted.
+  ('c0494000-0000-0000-0000-00000000000a', 'c0494000-0000-0000-0000-0000000000a1', 'manager', now(), now() - interval '3 days', null),
+  ('c0494000-0000-0000-0000-00000000000c', 'c0494000-0000-0000-0000-0000000000a1', 'viewer',  now(), now() - interval '2 days', null),
+  ('c0494000-0000-0000-0000-00000000000d', 'c0494000-0000-0000-0000-0000000000a1', 'staff',   now(), now() - interval '1 day', null),
+  ('c0494000-0000-0000-0000-00000000000b', 'c0494000-0000-0000-0000-0000000000a1', 'admin',   null,  now() - interval '4 days', null),
+  -- ben: staff in B only.
+  ('c0494000-0000-0000-0000-00000000000b', 'c0494000-0000-0000-0000-0000000000b1', 'staff',   now(), now(), null),
+  -- ada: admin in A (row level security shows her every member's override rows there).
+  ('c0494000-0000-0000-0000-00000000000a', 'c0494000-0000-0000-0000-0000000000ad', 'admin',   now(), now() - interval '5 days', null),
+  -- dee: an accepted member of A whose account is disabled.
+  ('c0494000-0000-0000-0000-00000000000a', 'c0494000-0000-0000-0000-0000000000d1', 'manager', now(), now() - interval '5 days', null),
+  -- sam: plain member of F; an Act-as seat in E that is still live, one in C that has expired.
+  ('c0494000-0000-0000-0000-00000000000f', 'c0494000-0000-0000-0000-0000000000c1', 'viewer',  now(), now() - interval '6 days', null),
+  ('c0494000-0000-0000-0000-00000000000e', 'c0494000-0000-0000-0000-0000000000c1', 'admin',   now(), now() - interval '7 days', now() + interval '1 hour'),
+  ('c0494000-0000-0000-0000-00000000000c', 'c0494000-0000-0000-0000-0000000000c1', 'admin',   now(), now() - interval '8 days', now() - interval '1 hour'),
+  -- nia: owner of N (every nullable setting null, comped).
+  ('c0494000-0000-0000-0000-0000000000ee', 'c0494000-0000-0000-0000-0000000000e1', 'owner',   now(), now(), null),
+  -- tia: two memberships made at the same moment; the organization id breaks the tie.
+  ('c0494000-0000-0000-0000-00000000000f', 'c0494000-0000-0000-0000-0000000000f1', 'staff',   now(), '2026-10-01T00:00:00Z', null),
+  ('c0494000-0000-0000-0000-00000000000e', 'c0494000-0000-0000-0000-0000000000f1', 'viewer',  now(), '2026-10-01T00:00:00Z', null);
+
+insert into public.role_permission_overrides (organization_id, role, permission, granted) values
+  ('c0494000-0000-0000-0000-00000000000a', 'manager', 'items:delete', false),
+  ('c0494000-0000-0000-0000-00000000000a', 'manager', 'items:export', true),
+  ('c0494000-0000-0000-0000-00000000000a', 'staff',   'items:update', false),
+  ('c0494000-0000-0000-0000-00000000000b', 'staff',   'orders:approve', true),
+  ('c0494000-0000-0000-0000-00000000000c', 'viewer',  'items:export', true),
+  ('c0494000-0000-0000-0000-00000000000c', 'admin',   'audit:read', false),
+  ('c0494000-0000-0000-0000-00000000000e', 'admin',   'items:import', true);
+insert into public.user_permission_overrides (organization_id, user_id, permission, granted) values
+  ('c0494000-0000-0000-0000-00000000000a', 'c0494000-0000-0000-0000-0000000000a1', 'items:delete', true),
+  ('c0494000-0000-0000-0000-00000000000a', 'c0494000-0000-0000-0000-0000000000a1', 'audit:read', false),
+  ('c0494000-0000-0000-0000-00000000000a', 'c0494000-0000-0000-0000-0000000000ad', 'reports:view', true),
+  ('c0494000-0000-0000-0000-00000000000b', 'c0494000-0000-0000-0000-0000000000b1', 'reports:view', false),
+  ('c0494000-0000-0000-0000-00000000000c', 'c0494000-0000-0000-0000-0000000000a1', 'items:import', true),
+  ('c0494000-0000-0000-0000-00000000000e', 'c0494000-0000-0000-0000-0000000000c1', 'items:export', true),
+  ('c0494000-0000-0000-0000-0000000000ee', 'c0494000-0000-0000-0000-0000000000e1', 'items:export', false);
+update public.organization_modules set enabled = (module_id in ('books', 'orders'))
+ where organization_id = 'c0494000-0000-0000-0000-00000000000a';
+update public.organization_modules set enabled = false
+ where organization_id = 'c0494000-0000-0000-0000-00000000000d';
+update public.user_profiles set disabled_at = now() where id = 'c0494000-0000-0000-0000-0000000000d1';
+
+-- ── 1. The function, as the catalog sees it ─────────────────────────────────
+select ok(not (select prosecdef from pg_proc where oid = 'public.get_request_context()'::regprocedure),
+  'SECURITY INVOKER: it reads under the caller''s row level security');
+select is((select provolatile::text from pg_proc where oid = 'public.get_request_context()'::regprocedure), 's',
+  'STABLE: PostgREST may serve it from a read-only transaction');
+select is((select l.lanname::text from pg_proc p join pg_language l on l.oid = p.prolang
+            where p.oid = 'public.get_request_context()'::regprocedure), 'plpgsql',
+  'PL/pgSQL: its plan is kept for the connection');
+select is((select array_to_string(proconfig, ',') from pg_proc where oid = 'public.get_request_context()'::regprocedure),
+  'search_path=public, pg_temp', 'search_path is pinned to public, pg_temp');
+select is((select pg_get_userbyid(proowner) from pg_proc where oid = 'public.get_request_context()'::regprocedure),
+  'postgres', 'owned by postgres');
+select ok(not has_function_privilege('public', 'public.get_request_context()', 'execute'), 'public holds no EXECUTE');
+select ok(not has_function_privilege('anon', 'public.get_request_context()', 'execute'), 'anon holds no EXECUTE');
+select ok(has_function_privilege('authenticated', 'public.get_request_context()', 'execute'), 'authenticated holds EXECUTE');
+select ok(has_function_privilege('service_role', 'public.get_request_context()', 'execute'), 'service_role holds EXECUTE');
+select is((select pg_get_function_result(oid) from pg_proc where oid = 'public.get_request_context()'::regprocedure),
+  'jsonb', 'returns jsonb, takes no argument');
+
+-- ── 2. anon is refused ──────────────────────────────────────────────────────
+set local role to anon;
+select throws_ok('select public.get_request_context()', '42501', null, 'anon cannot call it');
+set local role to postgres;
+
+-- ── 3. The same answer as 0413's body, caller after caller ─────────────────
+-- Callers alternate, and both claim settings PostgREST and older code use
+-- are exercised, so a plan kept in this session serves every caller.
+set local "request.jwt.claim.sub" to 'c0494000-0000-0000-0000-0000000000a1';
+set local role to authenticated;
+select is(public.get_request_context(), pg_temp.request_context_0413(),
+  'una (three organizations, one invitation not accepted, overrides, a default organization): same answer');
+set local role to postgres;
+set local "request.jwt.claim.sub" to 'c0494000-0000-0000-0000-0000000000b1';
+set local role to authenticated;
+select is(public.get_request_context(), pg_temp.request_context_0413(), 'ben (one organization): same answer');
+set local role to postgres;
+set local "request.jwt.claim.sub" to 'c0494000-0000-0000-0000-0000000000ad';
+set local role to authenticated;
+select is(public.get_request_context(), pg_temp.request_context_0413(),
+  'ada (an admin who can read other members'' override rows): same answer');
+set local role to postgres;
+set local "request.jwt.claim.sub" to 'c0494000-0000-0000-0000-0000000000d1';
+set local role to authenticated;
+select is(public.get_request_context(), pg_temp.request_context_0413(), 'dee (disabled account): same answer');
+set local role to postgres;
+set local "request.jwt.claim.sub" to 'c0494000-0000-0000-0000-0000000000c1';
+set local role to authenticated;
+select is(public.get_request_context(), pg_temp.request_context_0413(),
+  'sam (a live Act-as seat and an expired one): same answer');
+set local role to postgres;
+set local "request.jwt.claim.sub" to 'c0494000-0000-0000-0000-0000000000e1';
+set local role to authenticated;
+select is(public.get_request_context(), pg_temp.request_context_0413(),
+  'nia (an organization with every nullable setting null): same answer');
+set local role to postgres;
+set local "request.jwt.claim.sub" to 'c0494000-0000-0000-0000-0000000000f1';
+set local role to authenticated;
+select is(public.get_request_context(), pg_temp.request_context_0413(),
+  'tia (two memberships made at the same moment): same answer');
+set local role to postgres;
+set local "request.jwt.claim.sub" to 'c0494000-0000-0000-0000-000000000001';
+set local role to authenticated;
+select is(public.get_request_context(), pg_temp.request_context_0413(), 'noa (no membership): same answer');
+set local role to postgres;
+set local "request.jwt.claim.sub" to 'c0494000-0000-0000-0000-000000000002';
+set local role to authenticated;
+select is(public.get_request_context(), pg_temp.request_context_0413(), 'gus (no profile row): same answer');
+set local role to postgres;
+set local "request.jwt.claim.sub" to '';
+set local "request.jwt.claims" to '{"sub": "c0494000-0000-0000-0000-0000000000a1", "role": "authenticated"}';
+set local role to authenticated;
+select is(public.get_request_context(), pg_temp.request_context_0413(),
+  'una again, named by request.jwt.claims as PostgREST names her: same answer');
+set local role to postgres;
+set local "request.jwt.claims" to '';
+set local role to authenticated;
+select is(public.get_request_context(), pg_temp.request_context_0413(), 'nobody signed in: same answer');
+select is(public.get_request_context(),
+  '{"user_id": null, "profile": null, "memberships": []}'::jsonb, 'nobody signed in: no profile and no membership');
+
+-- ── 4. What the answer says, read directly ──────────────────────────────────
+set local role to postgres;
+set local "request.jwt.claim.sub" to 'c0494000-0000-0000-0000-0000000000a1';
+set local role to authenticated;
+create temp table una on commit drop as select public.get_request_context() as ctx;
+select is((select jsonb_agg(m->>'organization_id') from una, jsonb_array_elements(ctx->'memberships') m),
+  '["c0494000-0000-0000-0000-00000000000a", "c0494000-0000-0000-0000-00000000000c", "c0494000-0000-0000-0000-00000000000d"]'::jsonb,
+  'una: her three accepted memberships, oldest first; the invitation to B is not one');
+select is((select array_agg(k) from una, jsonb_object_keys(ctx) k), array['profile', 'user_id', 'memberships'],
+  'the top level keys, in jsonb order');
+select is((select array_agg(k) from una, jsonb_object_keys(ctx->'memberships'->0) k),
+  array['role', 'organization', 'role_overrides', 'user_overrides', 'enabled_modules', 'organization_id'],
+  'a membership''s keys');
+select is((select ctx->'memberships'->0->'role_overrides' from una),
+  '[{"granted": false, "permission": "items:delete"}, {"granted": true, "permission": "items:export"}]'::jsonb,
+  'una in A: the overrides of her role there, ordered by permission');
+select is((select ctx->'memberships'->0->'user_overrides' from una),
+  '[{"granted": false, "permission": "audit:read"}, {"granted": true, "permission": "items:delete"}]'::jsonb,
+  'una in A: her own overrides, ordered by permission');
+select is((select ctx->'memberships'->0->'enabled_modules' from una), '["books", "orders"]'::jsonb,
+  'una in A: the enabled modules, ordered');
+select is((select ctx->'memberships'->2->'enabled_modules' from una), '[]'::jsonb,
+  'una in D: no module enabled gives an empty list');
+select is((select ctx->'memberships'->0->'organization'->>'order_catalog_last_hide_at' from una),
+  '2026-11-01T10:00:00+00:00', 'the hide mark of A');
+select ok((select ctx::text not like '%c0494000-0000-0000-0000-00000000000b%' and ctx::text not like '%reports:view%'
+             and ctx::text not like '%orders:approve%' from una),
+  'nothing of B, and no other member''s override');
+
+-- ── 5. Row level security still decides ─────────────────────────────────────
+set local role to postgres;
+set local "request.jwt.claim.sub" to 'c0494000-0000-0000-0000-0000000000d1';
+set local role to authenticated;
+select is(public.get_request_context()->'memberships', '[]'::jsonb,
+  'dee: her accepted membership is hidden by row level security (disabled account)');
+select isnt(public.get_request_context()->'profile'->>'disabled_at', null,
+  'dee: her own profile still says she is disabled');
+set local role to postgres;
+set local "request.jwt.claim.sub" to 'c0494000-0000-0000-0000-0000000000c1';
+set local role to authenticated;
+select is((select jsonb_agg(m->>'organization_id') from jsonb_array_elements(public.get_request_context()->'memberships') m),
+  '["c0494000-0000-0000-0000-00000000000e", "c0494000-0000-0000-0000-00000000000f"]'::jsonb,
+  'sam: the expired Act-as seat in C is hidden by row level security; the live seat in E is not');
+set local role to service_role;
+select is((select jsonb_agg(m->>'organization_id') from jsonb_array_elements(public.get_request_context()->'memberships') m),
+  '["c0494000-0000-0000-0000-00000000000c", "c0494000-0000-0000-0000-00000000000e", "c0494000-0000-0000-0000-00000000000f"]'::jsonb,
+  'the same call as service_role, which bypasses row level security, also returns C: it is the policy that hides it (invoker rights)');
+select is(public.get_request_context(), pg_temp.request_context_0413(), 'as service_role: same answer as 0413''s body');
+set local role to postgres;
+set local "request.jwt.claim.sub" to 'c0494000-0000-0000-0000-0000000000c1';
+set local role to authenticated;
+select is((select jsonb_array_length(public.get_request_context()->'memberships')), 2,
+  'back as authenticated in the same session, the policy applies again (no plan kept across roles)');
+set local role to postgres;
+set local "request.jwt.claim.sub" to 'c0494000-0000-0000-0000-0000000000ad';
+set local role to authenticated;
+select ok((select count(*) from public.user_permission_overrides
+            where organization_id = 'c0494000-0000-0000-0000-00000000000a'
+              and user_id <> 'c0494000-0000-0000-0000-0000000000ad') >= 2,
+  'fixture: as an admin, ada can read una''s override rows');
+select is(public.get_request_context()->'memberships'->0->'user_overrides',
+  '[{"granted": true, "permission": "reports:view"}]'::jsonb,
+  'yet ada''s context holds only her own user override');
+set local role to postgres;
+set local "request.jwt.claim.sub" to 'c0494000-0000-0000-0000-0000000000b1';
+set local role to authenticated;
+select is((select jsonb_agg(m->>'organization_id') from jsonb_array_elements(public.get_request_context()->'memberships') m),
+  '["c0494000-0000-0000-0000-00000000000b"]'::jsonb, 'ben: B only, never another member''s memberships');
+
+-- ── 6. Read afresh on every call: a change bites on the next one ───────────
+set local role to postgres;
+set local "request.jwt.claim.sub" to '';
+update public.organization_members set role = 'staff'
+ where organization_id = 'c0494000-0000-0000-0000-00000000000a' and user_id = 'c0494000-0000-0000-0000-0000000000a1';
+delete from public.organization_members
+ where organization_id = 'c0494000-0000-0000-0000-00000000000c' and user_id = 'c0494000-0000-0000-0000-0000000000a1';
+set local "request.jwt.claim.sub" to 'c0494000-0000-0000-0000-0000000000a1';
+set local role to authenticated;
+select is(public.get_request_context()->'memberships'->0->>'role', 'staff', 'una''s new role in A, on the next call');
+select is(public.get_request_context()->'memberships'->0->'role_overrides',
+  '[{"granted": false, "permission": "items:update"}]'::jsonb, 'and the overrides of her new role');
+select is((select jsonb_agg(m->>'organization_id') from jsonb_array_elements(public.get_request_context()->'memberships') m),
+  '["c0494000-0000-0000-0000-00000000000a", "c0494000-0000-0000-0000-00000000000d"]'::jsonb,
+  'her removal from C, on the next call');
+select is(public.get_request_context(), pg_temp.request_context_0413(), 'after the changes: same answer as 0413''s body');
+
+-- ── 7. Her own rows by index, not every member's row through the policy ────
+-- una joins L, with 1,200 other members. Reading every membership and
+-- profile row through the policies costs thousands of buffer reads; reading
+-- her own rows by index costs a few hundred at most. Both calls are warm.
+set local role to postgres;
+set local "request.jwt.claim.sub" to '';
+insert into auth.users (id, email)
+select ('c0494000-0000-0000-0001-' || lpad(to_hex(g), 12, '0'))::uuid, 'filler-' || g || '-0494@example.test'
+  from generate_series(1, 1200) g;
+insert into public.organization_members (organization_id, user_id, role, accepted_at, created_at)
+select 'c0494000-0000-0000-0000-0000000000ff', ('c0494000-0000-0000-0001-' || lpad(to_hex(g), 12, '0'))::uuid,
+       'staff', now(), now() - (g || ' minutes')::interval
+  from generate_series(1, 1200) g;
+insert into public.organization_members (organization_id, user_id, role, accepted_at, created_at)
+values ('c0494000-0000-0000-0000-0000000000ff', 'c0494000-0000-0000-0000-0000000000a1', 'viewer', now(), now());
+set local "request.jwt.claim.sub" to 'c0494000-0000-0000-0000-0000000000a1';
+set local role to authenticated;
+do $warm$
+begin
+  perform pg_temp.buffer_hits('select public.get_request_context()');
+  perform pg_temp.buffer_hits('select pg_temp.request_context_0413()');
+end
+$warm$;
+select cmp_ok(pg_temp.buffer_hits('select public.get_request_context()'), '<', 400,
+  'una''s context reads under 400 buffers with 1,200 other members in one of her organizations');
+select cmp_ok(pg_temp.buffer_hits('select pg_temp.request_context_0413()'), '>', 4000,
+  'the same answer through 0413''s body reads over 4,000 (the measure tells the two apart)');
+
+set local role to postgres;
+select * from finish();
+rollback;

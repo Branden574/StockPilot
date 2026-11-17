@@ -928,6 +928,13 @@ PGTAP_TESTS=(
   # two-session proof is scripts/db-concurrency/0467_app_row_race.sh; the lock
   # footprint is scripts/db-concurrency/0467_migration_lock_footprint.sh.
   supabase/tests/0467_role_and_sign_in_policy_changes_recorded_by_database.test.sql
+  # The request context reads the caller's own rows by index (0494): the same
+  # answer as 0413's body for every kind of caller (several organizations, an
+  # invitation not accepted, a disabled account, live and expired Act-as
+  # seats, no profile, nobody signed in), row level security still deciding
+  # (an expired seat and a disabled account hidden), invoker rights, no anon
+  # EXECUTE, and a change seen on the next call.
+  supabase/tests/0494_request_context_reads_by_index.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -937,6 +944,11 @@ PGTAP_TESTS=(
 # MANIFEST 2 — apps/web vitest, paths relative to apps/web/
 # ═══════════════════════════════════════════════════════════════════════════
 WEB_TESTS=(
+  # The request context is asked once per page load and again on every new
+  # request: a role change, a removal or an override bites on the next one,
+  # in a page load and in a Server Action (nothing is kept across requests).
+  src/lib/auth/request-context.calls-per-request.test.ts
+
   # Storage path traversal (HI-8) and upload content verification.
   src/lib/storage-path.test.ts
   src/server/services/storage-path-traversal.test.ts
