@@ -1,6 +1,6 @@
 'use server';
 
-import { revalidatePath, revalidateTag } from 'next/cache';
+import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
@@ -8,6 +8,7 @@ import { reportError } from '@/lib/error-reporter';
 import { actionErrorResult, uncheckedAccessResult } from '@/server/lib/action-error-result';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError, withContext } from '@/server/services/context';
+import { expireOrdersCatalogAfterOrderWrite } from '@/server/services/lib/orders-catalog-expiry';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
 import {
@@ -64,14 +65,19 @@ function toResult<T>(error: unknown): ActionResult<T> {
  * resume RESERVE stock; cancel/deny/close-partial RELEASE it; the signature
  * hand-over DECREMENTS on-hand. Without this the "Place an Order" page shows
  * stale avail pills for up to a minute after an order changes state — the
- * owner expects near-instant. Same global-tag pattern as user-categories
- * (these mutations are orders-of-magnitude rarer than catalog reads, so
- * nuking the tag org-wide is cheap). Placing an order reserves nothing, so
- * createOrderRequestAction does NOT call this (phone ordering PO-2: it used
- * to empty every warm catalog on every order).
+ * owner expects near-instant.
+ *
+ * Only the order's own catalog: its organization's entry for the order's
+ * warehouse, taken from the row the service answered, expired now (`{ expire:
+ * 0 }`, so the next read recomputes; see orders-catalog-expiry.ts). The
+ * line edits and Hold available stock answer no order row, so they expire the
+ * organization's catalog. Each action here already calls revalidatePath, which
+ * re-renders the page into its response, so the expiry adds no render. Placing
+ * an order reserves nothing, so createOrderRequestAction does NOT call this
+ * (phone ordering PO-2: it used to empty every warm catalog on every order).
  */
-function revalidateOrdersCatalog() {
-  revalidateTag('orders-new-v2-catalog', 'max');
+function revalidateOrdersCatalog(svc: OrderRequestsService, order?: unknown) {
+  expireOrdersCatalogAfterOrderWrite(svc.organizationId, order);
 }
 
 /** An action error from the order submission service: the service's code,
@@ -470,9 +476,9 @@ export async function cancelOrderRequestAction(
   if (!parsed.success) return err('validation_error', 'Invalid input');
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    await svc.cancel(parsed.data.id, parsed.data.reason ?? null);
+    const row = await svc.cancel(parsed.data.id, parsed.data.reason ?? null);
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(svc, row);
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     // Cancel restocks already-picked stock — the cached list view must drop.
     await revalidateInventoryListForCurrentOrg();
@@ -515,7 +521,7 @@ export async function addOrderRequestLinesAction(
     const svc = await OrderRequestsService.forCurrentUser();
     const result = await svc.addLines(parsed.data.id, parsed.data.lines);
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(svc);
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(result);
   } catch (e) {
@@ -550,7 +556,7 @@ export async function updateOrderRequestLineQuantityAction(
       parsed.data.quantity,
     );
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(svc);
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(result);
   } catch (e) {
@@ -579,7 +585,7 @@ export async function removeOrderRequestLineAction(
     const svc = await OrderRequestsService.forCurrentUser();
     const result = await svc.removeLine(parsed.data.id, parsed.data.lineId);
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(svc);
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(result);
   } catch (e) {
@@ -599,9 +605,9 @@ export async function approveOrderRequestAction(
   if (!parsed.success) return err('validation_error', 'Invalid input');
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    await svc.approve(parsed.data.id, parsed.data.internalNotes ?? null);
+    const row = await svc.approve(parsed.data.id, parsed.data.internalNotes ?? null);
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(svc, row);
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(undefined);
   } catch (e) {
@@ -628,7 +634,7 @@ export async function holdOrderStockAction(
     const svc = await OrderRequestsService.forCurrentUser();
     const result = await svc.holdStock(parsed.data.id, 'manual');
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(svc);
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(result);
   } catch (e) {
@@ -654,9 +660,9 @@ export async function denyOrderRequestAction(
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Reason required');
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    await svc.deny(parsed.data.id, parsed.data.reason);
+    const row = await svc.deny(parsed.data.id, parsed.data.reason);
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(svc, row);
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(undefined);
   } catch (e) {
@@ -673,9 +679,9 @@ export async function generatePickSlipAction(
   if (!parsed.success) return err('validation_error', 'Invalid input');
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    await svc.generatePickSlip(parsed.data.id);
+    const row = await svc.generatePickSlip(parsed.data.id);
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(svc, row);
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(undefined);
   } catch (e) {
@@ -715,9 +721,9 @@ export async function completePickingAction(
   if (!parsed.success) return err('validation_error', 'Invalid input');
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    await svc.completePicking(parsed.data.id);
+    const row = await svc.completePicking(parsed.data.id);
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(svc, row);
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     revalidatePath(`/dashboard/orders/${parsed.data.id}/pick`);
     await revalidateInventoryListForCurrentOrg();
@@ -749,7 +755,7 @@ export async function confirmPhysicalSignatureAction(
     const svc = await OrderRequestsService.forCurrentUser();
     const row = await svc.confirmPhysicalSignature(parsed.data.id, parsed.data.signerName);
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(svc, row);
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok({ status: row?.status ?? null });
   } catch (e) {
@@ -764,9 +770,9 @@ export async function approveOrderPartialAction(
   if (!parsed.success) return err('validation_error', 'Invalid input');
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    await svc.approvePartial(parsed.data.id);
+    const row = await svc.approvePartial(parsed.data.id);
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(svc, row);
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     await revalidateInventoryListForCurrentOrg();
     return ok(undefined);
@@ -782,9 +788,9 @@ export async function resumeFulfillmentAction(
   if (!parsed.success) return err('validation_error', 'Invalid input');
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    await svc.resumeFulfillment(parsed.data.id);
+    const row = await svc.resumeFulfillment(parsed.data.id);
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(svc, row);
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(undefined);
   } catch (e) {
@@ -813,9 +819,9 @@ export async function reopenPickingAction(
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    await svc.reopenPicking(parsed.data.id, parsed.data.reason);
+    const row = await svc.reopenPicking(parsed.data.id, parsed.data.reason);
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(svc, row);
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     revalidatePath(`/dashboard/orders/${parsed.data.id}/pick`);
     return ok(undefined);
@@ -831,9 +837,9 @@ export async function closePartialAction(
   if (!parsed.success) return err('validation_error', 'Invalid input');
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    await svc.closePartial(parsed.data.id);
+    const row = await svc.closePartial(parsed.data.id);
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(svc, row);
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(undefined);
   } catch (e) {
@@ -920,9 +926,9 @@ export async function generatePackingSlipsAction(
   if (!parsed.success) return err('validation_error', 'Invalid input');
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    await svc.generatePackingSlips(parsed.data.id);
+    const row = await svc.generatePackingSlips(parsed.data.id);
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(svc, row);
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(undefined);
   } catch (e) {
@@ -942,9 +948,9 @@ export async function stageOrderAction(
   if (!parsed.success) return err('validation_error', 'Invalid input');
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    await svc.stageOrder(parsed.data.id, parsed.data.target);
+    const row = await svc.stageOrder(parsed.data.id, parsed.data.target);
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(svc, row);
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(undefined);
   } catch (e) {
@@ -982,9 +988,9 @@ export async function claimPickingAction(
   if (!parsed.success) return err('validation_error', 'Invalid input');
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    await svc.claimPicking(parsed.data.id);
+    const row = await svc.claimPicking(parsed.data.id);
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(svc, row);
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     revalidatePath(`/dashboard/orders/${parsed.data.id}/pick`);
     return ok(undefined);
@@ -1002,9 +1008,9 @@ export async function assignPickingAction(
   if (!parsed.success) return err('validation_error', 'Invalid input');
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    await svc.assignPicking(parsed.data.id, parsed.data.pickerUserId);
+    const row = await svc.assignPicking(parsed.data.id, parsed.data.pickerUserId);
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(svc, row);
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     revalidatePath(`/dashboard/orders/${parsed.data.id}/pick`);
     return ok(undefined);
@@ -1022,9 +1028,9 @@ export async function releasePickingAction(
   if (!parsed.success) return err('validation_error', 'Invalid input');
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    await svc.releasePicking(parsed.data.id);
+    const row = await svc.releasePicking(parsed.data.id);
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(svc, row);
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     revalidatePath(`/dashboard/orders/${parsed.data.id}/pick`);
     return ok(undefined);
@@ -1042,9 +1048,9 @@ export async function markInTransitAction(
   if (!parsed.success) return err('validation_error', 'Invalid input');
   try {
     const svc = await OrderRequestsService.forCurrentUser();
-    await svc.markInTransit(parsed.data.id);
+    const row = await svc.markInTransit(parsed.data.id);
     revalidatePath('/dashboard/orders');
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(svc, row);
     revalidatePath(`/dashboard/orders/${parsed.data.id}`);
     return ok(undefined);
   } catch (e) {

@@ -1,7 +1,5 @@
 import 'server-only';
 
-import { revalidateTag } from 'next/cache';
-
 import {
   formatPlacementLabel,
   groupingPreviewKey,
@@ -30,6 +28,7 @@ import {
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { embedInBackground } from './lib/embed-in-background';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
+import { expireOrganizationOrdersCatalog } from './lib/orders-catalog-expiry';
 import { fetchRackHoldingsByItem } from './rack-holdings';
 
 /**
@@ -57,8 +56,18 @@ import { fetchRackHoldingsByItem } from './rack-holdings';
  *  with the same key before the caller is told to try again (design 3.4). */
 export const UNGROUP_BUSY_RETRIES = 2;
 
-/** The order catalog's tag (loaders/orders-new-catalog.ts): it shows SKUs. */
-const ORDER_CATALOG_TAG = 'orders-new-v2-catalog';
+/**
+ * After a grouping write: the organization's order catalog (it shows SKUs, and
+ * the write changed them), expired now so the next read shows the new SKUs
+ * instead of serving the old entry once more. One organization's catalog only
+ * (orders-catalog-expiry.ts). Inside a Server Action this adds no render: the
+ * Items list expiry just before it already re-renders the page. Never throws
+ * (outside a request scope the catalog's 60 s TTL is the bound): a committed
+ * write never turns into an error the user retries.
+ */
+function expireOrderCatalogAfterGrouping(organizationId: string): void {
+  expireOrganizationOrdersCatalog(organizationId, 'item.grouping');
+}
 
 /** At most this many candidate rows are read for a preview (100 SKUs at
  *  production's largest share of 4 is 400). */
@@ -358,17 +367,7 @@ export class ItemGroupingService {
         );
       }
       invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.grouping');
-      try {
-        revalidateTag(ORDER_CATALOG_TAG, 'max');
-      } catch (err) {
-        // Outside a request scope (a script, a test) there is nothing to
-        // record the tag in; the catalog's 60 s TTL is the bound. Never turn
-        // a committed split into an error the user retries.
-        console.warn(
-          '[item-grouping] order catalog refresh skipped:',
-          err instanceof Error ? err.message : String(err),
-        );
-      }
+      expireOrderCatalogAfterGrouping(this.ctx.organizationId);
       return {
         organizationId: this.ctx.organizationId,
         replay: outcome.replay,
@@ -538,14 +537,7 @@ export class ItemGroupingService {
       }
       if (outcome.outcome === 'applied') {
         invalidateInventoryListAfterWrite(this.ctx.organizationId, 'item.grouping');
-        try {
-          revalidateTag(ORDER_CATALOG_TAG, 'max');
-        } catch (err) {
-          console.warn(
-            '[item-grouping] order catalog refresh skipped:',
-            err instanceof Error ? err.message : String(err),
-          );
-        }
+        expireOrderCatalogAfterGrouping(this.ctx.organizationId);
       }
       return { organizationId: this.ctx.organizationId, outcome };
     }

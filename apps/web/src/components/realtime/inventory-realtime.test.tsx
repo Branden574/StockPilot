@@ -18,7 +18,7 @@ const h = vi.hoisted(() => ({
   refresh: vi.fn(),
   // The realtime nudge. Resolves true = "invalidated", which in a real
   // Server Action means Next re-renders the page into the action's response.
-  revalidate: vi.fn(async (): Promise<boolean> => true),
+  revalidate: vi.fn(async (..._args: unknown[]): Promise<boolean> => true),
   visibility: { value: 'visible' as DocumentVisibilityState },
   pathname: { value: '/dashboard/inventory' },
   channel: vi.fn(),
@@ -58,7 +58,7 @@ vi.mock('@/lib/supabase/realtime-auth', () => ({
 }));
 
 vi.mock('@/server/actions/revalidate-inventory-view', () => ({
-  revalidateInventoryViewAction: () => h.revalidate(),
+  revalidateInventoryViewAction: (...args: unknown[]) => h.revalidate(...args),
 }));
 
 import {
@@ -68,8 +68,10 @@ import {
 } from '@/lib/orders/ordering-tab-signal';
 
 import {
+  inventoryListViewFor,
   InventoryRealtime,
   isVisibilityOnlyEvent,
+  ordinaryEventWaits,
   visibilityEventRule,
 } from './inventory-realtime';
 
@@ -683,7 +685,7 @@ describe('InventoryRealtime and visibility-only events', () => {
     expect(h.refresh).toHaveBeenCalledTimes(2);
   });
 
-  it('an ordinary event while the delayed refresh waits runs the action at once, and the wait is dropped', async () => {
+  it('Place an Order: an ordinary event while the delayed refresh waits shares it, never the action', async () => {
     const onItem = await mount('/dashboard/orders/new');
     vi.useFakeTimers();
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
@@ -694,9 +696,9 @@ describe('InventoryRealtime and visibility-only events', () => {
       new: { updated_at: '2026-10-26T16:00:00Z', order_catalog_visibility_changed_at: null },
     });
     await vi.advanceTimersByTimeAsync(5000);
-    // The action's re-render read both commits.
-    expect(h.revalidate).toHaveBeenCalledTimes(1);
-    expect(h.refresh).not.toHaveBeenCalled();
+    // The one delayed refresh, 2.5 s after the first event, read both commits.
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).not.toHaveBeenCalled();
   });
 
   // Review F2: the save's Server Action response already carried the page.
@@ -728,20 +730,81 @@ describe('InventoryRealtime and visibility-only events', () => {
     expect(h.revalidate).not.toHaveBeenCalled();
   });
 
-  it('an ordinary event is unchanged on an ordering page: it still runs the action', async () => {
-    const onItem = await mount('/dashboard/orders/new');
+  const ORDINARY = (commit: string) => ({
+    ...HIDE(),
+    commit_timestamp: commit,
+    new: {
+      updated_at: '2026-10-26T16:00:00Z',
+      order_catalog_visibility_changed_at: '2026-10-26T15:00:05Z',
+    },
+  });
+
+  it('Manage order items: an ordinary event still runs the action, at once, with no list view', async () => {
+    const onItem = await mount('/dashboard/orders/manage-items');
     vi.useFakeTimers();
-    onItem({
-      ...HIDE(),
-      commit_timestamp: 't-ordinary',
-      new: {
-        updated_at: '2026-10-26T16:00:00Z',
-        order_catalog_visibility_changed_at: '2026-10-26T15:00:05Z',
-      },
-    });
+    onItem(ORDINARY('t-ordinary'));
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).toHaveBeenCalledWith(null);
     await vi.advanceTimersByTimeAsync(2000);
     expect(h.revalidate).toHaveBeenCalledTimes(1);
     expect(h.refresh).not.toHaveBeenCalled();
+  });
+
+  // The storefront never reads the Items list cache the action expired, and
+  // the action's response re-sent its whole catalog from every open tab at
+  // once. Now it is the visibility events' delayed refresh.
+  it('Place an Order: an ordinary event is a router.refresh() 1 to 4 s later, never the action', async () => {
+    const onItem = await mount('/dashboard/orders/new');
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    onItem(ORDINARY('t-store-1'));
+    await vi.advanceTimersByTimeAsync(999);
+    expect(h.refresh).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).not.toHaveBeenCalled();
+
+    // Another warehouse's ordinary event is not filtered: it still refreshes.
+    setOrderingTabWarehouse('wh-north');
+    onItem({ ...ORDINARY('t-store-2'), new: { ...ORDINARY('x').new, warehouse_id: 'wh-south' } });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(h.refresh).toHaveBeenCalledTimes(2);
+    expect(h.revalidate).not.toHaveBeenCalled();
+  });
+
+  it('Place an Order: a burst of ordinary events shares one delayed refresh; each transaction once', async () => {
+    const onItem = await mount('/dashboard/orders/new');
+    const onMovement = h.handlers[1]!;
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    for (let n = 0; n < 5; n++) {
+      // One adjust_stock: the item UPDATE and the movement INSERT, same commit.
+      onItem(ORDINARY(`b-${n}`));
+      onMovement({
+        table: 'stock_movements',
+        eventType: 'INSERT',
+        commit_timestamp: `b-${n}`,
+        new: {},
+      });
+      await vi.advanceTimersByTimeAsync(400);
+    }
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).not.toHaveBeenCalled();
+  });
+
+  it('Place an Order: a hidden tab does no work for an ordinary event, then refreshes once on return', async () => {
+    const onItem = await mount('/dashboard/orders/new');
+    vi.useFakeTimers();
+    setVisibility('hidden');
+    onItem(ORDINARY('h-1'));
+    onItem(ORDINARY('h-2'));
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(h.refresh).not.toHaveBeenCalled();
+    setVisibility('visible');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).not.toHaveBeenCalled();
   });
 
   it('a visibility event then an ordinary one in the same window: the trailing refresh is the action', async () => {
@@ -781,5 +844,234 @@ describe('InventoryRealtime and visibility-only events', () => {
     onMovement({ table: 'stock_movements', eventType: 'INSERT', commit_timestamp: 't9', new: {} });
     await vi.advanceTimersByTimeAsync(1000);
     expect(h.revalidate).toHaveBeenCalledTimes(1);
+  });
+});
+
+// An ordinary event on Place an Order waits 1 to 4 s for its refresh. A tab
+// that leaves the page in that window must not drop it: the page it lands on
+// may be restored from the client router cache (staleTimes.dynamic) and would
+// keep the stock from before the change. It takes the new page's own path.
+describe('InventoryRealtime: leaving Place an Order while a refresh waits', () => {
+  const ORDINARY = (commit: string) => ({
+    ...HIDE(),
+    commit_timestamp: commit,
+    new: {
+      id: 'i-1',
+      updated_at: '2026-10-26T16:00:00Z',
+      order_catalog_visibility_changed_at: null,
+    },
+  });
+
+  async function mountAt(path: string) {
+    h.pathname.value = path;
+    const view = render(<InventoryRealtime organizationId="org-1" />);
+    await waitFor(() => expect(h.handlers.length).toBe(5));
+    return {
+      onItem: h.handlers[0]!,
+      navigate: (to: string) => {
+        h.pathname.value = to;
+        view.rerender(<InventoryRealtime organizationId="org-1" />);
+      },
+      unmount: () => view.unmount(),
+    };
+  }
+
+  // A page where realtime is off unmounts the subscription: the waiting
+  // event refreshes once on the way out instead of being lost.
+  it('to a page where realtime is off (Settings): exactly one router.refresh(), at once', async () => {
+    const { onItem, navigate } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    onItem(ORDINARY('r-1'));
+    await vi.advanceTimersByTimeAsync(500);
+    await act(async () => navigate('/dashboard/settings'));
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).not.toHaveBeenCalled();
+  });
+
+  it('unmounted while an ordinary event waits: exactly one router.refresh()', async () => {
+    const { onItem, unmount } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    onItem(ORDINARY('u-1'));
+    onItem(ORDINARY('u-2'));
+    unmount();
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).not.toHaveBeenCalled();
+  });
+
+  it('a normal unmount with nothing waiting refreshes nothing', async () => {
+    const { unmount } = await mountAt('/dashboard/orders/new');
+    unmount();
+    expect(h.refresh).not.toHaveBeenCalled();
+    expect(h.revalidate).not.toHaveBeenCalled();
+  });
+
+  it('nothing more on unmount once the wait has refreshed, or when only a visibility-only event waits', async () => {
+    const { onItem, unmount } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    onItem(ORDINARY('d-1'));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    onItem(HIDE({ commit_timestamp: 'd-2' }));
+    unmount();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('a hidden tab unmounted while an event waits does no work', async () => {
+    const { onItem, unmount } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    setVisibility('hidden');
+    onItem(ORDINARY('x-1'));
+    unmount();
+    expect(h.refresh).not.toHaveBeenCalled();
+    expect(h.revalidate).not.toHaveBeenCalled();
+  });
+
+  it('an ordinary event, then Back to Items: the action runs for Items when the wait ends', async () => {
+    const { onItem, navigate } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    onItem(ORDINARY('n-1'));
+    await vi.advanceTimersByTimeAsync(1000);
+    await act(async () => navigate('/dashboard/inventory'));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).toHaveBeenCalledWith('items');
+    expect(h.refresh).not.toHaveBeenCalled();
+  });
+
+  it('to any other page: the action, which only re-renders it there', async () => {
+    const { onItem, navigate } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    onItem(ORDINARY('n-2'));
+    await act(async () => navigate('/dashboard/orders'));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).toHaveBeenCalledWith(null);
+    expect(h.refresh).not.toHaveBeenCalled();
+  });
+
+  it('to Manage order items (an ordering page that does not wait): the action too', async () => {
+    const { onItem, navigate } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    onItem(ORDINARY('n-3'));
+    await act(async () => navigate('/dashboard/orders/manage-items'));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
+    expect(h.refresh).not.toHaveBeenCalled();
+  });
+
+  it('a visibility-only and an ordinary event waiting together, then Items: one action, nothing dropped', async () => {
+    const { onItem, navigate } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    onItem(HIDE({ commit_timestamp: 'p-1' }));
+    onItem(ORDINARY('p-2'));
+    await act(async () => navigate('/dashboard/inventory'));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).toHaveBeenCalledWith('items');
+    expect(h.refresh).not.toHaveBeenCalled();
+    // Both commits were read by that refresh: their echoes add nothing.
+    onItem(HIDE({ commit_timestamp: 'p-1' }));
+    onItem(ORDINARY('p-2'));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('both waiting and the tab stays on Place an Order: one delayed router.refresh(), no action', async () => {
+    const { onItem } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    onItem(HIDE({ commit_timestamp: 's-1' }));
+    onItem(ORDINARY('s-2'));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).not.toHaveBeenCalled();
+  });
+
+  it('only a visibility-only event waiting, then Items: still dropped (no other page shows it)', async () => {
+    const { onItem, navigate } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    onItem(HIDE({ commit_timestamp: 'v-1' }));
+    await act(async () => navigate('/dashboard/inventory'));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.revalidate).not.toHaveBeenCalled();
+    expect(h.refresh).not.toHaveBeenCalled();
+  });
+
+  it('hidden on Place an Order, then shown on Items: the one refresh on return is the action', async () => {
+    const { onItem, navigate } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    setVisibility('hidden');
+    onItem(ORDINARY('h-1'));
+    await act(async () => navigate('/dashboard/inventory'));
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(h.revalidate).not.toHaveBeenCalled();
+    setVisibility('visible');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).toHaveBeenCalledWith('items');
+    expect(h.refresh).not.toHaveBeenCalled();
+  });
+});
+
+// The action expires the shared list caches only for a tab on Items or Books
+// (and only for a caller who reads them, which the server decides). The tab
+// says which list it shows; nothing else.
+describe('InventoryRealtime tells the action which list the tab shows', () => {
+  it.each([
+    ['/dashboard/inventory', 'items'],
+    ['/dashboard/books', 'books'],
+    ['/dashboard', null],
+    ['/dashboard/orders', null],
+    ['/dashboard/inventory/00000000-0000-4000-8000-000000000001', null],
+    ['/dashboard/books/new', null],
+  ])('%s: %s', async (path, view) => {
+    h.pathname.value = path;
+    render(<InventoryRealtime organizationId="org-1" />);
+    await waitFor(() => expect(h.handlers.length).toBe(5));
+    h.handlers[1]!({
+      table: 'stock_movements',
+      eventType: 'INSERT',
+      commit_timestamp: 'v1',
+      new: {},
+    });
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).toHaveBeenCalledWith(view);
+  });
+});
+
+describe('inventoryListViewFor', () => {
+  it('names only the two list pages', () => {
+    expect(inventoryListViewFor('/dashboard/inventory')).toBe('items');
+    expect(inventoryListViewFor('/dashboard/inventory/')).toBe('items');
+    expect(inventoryListViewFor('/dashboard/books')).toBe('books');
+    expect(inventoryListViewFor('/dashboard/inventory/staging')).toBeNull();
+    expect(inventoryListViewFor('/dashboard/books/import')).toBeNull();
+    expect(inventoryListViewFor('/dashboard/inventoryx')).toBeNull();
+    expect(inventoryListViewFor('/dashboard')).toBeNull();
+    expect(inventoryListViewFor(null)).toBeNull();
+    expect(inventoryListViewFor(undefined)).toBeNull();
+  });
+});
+
+describe('ordinaryEventWaits', () => {
+  it('only Place an Order waits; Manage order items and every other page do not', () => {
+    expect(ordinaryEventWaits('/dashboard/orders/new')).toBe(true);
+    expect(ordinaryEventWaits('/dashboard/orders/manage-items')).toBe(false);
+    expect(ordinaryEventWaits('/dashboard/orders')).toBe(false);
+    expect(ordinaryEventWaits('/dashboard/inventory')).toBe(false);
+    expect(ordinaryEventWaits(null)).toBe(false);
   });
 });
