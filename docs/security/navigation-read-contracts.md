@@ -12,8 +12,8 @@ compare builds under one condition, they are not production numbers.
 | --- | --- | --- | --- | --- | --- |
 | Request context (profile, memberships, org row, modules) | `lib/auth/request-context-bundle.ts`, React `cache()` | one render | the render | nothing | legacy reads, only once the cookie session is verified to be the header's user |
 | Service context (RLS client, role, permissions, MFA state) | `server/services/context.ts` `withContext`, React `cache()` | one render | the render | nothing | throws |
-| Items/Books default list, dataset, lookups, value, trend buckets | `server/loaders/inventory-list.ts`, `unstable_cache` | org + warehouse key + view | 60 s, then stale-while-revalidate | tag `inventory-list-<org>` (`expire: 0`), by every service stock write (guard: `inventory-list-invalidation.guard.test.ts`) and by the realtime watcher | throws, nothing cached; the page takes the live path |
-| New-order catalog | `server/loaders/orders-new-catalog.ts`, `unstable_cache` | org + warehouse + scope key | 60 s, SWR | `orders-new-v2-catalog` | throws, nothing cached |
+| Items/Books default list, dataset, lookups, value, trend buckets | `server/loaders/inventory-list.ts`, `unstable_cache` | org + warehouse key + view | 60 s, then stale-while-revalidate | tag `inventory-list-<org>` (`expire: 0`), by every service stock write (guard: `inventory-list-invalidation.guard.test.ts`) and by the realtime watcher of a manager-or-above tab with `items:read` open on Items or Books (the session's organization; every other tab only re-renders, with `refresh()`) | throws, nothing cached; the page takes the live path |
+| New-order catalog | `server/loaders/orders-new-catalog.ts`, `unstable_cache` | org + warehouse + scope key | 60 s, SWR | `orders-new-v2-catalog:<org>:<warehouse>` (`expire: 0`) by an order write, for the order's warehouse; `orders-new-v2-catalog:<org>` by a grouping write or an order write with no row in hand (`expire: 0`) and by a category grant change (`'max'`); Show or Hide as in `order-catalog-visibility.ts`. The global `orders-new-v2-catalog` stays on the entries; nothing expires it | throws, nothing cached |
 | Catalog scope key | `resolveCatalogScopeKey`, computed per request from the same SQL helpers `inventory_items_select` uses, as the caller | not cached | per request | n/a | throws: the storefront fails closed |
 | Signed photo URLs | `server/services/item-images.ts`, per-path `unstable_cache` + 1 h instance memo | storage path | 25 days (URL valid 30) | never | nothing cached; the photo's own fallback shows |
 | Client router cache | Next, `staleTimes: { dynamic: 90, static: 180 }` | tab, URL, segment | visited pages 90 s; prefetched loading shells 180 s | any Server Action that revalidated (purges it and re-prefetches visible links); sign-in and sign-out | n/a |
@@ -48,7 +48,10 @@ the render arrives, but never earlier than 300 ms after the skeleton appeared
 cache at commit, in the service. The saving tab's action response carries the
 re-rendered page (no `router.refresh()` after it). Other tabs get one refresh
 per database transaction (the realtime watcher merges the events of one
-commit). The notification bell re-renders only the Notifications page. Hidden
+commit): the watcher's action re-renders the tab, and expires the list cache
+only for a manager's Items or Books tab. Place an Order tabs refresh 1 to 4 s
+later with `router.refresh()` instead, never the action; a tab that leaves
+Place an Order during that wait takes its new page's action. The notification bell re-renders only the Notifications page. Hidden
 tabs do no server work and refresh once when visible again. A permission change
 refreshes through `PermissionsRealtime`; "sign out this device" signs a web
 tab out live, once GoTrue confirms the session is gone.

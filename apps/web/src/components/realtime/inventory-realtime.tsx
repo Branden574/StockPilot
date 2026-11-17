@@ -191,7 +191,9 @@ function visibilityRefreshWaits(pathname: string | null | undefined): boolean {
 // waits, never the action. The action expired the Items list cache, which this
 // page never reads, and its response re-sent the whole catalog at once from
 // every open storefront tab. The wait spreads the tabs out, so when a write
-// expired the catalog one tab rebuilds it and the others read that entry.
+// expired the catalog one tab rebuilds it and the others read that entry. If
+// the tab has left Place an Order by the time the refresh starts, the waiting
+// ordinary event takes the new page's own path (the action), never dropped.
 
 /** Whether an ordinary event on this page is a delayed router.refresh()
  *  instead of the action (the storefront). */
@@ -359,6 +361,15 @@ export function InventoryRealtime({
       //     plain router.refresh(): no Items list cache expiry for a change
       //     that page does not show.
       let needsAction = false;
+      //   ordinaryWaiting: an ordinary event on Place an Order is waiting for
+      //     the delayed refresh (ordinaryEventWaits). Kept apart from the
+      //     visibility-only events because every page shows stock: if the tab
+      //     has left Place an Order when the refresh starts, the event is not
+      //     dropped (visibilityEventRule would drop it) but takes the current
+      //     page's own path, the action. Otherwise a page restored from the
+      //     client router cache (staleTimes.dynamic, next.config.ts) would
+      //     keep showing the stock from before the change.
+      let ordinaryWaiting = false;
       //   waitTimer: the storefront's delayed visibility refresh (see
       //     visibilityEventConcernsTab). One at a time; a refresh that starts
       //     before it fires reads everything it was waiting for, so it is
@@ -403,7 +414,10 @@ export function InventoryRealtime({
           clearTimeout(waitTimer);
           waitTimer = null;
         }
-        const useAction = needsAction;
+        const path = pathnameRef.current;
+        const ordinary = ordinaryWaiting;
+        ordinaryWaiting = false;
+        const useAction = needsAction || (ordinary && !ordinaryEventWaits(path));
         needsAction = false;
         lastRefreshRef.current = Date.now();
         for (const commit of seenSinceStart) {
@@ -414,9 +428,11 @@ export function InventoryRealtime({
         }
         seenSinceStart.clear();
         if (!useAction) {
-          // Only visibility-only events are waiting: re-render an ordering
-          // page; a page navigated away from in the meantime drops them.
-          if (visibilityEventRule(pathnameRef.current) === 'refresh') router.refresh();
+          // Only visibility-only events, or ordinary events on a tab still on
+          // Place an Order, are waiting: re-render an ordering page. A page
+          // navigated away from in the meantime drops visibility-only events
+          // (no other page shows them); an ordinary one took the action above.
+          if (ordinary || visibilityEventRule(path) === 'refresh') router.refresh();
           return;
         }
         inFlight = true;
@@ -426,7 +442,7 @@ export function InventoryRealtime({
         // The race continues exactly once, so an abandoned action's late
         // answer resolves a promise nobody awaits and cannot touch the lock.
         const revalidated = await Promise.race([
-          revalidateInventoryViewAction(inventoryListViewFor(pathnameRef.current)).then(
+          revalidateInventoryViewAction(inventoryListViewFor(path)).then(
             (r) => r === true,
             // A redirect (the session ended) counts as handled: the router is
             // already navigating, so no refresh is started under it.
@@ -508,7 +524,9 @@ export function InventoryRealtime({
         if (!visibilityOnly) {
           if (ordinaryEventWaits(path)) {
             // Place an Order: the delayed router.refresh(), never the action
-            // (see ORDINARY EVENTS ON PLACE AN ORDER).
+            // (see ORDINARY EVENTS ON PLACE AN ORDER), unless the tab has left
+            // the page when it fires (see ordinaryWaiting).
+            ordinaryWaiting = true;
             nudgeLater();
             return;
           }

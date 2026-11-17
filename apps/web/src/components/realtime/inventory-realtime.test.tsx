@@ -847,6 +847,126 @@ describe('InventoryRealtime and visibility-only events', () => {
   });
 });
 
+// An ordinary event on Place an Order waits 1 to 4 s for its refresh. A tab
+// that leaves the page in that window must not drop it: the page it lands on
+// may be restored from the client router cache (staleTimes.dynamic) and would
+// keep the stock from before the change. It takes the new page's own path.
+describe('InventoryRealtime: leaving Place an Order while a refresh waits', () => {
+  const ORDINARY = (commit: string) => ({
+    ...HIDE(),
+    commit_timestamp: commit,
+    new: {
+      id: 'i-1',
+      updated_at: '2026-10-26T16:00:00Z',
+      order_catalog_visibility_changed_at: null,
+    },
+  });
+
+  async function mountAt(path: string) {
+    h.pathname.value = path;
+    const view = render(<InventoryRealtime organizationId="org-1" />);
+    await waitFor(() => expect(h.handlers.length).toBe(5));
+    return {
+      onItem: h.handlers[0]!,
+      navigate: (to: string) => {
+        h.pathname.value = to;
+        view.rerender(<InventoryRealtime organizationId="org-1" />);
+      },
+    };
+  }
+
+  it('an ordinary event, then Back to Items: the action runs for Items when the wait ends', async () => {
+    const { onItem, navigate } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    onItem(ORDINARY('n-1'));
+    await vi.advanceTimersByTimeAsync(1000);
+    await act(async () => navigate('/dashboard/inventory'));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).toHaveBeenCalledWith('items');
+    expect(h.refresh).not.toHaveBeenCalled();
+  });
+
+  it('to any other page: the action, which only re-renders it there', async () => {
+    const { onItem, navigate } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    onItem(ORDINARY('n-2'));
+    await act(async () => navigate('/dashboard/orders'));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).toHaveBeenCalledWith(null);
+    expect(h.refresh).not.toHaveBeenCalled();
+  });
+
+  it('to Manage order items (an ordering page that does not wait): the action too', async () => {
+    const { onItem, navigate } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    onItem(ORDINARY('n-3'));
+    await act(async () => navigate('/dashboard/orders/manage-items'));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
+    expect(h.refresh).not.toHaveBeenCalled();
+  });
+
+  it('a visibility-only and an ordinary event waiting together, then Items: one action, nothing dropped', async () => {
+    const { onItem, navigate } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    onItem(HIDE({ commit_timestamp: 'p-1' }));
+    onItem(ORDINARY('p-2'));
+    await act(async () => navigate('/dashboard/inventory'));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).toHaveBeenCalledWith('items');
+    expect(h.refresh).not.toHaveBeenCalled();
+    // Both commits were read by that refresh: their echoes add nothing.
+    onItem(HIDE({ commit_timestamp: 'p-1' }));
+    onItem(ORDINARY('p-2'));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('both waiting and the tab stays on Place an Order: one delayed router.refresh(), no action', async () => {
+    const { onItem } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    onItem(HIDE({ commit_timestamp: 's-1' }));
+    onItem(ORDINARY('s-2'));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).not.toHaveBeenCalled();
+  });
+
+  it('only a visibility-only event waiting, then Items: still dropped (no other page shows it)', async () => {
+    const { onItem, navigate } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    onItem(HIDE({ commit_timestamp: 'v-1' }));
+    await act(async () => navigate('/dashboard/inventory'));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.revalidate).not.toHaveBeenCalled();
+    expect(h.refresh).not.toHaveBeenCalled();
+  });
+
+  it('hidden on Place an Order, then shown on Items: the one refresh on return is the action', async () => {
+    const { onItem, navigate } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    setVisibility('hidden');
+    onItem(ORDINARY('h-1'));
+    await act(async () => navigate('/dashboard/inventory'));
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(h.revalidate).not.toHaveBeenCalled();
+    setVisibility('visible');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.revalidate).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).toHaveBeenCalledWith('items');
+    expect(h.refresh).not.toHaveBeenCalled();
+  });
+});
+
 // The action expires the shared list caches only for a tab on Items or Books
 // (and only for a caller who reads them, which the server decides). The tab
 // says which list it shows; nothing else.
