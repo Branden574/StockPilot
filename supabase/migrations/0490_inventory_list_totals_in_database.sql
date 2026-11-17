@@ -34,7 +34,17 @@
 --    the function is created, so no caller's search_path ever applies (what a
 --    pinned search_path is for elsewhere); security_invariants allowlist N
 --    holds it to that shape (invoker, immutable, no SET, depends on no
---    function, operator or whole table).
+--    function, operator or other table) and to this exact body: any later
+--    CREATE OR REPLACE fails that test until a reviewer reads the new body
+--    and records its md5 there.
+--    The SQL-standard body records a dependency on the two columns it reads,
+--    so a later ALTER TABLE that changes the type of quantity_on_hand or
+--    reorder_point is refused ("cannot alter type of a column used by a
+--    function or procedure"; the trigger trg_inventory_items_low_stock
+--    already refuses it for the same two columns), and dropping either needs
+--    CASCADE: such a migration must drop is_low_stock (and that trigger),
+--    change the column, recreate both with the function's grants, and reload
+--    PostgREST's schema cache.
 --
 -- 2. public.inventory_list_value(p_organization_id uuid, p_filters jsonb)
 --    -> numeric

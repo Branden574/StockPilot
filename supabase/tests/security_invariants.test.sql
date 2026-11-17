@@ -511,29 +511,49 @@ insert into _sec_inv_flag_setter_allow (flag, fn, why) values
 -- inventory record's 1536-dimension embedding, about 6 KB) on every row the
 -- filter judges. An entry here is exempt from INV-27 (no search_path pin) and
 -- from INV-27b's refusal of an SQL-standard body, only while all of these
--- hold (the audit view below, read by INV-27 and INV-27b; INV-28c plants one
--- inside and one outside them):
+-- hold (the audit view below, read by INV-27 and INV-27b; INV-28c plants
+-- probes inside and outside them):
+--   * its body is exactly the body a reviewer read: the md5 of
+--     pg_get_function_sqlbody (the stored body, deparsed) equals body_md5.
+--     This is the term that keeps the exemption narrow. The other terms
+--     below cannot tell what a body does: built-in functions are pinned
+--     objects and record no dependency, including those that run SQL text
+--     resolved with the caller's search_path at call time (query_to_xml,
+--     ts_stat, to_regclass('name')) and those with side effects
+--     (set_config, advisory locks), and a subquery over a table records
+--     only column dependencies, so a scan of other rows of the argument's
+--     own table records nothing the terms below refuse. Any CREATE OR
+--     REPLACE of an entry therefore fails INV-27 until a reviewer reads the
+--     new body (pg_get_function_sqlbody) and records its md5 here. A
+--     Postgres release that deparses the body differently fails the same
+--     way (closed), and is fixed the same way;
 --   * SECURITY INVOKER, LANGUAGE sql, IMMUTABLE, returns boolean;
---   * an SQL-standard body (RETURN or BEGIN ATOMIC): Postgres parses it and
---     binds every name in it when the function is created, so the caller's
---     search_path never applies, which is what the pin is for;
+--   * an SQL-standard body (RETURN or BEGIN ATOMIC): Postgres stores it
+--     parsed, with every operator, function and type it names bound when the
+--     function is created, so the caller's search_path cannot rebind them
+--     (text a built-in runs at call time is another matter; see above);
 --   * no SET clause at all;
 --   * its recorded dependencies name no function, no operator, no whole
 --     relation and no column of any relation but the row types it is handed
---     as arguments (a column read from a scanned table is recorded as that
---     column, so a query over another table is refused too). So it reads no
---     table and calls no first-party code (built-in operators and functions
---     are pinned objects and record no dependency), and the text censuses,
---     which cannot read such a body, have nothing in it to find.
--- Keyed on the full signature, as allowlist J is.
-create temporary table _sec_inv_inline_predicate_allow (sig text primary key, why text not null);
-insert into _sec_inv_inline_predicate_allow (sig, why) values
-  ('public.is_low_stock(public.inventory_items)',
+--     as arguments: a first-party function or operator it calls, a
+--     shadowing operator present when it was created, or a column read
+--     from another table is refused even before the body is compared.
+-- Keyed on the full signature, as allowlist J is, and on the body.
+create temporary table _sec_inv_inline_predicate_allow (
+  sig text primary key,
+  body_md5 text not null,
+  why text not null
+);
+-- is_low_stock's body as Postgres stores it (pg_get_function_sqlbody):
+--   RETURN (COALESCE(((p_item).quantity_on_hand <= (0)::numeric), false) OR COALESCE((((p_item).reorder_point > (0)::numeric) AND (COALESCE((p_item).quantity_on_hand, (0)::numeric) <= (p_item).reorder_point)), false))
+insert into _sec_inv_inline_predicate_allow (sig, body_md5, why) values
+  ('public.is_low_stock(public.inventory_items)', '7676dccbb78ed418b35e7793a0a17a0b',
    'the inventory list''s low-stock computed field (0490): PostgREST filters is_low_stock=eq.true on the page, its count and the plan scan, and inventory_list_value calls it per row; inlined, it is the bare comparison of two numeric columns and never reads the row''s embedding');
 
 create temporary view _sec_inv_inline_predicate_audit as
   select a.sig, p.oid,
-         coalesce(not p.prosecdef
+         coalesce(md5(pg_get_function_sqlbody(p.oid)) = a.body_md5
+                  and not p.prosecdef
                   and p.prolang = (select l.oid from pg_language l where l.lanname = 'sql')
                   and p.provolatile = 'i'
                   and p.prorettype = 'boolean'::regtype
@@ -1434,7 +1454,7 @@ create temporary view _sec_inv_search_path_violations as
      and fp.oid not in (select j.oid from j where j.oid is not null)
      and fp.oid not in (select i.oid from _sec_inv_inline_predicate_audit i where i.in_terms)
   union all
-  select 'allowlist-N entry missing or outside its terms (see section N): ' || i.sig, i.sig
+  select 'allowlist-N entry missing, outside its terms or with a changed body (see section N): ' || i.sig, i.sig
     from _sec_inv_inline_predicate_audit i
    where not i.in_terms
   union all
@@ -1678,39 +1698,88 @@ drop function ledger._sec_inv_probe_atomic();
 drop function _sec_inv_probe_schema.f();
 drop schema _sec_inv_probe_schema;
 
--- INV-28c. MUTATION CONTROL for allowlist N (0490). Two unpinned ledger
--- predicates with SQL-standard bodies, both listed in N: one inside its terms
--- (compares its argument with a constant) and one outside them (reads a
--- column of a table it is not handed). The first must
--- be named nowhere; the second must be named by N's audit, as unpinned and as
--- an SQL-standard body. A third row names no function at all. Removed
--- straight after.
+-- INV-28c. MUTATION CONTROL for allowlist N (0490). Unpinned ledger
+-- predicates with SQL-standard bodies, each listed in N with the md5 of the
+-- body it had when listed:
+--   * inline_ok compares its argument with a constant and is unchanged: it
+--     must be named nowhere;
+--   * inline_reads reads a column of a table it is not handed, and is listed
+--     with that body's own md5: the dependency terms must name it;
+--   * inline_own, inline_setcfg and inline_xml are listed with an innocent
+--     body and then replaced (CREATE OR REPLACE), as a later edit would be,
+--     by one that reads other rows of the argument's own table, one that
+--     calls set_config, and one that runs SQL text through query_to_xml.
+--     Their dependencies pass every other term, so only the body md5 can
+--     name them, and it must;
+--   * a row naming no function at all must be named.
+-- Each named one is named by N's audit, as unpinned and as an SQL-standard
+-- body. Removed straight after.
 create function ledger._sec_inv_probe_inline_ok(p_n integer) returns boolean
   language sql immutable
   return p_n > 0;
 create function ledger._sec_inv_probe_inline_reads(p_n integer) returns boolean
   language sql immutable
   return exists (select 1 from public.organizations o where p_n > 0 and o.id is not null);
-revoke all on function ledger._sec_inv_probe_inline_ok(integer), ledger._sec_inv_probe_inline_reads(integer)
+create function ledger._sec_inv_probe_inline_own(p_item public.inventory_items) returns boolean
+  language sql immutable
+  return p_item.reorder_point > 0;
+create function ledger._sec_inv_probe_inline_setcfg(p_n integer) returns boolean
+  language sql immutable
+  return p_n > 0;
+create function ledger._sec_inv_probe_inline_xml(p_n integer) returns boolean
+  language sql immutable
+  return p_n > 0;
+revoke all on function ledger._sec_inv_probe_inline_ok(integer), ledger._sec_inv_probe_inline_reads(integer),
+  ledger._sec_inv_probe_inline_own(public.inventory_items), ledger._sec_inv_probe_inline_setcfg(integer),
+  ledger._sec_inv_probe_inline_xml(integer)
   from public, anon;
-insert into _sec_inv_inline_predicate_allow (sig, why) values
-  ('ledger._sec_inv_probe_inline_ok(integer)',    'control probe: within the terms; deleted below'),
-  ('ledger._sec_inv_probe_inline_reads(integer)', 'control probe: reads a table; deleted below'),
-  ('ledger._sec_inv_probe_inline_absent()',       'control probe: no such function; deleted below');
+insert into _sec_inv_inline_predicate_allow (sig, body_md5, why)
+select v.sig, md5(pg_get_function_sqlbody(to_regprocedure(v.sig))), v.why
+  from (values
+    ('ledger._sec_inv_probe_inline_ok(integer)',                     'control probe: within the terms; deleted below'),
+    ('ledger._sec_inv_probe_inline_reads(integer)',                  'control probe: reads a table; deleted below'),
+    ('ledger._sec_inv_probe_inline_own(public.inventory_items)',     'control probe: replaced below; deleted below'),
+    ('ledger._sec_inv_probe_inline_setcfg(integer)',                 'control probe: replaced below; deleted below'),
+    ('ledger._sec_inv_probe_inline_xml(integer)',                    'control probe: replaced below; deleted below')
+  ) v(sig, why);
+insert into _sec_inv_inline_predicate_allow (sig, body_md5, why) values
+  ('ledger._sec_inv_probe_inline_absent()', md5(''), 'control probe: no such function; deleted below');
+create or replace function ledger._sec_inv_probe_inline_own(p_item public.inventory_items) returns boolean
+  language sql immutable
+  return exists (select 1 from public.inventory_items s
+                  where s.organization_id = p_item.organization_id and s.reorder_point > 0);
+create or replace function ledger._sec_inv_probe_inline_setcfg(p_n integer) returns boolean
+  language sql immutable
+  return set_config('stockpilot.idempotency_write', p_n::text, true) is not null;
+create or replace function ledger._sec_inv_probe_inline_xml(p_n integer) returns boolean
+  language sql immutable
+  return query_to_xml('select 1', false, false, '') is not null and p_n > 0;
 select is(
   (select coalesce(string_agg(q.x, ' | ' order by q.x collate "C"), '') from (
      select v.x from _sec_inv_search_path_violations v where v.sig like '%\_sec\_inv\_probe\_inline%'
      union all
      select c.x from _sec_inv_first_party_census c where c.x like '%\_sec\_inv\_probe\_inline%') q),
-  'allowlist-N entry missing or outside its terms (see section N): ledger._sec_inv_probe_inline_absent() | '
-  'allowlist-N entry missing or outside its terms (see section N): ledger._sec_inv_probe_inline_reads(integer) | '
+  'allowlist-N entry missing, outside its terms or with a changed body (see section N): ledger._sec_inv_probe_inline_absent() | '
+  'allowlist-N entry missing, outside its terms or with a changed body (see section N): ledger._sec_inv_probe_inline_own(public.inventory_items) | '
+  'allowlist-N entry missing, outside its terms or with a changed body (see section N): ledger._sec_inv_probe_inline_reads(integer) | '
+  'allowlist-N entry missing, outside its terms or with a changed body (see section N): ledger._sec_inv_probe_inline_setcfg(integer) | '
+  'allowlist-N entry missing, outside its terms or with a changed body (see section N): ledger._sec_inv_probe_inline_xml(integer) | '
+  'sql-standard body: ledger._sec_inv_probe_inline_own(inventory_items) | '
   'sql-standard body: ledger._sec_inv_probe_inline_reads(integer) | '
-  'unpinned: ledger._sec_inv_probe_inline_reads(integer)',
-  'INV-28c control: allowlist N exempts an unpinned SQL-standard predicate only within its terms (no other table, no function and no operator among its dependencies), and names a missing entry'
+  'sql-standard body: ledger._sec_inv_probe_inline_setcfg(integer) | '
+  'sql-standard body: ledger._sec_inv_probe_inline_xml(integer) | '
+  'unpinned: ledger._sec_inv_probe_inline_own(inventory_items) | '
+  'unpinned: ledger._sec_inv_probe_inline_reads(integer) | '
+  'unpinned: ledger._sec_inv_probe_inline_setcfg(integer) | '
+  'unpinned: ledger._sec_inv_probe_inline_xml(integer)',
+  'INV-28c control: allowlist N exempts an unpinned SQL-standard predicate only with the body a reviewer listed (a later read of its own table, set_config or query_to_xml is named) and within its other terms (no other table, no function and no operator among its dependencies), and names a missing entry'
 );
 delete from _sec_inv_inline_predicate_allow where why like 'control probe:%';
 drop function ledger._sec_inv_probe_inline_ok(integer);
 drop function ledger._sec_inv_probe_inline_reads(integer);
+drop function ledger._sec_inv_probe_inline_own(public.inventory_items);
+drop function ledger._sec_inv_probe_inline_setcfg(integer);
+drop function ledger._sec_inv_probe_inline_xml(integer);
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
