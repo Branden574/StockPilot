@@ -38,7 +38,10 @@ vi.mock('@/lib/supabase/server', () => ({
 
 import { unstable_cache } from 'next/cache';
 
+import { catalogEntryTags } from '@/test/orders-catalog-tags';
+
 import {
+  CATALOG_ENTRY_WARN_CHARS,
   CATALOG_ROW_CEILING,
   FULL_CATALOG_SCOPE_KEY,
   loadCatalogBundle,
@@ -630,6 +633,86 @@ describe('loadCatalogItems — every orderable item in the warehouse', () => {
     expect(admin.itemQueries).toHaveLength(CATALOG_ROW_CEILING / 1000);
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('10000-row ceiling'));
     errorSpy.mockRestore();
+  });
+
+  // Next stores no unstable_cache entry over 2 MB (no custom cache handler),
+  // so past it every visit reads the whole catalog again. The loader says so
+  // first, measured as Next measures the entry (the value JSON-encoded twice).
+  describe('the entry size warning', () => {
+    const WH_BIG = '00000000-0000-4000-8000-0000000000b7';
+    const WH_SMALL = '00000000-0000-4000-8000-0000000000b8';
+    const rowsAt = (warehouse: string, nameChars: number) =>
+      Array.from({ length: 1000 }, (_, i) => ({
+        ...item(`i-${String(i).padStart(4, '0')}`, warehouse, null, CAT_X),
+        name: `${'n'.repeat(nameChars)}${String(i).padStart(4, '0')}`,
+      }));
+    const measured = (items: unknown) => JSON.stringify(JSON.stringify(items)).length;
+    const sizeWarnings = (spy: { mock: { calls: unknown[][] } }) =>
+      spy.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('catalog entry'));
+    const sizeReports = () =>
+      reportError.mock.calls.filter(
+        (c) => (c[1] as { tag?: string } | undefined)?.tag === 'orders_new.catalog_entry_size',
+      );
+
+    it('past 1.5 MB: warns with the warehouse, rows and size, and reports it once an hour per warehouse', async () => {
+      createAdminClientMock.mockReturnValue(makeFilteringAdmin(rowsAt(WH_BIG, 1200)).client);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const items = await loadCatalogItems(viewer('owner'), WH_BIG);
+
+      const size = measured(items);
+      expect(size).toBeGreaterThan(CATALOG_ENTRY_WARN_CHARS);
+      expect(size).toBeLessThan(CATALOG_ENTRY_WARN_CHARS * 1.05);
+      expect(items).toHaveLength(1000);
+      const warnings = sizeWarnings(warn);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain(WH_BIG);
+      expect(warnings[0]).toContain('1000 rows');
+      expect(warnings[0]).toContain(`${size} chars`);
+      expect(sizeReports()).toEqual([
+        [
+          expect.any(Error),
+          {
+            tag: 'orders_new.catalog_entry_size',
+            level: 'warning',
+            organizationId: ORG,
+            extra: { warehouseId: WH_BIG, rows: 1000, chars: size },
+          },
+        ],
+      ]);
+
+      // The next recompute warns again, but is not reported again within the hour.
+      await loadCatalogItems(viewer('owner'), WH_BIG);
+      expect(sizeWarnings(warn)).toHaveLength(2);
+      expect(sizeReports()).toHaveLength(1);
+      warn.mockRestore();
+    });
+
+    it('just under 1.5 MB: no warning and no report', async () => {
+      createAdminClientMock.mockReturnValue(makeFilteringAdmin(rowsAt(WH_SMALL, 1150)).client);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const items = await loadCatalogItems(viewer('owner'), WH_SMALL);
+
+      const size = measured(items);
+      expect(size).toBeLessThanOrEqual(CATALOG_ENTRY_WARN_CHARS);
+      expect(size).toBeGreaterThan(CATALOG_ENTRY_WARN_CHARS * 0.95);
+      expect(sizeWarnings(warn)).toEqual([]);
+      expect(sizeReports()).toEqual([]);
+      warn.mockRestore();
+    });
+
+    it('is measured in the uncached loader body: the cached wrapper is the pinned one, unchanged', async () => {
+      createAdminClientMock.mockReturnValue(makeFilteringAdmin(rowsAt(WH_BIG, 1200)).client);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await loadCatalogItems(viewer('owner'), WH_BIG);
+      // The callback unstable_cache wraps calls the body, which warns.
+      const call = vi.mocked(unstable_cache).mock.calls.at(-1)!;
+      warn.mockClear();
+      await (call[0] as (...a: string[]) => Promise<unknown>)(ORG, WH_BIG, FULL_CATALOG_SCOPE_KEY);
+      expect(sizeWarnings(warn)).toHaveLength(1);
+      warn.mockRestore();
+    });
   });
 
   it('a failed second page rejects the catalog (never a partial one cached as whole)', async () => {
@@ -1849,6 +1932,8 @@ describe('loadCatalogItems: an item hidden after a cached read is never offered'
       // for exactly the warehouses it touched.
       tags: ['orders-new-v2-catalog', `orders-new-v2-catalog:${ORG}`, `orders-new-v2-catalog:${ORG}:${WH}`],
     });
+    // The list the write-site tests check their expiries against.
+    expect((call[2] as { tags: string[] }).tags).toEqual(catalogEntryTags(ORG, WH));
     // The wrapped callback answers { rows, readStartedAt }.
     const value = (await (call[0] as (...a: string[]) => Promise<unknown>)(
       ORG,

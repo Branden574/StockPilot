@@ -1825,6 +1825,10 @@ WEB_TESTS=(
   src/server/services/order-storefront.test.ts
   src/server/loaders/orders-phone-catalog.test.ts
   src/server/loaders/orders-new-catalog.test.ts
+  # The realtime watcher's Server Action expires the Items/Books list caches
+  # of the SESSION's organization only (never one the client names), and only
+  # for a caller whose pages read them (manager and above with items:read).
+  src/server/actions/revalidate-inventory-view.test.ts
   src/server/loaders/orders-kits.test.ts
   src/server/loaders/orders-frequently-ordered.test.ts
 
