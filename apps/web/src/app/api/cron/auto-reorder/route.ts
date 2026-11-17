@@ -11,6 +11,7 @@ import {
   type AutoReorderSettings,
 } from '@/server/services/auto-reorder';
 import { createNotification } from '@/server/services/notifications';
+import { DAILY_CLAIM_HOLD_MS, sweepOrganizations } from '@/server/services/lib/cron-sweep';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import type { ServiceContext } from '@/server/services/context';
@@ -19,7 +20,18 @@ import { planAllowsAutoReorder, type ModuleId, type OrgBillingState } from '@sto
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+/**
+ * 300, up from 60: the job runs once a day, so an organization a run does not
+ * reach waits a whole day for its reorder. 300 is what the other daily
+ * per-organization jobs use (daily-briefing, restore-points), and the soft
+ * deadline below leaves the organization in flight a minute to finish.
+ */
+export const maxDuration = 300;
+
+/** Stop STARTING organizations after this long (see maxDuration). */
+const RUN_DEADLINE_MS = 240_000;
+/** The job's cadence: the slot of the fallback order (rotateByClock). */
+const DAY_MS = 24 * 60 * 60_000;
 
 function secretsEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
@@ -36,6 +48,11 @@ function secretsEqual(a: string, b: string): boolean {
  *
  * CRON_SECRET-gated like the other crons. FAIL-OPEN per org: one org's error is
  * reported and skipped, never blocking the rest.
+ *
+ * Order: the organizations this job reached longest ago first
+ * (cron_sweep_attempts, job 'auto_reorder'), so a run cut by its deadline
+ * leaves different organizations each day, and those go first the next day.
+ * One log line per run says how many it left.
  */
 export async function GET(req: Request) {
   if (!env.CRON_SECRET) {
@@ -46,6 +63,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
+  const startedAt = Date.now();
   const admin = createAdminClient();
 
   try {
@@ -76,36 +94,83 @@ export async function GET(req: Request) {
     let orgsProcessed = 0;
     let posCreated = 0;
     let posSent = 0;
+    const settingsByOrg = new Map(candidates.map((c) => [c.orgId, c.settings]));
 
-    for (const { orgId, settings } of candidates) {
-      try {
-        // Tier gate (Pro+ on the EFFECTIVE plan).
-        const { data: orgRow } = await admin
-          .from('organizations')
-          .select(
-            'plan, access_tier, billing_arrangement, stripe_subscription_id, trial_ends_at, trial_tier',
-          )
-          .eq('id', orgId)
-          .maybeSingle();
-        if (!orgRow || !planAllowsAutoReorder(orgRow as OrgBillingState)) continue;
+    // Least recently reached first, each organization claimed as it starts
+    // (sweepOrganizations, job 'auto_reorder'): a second delivery of this
+    // tick, or a manual run the same day, skips every organization this run
+    // has started. The database's own re-check under the per-organization
+    // reorder lock (createReorderDraft) still stands behind it.
+    const sweep = await sweepOrganizations(
+      admin,
+      {
+        job: 'auto_reorder',
+        tag: 'cron.auto-reorder',
+        orgIds: candidates.map((c) => c.orgId),
+        deadlineAt: startedAt + RUN_DEADLINE_MS,
+        slotMs: DAY_MS,
+        holdMs: DAILY_CLAIM_HOLD_MS,
+      },
+      async (orgId): Promise<{ result: 'success' | 'failure'; value: null }> => {
+        const settings = settingsByOrg.get(orgId)!;
+        try {
+          // Tier gate (Pro+ on the EFFECTIVE plan).
+          const { data: orgRow } = await admin
+            .from('organizations')
+            .select(
+              'plan, access_tier, billing_arrangement, stripe_subscription_id, trial_ends_at, trial_tier',
+            )
+            .eq('id', orgId)
+            .maybeSingle();
+          if (!orgRow || !planAllowsAutoReorder(orgRow as OrgBillingState)) {
+            return { result: 'success', value: null };
+          }
 
-        const ctx = await buildSystemContext(admin, orgId);
-        if (!ctx) continue; // no owner/admin to attribute to → skip safely
+          const ctx = await buildSystemContext(admin, orgId);
+          // no owner/admin to attribute to → skip safely
+          if (!ctx) return { result: 'failure', value: null };
 
-        const summary = await new PurchaseOrdersService(ctx).runAutoReorder(settings);
-        orgsProcessed++;
-        posCreated += summary.created;
-        posSent += summary.sent;
+          const summary = await new PurchaseOrdersService(ctx).runAutoReorder(settings);
+          orgsProcessed++;
+          posCreated += summary.created;
+          posSent += summary.sent;
 
-        if (summary.created > 0) {
-          await notifyAdmins(admin, orgId, summary);
+          if (summary.created > 0) {
+            await notifyAdmins(admin, orgId, summary);
+          }
+          return { result: 'success', value: null };
+        } catch (e) {
+          void reportError(e, { tag: 'cron.auto-reorder.org', extra: { orgId } });
+          return { result: 'failure', value: null };
         }
-      } catch (e) {
-        void reportError(e, { tag: 'cron.auto-reorder.org', extra: { orgId } });
-      }
-    }
+      },
+    );
 
-    return NextResponse.json({ orgsProcessed, posCreated, posSent, candidates: candidates.length });
+    // One line per run, counts only (no org ids).
+    console.info(
+      '[cron.auto-reorder]',
+      JSON.stringify({
+        candidates: candidates.length,
+        orgsProcessed,
+        posCreated,
+        posSent,
+        failed: sweep.failed,
+        heldByAnotherRun: sweep.heldByAnotherRun,
+        failingRepeatedly: sweep.failingRepeatedly,
+        orderedBy: sweep.orderedBy,
+        leftForNextRun: sweep.leftForNextRun,
+        ms: Date.now() - startedAt,
+      }),
+    );
+
+    return NextResponse.json({
+      orgsProcessed,
+      posCreated,
+      posSent,
+      candidates: candidates.length,
+      heldByAnotherRun: sweep.heldByAnotherRun,
+      leftForNextRun: sweep.leftForNextRun,
+    });
   } catch (err) {
     return internalErrorResponse(err, 'cron.auto-reorder');
   }

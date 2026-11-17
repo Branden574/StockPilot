@@ -65,6 +65,32 @@ describe('refreshBookPricesForOrg', () => {
     expect(client.fetchVolumeByIsbn).toHaveBeenCalledTimes(1);
     expect(client.fetchVolumeByIsbn).toHaveBeenCalledWith('9780306406157');
   });
+
+  it('stops at maxWritten (the scheduled share), apart from the read limit, and never asks again for an item already tried this run', async () => {
+    const items = ['i1', 'i2', 'i3', 'i4'].map((id) => ({
+      id,
+      barcode: '9780306406157',
+      last_priced_at: null,
+    }));
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: items, error: null },
+      'inventory_items.update': { data: null, error: null },
+      'item_price_observations.insert': { data: null, error: null },
+    });
+    const client = fakeClient(PRICED);
+    const tried = new Set(['i1']);
+
+    const res = await refreshBookPricesForOrg(stub.client, 'org-1', client, {
+      limit: 300,
+      maxWritten: 2,
+      tried,
+    });
+
+    expect(res.written).toBe(2);
+    expect(client.fetchVolumeByIsbn).toHaveBeenCalledTimes(2);
+    expect([...tried].sort()).toEqual(['i1', 'i2', 'i3']);
+    expect(stub.chainArgsAll.get('inventory_items.select')![0]).toContainEqual([300]);
+  });
 });
 
 describe('PriceTrackingService.fetchItemPrice', () => {

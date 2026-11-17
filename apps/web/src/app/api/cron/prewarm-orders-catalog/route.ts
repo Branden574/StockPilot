@@ -153,9 +153,9 @@ export async function GET(req: Request) {
         for (const r of page) activeOrgIds.push(r.id);
         if (page.length < ORG_PAGE_SIZE) break;
       }
-      // Ordering only: if this read fails, the window is the first in id
-      // order (reported).
-      let lastWarmed = new Map<string, number>();
+      // Ordering only: if this read fails (reported), the window moves with
+      // the clock instead (planOrgSweep), never the same first ones by id.
+      let lastWarmed: Map<string, number> | null = null;
       try {
         lastWarmed = (await readCronAttempts(admin, 'prewarm')).lastAttempt;
       } catch (err) {
@@ -166,6 +166,7 @@ export async function GET(req: Request) {
         activeOrgIds,
         windowSize: ORG_SWEEP_WINDOW,
         lastWarmed,
+        now: Date.now(),
       });
       sweepOrgIds = plan.orgIds;
       windowOrgIds = new Set(plan.windowOrgIds);

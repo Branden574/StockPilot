@@ -97,12 +97,19 @@ const DEFAULT_LIMIT = 300;
  * then oldest), so catalogs larger than `limit` rotate fairly across runs.
  * Skips items priced within RECENT_MS, throttles, caps at `limit`, and stops
  * gracefully at `deadlineMs` so a platform hard-kill never silently drops orgs.
+ *
+ * `maxWritten` stops once that many observations are written (the scheduled
+ * job's share of its run), apart from `limit`, which bounds the read: books
+ * that cannot be priced stay at the head of the order (they get no stamp), so
+ * a small read window could be all of them. `tried` (the scheduled job's, per
+ * organization, kept across its rounds) skips the items already looked up in
+ * this run without asking Google again, and records each item looked up now.
  */
 export async function refreshBookPricesForOrg(
   supabase: { from: (t: string) => any },
   orgId: string,
   client: GoogleBooksClient,
-  opts: { limit?: number; deadlineMs?: number } = {},
+  opts: { limit?: number; deadlineMs?: number; maxWritten?: number; tried?: Set<string> } = {},
 ): Promise<{ scanned: number; written: number; skipped: number }> {
   const limit = opts.limit ?? DEFAULT_LIMIT;
   const { data: items, error } = await supabase
@@ -124,11 +131,14 @@ export async function refreshBookPricesForOrg(
     // Graceful stop under the platform kill — better to return partial counts
     // than be hard-killed mid-loop with no result at all.
     if (opts.deadlineMs && Date.now() > opts.deadlineMs) break;
+    if (opts.maxWritten !== undefined && written >= opts.maxWritten) break;
+    if (opts.tried?.has(item.id)) continue;
     const priced = item.last_priced_at ? Date.now() - new Date(item.last_priced_at).getTime() : Infinity;
     if (priced < RECENT_MS || !isLikelyIsbn(item.barcode)) {
       skipped += 1;
       continue;
     }
+    opts.tried?.add(item.id);
     const ok = await recordBookObservation(supabase, orgId, item, client);
     if (ok) written += 1;
     else skipped += 1;

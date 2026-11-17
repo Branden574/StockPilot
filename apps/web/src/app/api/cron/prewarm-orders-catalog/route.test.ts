@@ -404,6 +404,37 @@ describe('GET /api/cron/prewarm-orders-catalog', () => {
     vi.useRealTimers();
   });
 
+  it('when the attempt records cannot be read: reported, and the window is not the first 48 by id on every run', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const fleet = Array.from({ length: 200 }, (_, i) => ({
+      id: `org-${String(i).padStart(3, '0')}`,
+      'organization_members.accepted_at': '2026-01-01T00:00:00Z',
+    }));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    const firstOfWindow: string[] = [];
+    for (let run = 0; run < 3; run += 1) {
+      vi.setSystemTime(Date.parse('2026-11-17T12:00:00.000Z') + run * 30 * 60_000);
+      adminClientHolder.client = makeSupabaseStub({
+        'organizations.select': servedLikePostgrest(fleet),
+        'warehouses.select': { data: [], error: null },
+        'cron_sweep_attempts.select': { data: null, error: { message: 'attempts read failed' } },
+      }).client;
+      prewarmInventorySpy.mockClear();
+      await GET(buildRequest('Bearer test-cron-secret'));
+      const calls = prewarmInventorySpy.mock.calls.map((c) => c[0]);
+      expect(calls.slice(0, 2)).toEqual([HOT_1, HOT_2]);
+      firstOfWindow.push(calls[2]!);
+    }
+    expect(new Set(firstOfWindow).size).toBe(3);
+    expect(firstOfWindow).not.toContain('org-000');
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'cron.prewarm-orders-catalog.attempts' }),
+    );
+    vi.useRealTimers();
+  });
+
   it('warms the phone photo map for each known-hot pair, and a failure does not stop the sweep', async () => {
     const stub = makeSupabaseStub({
       'organizations.select': { data: [{ id: HOT_1 }], error: null, count: 1 },

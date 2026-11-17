@@ -12,6 +12,7 @@ import {
   type AutoDeleteArchivedSettings,
 } from '@/server/services/archive-cleanup';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
+import { DAILY_CLAIM_HOLD_MS, sweepOrganizations } from '@/server/services/lib/cron-sweep';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import type { ServiceContext } from '@/server/services/context';
 
@@ -19,7 +20,18 @@ import type { ModuleId } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+/**
+ * 300, up from 60: the job runs once a day, so an organization a run does not
+ * reach waits a whole day. 300 is what the other daily per-organization jobs
+ * use (daily-briefing, restore-points), and the soft deadline below leaves the
+ * organization in flight a minute to finish.
+ */
+export const maxDuration = 300;
+
+/** Stop STARTING organizations after this long (see maxDuration). */
+const RUN_DEADLINE_MS = 240_000;
+/** The job's cadence: the slot of the fallback order (rotateByClock). */
+const DAY_MS = 24 * 60 * 60_000;
 
 function secretsEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
@@ -36,6 +48,13 @@ function secretsEqual(a: string, b: string): boolean {
  *
  * CRON_SECRET-gated like the other crons. FAIL-OPEN per org: one org's error is
  * reported and skipped, never blocking the rest.
+ *
+ * Order: the organizations this job reached longest ago first
+ * (cron_sweep_attempts, job 'auto_delete_archived'), so a run cut by its
+ * deadline leaves different organizations each day, and those go first the
+ * next day. Each organization is claimed as it starts: a second delivery of
+ * the tick skips it (the row-level guards of purgeExpiredArchivedItems stand
+ * behind that).
  */
 export async function GET(req: Request) {
   if (!env.CRON_SECRET) {
@@ -46,6 +65,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
+  const startedAt = Date.now();
   const admin = createAdminClient();
 
   try {
@@ -83,32 +103,48 @@ export async function GET(req: Request) {
     let itemsSkipped = 0;
     let orgsTruncated = 0; // hit the per-run cap → backlog drains next run
 
-    for (const { orgId, settings } of candidates) {
-      try {
-        const ctx = await buildSystemContext(admin, orgId);
-        if (!ctx) continue; // no owner/admin to attribute the deletions to → skip
-        const { deleted, truncated, skipped } = await purgeExpiredArchivedItems(
-          ctx,
-          settings.days,
-        );
-        orgsProcessed++;
-        itemsDeleted += deleted;
-        itemsSkipped += skipped;
-        // Soft-deleted items vanish from the cached Items/Books default views.
-        if (deleted > 0) revalidateInventoryList(orgId);
-        if (truncated) {
-          orgsTruncated++;
-          // Disclose the silent cap (recurring-bug-patterns rule) so a backlogged
-          // org is visible to operators rather than quietly under-deleting.
-          void reportError(new Error('archived-item purge hit per-run cap'), {
-            tag: 'cron.auto-delete-archived.truncated',
-            extra: { orgId, deleted },
-          });
+    const settingsByOrg = new Map(candidates.map((c) => [c.orgId, c.settings]));
+    const sweep = await sweepOrganizations(
+      admin,
+      {
+        job: 'auto_delete_archived',
+        tag: 'cron.auto-delete-archived',
+        orgIds: candidates.map((c) => c.orgId),
+        deadlineAt: startedAt + RUN_DEADLINE_MS,
+        slotMs: DAY_MS,
+        holdMs: DAILY_CLAIM_HOLD_MS,
+      },
+      async (orgId): Promise<{ result: 'success' | 'failure'; value: null }> => {
+        const settings = settingsByOrg.get(orgId)!;
+        try {
+          const ctx = await buildSystemContext(admin, orgId);
+          // no owner/admin to attribute the deletions to → skip
+          if (!ctx) return { result: 'failure', value: null };
+          const { deleted, truncated, skipped } = await purgeExpiredArchivedItems(
+            ctx,
+            settings.days,
+          );
+          orgsProcessed++;
+          itemsDeleted += deleted;
+          itemsSkipped += skipped;
+          // Soft-deleted items vanish from the cached Items/Books default views.
+          if (deleted > 0) revalidateInventoryList(orgId);
+          if (truncated) {
+            orgsTruncated++;
+            // Disclose the silent cap (recurring-bug-patterns rule) so a backlogged
+            // org is visible to operators rather than quietly under-deleting.
+            void reportError(new Error('archived-item purge hit per-run cap'), {
+              tag: 'cron.auto-delete-archived.truncated',
+              extra: { orgId, deleted },
+            });
+          }
+          return { result: 'success', value: null };
+        } catch (e) {
+          void reportError(e, { tag: 'cron.auto-delete-archived.org', extra: { orgId } });
+          return { result: 'failure', value: null };
         }
-      } catch (e) {
-        void reportError(e, { tag: 'cron.auto-delete-archived.org', extra: { orgId } });
-      }
-    }
+      },
+    );
 
     const summary = {
       orgsProcessed,
@@ -116,9 +152,20 @@ export async function GET(req: Request) {
       itemsSkipped,
       orgsTruncated,
       candidates: candidates.length,
+      heldByAnotherRun: sweep.heldByAnotherRun,
+      leftForNextRun: sweep.leftForNextRun,
     };
     // One line per run, counts only (no ids, names or org ids).
-    console.info('[cron.auto-delete-archived]', JSON.stringify(summary));
+    console.info(
+      '[cron.auto-delete-archived]',
+      JSON.stringify({
+        ...summary,
+        failed: sweep.failed,
+        failingRepeatedly: sweep.failingRepeatedly,
+        orderedBy: sweep.orderedBy,
+        ms: Date.now() - startedAt,
+      }),
+    );
     return NextResponse.json(summary);
   } catch (err) {
     return internalErrorResponse(err, 'cron.auto-delete-archived');

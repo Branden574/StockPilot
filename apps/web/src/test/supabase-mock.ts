@@ -246,7 +246,7 @@ function evaluateLogicTree(term: string, row: Record<string, unknown>): boolean 
     return cell === want;
   }
   if (cell === null) return false;
-  const c = compareLogicValue(cell, value, term);
+  const c = compareLogicValue(cell, value, term, op === 'eq' || op === 'neq');
   switch (op) {
     case 'eq':
       return c === 0;
@@ -265,19 +265,20 @@ function evaluateLogicTree(term: string, row: Record<string, unknown>): boolean 
 
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
 const NUMERIC = /^-?\d+(\.\d+)?$/;
-/** Ids and keys whose JS order is the database's: uuids and lower-case
- *  ASCII words (no case or accents for a collation to reorder). */
-const PLAIN_KEY = /^[0-9a-z-]+$/;
+/** A uuid: the one kind of text whose byte order is the database's order
+ *  (a uuid column compares the 128-bit value; a text column's collation may
+ *  ignore the hyphens, so other hyphenated text is not ordered here). */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /**
  * Compares a row's value with a logic-tree value the way Postgres would for
  * the column's type, or throws when it cannot tell: a number numerically, a
- * timestamp as a time (so `+00:00` and `Z` agree), true/false for a boolean,
- * a numeric string numerically, and a uuid or lower-case key in byte order.
- * Any other text is compared for equality only. A backslash escape is
- * refused.
+ * timestamp as a time (so `+00:00` and `Z` agree), a numeric string
+ * numerically, and a uuid against a uuid in byte order. A boolean, and any
+ * other text, is compared for equality only (`equalityOnly`: the term is eq
+ * or neq); an order asked of them is refused, as is a backslash escape.
  */
-function compareLogicValue(cell: unknown, value: string, term: string): number {
+function compareLogicValue(cell: unknown, value: string, term: string, equalityOnly: boolean): number {
   const refuse = (): never => {
     throw new Error(`servedLikePostgrest cannot compare in the .or() term ${term}`);
   };
@@ -289,7 +290,8 @@ function compareLogicValue(cell: unknown, value: string, term: string): number {
     return cmp(cell, v);
   }
   if (typeof cell === 'boolean') {
-    if (value !== 'true' && value !== 'false') refuse();
+    // Only eq/neq: false < true in Postgres, which a 0/1 answer cannot say.
+    if ((value !== 'true' && value !== 'false') || !equalityOnly) refuse();
     return String(cell) === value ? 0 : 1;
   }
   if (typeof cell !== 'string') return refuse();
@@ -302,10 +304,10 @@ function compareLogicValue(cell: unknown, value: string, term: string): number {
     return cmp(a, b);
   }
   if (NUMERIC.test(cell) && NUMERIC.test(value)) return cmp(Number(cell), Number(value));
-  if (PLAIN_KEY.test(cell) && PLAIN_KEY.test(value)) return cell < value ? -1 : cell > value ? 1 : 0;
+  if (UUID.test(cell) && UUID.test(value)) return cell < value ? -1 : cell > value ? 1 : 0;
   // Other text: equality only (a collation may order it differently).
-  if (cell === value) return 0;
-  return /\.(eq|neq)\./.test(term) ? 1 : refuse();
+  if (!equalityOnly) refuse();
+  return cell === value ? 0 : 1;
 }
 
 /**

@@ -7,6 +7,7 @@ import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { googleBooksClient } from '@/server/pricing/google-books-client';
+import { DAILY_CLAIM_HOLD_MS, sweepOrganizations } from '@/server/services/lib/cron-sweep';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { refreshBookPricesForOrg } from '@/server/services/price-tracking';
 
@@ -24,7 +25,28 @@ function secretsEqual(a: string, b: string): boolean {
   return timingSafeEqual(ab, bb);
 }
 
-/** Daily Google Books price pull for every org with the price_tracking module enabled. */
+/** The job's cadence: the slot of the fallback order (rotateByClock). */
+const DAY_MS = 24 * 60 * 60_000;
+/** How many of an organization's books one refresh reads (its window); what
+ *  it may write is its share (maxWritten). */
+const READ_WINDOW = 300;
+
+/**
+ * Daily Google Books price pull for every org with the price_tracking module enabled.
+ *
+ * FAIR SHARE of the run's budget (GLOBAL_CAP observations). The organizations
+ * go least recently reached first (cron_sweep_attempts, job 'price_pull'),
+ * and each is offered an equal part of what is left:
+ * ceil(left / organizations not yet offered). An organization with a big
+ * backlog therefore takes at most its share in that round, never the whole
+ * budget; what a small one does not use passes on to the organizations after
+ * it, and then round again to the ones that used all of their share
+ * (round-robin), so the budget is not left unused while one has a backlog.
+ * An organization the budget or the deadline did not reach is not stamped,
+ * so it goes first tomorrow. Each organization is claimed as it starts, so a
+ * second delivery of the tick spends nothing on it (Google's daily quota is
+ * shared with scanning).
+ */
 export async function GET(req: Request) {
   // Fail-closed when CRON_SECRET is unset/empty. Matches cron/drain-outbox.
   if (!env.CRON_SECRET) {
@@ -59,7 +81,6 @@ export async function GET(req: Request) {
   }
 
   const orgIds = Array.from(new Set(rows.map((r) => r.organization_id)));
-  const results: Array<{ orgId: string; scanned: number; written: number; skipped: number }> = [];
 
   // Global budget so one cron invocation can't exceed Vercel's maxDuration=60
   // (an uncatchable hard-kill would silently skip the remaining orgs) or blow
@@ -74,23 +95,108 @@ export async function GET(req: Request) {
   // price observations must stay fresh and can't be cached — so the cron gets
   // the smaller, bounded share.
   const GLOBAL_CAP = 200; // total observations per cron invocation
-  const deadlineMs = Date.now() + 50_000; // headroom under maxDuration=60
+  const startedAt = Date.now();
+  const deadlineMs = startedAt + 50_000; // headroom under maxDuration=60
   let used = 0;
-  for (const orgId of orgIds) {
-    if (Date.now() > deadlineMs || used >= GLOBAL_CAP) break;
-    try {
-      const r = await refreshBookPricesForOrg(admin, orgId, googleBooksClient, {
-        limit: Math.min(300, GLOBAL_CAP - used),
-        deadlineMs,
-      });
-      used += r.written;
-      results.push({ orgId, ...r });
-      // last_priced_at stamps bump updated_at → page-1 order changes.
-      if (r.written > 0) revalidateInventoryList(orgId);
-    } catch (e) {
-      // FAIL-OPEN per org: report and continue; one org must not 500 the cron.
-      void reportError(e, { tag: 'cron.price-pull', extra: { orgId } });
+  const left = () => GLOBAL_CAP - used;
+  /** Per organization, summed over the rounds (the response's results). */
+  const byOrg = new Map<
+    string,
+    { orgId: string; scanned: number; written: number; skipped: number }
+  >();
+  /** Per organization, the books looked up this run (not asked for again). */
+  const triedByOrg = new Map<string, Set<string>>();
+  /** One refresh of one organization with this share; true when it wrote the
+   *  whole share (it may have more to price). Throws on a failed refresh. */
+  const refresh = async (orgId: string, share: number): Promise<boolean> => {
+    const tried = triedByOrg.get(orgId) ?? new Set<string>();
+    triedByOrg.set(orgId, tried);
+    const r = await refreshBookPricesForOrg(admin, orgId, googleBooksClient, {
+      limit: READ_WINDOW,
+      maxWritten: share,
+      deadlineMs,
+      tried,
+    });
+    used += r.written;
+    const sum = byOrg.get(orgId) ?? { orgId, scanned: 0, written: 0, skipped: 0 };
+    sum.scanned += r.scanned;
+    sum.written += r.written;
+    sum.skipped += r.skipped;
+    byOrg.set(orgId, sum);
+    // last_priced_at stamps bump updated_at → page-1 order changes.
+    if (r.written > 0) revalidateInventoryList(orgId);
+    return r.written >= share;
+  };
+
+  // Round one: every organization, least recently reached first, each claimed
+  // as it starts and offered an equal part of what is left.
+  let wantMore: string[] = [];
+  const sweep = await sweepOrganizations(
+    admin,
+    {
+      job: 'price_pull',
+      tag: 'cron.price-pull',
+      orgIds,
+      deadlineAt: deadlineMs,
+      slotMs: DAY_MS,
+      holdMs: DAILY_CLAIM_HOLD_MS,
+      stopWhen: () => left() <= 0,
+    },
+    async (orgId, index): Promise<{ result: 'success' | 'failure'; value: null }> => {
+      try {
+        if (await refresh(orgId, Math.ceil(left() / (orgIds.length - index)))) {
+          wantMore.push(orgId);
+        }
+        return { result: 'success', value: null };
+      } catch (e) {
+        // FAIL-OPEN per org: report and continue; one org must not 500 the cron.
+        void reportError(e, { tag: 'cron.price-pull', extra: { orgId } });
+        return { result: 'failure', value: null };
+      }
+    },
+  );
+
+  // Later rounds: what the small organizations left goes round again to the
+  // ones that used all of their share (this run's claims are already theirs),
+  // in the same order, equal parts again, until the budget, the deadline or
+  // the backlog runs out.
+  let rounds = 1;
+  while (wantMore.length > 0 && left() > 0 && Date.now() < deadlineMs) {
+    rounds += 1;
+    const next: string[] = [];
+    for (let i = 0; i < wantMore.length; i += 1) {
+      if (left() <= 0 || Date.now() >= deadlineMs) break;
+      const orgId = wantMore[i]!;
+      try {
+        if (await refresh(orgId, Math.ceil(left() / (wantMore.length - i)))) next.push(orgId);
+      } catch (e) {
+        void reportError(e, { tag: 'cron.price-pull', extra: { orgId } });
+      }
     }
+    wantMore = next;
   }
-  return NextResponse.json({ ok: true, orgs: orgIds.length, results });
+  const results = [...byOrg.values()];
+
+  // One line per run, counts only (no org ids).
+  console.info(
+    '[cron.price-pull]',
+    JSON.stringify({
+      orgs: orgIds.length,
+      reached: results.length,
+      written: used,
+      cap: GLOBAL_CAP,
+      rounds,
+      failed: sweep.failed,
+      heldByAnotherRun: sweep.heldByAnotherRun,
+      orderedBy: sweep.orderedBy,
+      leftForNextRun: sweep.leftForNextRun,
+      ms: Date.now() - startedAt,
+    }),
+  );
+  return NextResponse.json({
+    ok: true,
+    orgs: orgIds.length,
+    results,
+    leftForNextRun: sweep.leftForNextRun,
+  });
 }
