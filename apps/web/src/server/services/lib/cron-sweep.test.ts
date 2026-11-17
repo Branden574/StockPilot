@@ -1,6 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { newestPerKey, oldestFirst, rotatingWindow, sweepUntilDeadline } from './cron-sweep';
+import { makeSupabaseStub } from '@/test/supabase-mock';
+
+const reportError = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
+
+import {
+  cronAttemptRecorder,
+  newestPerKey,
+  oldestFirst,
+  readCronAttempts,
+  rotatingWindow,
+  sweepUntilDeadline,
+} from './cron-sweep';
 
 const ids = (n: number) => Array.from({ length: n }, (_, i) => `o${String(i).padStart(3, '0')}`);
 
@@ -145,5 +157,87 @@ describe('sweepUntilDeadline', () => {
       },
     );
     expect(most).toBe(3);
+  });
+});
+
+describe('cron attempts (cron_sweep_attempts, 0492)', () => {
+  it("reads one job's rows into last attempt and failures in a row", async () => {
+    const stub = makeSupabaseStub({
+      'cron_sweep_attempts.select': {
+        data: [
+          {
+            organization_id: 'a',
+            last_attempt_at: '2026-11-17T02:00:00.000Z',
+            consecutive_failures: 2,
+          },
+          {
+            organization_id: 'b',
+            last_attempt_at: '2026-11-16T02:00:00.000Z',
+            consecutive_failures: null,
+          },
+        ],
+        error: null,
+      },
+    });
+    const out = await readCronAttempts(stub.client, 'restore_points');
+    expect([...out.lastAttempt]).toEqual([
+      ['a', Date.parse('2026-11-17T02:00:00.000Z')],
+      ['b', Date.parse('2026-11-16T02:00:00.000Z')],
+    ]);
+    expect([...out.failures]).toEqual([
+      ['a', 2],
+      ['b', 0],
+    ]);
+    expect(stub.chainArgsAll.get('cron_sweep_attempts.select')![0]).toContainEqual([
+      'job',
+      'restore_points',
+    ]);
+  });
+
+  it('stamps on start, then counts failures in a row: failure adds one, success resets, neither leaves it', async () => {
+    const stub = makeSupabaseStub({ 'cron_sweep_attempts.insert': { data: null, error: null } });
+    const rec = cronAttemptRecorder(stub.client, 'exception_sync', {
+      failuresBefore: new Map([
+        ['f', 2],
+        ['s', 3],
+        ['n', 4],
+      ]),
+      reportTag: 'test.attempts',
+    });
+    const finishF = rec.start('f');
+    // The stamp is sent at start, before the caller's own work.
+    expect(stub.chainArgsAll.get('cron_sweep_attempts.insert')).toHaveLength(1);
+    expect(await finishF('failure')).toBe(3);
+    expect(await rec.start('s')('success')).toBe(0);
+    expect(await rec.start('n')('neither')).toBe(4);
+    expect(await rec.start('new')('success')).toBe(0);
+    const rows = (stub.chainArgsAll.get('cron_sweep_attempts.insert') ?? []).map(
+      (args) =>
+        args[0]![0] as { job: string; organization_id: string; consecutive_failures?: number },
+    );
+    expect(rows.map((r) => [r.organization_id, r.consecutive_failures])).toEqual([
+      ['f', undefined],
+      ['f', 3],
+      ['s', undefined],
+      ['s', 0],
+      ['n', undefined],
+      ['new', undefined],
+    ]);
+    expect(new Set(rows.map((r) => r.job))).toEqual(new Set(['exception_sync']));
+  });
+
+  it('a failed write never throws and is reported once per run', async () => {
+    reportError.mockClear();
+    const stub = makeSupabaseStub({
+      'cron_sweep_attempts.insert': { data: null, error: { message: 'write failed' } },
+    });
+    const rec = cronAttemptRecorder(stub.client, 'restore_points', {
+      failuresBefore: new Map(),
+      reportTag: 'test.attempts',
+    });
+    await rec.start('a')('failure');
+    await rec.start('b')('failure');
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError.mock.calls[0]![1]).toMatchObject({ tag: 'test.attempts', level: 'warning' });
   });
 });

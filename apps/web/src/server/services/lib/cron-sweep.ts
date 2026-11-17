@@ -1,6 +1,10 @@
 import 'server-only';
 
+import { reportError } from '@/lib/error-reporter';
+import type { createAdminClient } from '@/lib/supabase/admin';
 import { mapWithConcurrency } from '@/lib/supabase/in-filter';
+
+import { fetchAllRows } from './paginate';
 
 /**
  * Helpers for scheduled jobs that visit every organization: an order that
@@ -108,4 +112,104 @@ export async function sweepUntilDeadline<T, R>(
   );
   const started = entries.filter((e) => e.started).length;
   return { entries, started, leftForNextRun: entries.length - started };
+}
+
+/**
+ * The jobs that record their attempts in cron_sweep_attempts (0492). The
+ * table's CHECK takes any short lower-case name; this union keeps the code to
+ * the names in use.
+ */
+export type CronSweepJob = 'exception_sync' | 'restore_points';
+
+/** One job's attempt records, per organization. */
+export interface CronAttempts {
+  /** When the job last started the organization (epoch ms). */
+  lastAttempt: Map<string, number>;
+  /** Attempts in a row that ended without success. */
+  failures: Map<string, number>;
+}
+
+/**
+ * Reads one job's attempt records (cron_sweep_attempts, 0492), a page at a
+ * time. Throws on a failed read: the caller orders without them and reports.
+ */
+export async function readCronAttempts(
+  admin: ReturnType<typeof createAdminClient>,
+  job: CronSweepJob,
+): Promise<CronAttempts> {
+  const rows = await fetchAllRows<{
+    organization_id: string;
+    last_attempt_at: string;
+    consecutive_failures: number | null;
+  }>((from, to) =>
+    admin
+      .from('cron_sweep_attempts')
+      .select('organization_id, last_attempt_at, consecutive_failures')
+      .eq('job', job)
+      .order('organization_id', { ascending: true })
+      .range(from, to),
+  );
+  const out: CronAttempts = { lastAttempt: new Map(), failures: new Map() };
+  for (const r of rows) {
+    out.lastAttempt.set(r.organization_id, Date.parse(r.last_attempt_at));
+    out.failures.set(r.organization_id, Number(r.consecutive_failures ?? 0));
+  }
+  return out;
+}
+
+/** How one attempt ended: success resets the count, failure adds one, and
+ *  neither (for example another run holds the organization) leaves it. */
+export type CronAttemptResult = 'success' | 'failure' | 'neither';
+
+/**
+ * Records one run's attempts for a job. `start(orgId)` SENDS the attempt
+ * stamp at once (before the caller's own first request for the organization)
+ * and returns `finish(result)`, which awaits the stamp and then writes the
+ * attempts-in-a-row count when it changes; it answers that count. A failed
+ * write never throws (the record is for ordering and counting only) and is
+ * reported once per run under `reportTag`.
+ */
+export function cronAttemptRecorder(
+  admin: ReturnType<typeof createAdminClient>,
+  job: CronSweepJob,
+  opts: { failuresBefore: ReadonlyMap<string, number>; reportTag: string },
+): { start(orgId: string): (result: CronAttemptResult) => Promise<number> } {
+  let reported = false;
+  const write = async (
+    orgId: string,
+    row: { last_attempt_at: string; consecutive_failures?: number },
+  ): Promise<void> => {
+    const { error } = await admin
+      .from('cron_sweep_attempts')
+      .upsert({ job, organization_id: orgId, ...row }, { onConflict: 'job,organization_id' });
+    if (error && !reported) {
+      reported = true;
+      void reportError(new Error(error.message), {
+        tag: opts.reportTag,
+        level: 'warning',
+        extra: { step: 'write', job },
+      });
+    }
+  };
+  return {
+    start(orgId) {
+      const attemptedAt = new Date().toISOString();
+      const stamp = write(orgId, { last_attempt_at: attemptedAt });
+      return async (result) => {
+        await stamp;
+        const before = opts.failuresBefore.get(orgId) ?? 0;
+        if (result === 'failure') {
+          await write(orgId, { last_attempt_at: attemptedAt, consecutive_failures: before + 1 });
+          return before + 1;
+        }
+        if (result === 'success') {
+          if (before > 0) {
+            await write(orgId, { last_attempt_at: attemptedAt, consecutive_failures: 0 });
+          }
+          return 0;
+        }
+        return before;
+      };
+    },
+  };
 }

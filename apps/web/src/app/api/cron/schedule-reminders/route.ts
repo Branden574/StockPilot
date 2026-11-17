@@ -186,7 +186,6 @@ export async function GET(req: Request) {
   async function readZones(events: EventRow[]): Promise<void> {
     const orgIds = [...new Set(events.map((e) => e.organization_id))].filter((id) => !tzRead.has(id));
     if (orgIds.length === 0) return;
-    for (const id of orgIds) tzRead.add(id);
     try {
       const orgs = await fetchAllRowsByIds<{ id: string; timezone: string | null }>(
         orgIds,
@@ -198,7 +197,12 @@ export async function GET(req: Request) {
             .order('id', { ascending: true })
             .range(from, to),
       );
-      for (const o of orgs) tzByOrg.set(o.id, resolveOrgTimezone(o.timezone));
+      // Only the orgs whose row came back are done: after a failed read the
+      // next page reads the same orgs again rather than keep the fallback.
+      for (const o of orgs) {
+        tzByOrg.set(o.id, resolveOrgTimezone(o.timezone));
+        tzRead.add(o.id);
+      }
     } catch (orgErr) {
       void reportError(new Error(rawErrorText(orgErr)), {
         tag: 'cron.schedule-reminders.org-timezone',

@@ -988,6 +988,12 @@ const REVIEWED: Record<string, Reviewed> = {
     reason: 'One price observation written by the price refresh.',
     writes: ['inventory_items.update', 'item_price_observations.insert'],
   },
+  'server/services/lib/cron-sweep.ts#cronAttemptRecorder': {
+    kind: 'system',
+    reason:
+      'Records when a scheduled job (api/cron/exception-occurrences, api/cron/restore-points) last started each organization, on the service-role client.',
+    writes: ['cron_sweep_attempts.upsert'],
+  },
   'server/services/restore-points.ts#pruneSnapshots': {
     kind: 'system',
     reason: 'The nightly prune of restore points past their keep window.',

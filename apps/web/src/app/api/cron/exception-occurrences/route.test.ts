@@ -56,7 +56,7 @@ function orgsStub(opts: {
       ),
       error: null,
     },
-    'exception_sync_attempts.select': opts.attemptsReadError
+    'cron_sweep_attempts.select': opts.attemptsReadError
       ? { data: null, error: { message: 'attempts read failed' } }
       : {
           data: Object.entries(opts.attempts ?? {}).map(([organization_id, a]) => ({
@@ -66,7 +66,7 @@ function orgsStub(opts: {
           })),
           error: null,
         },
-    'exception_sync_attempts.insert': opts.attemptsWriteError
+    'cron_sweep_attempts.insert': opts.attemptsWriteError
       ? { data: null, error: { message: 'attempts write failed' } }
       : { data: null, error: null },
     'exception_sync_state.select': opts.stateError
@@ -233,8 +233,13 @@ describe('GET /api/cron/exception-occurrences — the sweep', () => {
 describe('GET /api/cron/exception-occurrences — attempts and rotation (0492)', () => {
   const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
   const upserts = (stub: ReturnType<typeof orgsStub>) =>
-    (stub.chainArgsAll.get('exception_sync_attempts.insert') ?? []).map((args) => ({
-      row: args[0]![0] as { organization_id: string; last_attempt_at: string; consecutive_failures?: number },
+    (stub.chainArgsAll.get('cron_sweep_attempts.insert') ?? []).map((args) => ({
+      row: args[0]![0] as {
+        job: string;
+        organization_id: string;
+        last_attempt_at: string;
+        consecutive_failures?: number;
+      },
       opts: args[0]![1] as { onConflict?: string },
     }));
 
@@ -265,7 +270,8 @@ describe('GET /api/cron/exception-occurrences — attempts and rotation (0492)',
     const written = upserts(stub);
     expect(written.map((w) => w.row.organization_id)).toEqual(['a', 'b', 'c']);
     for (const w of written) {
-      expect(w.opts).toEqual({ onConflict: 'organization_id' });
+      expect(w.opts).toEqual({ onConflict: 'job,organization_id' });
+      expect(w.row.job).toBe('exception_sync');
       // Stamped when the org started, before its sync ran.
       expect(w.row.last_attempt_at).toBe(startedAt[w.row.organization_id]);
       expect(w.row.consecutive_failures).toBeUndefined();
@@ -374,11 +380,11 @@ describe('GET /api/cron/exception-occurrences — attempts and rotation (0492)',
         data: [...synced].map(([organization_id, last_synced_at]) => ({ organization_id, last_synced_at })),
         error: null,
       }),
-      'exception_sync_attempts.select': () => ({
+      'cron_sweep_attempts.select': () => ({
         data: [...attempts].map(([organization_id, a]) => ({ organization_id, ...a })),
         error: null,
       }),
-      'exception_sync_attempts.insert': (call) => {
+      'cron_sweep_attempts.insert': (call) => {
         const row = call.args[call.methods.indexOf('upsert')]![0] as {
           organization_id: string;
           last_attempt_at: string;

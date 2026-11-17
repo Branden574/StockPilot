@@ -27,14 +27,18 @@ vi.mock('@/lib/error-reporter', () => ({ reportError }));
 const adminHolder = { client: null as unknown };
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn(() => adminHolder.client) }));
 
-const notified: Array<{ eventId: string; horizon: string; at: number }> = [];
+const notified: Array<{ eventId: string; horizon: string; at: number; title: string }> = [];
 const notify = vi.hoisted(() => ({ cost: 0 }));
 vi.mock('@/server/services/notifications', () => ({
-  createNotification: async (args: { metadata: { scheduleEventId: string; horizon: string } }) => {
+  createNotification: async (args: {
+    title: string;
+    metadata: { scheduleEventId: string; horizon: string };
+  }) => {
     notified.push({
       eventId: args.metadata.scheduleEventId,
       horizon: args.metadata.horizon,
       at: Date.now(),
+      title: args.title,
     });
     if (notify.cost > 0) vi.setSystemTime(Date.now() + notify.cost);
   },
@@ -82,7 +86,10 @@ function ev(id: string, startsInMs: number, overrides: Partial<Ev> = {}): Ev {
 }
 
 /** One store of events behind every read and every stamp. */
-function stubOver(store: Ev[]) {
+function stubOver(
+  store: Ev[],
+  extra: Record<string, QueryResult | ((call: MockCall) => QueryResult)> = {},
+) {
   const served = servedLikePostgrest(() => store);
   const stub = makeSupabaseStub({
     'schedule_events.select': (call: MockCall): QueryResult => {
@@ -107,6 +114,7 @@ function stubOver(store: Ev[]) {
     'organization_members.select': { data: [{ user_id: 'user-manager' }], error: null },
     'user_profiles.select': { data: [], error: null },
     'notification_preferences.select': { data: [], error: null },
+    ...extra,
   });
   adminHolder.client = stub.client;
   return stub;
@@ -199,6 +207,50 @@ describe('GET /api/cron/schedule-reminders: which events, in what order', () => 
     notified.length = 0;
     expect((await run()).remindersSent).toBe(0);
     expect(notified).toHaveLength(0);
+  });
+});
+
+describe('GET /api/cron/schedule-reminders: time zones across pages', () => {
+  it("a failed zone read is retried on the next page, and that page formats in the org's own zone", async () => {
+    // Page one: 200 events. Page two: one event at 04:30Z on the 25th, which
+    // is 21:30 on the 24th in the fallback zone (Pacific, "today") and 00:30
+    // on the 25th in the org's zone (New York, "tomorrow").
+    const store = [
+      ...Array.from({ length: 200 }, (_, i) =>
+        ev(`p1-${String(i).padStart(3, '0')}`, 3 * HOUR + i * 1000),
+      ),
+      ev('p2-late', Date.parse('2026-08-25T04:30:00.000Z') - NOW.getTime()),
+    ];
+    let zoneReads = 0;
+    stubOver(store, {
+      'organizations.select': () => {
+        zoneReads += 1;
+        return zoneReads === 1
+          ? { data: null, error: { message: 'fetch failed' } }
+          : { data: [{ id: 'org-1', timezone: 'America/New_York' }], error: null };
+      },
+    });
+    const body = await run();
+    expect(body.remindersSent).toBe(201);
+    expect(zoneReads).toBe(2);
+    expect(notified.find((n) => n.eventId === 'p2-late')?.title).toContain('tomorrow');
+    const tags = reportError.mock.calls.map((c) => (c[1] as { tag: string }).tag);
+    expect(tags).toEqual(['cron.schedule-reminders.org-timezone']);
+  });
+
+  it('a zone read once is not read again on a later page', async () => {
+    const store = Array.from({ length: 201 }, (_, i) =>
+      ev(`e-${String(i).padStart(3, '0')}`, 3 * HOUR + i * 1000),
+    );
+    let zoneReads = 0;
+    stubOver(store, {
+      'organizations.select': () => {
+        zoneReads += 1;
+        return { data: [{ id: 'org-1', timezone: 'America/New_York' }], error: null };
+      },
+    });
+    expect((await run()).remindersSent).toBe(201);
+    expect(zoneReads).toBe(1);
   });
 });
 

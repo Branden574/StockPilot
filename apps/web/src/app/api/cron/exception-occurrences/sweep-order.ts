@@ -14,9 +14,10 @@ export interface SweepOrg {
 /**
  * Least recently REACHED first. An organization's time is the later of its
  * last applied sync (exception_sync_state.last_synced_at) and the cron's
- * last attempt at it (exception_sync_attempts.last_attempt_at, 0492). An
- * organization with neither (never synced, never tried: a new one) uses its
- * creation time, and with no creation time either, the start of this run.
+ * last attempt at it (cron_sweep_attempts.last_attempt_at, job
+ * exception_sync, 0492). An organization with neither (never synced, never
+ * tried: a new one) uses its creation time, and with no creation time either,
+ * the start of this run.
  * Ties keep id order.
  *
  * Why the attempt counts. last_synced_at moves only when a sync is applied,

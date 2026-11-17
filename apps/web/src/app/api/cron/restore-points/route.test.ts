@@ -50,13 +50,36 @@ const business = (id: string) => ({
 
 type PointRow = { id: string; organization_id: string; created_at: string; kind: string };
 
+type AttemptRow = {
+  job: string;
+  organization_id: string;
+  last_attempt_at: string;
+  consecutive_failures: number;
+};
+
 function stub(opts: {
   orgs: string[];
   points?: PointRow[] | (() => PointRow[]);
   pointsError?: boolean;
   items?: (call: MockCall) => { data: unknown; error: { message: string } | null };
+  /** cron_sweep_attempts rows, kept up to date by the cron's upserts. */
+  attempts?: AttemptRow[];
 }) {
+  const attempts = opts.attempts ?? [];
   const s = makeSupabaseStub({
+    'cron_sweep_attempts.select': servedLikePostgrest(() => attempts),
+    'cron_sweep_attempts.insert': (call) => {
+      const row = call.args[call.methods.indexOf('upsert')]![0] as Partial<AttemptRow> & {
+        job: string;
+        organization_id: string;
+      };
+      const prev = attempts.find(
+        (a) => a.job === row.job && a.organization_id === row.organization_id,
+      );
+      if (prev) Object.assign(prev, row);
+      else attempts.push({ consecutive_failures: 0, last_attempt_at: '', ...row });
+      return { data: null, error: null };
+    },
     'organizations.select': servedLikePostgrest(opts.orgs.map(business)),
     'organization_members.select': { data: [{ user_id: 'owner-1' }], error: null },
     'organization_modules.select': { data: [], error: null },
@@ -153,24 +176,24 @@ describe('GET /api/cron/restore-points: deadline', () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
 
     const res = await run();
-    // Three at once: a, b and c start at 0 s and finish by 360 s, so d and e
-    // would start past the 200 s deadline.
-    expect(started).toEqual(['a', 'b', 'c']);
-    expect(await res.json()).toMatchObject({ eligible: 5, snapshotted: 3, leftForNextRun: 2 });
+    // One at a time: a at 0 s, b at 120 s; c would start at 240 s, past the
+    // 200 s deadline.
+    expect(started).toEqual(['a', 'b']);
+    expect(await res.json()).toMatchObject({ eligible: 5, snapshotted: 2, leftForNextRun: 3 });
 
     const deadline = h.reportError.mock.calls.find(
       (c) => (c[1] as { tag: string }).tag === 'cron.restore-points.deadline',
     );
     expect(deadline?.[1]).toMatchObject({
       level: 'warning',
-      extra: { eligible: 5, snapshotted: 3, leftForNextRun: 2 },
+      extra: { eligible: 5, snapshotted: 2, leftForNextRun: 3 },
     });
     const lines = info.mock.calls.filter((c) => c[0] === '[cron.restore-points]');
     expect(lines).toHaveLength(1);
     expect(JSON.parse(String(lines[0]![1]))).toMatchObject({
       eligible: 5,
-      snapshotted: 3,
-      leftForNextRun: 2,
+      snapshotted: 2,
+      leftForNextRun: 3,
     });
     // Counts only: no organization ids in the line.
     expect(String(lines[0]![1])).not.toMatch(/"a"|"b"|"c"|"d"|"e"/);
@@ -178,9 +201,9 @@ describe('GET /api/cron/restore-points: deadline', () => {
   });
 
   it('over consecutive nights every organization gets a point, the ones left first on the next night', async () => {
-    // Three snapshots fit in a night (three at once, each 100 s, so the next
-    // would start at 300 s, past the 200 s deadline). Before, the order was id
-    // order every night, so d and e never got one.
+    // Two snapshots fit in a night (one at a time, each 100 s, so the third
+    // would start at 200 s, the deadline). Before, the order was id order
+    // every night, so c, d and e never got one.
     const store: PointRow[] = [];
     stub({ orgs: ['a', 'b', 'c', 'd', 'e'], points: () => store });
     const nights: string[][] = [];
@@ -198,14 +221,116 @@ describe('GET /api/cron/restore-points: deadline', () => {
       await run();
       nights.push(started);
     }
-    expect(nights[0]).toEqual(['a', 'b', 'c']);
-    expect(nights[1]).toEqual(['d', 'e', 'a']);
-    expect(nights[2]).toEqual(['b', 'c', 'd']);
+    expect(nights[0]).toEqual(['a', 'b']);
+    expect(nights[1]).toEqual(['c', 'd']);
+    expect(nights[2]).toEqual(['e', 'a']);
     expect(new Set(nights.flat())).toEqual(new Set(['a', 'b', 'c', 'd', 'e']));
+  });
+
+  it('takes one snapshot at a time: none starts before the one before it has ended', async () => {
+    // A snapshot can hold 50,000 items in memory; the cap bounds the peak
+    // only while one runs at a time.
+    vi.useRealTimers();
+    stub({ orgs: ['a', 'b', 'c', 'd'] });
+    let inFlight = 0;
+    let most = 0;
+    h.createSnapshot = async (ctx) => {
+      inFlight += 1;
+      most = Math.max(most, inFlight);
+      started.push(ctx.organizationId);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight -= 1;
+      return { id: 'x', itemCount: 0, capped: false };
+    };
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    await run();
+    expect(started).toEqual(['a', 'b', 'c', 'd']);
+    expect(most).toBe(1);
   });
 
   it('leaves the snapshot in flight minutes past the deadline to finish', () => {
     expect(maxDuration * 1000 - 200_000).toBeGreaterThanOrEqual(90_000);
+  });
+});
+
+describe('GET /api/cron/restore-points: attempts (cron_sweep_attempts, 0492)', () => {
+  it('records each attempt as the org starts, under job restore_points, before its snapshot', async () => {
+    const s = stub({ orgs: ['a', 'b'] });
+    const order: string[] = [];
+    h.createSnapshot = async (ctx) => {
+      const stamped = (s.chainArgsAll.get('cron_sweep_attempts.insert') ?? []).map(
+        (args) => (args[0]![0] as { organization_id: string }).organization_id,
+      );
+      order.push(
+        `${ctx.organizationId}:${stamped.includes(ctx.organizationId) ? 'stamped' : 'not'}`,
+      );
+      return { id: 'x', itemCount: 0, capped: false };
+    };
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    await run();
+    expect(order).toEqual(['a:stamped', 'b:stamped']);
+    const writes = (s.chainArgsAll.get('cron_sweep_attempts.insert') ?? []).map((args) => ({
+      row: args[0]![0] as Record<string, unknown>,
+      opts: args[0]![1],
+    }));
+    expect(writes.map((w) => [w.row.job, w.row.organization_id])).toEqual([
+      ['restore_points', 'a'],
+      ['restore_points', 'b'],
+    ]);
+    for (const w of writes) expect(w.opts).toEqual({ onConflict: 'job,organization_id' });
+    // The read takes this job's rows only.
+    const read = s.chainArgsAll.get('cron_sweep_attempts.select')![0]!;
+    expect(read).toContainEqual(['job', 'restore_points']);
+  });
+
+  it('an organization whose snapshot always fails goes to the back of the line instead of leading every night', async () => {
+    // Two snapshots fit in a night. 'a-fails' has no point, so ordering by the
+    // last point alone put it first every night and it took one of the two
+    // places each time.
+    const store: PointRow[] = [];
+    const attempts: AttemptRow[] = [];
+    stub({ orgs: ['a-fails', 'b', 'c', 'd'], points: () => store, attempts });
+    h.createSnapshot = async (ctx) => {
+      started.push(ctx.organizationId);
+      vi.setSystemTime(Date.now() + 100_000);
+      if (ctx.organizationId === 'a-fails') throw new Error('statement timeout');
+      store.push(point(ctx.organizationId, 0));
+      return { id: 'x', itemCount: 0, capped: false };
+    };
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const nights: string[][] = [];
+    for (let night = 0; night < 3; night += 1) {
+      vi.setSystemTime(NOW.getTime() + night * DAY);
+      started = [];
+      await run();
+      nights.push(started);
+    }
+    expect(nights).toEqual([
+      ['a-fails', 'b'],
+      ['c', 'd'],
+      ['a-fails', 'b'],
+    ]);
+    expect(attempts.find((a) => a.organization_id === 'a-fails')?.consecutive_failures).toBe(2);
+    expect(attempts.find((a) => a.organization_id === 'b')?.consecutive_failures).toBe(0);
+    const last = info.mock.calls.filter((c) => c[0] === '[cron.restore-points]').at(-1);
+    expect(JSON.parse(String(last?.[1]))).toMatchObject({ failed: 1, failingRepeatedly: 0 });
+  });
+
+  it('a failed attempts read still runs, ordered by the last point, and is reported', async () => {
+    const s = makeSupabaseStub({
+      'organizations.select': servedLikePostgrest(['a', 'b'].map(business)),
+      'organization_members.select': { data: [{ user_id: 'owner-1' }], error: null },
+      'organization_modules.select': { data: [], error: null },
+      'restore_points.select': servedLikePostgrest([point('a', 1 * DAY), point('b', 2 * DAY)]),
+      'cron_sweep_attempts.select': { data: null, error: { message: 'attempts read failed' } },
+      'cron_sweep_attempts.insert': { data: null, error: null },
+    });
+    h.client = s.client;
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    await run();
+    expect(started).toEqual(['b', 'a']);
+    const tags = h.reportError.mock.calls.map((c) => (c[1] as { tag: string }).tag);
+    expect(tags).toEqual(['cron.restore-points.attempts']);
   });
 });
 
