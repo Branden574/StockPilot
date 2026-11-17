@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { reportError } from '@/lib/error-reporter';
-import { makeSupabaseStub } from '@/test/supabase-mock';
+import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 import { KNOWN_HOT_ORG_IDS } from './org-sweep';
 
@@ -192,7 +192,7 @@ describe('GET /api/cron/prewarm-orders-catalog', () => {
     expect(prewarmInventorySpy).not.toHaveBeenCalled();
   });
 
-  it('filters enumeration to orgs with an accepted member, ordered by recent activity', async () => {
+  it('lists every org with an accepted member, in id order, a page at a time', async () => {
     const stub = makeSupabaseStub({
       'organizations.select': { data: [], error: null, count: 0 },
       'warehouses.select': { data: [], error: null },
@@ -209,11 +209,37 @@ describe('GET /api/cron/prewarm-orders-catalog', () => {
     // accepted_at IS NOT NULL filter present.
     expect(chain).toContain('not');
     expect(args).toContain('organization_members.accepted_at');
-    // Activity ordering + the disclosed cap.
+    // Every active org in id order, paged (no activity order, no limit:
+    // the rotating window, not the read, decides which orgs this run warms).
     expect(chain).toContain('order');
-    expect(args).toContain('updated_at');
-    expect(chain).toContain('limit');
-    expect(args).toContain(50);
+    expect(args).toContain('id');
+    expect(args).not.toContain('updated_at');
+    expect(chain).not.toContain('limit');
+    expect(chain).toContain('range');
+    expect(args).toEqual(expect.arrayContaining([0, 999]));
+  });
+
+  it('pages past 1000 active orgs, so the rotation sees all of them', async () => {
+    // The embed's accepted_at filter, as servedLikePostgrest reads it.
+    const all = Array.from({ length: 1500 }, (_, i) => ({
+      id: `org-${String(i).padStart(4, '0')}`,
+      'organization_members.accepted_at': '2026-01-01T00:00:00Z',
+    }));
+    const stub = makeSupabaseStub({
+      'organizations.select': servedLikePostgrest(all),
+      'warehouses.select': { data: [], error: null },
+    });
+    adminClientHolder.client = stub.client;
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const body = await (await GET(buildRequest('Bearer test-cron-secret'))).json();
+    expect(stub.chainsAll.get('organizations.select')).toHaveLength(2);
+    expect(body.orgSweep).toMatchObject({
+      activeOrgTotal: 1500,
+      swept: 50,
+      truncatedByCap: 1452,
+      runsToCoverAll: 32,
+    });
   });
 
   it('isolates a failing org: the sweep continues past a throwing prewarm', async () => {
@@ -267,13 +293,12 @@ describe('GET /api/cron/prewarm-orders-catalog', () => {
     });
   });
 
-  it('discloses cap truncation when more active orgs exist than the cap', async () => {
+  it('discloses the orgs outside this run\'s window when more active orgs exist than the cap', async () => {
     const stub = makeSupabaseStub({
       'organizations.select': {
-        // Simulate the capped page of a 120-org fleet.
-        data: Array.from({ length: 50 }, (_, i) => ({ id: `org-${i}` })),
+        // A 120-org fleet: the two known-hot orgs and a window of 48 run now.
+        data: Array.from({ length: 120 }, (_, i) => ({ id: `org-${String(i).padStart(3, '0')}` })),
         error: null,
-        count: 120,
       },
       'warehouses.select': { data: [], error: null },
     });
@@ -283,10 +308,36 @@ describe('GET /api/cron/prewarm-orders-catalog', () => {
     const res = await GET(buildRequest('Bearer test-cron-secret'));
     const body = await res.json();
 
-    expect(body.orgSweep.truncatedByCap).toBe(70);
+    expect(body.orgSweep).toMatchObject({ activeOrgTotal: 120, swept: 50, truncatedByCap: 72, runsToCoverAll: 3 });
     // Repo rule: no silent caps — shed work must hit the logs too.
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('truncatedByCap=70'));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('truncatedByCap=72 runsToCoverAll=3'));
     warnSpy.mockRestore();
+  });
+
+  it('warms a different window each 30-minute run, every org within ceil(N / 48) runs', async () => {
+    const fleet = Array.from({ length: 120 }, (_, i) => ({
+      id: `org-${String(i).padStart(3, '0')}`,
+      'organization_members.accepted_at': '2026-01-01T00:00:00Z',
+    }));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warmed = new Set<string>();
+    const t0 = Date.parse('2026-11-17T12:00:00.000Z');
+    for (let run = 0; run < 3; run += 1) {
+      vi.spyOn(Date, 'now').mockReturnValue(t0 + run * 30 * 60_000);
+      adminClientHolder.client = makeSupabaseStub({
+        'organizations.select': servedLikePostgrest(fleet),
+        'warehouses.select': { data: [], error: null },
+      }).client;
+      prewarmInventorySpy.mockClear();
+      await GET(buildRequest('Bearer test-cron-secret'));
+      const calls = prewarmInventorySpy.mock.calls.map((c) => c[0]);
+      // The known-hot orgs lead every run.
+      expect(calls.slice(0, 2)).toEqual([HOT_1, HOT_2]);
+      expect(calls).toHaveLength(50);
+      for (const id of calls.slice(2)) warmed.add(id);
+      vi.mocked(Date.now).mockRestore();
+    }
+    expect(warmed.size).toBe(120);
   });
 
   // Phone ordering PO-3: the phone storefront's photo map is warmed for every

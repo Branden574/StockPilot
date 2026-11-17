@@ -45,7 +45,7 @@ create temporary table expected_junctions (junction text, a text, b text, a_fk t
 create temporary table expected_pairs (a text, b text, relationships text) on commit drop;
 
 -- BEGIN GENERATED: scripts/gen-postgrest-embed-snapshot.mjs from scripts/postgrest-embeds/relationships.snapshot.json. Do not edit by hand.
--- 404 foreign keys, 9 junctions, 35 ambiguous pairs.
+-- 405 foreign keys, 9 junctions, 35 ambiguous pairs.
 insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('activity_logs', 'activity_logs_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('activity_logs', 'activity_logs_user_id_fkey', 'user_profiles', 'user_id', 'id'),
@@ -137,6 +137,7 @@ insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('exception_occurrences', 'exception_occurrences_previous_occurrence_id_fkey', 'exception_occurrences', 'previous_occurrence_id', 'id'),
   ('exception_occurrences', 'exception_occurrences_recount_cycle_count_id_fkey', 'cycle_counts', 'recount_cycle_count_id', 'id'),
   ('exception_occurrences', 'exception_occurrences_warehouse_id_fkey', 'warehouses', 'warehouse_id', 'id'),
+  ('exception_sync_attempts', 'exception_sync_attempts_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('exception_sync_state', 'exception_sync_state_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('export_presets', 'export_presets_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('idempotency_keys', 'idempotency_keys_organization_id_fkey', 'organizations', 'organization_id', 'id'),

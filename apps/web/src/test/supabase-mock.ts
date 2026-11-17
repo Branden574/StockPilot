@@ -96,9 +96,12 @@ export function inFilters(call: MockCall): Array<[string, unknown[]]> {
  * calls and its `.range()`/`.limit()` window (capped at max_rows, 1000) to
  * `rows`. Several `.order()` calls sort as PostgREST's `order=a,b` does: the
  * FIRST is the primary key and each later one only breaks its ties.
+ * An `.or()` is evaluated too, for the logic-tree forms `col.op.value` with
+ * op eq, neq, gt, gte, lt, lte or is (null, true, false), a value in double
+ * quotes, and nested `and(...)` / `or(...)` (see evaluateLogicTree).
  * So a test fails when the code under test forgets a filter, instead of the
  * stub handing back every row whatever was asked. Any other method in the
- * chain (an `.or()`, or any other `.not()`, it cannot evaluate) throws, so
+ * chain (any other `.not()`, or an `.or()` form it cannot evaluate) throws, so
  * nothing is ignored silently. `rows` may be a function, to change the data
  * between calls.
  */
@@ -142,6 +145,15 @@ export function servedLikePostgrest(
         case 'in':
           out = out.filter((r) => (value as unknown[]).includes(r[col]));
           break;
+        case 'or': {
+          if ((value as { referencedTable?: unknown; foreignTable?: unknown } | undefined)?.referencedTable
+            || (value as { foreignTable?: unknown } | undefined)?.foreignTable) {
+            throw new Error('servedLikePostgrest cannot evaluate an .or() on a referenced table');
+          }
+          const terms = splitLogicTerms(col);
+          out = out.filter((r) => terms.some((t) => evaluateLogicTree(t, r)));
+          break;
+        }
         case 'not': {
           // Only `.not(col, 'is', null)`: the rows whose col is set.
           const operand = call.args[i]?.[2];
@@ -184,6 +196,71 @@ export function servedLikePostgrest(
     }
     return { data: out.slice(from, Math.min(to, from + 999) + 1), error: null };
   };
+}
+
+/** Splits a PostgREST logic-tree list (`a.eq.1,and(b.gt.2,c.is.null)`) at
+ *  its top-level commas, leaving commas inside parentheses or double quotes. */
+function splitLogicTerms(list: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let quoted = false;
+  let current = '';
+  for (const ch of list) {
+    if (ch === '"') quoted = !quoted;
+    if (!quoted && ch === '(') depth += 1;
+    if (!quoted && ch === ')') depth -= 1;
+    if (!quoted && depth === 0 && ch === ',') {
+      out.push(current);
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  if (current.length > 0) out.push(current);
+  return out;
+}
+
+/**
+ * One term of a PostgREST logic tree against one row: `and(...)`, `or(...)`
+ * or `col.op.value`, with op eq, neq, gt, gte, lt, lte or is. Values are
+ * compared as the strings PostgREST would receive (a double-quoted value has
+ * its quotes taken off), against the row's value; `is` takes null, true or
+ * false. Anything else throws.
+ */
+function evaluateLogicTree(term: string, row: Record<string, unknown>): boolean {
+  const nested = /^(and|or)\((.*)\)$/s.exec(term);
+  if (nested) {
+    const parts = splitLogicTerms(nested[2] as string);
+    return nested[1] === 'and'
+      ? parts.every((p) => evaluateLogicTree(p, row))
+      : parts.some((p) => evaluateLogicTree(p, row));
+  }
+  const m = /^([A-Za-z0-9_]+)\.(eq|neq|gt|gte|lt|lte|is)\.(.*)$/s.exec(term);
+  if (!m) throw new Error(`servedLikePostgrest cannot evaluate the .or() term ${term}`);
+  const [, col, op, raw] = m as unknown as [string, string, string, string];
+  const value = raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2 ? raw.slice(1, -1) : raw;
+  const cell = row[col] ?? null;
+  if (op === 'is') {
+    const want = value === 'null' ? null : value === 'true' ? true : value === 'false' ? false : undefined;
+    if (want === undefined) throw new Error(`servedLikePostgrest cannot evaluate ${term}`);
+    return cell === want;
+  }
+  if (cell === null) return false;
+  const a = String(cell);
+  switch (op) {
+    case 'eq':
+      return a === value;
+    case 'neq':
+      return a !== value;
+    case 'gt':
+      return a > value;
+    case 'gte':
+      return a >= value;
+    case 'lt':
+      return a < value;
+    default:
+      return a <= value;
+  }
 }
 
 /**

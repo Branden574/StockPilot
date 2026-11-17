@@ -20,7 +20,18 @@ import type { ScheduleReminderParams } from '@/lib/email/families/schedule';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+/**
+ * The hard limit. 300, far above the soft deadline below: the deadline only
+ * stops new events from STARTING, and the event in flight (its recipients'
+ * reads, notifications and emails) gets the gap to finish.
+ */
+export const maxDuration = 300;
+
+/** Stop STARTING events after this long; the rest wait for the next run
+ *  (every 10 minutes), are counted, and are reported. */
+const RUN_DEADLINE_MS = 240_000;
+/** Events read per page. */
+const PAGE_SIZE = 200;
 
 function secretsEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
@@ -42,6 +53,16 @@ function secretsEqual(a: string, b: string): boolean {
  *
  * Dedupe by stamping reminded_*_at BEFORE sending (crash-safe direction:
  * losing one reminder beats spamming on retry loops). FAIL-OPEN per event.
+ *
+ * Which events. Only the ones still owed a reminder are read:
+ * reminded_1h_at is null, and either reminded_24h_at is null or the start is
+ * within the hour (exactly the events the loop below acts on). They are read
+ * in start order, soonest first, a page at a time with a (starts_at, id)
+ * cursor, until none are left or the run's soft deadline. The read used to be
+ * one `.limit(500)` with no order and no stamp filter, so events already
+ * reminded filled it as much as due ones, and past 500 events in the next 24
+ * hours some reminders were never sent. Events left by the deadline are
+ * counted, reported, and go first on the next run (soonest start first).
  *
  * Emails render via the es-layer schedule family (sched-tmrw / sched-hour,
  * lib/email/families/schedule.ts) — this replaced the raw one-line
@@ -146,305 +167,377 @@ export async function GET(req: Request) {
     reminded_1h_at: string | null;
   };
 
-  const { data, error } = await admin
-    .from('schedule_events')
-    .select(
-      'id, organization_id, title, starts_at, ends_at, all_day, location_text, details, warehouse_id, assigned_user_id, reminded_24h_at, reminded_1h_at',
-    )
-    .eq('status', 'scheduled')
-    .gte('starts_at', nowIso)
-    .lte('starts_at', in24h)
-    .limit(500);
-  if (error) {
-    void reportError(new Error(error.message), { tag: 'cron.schedule-reminders' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
-  }
+  const startedAt = now;
+  const deadlineAt = startedAt + RUN_DEADLINE_MS;
+  const eventColumns =
+    'id, organization_id, title, starts_at, ends_at, all_day, location_text, details, warehouse_id, assigned_user_id, reminded_24h_at, reminded_1h_at';
+  // The events still owed a reminder (see the header): the loop's own rule.
+  const owedFilter = `reminded_24h_at.is.null,starts_at.lte."${in1h}"`;
 
-  // One read of the display zone for every org in this run's events, rather
-  // than per event: a single run can carry up to 500 events across many
-  // orgs. 500 org ids in one `.in()` is past the URL limits (the local
-  // gateway refuses ~215, production fails ~395 after ~7 s of retries), so
-  // they go 100 per request.
+  // The display zone per org, read once per org per run rather than per
+  // event: a page carries up to PAGE_SIZE events across many orgs. A long
+  // org id list in one `.in()` is past the URL limits (the local gateway
+  // refuses ~215, production fails ~395 after ~7 s of retries), so they go
+  // 100 per request.
   // Read fails CLOSED to the documented default (see resolveOrgTimezone): a
   // missing row must degrade the printed zone, never skip the reminder.
-  const events = (data ?? []) as EventRow[];
-  const orgIds = [...new Set(events.map((e) => e.organization_id))];
   const tzByOrg = new Map<string, string>();
-  try {
-    const orgs = await fetchAllRowsByIds<{ id: string; timezone: string | null }>(
-      orgIds,
-      (batch) => (from, to) =>
-        admin
-          .from('organizations')
-          .select('id, timezone')
-          .in('id', batch)
-          .order('id', { ascending: true })
-          .range(from, to),
-    );
-    for (const o of orgs) tzByOrg.set(o.id, resolveOrgTimezone(o.timezone));
-  } catch (orgErr) {
-    void reportError(new Error(rawErrorText(orgErr)), {
-      tag: 'cron.schedule-reminders.org-timezone',
-    });
-  }
-
-  let sent = 0;
-  for (const ev of events) {
+  const tzRead = new Set<string>();
+  async function readZones(events: EventRow[]): Promise<void> {
+    const orgIds = [...new Set(events.map((e) => e.organization_id))].filter((id) => !tzRead.has(id));
+    if (orgIds.length === 0) return;
+    for (const id of orgIds) tzRead.add(id);
     try {
-      const isOneHour = ev.starts_at <= in1h && !ev.reminded_1h_at;
-      // 24h reminder is only meaningful BEFORE the 1h one. An event that
-      // enters the system already inside the 1h window (or whose 1h notice
-      // was sent) must never get a late "tomorrow" notice — the field bug
-      // was 'in 1 hour' at 6:20 followed by 'tomorrow' at 6:30 for the
-      // same event (owner-reported duplicate, 2026-07-11).
-      const isDayAhead = !isOneHour && !ev.reminded_24h_at && !ev.reminded_1h_at;
-      if (!isOneHour && !isDayAhead) continue;
-
-      // Stamp FIRST (crash-safe dedupe), and only proceed if we won the write.
-      // Also guarded on the start and the status this run READ: the events
-      // were read at the top and each is stamped only after the emails for
-      // the ones before it, and meanwhile a needed-by change
-      // (revise_order_needed_by) or a Schedule edit can move the event, or it
-      // can be closed. A move clears both stamps so the NEW time is reminded;
-      // a stamp from this stale read would send a reminder naming the old time
-      // and then suppress the new time's day-ahead one. Such an event is
-      // skipped here, and the next run reads it as it is.
-      const stamp = isOneHour ? { reminded_1h_at: nowIso } : { reminded_24h_at: nowIso };
-      const guard = isOneHour ? 'reminded_1h_at' : 'reminded_24h_at';
-      const { data: stamped } = await admin
-        .from('schedule_events')
-        .update(stamp)
-        .eq('id', ev.id)
-        .eq('starts_at', ev.starts_at)
-        .eq('status', 'scheduled')
-        .is(guard, null)
-        .select('id')
-        .maybeSingle();
-      if (!stamped) continue; // another run beat us, or the event moved or closed
-
-      // Recipients: assignee + org managers, deduped.
-      const { data: mgrs } = await admin
-        .from('organization_members')
-        .select('user_id')
-        .eq('organization_id', ev.organization_id)
-        .in('role', ['owner', 'admin', 'manager'])
-        .not('accepted_at', 'is', null)
-        // Real memberships, not act-as grants. Platform "act as" inserts a
-        // REAL organization_members row (role owner, accepted_at stamped,
-        // impersonation_expires_at set — services/platform/impersonation.ts),
-        // which matched this query exactly, so for the life of the grant the
-        // platform admin's personal account received the org's reminder push
-        // AND email every 10 minutes. Ten sibling recipient queries
-        // (daily-briefing, auto-reorder, recurring-pos, …) already filter it.
-        .is('impersonation_expires_at', null);
-      const userIds = new Set<string>((mgrs ?? []).map((m) => m.user_id as string));
-      // The assignee only while an accepted, non-act-as member of THIS event's
-      // org, read the managers' way (0384 review). assigned_user_id is the
-      // order's driver, copied by autoScheduleFromOrder and assignDelivery; a
-      // manager or an approver can write any user id as an order's driver
-      // straight through PostgREST (only assignDelivery checks membership),
-      // and a driver can leave the org after being named. This loop is the one
-      // place that contacts the assignee, with the event's title and
-      // description, so it checks here, at send time, whatever wrote the id.
-      // A failed read skips the assignee (reported): the managers are still
-      // reminded, and a stranger is never.
-      if (ev.assigned_user_id && !userIds.has(ev.assigned_user_id)) {
-        const { data: assignee, error: assigneeErr } = await admin
-          .from('organization_members')
-          .select('user_id')
-          .eq('organization_id', ev.organization_id)
-          .eq('user_id', ev.assigned_user_id)
-          .not('accepted_at', 'is', null)
-          .is('impersonation_expires_at', null)
-          .maybeSingle();
-        if (assigneeErr) {
-          void reportError(new Error(assigneeErr.message), {
-            tag: 'cron.schedule-reminders.assignee',
-            level: 'warning',
-            extra: { eventId: ev.id },
-          });
-        } else if ((assignee as { user_id?: string } | null)?.user_id === ev.assigned_user_id) {
-          userIds.add(ev.assigned_user_id);
-        }
-      }
-      if (userIds.size === 0) continue;
-
-      // ONE zone for this event's every label — see the block above tzPart.
-      const tz = tzByOrg.get(ev.organization_id) ?? resolveOrgTimezone(null);
-      const startsAt = new Date(ev.starts_at);
-      const when = tzPart(
-        startsAt,
-        {
-          weekday: 'short', month: 'short', day: 'numeric',
-          hour: 'numeric', minute: '2-digit',
-        },
-        tz,
-      );
-      // The day-ahead word is COMPUTED, never assumed — see dayWordFor.
-      const dayWord = dayWordFor(startsAt, new Date(now), tz);
-      const horizon = isOneHour ? 'in 1 hour' : dayWord;
-      const title = `Reminder: ${ev.title} — ${horizon}`;
-      const body = `${when}${ev.location_text ? ` · ${ev.location_text}` : ''}`;
-      const link = `/dashboard/schedule/${ev.id}`;
-
-      // es-template merge labels, all in the SAME `tz` as `when` and the day
-      // word above — one resolved zone per event, never a second copy.
-      const startTime = tzPart(startsAt, { hour: 'numeric', minute: '2-digit' }, tz);
-      const endTime = ev.ends_at
-        ? tzPart(new Date(ev.ends_at), { hour: 'numeric', minute: '2-digit' }, tz)
-        : null;
-      const timeLabel = ev.all_day
-        ? 'All day'
-        : endTime
-          ? `${startTime} – ${endTime}`
-          : startTime;
-      const appUrl = env.NEXT_PUBLIC_APP_URL;
-      const settingsUrl = `${appUrl}/dashboard/settings/notifications`;
-      const sharedParams = {
-        eventTitle: ev.title,
-        dayWord,
-        month: tzPart(startsAt, { month: 'short' }, tz),
-        day: tzPart(startsAt, { day: 'numeric' }, tz),
-        dow: tzPart(startsAt, { weekday: 'short' }, tz),
-        startTime,
-        timeLabel,
-        whenLabel: when,
-        location: ev.location_text,
-        details: ev.details,
-        scheduleUrl: `${appUrl}${link}`,
-      } satisfies Omit<
-        ScheduleReminderParams,
-        'assignedToYou' | 'firstName' | 'recipientEmail' | 'urls' | 'oneClickUnsubscribe'
-      >;
-
-      // Emails need addresses; one batch lookup for all recipients.
-      // (full_name feeds the greeting only — recipient selection unchanged.)
-      // disabled_at rides along on the SAME lookup: a disabled account must
-      // get neither the push nor the email. createNotification refuses a
-      // disabled recipient on its own (the single insert choke point), but
-      // this loop ALSO calls sendEmail directly below, bypassing that
-      // choke point entirely — so the check is repeated here, against data
-      // already in hand, no extra round trip.
-      //
-      // The recipients are every owner, admin and manager of the org, which
-      // no cap bounds, so both reads go 100 ids per request. Both were read
-      // with their errors ignored; a failure now degrades exactly as before
-      // (no profile: no email, and createNotification still refuses a
-      // disabled account; no preferences: subscribed), and is reported. The
-      // event is already stamped, so skipping it would lose the reminder.
-      type ProfileRow = {
-        id: string;
-        email: string | null;
-        full_name: string | null;
-        disabled_at: string | null;
-      };
-      type PrefRow = {
-        user_id: string;
-        email_schedule_reminders: boolean | null;
-        push_schedule_reminders: boolean | null;
-      };
-      const recipientIds = [...userIds];
-      const [profiles, prefRows] = await Promise.all([
-        fetchAllRowsByIds<ProfileRow>(recipientIds, (batch) => (from, to) =>
+      const orgs = await fetchAllRowsByIds<{ id: string; timezone: string | null }>(
+        orgIds,
+        (batch) => (from, to) =>
           admin
-            .from('user_profiles')
-            .select('id, email, full_name, disabled_at')
+            .from('organizations')
+            .select('id, timezone')
             .in('id', batch)
             .order('id', { ascending: true })
             .range(from, to),
-        ).catch((err: unknown) => {
-          void reportError(new Error(rawErrorText(err)), {
-            tag: 'cron.schedule-reminders.profiles',
-            level: 'warning',
-          });
-          return [] as ProfileRow[];
-        }),
-        // Per-user prefs (0258), house fail-open pattern: missing row or null
-        // column = subscribed; only an explicit false opts out.
-        fetchAllRowsByIds<PrefRow>(recipientIds, (batch) => (from, to) =>
-          admin
-            .from('notification_preferences')
-            .select('user_id, email_schedule_reminders, push_schedule_reminders')
-            .in('user_id', batch)
-            .order('user_id', { ascending: true })
-            .range(from, to),
-        ).catch((err: unknown) => {
-          void reportError(new Error(rawErrorText(err)), {
-            tag: 'cron.schedule-reminders.preferences',
-            level: 'warning',
-          });
-          return [] as PrefRow[];
-        }),
-      ]);
-      const profileById = new Map(profiles.map((p) => [p.id, p]));
-      const prefById = new Map(prefRows.map((r) => [r.user_id, r]));
-
-      for (const uid of userIds) {
-        const profile = profileById.get(uid);
-        if (profile?.disabled_at) continue;
-        const pref = prefById.get(uid);
-        const wantsPush = pref?.push_schedule_reminders !== false;
-        const wantsEmail = pref?.email_schedule_reminders !== false;
-        if (!wantsPush && !wantsEmail) continue;
-        // In-app + push in one call.
-        if (wantsPush) {
-          await createNotification({
-            organizationId: ev.organization_id,
-            userId: uid,
-            type: 'schedule_reminder',
-            title,
-            body,
-            link,
-            metadata: { scheduleEventId: ev.id, horizon: isOneHour ? '1h' : '24h' },
-          });
-        }
-        const email = profile?.email;
-        if (email && wantsEmail) {
-          // This recipient's own link, for the event's organization: it
-          // turns off their schedule reminder emails and nobody else's.
-          // Dated with the run's UTC day: the link works for 90 days.
-          const unsubscribe = memberUnsubscribeDelivery({
-            appUrl,
-            settingsUrl,
-            claim: {
-              userId: uid,
-              organizationId: ev.organization_id,
-              kind: 'schedule_reminders',
-            },
-            issuedAt: new Date(now),
-          });
-          const params: ScheduleReminderParams = {
-            ...sharedParams,
-            assignedToYou: uid === ev.assigned_user_id,
-            firstName: (profile?.full_name ?? '').trim().split(/\s+/)[0] || null,
-            recipientEmail: email,
-            urls: {
-              manage: settingsUrl,
-              unsubscribe: unsubscribe.url,
-              support: `${appUrl}/support`,
-            },
-            oneClickUnsubscribe: unsubscribe.oneClick,
-          };
-          const rendered = isOneHour
-            ? renderSchedHour(params)
-            : renderSchedTomorrow(params);
-          // rendered.subject === `Reminder: ${ev.title} — ${horizon}` (the
-          // registry subject builders reproduce the legacy subject exactly).
-          await sendEmail({
-            to: email,
-            subject: rendered.subject,
-            text: rendered.text,
-            html: rendered.html,
-            from: rendered.from,
-            headers: rendered.headers,
-          });
-        }
-      }
-      sent++;
-    } catch (e) {
-      void reportError(e, { tag: 'cron.schedule-reminders', extra: { eventId: ev.id } });
+      );
+      for (const o of orgs) tzByOrg.set(o.id, resolveOrgTimezone(o.timezone));
+    } catch (orgErr) {
+      void reportError(new Error(rawErrorText(orgErr)), {
+        tag: 'cron.schedule-reminders.org-timezone',
+      });
     }
   }
 
-  return NextResponse.json({ ok: true, remindersSent: sent });
+  let sent = 0;
+  let read = 0;
+  let pages = 0;
+  let stoppedAtDeadline = false;
+  let cursor: { startsAt: string; id: string } | null = null;
+  pageLoop: for (;;) {
+    let query = admin
+      .from('schedule_events')
+      .select(eventColumns)
+      .eq('status', 'scheduled')
+      .gte('starts_at', nowIso)
+      .lte('starts_at', in24h)
+      .is('reminded_1h_at', null)
+      .or(owedFilter);
+    if (cursor) {
+      // After the last event of the previous page, in (starts_at, id) order.
+      query = query.or(
+        `starts_at.gt."${cursor.startsAt}",and(starts_at.eq."${cursor.startsAt}",id.gt.${cursor.id})`,
+      );
+    }
+    const { data, error } = await query
+      .order('starts_at', { ascending: true })
+      .order('id', { ascending: true })
+      .limit(PAGE_SIZE);
+    if (error) {
+      void reportError(new Error(error.message), { tag: 'cron.schedule-reminders' });
+      return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    }
+    const events = (data ?? []) as EventRow[];
+    pages += 1;
+    read += events.length;
+    await readZones(events);
+
+    for (const ev of events) {
+      if (Date.now() >= deadlineAt) {
+        stoppedAtDeadline = true;
+        break pageLoop;
+      }
+      try {
+        const isOneHour = ev.starts_at <= in1h && !ev.reminded_1h_at;
+        // 24h reminder is only meaningful BEFORE the 1h one. An event that
+        // enters the system already inside the 1h window (or whose 1h notice
+        // was sent) must never get a late "tomorrow" notice — the field bug
+        // was 'in 1 hour' at 6:20 followed by 'tomorrow' at 6:30 for the
+        // same event (owner-reported duplicate, 2026-07-11).
+        const isDayAhead = !isOneHour && !ev.reminded_24h_at && !ev.reminded_1h_at;
+        if (!isOneHour && !isDayAhead) continue;
+
+        // Stamp FIRST (crash-safe dedupe), and only proceed if we won the write.
+        // Also guarded on the start and the status this run READ: the events
+        // were read at the top and each is stamped only after the emails for
+        // the ones before it, and meanwhile a needed-by change
+        // (revise_order_needed_by) or a Schedule edit can move the event, or it
+        // can be closed. A move clears both stamps so the NEW time is reminded;
+        // a stamp from this stale read would send a reminder naming the old time
+        // and then suppress the new time's day-ahead one. Such an event is
+        // skipped here, and the next run reads it as it is.
+        const stamp = isOneHour ? { reminded_1h_at: nowIso } : { reminded_24h_at: nowIso };
+        const guard = isOneHour ? 'reminded_1h_at' : 'reminded_24h_at';
+        const { data: stamped } = await admin
+          .from('schedule_events')
+          .update(stamp)
+          .eq('id', ev.id)
+          .eq('starts_at', ev.starts_at)
+          .eq('status', 'scheduled')
+          .is(guard, null)
+          .select('id')
+          .maybeSingle();
+        if (!stamped) continue; // another run beat us, or the event moved or closed
+
+        // Recipients: assignee + org managers, deduped.
+        const { data: mgrs } = await admin
+          .from('organization_members')
+          .select('user_id')
+          .eq('organization_id', ev.organization_id)
+          .in('role', ['owner', 'admin', 'manager'])
+          .not('accepted_at', 'is', null)
+          // Real memberships, not act-as grants. Platform "act as" inserts a
+          // REAL organization_members row (role owner, accepted_at stamped,
+          // impersonation_expires_at set — services/platform/impersonation.ts),
+          // which matched this query exactly, so for the life of the grant the
+          // platform admin's personal account received the org's reminder push
+          // AND email every 10 minutes. Ten sibling recipient queries
+          // (daily-briefing, auto-reorder, recurring-pos, …) already filter it.
+          .is('impersonation_expires_at', null);
+        const userIds = new Set<string>((mgrs ?? []).map((m) => m.user_id as string));
+        // The assignee only while an accepted, non-act-as member of THIS event's
+        // org, read the managers' way (0384 review). assigned_user_id is the
+        // order's driver, copied by autoScheduleFromOrder and assignDelivery; a
+        // manager or an approver can write any user id as an order's driver
+        // straight through PostgREST (only assignDelivery checks membership),
+        // and a driver can leave the org after being named. This loop is the one
+        // place that contacts the assignee, with the event's title and
+        // description, so it checks here, at send time, whatever wrote the id.
+        // A failed read skips the assignee (reported): the managers are still
+        // reminded, and a stranger is never.
+        if (ev.assigned_user_id && !userIds.has(ev.assigned_user_id)) {
+          const { data: assignee, error: assigneeErr } = await admin
+            .from('organization_members')
+            .select('user_id')
+            .eq('organization_id', ev.organization_id)
+            .eq('user_id', ev.assigned_user_id)
+            .not('accepted_at', 'is', null)
+            .is('impersonation_expires_at', null)
+            .maybeSingle();
+          if (assigneeErr) {
+            void reportError(new Error(assigneeErr.message), {
+              tag: 'cron.schedule-reminders.assignee',
+              level: 'warning',
+              extra: { eventId: ev.id },
+            });
+          } else if ((assignee as { user_id?: string } | null)?.user_id === ev.assigned_user_id) {
+            userIds.add(ev.assigned_user_id);
+          }
+        }
+        if (userIds.size === 0) continue;
+
+        // ONE zone for this event's every label — see the block above tzPart.
+        const tz = tzByOrg.get(ev.organization_id) ?? resolveOrgTimezone(null);
+        const startsAt = new Date(ev.starts_at);
+        const when = tzPart(
+          startsAt,
+          {
+            weekday: 'short', month: 'short', day: 'numeric',
+            hour: 'numeric', minute: '2-digit',
+          },
+          tz,
+        );
+        // The day-ahead word is COMPUTED, never assumed — see dayWordFor.
+        const dayWord = dayWordFor(startsAt, new Date(now), tz);
+        const horizon = isOneHour ? 'in 1 hour' : dayWord;
+        const title = `Reminder: ${ev.title} — ${horizon}`;
+        const body = `${when}${ev.location_text ? ` · ${ev.location_text}` : ''}`;
+        const link = `/dashboard/schedule/${ev.id}`;
+
+        // es-template merge labels, all in the SAME `tz` as `when` and the day
+        // word above — one resolved zone per event, never a second copy.
+        const startTime = tzPart(startsAt, { hour: 'numeric', minute: '2-digit' }, tz);
+        const endTime = ev.ends_at
+          ? tzPart(new Date(ev.ends_at), { hour: 'numeric', minute: '2-digit' }, tz)
+          : null;
+        const timeLabel = ev.all_day
+          ? 'All day'
+          : endTime
+            ? `${startTime} – ${endTime}`
+            : startTime;
+        const appUrl = env.NEXT_PUBLIC_APP_URL;
+        const settingsUrl = `${appUrl}/dashboard/settings/notifications`;
+        const sharedParams = {
+          eventTitle: ev.title,
+          dayWord,
+          month: tzPart(startsAt, { month: 'short' }, tz),
+          day: tzPart(startsAt, { day: 'numeric' }, tz),
+          dow: tzPart(startsAt, { weekday: 'short' }, tz),
+          startTime,
+          timeLabel,
+          whenLabel: when,
+          location: ev.location_text,
+          details: ev.details,
+          scheduleUrl: `${appUrl}${link}`,
+        } satisfies Omit<
+          ScheduleReminderParams,
+          'assignedToYou' | 'firstName' | 'recipientEmail' | 'urls' | 'oneClickUnsubscribe'
+        >;
+
+        // Emails need addresses; one batch lookup for all recipients.
+        // (full_name feeds the greeting only — recipient selection unchanged.)
+        // disabled_at rides along on the SAME lookup: a disabled account must
+        // get neither the push nor the email. createNotification refuses a
+        // disabled recipient on its own (the single insert choke point), but
+        // this loop ALSO calls sendEmail directly below, bypassing that
+        // choke point entirely — so the check is repeated here, against data
+        // already in hand, no extra round trip.
+        //
+        // The recipients are every owner, admin and manager of the org, which
+        // no cap bounds, so both reads go 100 ids per request. Both were read
+        // with their errors ignored; a failure now degrades exactly as before
+        // (no profile: no email, and createNotification still refuses a
+        // disabled account; no preferences: subscribed), and is reported. The
+        // event is already stamped, so skipping it would lose the reminder.
+        type ProfileRow = {
+          id: string;
+          email: string | null;
+          full_name: string | null;
+          disabled_at: string | null;
+        };
+        type PrefRow = {
+          user_id: string;
+          email_schedule_reminders: boolean | null;
+          push_schedule_reminders: boolean | null;
+        };
+        const recipientIds = [...userIds];
+        const [profiles, prefRows] = await Promise.all([
+          fetchAllRowsByIds<ProfileRow>(recipientIds, (batch) => (from, to) =>
+            admin
+              .from('user_profiles')
+              .select('id, email, full_name, disabled_at')
+              .in('id', batch)
+              .order('id', { ascending: true })
+              .range(from, to),
+          ).catch((err: unknown) => {
+            void reportError(new Error(rawErrorText(err)), {
+              tag: 'cron.schedule-reminders.profiles',
+              level: 'warning',
+            });
+            return [] as ProfileRow[];
+          }),
+          // Per-user prefs (0258), house fail-open pattern: missing row or null
+          // column = subscribed; only an explicit false opts out.
+          fetchAllRowsByIds<PrefRow>(recipientIds, (batch) => (from, to) =>
+            admin
+              .from('notification_preferences')
+              .select('user_id, email_schedule_reminders, push_schedule_reminders')
+              .in('user_id', batch)
+              .order('user_id', { ascending: true })
+              .range(from, to),
+          ).catch((err: unknown) => {
+            void reportError(new Error(rawErrorText(err)), {
+              tag: 'cron.schedule-reminders.preferences',
+              level: 'warning',
+            });
+            return [] as PrefRow[];
+          }),
+        ]);
+        const profileById = new Map(profiles.map((p) => [p.id, p]));
+        const prefById = new Map(prefRows.map((r) => [r.user_id, r]));
+
+        for (const uid of userIds) {
+          const profile = profileById.get(uid);
+          if (profile?.disabled_at) continue;
+          const pref = prefById.get(uid);
+          const wantsPush = pref?.push_schedule_reminders !== false;
+          const wantsEmail = pref?.email_schedule_reminders !== false;
+          if (!wantsPush && !wantsEmail) continue;
+          // In-app + push in one call.
+          if (wantsPush) {
+            await createNotification({
+              organizationId: ev.organization_id,
+              userId: uid,
+              type: 'schedule_reminder',
+              title,
+              body,
+              link,
+              metadata: { scheduleEventId: ev.id, horizon: isOneHour ? '1h' : '24h' },
+            });
+          }
+          const email = profile?.email;
+          if (email && wantsEmail) {
+            // This recipient's own link, for the event's organization: it
+            // turns off their schedule reminder emails and nobody else's.
+            // Dated with the run's UTC day: the link works for 90 days.
+            const unsubscribe = memberUnsubscribeDelivery({
+              appUrl,
+              settingsUrl,
+              claim: {
+                userId: uid,
+                organizationId: ev.organization_id,
+                kind: 'schedule_reminders',
+              },
+              issuedAt: new Date(now),
+            });
+            const params: ScheduleReminderParams = {
+              ...sharedParams,
+              assignedToYou: uid === ev.assigned_user_id,
+              firstName: (profile?.full_name ?? '').trim().split(/\s+/)[0] || null,
+              recipientEmail: email,
+              urls: {
+                manage: settingsUrl,
+                unsubscribe: unsubscribe.url,
+                support: `${appUrl}/support`,
+              },
+              oneClickUnsubscribe: unsubscribe.oneClick,
+            };
+            const rendered = isOneHour
+              ? renderSchedHour(params)
+              : renderSchedTomorrow(params);
+            // rendered.subject === `Reminder: ${ev.title} — ${horizon}` (the
+            // registry subject builders reproduce the legacy subject exactly).
+            await sendEmail({
+              to: email,
+              subject: rendered.subject,
+              text: rendered.text,
+              html: rendered.html,
+              from: rendered.from,
+              headers: rendered.headers,
+            });
+          }
+        }
+        sent++;
+      } catch (e) {
+        void reportError(e, { tag: 'cron.schedule-reminders', extra: { eventId: ev.id } });
+      }
+    }
+
+    if (events.length < PAGE_SIZE) break;
+    const last = events[events.length - 1] as EventRow;
+    cursor = { startsAt: last.starts_at, id: last.id };
+  }
+
+  // Events still owed a reminder when the deadline stopped the run (counted
+  // only then): reported, and first in line on the next run.
+  let leftForNextRun = 0;
+  if (stoppedAtDeadline) {
+    const { count, error: countErr } = await admin
+      .from('schedule_events')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'scheduled')
+      .gte('starts_at', nowIso)
+      .lte('starts_at', in24h)
+      .is('reminded_1h_at', null)
+      .or(owedFilter);
+    leftForNextRun = countErr ? -1 : (count ?? 0);
+    void reportError(new Error('Schedule reminders stopped at the run deadline'), {
+      tag: 'cron.schedule-reminders.deadline',
+      level: 'warning',
+      extra: { read, remindersSent: sent, leftForNextRun },
+    });
+  }
+
+  // One line per run, counts only (no event or org ids). leftForNextRun is
+  // -1 when the deadline stopped the run and the count could not be read.
+  console.info(
+    '[cron.schedule-reminders]',
+    JSON.stringify({
+      pages,
+      read,
+      remindersSent: sent,
+      stoppedAtDeadline,
+      leftForNextRun,
+      ms: Date.now() - startedAt,
+    }),
+  );
+
+  return NextResponse.json({ ok: true, remindersSent: sent, stoppedAtDeadline, leftForNextRun });
 }
