@@ -16,6 +16,12 @@ import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown'
 import { Button } from '@/components/ui/button';
 import { can, countStartAllowed, isManagerOrAbove, type Role } from '@stockpilot/core';
 import { expandPlacementRows } from '@/lib/placements';
+import {
+  packInventoryClientRows,
+  toInventoryClientRows,
+  withoutFlatTrends,
+  type InventoryClientRow,
+} from '@/lib/inventory/client-row';
 import { ElsewhereUnavailableNotice } from '@/components/inventory/elsewhere-unavailable-notice';
 import {
   deriveInstantView,
@@ -366,19 +372,26 @@ async function buildInstantAdoptedPayload(
     ]);
     if (!dataset) return null;
     // Payload-diet (thumb-only) rows — identical shape to the awaited
-    // instant branch so a realtime refresh never flips the row shape.
-    const items = await resolveInventoryListImages(organizationId, dataset.items, {
-      payloadDiet: true,
-    });
+    // instant branch so a realtime refresh never flips the row shape. Only
+    // the columns the table reads, packed (lib/inventory/client-row.ts).
+    const items = toInventoryClientRows(
+      await resolveInventoryListImages(organizationId, dataset.items, {
+        payloadDiet: true,
+      }),
+    );
     return {
-      items,
+      items: packInventoryClientRows(items),
       placement: dataset.placement,
       // Full-dataset trends from the org-wide buckets (pure CPU) so every
       // locally-derived page has its sparklines ready the moment the
-      // table flips into instant mode.
-      trends: deriveInventoryTrends(
-        items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
-        trendBuckets,
+      // table flips into instant mode. A flat, unmoved trend is left out:
+      // the table draws a row without one the same way.
+      trends: withoutFlatTrends(
+        deriveInventoryTrends(
+          items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
+          trendBuckets,
+        ),
+        items,
       ),
       view: 'items',
     };
@@ -534,7 +547,7 @@ async function inventoryTableSection({
   // viewer (useSharedCaches false), over-cap orgs (dataset === null)
   // and any loader failure also fall through — byte-identical to today.
   let instantData: {
-    items: InventoryListItemRow[];
+    items: InventoryClientRow<InventoryListItemRow>[];
     placement: Record<string, InventoryPlacementLine[]>;
     lookups: InventoryListLookups;
     trends: Map<string, { qtySeries: number[]; moveSeries: number[] }>;
@@ -603,19 +616,25 @@ async function inventoryTableSection({
         // inside the loader's cache — see the loader's header note).
         // payloadDiet (rank 5): thumb-only rows, master on demand —
         // identical to the streamed default-view payload so realtime
-        // refreshes never flip the row shape.
-        const items = await resolveInventoryListImages(sessionCtx.organizationId, dataset.items, {
-          payloadDiet: true,
-        });
+        // refreshes never flip the row shape (the same read columns too).
+        const items = toInventoryClientRows(
+          await resolveInventoryListImages(sessionCtx.organizationId, dataset.items, {
+            payloadDiet: true,
+          }),
+        );
         instantData = {
           items,
           placement: dataset.placement,
           lookups,
           // Full-dataset trends from the org-wide buckets — pure CPU,
-          // so every locally-derived page has its sparklines ready.
-          trends: deriveInventoryTrends(
-            items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
-            trendBuckets,
+          // so every locally-derived page has its sparklines ready. A
+          // flat, unmoved trend is left out, as on the streamed payload.
+          trends: withoutFlatTrends(
+            deriveInventoryTrends(
+              items.map((i) => ({ id: i.id, quantityOnHand: i.quantity_on_hand })),
+              trendBuckets,
+            ),
+            items,
           ),
         };
       }
@@ -663,7 +682,11 @@ async function inventoryTableSection({
     if (emptyState) return <PerfUseful>{emptyState}</PerfUseful>;
     return (
       <InventoryTable
-        items={instantItems}
+        // The derived page's rows: in instant mode the table reads the
+        // dataset below, and `items` only stands in when there is none.
+        // (Handing it the whole dataset again would send every row twice
+        // now that the dataset travels packed.)
+        items={derived.pageItems}
         total={derived.total}
         valueOnHand={derived.valueOnHand}
         lookups={{
@@ -694,7 +717,11 @@ async function inventoryTableSection({
         savedViewScope="inventory"
         activeWarehouseId={warehouseFilter}
         currentUserId={sessionCtx.userId}
-        instant={{ items: instantItems, placement: instantData.placement, view: 'items' }}
+        instant={{
+          items: packInventoryClientRows(instantItems),
+          placement: instantData.placement,
+          view: 'items',
+        }}
         productGroupUnits={productGroupUnits}
         initialView={initialView}
         emptyNote={scope ? scopedWarehouseMessage(scope) : null}
@@ -975,7 +1002,9 @@ async function inventoryTableSection({
   }
 
   const [savedViews, scope] = await Promise.all([savedViewsPromise, scopePromise]);
-  const itemsWithImages = data.items;
+  // Only the columns the table reads (lib/inventory/client-row.ts), the same
+  // shape the instant dataset carries.
+  const itemsWithImages = toInventoryClientRows(data.items);
   const placementMap = data.placementMap;
 
   // ONE LINE PER RACK: expand each item into a row per holding location. The
