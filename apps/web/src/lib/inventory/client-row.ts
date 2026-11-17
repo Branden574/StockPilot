@@ -25,6 +25,11 @@
 //      movements is exactly what the table draws when a row has no trend
 //      (seriesForRow), so it is left out of the map.
 //
+// A helper the table hands rows to, typed with an OPTIONAL field
+// (`row: { foo?: T }`), accepts a row without `foo` and reads undefined with
+// no type error. Such a field must be declared on the table's row type, which
+// puts it in INVENTORY_CLIENT_ROW_FIELDS (the size test ties the two).
+//
 // None of this touches what is cached or how it is keyed: the loaders and
 // their keys are unchanged, and image URLs are still signed per request
 // before these steps run.

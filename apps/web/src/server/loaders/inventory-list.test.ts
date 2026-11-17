@@ -821,6 +821,52 @@ describe('resolveInventoryListImages payloadDiet (rank 5 — instant dataset onl
     expect(rows[0]!.image_lqip).toBeNull();
   });
 
+  it('a thumb that does not sign while its master does shows the master (Books and Items), signing only those masters in one more call', async () => {
+    const row = () =>
+      cachedRow({
+        image_storage_path: 'p/master.jpg',
+        image_thumb_path: 'p/thumb.webp',
+        image_lqip: 'blur',
+      });
+    const fine = cachedRow({
+      id: 'item-2',
+      image_storage_path: 'p/master-2.jpg',
+      image_thumb_path: 'p/thumb-2.webp',
+    });
+    for (const keepLqip of [true, false]) {
+      signedUrlsMock.mockReset();
+      signedUrlsMock
+        .mockResolvedValueOnce(new Map([['p/thumb-2.webp', 'https://signed/thumb-2']]))
+        .mockResolvedValueOnce(new Map([['p/master.jpg', 'https://signed/master']]));
+
+      const rows = await resolveInventoryListImages('org-1', [row(), fine], {
+        payloadDiet: true,
+        keepLqip,
+      });
+
+      expect(signedUrlsMock).toHaveBeenCalledTimes(2);
+      expect(signedUrlsMock).toHaveBeenNthCalledWith(1, ['p/thumb.webp', 'p/thumb-2.webp']);
+      expect(signedUrlsMock).toHaveBeenNthCalledWith(2, ['p/master.jpg']);
+      expect(rows[0]!.image_url).toBe('https://signed/master');
+      expect(rows[0]!.image_thumb_url).toBeNull();
+      expect(rows[0]!.image_lqip).toBe(keepLqip ? 'blur' : null);
+      // The row whose thumb signed is unchanged: thumb only.
+      expect(rows[1]!.image_url).toBeNull();
+      expect(rows[1]!.image_thumb_url).toBe('https://signed/thumb-2');
+    }
+  });
+
+  it('every thumb signed: no second sign call', async () => {
+    signedUrlsMock.mockReset();
+    signedUrlsMock.mockResolvedValue(new Map([['p/thumb.webp', 'https://signed/thumb']]));
+    await resolveInventoryListImages(
+      'org-1',
+      [cachedRow({ image_storage_path: 'p/master.jpg', image_thumb_path: 'p/thumb.webp' })],
+      { payloadDiet: true, keepLqip: true },
+    );
+    expect(signedUrlsMock).toHaveBeenCalledTimes(1);
+  });
+
   it('default (no opts) stays full-fidelity — the 30-row payload and every server-mode path are unchanged', async () => {
     signedUrlsMock.mockResolvedValue(
       new Map([

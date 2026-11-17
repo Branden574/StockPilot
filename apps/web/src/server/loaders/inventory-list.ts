@@ -1653,7 +1653,9 @@ export function deriveInventoryTrends(
  * and this function's sign fan-out. The client fetches the master on
  * demand from the org-scoped /api/items/[id]/image-master route (same
  * 25-day per-path cache → same stable URL). Rows WITHOUT a thumb keep
- * their master/cfThumb inline — it's their only image. The default view's
+ * their master/cfThumb inline — it's their only image. A row whose thumb
+ * does not sign falls back to its master (signed in one more batched call
+ * for exactly those rows), as the full path shows it. The default view's
  * cached page-1 payload and every server-mode path stay full-fidelity.
  *
  * `opts.keepLqip` (Books instant dataset): the diet rows keep their LQIP, so
@@ -1674,10 +1676,29 @@ export async function resolveInventoryListImages(
     if (r.image_storage_path && !(diet && r.image_thumb_path)) paths.add(r.image_storage_path);
     if (r.image_thumb_path) paths.add(r.image_thumb_path);
   }
+  const images = new ItemImagesService(adminReadContext(organizationId));
   const urlByPath =
-    paths.size > 0
-      ? await new ItemImagesService(adminReadContext(organizationId)).signedUrls([...paths])
-      : new Map<string, string>();
+    paths.size > 0 ? await images.signedUrls([...paths]) : new Map<string, string>();
+
+  // Diet rows whose thumb did not sign (a missing or unreadable thumb
+  // object) fall back to their master, as the full path shows it: one more
+  // batched sign for exactly those masters, normally none at all.
+  if (diet) {
+    const masters = new Set<string>();
+    for (const r of rows) {
+      if (
+        r.image_thumb_path &&
+        r.image_storage_path &&
+        !urlByPath.has(r.image_thumb_path) &&
+        !urlByPath.has(r.image_storage_path)
+      ) {
+        masters.add(r.image_storage_path);
+      }
+    }
+    if (masters.size > 0) {
+      for (const [path, url] of await images.signedUrls([...masters])) urlByPath.set(path, url);
+    }
+  }
 
   return rows.map((r) => {
     const { image_storage_path, image_thumb_path, image_lqip, ...rest } = r;
@@ -1690,11 +1711,23 @@ export async function resolveInventoryListImages(
         : null;
     if (diet && image_thumb_path) {
       const thumbUrl = urlByPath.get(image_thumb_path) ?? null;
+      const fallbackMaster =
+        !thumbUrl && image_storage_path ? (urlByPath.get(image_storage_path) ?? null) : null;
+      if (fallbackMaster) {
+        // The thumb did not sign but the master did: show the master, as
+        // the full path would (with the LQIP when asked for).
+        return {
+          ...rest,
+          image_url: fallbackMaster,
+          image_thumb_url: null,
+          image_lqip: keepLqip ? image_lqip : null,
+        };
+      }
       return {
         ...rest,
-        // Master intentionally absent (fetched on demand); if the thumb
-        // failed to sign, degrade to the cfThumb fallback like the full
-        // path would for a failed master.
+        // Master intentionally absent (fetched on demand); if neither the
+        // thumb nor the master signed, degrade to the cfThumb fallback like
+        // the full path would for a failed master.
         image_url: thumbUrl ? null : cfThumb,
         image_thumb_url: thumbUrl,
         // The placeholder belongs to the photo shown: kept only beside a

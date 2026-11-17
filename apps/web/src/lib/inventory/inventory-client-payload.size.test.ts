@@ -187,14 +187,59 @@ describe('the rows carry every column the table reads', () => {
     expect(unexpected).toEqual([]);
   });
 
-  it('a cast that reads a row column in the table names a shipped column', () => {
-    // `(i as { barcode?: string | null }).barcode` reads past the row type;
-    // the column it names must still be sent.
-    const src = readFileSync(join(WEB_SRC, 'components/inventory/inventory-table.tsx'), 'utf8');
-    const cast = /\b(?:item|it|i|r|row) as \{\s*(\w+)\??:/g;
-    const named = [...src.matchAll(cast)].map((m) => m[1]!);
-    for (const field of named) {
-      expect(INVENTORY_CLIENT_ROW_FIELDS as readonly string[]).toContain(field);
+  it('no client file that receives the rows reads a column that is no longer sent', () => {
+    // Typed reads are held by the type check above (tsc). This covers what tsc
+    // cannot see: a cast past the row type, `(i as { supplier_id?: string })`,
+    // and a property read off a value typed loosely, in every client file the
+    // rows reach. The columns the loaders select and the table does not read:
+    const row = syntheticListView(1, 'items').items[0]! as unknown as Record<string, unknown>;
+    const dropped = Object.keys(row).filter(
+      (k) => !(INVENTORY_CLIENT_ROW_FIELDS as readonly string[]).includes(k),
+    );
+    expect(dropped.sort()).toEqual(
+      [
+        'created_by',
+        'description',
+        'is_rental',
+        'jersey_number',
+        'retail_price',
+        'supplier_id',
+        'tracking_type',
+        'updated_by',
+        'variant_key',
+        'variant_size_system',
+      ].sort(),
+    );
+    const names = dropped.join('|');
+    // A cast naming a dropped column, on any identifier.
+    const cast = new RegExp(String.raw`as\s+\{[^}]*\b(${names})\??\s*:`);
+    // A property read of a dropped column. `description` is left out here:
+    // the empty states and dialogs these files render take a `description`
+    // prop of their own; the cast check above still covers it.
+    const read = new RegExp(
+      String.raw`\.(${dropped.filter((d) => d !== 'description').join('|')})\b`,
+    );
+    const files = [
+      'components/inventory/inventory-table.tsx',
+      'components/inventory/inventory-grid.tsx',
+      'components/inventory/use-instant-filters.ts',
+      'components/inventory/selection-utils.ts',
+      'components/books/books-glass-columns.tsx',
+      'components/books/books-inventory-table.tsx',
+      'lib/inventory/instant-mode.ts',
+      'lib/inventory/group-by-sku.ts',
+      'lib/inventory/rack-holdings.ts',
+      'lib/orders/start-order-prefill.ts',
+      'lib/placements.ts',
+    ];
+    const found: string[] = [];
+    for (const f of files) {
+      const lines = readFileSync(join(WEB_SRC, f), 'utf8').split('\n');
+      lines.forEach((line, i) => {
+        if (/^\s*(\/\/|\*|\/\*\*)/.test(line)) return;
+        if (cast.test(line) || read.test(line)) found.push(`${f}:${i + 1}: ${line.trim()}`);
+      });
     }
+    expect(found).toEqual([]);
   });
 });
