@@ -2,6 +2,7 @@
 // After a run: is the data still right? LOCAL ONLY.
 //
 //   node load-tests/k6/tools/check-correctness.mjs --manifest <m.json> --summary <k6 summary.json> \
+//        --console <k6 console output> \
 //        --since <ISO time the run began, from the database clock> [--out result.json]
 //
 // Checks, for the load-test organization:
@@ -19,7 +20,13 @@
 //      in its notes);
 //   5. adjust movements by the load-test accounts since the run began = the
 //      200 answers (adjust_up_ok + adjust_down_ok), and their net change =
-//      up - down.
+//      up - down; and, exactly, by token: each adjust's reason carries a token
+//      of its own, and k6's console output (LOADTEST_WRITE_LOG=1) names every
+//      token sent and the status of every one answered. Every movement must
+//      carry a token this run sent, no token may appear twice, every adjust
+//      answered 200 must have exactly one movement with the change it asked
+//      for, an adjust answered with an error must have none, and an
+//      unanswered one at most one.
 // Writes the run's end cut off (sent, never answered: k6 stops a request still
 // in flight when gracefulStop runs out) may or may not have been committed. For
 // those the counts in 3-5 may be higher than the answers, by at most the
@@ -28,7 +35,7 @@
 // quiet (run-scale.mjs waits for it), or a write still being committed counts
 // as a fault.
 // Exits 1 when any check fails.
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 import { lit, parseArgs, psqlJson, readJson } from './local.mjs';
 
@@ -46,6 +53,28 @@ function unanswered(summary, write) {
   );
 }
 
+/** The adjust log lines in k6's console output: token -> { sign, answered status or null }. */
+function adjustLog(file) {
+  const sent = new Map();
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
+    const m = /msg="((?:[^"\\]|\\.)*)"/.exec(line);
+    if (!m || !m[1].includes('lt')) continue;
+    let rec;
+    try {
+      rec = JSON.parse(JSON.parse(`"${m[1]}"`));
+    } catch (_e) {
+      continue;
+    }
+    if (!rec || rec.lt !== 'adjust') continue;
+    if (rec.phase === 'sent') sent.set(rec.token, { sign: rec.sign, status: null });
+    else if (rec.phase === 'answered' && sent.has(rec.token))
+      sent.get(rec.token).status = rec.status;
+  }
+  return sent;
+}
+
+const ADJUST_REASON = /^Load test [+-]1 ([0-9a-f-]{36})$/;
+
 /** answers <= database <= answers + cut off, with the words for the result. */
 function within(database, answers, cutOff) {
   const d = Number(database);
@@ -61,6 +90,8 @@ function main() {
   const summary = readJson(args.summary);
   const since = args.since;
   if (!since || Number.isNaN(Date.parse(since))) throw new Error('--since <ISO time> is required');
+  if (!args.console) throw new Error('--console <k6 console output> is required');
+  const sent = adjustLog(args.console);
   const org = lit(m.organizationId);
   const users = Object.values(m.users)
     .flat()
@@ -119,6 +150,10 @@ select json_build_object(
   'adjustNetSince', (select coalesce(sum(quantity_change), 0) from public.stock_movements
                               where organization_id = ${org} and created_at >= ${t}::timestamptz
                                 and user_id in (${users}) and movement_type in ('add', 'remove', 'adjust')),
+  'adjustRows', (select coalesce(json_agg(json_build_object('reason', reason, 'change', quantity_change)), '[]')
+                              from public.stock_movements
+                              where organization_id = ${org} and created_at >= ${t}::timestamptz
+                                and user_id in (${users}) and movement_type in ('add', 'remove', 'adjust')),
   'movementTypesSince', (select coalesce(json_object_agg(movement_type, n), '{}') from (
                               select movement_type, count(*) n from public.stock_movements
                                where organization_id = ${org} and created_at >= ${t}::timestamptz group by 1) mt)
@@ -151,6 +186,49 @@ select json_build_object(
   const net = Number(db.adjustNetSince);
   const answeredNet = k6.adjustUp - k6.adjustDown;
   const netOk = net >= answeredNet - cut.adjustDown && net <= answeredNet + cut.adjustUp;
+
+  // The exact adjust check, by token.
+  const seen = new Map();
+  let foreign = 0;
+  let wrongChange = 0;
+  for (const r of db.adjustRows) {
+    const m = ADJUST_REASON.exec(String(r.reason ?? ''));
+    const s = m && sent.get(m[1]);
+    if (!s) {
+      foreign++;
+      continue;
+    }
+    seen.set(m[1], (seen.get(m[1]) || 0) + 1);
+    if (Number(r.change) !== s.sign) wrongChange++;
+  }
+  let twice = 0;
+  for (const n of seen.values()) if (n > 1) twice++;
+  let answeredMissing = 0;
+  let erroredCommitted = 0;
+  let unansweredSent = 0;
+  let unansweredCommitted = 0;
+  let logged200 = 0;
+  for (const [token, s] of sent) {
+    const n = seen.get(token) || 0;
+    if (s.status === 200) {
+      logged200++;
+      if (n !== 1) answeredMissing++;
+    } else if (s.status === null) {
+      unansweredSent++;
+      if (n > 0) unansweredCommitted++;
+    } else if (n > 0) erroredCommitted++;
+  }
+  const tokens = {
+    sent: sent.size,
+    answered200: logged200,
+    unanswered: unansweredSent,
+    unansweredCommitted,
+    movementsWithoutSentToken: foreign,
+    tokensTwice: twice,
+    answered200WithoutOneMovement: answeredMissing,
+    answeredErrorWithMovement: erroredCommitted,
+    wrongChange,
+  };
   const checks = [
     [
       'on hand = sum of holdings (items touched this run)',
@@ -191,6 +269,32 @@ select json_build_object(
     ],
     ['adjust movements = adjust answers', adjustOk, adjustDetail],
     [
+      'adjust log is complete (logged 200 answers = answer counters)',
+      logged200 === k6.adjustUp + k6.adjustDown,
+      `log ${logged200}, counters ${k6.adjustUp + k6.adjustDown}`,
+    ],
+    [
+      'every adjust movement carries a token this run sent',
+      foreign === 0,
+      `${foreign} without one`,
+    ],
+    ['no adjust token on two movements', twice === 0, `${twice}`],
+    [
+      'every adjust answered 200 has exactly one movement',
+      answeredMissing === 0,
+      `${answeredMissing} of ${logged200} do not`,
+    ],
+    [
+      'no movement for an adjust answered with an error',
+      erroredCommitted === 0,
+      `${erroredCommitted}`,
+    ],
+    [
+      'every adjust movement has the change its request asked for',
+      wrongChange === 0,
+      `${wrongChange} differ`,
+    ],
+    [
       'adjust net change = up - down',
       netOk,
       `database ${net}, answers ${answeredNet}${cut.adjustUp + cut.adjustDown ? ` (cut off: +1 x ${cut.adjustUp}, -1 x ${cut.adjustDown})` : ''}`,
@@ -201,14 +305,18 @@ select json_build_object(
     ok,
     since,
     checks: checks.map(([name, pass, detail]) => ({ name, pass, detail })),
-    database: db,
+    // The movement rows themselves stay out of the result file.
+    database: { ...db, adjustRows: db.adjustRows.length },
     answers: k6,
     unansweredWrites: cut,
+    adjustTokens: tokens,
   };
   for (const c of result.checks)
     console.log(`  ${c.pass ? 'ok  ' : 'FAIL'} ${c.name} (${c.detail})`);
   const cutTotal = Object.values(cut).reduce((a, b) => a + b, 0);
-  console.log(`  unanswered writes (cut off at the end): ${cutTotal}`);
+  console.log(
+    `  unanswered writes (cut off at the end): ${cutTotal}; adjusts unanswered ${unansweredSent}, of which committed ${unansweredCommitted}`,
+  );
   if (args.out) writeFileSync(args.out, JSON.stringify(result, null, 1));
   if (!ok) process.exitCode = 1;
 }

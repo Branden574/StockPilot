@@ -11,20 +11,36 @@ gate.
 
 1. **This machine only.** Every scenario and every tool refuses an address that
    is not `127.0.0.1` or `[::1]` (`k6/lib/safety.js`), before the first
-   request. The name `localhost` is refused too: it is a name, and an
-   environment proxy setting can send it elsewhere. There is no default address
-   anywhere and no override. A preview deploy or the production site cannot be
-   a target. k6 never follows a redirect, and the Node tools refuse one.
-2. **The app under test calls no outside service.** Build and serve it only in
-   a worktree with **no `apps/web/.env*` file** (Next.js reads those, and a
-   checkout's file may hold real keys). The app env file written by
-   `local-env.mjs` sets every outside-service key the app reads (email, AI,
-   book lookups, payments, analytics, maps, accounting, push, error webhooks,
-   hosting) to empty, so none can come from anywhere else
-   (`k6/tools/app-env.mjs`). `run-scale.mjs` refuses to start when this
-   checkout or the folder the app runs from has an `apps/web/.env*` file, or
-   when the app's Content-Security-Policy names a Supabase address other than
-   the local stack.
+   request, and the name `localhost` too. There is no default address anywhere
+   and no override. A preview deploy or the production site cannot be a
+   target. k6 never follows a redirect, and the Node tools refuse one.
+   A literal address is not enough on its own: with Node's environment proxy
+   on (`NODE_USE_ENV_PROXY=1` or `--use-env-proxy`, and `HTTP_PROXY` set),
+   Node's fetch sends even `127.0.0.1` and `[::1]` to the proxy, with the
+   service key. So every tool refuses to run with the proxy on
+   (`k6/tools/local.mjs`), no child process gets a proxy setting or
+   `NODE_OPTIONS`, and the app env file writes them all empty.
+2. **The app under test reaches nothing outside this machine.**
+   - `run-scale.mjs` starts the app itself, from this worktree, as
+     `node --require k6/tools/outbound-guard.cjs next start`, with an
+     environment made only of the app env file plus `PATH` and `HOME`. It
+     refuses a port that is already taken and stops the app at the end.
+   - The outbound guard refuses every connection the server tries to make to
+     anything but this machine (every TCP and TLS socket, and `fetch`), logs it,
+     and any refusal fails the step. **This is what stops services that need
+     no key**: Expo push, Google Books and UPCitemdb lookups, the PostHog
+     ingest proxy, and integrations whose credentials are stored in the
+     database. Empty keys alone do not stop those.
+   - The app env file written by `local-env.mjs` also sets every
+     outside-service key the app reads (email, AI, book lookups, payments,
+     analytics, maps, accounting, push, error webhooks, hosting) to empty, so
+     none can come from a checkout file (`k6/tools/app-env.mjs`).
+   - Build only in a worktree with **no `apps/web/.env*` file** (Next.js reads
+     those, and a checkout's file may hold real keys); `run-scale.mjs` refuses
+     a checkout that has one, and an app whose Content-Security-Policy names a
+     Supabase address other than the local stack.
+   - Not covered: connections the database itself makes (`pg_net`, used by
+     the push trigger). The synthetic accounts have no push tokens.
 3. **Keys stay in the environment.** The env files live outside the repository
    (mode 600) and are loaded without printing. The service key is read only by
    the seeder and inside k6 `setup()`; it is never logged, tagged or written to
@@ -64,10 +80,14 @@ supabase start --workdir "$STACK" -x studio,imgproxy,edge-runtime,logflare,vecto
 supabase status -o env --workdir "$STACK" | \
   node load-tests/k6/tools/local-env.mjs --app-env "$STACK/app.env" --loadtest-env "$STACK/loadtest.env" --port 3600
 
-# 3. Build and start the app against that stack (production build, port 3600).
-cd apps/web
-( set -a; . "$STACK/app.env"; set +a; pnpm build && exec npx next start -p 3600 -H 127.0.0.1 )
+# 3. Build the app against that stack (production build). run-scale.mjs starts it.
+( cd apps/web && set -a && . "$STACK/app.env" && set +a && pnpm build )
 ```
+
+`local-env.mjs` pins `NEXT_PUBLIC_LIQUID_GLASS` (it is built into the pages
+measured): `opt-in` by default, the web app's released setting on 2026-11-11;
+`--liquid-glass off|opt-in|default` changes it. Build with the same file the
+runner is given; the report states the value.
 
 `prepare-stack.mjs` copies `supabase/` (never its `.temp` or `.branches`
 folders, where a linked checkout keeps the link, and it checks the copy holds no
@@ -82,17 +102,20 @@ whenever the code under test changes; restart the stack (`supabase stop
 ## Run a scale point
 
 ```bash
-node --env-file="$STACK/loadtest.env" load-tests/k6/run-scale.mjs \
+node --env-file="$STACK/loadtest.env" load-tests/k6/run-scale.mjs --app-env "$STACK/app.env" \
   --items 10001 --users-per-role 40 \
   --ladder 25,50,100,250 --duration 5m --warmup 60s \
   --label "main abc1234" --out load-tests/results/main-10k
 ```
 
-One command: seed, warm up, run each step of the ladder, check the data after
-each step, write `report.md` and `report.json` in `--out`, tear down.
+One command: start the app (port taken: refused), seed, warm up, run each step
+of the ladder, check the data after each step, write `report.md` and
+`report.json` in `--out`, tear down, stop the app. The app's log is
+`server.log` and the guard's refusals `outbound-refused.log` in `--out`.
 
 | Option | Default | Meaning |
 |---|---|---|
+| `--app-env` | | The app env file `local-env.mjs` wrote (required) |
 | `--items` | 1000 | Items to seed: 1,000 / 10,001 / 50,000 are the scale points |
 | `--users-per-role` | 20 | Accounts per role; 40-50 for the 250 step so per-person limits are not the bottleneck |
 | `--ladder` | 25,50,100,250 | Concurrent people per step |
@@ -209,6 +232,7 @@ Each VU keeps one session for the whole run.
 | `http_req_failed` | 1% or more of answers are not the expected status (2xx, or the 403/404 a probe expects; a 3xx counts as failed) |
 | `http_req_duration{kind:ssr / api_read / write}` | p95 over 1500 / 800 / 2000 ms (configurable) |
 | `dropped_iterations` | more than `LOADTEST_MAX_DROPPED_PCT` (1%) of the planned iterations could not start on time: the step did not deliver the load it reports |
+| outbound guard (runner) | the app tried to connect to anything off this machine (stops the ladder) |
 
 After each step `tools/check-correctness.mjs` checks the data: on hand equals
 the sum of holdings (items touched, and every item), no negative holding or on
@@ -216,7 +240,12 @@ hand, orders created equal the 201 answers with one order per submission key,
 receipts equal the receive answers with no key used twice and one line and one
 movement each, purchase order received quantities equal their receipt lines,
 and adjust movements equal the adjust answers with a net change of up minus
-down. The runner first waits for the database to go quiet (no request from the
+down. Adjusts are checked exactly, by token: each adjust's reason carries a
+token of its own, k6 logs every token sent and the status of every one
+answered (`k6-console.log` in the step folder), and every movement must carry
+a token the run sent, no token may appear twice, every adjust answered 200
+must have exactly one movement with the change it asked for, and one answered
+with an error none. The runner first waits for the database to go quiet (no request from the
 app still running). A write the end of the step cut off (sent, never answered:
 k6 stops requests still in flight when `gracefulStop` runs out) may or may not
 have been committed; the check allows each such write either way and the
@@ -260,7 +289,11 @@ LOADTEST_MANIFEST=/tmp/lt/manifest.json LOADTEST_ACTORS=25 LOADTEST_DURATION=2m 
 LOADTEST_MANIFEST=/tmp/lt/manifest.json ./load-tests/k6/run-all.sh   # 01 and 03-07 in a row
 ```
 
-Run them against a stack you can throw away: 06 writes.
+Run them against a stack you can throw away: 06 writes. They need the app
+running already; started by hand it has no outbound guard, so for a measured
+run use `run-scale.mjs --scenario`, which starts the app under the guard. To
+start it by hand anyway, from `apps/web` in a clean worktree:
+`env -i PATH="$PATH" HOME="$HOME" bash -c 'set -a; . "$STACK/app.env"; set +a; exec node --require ../../load-tests/k6/tools/outbound-guard.cjs node_modules/next/dist/bin/next start -p 3600 -H 127.0.0.1'`.
 
 ---
 
@@ -272,17 +305,23 @@ comparisons between builds, not production capacity). Fill in from
 `report.md`; leave a cell empty until a run measured it. The 1,000 item rows
 are the suite's proof runs (10 accounts per role, 2 minutes per step, after a
 30 s warm-up, on an Apple silicon laptop that was also running the stack and
-k6). The 25 row is from an earlier version of the runner: its requests/s
-counted the `setup()` sign-ins in the step time, and its write p95 included the
-viewer's refused writes and the resends.
+k6). The first two rows ran on a build without `NEXT_PUBLIC_LIQUID_GLASS`
+(read as `off`) and a server started by hand; the next two on a build pinned to
+`opt-in`, served by `run-scale.mjs` under the outbound guard, on a freshly
+started stack. Their p95 times are higher; what makes the difference was not
+measured. The 25 row is from an earlier version of the runner: its
+requests/s counted the `setup()` sign-ins in the step time, and its write p95
+included the viewer's refused writes and the resends.
 
-| Scale point | Actors | Requests/s | Dropped | ssr p95 ms | api_read p95 ms | write p95 ms | Failed | Correctness | Build | Date |
-|---|---|---|---|---|---|---|---|---|---|---|
-| 1,000 items | 5 | 1.3 | 0 / 144 | 280 | 209 | 224 | 0.00% | pass | main d565102a7 | 2026-11-17 |
-| 1,000 items | 10 | 2.8 | 0 / 296 | 190 | 138 | 153 | 0.00% | pass | main d565102a7 | 2026-11-17 |
-| 1,000 items | 25 | (5.3) | | 1480 | 779 | (905) | 0.00% | pass | main d565102a7 | 2026-11-17 |
-| 10,001 items | 25-250 | | | | | | | | | |
-| 50,000 items | 25-250 | | | | | | | | | |
+| Scale point | Actors | Requests/s | Dropped | ssr p95 ms | api_read p95 ms | write p95 ms | Failed | Correctness | Liquid Glass | Build | Date |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1,000 items | 5 | 1.3 | 0 / 144 | 280 | 209 | 224 | 0.00% | pass | unset (off) | main d565102a7 | 2026-11-17 |
+| 1,000 items | 10 | 2.8 | 0 / 296 | 190 | 138 | 153 | 0.00% | pass | unset (off) | main d565102a7 | 2026-11-17 |
+| 1,000 items | 5 | 1.4 | 0 / 144 | 1073 | 352 | 671 | 0.00% | pass | opt-in | main d565102a7 | 2026-11-17 |
+| 1,000 items | 10 | 2.7 | 0 / 296 | 574 | 442 | 431 | 0.00% | pass | opt-in | main d565102a7 | 2026-11-17 |
+| 1,000 items | 25 | (5.3) | | 1480 | 779 | (905) | 0.00% | pass | unset (off) | main d565102a7 | 2026-11-17 |
+| 10,001 items | 25-250 | | | | | | | | | | |
+| 50,000 items | 25-250 | | | | | | | | | | |
 
 ---
 

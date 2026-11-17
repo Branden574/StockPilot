@@ -59,6 +59,9 @@ function stepReport(dir, name) {
   const before = readMaybe(join(dir, 'pg-before.json'));
   const after = readMaybe(join(dir, 'pg-after.json'));
   const correctness = readMaybe(join(dir, 'correctness.json'));
+  const outboundRefused = existsSync(join(dir, 'outbound-refused.txt'))
+    ? Number(readFileSync(join(dir, 'outbound-refused.txt'), 'utf8').trim())
+    : null;
   const exitCode = existsSync(join(dir, 'k6-exit.txt'))
     ? readFileSync(join(dir, 'k6-exit.txt'), 'utf8').trim()
     : '?';
@@ -202,6 +205,7 @@ function stepReport(dir, name) {
     maxDropped: lt.maxDropped ?? null,
     unanswered,
     unansweredTotal,
+    outboundRefused,
     appRequests,
     throughputPerS: appRequests / durationS,
     httpFailedRate: rate('http_req_failed'),
@@ -225,24 +229,25 @@ function markdown(run, steps) {
   L.push(
     `Local only. App ${run.baseUrl}, database on this machine. Seeded ${run.items} items, ${run.usersPerRole} accounts per role` +
       ` (organization ${run.organizationId}). Each step ran ${run.duration}` +
-      `${run.warmup && !/^0s?$/.test(run.warmup) ? `, after one ${run.warmup} warm-up run that is not reported` : ''}.`,
+      `${run.warmup && !/^0s?$/.test(run.warmup) ? `, after one ${run.warmup} warm-up run that is not reported` : ''}.` +
+      ` The app was ${run.server || 'started by hand'}; NEXT_PUBLIC_LIQUID_GLASS=${run.liquidGlass ?? 'not recorded'}.`,
     '',
   );
   L.push('## Summary', '');
   L.push(
-    '| actors | requests | req/s | dropped / planned | failed | checks | ssr p95 | api p95 | write p95 | unanswered writes | PostgREST stmts/req | peak conns | correctness | k6 exit |',
+    '| actors | requests | req/s | dropped / planned | failed | checks | ssr p95 | api p95 | write p95 | unanswered writes | outbound refused | PostgREST stmts/req | peak conns | correctness | k6 exit |',
   );
-  L.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
+  L.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
   for (const s of steps) {
     if (s.missing) {
-      L.push(`| ${s.name} | not run | | | | | | | | | | | | |`);
+      L.push(`| ${s.name} | not run | | | | | | | | | | | | | |`);
       continue;
     }
     L.push(
       `| ${s.name} | ${s.appRequests} | ${s.throughputPerS.toFixed(1)} | ${s.counts.dropped_iterations} / ${s.plannedIterations ?? '-'} | ` +
         `${(s.httpFailedRate * 100).toFixed(2)}% | ${(s.checksRate * 100).toFixed(2)}% | ` +
         `${ms(s.byKind.ssr && s.byKind.ssr.p95)} | ${ms(s.byKind.api_read && s.byKind.api_read.p95)} | ${ms(s.byKind.write && s.byKind.write.p95)} | ` +
-        `${s.unansweredTotal} | ` +
+        `${s.unansweredTotal} | ${s.outboundRefused ?? '-'} | ` +
         `${s.db && s.db.statementsPerRequest !== null ? s.db.statementsPerRequest.toFixed(1) : '-'} | ${s.connectionPeak.total} | ` +
         `${s.correctness ? (s.correctness.ok ? 'pass' : 'FAIL') : '-'} | ${s.exitCode} |`,
     );
@@ -252,7 +257,8 @@ function markdown(run, steps) {
     'req/s = workload requests over the configured step time (setup() sign-ins and the graceful stop left out). ' +
       'dropped = iterations k6 could not start on time for want of a free VU (the step fails above ' +
       'LOADTEST_MAX_DROPPED_PCT of the planned ones). unanswered writes = writes sent but cut off by the end of ' +
-      'the step; the correctness check allows each to have been committed or not. ' +
+      'the step; the correctness check allows each to have been committed or not (adjusts are matched exactly, by token). ' +
+      'outbound refused = connections the app server tried to make off this machine, refused by the outbound guard (any fails the step). ' +
       'The p95 columns hold the timed kinds only: refused viewer writes, resent submissions and scope probes are ' +
       'reported apart below.',
     '',

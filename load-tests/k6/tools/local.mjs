@@ -6,6 +6,58 @@ import { readFileSync } from 'node:fs';
 
 import { assertLoopbackDbUrl, assertLoopbackUrl } from '../lib/safety.js';
 
+/**
+ * Node's environment proxy. With NODE_USE_ENV_PROXY=1 (or --use-env-proxy)
+ * and HTTP_PROXY set, Node's fetch sends even 127.0.0.1 and [::1] requests to
+ * the proxy unless NO_PROXY names them, and with them the service key. The
+ * tools refuse to run that way rather than rely on NO_PROXY.
+ */
+export const PROXY_ENV = Object.freeze([
+  'NODE_USE_ENV_PROXY',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'ALL_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'all_proxy',
+  'no_proxy',
+]);
+
+/** Why this process would send its requests through a proxy, or null. */
+export function envProxyReason(env = process.env, execArgv = process.execArgv) {
+  if (env.NODE_USE_ENV_PROXY !== undefined && env.NODE_USE_ENV_PROXY !== '')
+    return 'NODE_USE_ENV_PROXY is set';
+  if (execArgv.some((a) => a.includes('use-env-proxy')))
+    return 'node was started with --use-env-proxy';
+  if (String(env.NODE_OPTIONS || '').includes('use-env-proxy'))
+    return 'NODE_OPTIONS holds --use-env-proxy';
+  return null;
+}
+
+/** Exits when an environment proxy is on (see envProxyReason). */
+export function assertNoEnvProxy() {
+  const why = envProxyReason();
+  if (why) {
+    console.error(
+      `[loadtest] ${why}: Node would send local requests (and the service key) through a proxy. Unset it and run again.`,
+    );
+    process.exit(2);
+  }
+}
+// Every tool and the runner import this module: refuse before anything runs.
+assertNoEnvProxy();
+
+/**
+ * The environment for a child process: this one without the proxy settings
+ * and without NODE_OPTIONS (which can load code or turn the proxy on).
+ */
+export function childEnv(extra = {}, env = process.env) {
+  const out = { ...env };
+  for (const k of [...PROXY_ENV, 'NODE_OPTIONS']) delete out[k];
+  return { ...out, ...extra };
+}
+
 /** Reads `--name value` and `--flag` arguments. */
 export function parseArgs(argv) {
   const out = { _: [] };

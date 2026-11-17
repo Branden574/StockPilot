@@ -301,6 +301,32 @@ function textOf(res) {
   return typeof res.body === 'string' ? res.body : '';
 }
 
+/**
+ * One adjust of +1 or -1, its reason carrying a token of its own. When
+ * LOADTEST_WRITE_LOG=1 (run-scale.mjs sets it and keeps k6's console output
+ * per step), it logs the token when sent and again with the status when
+ * answered, so the correctness check can match every answered adjust to
+ * exactly one movement and every unanswered one to at most one: a write
+ * applied twice cannot hide behind the count of cut-off writes.
+ */
+function adjustOnce(who, path, sign) {
+  const token = crypto.randomUUID();
+  const log = __ENV.LOADTEST_WRITE_LOG === '1';
+  if (log) console.log(JSON.stringify({ lt: 'adjust', token, sign, phase: 'sent' }));
+  const res = call(who, 'POST', path, {
+    auth: 'bearer',
+    kind: 'write',
+    action: 'adjust_pair',
+    body: { quantityChange: sign, reason: `Load test ${sign > 0 ? '+1' : '-1'} ${token}` },
+    write: sign > 0 ? 'adjust_up' : 'adjust_down',
+  });
+  if (log && res.status !== 0)
+    console.log(
+      JSON.stringify({ lt: 'adjust', token, sign, phase: 'answered', status: res.status }),
+    );
+  return res;
+}
+
 // ── Actions ──
 // Each returns nothing; checks record the outcome. `who` = { role, session }.
 const ACTIONS = {
@@ -559,25 +585,13 @@ const ACTIONS = {
     run(who) {
       const item = pick(POOLS.adjust);
       const path = `/api/v1/items/${item.id}/adjust`;
-      const up = call(who, 'POST', path, {
-        auth: 'bearer',
-        kind: 'write',
-        action: 'adjust_pair',
-        body: { quantityChange: 1, reason: 'Load test +1' },
-        write: 'adjust_up',
-      });
+      const up = adjustOnce(who, path, 1);
       const upOk = up.status === 200;
       if (upOk) adjustUp.add(1, { role: who.role });
       check(up, { 'adjust +1 200': () => upOk });
       if (!upOk) return;
       sleep(rand(0.3, 1));
-      const down = call(who, 'POST', path, {
-        auth: 'bearer',
-        kind: 'write',
-        action: 'adjust_pair',
-        body: { quantityChange: -1, reason: 'Load test -1' },
-        write: 'adjust_down',
-      });
+      const down = adjustOnce(who, path, -1);
       const downOk = down.status === 200;
       if (downOk) adjustDown.add(1, { role: who.role });
       check(down, { 'adjust -1 200': () => downOk });

@@ -11,6 +11,9 @@
 //                 the app reads written EMPTY (app-env.mjs), so a key in a
 //                 checkout's apps/web/.env* file can never reach the build or
 //                 the server. Build in a worktree with no apps/web/.env* file.
+//                 It also writes Node's proxy settings and NODE_OPTIONS
+//                 empty, and pins NEXT_PUBLIC_LIQUID_GLASS (--liquid-glass
+//                 off | opt-in | default; default opt-in).
 // --loadtest-env  the LOADTEST_* settings, for `node --env-file=<file> run-scale.mjs`.
 // Keep both OUTSIDE the repository (they hold keys). Mode 600, also when the
 // file already existed.
@@ -19,13 +22,18 @@ import { chmodSync, existsSync, readFileSync, realpathSync, writeFileSync } from
 import { dirname, resolve } from 'node:path';
 
 import { assertLoopbackDbUrl, assertLoopbackUrl } from '../lib/safety.js';
-import { OUTSIDE_SERVICE_ENV, PINNED_DEFAULT_ENV } from './app-env.mjs';
-import { parseArgs } from './local.mjs';
+import {
+  DEFAULT_LIQUID_GLASS,
+  LIQUID_GLASS_VALUES,
+  OUTSIDE_SERVICE_ENV,
+  PINNED_DEFAULT_ENV,
+} from './app-env.mjs';
+import { parseArgs, PROXY_ENV } from './local.mjs';
 
 const args = parseArgs(process.argv.slice(2));
 if (!args['app-env'] || !args['loadtest-env']) {
   console.error(
-    'usage: supabase status -o env --workdir <dir> | local-env.mjs --app-env <file> --loadtest-env <file> [--port 3600]',
+    'usage: supabase status -o env --workdir <dir> | local-env.mjs --app-env <file> --loadtest-env <file> [--port 3600] [--liquid-glass opt-in]',
   );
   process.exit(2);
 }
@@ -48,6 +56,11 @@ for (const line of readFileSync(0, 'utf8').split('\n')) {
   if (m) kv[m[1]] = m[2];
 }
 const port = Number(args.port ?? 3600);
+const liquidGlass = String(args['liquid-glass'] ?? DEFAULT_LIQUID_GLASS);
+if (!LIQUID_GLASS_VALUES.includes(liquidGlass)) {
+  console.error(`--liquid-glass must be one of ${LIQUID_GLASS_VALUES.join(', ')}`);
+  process.exit(2);
+}
 try {
   assertLoopbackUrl('API_URL', kv.API_URL);
   assertLoopbackDbUrl('DB_URL', kv.DB_URL);
@@ -65,6 +78,11 @@ const app = [
   `NEXT_PUBLIC_SUPABASE_ANON_KEY=${kv.ANON_KEY}`,
   `SUPABASE_SERVICE_ROLE_KEY=${kv.SERVICE_ROLE_KEY}`,
   'NEXT_TELEMETRY_DISABLED=1',
+  '# Pinned: the pages measured depend on it (inlined at build time).',
+  `NEXT_PUBLIC_LIQUID_GLASS=${liquidGlass}`,
+  '# Empty on purpose: no proxy (Node would send even 127.0.0.1 through it) and no NODE_OPTIONS.',
+  ...PROXY_ENV.map((name) => `${name}=`),
+  'NODE_OPTIONS=',
   '# Empty on purpose: no outside service from a load test (load-tests/k6/tools/app-env.mjs).',
   ...OUTSIDE_SERVICE_ENV.map((name) => `${name}=`),
   '# Empty on purpose: the defaults, whatever a checkout file says.',

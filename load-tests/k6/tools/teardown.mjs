@@ -17,11 +17,14 @@
 // counting what is left and fails if anything is. The database must be on
 // this machine (local.mjs refuses any other address).
 import { lit, parseArgs, psql, readJson } from './local.mjs';
-
-/** The seeder's shapes (seed.mjs). */
-const SLUG_RE = '^loadtest-[a-z0-9]{4,16}$';
-const EMAIL_RE = '^loadtest\\+[a-z0-9]{4,16}-[a-z-]+-[0-9]+@example\\.com$';
-const EMAIL_RE_JS = /^loadtest\+[a-z0-9]{4,16}-[a-z-]+-[0-9]+@example\.com$/;
+import {
+  EMAIL_RE,
+  EMAIL_RE_JS,
+  SLUG_RE,
+  seededOrgsSql,
+  seededUsersSql,
+  uuidArray,
+} from './teardown-sql.mjs';
 
 function lines(out) {
   const t = out.trim();
@@ -30,12 +33,7 @@ function lines(out) {
 
 function orgsFor(args) {
   if (args.all) {
-    return lines(
-      psql(`select id || '|' || slug || '|' || name from public.organizations
-             where slug::text ~ ${lit(SLUG_RE)}
-               and name = 'Load Test Org ' || substr(slug::text, 10)
-             order by slug;`),
-    ).map((l) => {
+    return lines(psql(seededOrgsSql())).map((l) => {
       const [id, slug, name] = l.split('|');
       return { id, slug, name };
     });
@@ -49,14 +47,7 @@ function orgsFor(args) {
 function usersFor(args, orgIds) {
   if (args.all) {
     // Seeder accounts that belong to no organization but the load-test ones.
-    return lines(
-      psql(`select u.id || '|' || u.email from auth.users u
-             where u.email ~ ${lit(EMAIL_RE)}
-               and not exists (select 1 from public.organization_members om
-                                where om.user_id = u.id
-                                  and om.organization_id <> all(array[${orgIds.map(lit).join(',') || 'null'}]::uuid[]))
-             order by u.email;`),
-    ).map((l) => {
+    return lines(psql(seededUsersSql(orgIds))).map((l) => {
       const [id, email] = l.split('|');
       return { id, email };
     });
@@ -161,7 +152,7 @@ commit;`);
   const left = psql(`
 create temp table _left(msg text);
 do $$
-declare t text; n bigint; total bigint := 0; orgs uuid[] := array[${orgs.map(lit).join(',') || 'null'}]::uuid[];
+declare t text; n bigint; total bigint := 0; orgs uuid[] := ${uuidArray(orgs)};
 begin
   for t in select c.table_name from information_schema.columns c
              join information_schema.tables tb on tb.table_schema = c.table_schema and tb.table_name = c.table_name
@@ -172,7 +163,7 @@ begin
   end loop;
   select count(*) into n from public.organizations where id = any(orgs);
   total := total + n;
-  select count(*) into n from auth.users where id = any(array[${users.map(lit).join(',') || 'null'}]::uuid[]);
+  select count(*) into n from auth.users where id = any(${uuidArray(users)});
   total := total + n;
   if total > 0 then insert into _left values ('total: ' || total); end if;
 end $$;

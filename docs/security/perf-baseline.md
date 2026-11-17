@@ -193,14 +193,17 @@ address that is not `127.0.0.1` or `[::1]` (not the name `localhost`, which a
 proxy setting can send elsewhere) before its first request, never follows a
 redirect, and there is no default address and no override
 (`load-tests/k6/lib/safety.js`; `apps/web/src/test/load-tests-safety.guard.test.ts`
-holds every scenario to it). The app under test is built and served from a
-worktree with no `apps/web/.env*` file, with every outside-service key it reads
-set to empty, and the runner refuses an app whose Content-Security-Policy names
-any Supabase address but the local stack. Setup, seeding, the workload, thresholds and the
+holds every scenario to it). The tools refuse to run with Node's environment
+proxy on (it would send even `127.0.0.1` to the proxy). The app under test is
+built in a worktree with no `apps/web/.env*` file, with every outside-service
+key it reads set to empty, and the runner starts it itself under an outbound
+guard that refuses, and fails the step on, any connection off this machine
+(which also covers services that need no key). It refuses an app whose
+Content-Security-Policy names any Supabase address but the local stack. Setup, seeding, the workload, thresholds and the
 report are described in `load-tests/README.md`. The one command:
 
 ```bash
-node --env-file=<loadtest env, outside the repo> load-tests/k6/run-scale.mjs \
+node --env-file=<loadtest env, outside the repo> load-tests/k6/run-scale.mjs --app-env <app env> \
   --items 10001 --users-per-role 40 --ladder 25,50,100,250 --duration 5m --out load-tests/results/<name>
 ```
 

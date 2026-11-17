@@ -83,13 +83,15 @@ const scenarioFiles = filesUnder(SCENARIOS, ['.js', '.mjs']);
 const k6Files = [...scenarioFiles, ...filesUnder(path.join(K6, 'lib'), ['.js', '.mjs'])];
 /** Everything Node runs: the tools and the runner. */
 const nodeFiles = [
-  ...filesUnder(path.join(K6, 'tools'), ['.js', '.mjs']),
+  ...filesUnder(path.join(K6, 'tools'), ['.js', '.mjs', '.cjs']),
   ...fs
     .readdirSync(K6)
     .filter((f) => f.endsWith('.mjs'))
     .map((f) => path.join(K6, f)),
 ];
 const rel = (f: string) => path.relative(REPO_ROOT, f);
+/** The one file allowed to load node:net (to restrict it): the app server's outbound guard. */
+const OUTBOUND_GUARD = path.join(K6, 'tools', 'outbound-guard.cjs');
 /** A child's environment with no LOADTEST_* or other settings: only PATH. */
 const BARE_ENV: NodeJS.ProcessEnv = { PATH: process.env.PATH ?? '', NODE_ENV: 'test' };
 
@@ -132,11 +134,12 @@ describe('load tests: every scenario is held to this machine', () => {
       const plain = code.match(/^import http from 'k6\/http';$/gm) ?? [];
       if (mentions.length !== plain.length)
         offenders.push(`${rel(file)}: k6/http imported another way`);
-      if (/\bhttp\s*\[|[=(,:]\s*http\s*[;,)}]/.test(code))
+      if (/\bhttp\s*\[|[=(,:]\s*http\s*[;,)}]|\.\.\.\s*http\b|=\s*http\s*;?\s*$/m.test(code))
         offenders.push(`${rel(file)}: http passed on or indexed`);
       if (/['"]k6\/(ws|browser|net\/grpc|experimental\/[\w/-]+)['"]/.test(code))
         offenders.push(`${rel(file)}: a network module other than k6/http`);
-      if (/\brequire\(|\bimport\(/.test(code)) offenders.push(`${rel(file)}: dynamic import`);
+      if (/\brequire\s*\(|\bimport\s*\(/.test(code)) offenders.push(`${rel(file)}: dynamic import`);
+      if (/\[\s*['"`]fetch['"`]\s*\]/.test(code)) offenders.push(`${rel(file)}: fetch by name`);
     }
     expect(offenders).toEqual([]);
   });
@@ -162,7 +165,7 @@ describe('load tests: every scenario is held to this machine', () => {
   });
 
   it('no file in the suite holds an address that is not this machine, or reads BASE_URL', () => {
-    const files = filesUnder(K6, ['.js', '.mjs', '.sh']);
+    const files = filesUnder(K6, ['.js', '.mjs', '.cjs', '.sh']);
     const offenders: string[] = [];
     for (const file of files) {
       const src = fs.readFileSync(file, 'utf8');
@@ -185,16 +188,30 @@ describe('load tests: every scenario is held to this machine', () => {
     const offenders: string[] = [];
     for (const file of nodeFiles) {
       const code = codeOf(fs.readFileSync(file, 'utf8'));
-      if (
-        /(?:\bfrom|\bimport|\brequire\()\s*['"](node:)?(http|https|http2|net|tls|dgram|undici|pg|postgres)['"]/.test(
-          code,
-        )
-      )
+      const NET_IMPORT =
+        /(?:\bfrom|\bimport\s*\(?|\brequire\s*\()\s*['"`](node:)?(http|https|http2|net|tls|dgram|undici|pg|postgres)['"`]/;
+      // The outbound guard loads node:net only to wrap it; nothing else may.
+      if (file !== OUTBOUND_GUARD && NET_IMPORT.test(code))
         offenders.push(`${rel(file)}: imports a network or database client`);
+      if (/\[\s*['"`]fetch['"`]\s*\]/.test(code)) offenders.push(`${rel(file)}: fetch by name`);
+      // A shell can run anything: no exec/execSync, no shell option, no shell started.
+      if (
+        /import\s*\{[^}]*\bexec(?:Sync)?\b[^}]*\}\s*from\s*['"](node:)?child_process['"]/.test(code)
+      )
+        offenders.push(`${rel(file)}: imports exec (a shell)`);
+      // Named as themselves, so the command check below sees every start.
+      if (
+        /import\s*(?:\*|\{[^}]*\bas\b[^}]*\})\s*(?:as\s+\w+\s*)?from\s*['"](node:)?child_process['"]/.test(
+          code,
+        ) ||
+        /require\s*\(\s*['"](node:)?child_process['"]\s*\)/.test(code)
+      )
+        offenders.push(`${rel(file)}: child_process imported under another name`);
+      if (/\bshell\s*:\s*(?!false\b)/.test(code)) offenders.push(`${rel(file)}: shell option`);
       const START =
-        /\b(?:spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)\(\s*['"]([\w./-]+)['"]/g;
+        /\b(?:spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)\(\s*['"`]([\w./-]+)/g;
       for (const [, cmd] of code.matchAll(START)) {
-        if (/^(curl|wget|supabase|nc|ssh|npx|pnpm)$/.test(cmd!))
+        if (/^(curl|wget|supabase|nc|ssh|npx|pnpm|sh|bash|zsh|dash|env|xargs)$/.test(cmd!))
           offenders.push(`${rel(file)}: starts ${cmd}`);
         if (/^(psql|pg_dump|pg_restore)$/.test(cmd!) && !file.endsWith(`${path.sep}local.mjs`))
           offenders.push(`${rel(file)}: starts ${cmd} itself (use local.mjs)`);
@@ -218,6 +235,120 @@ describe('load tests: every scenario is held to this machine', () => {
     const local = codeOf(fs.readFileSync(path.join(K6, 'tools', 'local.mjs'), 'utf8'));
     expect(local).toMatch(/assertLoopbackDbUrl\('LOADTEST_DB_URL'/);
     expect(local).toMatch(/assertLoopbackUrl\('LOADTEST_SUPABASE_URL'/);
+  });
+
+  it("Node's environment proxy is refused, and children never get one", () => {
+    const tools = path.join(K6, 'tools');
+    const cases: Array<[string, string[], Record<string, string>]> = [
+      ['NODE_USE_ENV_PROXY', [path.join(tools, 'report.mjs')], { NODE_USE_ENV_PROXY: '1' }],
+      ['--use-env-proxy', ['--use-env-proxy', path.join(tools, 'report.mjs')], {}],
+      ['NODE_OPTIONS', [path.join(tools, 'report.mjs')], { NODE_OPTIONS: '--use-env-proxy' }],
+      ['run-scale', [path.join(K6, 'run-scale.mjs')], { NODE_USE_ENV_PROXY: '1' }],
+    ];
+    for (const [label, args, env] of cases) {
+      const res = spawnSync(process.execPath, args, {
+        encoding: 'utf8',
+        env: { ...BARE_ENV, ...env },
+      });
+      expect(res.status, label).toBe(2);
+      expect(res.stderr, label).toMatch(/through a proxy/);
+    }
+    const local = codeOf(fs.readFileSync(path.join(tools, 'local.mjs'), 'utf8'));
+    // At the top level of the module every tool imports.
+    expect(local).toMatch(/^assertNoEnvProxy\(\);$/m);
+    const runner = codeOf(fs.readFileSync(path.join(K6, 'run-scale.mjs'), 'utf8'));
+    expect(runner).toMatch(/^assertNoEnvProxy\(\);$/m);
+    // No child inherits this process's environment as it is.
+    expect(runner).not.toMatch(/env:\s*process\.env\b|\.\.\.process\.env\b/);
+  });
+
+  it('childEnv drops every proxy setting and NODE_OPTIONS', async () => {
+    const l = await load<{
+      childEnv: (extra?: object, env?: object) => Record<string, string>;
+    }>('tools/local.mjs');
+    const env = {
+      PATH: '/bin',
+      HTTP_PROXY: 'x',
+      https_proxy: 'x',
+      ALL_PROXY: 'x',
+      no_proxy: 'x',
+      NODE_USE_ENV_PROXY: '1',
+      NODE_OPTIONS: '--require x',
+    };
+    expect(l.childEnv({ A: '1' }, env)).toEqual({ PATH: '/bin', A: '1' });
+  });
+
+  it('run-scale.mjs serves the app itself, under the outbound guard, from app.env only', () => {
+    const runner = codeOf(fs.readFileSync(path.join(K6, 'run-scale.mjs'), 'utf8'));
+    expect(runner).toMatch(/\['--require', GUARD, nextBin, 'start', '-p', port, '-H', host\]/);
+    expect(runner).toMatch(
+      /const env = \{\s*PATH: process\.env\.PATH,\s*HOME: process\.env\.HOME,\s*\.\.\.appEnv,\s*LOADTEST_OUTBOUND_LOG: outboundLog,\s*\};/,
+    );
+    expect(runner).toMatch(/already taken/);
+    expect(runner).toMatch(/refused > 0/);
+  });
+
+  it('the outbound guard refuses every connection off this machine, and logs it', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lt-guard-'));
+    try {
+      // Every target goes nowhere even unguarded: 192.0.2.1 is TEST-NET-1 and
+      // .invalid never resolves.
+      const probe = path.join(dir, 'probe.cjs');
+      fs.writeFileSync(
+        probe,
+        `const raw = globalThis.fetch;
+require(${JSON.stringify(OUTBOUND_GUARD)});
+const http = require('node:http'), https = require('node:https'), net = require('node:net'), tls = require('node:tls');
+const out = [];
+const settle = (name, p) => p.then(() => out.push(name + ' connected'), (e) => out.push(name + ' ' + String((e && e.cause && e.cause.message) || (e && e.message) || e)));
+const ev = (name, mk) => new Promise((res) => { const s = mk(); const t = setTimeout(() => { out.push(name + ' timeout'); s.destroy(); res(); }, 4000); s.on('error', (e) => { clearTimeout(t); out.push(name + ' ' + e.message); res(); }); s.on('connect', () => { clearTimeout(t); out.push(name + ' connected'); s.destroy(); res(); }); });
+(async () => {
+  await settle('fetch', fetch('http://192.0.2.1:8080/x'));
+  await settle('fetch-name', fetch('https://example.invalid/x'));
+  await settle('undici', raw('http://192.0.2.1:8080/x'));
+  await ev('http', () => http.get('http://192.0.2.1:8080/x'));
+  await ev('https', () => https.get('https://example.invalid/x'));
+  await ev('net', () => net.connect(8080, '192.0.2.1'));
+  await ev('tls', () => tls.connect({ host: '192.0.2.1', port: 443 }));
+  await ev('local', () => net.connect(1, '127.0.0.1'));
+  console.log(JSON.stringify(out));
+})();
+`,
+      );
+      const log = path.join(dir, 'refused.log');
+      const res = spawnSync(process.execPath, [probe], {
+        encoding: 'utf8',
+        env: { ...BARE_ENV, LOADTEST_OUTBOUND_LOG: log },
+        timeout: 60_000,
+      });
+      const out: string[] = JSON.parse(res.stdout.trim().split('\n').pop()!);
+      for (const name of ['fetch', 'fetch-name', 'undici', 'http', 'https', 'net', 'tls']) {
+        const line = out.find((l) => l.startsWith(`${name} `));
+        expect(line, name).toMatch(/outbound guard/);
+      }
+      // This machine is still reachable (a closed port answers ECONNREFUSED).
+      expect(out.find((l) => l.startsWith('local '))).toMatch(/ECONNREFUSED/);
+      expect(fs.readFileSync(log, 'utf8').trim().split('\n')).toHaveLength(7);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('teardown --all never selects an account in another organization, also when no load-test organization is left', async () => {
+    const t = await load<{
+      seededUsersSql: (ids: string[]) => string;
+      uuidArray: (ids: string[]) => string;
+    }>('tools/teardown-sql.mjs');
+    const none = t.seededUsersSql([]);
+    expect(none).toContain("not (om.organization_id = any('{}'::uuid[]))");
+    expect(none).not.toMatch(/null/i);
+    const one = t.seededUsersSql(['00000000-0000-4000-8000-000000000001']);
+    expect(one).toContain(
+      "not (om.organization_id = any(array['00000000-0000-4000-8000-000000000001']::uuid[]))",
+    );
+    expect(() => t.uuidArray(["x'); drop table y; --"])).toThrow(/uuid/);
+    const teardown = codeOf(fs.readFileSync(path.join(K6, 'tools', 'teardown.mjs'), 'utf8'));
+    expect(teardown).not.toMatch(/array\[\$\{/);
   });
 
   it('run-scale.mjs runs only a scenario of the suite', () => {
@@ -368,12 +499,18 @@ describe('load tests: the app under test reaches no outside service', () => {
         (f) => !/\.test\.tsx?$|[\\/]test[\\/]/.test(f),
       ),
       path.join(WEB, 'next.config.ts'),
+      // Workspace packages the app bundles.
+      ...filesUnder(path.join(REPO_ROOT, 'packages'), ['.ts', '.tsx']).filter(
+        (f) => !/\.test\.tsx?$|[\\/](test|node_modules|dist)[\\/]/.test(f),
+      ),
     ];
     const names = new Set<string>();
     for (const file of files) {
       const src = fs.readFileSync(file, 'utf8');
       for (const m of src.matchAll(/process\.env(?:\.|\[\s*['"])([A-Z][A-Z0-9_]+)/g))
         names.add(m[1]!);
+      // An env object passed in and read by name (env.RETURNS_EXCHANGE_CREATE).
+      for (const m of src.matchAll(/\benv\.([A-Z][A-Z0-9_]{2,})\b/g)) names.add(m[1]!);
     }
     // The schema's keys (read through the parsed env object, not process.env).
     for (const file of ['env.ts', 'env.client.ts']) {
@@ -440,6 +577,9 @@ describe('load tests: the app under test reaches no outside service', () => {
           n,
         ).toBe(false);
       expect(lines).toContain('NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:58421');
+      const l = await load<{ PROXY_ENV: readonly string[] }>('tools/local.mjs');
+      for (const n of [...l.PROXY_ENV, 'NODE_OPTIONS']) expect(lines, n).toContain(`${n}=`);
+      expect(lines).toContain('NEXT_PUBLIC_LIQUID_GLASS=opt-in');
       expect(fs.statSync(app).mode & 0o777).toBe(0o600);
       expect(fs.statSync(lt).mode & 0o777).toBe(0o600);
       expect(res.stdout).not.toContain('stub-service');

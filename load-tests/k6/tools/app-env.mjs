@@ -8,6 +8,12 @@
 // book lookups, no payments, analytics, maps, accounting, error webhooks or
 // platform hooks from a load test.
 //
+// Empty keys alone do NOT stop services that need no key (Expo push, Google
+// Books without a key, UPCitemdb, the PostHog ingest proxy, integrations whose
+// credentials are stored in the database). run-scale.mjs starts the app under
+// tools/outbound-guard.cjs, which refuses every connection to anything but
+// this machine; that is what stops those.
+//
 // apps/web/src/test/load-tests-safety.guard.test.ts reads every environment
 // variable the app's sources name and fails when one that looks like an
 // outside-service key or address is missing here.
@@ -70,7 +76,17 @@ export const PINNED_DEFAULT_ENV = Object.freeze([
   'ORDERS_PHONE_STOREFRONT',
   'ORDER_ITEMS_MANAGE_ORGS',
   'ES_LATENT_ORDER_EMAILS',
+  'RETURNS_EXCHANGE_CREATE',
 ]);
+
+/**
+ * NEXT_PUBLIC_LIQUID_GLASS changes the pages being measured (it is inlined at
+ * build time), so every load-test build pins it: local-env.mjs writes it
+ * (default opt-in, the value the web app was released with on 2026-11-11;
+ * --liquid-glass changes it) and the report states it.
+ */
+export const LIQUID_GLASS_VALUES = Object.freeze(['off', 'opt-in', 'default']);
+export const DEFAULT_LIQUID_GLASS = 'opt-in';
 
 /**
  * Names that look like outside-service settings but are not keys or

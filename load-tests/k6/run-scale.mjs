@@ -1,30 +1,44 @@
 #!/usr/bin/env node
-// One command: seed a scale point, run a ladder of load steps, check the data,
-// write the report, tear down. LOCAL ONLY.
+// One command: start the app, seed a scale point, run a ladder of load steps,
+// check the data, write the report, tear down, stop the app. LOCAL ONLY.
 //
-//   node --env-file=<loadtest env file> load-tests/k6/run-scale.mjs \
+//   node --env-file=<loadtest env file> load-tests/k6/run-scale.mjs --app-env <app env file> \
 //     --items 10001 --users-per-role 40 --ladder 25,50,100,250 --duration 5m --warmup 60s \
 //     --out load-tests/results/<name>
 //
-// The env file (outside the repository, never printed) sets:
-//   LOADTEST_BASE_URL                  the app, built and started locally (http://127.0.0.1:3600)
+// The loadtest env file (outside the repository, never printed) sets:
+//   LOADTEST_BASE_URL                  where the app will listen (http://127.0.0.1:3600)
 //   LOADTEST_SUPABASE_URL              the local Supabase API (http://127.0.0.1:<port>)
 //   LOADTEST_SUPABASE_ANON_KEY         its anon key
 //   LOADTEST_SUPABASE_SERVICE_ROLE_KEY its service key (seeding, and minting sessions in k6 setup())
 //   LOADTEST_DB_URL                    its database (postgresql://...@127.0.0.1:<port>/postgres)
 // Every one of them must name this machine (127.0.0.1 or [::1]); anything
-// else is refused before any connection is made.
+// else is refused before any connection is made. Node's environment proxy
+// must be off (tools/local.mjs refuses NODE_USE_ENV_PROXY and
+// --use-env-proxy), and no child process gets a proxy setting or NODE_OPTIONS.
 //
-// Before seeding it also refuses:
-//   - an apps/web/.env* file (other than *.example) in this checkout or in the
-//     folder the app's server runs from: Next.js reads those files, and a
-//     checkout's env file may hold real keys;
+// The app: build it first in this worktree with the app env file
+// (README). The runner then starts it ITSELF, from this worktree's apps/web,
+// as `node --require tools/outbound-guard.cjs next start -p <port> -H <host>`
+// with an environment made only of the app env file plus PATH and HOME. It
+// refuses to start when the port is already taken, uses only the server it
+// started, and stops it at the end. The outbound guard refuses every
+// connection the server tries to make to anything but this machine; any
+// refusal fails the step.
+//
+// It also refuses:
+//   - an apps/web/.env* file (other than *.example) in this checkout: Next.js
+//     reads those files, and a checkout's env file may hold real keys;
+//   - an app env file that does not name LOADTEST_SUPABASE_URL, or that does
+//     not set every outside-service key, proxy setting and pinned switch
+//     (tools/app-env.mjs) to empty, or has no NEXT_PUBLIC_LIQUID_GLASS value;
 //   - an app whose Content-Security-Policy connect-src names any Supabase
 //     address other than LOADTEST_SUPABASE_URL (a build made with another
 //     NEXT_PUBLIC_SUPABASE_URL, or with none, which falls back to the
 //     production project).
 //
 // Options:
+//   --app-env FILE        the app env file local-env.mjs wrote (required)
 //   --items N             1000 | 10001 | 50000 ... (default 1000)
 //   --users-per-role N    accounts per role (default 20; 40-50 for the 250 step)
 //   --ladder a,b,c        concurrent people per step (default 25,50,100,250)
@@ -39,12 +53,14 @@
 //
 // Each step: database time -> pg_stat_statements snapshot -> connection
 // sampler -> k6 -> wait for the database to go quiet -> snapshot ->
-// correctness check. A step whose sign-in,
-// authenticator, scope or correctness checks failed stops the ladder.
+// correctness check. A step whose sign-in, authenticator, scope, outbound or
+// correctness checks failed stops the ladder.
 import { spawn, spawnSync } from 'node:child_process';
 import {
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -54,74 +70,184 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { isLoopbackUrl, localTarget } from './lib/safety.js';
-import { isAppEnvFile } from './tools/app-env.mjs';
-import { localDb, localSupabase, parseArgs, psql, readJson } from './tools/local.mjs';
+import {
+  isAppEnvFile,
+  LIQUID_GLASS_VALUES,
+  OUTSIDE_SERVICE_ENV,
+  PINNED_DEFAULT_ENV,
+} from './tools/app-env.mjs';
+import {
+  assertNoEnvProxy,
+  childEnv,
+  localDb,
+  localSupabase,
+  parseArgs,
+  PROXY_ENV,
+  psql,
+  readJson,
+} from './tools/local.mjs';
+
+// Also done when local.mjs loads; stated here so the runner never depends on it.
+assertNoEnvProxy();
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const TOOLS = join(HERE, 'tools');
 const SCENARIOS = join(HERE, 'scenarios');
 const CHECKOUT = resolve(HERE, '..', '..');
+const WEB = join(CHECKOUT, 'apps', 'web');
+const GUARD = join(TOOLS, 'outbound-guard.cjs');
 
-/** apps/web/.env* files (not *.example) under `root`, or under `root` itself when it is apps/web. */
-function appEnvFilesIn(root) {
+/** apps/web/.env* files (not *.example) in this checkout. */
+function appEnvFilesInCheckout() {
   const found = [];
-  for (const dir of [root, join(root, 'apps', 'web')]) {
+  for (const dir of [CHECKOUT, WEB]) {
     if (!existsSync(dir)) continue;
     for (const name of readdirSync(dir)) if (isAppEnvFile(name)) found.push(join(dir, name));
   }
   return found;
 }
 
-/** The folder the process listening on `port` (this machine) runs from, via lsof. */
-function serverFolder(port) {
-  const pids = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
-    encoding: 'utf8',
-  });
-  const list = String(pids.stdout || '')
-    .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => /^\d+$/.test(l));
-  const folders = new Set();
-  for (const pid of list) {
-    const res = spawnSync('lsof', ['-a', '-p', pid, '-d', 'cwd', '-Fn'], { encoding: 'utf8' });
-    for (const line of String(res.stdout || '').split('\n'))
-      if (line.startsWith('n/')) folders.add(line.slice(1));
+/**
+ * The app env file: NAME=value lines (local-env.mjs writes them unquoted), read
+ * without printing a value, and checked.
+ */
+function readAppEnv(file, target) {
+  if (!file)
+    throw new Error('--app-env <file> is required (the app env file local-env.mjs wrote).');
+  const real = realpathSync(resolve(String(file)));
+  if (real.startsWith(`${realpathSync(CHECKOUT)}${sep}`))
+    throw new Error('The app env file must be outside the repository.');
+  const env = {};
+  for (const line of readFileSync(real, 'utf8').split('\n')) {
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
+    if (m) env[m[1]] = m[2];
   }
-  return [...folders];
+  if (env.NEXT_PUBLIC_SUPABASE_URL !== target.supabaseUrl)
+    throw new Error(
+      'The app env file does not name LOADTEST_SUPABASE_URL as NEXT_PUBLIC_SUPABASE_URL.',
+    );
+  const notEmpty = [
+    ...OUTSIDE_SERVICE_ENV,
+    ...PINNED_DEFAULT_ENV,
+    ...PROXY_ENV,
+    'NODE_OPTIONS',
+  ].filter((n) => env[n] !== '');
+  if (notEmpty.length)
+    throw new Error(
+      `The app env file must set these to empty: ${notEmpty.join(', ')}. Write it again with local-env.mjs.`,
+    );
+  if (!LIQUID_GLASS_VALUES.includes(env.NEXT_PUBLIC_LIQUID_GLASS))
+    throw new Error(
+      `The app env file must pin NEXT_PUBLIC_LIQUID_GLASS to one of ${LIQUID_GLASS_VALUES.join(', ')}.`,
+    );
+  if (env.NODE_ENV !== 'production')
+    throw new Error('The app env file must set NODE_ENV=production.');
+  return env;
 }
 
-/** Refuses an app built with, or able to read, anything but the local stack. */
-async function checkAppIsLocal(target) {
-  const own = appEnvFilesIn(CHECKOUT);
-  if (own.length)
-    throw new Error(
-      `This checkout has app env files (${own.map((f) => f.slice(CHECKOUT.length + 1)).join(', ')}). ` +
-        'Build and run load tests only in a worktree with no apps/web/.env* file.',
-    );
-  const port = new URL(target.baseUrl).port;
+/** Process ids listening on `port` on this machine (lsof). */
+function listeners(port) {
+  const res = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
+    encoding: 'utf8',
+  });
+  return String(res.stdout || '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => /^\d+$/.test(l))
+    .map(Number);
+}
+
+/** The process and its children (pgrep -P). */
+function familyOf(pid) {
+  const kids = String(spawnSync('pgrep', ['-P', String(pid)], { encoding: 'utf8' }).stdout || '')
+    .split('\n')
+    .filter((l) => /^\d+$/.test(l.trim()))
+    .map(Number);
+  return new Set([pid, ...kids]);
+}
+
+/** Lines in the outbound guard's log: one per refused connection. */
+function refusals(file) {
+  if (!existsSync(file)) return 0;
+  return readFileSync(file, 'utf8').split('\n').filter(Boolean).length;
+}
+
+/**
+ * Starts the built app from this worktree under the outbound guard, with an
+ * environment made only of the app env file plus PATH and HOME, and waits until
+ * it answers. Refuses a port that is already taken.
+ */
+async function startServer(target, appEnv, out) {
+  const url = new URL(target.baseUrl);
+  const port = url.port;
   if (!port) throw new Error('LOADTEST_BASE_URL must name its port (http://127.0.0.1:3600).');
-  const folders = serverFolder(port);
-  if (folders.length === 0)
+  const host = url.hostname.replace(/^\[|\]$/g, '');
+  if (listeners(port).length)
     throw new Error(
-      `No process on this machine is listening on port ${port} (or lsof could not see it).`,
+      `Port ${port} is already taken. Stop whatever listens there: the runner starts the app itself.`,
     );
-  for (const folder of folders) {
-    const files = appEnvFilesIn(folder);
-    if (files.length)
+  if (!existsSync(join(WEB, '.next', 'BUILD_ID')))
+    throw new Error(
+      'apps/web has no production build. Build it first with the app env file (README).',
+    );
+  const nextBin = join(WEB, 'node_modules', 'next', 'dist', 'bin', 'next');
+  if (!existsSync(nextBin)) throw new Error('apps/web/node_modules has no next: install first.');
+  const outboundLog = join(out, 'outbound-refused.log');
+  writeFileSync(outboundLog, '');
+  const logFd = openSync(join(out, 'server.log'), 'a');
+  const env = {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    ...appEnv,
+    LOADTEST_OUTBOUND_LOG: outboundLog,
+  };
+  const child = spawn(
+    process.execPath,
+    ['--require', GUARD, nextBin, 'start', '-p', port, '-H', host],
+    { cwd: WEB, env, stdio: ['ignore', logFd, logFd] },
+  );
+  closeSync(logFd);
+  let exited = null;
+  child.on('exit', (code, signal) => {
+    exited = signal || String(code);
+  });
+  const stop = () => {
+    if (exited === null) child.kill('SIGTERM');
+  };
+  process.once('exit', stop);
+  for (const sig of ['SIGINT', 'SIGTERM'])
+    process.once(sig, () => {
+      stop();
+      process.exit(130);
+    });
+  const deadline = Date.now() + 120_000;
+  for (;;) {
+    if (exited !== null)
+      throw new Error(`The app exited while starting (${exited}); see ${join(out, 'server.log')}.`);
+    const res = await fetch(`${target.baseUrl}/signin`, { redirect: 'error' }).catch(() => null);
+    if (res && res.status === 200) break;
+    if (Date.now() > deadline) {
+      stop();
       throw new Error(
-        `The app on port ${port} runs from ${folder}, which has app env files (${files.length}). ` +
-          'Serve it from a worktree with no apps/web/.env* file.',
+        `The app did not answer /signin within 120 s; see ${join(out, 'server.log')}.`,
       );
+    }
+    await new Promise((r) => setTimeout(r, 500));
   }
-  // The build's Supabase address, as the browser is told it.
-  const res = await fetch(`${target.baseUrl}/signin`, { redirect: 'error' }).catch((e) => ({
-    status: `unreachable (${e.message})`,
-    headers: new Headers(),
-  }));
-  if (res.status !== 200)
-    throw new Error(
-      `The app at LOADTEST_BASE_URL answered /signin with ${res.status}. Build and start it first (see README).`,
-    );
+  // Only the server this run started may be the one answering.
+  const family = familyOf(child.pid);
+  const strangers = listeners(port).filter((pid) => !family.has(pid));
+  if (strangers.length) {
+    stop();
+    throw new Error(`Another process also listens on port ${port}; refusing to measure it.`);
+  }
+  return { stop, outboundLog, pid: child.pid };
+}
+
+/** Refuses an app built for anything but the local stack (its CSP connect-src). */
+async function checkBuildIsLocal(target) {
+  const res = await fetch(`${target.baseUrl}/signin`, { redirect: 'error' });
+  if (res.status !== 200) throw new Error(`The app answered /signin with ${res.status}.`);
   const csp = res.headers.get('content-security-policy') || '';
   const connect = /(?:^|;)\s*connect-src\s+([^;]*)/.exec(csp);
   if (!connect) throw new Error('The app sent no Content-Security-Policy connect-src.');
@@ -181,8 +307,9 @@ function waitForQuietDatabase(maxSeconds = 60) {
   return false;
 }
 
+/** Runs a child to the end, with the proxy settings and NODE_OPTIONS removed. */
 function run(cmd, args, opts = {}) {
-  const res = spawnSync(cmd, args, { stdio: 'inherit', env: process.env, ...opts });
+  const res = spawnSync(cmd, args, { stdio: 'inherit', env: childEnv(), ...opts });
   if (res.error) throw res.error;
   return res.status;
 }
@@ -197,7 +324,14 @@ async function main() {
   localDb();
   if (!process.env.LOADTEST_SUPABASE_ANON_KEY)
     throw new Error('LOADTEST_SUPABASE_ANON_KEY is not set.');
-  if (spawnSync('k6', ['version'], { encoding: 'utf8' }).status !== 0)
+  const appEnv = readAppEnv(args['app-env'], target);
+  const own = appEnvFilesInCheckout();
+  if (own.length)
+    throw new Error(
+      `This checkout has app env files (${own.map((f) => f.slice(CHECKOUT.length + 1)).join(', ')}). ` +
+        'Build and run load tests only in a worktree with no apps/web/.env* file.',
+    );
+  if (spawnSync('k6', ['version'], { encoding: 'utf8', env: childEnv() }).status !== 0)
     throw new Error('k6 is not installed (brew install k6).');
 
   const ladder = String(args.ladder ?? '25,50,100,250')
@@ -211,11 +345,43 @@ async function main() {
   const out = resolve(String(args.out ?? join(HERE, '..', 'results', stamp)));
   mkdirSync(join(out, 'steps'), { recursive: true });
 
-  // The app answers on this machine, was built for the local stack, and has
-  // no checkout env file to read.
-  await checkAppIsLocal(target);
+  // The app: started here, under the outbound guard, and checked.
+  console.log(`== starting the app (${target.baseUrl}, outbound guard on)`);
+  const server = await startServer(target, appEnv, out);
+  try {
+    await checkBuildIsLocal(target);
+    if (refusals(server.outboundLog) > 0)
+      throw new Error(
+        `The app tried to reach outside this machine while starting; see ${server.outboundLog}.`,
+      );
+    process.exitCode = await runLadder({
+      args,
+      target,
+      appEnv,
+      scenario,
+      ladder,
+      duration,
+      warmup,
+      out,
+      server,
+    });
+  } finally {
+    server.stop();
+  }
+}
 
-  let manifestPath = args.manifest ? resolve(String(args.manifest)) : join(out, 'manifest.json');
+async function runLadder({
+  args,
+  target,
+  appEnv,
+  scenario,
+  ladder,
+  duration,
+  warmup,
+  out,
+  server,
+}) {
+  const manifestPath = args.manifest ? resolve(String(args.manifest)) : join(out, 'manifest.json');
   if (!args.manifest) {
     const code = run('node', [
       join(TOOLS, 'seed.mjs'),
@@ -236,6 +402,8 @@ async function main() {
         startedAt: new Date().toISOString(),
         label: args.label || null,
         baseUrl: target.baseUrl,
+        server: 'started by run-scale.mjs from this worktree, outbound guard on',
+        liquidGlass: appEnv.NEXT_PUBLIC_LIQUID_GLASS,
         organizationId: manifest.organizationId,
         items: manifest.scale.items,
         usersPerRole: manifest.scale.usersPerRole,
@@ -249,30 +417,40 @@ async function main() {
     ),
   );
 
-  const k6Env = (actors, dur, summaryOut) => ({
-    ...process.env,
-    LOADTEST_MANIFEST: manifestPath,
-    LOADTEST_ACTORS: String(actors),
-    LOADTEST_DURATION: dur,
-    LOADTEST_SUMMARY_OUT: summaryOut,
-    K6_NO_USAGE_REPORT: 'true',
-  });
+  const k6Env = (actors, dur, summaryOut) =>
+    childEnv({
+      LOADTEST_MANIFEST: manifestPath,
+      LOADTEST_ACTORS: String(actors),
+      LOADTEST_DURATION: dur,
+      LOADTEST_SUMMARY_OUT: summaryOut,
+      K6_NO_USAGE_REPORT: 'true',
+      // Each adjust's token, sent and answered, into the console output.
+      LOADTEST_WRITE_LOG: '1',
+    });
 
+  let failed = false;
   if (warmup !== '0' && warmup !== '0s') {
     console.log(`\n== warm-up: ${ladder[0]} actors for ${warmup} (not reported)`);
     mkdirSync(join(out, 'warmup'), { recursive: true });
-    run('k6', ['run', '-q', scenario], {
+    const before = refusals(server.outboundLog);
+    run('k6', ['run', '-q', '--console-output', join(out, 'warmup', 'k6-console.log'), scenario], {
       env: k6Env(ladder[0], warmup, join(out, 'warmup', 'summary.json')),
     });
+    if (refusals(server.outboundLog) > before) {
+      console.log(
+        `!! the app tried to reach outside this machine during the warm-up (${server.outboundLog}).`,
+      );
+      failed = true;
+    }
   }
 
-  let failed = false;
-  for (const actors of ladder) {
+  for (const actors of failed ? [] : ladder) {
     const dir = join(out, 'steps', String(actors));
     mkdirSync(dir, { recursive: true });
     console.log(`\n== step: ${actors} actors for ${duration}`);
     const since = psql('select now();').trim();
     writeFileSync(join(dir, 'since.txt'), since);
+    const refusedBefore = refusals(server.outboundLog);
     run('node', [join(TOOLS, 'pgstat.mjs'), 'snapshot', '--out', join(dir, 'pg-before.json')]);
     const sampler = spawn(
       'node',
@@ -284,20 +462,20 @@ async function main() {
         '--every',
         '2',
       ],
-      {
-        stdio: 'ignore',
-        env: process.env,
-      },
+      { stdio: 'ignore', env: childEnv() },
     );
     const stopSampler = () => sampler.kill('SIGTERM');
     process.once('exit', stopSampler);
-    const code = run('k6', ['run', '-q', scenario], {
+    const consoleLog = join(dir, 'k6-console.log');
+    const code = run('k6', ['run', '-q', '--console-output', consoleLog, scenario], {
       env: k6Env(actors, duration, join(dir, 'summary.json')),
     });
     stopSampler();
     process.removeListener('exit', stopSampler);
     writeFileSync(join(dir, 'k6-exit.txt'), String(code));
     writeFileSync(join(dir, 'settled.txt'), String(waitForQuietDatabase()));
+    const refused = refusals(server.outboundLog) - refusedBefore;
+    writeFileSync(join(dir, 'outbound-refused.txt'), String(refused));
     run('node', [join(TOOLS, 'pgstat.mjs'), 'snapshot', '--out', join(dir, 'pg-after.json')]);
     let correctnessOk = false;
     if (existsSync(join(dir, 'summary.json'))) {
@@ -309,6 +487,8 @@ async function main() {
           manifestPath,
           '--summary',
           join(dir, 'summary.json'),
+          '--console',
+          consoleLog,
           '--since',
           since,
           '--out',
@@ -319,9 +499,14 @@ async function main() {
       ? JSON.parse(readFileSync(join(dir, 'summary.json'), 'utf8'))
       : null;
     const count = (n) => (summary && summary.metrics[n] ? summary.metrics[n].values.count : 0);
+    if (refused > 0)
+      console.log(
+        `!! the app tried to reach outside this machine ${refused} time(s) in this step (${server.outboundLog}).`,
+      );
     const hardFail =
       !summary ||
       !correctnessOk ||
+      refused > 0 ||
       count('signin_redirects') > 0 ||
       count('mfa_required') > 0 ||
       count('scope_violations') > 0 ||
@@ -330,7 +515,7 @@ async function main() {
     if (code !== 0) failed = true;
     if (hardFail) {
       failed = true;
-      console.log('!! sign-in, scope or correctness failed: the ladder stops here.');
+      console.log('!! sign-in, scope, outbound or correctness failed: the ladder stops here.');
       break;
     }
     if (code !== 0 && !args['continue-on-fail']) {
@@ -353,7 +538,7 @@ async function main() {
       `\nKept the organization. Remove it with: node --env-file=<env> ${join('load-tests', 'k6', 'tools', 'teardown.mjs')} --manifest ${manifestPath}`,
     );
   }
-  process.exitCode = failed ? 1 : 0;
+  return failed ? 1 : 0;
 }
 
 main().catch((e) => {
