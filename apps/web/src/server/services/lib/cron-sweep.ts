@@ -8,14 +8,15 @@ import { fetchAllRows } from './paginate';
 
 /**
  * Helpers for scheduled jobs that visit every organization: an order that
- * puts the organizations a job reached longest ago first, a window that
- * rotates through all of them over consecutive runs, and a sweep that stops
- * STARTING work at a soft deadline and says how much it left.
+ * puts the organizations a job reached longest ago first, a record of each
+ * job's attempts per organization (cron_sweep_attempts, 0492) that keeps
+ * that order honest across runs, and a sweep that stops STARTING work at a
+ * soft deadline and says how much it left.
  *
  * Why. A job that walks the organizations in the same order every run, and
  * stops at its time limit, reaches the same first ones every run and never
- * the rest. Ordering by "longest since this job last reached it" (or
- * rotating a window) makes a cut fall on different organizations each run,
+ * the rest. Ordering by "longest since this job last reached it" makes a
+ * cut fall on different organizations each run,
  * so every one is reached within a bounded number of runs. The deadline only
  * stops new work from starting; work already started finishes inside the
  * route's maxDuration, so nothing is cut half way.
@@ -61,24 +62,6 @@ export function newestPerKey<Row>(
   return out;
 }
 
-/**
- * A window of `size` ids that moves on by `size` each slot, wrapping around:
- * slot s starts at (s * size) mod N. Consecutive slots cover consecutive,
- * non-overlapping stretches of `ids` until they wrap, so every id is in at
- * least one window of any ceil(N / size) consecutive slots (with `ids` in a
- * stable order). With N <= size every slot is all of `ids`, in order.
- */
-export function rotatingWindow(ids: readonly string[], size: number, slot: number): string[] {
-  const n = ids.length;
-  const width = Math.max(0, Math.floor(size));
-  if (n <= width) return [...ids];
-  const s = Math.floor(slot);
-  const start = ((((s % n) * (width % n)) % n) + n) % n;
-  const out: string[] = [];
-  for (let i = 0; i < width; i += 1) out.push(ids[(start + i) % n] as string);
-  return out;
-}
-
 /** What happened to one item of a deadline sweep. */
 export type SweepEntry<T, R> =
   | { item: T; started: false }
@@ -119,7 +102,7 @@ export async function sweepUntilDeadline<T, R>(
  * table's CHECK takes any short lower-case name; this union keeps the code to
  * the names in use.
  */
-export type CronSweepJob = 'exception_sync' | 'restore_points';
+export type CronSweepJob = 'exception_sync' | 'restore_points' | 'prewarm';
 
 /** One job's attempt records, per organization. */
 export interface CronAttempts {
@@ -164,17 +147,32 @@ export type CronAttemptResult = 'success' | 'failure' | 'neither';
 /**
  * Records one run's attempts for a job. `start(orgId)` SENDS the attempt
  * stamp at once (before the caller's own first request for the organization)
- * and returns `finish(result)`, which awaits the stamp and then writes the
- * attempts-in-a-row count when it changes; it answers that count. A failed
- * write never throws (the record is for ordering and counting only) and is
- * reported once per run under `reportTag`.
+ * and returns `finish(result)`, which awaits the stamp and answers the
+ * attempts-in-a-row count.
+ *
+ * The stamp counts the attempt as a failure in advance (consecutive_failures
+ * one more than before), and `finish` corrects it: success writes 0, neither
+ * writes the old count back, failure leaves it. So an attempt that never
+ * finishes, because the function was killed at maxDuration, is still counted
+ * as a failure, and the organization still goes to the back of the line.
+ *
+ * With `countFailures: false` (a job with nothing to count, such as the
+ * prewarm) the stamp writes only the time and `finish` only awaits it.
+ *
+ * A failed write never throws (the record is for ordering and counting only)
+ * and is reported once per run under `reportTag`.
  */
 export function cronAttemptRecorder(
   admin: ReturnType<typeof createAdminClient>,
   job: CronSweepJob,
-  opts: { failuresBefore: ReadonlyMap<string, number>; reportTag: string },
+  opts: {
+    failuresBefore: ReadonlyMap<string, number>;
+    reportTag: string;
+    countFailures?: boolean;
+  },
 ): { start(orgId: string): (result: CronAttemptResult) => Promise<number> } {
   let reported = false;
+  const countFailures = opts.countFailures !== false;
   const write = async (
     orgId: string,
     row: { last_attempt_at: string; consecutive_failures?: number },
@@ -194,21 +192,20 @@ export function cronAttemptRecorder(
   return {
     start(orgId) {
       const attemptedAt = new Date().toISOString();
-      const stamp = write(orgId, { last_attempt_at: attemptedAt });
+      const before = opts.failuresBefore.get(orgId) ?? 0;
+      const stamp = write(
+        orgId,
+        countFailures
+          ? { last_attempt_at: attemptedAt, consecutive_failures: before + 1 }
+          : { last_attempt_at: attemptedAt },
+      );
       return async (result) => {
         await stamp;
-        const before = opts.failuresBefore.get(orgId) ?? 0;
-        if (result === 'failure') {
-          await write(orgId, { last_attempt_at: attemptedAt, consecutive_failures: before + 1 });
-          return before + 1;
-        }
-        if (result === 'success') {
-          if (before > 0) {
-            await write(orgId, { last_attempt_at: attemptedAt, consecutive_failures: 0 });
-          }
-          return 0;
-        }
-        return before;
+        if (!countFailures) return before;
+        if (result === 'failure') return before + 1;
+        const settled = result === 'success' ? 0 : before;
+        await write(orgId, { last_attempt_at: attemptedAt, consecutive_failures: settled });
+        return settled;
       };
     },
   };

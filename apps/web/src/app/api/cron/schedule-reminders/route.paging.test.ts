@@ -210,6 +210,37 @@ describe('GET /api/cron/schedule-reminders: which events, in what order', () => 
   });
 });
 
+describe('GET /api/cron/schedule-reminders: one tick delivered twice', () => {
+  it('a day-ahead claim loses to a 1h claim made since the run read the event', async () => {
+    // Run A reads an event starting 1 h 5 s from now: day-ahead for A. A
+    // second delivery of the same tick, seconds later, reads it as 1 h away
+    // and claims (and sends) the 1h reminder before A claims. A's day-ahead
+    // claim must then match no row, or the event gets "in 1 hour" and then
+    // "today".
+    const store = [ev('dup', HOUR + 5_000)];
+    const served = servedLikePostgrest(() => store);
+    let claims = 0;
+    stubOver(store, {
+      'schedule_events.update': (call: MockCall): QueryResult => {
+        claims += 1;
+        // The other delivery's 1h claim lands first.
+        if (claims === 1) store[0]!.reminded_1h_at = new Date(NOW.getTime() + 10_000).toISOString();
+        const row = (
+          (served({ ...call, methods: call.methods.slice(1), args: call.args.slice(1) }).data ??
+            []) as Ev[]
+        )[0];
+        if (!row) return { data: null, error: null };
+        Object.assign(row, call.args[0]![0] as Partial<Ev>);
+        return { data: { id: row.id }, error: null };
+      },
+    });
+    const body = await run();
+    expect(body.remindersSent).toBe(0);
+    expect(notified).toHaveLength(0);
+    expect(store[0]!.reminded_24h_at).toBeNull();
+  });
+});
+
 describe('GET /api/cron/schedule-reminders: time zones across pages', () => {
   it("a failed zone read is retried on the next page, and that page formats in the org's own zone", async () => {
     // Page one: 200 events. Page two: one event at 04:30Z on the 25th, which

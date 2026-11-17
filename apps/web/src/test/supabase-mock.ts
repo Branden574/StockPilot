@@ -222,10 +222,10 @@ function splitLogicTerms(list: string): string[] {
 
 /**
  * One term of a PostgREST logic tree against one row: `and(...)`, `or(...)`
- * or `col.op.value`, with op eq, neq, gt, gte, lt, lte or is. Values are
- * compared as the strings PostgREST would receive (a double-quoted value has
- * its quotes taken off), against the row's value; `is` takes null, true or
- * false. Anything else throws.
+ * or `col.op.value`, with op eq, neq, gt, gte, lt, lte or is. A
+ * double-quoted value has its quotes taken off; the comparison follows the
+ * row value's type (compareLogicValue); `is` takes null, true or false.
+ * Anything else throws.
  */
 function evaluateLogicTree(term: string, row: Record<string, unknown>): boolean {
   const nested = /^(and|or)\((.*)\)$/s.exec(term);
@@ -246,21 +246,66 @@ function evaluateLogicTree(term: string, row: Record<string, unknown>): boolean 
     return cell === want;
   }
   if (cell === null) return false;
-  const a = String(cell);
+  const c = compareLogicValue(cell, value, term);
   switch (op) {
     case 'eq':
-      return a === value;
+      return c === 0;
     case 'neq':
-      return a !== value;
+      return c !== 0;
     case 'gt':
-      return a > value;
+      return c > 0;
     case 'gte':
-      return a >= value;
+      return c >= 0;
     case 'lt':
-      return a < value;
+      return c < 0;
     default:
-      return a <= value;
+      return c <= 0;
   }
+}
+
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
+const NUMERIC = /^-?\d+(\.\d+)?$/;
+/** Ids and keys whose JS order is the database's: uuids and lower-case
+ *  ASCII words (no case or accents for a collation to reorder). */
+const PLAIN_KEY = /^[0-9a-z-]+$/;
+
+/**
+ * Compares a row's value with a logic-tree value the way Postgres would for
+ * the column's type, or throws when it cannot tell: a number numerically, a
+ * timestamp as a time (so `+00:00` and `Z` agree), true/false for a boolean,
+ * a numeric string numerically, and a uuid or lower-case key in byte order.
+ * Any other text is compared for equality only. A backslash escape is
+ * refused.
+ */
+function compareLogicValue(cell: unknown, value: string, term: string): number {
+  const refuse = (): never => {
+    throw new Error(`servedLikePostgrest cannot compare in the .or() term ${term}`);
+  };
+  if (value.includes('\\')) refuse();
+  const cmp = (a: number, b: number) => (a < b ? -1 : a > b ? 1 : 0);
+  if (typeof cell === 'number') {
+    const v = Number(value);
+    if (!NUMERIC.test(value) || !Number.isFinite(v)) refuse();
+    return cmp(cell, v);
+  }
+  if (typeof cell === 'boolean') {
+    if (value !== 'true' && value !== 'false') refuse();
+    return String(cell) === value ? 0 : 1;
+  }
+  if (typeof cell !== 'string') return refuse();
+  if (ISO_TIMESTAMP.test(cell) || ISO_TIMESTAMP.test(value)) {
+    const a = Date.parse(cell);
+    const b = Date.parse(value);
+    if (!ISO_TIMESTAMP.test(cell) || !ISO_TIMESTAMP.test(value) || Number.isNaN(a) || Number.isNaN(b)) {
+      refuse();
+    }
+    return cmp(a, b);
+  }
+  if (NUMERIC.test(cell) && NUMERIC.test(value)) return cmp(Number(cell), Number(value));
+  if (PLAIN_KEY.test(cell) && PLAIN_KEY.test(value)) return cell < value ? -1 : cell > value ? 1 : 0;
+  // Other text: equality only (a collation may order it differently).
+  if (cell === value) return 0;
+  return /\.(eq|neq)\./.test(term) ? 1 : refuse();
 }
 
 /**

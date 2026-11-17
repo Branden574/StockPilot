@@ -124,6 +124,44 @@ describe('servedLikePostgrest', () => {
     expect((both.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['b']);
   });
 
+  it('compares in an .or() by type: numbers as numbers, timestamps as times', async () => {
+    const stub = makeSupabaseStub({
+      'q.select': servedLikePostgrest([
+        { id: 'x', qty: 9, at: '2026-08-24T20:00:00+00:00' },
+        { id: 'y', qty: 12, at: '2026-08-24T21:00:00+00:00' },
+      ]),
+    });
+    // '9' > '10' as text; 9 < 10 as the number it is.
+    const gt = await stub.client.from('q').select('id').or('qty.gt.10').order('id');
+    expect((gt.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['y']);
+    const lt = await stub.client.from('q').select('id').or('qty.lt.10').order('id');
+    expect((lt.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['x']);
+    // PostgREST's +00:00 against a toISOString() Z value: the same instant.
+    const at = await stub.client
+      .from('q')
+      .select('id')
+      .or('at.lte."2026-08-24T20:30:00.000Z"')
+      .order('id');
+    expect((at.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['x']);
+    const same = await stub.client.from('q').select('id').or('at.eq."2026-08-24T20:00:00.000Z"');
+    expect((same.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['x']);
+  });
+
+  it('refuses an .or() comparison it cannot make the way the database would', async () => {
+    const stub = makeSupabaseStub({
+      'q.select': servedLikePostgrest([{ id: 'x', qty: 9, name: 'Blue Pen', at: '2026-08-24T20:00:00Z' }]),
+    });
+    const run = (filter: string) =>
+      Promise.resolve().then(() => stub.client.from('q').select('id').or(filter));
+    await expect(run('qty.gt.ten')).rejects.toThrow(/cannot compare/);
+    await expect(run('name.gt.Apple')).rejects.toThrow(/cannot compare/); // collation order
+    await expect(run('at.lt.tomorrow')).rejects.toThrow(/cannot compare/);
+    await expect(run('name.eq."Blue\\ Pen"')).rejects.toThrow(/cannot compare/);
+    // Equality on text is fine.
+    const eq = await stub.client.from('q').select('id').or('name.eq."Blue Pen"');
+    expect((eq.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['x']);
+  });
+
   it('refuses a filter it cannot evaluate rather than ignoring it', async () => {
     const stub = makeSupabaseStub({ 'items.select': servedLikePostgrest(rows) });
     await expect(

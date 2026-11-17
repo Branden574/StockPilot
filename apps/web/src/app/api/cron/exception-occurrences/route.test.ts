@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
 /**
- * The Exception Center sync cron (F1-1): CRON_SECRET-gated, three orgs at a
+ * The Exception Center sync cron (F1-1): CRON_SECRET-gated, one org at a
  * time, least recently reached first (the later of the last sync and the
  * cron's last attempt), fail-open per org, and a soft deadline so a slow run
  * stops itself instead of being killed mid-sweep.
@@ -264,17 +264,25 @@ describe('GET /api/cron/exception-occurrences — attempts and rotation (0492)',
       return APPLIED;
     });
     const res = await GET(req('Bearer test-cron-secret'));
-    // Three at once: a at 0 s, b at 20 s, c at 40 s; d would start at 60 s.
+    // One at a time: a at 0 s, b at 20 s, c at 40 s; d would start at 60 s.
     expect(syncOrg.mock.calls.map((c) => c[0])).toEqual(['a', 'b', 'c']);
     expect(await res.json()).toMatchObject({ processed: 3, deferredForTime: 1 });
     const written = upserts(stub);
-    expect(written.map((w) => w.row.organization_id)).toEqual(['a', 'b', 'c']);
+    // Per org: the stamp as it starts (counted as a failure in advance, so a
+    // run killed mid-sync still counts it), then the correction after it.
+    expect(written.map((w) => [w.row.organization_id, w.row.consecutive_failures])).toEqual([
+      ['a', 1],
+      ['a', 0],
+      ['b', 1],
+      ['b', 0],
+      ['c', 1],
+      ['c', 0],
+    ]);
     for (const w of written) {
       expect(w.opts).toEqual({ onConflict: 'job,organization_id' });
       expect(w.row.job).toBe('exception_sync');
       // Stamped when the org started, before its sync ran.
       expect(w.row.last_attempt_at).toBe(startedAt[w.row.organization_id]);
-      expect(w.row.consecutive_failures).toBeUndefined();
     }
   });
 
@@ -304,7 +312,9 @@ describe('GET /api/cron/exception-occurrences — attempts and rotation (0492)',
         .filter((w) => w.row.consecutive_failures !== undefined)
         .map((w) => [w.row.organization_id, w.row.consecutive_failures]),
     );
-    expect(counts).toEqual({ 'org-ok': 0, 'org-none': 3, 'org-fail': 1 });
+    // The last write per org: success resets, busy keeps its count, a
+    // failure keeps the count its stamp already gave it.
+    expect(counts).toEqual({ 'org-ok': 0, 'org-busy': 2, 'org-none': 3, 'org-fail': 1 });
     const line = info.mock.calls.find((c) => c[0] === '[cron.exception-occurrences]');
     expect(JSON.parse(String(line?.[1]))).toMatchObject({ failingRepeatedly: 1, applied: 1, busy: 1 });
     expect(String(line?.[1])).not.toMatch(/org-/);
@@ -332,7 +342,7 @@ describe('GET /api/cron/exception-occurrences — attempts and rotation (0492)',
     expect(tags).toEqual(['cron.exception-occurrences.attempts']);
   });
 
-  it('runs at most three orgs at once', async () => {
+  it('runs one org at a time', async () => {
     orgsStub({ orgs: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] });
     let inFlight = 0;
     let most = 0;
@@ -345,11 +355,12 @@ describe('GET /api/cron/exception-occurrences — attempts and rotation (0492)',
     });
     const res = await GET(req('Bearer test-cron-secret'));
     expect(await res.json()).toMatchObject({ processed: 7, applied: 7 });
-    expect(most).toBe(3);
+    expect(most).toBe(1);
   });
 
   it('over consecutive runs every org is reached, failing and never-synced ones included', async () => {
-    // 20 orgs, three syncs per run (each takes 15 s; the deadline is 45 s).
+    // 20 orgs, three syncs per run (one at a time, each 15 s; the deadline is
+    // 45 s).
     // 12 are healthy, 5 never get a sync (no owner or admin) and were last
     // synced two days ago, 3 are new. Under the old tiers the healthy due orgs
     // filled every run, so the 5 never got another attempt and the 3 new ones

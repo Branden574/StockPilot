@@ -991,7 +991,7 @@ const REVIEWED: Record<string, Reviewed> = {
   'server/services/lib/cron-sweep.ts#cronAttemptRecorder': {
     kind: 'system',
     reason:
-      'Records when a scheduled job (api/cron/exception-occurrences, api/cron/restore-points) last started each organization, on the service-role client.',
+      'Records when a scheduled job (api/cron/exception-occurrences, api/cron/restore-points, and the orders catalog prewarm job) last started each organization, on the service-role client.',
     writes: ['cron_sweep_attempts.upsert'],
   },
   'server/services/restore-points.ts#pruneSnapshots': {

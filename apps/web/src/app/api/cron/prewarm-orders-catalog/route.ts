@@ -3,8 +3,10 @@ import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/env';
+import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
+import { cronAttemptRecorder, readCronAttempts } from '@/server/services/lib/cron-sweep';
 import {
   prewarmInventoryList,
   type InventoryListPrewarmResult,
@@ -50,10 +52,10 @@ const ORG_PAGE_SIZE = 1000;
  *   • KNOWN-HOT orgs (org-sweep.ts) keep the full treatment: orders-new
  *     catalog per warehouse pair + Items/Books 'all' AND per-warehouse
  *     variants.
- *   • EVERY OTHER ACTIVE ORG — any org with ≥1 accepted member, in a
- *     window of ORG_SWEEP_WINDOW that rotates each run, so every one is
- *     warmed at least once every ceil(N / ORG_SWEEP_WINDOW) runs (disclosed,
- *     see org-sweep.ts for the budget math) — gets the Items/Books 'all'
+ *   • EVERY OTHER ACTIVE ORG — any org with ≥1 accepted member, up to
+ *     ORG_SWEEP_WINDOW a run, least recently warmed first, so with C warmed
+ *     per run every one is warmed within ceil(N / C) runs (disclosed, see
+ *     org-sweep.ts for the budget math) — gets the Items/Books 'all'
  *     variant, the one nearly every manager request resolves to. The
  *     cold-visit killer: before this sweep a first visit to any
  *     non-hot org paid ~4.8s of cold loaders at 50k-item scale.
@@ -121,16 +123,18 @@ export async function GET(req: Request) {
     // 1) Enumerate every org worth warming — FULL SWEEP ONLY: ≥1
     //    ACCEPTED member (the empty !inner() embed is a pure join
     //    filter — no member rows ship back), ALL of them, in id order, a
-    //    page at a time. planOrgSweep then takes this run's rotating
-    //    window of ORG_SWEEP_WINDOW (plus the known-hot orgs, first), so
-    //    every active org is warmed within ceil(N / ORG_SWEEP_WINDOW)
-    //    runs. (It used to take the 50 most recently updated, so an org
-    //    past the 48th was never warmed.) The hot tier skips the query
-    //    entirely — its org list is the KNOWN_HOT_ORG_IDS constant.
+    //    page at a time. planOrgSweep then takes the ORG_SWEEP_WINDOW
+    //    least recently warmed (plus the known-hot orgs, first), by the
+    //    time this cron last started each (cron_sweep_attempts, job
+    //    'prewarm'); an org the deadline leaves keeps its old time and goes
+    //    first next run. (It used to take the 50 most recently updated, so
+    //    an org past the 48th was never warmed.) The hot tier skips the
+    //    query entirely — its org list is the KNOWN_HOT_ORG_IDS constant.
     let sweepOrgIds: string[] = [...KNOWN_HOT_ORG_IDS];
     let activeOrgTotal: number | null = null;
     let truncatedByCap = 0;
     let runsToCoverAll = 1;
+    let windowOrgIds = new Set<string>();
     if (!hotOnly) {
       const activeOrgIds: string[] = [];
       for (let from = 0; ; from += ORG_PAGE_SIZE) {
@@ -149,13 +153,22 @@ export async function GET(req: Request) {
         for (const r of page) activeOrgIds.push(r.id);
         if (page.length < ORG_PAGE_SIZE) break;
       }
+      // Ordering only: if this read fails, the window is the first in id
+      // order (reported).
+      let lastWarmed = new Map<string, number>();
+      try {
+        lastWarmed = (await readCronAttempts(admin, 'prewarm')).lastAttempt;
+      } catch (err) {
+        void reportError(err, { tag: 'cron.prewarm-orders-catalog.attempts', level: 'warning' });
+      }
       const plan = planOrgSweep({
         knownHotOrgIds: KNOWN_HOT_ORG_IDS,
         activeOrgIds,
         windowSize: ORG_SWEEP_WINDOW,
-        now: startedAt,
+        lastWarmed,
       });
       sweepOrgIds = plan.orgIds;
+      windowOrgIds = new Set(plan.windowOrgIds);
       activeOrgTotal = activeOrgIds.length;
       truncatedByCap = plan.outsideWindow;
       runsToCoverAll = plan.runsToCoverAll;
@@ -230,17 +243,27 @@ export async function GET(req: Request) {
     //    sweepOrgIds, so a deadline can only ever shed the cold tail.
     //    Per-view errors are captured inside prewarmInventoryList; the
     //    try/catch is belt-and-braces isolation.
+    //    Each window org's attempt is recorded as it starts (the stamp is
+    //    sent before its warm and awaited after it); a failed write never
+    //    stops the sweep and is reported once.
+    const recorder = cronAttemptRecorder(admin, 'prewarm', {
+      failuresBefore: new Map(),
+      reportTag: 'cron.prewarm-orders-catalog.attempts',
+      countFailures: false,
+    });
     const inventory: InventoryListPrewarmResult[] = [];
     for (const orgId of sweepOrgIds) {
       if (Date.now() > deadlineAt) {
         skippedForBudget += 1;
         continue;
       }
+      const finish = windowOrgIds.has(orgId) ? recorder.start(orgId) : null;
       try {
         inventory.push(await prewarmInventoryList(orgId));
       } catch (err) {
         console.warn(`[prewarm] inventory sweep failed for org ${orgId}:`, err);
       }
+      if (finish) await finish('neither');
     }
 
     // 4) Per-warehouse cookie variants — known-hot pairs only (see the
@@ -263,17 +286,26 @@ export async function GET(req: Request) {
 
     // NO SILENT CAPS: any shed work gets a log line, not just a
     // response field nobody reads.
-    if (truncatedByCap > 0 || skippedForBudget > 0) {
+    // NO SILENT CAPS: work shed for time gets a warning line; the orgs
+    //    outside this run's window (they take their turn in a later run)
+    //    are in the response and an info line, every run.
+    if (skippedForBudget > 0) {
       console.warn(
-        `[prewarm] sweep shed work: cap=${ORG_SWEEP_CAP} activeOrgTotal=${activeOrgTotal ?? 'n/a'} ` +
-          `truncatedByCap=${truncatedByCap} runsToCoverAll=${runsToCoverAll} ` +
-          `skippedForBudget=${skippedForBudget} elapsedMs=${Date.now() - startedAt}`,
+        `[prewarm] sweep shed work for time: skippedForBudget=${skippedForBudget} ` +
+          `activeOrgTotal=${activeOrgTotal ?? 'n/a'} elapsedMs=${Date.now() - startedAt}`,
+      );
+    }
+    if (!hotOnly) {
+      console.info(
+        `[prewarm] sweep: cap=${ORG_SWEEP_CAP} activeOrgTotal=${activeOrgTotal ?? 'n/a'} ` +
+          `swept=${sweepOrgIds.length} truncatedByCap=${truncatedByCap} ` +
+          `runsToCoverAll=${runsToCoverAll} skippedForBudget=${skippedForBudget}`,
       );
     }
 
     return NextResponse.json({
       // 'hot' = known-hot tier only (boot self-warm); 'full' = the
-      // rotating all-active-orgs sweep (cron / deploy hook).
+      // all-active-orgs sweep, a window per run (cron / deploy hook).
       scope: hotOnly ? 'hot' : 'full',
       prewarmed: results.length,
       totalMs: Date.now() - startedAt,
@@ -286,8 +318,9 @@ export async function GET(req: Request) {
         // null on the hot tier — no enumeration ran.
         activeOrgTotal,
         swept: sweepOrgIds.length,
-        // Active orgs outside this run's rotating window (warmed in a later
-        // run), and how many runs the window takes to cover them all.
+        // Active orgs outside this run's window (warmed in a later run), and
+        // how many runs the line takes to reach them all when no run is cut
+        // by its deadline.
         truncatedByCap,
         runsToCoverAll,
         skippedForBudget,

@@ -6,11 +6,11 @@
  * reach it without spinning up the route.
  */
 
-import { rotatingWindow } from '@/server/services/lib/cron-sweep';
+import { oldestFirst } from '@/server/services/lib/cron-sweep';
 
 /**
- * Orgs that are ALWAYS warmed first, ahead of the rotating
- * sweep — the sweep's deadline can truncate the tail, never these.
+ * Orgs that are ALWAYS warmed first, ahead of the
+ * oldest-warmed-first sweep — the sweep's deadline can truncate the tail, never these.
  * They also keep their EXTRA warm surfaces (orders-new catalog per
  * warehouse + per-warehouse Items/Books variants) that the broad sweep
  * deliberately skips — see route.ts.
@@ -34,29 +34,32 @@ export const KNOWN_HOT_ORG_IDS = [
  *   • 50 orgs × ~1s ≈ 50s worst case — right at the route's
  *     maxDuration=60 window, so the cap alone is NOT the safety net:
  *     route.ts also stops starting new orgs at a ~50s soft deadline
- *     (same pattern as cron/price-pull) and reports both the orgs outside
- *     this run's window and any deadline skips in its response + a log line.
- * Past the cap the rest of the orgs ROTATE (planOrgSweep): each run takes
- * the next window, so every active org is warmed at least once every
- * ceil(N / ORG_SWEEP_WINDOW) runs (N = active orgs other than the known-hot
- * ones; every 30 minutes, so 100 orgs are all warmed within an hour).
+ *     (same pattern as cron/price-pull) and reports the orgs it skipped
+ *     for time in its response + a warning line.
+ * Past the cap the rest of the orgs take turns (planOrgSweep): the ones
+ * least recently warmed go first, by the time the cron last started each
+ * (cron_sweep_attempts, job 'prewarm', 0492), and an org the deadline left
+ * keeps its old time, so it goes first next run. With C orgs warmed per run
+ * (ORG_SWEEP_WINDOW when no run is cut by its deadline, fewer when one is),
+ * every active org is warmed within ceil(N / C) runs (N = active orgs other
+ * than the known-hot ones; every 30 minutes).
  */
 export const ORG_SWEEP_CAP = 50;
 
 /** The rotating part of the cap: what is left after the known-hot orgs. */
 export const ORG_SWEEP_WINDOW = ORG_SWEEP_CAP - KNOWN_HOT_ORG_IDS.length;
 
-/** The cron's period (vercel.json: every 30 minutes). One window per slot. */
-export const ORG_SWEEP_SLOT_MS = 30 * 60_000;
-
 export interface OrgSweepPlan {
   /** Known-hot orgs first, then this run's window, deduped. */
   orgIds: string[];
-  /** Active orgs other than the known-hot ones (the rotation's N). */
+  /** The window alone (the orgs whose attempt the route records). */
+  windowOrgIds: string[];
+  /** Active orgs other than the known-hot ones (the line's N). */
   rotating: number;
   /** Of those, how many are outside this run's window (warmed in a later run). */
   outsideWindow: number;
-  /** Runs it takes for the window to cover every one of them. */
+  /** Runs the line takes to reach every one of them, when no run is cut by
+   *  its deadline. */
   runsToCoverAll: number;
 }
 
@@ -64,17 +67,17 @@ export interface OrgSweepPlan {
  * Plans one run's orgs. Known-hot ids are seeded FIRST so they can never
  * fall outside the window or starve behind the deadline. `activeOrgIds` is
  * the route's enumeration (every organization with ≥1 ACCEPTED member, in id
- * order), which may or may not contain the known-hot ids. The rest rotate:
- * the run in 30-minute slot s = floor(now / ORG_SWEEP_SLOT_MS) takes
- * `windowSize` of them starting at (s × windowSize) mod N, wrapping
- * (rotatingWindow, services/lib/cron-sweep.ts). With N ≤ windowSize every
- * run takes all of them, in order, as before.
+ * order), which may or may not contain the known-hot ids. The rest go least
+ * recently warmed first (`lastWarmed`: epoch ms of the cron's last attempt,
+ * per org); an org with none goes first, in id order. The first `windowSize`
+ * of them are this run's window. With N ≤ windowSize every run takes all of
+ * them.
  */
 export function planOrgSweep(opts: {
   knownHotOrgIds: readonly string[];
   activeOrgIds: readonly string[];
   windowSize: number;
-  now: number;
+  lastWarmed: ReadonlyMap<string, number>;
 }): OrgSweepPlan {
   const hot: string[] = [];
   const seen = new Set<string>();
@@ -89,12 +92,13 @@ export function planOrgSweep(opts: {
     seen.add(id);
     rest.push(id);
   }
-  const slot = Math.floor(opts.now / ORG_SWEEP_SLOT_MS);
-  const window = rotatingWindow(rest, opts.windowSize, slot);
+  const width = Math.max(0, Math.floor(opts.windowSize));
+  const window = oldestFirst(rest, opts.lastWarmed).slice(0, width);
   return {
     orgIds: [...hot, ...window],
+    windowOrgIds: window,
     rotating: rest.length,
     outsideWindow: rest.length - window.length,
-    runsToCoverAll: Math.max(1, Math.ceil(rest.length / Math.max(1, opts.windowSize))),
+    runsToCoverAll: Math.max(1, Math.ceil(rest.length / Math.max(1, width))),
   };
 }

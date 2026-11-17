@@ -10,7 +10,6 @@ import {
   newestPerKey,
   oldestFirst,
   readCronAttempts,
-  rotatingWindow,
   sweepUntilDeadline,
 } from './cron-sweep';
 
@@ -61,41 +60,6 @@ describe('newestPerKey', () => {
       (r) => r.t,
     );
     expect([...out]).toEqual([['a', Date.parse('2026-11-03T00:00:00Z')]]);
-  });
-});
-
-describe('rotatingWindow', () => {
-  it('with N at or under the size, every slot is every id in order', () => {
-    for (const slot of [0, 1, 7, 123_456]) {
-      expect(rotatingWindow(ids(48), 48, slot)).toEqual(ids(48));
-      expect(rotatingWindow(ids(3), 48, slot)).toEqual(ids(3));
-    }
-    expect(rotatingWindow([], 48, 5)).toEqual([]);
-  });
-
-  it('consecutive slots take consecutive stretches, and wrap around', () => {
-    const all = ids(100);
-    expect(rotatingWindow(all, 48, 0)).toEqual(all.slice(0, 48));
-    expect(rotatingWindow(all, 48, 1)).toEqual(all.slice(48, 96));
-    // Slot 2 starts at 96 and wraps to the start.
-    expect(rotatingWindow(all, 48, 2)).toEqual([...all.slice(96), ...all.slice(0, 44)]);
-  });
-
-  it('any ceil(N / size) consecutive slots cover every id, for many N and start slots', () => {
-    for (const n of [49, 50, 95, 96, 97, 100, 143, 500, 1001]) {
-      const all = ids(n);
-      const runs = Math.ceil(n / 48);
-      for (const first of [0, 1, 5, 984_321]) {
-        const seen = new Set<string>();
-        for (let s = first; s < first + runs; s += 1) {
-          const w = rotatingWindow(all, 48, s);
-          expect(w).toHaveLength(48);
-          expect(new Set(w).size).toBe(48);
-          for (const id of w) seen.add(id);
-        }
-        expect(seen.size, `N=${n} from slot ${first}`).toBe(n);
-      }
-    }
   });
 });
 
@@ -194,7 +158,7 @@ describe('cron attempts (cron_sweep_attempts, 0492)', () => {
     ]);
   });
 
-  it('stamps on start, then counts failures in a row: failure adds one, success resets, neither leaves it', async () => {
+  it('stamps on start as a failure in advance, then corrects it: success resets, neither restores, failure keeps', async () => {
     const stub = makeSupabaseStub({ 'cron_sweep_attempts.insert': { data: null, error: null } });
     const rec = cronAttemptRecorder(stub.client, 'exception_sync', {
       failuresBefore: new Map([
@@ -216,14 +180,48 @@ describe('cron attempts (cron_sweep_attempts, 0492)', () => {
         args[0]![0] as { job: string; organization_id: string; consecutive_failures?: number },
     );
     expect(rows.map((r) => [r.organization_id, r.consecutive_failures])).toEqual([
-      ['f', undefined],
       ['f', 3],
-      ['s', undefined],
+      ['s', 4],
       ['s', 0],
-      ['n', undefined],
-      ['new', undefined],
+      ['n', 5],
+      ['n', 4],
+      ['new', 1],
+      ['new', 0],
     ]);
     expect(new Set(rows.map((r) => r.job))).toEqual(new Set(['exception_sync']));
+  });
+
+  it('an attempt that never finishes (killed at maxDuration) is already counted as a failure', async () => {
+    const stub = makeSupabaseStub({ 'cron_sweep_attempts.insert': { data: null, error: null } });
+    const rec = cronAttemptRecorder(stub.client, 'restore_points', {
+      failuresBefore: new Map([['k', 1]]),
+      reportTag: 'test.attempts',
+    });
+    rec.start('k'); // the function is killed before finish is called
+    const rows = (stub.chainArgsAll.get('cron_sweep_attempts.insert') ?? []).map(
+      (args) => args[0]![0] as { organization_id: string; consecutive_failures?: number },
+    );
+    expect(rows).toEqual([
+      expect.objectContaining({ organization_id: 'k', consecutive_failures: 2 }),
+    ]);
+  });
+
+  it('with countFailures off, writes only the attempt time', async () => {
+    const stub = makeSupabaseStub({ 'cron_sweep_attempts.insert': { data: null, error: null } });
+    const rec = cronAttemptRecorder(stub.client, 'prewarm', {
+      failuresBefore: new Map(),
+      reportTag: 'test.attempts',
+      countFailures: false,
+    });
+    await rec.start('a')('neither');
+    await rec.start('b')('failure');
+    const rows = (stub.chainArgsAll.get('cron_sweep_attempts.insert') ?? []).map(
+      (args) => args[0]![0] as Record<string, unknown>,
+    );
+    expect(rows.map((r) => Object.keys(r).sort())).toEqual([
+      ['job', 'last_attempt_at', 'organization_id'],
+      ['job', 'last_attempt_at', 'organization_id'],
+    ]);
   });
 
   it('a failed write never throws and is reported once per run', async () => {

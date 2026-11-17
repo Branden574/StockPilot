@@ -273,9 +273,15 @@ describe('GET /api/cron/restore-points: attempts (cron_sweep_attempts, 0492)', (
       row: args[0]![0] as Record<string, unknown>,
       opts: args[0]![1],
     }));
-    expect(writes.map((w) => [w.row.job, w.row.organization_id])).toEqual([
-      ['restore_points', 'a'],
-      ['restore_points', 'b'],
+    // The stamp as each org starts (counted as a failure in advance), then
+    // the correction after its snapshot.
+    expect(
+      writes.map((w) => [w.row.job, w.row.organization_id, w.row.consecutive_failures]),
+    ).toEqual([
+      ['restore_points', 'a', 1],
+      ['restore_points', 'a', 0],
+      ['restore_points', 'b', 1],
+      ['restore_points', 'b', 0],
     ]);
     for (const w of writes) expect(w.opts).toEqual({ onConflict: 'job,organization_id' });
     // The read takes this job's rows only.

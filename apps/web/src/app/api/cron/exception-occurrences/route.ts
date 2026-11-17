@@ -42,12 +42,12 @@ export const maxDuration = 300;
 const SWEEP_DEADLINE_MS = 45_000;
 
 /**
- * Organizations synced at once. Each sync reads and writes only its own
- * organization (exceptions_sync takes that organization's lock), so a few at
- * once never touch each other; three keeps the database calm. The deadline is
- * checked before each start.
+ * One org at a time, as before: each sync already runs its rule groups in
+ * parallel against the shared database pool, so several orgs at once would
+ * multiply that. Fairness comes from the order, not from parallelism. The
+ * deadline is checked before each start.
  */
-const CONCURRENCY = 3;
+const CONCURRENCY = 1;
 
 /** An organization whose attempts have ended without a sync this many times
  *  in a row is counted in the run's log line (failingRepeatedly). */
@@ -69,7 +69,7 @@ const REPEATED_FAILURES = 3;
  * CRON_SECRET-gated (the shared constant-time secretsEqual). FAIL-OPEN per
  * org: syncOrg never throws, reports its own failures
  * (exceptions.sync_failed), and one org's failure never stops the rest.
- * Orgs run three at a time, least recently REACHED first (exceptionSweepOrder:
+ * Orgs run one at a time, least recently REACHED first (exceptionSweepOrder:
  * the later of the last applied sync and the cron's last attempt). The cron
  * records each attempt (cron_sweep_attempts, 0492) as it starts the org,
  * so an org it reached goes to the back of the line whether or not the sync

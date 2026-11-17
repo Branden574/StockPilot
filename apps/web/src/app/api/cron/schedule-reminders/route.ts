@@ -269,6 +269,10 @@ export async function GET(req: Request) {
         // skipped here, and the next run reads it as it is.
         const stamp = isOneHour ? { reminded_1h_at: nowIso } : { reminded_24h_at: nowIso };
         const guard = isOneHour ? 'reminded_1h_at' : 'reminded_24h_at';
+        // Both horizons also require reminded_1h_at null: a day-ahead claim
+        // must lose to a 1h claim made since this run read the event (two
+        // deliveries of one cron tick, seconds apart, can classify one event
+        // both ways). For the 1h claim it is the same filter as its guard.
         const { data: stamped } = await admin
           .from('schedule_events')
           .update(stamp)
@@ -276,6 +280,7 @@ export async function GET(req: Request) {
           .eq('starts_at', ev.starts_at)
           .eq('status', 'scheduled')
           .is(guard, null)
+          .is('reminded_1h_at', null)
           .select('id')
           .maybeSingle();
         if (!stamped) continue; // another run beat us, or the event moved or closed

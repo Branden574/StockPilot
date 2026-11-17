@@ -293,7 +293,7 @@ describe('GET /api/cron/prewarm-orders-catalog', () => {
     });
   });
 
-  it('discloses the orgs outside this run\'s window when more active orgs exist than the cap', async () => {
+  it('discloses the orgs outside this run\'s window in an info line, and warns only when work was shed for time', async () => {
     const stub = makeSupabaseStub({
       'organizations.select': {
         // A 120-org fleet: the two known-hot orgs and a window of 48 run now.
@@ -304,44 +304,106 @@ describe('GET /api/cron/prewarm-orders-catalog', () => {
     });
     adminClientHolder.client = stub.client;
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
 
     const res = await GET(buildRequest('Bearer test-cron-secret'));
     const body = await res.json();
 
-    expect(body.orgSweep).toMatchObject({ activeOrgTotal: 120, swept: 50, truncatedByCap: 72, runsToCoverAll: 3 });
-    // Repo rule: no silent caps — shed work must hit the logs too.
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('truncatedByCap=72 runsToCoverAll=3'));
+    expect(body.orgSweep).toMatchObject({
+      activeOrgTotal: 120,
+      swept: 50,
+      truncatedByCap: 72,
+      runsToCoverAll: 3,
+      skippedForBudget: 0,
+    });
+    // Repo rule: no silent caps. The window is routine, so an info line;
+    // nothing was shed for time, so no warning.
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('truncatedByCap=72 runsToCoverAll=3'));
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('shed work'));
     warnSpy.mockRestore();
+    infoSpy.mockRestore();
   });
 
-  it('warms a different window each 30-minute run, every org within ceil(N / 48) runs', async () => {
-    const fleet = Array.from({ length: 120 }, (_, i) => ({
+  it('warns when the deadline sheds work', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-17T12:00:00.000Z'));
+    adminClientHolder.client = makeSupabaseStub({
+      'organizations.select': {
+        data: Array.from({ length: 10 }, (_, i) => ({ id: `org-${i}` })),
+        error: null,
+      },
+      'warehouses.select': { data: [], error: null },
+    }).client;
+    prewarmInventorySpy.mockImplementation(async (organizationId, warehouseId) => {
+      vi.setSystemTime(Date.now() + 20_000);
+      return inventoryResult(organizationId, warehouseId);
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+
+    const body = await (await GET(buildRequest('Bearer test-cron-secret'))).json();
+    // Warms start at 0, 20 and 40 s; the fourth would start at 60 s.
+    expect(body.orgSweep.skippedForBudget).toBe(9);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('skippedForBudget=9'));
+    vi.useRealTimers();
+  });
+
+  it('runs cut by the deadline still warm every org: the ones left go first next run', async () => {
+    // 96 orgs; each warm takes 1.6 s, so about 30 of each window of 48 are
+    // warmed before the 50 s deadline. A window chosen from the clock alone
+    // cut the same tail every time and never warmed a third of them.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const fleet = Array.from({ length: 96 }, (_, i) => ({
       id: `org-${String(i).padStart(3, '0')}`,
       'organization_members.accepted_at': '2026-01-01T00:00:00Z',
     }));
+    const attempts: Array<{ job: string; organization_id: string; last_attempt_at: string }> = [];
+    prewarmInventorySpy.mockImplementation(async (organizationId, warehouseId) => {
+      vi.setSystemTime(Date.now() + 1_600);
+      return inventoryResult(organizationId, warehouseId);
+    });
     vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'info').mockImplementation(() => {});
     const warmed = new Set<string>();
     const t0 = Date.parse('2026-11-17T12:00:00.000Z');
-    for (let run = 0; run < 3; run += 1) {
-      vi.spyOn(Date, 'now').mockReturnValue(t0 + run * 30 * 60_000);
-      adminClientHolder.client = makeSupabaseStub({
+    const runs = Math.ceil(96 / 30) + 1;
+    for (let run = 0; run < runs; run += 1) {
+      vi.setSystemTime(t0 + run * 30 * 60_000);
+      const stub = makeSupabaseStub({
         'organizations.select': servedLikePostgrest(fleet),
         'warehouses.select': { data: [], error: null },
-      }).client;
+        'cron_sweep_attempts.select': servedLikePostgrest(() => attempts),
+        'cron_sweep_attempts.insert': (call) => {
+          const row = call.args[call.methods.indexOf('upsert')]![0] as {
+            job: string;
+            organization_id: string;
+            last_attempt_at: string;
+          };
+          const prev = attempts.find((a) => a.organization_id === row.organization_id);
+          if (prev) Object.assign(prev, row);
+          else attempts.push({ ...row });
+          return { data: null, error: null };
+        },
+      });
+      adminClientHolder.client = stub.client;
       prewarmInventorySpy.mockClear();
-      await GET(buildRequest('Bearer test-cron-secret'));
+      const body = await (await GET(buildRequest('Bearer test-cron-secret'))).json();
       const calls = prewarmInventorySpy.mock.calls.map((c) => c[0]);
       // The known-hot orgs lead every run.
       expect(calls.slice(0, 2)).toEqual([HOT_1, HOT_2]);
-      expect(calls).toHaveLength(50);
+      expect(body.orgSweep.skippedForBudget).toBeGreaterThan(0);
       for (const id of calls.slice(2)) warmed.add(id);
-      vi.mocked(Date.now).mockRestore();
+      // Only window orgs are recorded, under job 'prewarm'.
+      for (const args of stub.chainArgsAll.get('cron_sweep_attempts.insert') ?? []) {
+        const row = args[0]![0] as { job: string; organization_id: string };
+        expect(row.job).toBe('prewarm');
+        expect([HOT_1, HOT_2]).not.toContain(row.organization_id);
+      }
     }
-    expect(warmed.size).toBe(120);
+    expect(warmed.size).toBe(96);
+    vi.useRealTimers();
   });
 
-  // Phone ordering PO-3: the phone storefront's photo map is warmed for every
-  // pair the web catalog is warmed for, after it, with its own result list.
   it('warms the phone photo map for each known-hot pair, and a failure does not stop the sweep', async () => {
     const stub = makeSupabaseStub({
       'organizations.select': { data: [{ id: HOT_1 }], error: null, count: 1 },
