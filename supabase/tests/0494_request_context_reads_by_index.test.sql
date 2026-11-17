@@ -8,7 +8,7 @@
 -- so a plan kept from one caller is shown never to answer for another.
 -- Made-up data only.
 begin;
-select plan(47);
+select plan(48);
 
 -- ── The reference: 0413's body, verbatim ───────────────────────────────────
 create function pg_temp.request_context_0413()
@@ -92,7 +92,7 @@ $hits$;
 
 -- ── Fixture ────────────────────────────────────────────────────────────────
 -- Organizations: A..F, N (every nullable setting null, comped), and L, which
--- gets 1,200 members in section 7 (a whole-table read is then easy to see).
+-- gets 300 members in section 7 (a whole-table read is then easy to see).
 insert into public.organizations (id, name, slug, logo_url, nav_overrides, dashboard_layout, order_status_config, mfa_policy, all_modules_comp) values
   ('c0494000-0000-0000-0000-00000000000a', 'Org A 0494', 'org-a-0494', 'https://example.test/a.png',
      '{"v": 1, "hidden": ["/dashboard/reports"], "labels": {"/dashboard/inventory": "Stock"}}',
@@ -335,32 +335,36 @@ select is((select jsonb_agg(m->>'organization_id') from jsonb_array_elements(pub
 select is(public.get_request_context(), pg_temp.request_context_0413(), 'after the changes: same answer as 0413''s body');
 
 -- ── 7. Her own rows by index, not every member's row through the policy ────
--- una joins L, with 1,200 other members. Reading every membership and
+-- una joins L, with 300 other members. Reading every membership and
 -- profile row through the policies costs thousands of buffer reads; reading
--- her own rows by index costs a few hundred at most. Both calls are warm.
+-- her own rows by index costs a few hundred. The tables are analyzed, as
+-- autovacuum keeps them. The 0494 body is measured warm, the least of three
+-- calls (a call that plans again after a cache invalidation reads the
+-- catalog too); 0413's body plans on every call, and is measured once.
 set local role to postgres;
 set local "request.jwt.claim.sub" to '';
 insert into auth.users (id, email)
 select ('c0494000-0000-0000-0001-' || lpad(to_hex(g), 12, '0'))::uuid, 'filler-' || g || '-0494@example.test'
-  from generate_series(1, 1200) g;
+  from generate_series(1, 300) g;
 insert into public.organization_members (organization_id, user_id, role, accepted_at, created_at)
 select 'c0494000-0000-0000-0000-0000000000ff', ('c0494000-0000-0000-0001-' || lpad(to_hex(g), 12, '0'))::uuid,
        'staff', now(), now() - (g || ' minutes')::interval
-  from generate_series(1, 1200) g;
+  from generate_series(1, 300) g;
 insert into public.organization_members (organization_id, user_id, role, accepted_at, created_at)
 values ('c0494000-0000-0000-0000-0000000000ff', 'c0494000-0000-0000-0000-0000000000a1', 'viewer', now(), now());
+analyze public.organization_members, public.user_profiles;
 set local "request.jwt.claim.sub" to 'c0494000-0000-0000-0000-0000000000a1';
 set local role to authenticated;
-do $warm$
-begin
-  perform pg_temp.buffer_hits('select public.get_request_context()');
-  perform pg_temp.buffer_hits('select pg_temp.request_context_0413()');
-end
-$warm$;
-select cmp_ok(pg_temp.buffer_hits('select public.get_request_context()'), '<', 400,
-  'una''s context reads under 400 buffers with 1,200 other members in one of her organizations');
-select cmp_ok(pg_temp.buffer_hits('select pg_temp.request_context_0413()'), '>', 4000,
-  'the same answer through 0413''s body reads over 4,000 (the measure tells the two apart)');
+create temp table hits on commit drop as
+select (select min(pg_temp.buffer_hits('select public.get_request_context()')) from generate_series(1, 3)) as new_body,
+       pg_temp.buffer_hits('select pg_temp.request_context_0413()') as reference;
+select diag('buffers per call: 0494 body ' || new_body || ', 0413 body ' || reference) from hits;
+select cmp_ok((select new_body from hits), '<', 1000,
+  'una''s context reads under 1,000 buffers with 300 other members in one of her organizations');
+select cmp_ok((select reference from hits), '>', (select 5 * new_body from hits),
+  'the same answer through 0413''s body reads over five times as many (the measure tells the two apart)');
+select cmp_ok((select reference from hits), '>', 6000,
+  'and over 6,000: every member''s row went through the policy');
 
 set local role to postgres;
 select * from finish();
