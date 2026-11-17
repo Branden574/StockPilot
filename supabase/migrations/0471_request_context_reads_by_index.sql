@@ -1,4 +1,4 @@
--- 0494_request_context_reads_by_index.sql
+-- 0471_request_context_reads_by_index.sql
 --
 -- get_request_context() reads the caller's own profile row and membership
 -- rows through their indexes, and keeps its query plan for the life of a
@@ -82,8 +82,15 @@
 -- (PostgREST retries those, 0367).
 --
 -- ── ROLLBACK ──────────────────────────────────────────────────────────────
--- Restate 0413's body (section 16 of 0413_order_catalog_visibility.sql). The
--- answer is the same either way, so the application needs no change.
+-- Restate 0413's body VERBATIM: lines 2557-2626 of
+-- 0413_order_catalog_visibility.sql (section 16), byte for byte, its
+-- "-- 0413: lets catalog loads skip the freshness query." comment line and
+-- its whitespace included, so md5(prosrc) is again
+-- 8187cbf44b70aa4599175da691ae1649. A body that differs in any byte (a
+-- dropped comment, re-indented lines) answers the same, but a later re-run
+-- of this migration then refuses at its preflight (55000
+-- request_context_preflight). The answer is the same either way, so the
+-- application needs no change.
 --
 -- ── ORDER ─────────────────────────────────────────────────────────────────
 -- After 0413 (the body it replaces) and every lower number.
@@ -127,7 +134,7 @@ set search_path = public, pg_temp
 as $function$
 begin
   -- The caller's id is read once, as (select auth.uid()), where it picks
-  -- the rows: see 0494.
+  -- the rows: see 0471.
   return (
     select jsonb_build_object(
       'user_id', auth.uid(),
@@ -192,7 +199,7 @@ $function$;
 
 -- ═══ 2. Comment and grants ══════════════════════════════════════════════════
 comment on function public.get_request_context() is
-  'Caller-only request context (profile, accepted memberships, org settings, permission overrides, enabled modules) in one round trip. SECURITY INVOKER: reads under the caller''s RLS. Applies no policy; the application resolves org, permissions, account status and MFA from it. See 0355; 0413 added the hide mark; 0494 reads the caller''s rows by index and keeps the plan per connection.';
+  'Caller-only request context (profile, accepted memberships, org settings, permission overrides, enabled modules) in one round trip. SECURITY INVOKER: reads under the caller''s RLS. Applies no policy; the application resolves org, permissions, account status and MFA from it. See 0355; 0413 added the hide mark; 0471 reads the caller''s rows by index and keeps the plan per connection.';
 
 revoke all on function public.get_request_context() from public;
 revoke all on function public.get_request_context() from anon;
