@@ -104,7 +104,7 @@ import {
   toInventoryClientRows,
   withoutFlatTrends,
 } from '@/lib/inventory/client-row';
-import { syntheticListView, type PayloadProfile } from '@/test/inventory-payload-fixture';
+import { syntheticListView, type PayloadProfile } from '@/test/inventory-payload.test.fixture';
 
 import {
   InventoryTable,

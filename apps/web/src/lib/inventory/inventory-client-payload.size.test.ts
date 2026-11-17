@@ -16,7 +16,7 @@ import {
   type InventoryClientRowField,
 } from '@/lib/inventory/client-row';
 import { rowMatchesRack } from '@/lib/inventory/instant-mode';
-import { syntheticListView, type PayloadProfile } from '@/test/inventory-payload-fixture';
+import { syntheticListView, type PayloadProfile } from '@/test/inventory-payload.test.fixture';
 
 // THE WEIGHT OF THE ITEMS AND BOOKS PAGES. A manager's Items or Books page
 // carries the whole view (instant mode, up to INSTANT_MODE_MAX_ROWS rows):

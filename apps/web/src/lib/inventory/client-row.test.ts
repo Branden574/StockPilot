@@ -15,7 +15,7 @@ import {
   planInstantFirstPage,
   type InstantModeRow,
 } from '@/lib/inventory/instant-mode';
-import { syntheticListView, type PayloadProfile } from '@/test/inventory-payload-fixture';
+import { syntheticListView, type PayloadProfile } from '@/test/inventory-payload.test.fixture';
 
 // The table derives every view of the Items and Books lists from the rows it
 // receives (instant mode). Those rows are now reduced to the columns the table
