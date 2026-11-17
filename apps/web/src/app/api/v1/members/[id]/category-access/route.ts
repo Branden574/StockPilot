@@ -7,6 +7,7 @@ import { isUuid } from '@stockpilot/core';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { apiContextGate } from '@/server/lib/api-context-gate';
+import { ordersCatalogTag } from '@/server/services/lib/order-catalog-hidden';
 import { UserCategoriesService } from '@/server/services/user-categories';
 
 import {
@@ -134,7 +135,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // The change is saved by now, so a refresh that fails is reported, never
     // answered.
     try {
-      revalidateTag('orders-new-v2-catalog', 'max');
+      // This organization's catalog entries only ('max': see the web action
+      // in actions/user-categories.ts; the access key is resolved live).
+      revalidateTag(ordersCatalogTag(ctx.organizationId), 'max');
       revalidatePath('/dashboard/inventory');
       revalidatePath('/dashboard/books');
       revalidatePath('/dashboard/team');

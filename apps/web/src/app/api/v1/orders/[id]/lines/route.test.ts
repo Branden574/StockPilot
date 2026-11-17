@@ -8,6 +8,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { ServiceError } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
+import { expectCatalogExpiryReaches } from '@/test/orders-catalog-tags';
 
 import { DELETE, PATCH, POST } from './route';
 
@@ -28,12 +29,18 @@ const removeLine = vi.fn();
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(checkRateLimit).mockResolvedValue({ allowed: true, resetAt: 0 } as never);
-  vi.mocked(withApiContext).mockResolvedValue({ userId: 'u1', organizationId: 'o1' } as never);
+  vi.mocked(withApiContext).mockResolvedValue({ userId: 'u1', organizationId: ORG } as never);
   vi.mocked(OrderRequestsService).mockImplementation(function () {
     return { addLines, updateLineQuantity, removeLine } as unknown as InstanceType<typeof OrderRequestsService>;
   });
 });
 
+const ORG = '00000000-0000-4000-8000-00000000000a';
+const OTHER_ORG = '00000000-0000-4000-8000-00000000000b';
+const WH = '00000000-0000-4000-8000-0000000000c1';
+// The line methods answer no order row, so the caller's organization's
+// catalog is expired, now; never every organization's (the global tag).
+const ORG_CATALOG_EXPIRY = [[`orders-new-v2-catalog:${ORG}`, { expire: 0 }]];
 const ORDER = '11111111-1111-1111-1111-111111111111';
 const ITEM = '22222222-2222-2222-2222-222222222222';
 const LINE = '33333333-3333-3333-3333-333333333333';
@@ -58,7 +65,7 @@ describe('POST /api/v1/orders/[id]/lines returns the hold outcome', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, added: 1, merged: 0, pickSlipStale: false, hold });
     expect(addLines).toHaveBeenCalledWith(ORDER, [{ itemId: ITEM, quantity: 3 }]);
-    expect(revalidateTag).toHaveBeenCalledWith('orders-new-v2-catalog', 'max');
+    expect(vi.mocked(revalidateTag).mock.calls).toEqual(ORG_CATALOG_EXPIRY);
   });
 });
 
@@ -98,7 +105,7 @@ describe('PATCH /api/v1/orders/[id]/lines returns the hold outcome', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, pickSlipStale: true, quantity: 14, hold });
     expect(updateLineQuantity).toHaveBeenCalledWith(ORDER, LINE, 14);
-    expect(revalidateTag).toHaveBeenCalledWith('orders-new-v2-catalog', 'max');
+    expect(vi.mocked(revalidateTag).mock.calls).toEqual(ORG_CATALOG_EXPIRY);
   });
 });
 
@@ -110,7 +117,11 @@ describe('the storefront catalog is revalidated after every line write, as the w
       { params },
     );
     expect(res.status).toBe(200);
-    expect(revalidateTag).toHaveBeenCalledWith('orders-new-v2-catalog', 'max');
+    expect(vi.mocked(revalidateTag).mock.calls).toEqual(ORG_CATALOG_EXPIRY);
+    expectCatalogExpiryReaches(
+      vi.mocked(revalidateTag).mock.calls.map((c) => c[0]),
+      { hits: [[ORG, WH]], misses: [[OTHER_ORG, WH]] },
+    );
   });
 
   it('never after a refused write', async () => {

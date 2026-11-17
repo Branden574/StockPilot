@@ -11,6 +11,7 @@ import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { ServiceError } from '@/server/services/context';
 import { UserCategoriesService } from '@/server/services/user-categories';
+import { expectCatalogExpiryReaches } from '@/test/orders-catalog-tags';
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
 import { POST } from './route';
@@ -37,6 +38,7 @@ vi.mock('@/server/services/user-categories', () => ({ UserCategoriesService: vi.
 const MEMBER = '5a1b2c3d-0000-4000-8000-00000000000a';
 const CATEGORY = '7c1e2a90-0000-4000-8000-00000000000b';
 const OTHER_CATEGORY = '7c1e2a90-0000-4000-8000-00000000000c';
+const WAREHOUSE = '9d2f3b01-0000-4000-8000-00000000000d';
 
 function ctx() {
   return {
@@ -217,7 +219,12 @@ describe('POST /api/v1/members/[id]/category-access', () => {
     mockService(async () => ({ changed: true, categoryIds: [CATEGORY] }));
     const { req, params } = request();
     await POST(req, params);
-    expect(revalidateTag).toHaveBeenCalledWith('orders-new-v2-catalog', 'max');
+    // This organization's catalog entries only, never every organization's.
+    expect(vi.mocked(revalidateTag).mock.calls).toEqual([['orders-new-v2-catalog:org-1', 'max']]);
+    expectCatalogExpiryReaches(
+      vi.mocked(revalidateTag).mock.calls.map((c) => c[0]),
+      { hits: [['org-1', WAREHOUSE]], misses: [['org-2', WAREHOUSE]] },
+    );
     expect(
       vi
         .mocked(revalidatePath)
