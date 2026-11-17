@@ -87,7 +87,9 @@ describe('holdOrderStockAction (F2-2)', () => {
       },
     });
     expect(stub.rpcCalls).toEqual([{ name: 'hold_order_stock', args: { p_order_id: ORDER } }]);
-    expect(revalidateTag).toHaveBeenCalledWith('orders-new-v2-catalog', 'max');
+    // The hold answers no order row: this organization's catalog, expired
+    // now; never every organization's.
+    expect(vi.mocked(revalidateTag).mock.calls).toEqual([['orders-new-v2-catalog:org-test', { expire: 0 }]]);
     expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/orders/${ORDER}`);
   });
 

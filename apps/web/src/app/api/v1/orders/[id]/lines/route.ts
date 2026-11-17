@@ -1,4 +1,3 @@
-import { revalidateTag } from 'next/cache';
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
@@ -8,6 +7,7 @@ import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { invalidPathIdResponse } from '@/server/lib/path-id';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
+import { expireOrdersCatalogAfterOrderWrite } from '@/server/services/lib/orders-catalog-expiry';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
 export const runtime = 'nodejs';
@@ -18,10 +18,12 @@ export const dynamic = 'force-dynamic';
  * a raise by an approver is held (F2-2), a lowering or a removal releases.
  * Bust the storefront catalog as the web actions do after the same writes
  * (actions/order-requests.ts revalidateOrdersCatalog), so the phone's edits
- * show on the Place an Order page without waiting out its cache.
+ * show on the Place an Order page without waiting out its cache. The line
+ * methods answer no order row, so this is the caller's organization's catalog,
+ * expired now (orders-catalog-expiry.ts); never another organization's.
  */
-function revalidateOrdersCatalog() {
-  revalidateTag('orders-new-v2-catalog', 'max');
+function revalidateOrdersCatalog(organizationId: string) {
+  expireOrdersCatalogAfterOrderWrite(organizationId);
 }
 
 const bodySchema = z.object({
@@ -88,7 +90,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   try {
     const result = await new OrderRequestsService(ctx).addLines(id, parsed.data.lines);
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(ctx.organizationId);
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
     if (e instanceof ServiceError) {
@@ -164,7 +166,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       parsed.data.lineId,
       parsed.data.quantity,
     );
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(ctx.organizationId);
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
     if (e instanceof ServiceError) {
@@ -222,7 +224,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
 
   try {
     const result = await new OrderRequestsService(ctx).removeLine(id, lineId.data);
-    revalidateOrdersCatalog();
+    revalidateOrdersCatalog(ctx.organizationId);
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
     if (e instanceof ServiceError) {
