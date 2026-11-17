@@ -1,4 +1,4 @@
--- 0490_inventory_list_totals_in_database.sql
+-- 0470_inventory_list_totals_in_database.sql
 --
 -- The Items, Books and Rentals lists (InventoryService.list) show a value
 -- footer: the sum of quantity_on_hand x unit_cost over EVERY record the view
@@ -125,7 +125,7 @@ return coalesce(p_item.quantity_on_hand <= 0, false)
                 and coalesce(p_item.quantity_on_hand, 0) <= p_item.reorder_point, false);
 
 comment on function public.is_low_stock(public.inventory_items) is
-  'Computed field (0490): true when the record is out (quantity_on_hand <= 0) or at or under a positive reorder point. The rule the inventory list''s low-stock view uses; filterable in a request as is_low_stock=eq.true. Never null.';
+  'Computed field (0470): true when the record is out (quantity_on_hand <= 0) or at or under a positive reorder point. The rule the inventory list''s low-stock view uses; filterable in a request as is_low_stock=eq.true. Never null.';
 
 revoke all on function public.is_low_stock(public.inventory_items) from public, anon, authenticated, service_role;
 grant execute on function public.is_low_stock(public.inventory_items) to authenticated, service_role;
@@ -382,7 +382,7 @@ end;
 $$;
 
 comment on function public.inventory_list_value(uuid, jsonb) is
-  'Inventory list value footer (0490): sum(quantity_on_hand x unit_cost) over the organization''s live records matching p_filters, the same filters as the list''s page request (built by buildItemListValueFilters in the app). SECURITY INVOKER: the caller''s row level security applies. Unknown keys and malformed values are refused with 22023. authenticated may execute; anon and PUBLIC may not.';
+  'Inventory list value footer (0470): sum(quantity_on_hand x unit_cost) over the organization''s live records matching p_filters, the same filters as the list''s page request (built by buildItemListValueFilters in the app). SECURITY INVOKER: the caller''s row level security applies. Unknown keys and malformed values are refused with 22023. authenticated may execute; anon and PUBLIC may not.';
 
 revoke all on function public.inventory_list_value(uuid, jsonb) from public, anon, authenticated, service_role;
 grant execute on function public.inventory_list_value(uuid, jsonb) to authenticated;

@@ -1278,7 +1278,7 @@ function keepGranted<Row extends { category_id: string | null }>(
 /** The light columns a group-aware page is planned from (listPlanRows):
  *  what sortInstantRows and runAwarePages read, the value footer, a
  *  viewer's grants, and the reorder point PlanRow has always carried (the
- *  low-stock rule itself runs in the database: is_low_stock, 0490). */
+ *  low-stock rule itself runs in the database: is_low_stock, 0470). */
 const PLAN_ROW_COLUMNS =
   'id, sku, name, group_id, quantity_on_hand, unit_cost, reorder_point, category_id, status, created_at, updated_at';
 
@@ -1331,7 +1331,7 @@ export const ITEM_LIST_FILTER_KEYS = {
 } as const satisfies Record<keyof ItemListFilters, 'row_filter' | 'not_a_row_filter'>;
 
 /**
- * What inventory_list_value (migration 0490) reads: the list's filters,
+ * What inventory_list_value (migration 0470) reads: the list's filters,
  * normalized, with the caller's scope. An absent key adds no condition; the
  * migration's header says what each key means in SQL.
  */
@@ -1643,7 +1643,7 @@ export class InventoryService {
       // pool of items whose cost just hasn't been recorded yet.
       query = query.gt('unit_cost', 0);
     }
-    // Low stock is the computed field is_low_stock (migration 0490), so the
+    // Low stock is the computed field is_low_stock (migration 0470), so the
     // database applies the whole rule and the page, its exact count and every
     // scan of the view describe the same set:
     //   - qty <= 0                          → critical whatever the reorder point
@@ -1948,7 +1948,7 @@ export class InventoryService {
 
     // The "$N on hand" footer adds up the WHOLE filtered view, not just the
     // visible page: one aggregate in the database (inventory_list_value,
-    // migration 0490), asked in parallel with the page. Its filters come from
+    // migration 0470), asked in parallel with the page. Its filters come from
     // buildItemListValueFilters, which normalizes the same filters with the
     // same helpers as applyContentFilters, and takes the same scope (the
     // caller's warehouses, a viewer's grants). It runs as the caller

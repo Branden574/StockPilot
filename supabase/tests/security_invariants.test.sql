@@ -503,7 +503,7 @@ insert into _sec_inv_flag_setter_allow (flag, fn, why) values
   ('stockpilot.idempotency_write', 'public.draft_order_shortfall_pos', 'raises the flag (the transaction id) around its own retry key insert and update, and puts the previous value back; the idempotency_keys guard admits an API role''s write only under it (0466; also 0466 P3)');
 
 -- ── N. Inlinable row predicates: an SQL-standard body and no SET clause
---       (T23, 0490) ─────────────────────────────────────────────────────────
+--       (T23, 0470) ─────────────────────────────────────────────────────────
 --
 -- A SET clause stops Postgres inlining a SQL function. For a predicate that
 -- PostgREST filters on as a computed field, a call that is not inlined builds
@@ -548,7 +548,7 @@ create temporary table _sec_inv_inline_predicate_allow (
 --   RETURN (COALESCE(((p_item).quantity_on_hand <= (0)::numeric), false) OR COALESCE((((p_item).reorder_point > (0)::numeric) AND (COALESCE((p_item).quantity_on_hand, (0)::numeric) <= (p_item).reorder_point)), false))
 insert into _sec_inv_inline_predicate_allow (sig, body_md5, why) values
   ('public.is_low_stock(public.inventory_items)', '7676dccbb78ed418b35e7793a0a17a0b',
-   'the inventory list''s low-stock computed field (0490): PostgREST filters is_low_stock=eq.true on the page, its count and the plan scan, and inventory_list_value calls it per row; inlined, it is the bare comparison of two numeric columns and never reads the row''s embedding');
+   'the inventory list''s low-stock computed field (0470): PostgREST filters is_low_stock=eq.true on the page, its count and the plan scan, and inventory_list_value calls it per row; inlined, it is the bare comparison of two numeric columns and never reads the row''s embedding');
 
 create temporary view _sec_inv_inline_predicate_audit as
   select a.sig, p.oid,
@@ -1698,7 +1698,7 @@ drop function ledger._sec_inv_probe_atomic();
 drop function _sec_inv_probe_schema.f();
 drop schema _sec_inv_probe_schema;
 
--- INV-28c. MUTATION CONTROL for allowlist N (0490). Unpinned ledger
+-- INV-28c. MUTATION CONTROL for allowlist N (0470). Unpinned ledger
 -- predicates with SQL-standard bodies, each listed in N with the md5 of the
 -- body it had when listed:
 --   * inline_ok compares its argument with a constant and is unchanged: it

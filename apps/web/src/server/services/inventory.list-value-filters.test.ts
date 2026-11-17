@@ -7,7 +7,7 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 /**
  * The inventory list's value footer is one aggregate in the database
- * (inventory_list_value, migration 0490), asked with filters that
+ * (inventory_list_value, migration 0470), asked with filters that
  * buildItemListValueFilters builds from the list's own filters, and low stock
  * is the computed field is_low_stock, filtered in the request. This file
  * holds:

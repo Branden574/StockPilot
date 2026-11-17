@@ -55,7 +55,7 @@ function makeClient(answers: Record<string, Answer>) {
       );
       return builder;
     },
-    // list() asks inventory_list_value (0490) for its value total.
+    // list() asks inventory_list_value (0470) for its value total.
     rpc: async () => ({ data: 0, error: null }),
   };
   return { client, started, filters };

@@ -350,7 +350,7 @@ export function rowMatchesInstantSearch(row: InstantModeRow, normalizedTerm: str
 /* ---- filters ------------------------------------------------------------ */
 
 /** The low-stock rule list() asks the database for (the computed field
- *  is_low_stock, migration 0490): out counts as low even with no reorder
+ *  is_low_stock, migration 0470): out counts as low even with no reorder
  *  line; qty above 0 needs a positive reorder point. */
 export function isLowStock(quantityOnHand: number, reorderPoint: number): boolean {
   return quantityOnHand <= 0 || (reorderPoint > 0 && quantityOnHand <= reorderPoint);

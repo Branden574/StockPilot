@@ -132,7 +132,7 @@ describe('rental items are listed by the database, on both clients', () => {
     expect(methodBody(code, 'private filteredScanPage('), 'the plan scan').toMatch(
       /this\.applyContentFilters\(\s*sumQuery\s*,\s*filters\s*\)/,
     );
-    // Since migration 0490 the value total is one aggregate in the database,
+    // Since migration 0470 the value total is one aggregate in the database,
     // asked with the filters buildItemListValueFilters builds from the same
     // filters (inventory.list-value-filters.test.ts holds every filter to
     // reaching it). The rental rule there is the same comparison, once, and

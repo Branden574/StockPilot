@@ -1,5 +1,5 @@
--- supabase/tests/0490_inventory_list_totals_in_database.test.sql
--- pgTAP proof for migration 0490: the computed field is_low_stock and the
+-- supabase/tests/0470_inventory_list_totals_in_database.test.sql
+-- pgTAP proof for migration 0470: the computed field is_low_stock and the
 -- inventory list's value total inventory_list_value.
 --
 -- S.  Structure and who may call them:
@@ -27,37 +27,37 @@
 --
 -- Fixtures as the test superuser, made-up names; every call as an API role
 -- runs in a subtransaction that is always undone. begin/rollback: nothing
--- leaks. Namespace 04900000.
+-- leaks. Namespace 04700000.
 
 begin;
 
 select plan(101);
 
-\set orgA  '\'04900000-0000-0000-0000-00000000000a\''
-\set orgB  '\'04900000-0000-0000-0000-00000000000b\''
-\set whA1  '\'04900000-0000-0000-0000-0000000000a1\''
-\set whA2  '\'04900000-0000-0000-0000-0000000000a2\''
-\set whB   '\'04900000-0000-0000-0000-0000000000b1\''
-\set catA1 '\'04900000-0000-0000-0000-0000000000c1\''
-\set catA2 '\'04900000-0000-0000-0000-0000000000c2\''
-\set catB  '\'04900000-0000-0000-0000-0000000000cb\''
-\set supA  '\'04900000-0000-0000-0000-0000000000d1\''
-\set locA  '\'04900000-0000-0000-0000-0000000000e1\''
-\set chA   '\'04900000-0000-0000-0000-0000000000f1\''
-\set chA2  '\'04900000-0000-0000-0000-0000000000f2\''
-\set mgrA  '\'04900000-0000-0000-0000-000000000101\''
-\set stfA  '\'04900000-0000-0000-0000-000000000102\''
-\set vwrA  '\'04900000-0000-0000-0000-000000000103\''
-\set mgrB  '\'04900000-0000-0000-0000-000000000104\''
-\set nobody '\'04900000-0000-0000-0000-000000000105\''
-\set stfC  '\'04900000-0000-0000-0000-000000000106\''
+\set orgA  '\'04700000-0000-0000-0000-00000000000a\''
+\set orgB  '\'04700000-0000-0000-0000-00000000000b\''
+\set whA1  '\'04700000-0000-0000-0000-0000000000a1\''
+\set whA2  '\'04700000-0000-0000-0000-0000000000a2\''
+\set whB   '\'04700000-0000-0000-0000-0000000000b1\''
+\set catA1 '\'04700000-0000-0000-0000-0000000000c1\''
+\set catA2 '\'04700000-0000-0000-0000-0000000000c2\''
+\set catB  '\'04700000-0000-0000-0000-0000000000cb\''
+\set supA  '\'04700000-0000-0000-0000-0000000000d1\''
+\set locA  '\'04700000-0000-0000-0000-0000000000e1\''
+\set chA   '\'04700000-0000-0000-0000-0000000000f1\''
+\set chA2  '\'04700000-0000-0000-0000-0000000000f2\''
+\set mgrA  '\'04700000-0000-0000-0000-000000000101\''
+\set stfA  '\'04700000-0000-0000-0000-000000000102\''
+\set vwrA  '\'04700000-0000-0000-0000-000000000103\''
+\set mgrB  '\'04700000-0000-0000-0000-000000000104\''
+\set nobody '\'04700000-0000-0000-0000-000000000105\''
+\set stfC  '\'04700000-0000-0000-0000-000000000106\''
 
 insert into auth.users (id, email, raw_user_meta_data)
-  select ('04900000-0000-0000-0000-00000000010' || g)::uuid, 'person' || g || '@t490.test', '{}'::jsonb
+  select ('04700000-0000-0000-0000-00000000010' || g)::uuid, 'person' || g || '@t470.test', '{}'::jsonb
     from generate_series(1, 6) g;
 insert into public.organizations (id, name, slug) values
-  (:orgA, 'T490 Org A', 't490-org-a'),
-  (:orgB, 'T490 Org B', 't490-org-b');
+  (:orgA, 'T470 Org A', 't470-org-a'),
+  (:orgB, 'T470 Org B', 't470-org-b');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   (:orgA, :mgrA, 'manager', now()),
   (:orgA, :stfA, 'staff',   now()),
@@ -65,22 +65,22 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgA, :stfC, 'staff',   now()),
   (:orgB, :mgrB, 'manager', now());
 insert into public.warehouses (id, organization_id, name, code, status) values
-  (:whA1, :orgA, 'T490 Main',   'WH-T490A1', 'active'),
-  (:whA2, :orgA, 'T490 Second', 'WH-T490A2', 'active'),
-  (:whB,  :orgB, 'T490 Other',  'WH-T490B',  'active');
+  (:whA1, :orgA, 'T470 Main',   'WH-T470A1', 'active'),
+  (:whA2, :orgA, 'T470 Second', 'WH-T470A2', 'active'),
+  (:whB,  :orgB, 'T470 Other',  'WH-T470B',  'active');
 insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, is_primary) values
   (:orgA, :stfA, :whA1, true),
   (:orgA, :vwrA, :whA1, true);
 insert into public.categories (id, organization_id, name) values
-  (:catA1, :orgA, 'T490 Shirts'), (:catA2, :orgA, 'T490 Mugs'), (:catB, :orgB, 'T490 Lamps');
+  (:catA1, :orgA, 'T470 Shirts'), (:catA2, :orgA, 'T470 Mugs'), (:catB, :orgB, 'T470 Lamps');
 insert into public.user_category_assignments (organization_id, user_id, category_id) values
   (:orgA, :vwrA, :catA1);
-insert into public.suppliers (id, organization_id, name) values (:supA, :orgA, 'T490 Supplier');
+insert into public.suppliers (id, organization_id, name) values (:supA, :orgA, 'T470 Supplier');
 insert into public.locations (id, organization_id, warehouse_id, name, type) values
-  (:locA, :orgA, :whA1, 'T490 Aisle', 'room');
+  (:locA, :orgA, :whA1, 'T470 Aisle', 'room');
 insert into public.charters (id, organization_id, name, code, status) values
-  (:chA,  :orgA, 'T490 Charter',  'T490-CH',  'active'),
-  (:chA2, :orgA, 'T490 Charter 2', 'T490-CH2', 'active');
+  (:chA,  :orgA, 'T470 Charter',  'T470-CH',  'active'),
+  (:chA2, :orgA, 'T470 Charter 2', 'T470-CH2', 'active');
 insert into public.warehouse_charters (organization_id, warehouse_id, charter_id) values
   (:orgA, :whA1, :chA),
   (:orgA, :whA1, :chA2);
@@ -100,38 +100,38 @@ create temp table fx (
   is_rental boolean default false, is_bundle boolean default false,
   order_catalog_visible boolean default true, custom_fields jsonb default '{}'::jsonb,
   created_at timestamptz default '2026-05-01T00:00:00Z', updated_at timestamptz default '2026-05-01T00:00:00Z',
-  deleted boolean default false, org uuid default '04900000-0000-0000-0000-00000000000a'
+  deleted boolean default false, org uuid default '04700000-0000-0000-0000-00000000000a'
 );
 insert into fx (sku, name, barcode, model_number, warehouse_id, category_id, quantity_on_hand, reorder_point, unit_cost) values
-  ('T490-A01', 'Blue tee', '111', 'MX-1', :whA1, :catA1, 10, 0, 2);
+  ('T470-A01', 'Blue tee', '111', 'MX-1', :whA1, :catA1, 10, 0, 2);
 insert into fx (sku, name, warehouse_id, category_id, supplier_id, primary_location_id, quantity_on_hand, reorder_point, unit_cost) values
-  ('T490-A02', 'Red mug', :whA2, :catA2, :supA, :locA, 3, 5, 4);
+  ('T470-A02', 'Red mug', :whA2, :catA2, :supA, :locA, 3, 5, 4);
 insert into fx (sku, name, warehouse_id, category_id, charter_id, quantity_on_hand, reorder_point, unit_cost, item_type, custom_fields) values
-  ('T490-A03', 'Field guide', :whA1, :catA1, :chA, 0, 0, 7, 'book', '{"book_rack_number":"17","book_rack_row":"B"}');
+  ('T470-A03', 'Field guide', :whA1, :catA1, :chA, 0, 0, 7, 'book', '{"book_rack_number":"17","book_rack_row":"B"}');
 insert into fx (sku, name, warehouse_id, category_id, quantity_on_hand, reorder_point, unit_cost, status, auto_archived) values
-  ('T490-A04', 'Old cap', :whA1, :catA1, 1, 2, 3, 'archived', true);
+  ('T470-A04', 'Old cap', :whA1, :catA1, 1, 2, 3, 'archived', true);
 insert into fx (sku, name, warehouse_id, category_id, quantity_on_hand, reorder_point, unit_cost, awaiting_first_receipt) values
-  ('T490-A05', 'Coming soon', :whA1, :catA1, 0, 0, 5, true);
+  ('T470-A05', 'Coming soon', :whA1, :catA1, 0, 0, 5, true);
 insert into fx (sku, name, warehouse_id, category_id, quantity_on_hand, reorder_point, unit_cost, is_rental) values
-  ('T490-A06', 'Canopy', :whA1, :catA1, 1, 0, 100, true);
+  ('T470-A06', 'Canopy', :whA1, :catA1, 1, 0, 100, true);
 insert into fx (sku, name, warehouse_id, category_id, quantity_on_hand, reorder_point, unit_cost, is_bundle, custom_fields) values
-  ('T490-A07', 'Starter kit', :whA1, :catA1, 4, 0, 1, true, '{"rack_number":"17","rack_row":"B"}');
+  ('T470-A07', 'Starter kit', :whA1, :catA1, 4, 0, 1, true, '{"rack_number":"17","rack_row":"B"}');
 insert into fx (sku, name, warehouse_id, category_id, quantity_on_hand, reorder_point, unit_cost, order_catalog_visible, item_type) values
-  ('T490-A08', 'Ladder', :whA1, :catA1, 6, 0, 0, false, 'asset');
+  ('T470-A08', 'Ladder', :whA1, :catA1, 6, 0, 0, false, 'asset');
 insert into fx (sku, name, warehouse_id, category_id, quantity_on_hand, reorder_point, unit_cost, deleted) values
-  ('T490-A09', 'Gone tee', :whA1, :catA1, 9, 0, 9, true);
+  ('T470-A09', 'Gone tee', :whA1, :catA1, 9, 0, 9, true);
 insert into fx (sku, name, model_number, warehouse_id, category_id, quantity_on_hand, reorder_point, unit_cost, custom_fields, created_at, updated_at) values
-  ('T490-A10', 'Green tee', 'zz_1', :whA1, :catA1, 2, 0, 10, '{"rack_number":"17-B"}', '2026-01-15T00:00:00Z', '2026-03-15T00:00:00Z');
+  ('T470-A10', 'Green tee', 'zz_1', :whA1, :catA1, 2, 0, 10, '{"rack_number":"17-B"}', '2026-01-15T00:00:00Z', '2026-03-15T00:00:00Z');
 insert into fx (sku, name, warehouse_id, category_id, quantity_on_hand, reorder_point, unit_cost, item_type, custom_fields) values
-  ('T490-A11', 'Atlas', :whA1, :catA1, 5, 0, 3, 'book', '{"rack_number":"17","rack_row":"B"}');
+  ('T470-A11', 'Atlas', :whA1, :catA1, 5, 0, 3, 'book', '{"rack_number":"17","rack_row":"B"}');
 insert into fx (sku, name, barcode, warehouse_id, category_id, quantity_on_hand, reorder_point, unit_cost, item_type) values
-  ('T490-A12', 'Some novel', '9780306406157', :whA1, :catA1, 1, 0, 20, 'book');
+  ('T470-A12', 'Some novel', '9780306406157', :whA1, :catA1, 1, 0, 20, 'book');
 insert into fx (sku, name, warehouse_id, category_id, quantity_on_hand, reorder_point, unit_cost, status) values
-  ('T490-A13', 'Plate', :whA2, :catA2, 5, 5, 6, 'discontinued');
+  ('T470-A13', 'Plate', :whA2, :catA2, 5, 5, 6, 'discontinued');
 insert into fx (sku, name, warehouse_id, category_id, charter_id, quantity_on_hand, reorder_point, unit_cost, status, item_type) values
-  ('T490-C01', 'Spare fuse', :whA1, :catA2, :chA2, 2, 0, 50, 'discontinued', 'consumable');
+  ('T470-C01', 'Spare fuse', :whA1, :catA2, :chA2, 2, 0, 50, 'discontinued', 'consumable');
 insert into fx (sku, name, warehouse_id, category_id, quantity_on_hand, reorder_point, unit_cost, org) values
-  ('T490-B01', 'Desk lamp', :whB, :catB, 10, 0, 1000, :orgB);
+  ('T470-B01', 'Desk lamp', :whB, :catB, 10, 0, 1000, :orgB);
 
 insert into public.inventory_items (
   organization_id, sku, name, barcode, model_number, warehouse_id, category_id, supplier_id,
@@ -159,11 +159,11 @@ begin
     perform set_config('role', p_role, true);
     execute 'select public.inventory_list_value($1, $2)' into v using p_org, p_filters;
     perform set_config('role', 'none', true);
-    raise exception using errcode = 'XX490', message = coalesce(v::text, 'null');
+    raise exception using errcode = 'XX470', message = coalesce(v::text, 'null');
   exception when others then
     get stacked diagnostics v_state = returned_sqlstate, v_msg = message_text;
   end;
-  if v_state = 'XX490' then
+  if v_state = 'XX470' then
     return v_msg;
   end if;
   return 'error ' || v_state;
@@ -187,13 +187,13 @@ begin
     perform set_config('request.jwt.claim.role', 'authenticated', true);
     perform set_config('role', 'authenticated', true);
     execute 'select coalesce(sum(coalesce(quantity_on_hand, 0) * coalesce(unit_cost, 0)), 0) from public.inventory_items where organization_id = $1 and deleted_at is null'
-      into v using '04900000-0000-0000-0000-00000000000a'::uuid;
+      into v using '04700000-0000-0000-0000-00000000000a'::uuid;
     perform set_config('role', 'none', true);
-    raise exception using errcode = 'XX490', message = v::text;
+    raise exception using errcode = 'XX470', message = v::text;
   exception when others then
     get stacked diagnostics v_state = returned_sqlstate, v_msg = message_text;
   end;
-  if v_state = 'XX490' then
+  if v_state = 'XX470' then
     return v_msg;
   end if;
   return 'error ' || v_state;
@@ -211,7 +211,7 @@ end $$;
 
 -- A manager of A's value for p_filters.
 create function pg_temp.mgr(p_filters jsonb) returns text language sql as $$
-  select pg_temp.value_as('04900000-0000-0000-0000-000000000101', '04900000-0000-0000-0000-00000000000a', p_filters)
+  select pg_temp.value_as('04700000-0000-0000-0000-000000000101', '04700000-0000-0000-0000-00000000000a', p_filters)
 $$;
 
 create function pg_temp.low(p_qty numeric, p_rp numeric) returns boolean language sql as $$
@@ -275,7 +275,7 @@ select is(pg_temp.low(null, null), false, 'L17 both null: not low, and not null'
 select is(
   (select array_agg(i.sku order by i.sku) from public.inventory_items i
     where i.organization_id = :orgA and i.deleted_at is null and i.is_low_stock),
-  array['T490-A02', 'T490-A03', 'T490-A04', 'T490-A05', 'T490-A13'],
+  array['T470-A02', 'T470-A03', 'T470-A04', 'T470-A05', 'T470-A13'],
   'L18 read as a column (i.is_low_stock, as PostgREST filters): the low records of A');
 select is(
   (select count(*)::int from public.inventory_items i
@@ -288,91 +288,91 @@ select is(
 
 -- ══ V. The value, filter by filter, as a manager of A ════════════════════
 select is(pg_temp.mgr('{}'),
-  pg_temp.sum_of(array['T490-A01','T490-A02','T490-A03','T490-A04','T490-A05','T490-A06','T490-A07','T490-A08','T490-A10','T490-A11','T490-A12','T490-A13','T490-C01']),
+  pg_temp.sum_of(array['T470-A01','T470-A02','T470-A03','T470-A04','T470-A05','T470-A06','T470-A07','T470-A08','T470-A10','T470-A11','T470-A12','T470-A13','T470-C01']),
   'V1 no filter: every live record of A (not the deleted one, nothing of B)');
 select is(pg_temp.mgr('{"status":"active","awaiting_first_receipt":false,"item_types":["product"],"is_rental":false}'),
-  pg_temp.sum_of(array['T490-A01','T490-A02','T490-A07','T490-A10']),
+  pg_temp.sum_of(array['T470-A01','T470-A02','T470-A07','T470-A10']),
   'V2 the defaults the list sends (active, received, product, not a rental)');
-select is(pg_temp.mgr('{"status":"archived"}'), pg_temp.sum_of(array['T490-A04']), 'V3 status');
-select is(pg_temp.mgr('{"auto_archived":true}'), pg_temp.sum_of(array['T490-A04']), 'V4 auto_archived');
-select is(pg_temp.mgr('{"awaiting_first_receipt":true}'), pg_temp.sum_of(array['T490-A05']), 'V5 awaiting_first_receipt true');
-select is(pg_temp.mgr('{"search":"tee"}'), pg_temp.sum_of(array['T490-A01','T490-A10']), 'V6 search: name ILIKE, case-insensitive, the deleted one left out');
-select is(pg_temp.mgr('{"search":"t490-a1"}'), pg_temp.sum_of(array['T490-A10','T490-A11','T490-A12','T490-A13']), 'V7 search: sku');
-select is(pg_temp.mgr('{"search":"mx-"}'), pg_temp.sum_of(array['T490-A01']), 'V8 search: model_number');
-select is(pg_temp.mgr('{"search":"0306"}'), pg_temp.sum_of(array['T490-A12']), 'V9 search: barcode');
-select is(pg_temp.mgr('{"search":"b_ue"}'), pg_temp.sum_of(array['T490-A01']), 'V10 search: _ is a LIKE wildcard, as in the request');
+select is(pg_temp.mgr('{"status":"archived"}'), pg_temp.sum_of(array['T470-A04']), 'V3 status');
+select is(pg_temp.mgr('{"auto_archived":true}'), pg_temp.sum_of(array['T470-A04']), 'V4 auto_archived');
+select is(pg_temp.mgr('{"awaiting_first_receipt":true}'), pg_temp.sum_of(array['T470-A05']), 'V5 awaiting_first_receipt true');
+select is(pg_temp.mgr('{"search":"tee"}'), pg_temp.sum_of(array['T470-A01','T470-A10']), 'V6 search: name ILIKE, case-insensitive, the deleted one left out');
+select is(pg_temp.mgr('{"search":"t470-a1"}'), pg_temp.sum_of(array['T470-A10','T470-A11','T470-A12','T470-A13']), 'V7 search: sku');
+select is(pg_temp.mgr('{"search":"mx-"}'), pg_temp.sum_of(array['T470-A01']), 'V8 search: model_number');
+select is(pg_temp.mgr('{"search":"0306"}'), pg_temp.sum_of(array['T470-A12']), 'V9 search: barcode');
+select is(pg_temp.mgr('{"search":"b_ue"}'), pg_temp.sum_of(array['T470-A01']), 'V10 search: _ is a LIKE wildcard, as in the request');
 select is(pg_temp.mgr('{"search":"nothing like it","search_isbn_variants":["0306406152","9780306406157"]}'),
-  pg_temp.sum_of(array['T490-A12']), 'V11 search ISBN forms: an exact barcode match');
-select is(pg_temp.mgr('{"barcode":"111"}'), pg_temp.sum_of(array['T490-A01']), 'V12 barcode: exact');
+  pg_temp.sum_of(array['T470-A12']), 'V11 search ISBN forms: an exact barcode match');
+select is(pg_temp.mgr('{"barcode":"111"}'), pg_temp.sum_of(array['T470-A01']), 'V12 barcode: exact');
 select is(pg_temp.mgr('{"rack":{"number":"17","row":"B","label":"17-B","keys":"item"}}'),
-  pg_temp.sum_of(array['T490-A07','T490-A10','T490-A11']), 'V13 rack, item keys: number and row, or the whole label');
+  pg_temp.sum_of(array['T470-A07','T470-A10','T470-A11']), 'V13 rack, item keys: number and row, or the whole label');
 select is(pg_temp.mgr('{"rack":{"number":"17","row":null,"label":"17","keys":"item"}}'),
-  pg_temp.sum_of(array['T490-A07','T490-A11']), 'V14 rack number alone');
+  pg_temp.sum_of(array['T470-A07','T470-A11']), 'V14 rack number alone');
 select is(pg_temp.mgr('{"rack":{"number":"17","row":"B","label":"17-B","keys":"book"}}'),
-  pg_temp.sum_of(array['T490-A03']), 'V15 rack, book keys');
+  pg_temp.sum_of(array['T470-A03']), 'V15 rack, book keys');
 select is(pg_temp.mgr('{"rack":{"number":"17","row":"B","label":"17-B","keys":"by_type"}}'),
-  pg_temp.sum_of(array['T490-A03','T490-A07','T490-A10']), 'V16 rack by type: a book reads book keys, others rack keys');
-select is(pg_temp.mgr(format('{"category_ids":["%s"]}', :catA2)::jsonb), pg_temp.sum_of(array['T490-A02','T490-A13','T490-C01']), 'V17 category_ids');
-select is(pg_temp.mgr(format('{"location_ids":["%s"]}', :locA)::jsonb), pg_temp.sum_of(array['T490-A02']), 'V18 location_ids');
-select is(pg_temp.mgr(format('{"supplier_ids":["%s"]}', :supA)::jsonb), pg_temp.sum_of(array['T490-A02']), 'V19 supplier_ids');
-select is(pg_temp.mgr(format('{"charter_ids":["%s"]}', :chA)::jsonb), pg_temp.sum_of(array['T490-A03']), 'V20 charter_ids');
+  pg_temp.sum_of(array['T470-A03','T470-A07','T470-A10']), 'V16 rack by type: a book reads book keys, others rack keys');
+select is(pg_temp.mgr(format('{"category_ids":["%s"]}', :catA2)::jsonb), pg_temp.sum_of(array['T470-A02','T470-A13','T470-C01']), 'V17 category_ids');
+select is(pg_temp.mgr(format('{"location_ids":["%s"]}', :locA)::jsonb), pg_temp.sum_of(array['T470-A02']), 'V18 location_ids');
+select is(pg_temp.mgr(format('{"supplier_ids":["%s"]}', :supA)::jsonb), pg_temp.sum_of(array['T470-A02']), 'V19 supplier_ids');
+select is(pg_temp.mgr(format('{"charter_ids":["%s"]}', :chA)::jsonb), pg_temp.sum_of(array['T470-A03']), 'V20 charter_ids');
 select is(pg_temp.mgr('{"charter_generic":true}'),
-  pg_temp.sum_of(array['T490-A01','T490-A02','T490-A04','T490-A05','T490-A06','T490-A07','T490-A08','T490-A10','T490-A11','T490-A12','T490-A13']),
+  pg_temp.sum_of(array['T470-A01','T470-A02','T470-A04','T470-A05','T470-A06','T470-A07','T470-A08','T470-A10','T470-A11','T470-A12','T470-A13']),
   'V21 charter_generic alone: no charter');
 select is(pg_temp.mgr(format('{"charter_generic":true,"charter_ids":["%s"]}', :chA)::jsonb),
-  pg_temp.sum_of(array['T490-A01','T490-A02','T490-A03','T490-A04','T490-A05','T490-A06','T490-A07','T490-A08','T490-A10','T490-A11','T490-A12','T490-A13']),
+  pg_temp.sum_of(array['T470-A01','T470-A02','T470-A03','T470-A04','T470-A05','T470-A06','T470-A07','T470-A08','T470-A10','T470-A11','T470-A12','T470-A13']),
   'V22 Generic plus a charter: either (not the other charter)');
-select is(pg_temp.mgr('{"out_of_stock":true}'), pg_temp.sum_of(array['T490-A03','T490-A05']), 'V23 out_of_stock: on hand 0 or less');
+select is(pg_temp.mgr('{"out_of_stock":true}'), pg_temp.sum_of(array['T470-A03','T470-A05']), 'V23 out_of_stock: on hand 0 or less');
 select is(pg_temp.mgr('{"has_unit_cost":true}'),
-  pg_temp.sum_of(array['T490-A01','T490-A02','T490-A03','T490-A04','T490-A05','T490-A06','T490-A07','T490-A10','T490-A11','T490-A12','T490-A13','T490-C01']),
+  pg_temp.sum_of(array['T470-A01','T470-A02','T470-A03','T470-A04','T470-A05','T470-A06','T470-A07','T470-A10','T470-A11','T470-A12','T470-A13','T470-C01']),
   'V24 has_unit_cost: unit cost above 0');
-select is(pg_temp.mgr('{"low_stock":true}'), pg_temp.sum_of(array['T490-A02','T490-A03','T490-A04','T490-A05','T490-A13']), 'V25 low_stock');
-select is(pg_temp.mgr('{"item_types":["book","asset"]}'), pg_temp.sum_of(array['T490-A03','T490-A08','T490-A11','T490-A12']), 'V26 item_types');
+select is(pg_temp.mgr('{"low_stock":true}'), pg_temp.sum_of(array['T470-A02','T470-A03','T470-A04','T470-A05','T470-A13']), 'V25 low_stock');
+select is(pg_temp.mgr('{"item_types":["book","asset"]}'), pg_temp.sum_of(array['T470-A03','T470-A08','T470-A11','T470-A12']), 'V26 item_types');
 select is(pg_temp.mgr('{"exclude_bundles":true}'),
-  pg_temp.sum_of(array['T490-A01','T490-A02','T490-A03','T490-A04','T490-A05','T490-A06','T490-A08','T490-A10','T490-A11','T490-A12','T490-A13','T490-C01']),
+  pg_temp.sum_of(array['T470-A01','T470-A02','T470-A03','T470-A04','T470-A05','T470-A06','T470-A08','T470-A10','T470-A11','T470-A12','T470-A13','T470-C01']),
   'V27 exclude_bundles');
-select is(pg_temp.mgr('{"order_catalog_visible":false}'), pg_temp.sum_of(array['T490-A08']), 'V28 order_catalog_visible');
-select is(pg_temp.mgr('{"is_rental":true}'), pg_temp.sum_of(array['T490-A06']), 'V29 is_rental');
-select is(pg_temp.mgr('{"created_since":"2026-01-01","created_until":"2026-02-01"}'), pg_temp.sum_of(array['T490-A10']), 'V30 created range: since inclusive, until exclusive');
+select is(pg_temp.mgr('{"order_catalog_visible":false}'), pg_temp.sum_of(array['T470-A08']), 'V28 order_catalog_visible');
+select is(pg_temp.mgr('{"is_rental":true}'), pg_temp.sum_of(array['T470-A06']), 'V29 is_rental');
+select is(pg_temp.mgr('{"created_since":"2026-01-01","created_until":"2026-02-01"}'), pg_temp.sum_of(array['T470-A10']), 'V30 created range: since inclusive, until exclusive');
 select is(pg_temp.mgr('{"created_until":"2026-01-15T00:00:00Z"}'), '0', 'V31 created_until excludes a record made at that instant');
-select is(pg_temp.mgr('{"updated_since":"2026-03-15T00:00:00Z","updated_until":"2026-03-16"}'), pg_temp.sum_of(array['T490-A10']), 'V32 updated range');
+select is(pg_temp.mgr('{"updated_since":"2026-03-15T00:00:00Z","updated_until":"2026-03-16"}'), pg_temp.sum_of(array['T470-A10']), 'V32 updated range');
 select is(pg_temp.mgr((select format('{"ids":["%s","%s"]}', min(id::text), max(id::text))
-                         from public.inventory_items where sku in ('T490-A01', 'T490-A02'))::jsonb),
-  pg_temp.sum_of(array['T490-A01','T490-A02']), 'V33 ids');
-select is(pg_temp.mgr(format('{"warehouse_ids":["%s"]}', :whA2)::jsonb), pg_temp.sum_of(array['T490-A02','T490-A13']), 'V34 warehouse_ids');
-select is(pg_temp.mgr(format('{"category_grants":["%s"]}', :catA2)::jsonb), pg_temp.sum_of(array['T490-A02','T490-A13','T490-C01']), 'V35 category_grants');
+                         from public.inventory_items where sku in ('T470-A01', 'T470-A02'))::jsonb),
+  pg_temp.sum_of(array['T470-A01','T470-A02']), 'V33 ids');
+select is(pg_temp.mgr(format('{"warehouse_ids":["%s"]}', :whA2)::jsonb), pg_temp.sum_of(array['T470-A02','T470-A13']), 'V34 warehouse_ids');
+select is(pg_temp.mgr(format('{"category_grants":["%s"]}', :catA2)::jsonb), pg_temp.sum_of(array['T470-A02','T470-A13','T470-C01']), 'V35 category_grants');
 select is(pg_temp.mgr('{"status":"active","low_stock":true,"item_types":["product"]}'),
-  pg_temp.sum_of(array['T490-A02','T490-A05']), 'V36 combined: active, low, products');
+  pg_temp.sum_of(array['T470-A02','T470-A05']), 'V36 combined: active, low, products');
 select is(pg_temp.mgr('{"status":"active","awaiting_first_receipt":false,"is_rental":false,"low_stock":true,"item_types":["product","book"],"exclude_bundles":true}'),
-  pg_temp.sum_of(array['T490-A02','T490-A03']), 'V37 combined: the list defaults with low stock over products and books');
+  pg_temp.sum_of(array['T470-A02','T470-A03']), 'V37 combined: the list defaults with low stock over products and books');
 select is(pg_temp.mgr(format('{"search":"tee","rack":{"number":"17","row":"B","label":"17-B","keys":"item"},"warehouse_ids":["%s"],"has_unit_cost":true}', :whA1)::jsonb),
-  pg_temp.sum_of(array['T490-A10']), 'V38 combined: search, rack, warehouse and unit cost');
+  pg_temp.sum_of(array['T470-A10']), 'V38 combined: search, rack, warehouse and unit cost');
 select is(pg_temp.mgr(format('{"category_ids":["%s"],"supplier_ids":["%s"],"out_of_stock":true}', :catA2, :supA)::jsonb),
   '0', 'V39 combined filters that match nothing add up to 0, never null');
 select is(pg_temp.mgr('{"status":"active","search":"blue","search_isbn_variants":["0306406152"]}'),
-  pg_temp.sum_of(array['T490-A01']), 'V40 search ISBN forms only widen the search, inside it');
+  pg_temp.sum_of(array['T470-A01']), 'V40 search ISBN forms only widen the search, inside it');
 select is(pg_temp.mgr('{"search":"%"}'), pg_temp.mgr('{}'), 'V41 the search text is a pattern body, as in the request: a % is a wildcard (the app strips it before sending)');
 
 -- ══ R. Row level security ═════════════════════════════════════════════════
 select is(pg_temp.value_as(:stfA, :orgA, '{}'),
-  pg_temp.sum_of(array['T490-A01','T490-A03','T490-A04','T490-A05','T490-A06','T490-A07','T490-A08','T490-A10','T490-A11','T490-A12','T490-C01']),
+  pg_temp.sum_of(array['T470-A01','T470-A03','T470-A04','T470-A05','T470-A06','T470-A07','T470-A08','T470-A10','T470-A11','T470-A12','T470-C01']),
   'R1 staff of A: only the warehouse they are assigned');
 select is(pg_temp.value_as(:stfA, :orgA, format('{"warehouse_ids":["%s"]}', :whA2)::jsonb), '0',
   'R2 staff of A asking for a warehouse they cannot read: 0, never more');
 select is(pg_temp.value_as(:vwrA, :orgA, '{}'),
-  pg_temp.sum_of(array['T490-A01','T490-A03','T490-A04','T490-A05','T490-A06','T490-A07','T490-A08','T490-A10','T490-A11','T490-A12']),
+  pg_temp.sum_of(array['T470-A01','T470-A03','T470-A04','T470-A05','T470-A06','T470-A07','T470-A08','T470-A10','T470-A11','T470-A12']),
   'R3 viewer of A with a Shirts grant, in Main: Shirts in Main');
 select is(pg_temp.value_as(:vwrA, :orgA, format('{"category_grants":["%s"]}', :catA2)::jsonb), '0',
   'R4 viewer naming a category they are not granted: 0');
 select is(pg_temp.value_as(:vwrA, :orgA, format('{"category_ids":["%s"]}', :catA1)::jsonb),
   pg_temp.value_as(:vwrA, :orgA, '{}'), 'R5 viewer narrowing to their own grant: the same');
 select is(pg_temp.value_as(:mgrB, :orgA, '{}'), '0', 'R6 a manager of B asking for A: 0');
-select is(pg_temp.value_as(:mgrB, :orgB, '{}'), pg_temp.sum_of(array['T490-B01']), 'R7 a manager of B: B''s value');
+select is(pg_temp.value_as(:mgrB, :orgB, '{}'), pg_temp.sum_of(array['T470-B01']), 'R7 a manager of B: B''s value');
 select is(pg_temp.value_as(:mgrA, :orgB, '{}'), '0', 'R8 a manager of A asking for B: 0');
 select is(pg_temp.value_as(:nobody, :orgA, '{}'), '0', 'R9 someone with no membership: 0');
 select is(pg_temp.value_as(null, :orgA, '{}'), '0', 'R10 authenticated with no user: 0');
 select is(pg_temp.value_as(:stfC, :orgA, '{}'),
-  pg_temp.sum_of(array['T490-A01','T490-A03','T490-A04','T490-A05','T490-A06','T490-A07','T490-A08','T490-A10','T490-A11','T490-A12']),
+  pg_temp.sum_of(array['T470-A01','T470-A03','T470-A04','T470-A05','T470-A06','T470-A07','T470-A08','T470-A10','T470-A11','T470-A12']),
   'R11 staff who may read one charter in Main: Main''s records of that charter and of none, not the other charter''s');
 select is(pg_temp.value_as(:stfC, :orgA, '{}'), pg_temp.readable_sum(:stfC),
   'R12 that staff member''s total equals the sum over the rows they can read');

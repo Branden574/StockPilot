@@ -62,7 +62,7 @@ function makeStub() {
   };
   return {
     from: () => chain,
-    // list() asks inventory_list_value (0490) for its value total.
+    // list() asks inventory_list_value (0470) for its value total.
     rpc: async () => ({ data: 0, error: null }),
     _eqCalls: eqCalls,
     _filterCalls: filterCalls,

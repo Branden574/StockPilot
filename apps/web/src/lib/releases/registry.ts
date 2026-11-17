@@ -7267,7 +7267,7 @@ export const RELEASES: Release[] = [
     //   (so does a failed scan); with stock=low the size it checked was the
     //   low pre-filter's (a reorder point set, or no stock), counted before
     //   the low rule, so the words said what the 2,000 counted there.
-    //   Corrected (wording only, revision kept) when migration 0490 moved
+    //   Corrected (wording only, revision kept) when migration 0470 moved
     //   the whole low rule into the request (the computed field
     //   is_low_stock, applied by applyContentFilters to the page, its count
     //   and the plan scan): the 2,000 now counts the low or critical records

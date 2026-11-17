@@ -18927,7 +18927,7 @@ describe('the pages-keep-groups-whole release (Phase 2, #364)', () => {
   // As this release shipped, a fixed Low + critical page was 30 records that
   // passed the low pre-filter, filtered again after they were read, and the
   // plan scan filtered the whole view first, so every low record was planned
-  // onto a page. Since migration 0490 the database applies the whole low rule
+  // onto a page. Since migration 0470 the database applies the whole low rule
   // (is_low_stock) to the page, its count and the plan scan alike, so every
   // fixed page is full too, and the 2,000 cap counts the low records
   // themselves. The words below are the release as it was published, but for
