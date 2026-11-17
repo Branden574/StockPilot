@@ -64,7 +64,13 @@ function stub(opts: {
   items?: (call: MockCall) => { data: unknown; error: { message: string } | null };
   /** cron_sweep_attempts rows, kept up to date by the cron's upserts. */
   attempts?: AttemptRow[];
+  /** Organizations whose owner/admin read ('members') or module set read
+   *  ('modules') fails. */
+  contextFails?: Record<string, 'members' | 'modules'>;
 }) {
+  const readFails = (call: MockCall, what: 'members' | 'modules') =>
+    opts.contextFails?.[String(call.args[call.methods.indexOf('eq')]?.[1])] === what;
+  const READ_ERROR = { message: 'canceling statement due to statement timeout', code: '57014' };
   const attempts = opts.attempts ?? [];
   const s = makeSupabaseStub({
     'cron_sweep_attempts.select': servedLikePostgrest(() => attempts),
@@ -81,8 +87,12 @@ function stub(opts: {
       return { data: null, error: null };
     },
     'organizations.select': servedLikePostgrest(opts.orgs.map(business)),
-    'organization_members.select': { data: [{ user_id: 'owner-1' }], error: null },
-    'organization_modules.select': { data: [], error: null },
+    'organization_members.select': (call) =>
+      readFails(call, 'members')
+        ? { data: null, error: READ_ERROR }
+        : { data: [{ user_id: 'owner-1' }], error: null },
+    'organization_modules.select': (call) =>
+      readFails(call, 'modules') ? { data: null, error: READ_ERROR } : { data: [], error: null },
     'restore_points.select': opts.pointsError
       ? { data: null, error: { message: 'boom' } }
       : servedLikePostgrest(() =>
@@ -372,5 +382,22 @@ describe('GET /api/cron/restore-points: a snapshot is whole or absent', () => {
       (args) => (args[0]![0] as { organization_id: string }).organization_id,
     );
     expect(inserted).toEqual(['b']);
+  });
+});
+
+describe('GET /api/cron/restore-points: the system context', () => {
+  it('an organization whose owner/admin or module set cannot be read is failed, reported once, never "no owner"', async () => {
+    stub({ orgs: ['a', 'b', 'c'], contextFails: { a: 'members', b: 'modules' } });
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+
+    const res = await run();
+    expect(await res.json()).toMatchObject({ eligible: 3, snapshotted: 1, noOwner: 0, failed: 2 });
+    expect(started).toEqual(['c']);
+    const reports = h.reportError.mock.calls.filter(
+      (c) => (c[1] as { tag: string }).tag === 'cron.restore-points.context',
+    );
+    expect(reports).toHaveLength(1);
+    // No organization id in the report: the count is in the log line.
+    expect(reports[0]![1]).toEqual({ tag: 'cron.restore-points.context' });
   });
 });

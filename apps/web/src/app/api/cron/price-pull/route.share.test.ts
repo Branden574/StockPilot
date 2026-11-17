@@ -26,6 +26,9 @@ const backlog = new Map<string, number>();
 const unknown = new Map<string, number>();
 const calls: Array<{ orgId: string; share: number; written: number; lookups?: number }> = [];
 const cost = { wait: false, lookupMs: 0 };
+/** With `answers` set, Google answers that many lookups in all, then stops
+ *  answering (a rate limit): the refresh stops as the service does. */
+const google = { answers: null as number | null, asked: 0 };
 vi.mock('@/server/services/price-tracking', () => ({
   refreshBookPricesForOrg: async (
     _admin: unknown,
@@ -36,7 +39,14 @@ vi.mock('@/server/services/price-tracking', () => ({
     if (cost.wait) await new Promise((r) => setTimeout(r, 1));
     let lookups = 0;
     let written = 0;
+    let googleUnavailable = false;
     while (lookups < opts.maxLookups && !(Date.now() > opts.deadlineMs)) {
+      if (google.answers !== null && google.asked >= google.answers) {
+        google.asked += 1;
+        lookups += 1;
+        googleUnavailable = true;
+        break;
+      }
       const unpriceable = unknown.get(orgId) ?? 0;
       const priceable = backlog.get(orgId) ?? 0;
       if (unpriceable + priceable === 0) break;
@@ -46,10 +56,11 @@ vi.mock('@/server/services/price-tracking', () => ({
         written += 1;
       }
       lookups += 1;
+      google.asked += 1;
       if (cost.lookupMs > 0) vi.setSystemTime(Date.now() + cost.lookupMs);
     }
     calls.push({ orgId, share: opts.maxLookups, written, lookups });
-    return { scanned: lookups, written, skipped: lookups - written, lookups };
+    return { scanned: lookups, written, skipped: lookups - written, lookups, googleUnavailable };
   },
 }));
 
@@ -83,6 +94,8 @@ beforeEach(() => {
   calls.length = 0;
   cost.wait = false;
   cost.lookupMs = 0;
+  google.answers = null;
+  google.asked = 0;
   info = vi.spyOn(console, 'info').mockImplementation(() => {});
 });
 afterEach(() => {
@@ -220,5 +233,39 @@ describe('GET /api/cron/price-pull — a fair share of the run per organization'
     expect(lookups).toBe(200);
     const log = JSON.parse(String(info.mock.calls.find((c) => c[0] === '[cron.price-pull]')?.[1]));
     expect(log).toMatchObject({ lookups: 200, lookupCap: 200, written: 0 });
+  });
+
+  it('when Google stops answering (a rate limit), the run asks nothing more, reports it once, and the organizations not reached go first next run', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-11-17T09:00:00.000Z'));
+    const orgs = orgIds(3);
+    for (const o of orgs) backlog.set(o, 500);
+    google.answers = 70;
+    const table = cronAttemptsTable();
+    adminHolder.client = client(table, orgs);
+
+    const body = await (await get()).json();
+    // org-001 gets its 67; org-002 three, then the call Google refuses; org-003
+    // is never started, and nothing is asked after the refusal.
+    expect(calls.map(({ orgId, written, lookups }) => [orgId, written, lookups])).toEqual([
+      ['org-001', 67, 67],
+      ['org-002', 3, 4],
+    ]);
+    expect(google.asked).toBe(71);
+    expect(body.leftForNextRun).toBe(1);
+    const google429 = reportError.mock.calls.filter(
+      ([, c]) => (c as { tag?: string }).tag === 'cron.price-pull.google',
+    );
+    expect(google429).toHaveLength(1);
+    const line = JSON.parse(
+      String(info.mock.calls.find((c) => c[0] === '[cron.price-pull]')?.[1]),
+    ) as Record<string, unknown>;
+    expect(line).toMatchObject({ googleUnavailable: true, rounds: 1, leftForNextRun: 1 });
+
+    calls.length = 0;
+    google.answers = null;
+    vi.setSystemTime(Date.parse('2026-11-18T09:00:00.000Z'));
+    await get();
+    expect(calls[0]!.orgId).toBe('org-003');
   });
 });

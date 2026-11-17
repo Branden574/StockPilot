@@ -13,10 +13,10 @@ import {
 import { createNotification } from '@/server/services/notifications';
 import { DAILY_CLAIM_HOLD_MS, sweepOrganizations } from '@/server/services/lib/cron-sweep';
 import { fetchAllRows } from '@/server/services/lib/paginate';
+import { systemContextLoader } from '@/server/services/lib/system-context';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
-import type { ServiceContext } from '@/server/services/context';
 
-import { planAllowsAutoReorder, type ModuleId, type OrgBillingState } from '@stockpilot/core';
+import { planAllowsAutoReorder, type OrgBillingState } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -97,6 +97,8 @@ export async function GET(req: Request) {
     let posCreated = 0;
     let posSent = 0;
     let noActor = 0;
+    let contextUnread = 0;
+    const loadContext = systemContextLoader(admin, 'cron.auto-reorder.context');
     let turnedOff = 0;
 
     // Least recently reached first, each organization claimed as it starts
@@ -145,13 +147,21 @@ export async function GET(req: Request) {
             return { result: 'success', value: null };
           }
 
-          const ctx = await buildSystemContext(admin, orgId);
-          // No owner/admin to attribute to → skip safely. Not a failure: it
-          // would count against the organization every day.
-          if (!ctx) {
+          const loaded = await loadContext(orgId);
+          // A failed read of the owner/admin or the module set is a failure
+          // (reported once per run), never "no owner" or "no modules". Only
+          // an organization whose reads answered with no owner/admin to
+          // attribute to is skipped, and that is not a failure: it would count
+          // against the organization every day.
+          if (!loaded.ok) {
+            if (loaded.reason === 'read_failed') {
+              contextUnread++;
+              return { result: 'failure', value: null };
+            }
             noActor++;
             return { result: 'neither', value: null };
           }
+          const ctx = loaded.ctx;
 
           const summary = await new PurchaseOrdersService(ctx).runAutoReorder(settings);
           orgsProcessed++;
@@ -178,11 +188,13 @@ export async function GET(req: Request) {
         posCreated,
         posSent,
         noActor,
+        contextUnread,
         turnedOff,
         failed: sweep.failed,
         heldByAnotherRun: sweep.heldByAnotherRun,
         failingRepeatedly: sweep.failingRepeatedly,
         orderedBy: sweep.orderedBy,
+        promoted: sweep.promoted,
         leftForNextRun: sweep.leftForNextRun,
         ms: Date.now() - startedAt,
       }),
@@ -208,52 +220,6 @@ function autoReorderBucket(row: { settings?: unknown } | null | undefined): unkn
     ? (settings as Record<string, unknown>).autoReorder
     : undefined;
 }
-
-/**
- * Builds an owner-equivalent system ServiceContext for the cron: service-role
- * client (bypasses RLS, queries stay org-scoped by organization_id), role
- * 'owner', MFA satisfied, and the org's actually-enabled modules. Returns null
- * when the org has no owner/admin to attribute created POs to.
- */
-async function buildSystemContext(
-  admin: ReturnType<typeof createAdminClient>,
-  orgId: string,
-): Promise<ServiceContext | null> {
-  const [{ data: members }, { data: mods }] = await Promise.all([
-    admin
-      .from('organization_members')
-      .select('user_id, role')
-      .eq('organization_id', orgId)
-      .in('role', ['owner', 'admin'])
-      .not('accepted_at', 'is', null)
-      .is('impersonation_expires_at', null)
-      .limit(1),
-    admin
-      .from('organization_modules')
-      .select('module_id')
-      .eq('organization_id', orgId)
-      .eq('enabled', true),
-  ]);
-
-  const actor = (members ?? [])[0] as { user_id: string; role: string } | undefined;
-  if (!actor) return null;
-
-  const enabledModules = new Set(
-    ((mods ?? []) as Array<{ module_id: string }>).map((m) => m.module_id as ModuleId),
-  );
-
-  return {
-    organizationId: orgId,
-    userId: actor.user_id,
-    role: 'owner',
-    supabase: admin as unknown as ServiceContext['supabase'],
-    mfaRequired: false,
-    mfaSatisfied: true,
-    isSystem: true,
-    enabledModules,
-  };
-}
-
 /** Notify the org's owners/admins that auto-reorder ran. Best-effort. */
 async function notifyAdmins(
   admin: ReturnType<typeof createAdminClient>,

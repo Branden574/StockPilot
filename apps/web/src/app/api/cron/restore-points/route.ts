@@ -15,10 +15,10 @@ import {
   type CronAttempts,
 } from '@/server/services/lib/cron-sweep';
 import { fetchAllRows } from '@/server/services/lib/paginate';
+import { systemContextLoader } from '@/server/services/lib/system-context';
 import { createSnapshot } from '@/server/services/restore-points';
-import type { ServiceContext } from '@/server/services/context';
 
-import { planAllowsRestorePoints, type ModuleId, type OrgBillingState } from '@stockpilot/core';
+import { planAllowsRestorePoints, type OrgBillingState } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -135,6 +135,7 @@ export async function GET(req: Request) {
       failuresBefore: attempts.failures,
       reportTag: 'cron.restore-points.attempts',
     });
+    const loadContext = systemContextLoader(admin, 'cron.restore-points.context');
     let failingRepeatedly = 0;
     const sweep = await sweepUntilDeadline(
       ordered,
@@ -145,12 +146,16 @@ export async function GET(req: Request) {
         const finish = recorder.start(orgId);
         let result: 'snapshotted' | 'no_owner' | 'failed';
         try {
-          const ctx = await buildSystemContext(admin, orgId);
-          if (!ctx) {
+          const loaded = await loadContext(orgId);
+          if (loaded.ok) {
+            await createSnapshot(loaded.ctx, { kind: 'auto', label: null });
+            result = 'snapshotted';
+          } else if (loaded.reason === 'no_actor') {
             result = 'no_owner';
           } else {
-            await createSnapshot(ctx, { kind: 'auto', label: null });
-            result = 'snapshotted';
+            // The owner/admin or the module set could not be read: failed
+            // (reported once per run), never "no owner".
+            result = 'failed';
           }
         } catch (e) {
           void reportError(e, { tag: 'cron.restore-points.org', extra: { orgId } });
@@ -199,41 +204,4 @@ export async function GET(req: Request) {
   } catch (err) {
     return internalErrorResponse(err, 'cron.restore-points');
   }
-}
-
-/** Owner-equivalent system context for the cron (service-role, org-scoped). */
-async function buildSystemContext(
-  admin: ReturnType<typeof createAdminClient>,
-  orgId: string,
-): Promise<ServiceContext | null> {
-  const [{ data: members }, { data: mods }] = await Promise.all([
-    admin
-      .from('organization_members')
-      .select('user_id')
-      .eq('organization_id', orgId)
-      .in('role', ['owner', 'admin'])
-      .not('accepted_at', 'is', null)
-      .is('impersonation_expires_at', null)
-      .limit(1),
-    admin
-      .from('organization_modules')
-      .select('module_id')
-      .eq('organization_id', orgId)
-      .eq('enabled', true),
-  ]);
-  const actor = (members ?? [])[0] as { user_id: string } | undefined;
-  if (!actor) return null;
-  const enabledModules = new Set(
-    ((mods ?? []) as Array<{ module_id: string }>).map((m) => m.module_id as ModuleId),
-  );
-  return {
-    organizationId: orgId,
-    userId: actor.user_id,
-    role: 'owner',
-    supabase: admin as unknown as ServiceContext['supabase'],
-    mfaRequired: false,
-    mfaSatisfied: true,
-    isSystem: true,
-    enabledModules,
-  };
 }

@@ -57,6 +57,10 @@ const ORGS = ['org-1', 'org-2', 'org-3', 'org-4', 'org-5', 'org-6'];
 const turnedOffSince = new Set<string>();
 /** Organizations with no accepted owner or admin. */
 const noOwner = new Set<string>();
+/** Organizations whose owner/admin read ('members') or module set read
+ *  ('modules') fails. */
+const readFails = new Map<string, 'members' | 'modules'>();
+const READ_ERROR = { message: 'canceling statement due to statement timeout', code: '57014' };
 const eqValue = (call: MockCall, col: string) =>
   call.args.find((a, i) => call.methods[i] === 'eq' && a[0] === col)?.[1] as string | undefined;
 function settingsNow(call: MockCall) {
@@ -75,15 +79,17 @@ function client(table: ReturnType<typeof cronAttemptsTable>) {
   return makeSupabaseStub({
     ...table.results,
     'organization_modules.select': (call: MockCall) =>
-      call.args[0]?.[0] === 'organization_id, settings'
-        ? {
-            data: ORGS.map((id) => ({
-              organization_id: id,
-              settings: { autoReorder: { enabled: true, mode: 'draft' } },
-            })),
-            error: null,
-          }
-        : { data: [{ module_id: 'purchase_orders' }], error: null },
+      readFails.get(eqValue(call, 'organization_id') ?? '') === 'modules'
+        ? { data: null, error: READ_ERROR }
+        : call.args[0]?.[0] === 'organization_id, settings'
+          ? {
+              data: ORGS.map((id) => ({
+                organization_id: id,
+                settings: { autoReorder: { enabled: true, mode: 'draft' } },
+              })),
+              error: null,
+            }
+          : { data: [{ module_id: 'purchase_orders' }], error: null },
     // The organization's settings read again as its turn starts.
     'organization_modules.select.maybeSingle': (call: MockCall) => ({
       data: settingsNow(call),
@@ -91,9 +97,11 @@ function client(table: ReturnType<typeof cronAttemptsTable>) {
     }),
     'organizations.select': { data: { plan: 'pro' }, error: null },
     'organization_members.select': (call: MockCall) =>
-      noOwner.has(eqValue(call, 'organization_id') ?? '')
-        ? { data: [], error: null }
-        : { data: [{ user_id: 'admin-1', role: 'owner' }], error: null },
+      readFails.get(eqValue(call, 'organization_id') ?? '') === 'members'
+        ? { data: null, error: READ_ERROR }
+        : noOwner.has(eqValue(call, 'organization_id') ?? '')
+          ? { data: [], error: null }
+          : { data: [{ user_id: 'admin-1', role: 'owner' }], error: null },
   }).client;
 }
 
@@ -109,6 +117,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   turnedOffSince.clear();
   noOwner.clear();
+  readFails.clear();
   reorderRuns.length = 0;
   reorderCost.ms = 0;
   reorderCost.wait = false;
@@ -220,5 +229,25 @@ describe('GET /api/cron/auto-reorder reaches every organization', () => {
       expect(logLine()).toMatchObject({ noActor: 1, failed: 0, failingRepeatedly: 0 });
     }
     expect(table.rows.find((r) => r.organization_id === 'org-3')!.consecutive_failures).toBe(0);
+  });
+
+  it('an organization whose owner/admin or module set cannot be read is a failure, reported once, never "no owner" or "no modules"', async () => {
+    const table = cronAttemptsTable();
+    adminHolder.client = client(table);
+    readFails.set('org-2', 'members');
+    readFails.set('org-4', 'modules');
+    await get();
+    expect(reorderRuns).toEqual(['org-1', 'org-3', 'org-5', 'org-6']);
+    expect(logLine()).toMatchObject({ noActor: 0, contextUnread: 2, failed: 2 });
+    for (const id of ['org-2', 'org-4']) {
+      expect(table.rows.find((r) => r.organization_id === id)!.consecutive_failures, id).toBe(1);
+    }
+    const reports = reportError.mock.calls.filter(
+      ([, c]) => (c as { tag?: string }).tag === 'cron.auto-reorder.context',
+    );
+    expect(reports).toHaveLength(1);
+    // No organization id anywhere in the report: the count is in the log line.
+    expect(reports[0]![1]).toEqual({ tag: 'cron.auto-reorder.context' });
+    expect((reports[0]![0] as Error).message).not.toMatch(/org-/);
   });
 });

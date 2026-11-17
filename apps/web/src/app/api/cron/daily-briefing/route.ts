@@ -12,12 +12,12 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { DAILY_CLAIM_HOLD_MS, sweepOrganizations } from '@/server/services/lib/cron-sweep';
 import { fetchAllRows } from '@/server/services/lib/paginate';
+import { systemContextLoader } from '@/server/services/lib/system-context';
 import { createNotification } from '@/server/services/notifications';
 import { gatherInsightsForCtx, summarizeInsights } from '@/server/services/insights';
 import { insightsVisibleTo, type InsightReader } from '@/server/services/insights-access';
-import type { ServiceContext } from '@/server/services/context';
 
-import { can, type ModuleId, type Role } from '@stockpilot/core';
+import { can, type Role } from '@stockpilot/core';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -75,6 +75,9 @@ export async function GET(req: NextRequest) {
   let orgsProcessed = 0;
   let briefingsSent = 0;
   let noActor = 0;
+  let contextUnread = 0;
+  let turnedOff = 0;
+  const loadContext = systemContextLoader(admin, 'cron.daily-briefing.context');
 
   try {
     // Orgs with the ai module on — the same gate as the insights page.
@@ -105,33 +108,34 @@ export async function GET(req: NextRequest) {
       },
       async (orgId): Promise<{ result: 'success' | 'failure' | 'neither'; value: null }> => {
         try {
-          const ctx = await buildSystemContext(admin, orgId);
-          // No owner/admin to attribute to: skipped, not a failure (it would
-          // count against the organization every day).
-          if (!ctx) {
+          const loaded = await loadContext(orgId);
+          // A failed read of the owner/admin or the module set is a failure
+          // (reported once per run), never "no owner" or "no modules". Only
+          // an organization whose reads answered with no owner/admin to
+          // attribute to is skipped, and that is not a failure: it would count
+          // against the organization every day.
+          if (!loaded.ok) {
+            if (loaded.reason === 'read_failed') {
+              contextUnread += 1;
+              return { result: 'failure', value: null };
+            }
             noActor += 1;
             return { result: 'neither', value: null };
           }
-          // The organization was picked because its ai module is on, so a set
-          // without ai means its module read failed (buildSystemContext keeps
-          // every cron copy's shape and drops that error, leaving an empty set)
-          // or ai was turned off since. Either way every module's line would be
-          // dropped for every reader: skip the organization for this run and
-          // say so, rather than send a briefing trimmed without a trace.
+          const ctx = loaded.ctx;
+          // The organization was picked because its ai module is on, and its
+          // module set was read just now (a failed read is a failure above),
+          // so a set without ai means ai was turned off since the list was
+          // read: skipped for this run like any organization with ai off, not
+          // a failure.
           if (!ctx.enabledModules.has('ai')) {
-            void reportError(
-              new Error('Daily briefing could not confirm the organization modules'),
-              {
-                tag: 'cron.daily-briefing.modules',
-                organizationId: orgId,
-              },
-            );
-            return { result: 'failure', value: null };
+            turnedOff += 1;
+            return { result: 'neither', value: null };
           }
           orgsProcessed += 1;
 
           // Every line the counts produce, then the lines the organization can
-          // open: the cron's context is the owner (buildSystemContext), so its
+          // open: the cron's context is the owner (loadSystemContext), so its
           // view is the module rules alone. A line whose module is off is counted
           // anyway (the counts ask no module) and no reader is ever shown it.
           const gathered = await gatherInsightsForCtx(ctx);
@@ -268,10 +272,13 @@ export async function GET(req: NextRequest) {
         orgsProcessed,
         briefingsSent,
         noActor,
+        contextUnread,
+        turnedOff,
         failed: sweep.failed,
         heldByAnotherRun: sweep.heldByAnotherRun,
         failingRepeatedly: sweep.failingRepeatedly,
         orderedBy: sweep.orderedBy,
+        promoted: sweep.promoted,
         leftForNextRun: sweep.leftForNextRun,
         ms: Date.now() - startedAt,
       }),
@@ -286,48 +293,4 @@ export async function GET(req: NextRequest) {
   } catch (err) {
     return internalErrorResponse(err, 'cron.daily-briefing');
   }
-}
-
-/**
- * Owner-equivalent system context for one org (service-role client, org-scoped
- * queries, MFA satisfied, real enabled-module set). Mirrors the auto-reorder
- * cron. Null when the org has no accepted owner/admin to attribute to.
- */
-async function buildSystemContext(
-  admin: ReturnType<typeof createAdminClient>,
-  orgId: string,
-): Promise<ServiceContext | null> {
-  const [{ data: members }, { data: mods }] = await Promise.all([
-    admin
-      .from('organization_members')
-      .select('user_id, role')
-      .eq('organization_id', orgId)
-      .in('role', ['owner', 'admin'])
-      .not('accepted_at', 'is', null)
-      .is('impersonation_expires_at', null)
-      .limit(1),
-    admin
-      .from('organization_modules')
-      .select('module_id')
-      .eq('organization_id', orgId)
-      .eq('enabled', true),
-  ]);
-
-  const actor = (members ?? [])[0] as { user_id: string; role: string } | undefined;
-  if (!actor) return null;
-
-  const enabledModules = new Set(
-    ((mods ?? []) as Array<{ module_id: string }>).map((m) => m.module_id as ModuleId),
-  );
-
-  return {
-    organizationId: orgId,
-    userId: actor.user_id,
-    role: 'owner',
-    supabase: admin as unknown as ServiceContext['supabase'],
-    mfaRequired: false,
-    mfaSatisfied: true,
-    isSystem: true,
-    enabledModules,
-  };
 }

@@ -4,6 +4,7 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
 
 import { PriceTrackingService, recordBookObservation, refreshBookPricesForOrg } from './price-tracking';
+import { GoogleBooksUnavailableError } from '@/server/pricing/google-books-client';
 
 const withPT = () => new Set<ModuleId>([...DEFAULT_MODULE_IDS, 'price_tracking']);
 const fakeClient = (json: unknown) => ({ fetchVolumeByIsbn: vi.fn(async () => json) });
@@ -128,5 +129,68 @@ describe('PriceTrackingService.fetchItemPrice', () => {
     const svc = new PriceTrackingService(makeServiceContext(stub.client, { enabledModules: withPT() }), fakeClient(PRICED));
     const res = await svc.fetchItemPrice('i1');
     expect(res?.retail_price).toBe(7.99);
+  });
+});
+
+describe('when Google does not answer (a rate limit, an error, no reply)', () => {
+  /** Answers PRICED for the first `answered` calls, then a 429. */
+  const limitedClient = (answered: number) => {
+    let calls = 0;
+    return {
+      fetchVolumeByIsbn: vi.fn(async () => {
+        calls += 1;
+        if (calls > answered) throw new GoogleBooksUnavailableError(429);
+        return PRICED;
+      }),
+    };
+  };
+
+  it('recordBookObservation throws it on, with nothing written and the book not stamped', async () => {
+    const stub = makeSupabaseStub({
+      'inventory_items.update': { data: null, error: null },
+      'item_price_observations.insert': { data: null, error: null },
+    });
+    await expect(
+      recordBookObservation(stub.client, 'org-1', { id: 'i1', barcode: '9780306406157' }, limitedClient(0)),
+    ).rejects.toBeInstanceOf(GoogleBooksUnavailableError);
+    expect(stub.fromCalls).toEqual([]);
+  });
+
+  it('the refresh stops at that book: it and the books after it are left as they were, and the caller is told', async () => {
+    const items = ['i1', 'i2', 'i3'].map((id) => ({ id, barcode: '9780306406157', last_priced_at: null }));
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: items, error: null },
+      'inventory_items.update': { data: null, error: null },
+      'item_price_observations.insert': { data: null, error: null },
+    });
+    const client = limitedClient(1);
+    const tried = new Set<string>();
+
+    const res = await refreshBookPricesForOrg(stub.client, 'org-1', client, { limit: 300, tried });
+
+    expect(res).toMatchObject({ written: 1, lookups: 2, googleUnavailable: true });
+    // i3 is never asked about.
+    expect(client.fetchVolumeByIsbn).toHaveBeenCalledTimes(2);
+    // Only i1, which Google answered, is stamped; i2 (the 429) and i3 keep their place.
+    const stamped = (stub.chainArgsAll.get('inventory_items.update') ?? []).map(
+      (args) => args.find((a) => a[0] === 'id')?.[1],
+    );
+    expect(stamped).toEqual(['i1']);
+    expect([...tried]).toEqual(['i1']);
+  });
+
+  it('a person asking for one price gets the latest observation, and the book is not stamped', async () => {
+    const latest = { item_id: 'i1', list_price: 9.99, observed_at: '2026-11-01T00:00:00.000Z' };
+    const stub = makeSupabaseStub({
+      'inventory_items.select.maybeSingle': { data: { id: 'i1', barcode: '9780306406157' }, error: null },
+      'inventory_items.update': { data: null, error: null },
+      'item_price_observations.select.maybeSingle': { data: latest, error: null },
+    });
+    const svc = new PriceTrackingService(
+      makeServiceContext(stub.client, { enabledModules: withPT() }),
+      limitedClient(0),
+    );
+    await expect(svc.fetchItemPrice('i1')).resolves.toEqual(latest);
+    expect(stub.chainArgsAll.get('inventory_items.update')).toBeUndefined();
   });
 });

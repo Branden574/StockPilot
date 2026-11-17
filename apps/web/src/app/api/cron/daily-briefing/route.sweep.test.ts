@@ -52,20 +52,28 @@ const ORGS = ['org-1', 'org-2', 'org-3', 'org-4', 'org-5', 'org-6'];
 
 /** Organizations with no accepted owner or admin. */
 const noOwner = new Set<string>();
+/** Organizations whose owner/admin read ('members') or module set read
+ *  ('modules') fails. */
+const readFails = new Map<string, 'members' | 'modules'>();
+const READ_ERROR = { message: 'canceling statement due to statement timeout', code: '57014' };
 const eqValue = (call: MockCall, col: string) =>
   call.args.find((a, i) => call.methods[i] === 'eq' && a[0] === col)?.[1] as string | undefined;
 
 function client(table: ReturnType<typeof cronAttemptsTable>) {
   return makeSupabaseStub({
     ...table.results,
-    'organization_modules.select': (call) =>
-      call.methods.includes('range')
-        ? { data: ORGS.map((id) => ({ organization_id: id })), error: null }
-        : { data: [{ module_id: 'ai' }, { module_id: 'inventory' }], error: null },
+    'organization_modules.select': (call: MockCall) =>
+      readFails.get(eqValue(call, 'organization_id') ?? '') === 'modules'
+        ? { data: null, error: READ_ERROR }
+        : call.methods.includes('range')
+          ? { data: ORGS.map((id) => ({ organization_id: id })), error: null }
+          : { data: [{ module_id: 'ai' }, { module_id: 'inventory' }], error: null },
     'organization_members.select': (call: MockCall) =>
-      noOwner.has(eqValue(call, 'organization_id') ?? '')
-        ? { data: [], error: null }
-        : { data: [{ user_id: 'admin-1', role: 'owner' }], error: null },
+      readFails.get(eqValue(call, 'organization_id') ?? '') === 'members'
+        ? { data: null, error: READ_ERROR }
+        : noOwner.has(eqValue(call, 'organization_id') ?? '')
+          ? { data: [], error: null }
+          : { data: [{ user_id: 'admin-1', role: 'owner' }], error: null },
     // No briefing yet today for anyone (the per-user check).
     'notifications.select': { data: [], error: null },
   }).client;
@@ -82,6 +90,7 @@ let info: MockInstance<Console['info']>;
 beforeEach(() => {
   vi.clearAllMocks();
   noOwner.clear();
+  readFails.clear();
   sent.length = 0;
   gathered.length = 0;
   cost.ms = 0;
@@ -142,5 +151,25 @@ describe('GET /api/cron/daily-briefing reaches every organization', () => {
       expect(logLine()).toMatchObject({ noActor: 1, failed: 0, failingRepeatedly: 0 });
     }
     expect(table.rows.find((r) => r.organization_id === 'org-3')!.consecutive_failures).toBe(0);
+  });
+
+  it('an organization whose owner/admin or module set cannot be read is a failure, reported once, never "no owner" or "no modules"', async () => {
+    const table = cronAttemptsTable();
+    adminHolder.client = client(table);
+    readFails.set('org-2', 'members');
+    readFails.set('org-4', 'modules');
+    await get();
+    expect(gathered).toEqual(['org-1', 'org-3', 'org-5', 'org-6']);
+    expect(logLine()).toMatchObject({ noActor: 0, contextUnread: 2, failed: 2 });
+    for (const id of ['org-2', 'org-4']) {
+      expect(table.rows.find((r) => r.organization_id === id)!.consecutive_failures, id).toBe(1);
+    }
+    const reports = reportError.mock.calls.filter(
+      ([, c]) => (c as { tag?: string }).tag === 'cron.daily-briefing.context',
+    );
+    expect(reports).toHaveLength(1);
+    // No organization id anywhere in the report: the count is in the log line.
+    expect(reports[0]![1]).toEqual({ tag: 'cron.daily-briefing.context' });
+    expect((reports[0]![0] as Error).message).not.toMatch(/org-/);
   });
 });

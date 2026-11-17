@@ -1648,12 +1648,13 @@ export class ExceptionOccurrencesService {
   }
 
   /**
-   * buildSystemContext came back empty. The shared helper ignores its read
-   * errors (its body is pinned identical to the route copies by the
-   * daily-briefing guard, so it is not changed here), which made a FAILED
-   * members read look exactly like an org with no owner or admin: the sync
-   * was dropped with no report, and a posted count's re-check silently waited
-   * for the cron. So the members read is repeated with its error bound:
+   * buildSystemContext came back empty: its reads answered with no owner or
+   * admin (a failed read now throws there, and syncOrg reports it as
+   * exceptions.sync_failed). The helper used to ignore its read errors, which
+   * made a FAILED members read look exactly like an org with no owner or
+   * admin: the sync was dropped with no report, and a posted count's re-check
+   * silently waited for the cron. The members read is still repeated with its
+   * error bound, so a "nobody" is confirmed before it is reported:
    *   - it fails: thrown, and reported by syncOrg as exceptions.sync_failed;
    *   - it finds an actor after all (the first read failed transiently):
    *     thrown the same way;

@@ -626,6 +626,7 @@ export async function GET(req: Request) {
         failed,
         failingRepeatedly: sweep.failingRepeatedly,
         orderedBy: sweep.orderedBy,
+        promoted: sweep.promoted,
         leftForNextRun: sweep.leftForNextRun,
         ms: Date.now() - requestStartedAt,
       }),

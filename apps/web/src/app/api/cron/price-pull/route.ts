@@ -69,6 +69,12 @@ const RUN_DEADLINE_MS = 50_000;
  * organizations it started. Each run keeps its own LOOKUP_CAP, so a tick
  * delivered twice can still spend up to twice the cap in total, split between
  * the organizations each run claimed; no book is looked up by both.
+ *
+ * GOOGLE NOT ANSWERING. A rate limit (429), another error reply or no reply
+ * is not "no price found": the refresh stops at that book, leaves it and the
+ * ones after it as they were (not stamped), and the run asks Google nothing
+ * more (it would only meet the same limit). Reported once per run
+ * (cron.price-pull.google); the books not reached go first next time.
  */
 export async function GET(req: Request) {
   // Fail-closed when CRON_SECRET is unset/empty. Matches cron/drain-outbox.
@@ -110,6 +116,8 @@ export async function GET(req: Request) {
 
   let used = 0; // lookups this run
   let written = 0;
+  /** Set when Google did not answer: no more lookups this run. */
+  let googleUnavailable = false;
   const left = () => LOOKUP_CAP - used;
   /** Per organization, summed over the rounds (the response's results). */
   const byOrg = new Map<
@@ -132,6 +140,16 @@ export async function GET(req: Request) {
     });
     used += r.lookups;
     written += r.written;
+    if (r.googleUnavailable && !googleUnavailable) {
+      googleUnavailable = true;
+      void reportError(
+        new Error('Google Books did not answer; the price pull stopped its lookups'),
+        {
+          tag: 'cron.price-pull.google',
+          level: 'warning',
+        },
+      );
+    }
     const sum = byOrg.get(orgId) ?? {
       orgId,
       scanned: 0,
@@ -146,7 +164,7 @@ export async function GET(req: Request) {
     byOrg.set(orgId, sum);
     // last_priced_at stamps bump updated_at → page-1 order changes.
     if (r.lookups > 0) revalidateInventoryList(orgId);
-    return r.lookups >= share || Date.now() > until;
+    return !googleUnavailable && (r.lookups >= share || Date.now() > until);
   };
 
   // Round one: every organization, least recently reached first, each claimed
@@ -162,7 +180,7 @@ export async function GET(req: Request) {
       deadlineAt: deadlineMs,
       slotMs: DAY_MS,
       holdMs: DAILY_CLAIM_HOLD_MS,
-      stopWhen: () => left() <= 0,
+      stopWhen: () => left() <= 0 || googleUnavailable,
     },
     async (orgId, index): Promise<{ result: 'success' | 'failure'; value: null }> => {
       try {
@@ -186,11 +204,11 @@ export async function GET(req: Request) {
   // theirs), in the same order, equal parts of the lookups again, sharing the
   // run's deadline, until the lookups, the deadline or the backlogs run out.
   let rounds = 1;
-  while (wantMore.length > 0 && left() > 0 && Date.now() < deadlineMs) {
+  while (wantMore.length > 0 && left() > 0 && !googleUnavailable && Date.now() < deadlineMs) {
     rounds += 1;
     const next: string[] = [];
     for (let i = 0; i < wantMore.length; i += 1) {
-      if (left() <= 0 || Date.now() >= deadlineMs) break;
+      if (left() <= 0 || googleUnavailable || Date.now() >= deadlineMs) break;
       const orgId = wantMore[i]!;
       try {
         if (await refresh(orgId, Math.ceil(left() / (wantMore.length - i)), deadlineMs)) {
@@ -214,9 +232,11 @@ export async function GET(req: Request) {
       lookupCap: LOOKUP_CAP,
       written,
       rounds,
+      googleUnavailable,
       failed: sweep.failed,
       heldByAnotherRun: sweep.heldByAnotherRun,
       orderedBy: sweep.orderedBy,
+      promoted: sweep.promoted,
       leftForNextRun: sweep.leftForNextRun,
       ms: Date.now() - startedAt,
     }),

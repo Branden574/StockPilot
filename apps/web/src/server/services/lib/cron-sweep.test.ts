@@ -12,8 +12,10 @@ import {
   newestPerKey,
   oldestFirst,
   readCronAttempts,
+  RETRY_FIRST_LIMIT,
   retryFirstOnce,
   rotateByClock,
+  settledFailures,
   sweepOrder,
   sweepOrganizations,
   sweepUntilDeadline,
@@ -622,8 +624,94 @@ describe('retryFirstOnce (an attempt that did not finish goes to the front once)
       ['d', 2],
       ['e', 1],
     ]);
-    expect(retryFirstOnce(['a', 'b', 'c', 'd', 'e'], failures)).toEqual(['c', 'e', 'a', 'b', 'd']);
-    expect(retryFirstOnce(['a', 'b'], new Map())).toEqual(['a', 'b']);
+    expect(retryFirstOnce(['a', 'b', 'c', 'd', 'e'], failures)).toEqual({
+      order: ['c', 'e', 'a', 'b', 'd'],
+      promoted: 2,
+    });
+    expect(retryFirstOnce(['a', 'b'], new Map())).toEqual({ order: ['a', 'b'], promoted: 0 });
+  });
+
+  it('moves at most RETRY_FIRST_LIMIT (3) a run; the others keep their place', () => {
+    expect(RETRY_FIRST_LIMIT).toBe(3);
+    const failures = new Map(['b', 'c', 'd', 'e', 'f'].map((id) => [id, 1] as const));
+    expect(retryFirstOnce(['a', 'b', 'c', 'd', 'e', 'f', 'g'], failures)).toEqual({
+      order: ['b', 'c', 'd', 'a', 'e', 'f', 'g'],
+      promoted: 3,
+    });
+  });
+
+  it('settledFailures: success clears, failure adds one, neither keeps the count but clears a first failure', () => {
+    expect(settledFailures('success', 4)).toBe(0);
+    expect(settledFailures('failure', 0)).toBe(1);
+    expect(settledFailures('failure', 2)).toBe(3);
+    expect(settledFailures('neither', 0)).toBe(0);
+    expect(settledFailures('neither', 1)).toBe(0);
+    expect(settledFailures('neither', 2)).toBe(2);
+    expect(settledFailures('neither', 5)).toBe(5);
+  });
+
+  it('an organization that failed once and then has nothing to do goes to the front once, not every run', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const table = cronAttemptsTable();
+    const stub = makeSupabaseStub(table.results);
+    const list = ids(6);
+    const LAST = list[5]!;
+    const firsts: string[] = [];
+    const promoted: number[] = [];
+    for (let day = 0; day < 4; day += 1) {
+      vi.setSystemTime(Date.parse('2026-11-17T08:00:00.000Z') + day * DAY);
+      const out = await sweepOrganizations(
+        stub.client,
+        {
+          job: 'auto_reorder',
+          tag: 'cron.test',
+          orgIds: list,
+          deadlineAt: Date.now() + 60_000,
+          slotMs: DAY,
+          holdMs: 20 * 60 * 60_000,
+        },
+        async (orgId) => {
+          // Day 0: it fails. From then on the job is off for it: neither.
+          if (orgId === LAST) return { result: day === 0 ? 'failure' : 'neither', value: orgId };
+          return { result: 'success', value: orgId };
+        },
+      );
+      firsts.push(out.done[0]!.orgId);
+      promoted.push(out.promoted);
+    }
+    // Day 1 moves it to the front (its first failure); its neither then
+    // clears the count, so days 2 and 3 go in the plain order.
+    expect(firsts[1]).toBe(LAST);
+    expect(promoted).toEqual([0, 1, 0, 0]);
+    expect(firsts[2]).not.toBe(LAST);
+    expect(firsts[3]).not.toBe(LAST);
+    expect(table.rows.find((r) => r.organization_id === LAST)!.consecutive_failures).toBe(0);
+  });
+
+  it('a neither after two or more failures leaves the count as it was', async () => {
+    const table = cronAttemptsTable([
+      {
+        job: 'auto_reorder',
+        organization_id: 'a',
+        last_attempt_at: '2026-11-01T08:00:00.000Z',
+        consecutive_failures: 2,
+      },
+    ]);
+    const stub = makeSupabaseStub(table.results);
+    const out = await sweepOrganizations(
+      stub.client,
+      {
+        job: 'auto_reorder',
+        tag: 'cron.test',
+        orgIds: ['a'],
+        deadlineAt: Date.now() + 60_000,
+        slotMs: DAY,
+        holdMs: 20 * 60 * 60_000,
+      },
+      async () => ({ result: 'neither', value: null }),
+    );
+    expect(out.promoted).toBe(0);
+    expect(table.rows.find((r) => r.organization_id === 'a')!.consecutive_failures).toBe(2);
   });
 
   it('40 organizations of 4 s and one of 150 s: the big one, killed at 300 s when it starts last, finishes the next run', async () => {

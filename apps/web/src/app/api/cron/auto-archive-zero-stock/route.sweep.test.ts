@@ -51,6 +51,10 @@ const ORGS = ['org-1', 'org-2', 'org-3', 'org-4', 'org-5', 'org-6'];
 const turnedOffSince = new Set<string>();
 /** Organizations with no accepted owner or admin. */
 const noOwner = new Set<string>();
+/** Organizations whose owner/admin read ('members') or module set read
+ *  ('modules') fails. */
+const readFails = new Map<string, 'members' | 'modules'>();
+const READ_ERROR = { message: 'canceling statement due to statement timeout', code: '57014' };
 const eqValue = (call: MockCall, col: string) =>
   call.args.find((a, i) => call.methods[i] === 'eq' && a[0] === col)?.[1] as string | undefined;
 function settingsNow(call: MockCall) {
@@ -67,22 +71,26 @@ function settingsNow(call: MockCall) {
 function client(table: ReturnType<typeof cronAttemptsTable>) {
   return makeSupabaseStub({
     ...table.results,
-    'organization_modules.select': (call) =>
-      call.methods.includes('range')
-        ? {
-            data: ORGS.map((id) => ({
-              organization_id: id,
-              settings: { autoArchiveOnZeroStock: { enabled: true, dwellDays: 30 } },
-            })),
-            error: null,
-          }
-        : { data: [{ module_id: 'inventory' }], error: null },
+    'organization_modules.select': (call: MockCall) =>
+      readFails.get(eqValue(call, 'organization_id') ?? '') === 'modules'
+        ? { data: null, error: READ_ERROR }
+        : call.methods.includes('range')
+          ? {
+              data: ORGS.map((id) => ({
+                organization_id: id,
+                settings: { autoArchiveOnZeroStock: { enabled: true, dwellDays: 30 } },
+              })),
+              error: null,
+            }
+          : { data: [{ module_id: 'inventory' }], error: null },
     // The organization's settings read again as its turn starts.
     'organization_modules.select.maybeSingle': (call) => ({ data: settingsNow(call), error: null }),
     'organization_members.select': (call: MockCall) =>
-      noOwner.has(eqValue(call, 'organization_id') ?? '')
-        ? { data: [], error: null }
-        : { data: [{ user_id: 'u1', role: 'owner' }], error: null },
+      readFails.get(eqValue(call, 'organization_id') ?? '') === 'members'
+        ? { data: null, error: READ_ERROR }
+        : noOwner.has(eqValue(call, 'organization_id') ?? '')
+          ? { data: [], error: null }
+          : { data: [{ user_id: 'u1', role: 'owner' }], error: null },
   }).client;
 }
 
@@ -98,6 +106,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   turnedOffSince.clear();
   noOwner.clear();
+  readFails.clear();
   archivedIn.length = 0;
   notified.length = 0;
   cost.ms = 0;
@@ -164,5 +173,25 @@ describe('GET /api/cron/auto-archive-zero-stock reaches every organization', () 
       expect(logLine()).toMatchObject({ noActor: 1, failed: 0, failingRepeatedly: 0 });
     }
     expect(table.rows.find((r) => r.organization_id === 'org-3')!.consecutive_failures).toBe(0);
+  });
+
+  it('an organization whose owner/admin or module set cannot be read is a failure, reported once, never "no owner" or "no modules"', async () => {
+    const table = cronAttemptsTable();
+    adminHolder.client = client(table);
+    readFails.set('org-2', 'members');
+    readFails.set('org-4', 'modules');
+    await get();
+    expect(archivedIn).toEqual(['org-1', 'org-3', 'org-5', 'org-6']);
+    expect(logLine()).toMatchObject({ noActor: 0, contextUnread: 2, failed: 2 });
+    for (const id of ['org-2', 'org-4']) {
+      expect(table.rows.find((r) => r.organization_id === id)!.consecutive_failures, id).toBe(1);
+    }
+    const reports = reportError.mock.calls.filter(
+      ([, c]) => (c as { tag?: string }).tag === 'cron.auto-archive-zero-stock.context',
+    );
+    expect(reports).toHaveLength(1);
+    // No organization id anywhere in the report: the count is in the log line.
+    expect(reports[0]![1]).toEqual({ tag: 'cron.auto-archive-zero-stock.context' });
+    expect((reports[0]![0] as Error).message).not.toMatch(/org-/);
   });
 });
