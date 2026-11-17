@@ -5,12 +5,13 @@
 // {supabase}/auth/v1/token?grant_type=password. This measures that call on the
 // local stack, for one seeded account (a made-up loadtest+...@example.com).
 // Every seeded account's password is derived from the local stack's service
-// key and its email (lib/auth.js accountPassword); setup() derives it, so only
-// the email is needed:
+// key and its email (lib/auth.js accountPassword); setup() derives it. The
+// account is the first staff account of the seeded organization
+// (LOADTEST_MANIFEST, which run-scale.mjs sets), or LOADTEST_SIGNIN_EMAIL.
+// Run it through the runner, like every scenario:
 //
-//   set -a; . <loadtest env file>; set +a   # LOADTEST_* for the local stack, never printed
-//   LOADTEST_SIGNIN_EMAIL=<a seeded account's email, from the manifest> \
-//     k6 run load-tests/k6/scenarios/02-signin.js
+//   node --env-file=<loadtest env> load-tests/k6/run-scale.mjs --app-env <app env> \
+//     --scenario scenarios/02-signin.js --ladder 1 --warmup 0
 //
 // The local stack's sign-in rate limit applies (config.toml [auth.rate_limit]
 // sign_in_sign_ups); 429s count as failures here, so raise it on the stack the
@@ -19,6 +20,7 @@ import http from 'k6/http';
 import { check, fail, sleep } from 'k6';
 
 import { accountPassword } from '../lib/auth.js';
+import { plainSummary } from '../lib/plain-summary.js';
 import { assertRequestUrl, localTarget } from '../lib/safety.js';
 
 const { supabaseUrl } = localTarget(__ENV);
@@ -38,10 +40,12 @@ export const options = {
   },
 };
 
-const EMAIL = __ENV.LOADTEST_SIGNIN_EMAIL;
+const EMAIL =
+  __ENV.LOADTEST_SIGNIN_EMAIL ||
+  (__ENV.LOADTEST_MANIFEST ? JSON.parse(open(__ENV.LOADTEST_MANIFEST)).users.staff[0].email : '');
 const ANON = __ENV.LOADTEST_SUPABASE_ANON_KEY;
 if (!EMAIL || !ANON) {
-  fail('Set LOADTEST_SIGNIN_EMAIL (a seeded account) and LOADTEST_SUPABASE_ANON_KEY.');
+  fail('Set LOADTEST_MANIFEST or LOADTEST_SIGNIN_EMAIL (a seeded account), and LOADTEST_SUPABASE_ANON_KEY.');
 }
 if (!/^loadtest\+[a-z0-9-]+@example\.com$/.test(EMAIL)) {
   fail('LOADTEST_SIGNIN_EMAIL must be a seeded load-test account (loadtest+...@example.com).');
@@ -75,4 +79,9 @@ export default function (data) {
     },
   });
   sleep(Math.random() * 1.5 + 0.5);
+}
+
+// The JSON summary run-scale.mjs reads (setup_data left out).
+export function handleSummary(data) {
+  return plainSummary(data);
 }

@@ -351,6 +351,121 @@ const ev = (name, mk) => new Promise((res) => { const s = mk(); const t = setTim
     expect(teardown).not.toMatch(/array\[\$\{/);
   });
 
+  it('k6 runs only through run-scale.mjs: no script, workflow or document runs it bare', () => {
+    const offenders: string[] = [];
+    const runner = path.join(K6, 'run-scale.mjs');
+    // run-all.sh holds the one k6 run line, behind a gate (next test).
+    const runAll = path.join(K6, 'run-all.sh');
+    // Every file of the suite, the repository's scripts and workflows, and the docs.
+    const files = [
+      ...filesUnder(path.join(REPO_ROOT, 'load-tests'), [
+        '.js',
+        '.mjs',
+        '.cjs',
+        '.sh',
+        '.md',
+        '.json',
+      ]),
+      ...filesUnder(path.join(REPO_ROOT, 'scripts'), ['.sh', '.mjs', '.js', '.ts']),
+      ...filesUnder(path.join(REPO_ROOT, '.github'), ['.yml', '.yaml']),
+      ...filesUnder(path.join(REPO_ROOT, 'docs'), ['.md']),
+      path.join(REPO_ROOT, 'package.json'),
+      path.join(REPO_ROOT, 'apps', 'web', 'package.json'),
+    ].filter((f) => fs.existsSync(f));
+    for (const file of files) {
+      const src = fs.readFileSync(file, 'utf8');
+      // `k6 run <something>` or `k6 cloud <something>`: a command line.
+      if (file !== runAll && /(^|[\s"'`(;&|])k6\s+(run|cloud|archive)\s+[^\s`]/m.test(src))
+        offenders.push(`${rel(file)}: k6 run`);
+      if (
+        file !== runner &&
+        /\b(?:spawn|spawnSync|execFile|execFileSync|run)\(\s*['"`]k6['"`]/.test(src)
+      )
+        offenders.push(`${rel(file)}: starts k6`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('run-all.sh runs only when run-scale.mjs started it, and refuses otherwise', () => {
+    const runAll = path.join(K6, 'run-all.sh');
+    const src = fs.readFileSync(runAll, 'utf8');
+    // The gate comes before anything else the script does, and before k6.
+    const gate = src.indexOf('LOADTEST_RUNNER_PID');
+    const k6 = src.search(/^\s*if ! k6 run /m);
+    expect(gate).toBeGreaterThan(0);
+    expect(k6).toBeGreaterThan(gate);
+    expect(src.slice(0, src.indexOf('cd "$(dirname "$0")'))).toMatch(/exit 2\n\s*fi/);
+    // The one k6 command in the script is that line: none before the gate.
+    const code = src
+      .split('\n')
+      .filter((l) => !/^\s*#/.test(l))
+      .join('\n');
+    const k6Commands = [...code.matchAll(/(^|[\s;&|(`])k6\s+[a-z-]/gm)];
+    expect(k6Commands).toHaveLength(1);
+    expect(k6Commands[0]?.index ?? -1).toBeGreaterThan(code.indexOf('exit 2'));
+    // Bare, and with the variable forged by a parent that is not the runner.
+    for (const env of [{}, { LOADTEST_RUNNER_PID: String(process.pid) }]) {
+      const res = spawnSync(runAll, [], {
+        encoding: 'utf8',
+        env: { ...BARE_ENV, ...env, LOADTEST_MANIFEST: '/nonexistent' },
+      });
+      expect(res.status, JSON.stringify(env)).toBe(2);
+      expect(res.stderr).toMatch(/use load-tests\/k6\/run-scale\.mjs --scenario <name>/);
+      expect(res.stdout).not.toMatch(/Running/);
+    }
+    // The runner starts it as its own child, with its own process id.
+    const runner = codeOf(fs.readFileSync(path.join(K6, 'run-scale.mjs'), 'utf8'));
+    expect(runner).toMatch(/run\(join\(HERE, 'run-all\.sh'\), \[\]/);
+    expect(runner).toMatch(/LOADTEST_RUNNER_PID: String\(process\.pid\)/);
+  });
+
+  it.each(scenarioFiles.map((f) => [path.basename(f), f]))(
+    '%s writes the JSON summary the runner reads, without setup_data',
+    (_name, file) => {
+      const code = codeOf(fs.readFileSync(file, 'utf8'));
+      expect(code).toMatch(
+        /export function handleSummary\(data\)\s*\{\s*return (summarize|plainSummary)\(data\);/,
+      );
+    },
+  );
+
+  it('every outbound refusal is placed in its phase, after the last step and at shutdown too', async () => {
+    const o = await load<{
+      parseRefusals: (t: string) => Array<Record<string, unknown>>;
+      assignPhases: (
+        r: Array<Record<string, unknown>>,
+        p: Array<{ name: string; at: number }>,
+      ) => Array<{ phase: string }>;
+    }>('tools/outbound-phases.mjs');
+    const t0 = Date.parse('2026-11-17T10:00:00Z');
+    const phases = [
+      { name: 'start-up', at: t0 },
+      { name: 'seeding', at: t0 + 10_000 },
+      { name: 'step 5', at: t0 + 20_000 },
+      { name: 'after step 5', at: t0 + 80_000 },
+      { name: 'teardown', at: t0 + 90_000 },
+      { name: 'shutdown', at: t0 + 95_000 },
+    ];
+    const at = (ms: number) => new Date(t0 + ms).toISOString();
+    const log = [15_000, 30_000, 85_000, 92_000, 96_000]
+      .map((ms) => JSON.stringify({ at: at(ms), kind: 'fetch', target: 'http://192.0.2.1:8080' }))
+      .concat(['not json'])
+      .join('\n');
+    const placed = o.assignPhases(o.parseRefusals(log), phases);
+    expect(placed.map((r) => r.phase)).toEqual([
+      'seeding',
+      'step 5',
+      'after step 5',
+      'teardown',
+      'shutdown',
+      'unknown time',
+    ]);
+    const runner = codeOf(fs.readFileSync(path.join(K6, 'run-scale.mjs'), 'utf8'));
+    // The run-level check reads the whole log after the server has stopped.
+    expect(runner).toMatch(/mark\('shutdown'\);\s*await server\.stop\(\);/);
+    expect(runner).toMatch(/if \(refused\.length\) \{\s*code = 1;/);
+  });
+
   it('run-scale.mjs runs only a scenario of the suite', () => {
     for (const bad of [
       '../../../etc/x.js',

@@ -35,7 +35,7 @@
 // quiet (run-scale.mjs waits for it), or a write still being committed counts
 // as a fault.
 // Exits 1 when any check fails.
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 import { lit, parseArgs, psqlJson, readJson } from './local.mjs';
 
@@ -56,7 +56,10 @@ function unanswered(summary, write) {
 /** The adjust log lines in k6's console output: token -> { sign, answered status or null }. */
 function adjustLog(file) {
   const sent = new Map();
-  for (const line of readFileSync(file, 'utf8').split('\n')) {
+  // k6 writes no file when nothing was logged (a scenario with no adjusts).
+  // A missing log with adjusts answered still fails "adjust log is complete".
+  const text = existsSync(file) ? readFileSync(file, 'utf8') : '';
+  for (const line of text.split('\n')) {
     const m = /msg="((?:[^"\\]|\\.)*)"/.exec(line);
     if (!m || !m[1].includes('lt')) continue;
     let rec;

@@ -23,8 +23,11 @@
 // with an environment made only of the app env file plus PATH and HOME. It
 // refuses to start when the port is already taken, uses only the server it
 // started, and stops it at the end. The outbound guard refuses every
-// connection the server tries to make to anything but this machine; any
-// refusal fails the step.
+// connection the server tries to make to anything but this machine. Any
+// refusal fails the RUN, whenever it happens: in a step (which also stops the
+// ladder at once), while seeding, between steps, after the last step or while
+// the server shuts down. Each one is reported with its phase
+// (outbound-refusals.json and the report).
 //
 // It also refuses:
 //   - an apps/web/.env* file (other than *.example) in this checkout: Next.js
@@ -44,6 +47,10 @@
 //   --ladder a,b,c        concurrent people per step (default 25,50,100,250)
 //   --duration D          steady time per step, e.g. 3m (default 3m)
 //   --warmup D            one run at the first rate before the ladder, not reported (default 30s; 0 to skip)
+//   --all-scenarios       instead of a ladder: run-all.sh (the single-purpose
+//                         scenarios one after another, LOADTEST_ACTORS = the first
+//                         ladder value), then one data check over all of them.
+//                         run-all.sh refuses to run unless this runner started it.
 //   --scenario F          k6 scenario, a file in load-tests/k6/scenarios/
 //                         (default scenarios/10-roles-workload.js)
 //   --manifest M          reuse an organization seeded earlier instead of seeding
@@ -70,6 +77,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { isLoopbackUrl, localTarget } from './lib/safety.js';
+import { assignPhases, parseRefusals } from './tools/outbound-phases.mjs';
 import {
   isAppEnvFile,
   LIQUID_GLASS_VALUES,
@@ -211,13 +219,23 @@ async function startServer(target, appEnv, out) {
   child.on('exit', (code, signal) => {
     exited = signal || String(code);
   });
-  const stop = () => {
+  const kill = () => {
     if (exited === null) child.kill('SIGTERM');
   };
-  process.once('exit', stop);
+  /** Stops the server and waits until it has exited (SIGKILL after 20 s). */
+  const stop = () =>
+    new Promise((done) => {
+      if (exited !== null) return done();
+      child.once('exit', () => done());
+      child.kill('SIGTERM');
+      setTimeout(() => {
+        if (exited === null) child.kill('SIGKILL');
+      }, 20_000).unref();
+    });
+  process.once('exit', kill);
   for (const sig of ['SIGINT', 'SIGTERM'])
     process.once(sig, () => {
-      stop();
+      kill();
       process.exit(130);
     });
   const deadline = Date.now() + 120_000;
@@ -227,7 +245,7 @@ async function startServer(target, appEnv, out) {
     const res = await fetch(`${target.baseUrl}/signin`, { redirect: 'error' }).catch(() => null);
     if (res && res.status === 200) break;
     if (Date.now() > deadline) {
-      stop();
+      kill();
       throw new Error(
         `The app did not answer /signin within 120 s; see ${join(out, 'server.log')}.`,
       );
@@ -238,7 +256,7 @@ async function startServer(target, appEnv, out) {
   const family = familyOf(child.pid);
   const strangers = listeners(port).filter((pid) => !family.has(pid));
   if (strangers.length) {
-    stop();
+    kill();
     throw new Error(`Another process also listens on port ${port}; refusing to measure it.`);
   }
   return { stop, outboundLog, pid: child.pid };
@@ -318,6 +336,8 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   // Only the suite's own scenarios, before anything else.
   const scenario = scenarioFile(args.scenario);
+  if (args['all-scenarios'] && args.scenario)
+    throw new Error("--all-scenarios runs run-all.sh's list: give it or --scenario, not both.");
   // Every address, checked before anything connects.
   const target = localTarget(process.env);
   localSupabase();
@@ -345,16 +365,23 @@ async function main() {
   const out = resolve(String(args.out ?? join(HERE, '..', 'results', stamp)));
   mkdirSync(join(out, 'steps'), { recursive: true });
 
+  // Phases, for placing each outbound refusal (tools/outbound-phases.mjs).
+  const phases = [];
+  const mark = (name) => phases.push({ name, at: Date.now() });
+
   // The app: started here, under the outbound guard, and checked.
   console.log(`== starting the app (${target.baseUrl}, outbound guard on)`);
+  mark('start-up');
   const server = await startServer(target, appEnv, out);
+  let code = 1;
+  let error = null;
   try {
     await checkBuildIsLocal(target);
     if (refusals(server.outboundLog) > 0)
       throw new Error(
         `The app tried to reach outside this machine while starting; see ${server.outboundLog}.`,
       );
-    process.exitCode = await runLadder({
+    code = await runLadder({
       args,
       target,
       appEnv,
@@ -364,10 +391,32 @@ async function main() {
       warmup,
       out,
       server,
+      mark,
     });
+  } catch (e) {
+    error = e;
   } finally {
-    server.stop();
+    mark('shutdown');
+    await server.stop();
   }
+
+  // Every refusal the guard logged, from start-up to shutdown, fails the run.
+  const refused = assignPhases(parseRefusals(readFileSync(server.outboundLog, 'utf8')), phases);
+  writeFileSync(
+    join(out, 'outbound-refusals.json'),
+    JSON.stringify({ phases, refusals: refused }, null, 1),
+  );
+  if (refused.length) {
+    code = 1;
+    console.log(`\n!! the app tried to reach outside this machine ${refused.length} time(s):`);
+    for (const r of refused) console.log(`   ${r.phase}: ${r.kind} to ${r.target} at ${r.at}`);
+  }
+  if (error) throw error;
+
+  console.log('\n== report');
+  run('node', [join(TOOLS, 'report.mjs'), '--dir', out]);
+  console.log(`\nReport: ${join(out, 'report.md')}`);
+  process.exitCode = code;
 }
 
 async function runLadder({
@@ -380,9 +429,11 @@ async function runLadder({
   warmup,
   out,
   server,
+  mark,
 }) {
   const manifestPath = args.manifest ? resolve(String(args.manifest)) : join(out, 'manifest.json');
   if (!args.manifest) {
+    mark('seeding');
     const code = run('node', [
       join(TOOLS, 'seed.mjs'),
       '--items',
@@ -403,13 +454,19 @@ async function runLadder({
         label: args.label || null,
         baseUrl: target.baseUrl,
         server: 'started by run-scale.mjs from this worktree, outbound guard on',
-        liquidGlass: appEnv.NEXT_PUBLIC_LIQUID_GLASS,
+        // Baked into the build; the runner cannot tell which file the build
+        // used, so this is the value the app env file intends.
+        liquidGlass: {
+          intended: appEnv.NEXT_PUBLIC_LIQUID_GLASS,
+          note: 'NEXT_PUBLIC_LIQUID_GLASS is baked in at build time; this is the app env value the build was meant to use, not verified',
+        },
         organizationId: manifest.organizationId,
         items: manifest.scale.items,
         usersPerRole: manifest.scale.usersPerRole,
         ladder,
         duration,
-        warmup,
+        // --all-scenarios runs no warm-up.
+        warmup: args['all-scenarios'] ? '0s' : warmup,
         scenario: scenario.split('/load-tests/')[1] || scenario,
       },
       null,
@@ -428,9 +485,16 @@ async function runLadder({
       LOADTEST_WRITE_LOG: '1',
     });
 
+  if (args['all-scenarios']) {
+    const code = runAllScenarios({ args, manifestPath, ladder, duration, out, server, mark });
+    teardownAtEnd(args, manifestPath, mark);
+    return code;
+  }
+
   let failed = false;
   if (warmup !== '0' && warmup !== '0s') {
     console.log(`\n== warm-up: ${ladder[0]} actors for ${warmup} (not reported)`);
+    mark('warm-up');
     mkdirSync(join(out, 'warmup'), { recursive: true });
     const before = refusals(server.outboundLog);
     run('k6', ['run', '-q', '--console-output', join(out, 'warmup', 'k6-console.log'), scenario], {
@@ -448,6 +512,7 @@ async function runLadder({
     const dir = join(out, 'steps', String(actors));
     mkdirSync(dir, { recursive: true });
     console.log(`\n== step: ${actors} actors for ${duration}`);
+    mark(`step ${actors}`);
     const since = psql('select now();').trim();
     writeFileSync(join(dir, 'since.txt'), since);
     const refusedBefore = refusals(server.outboundLog);
@@ -476,6 +541,9 @@ async function runLadder({
     writeFileSync(join(dir, 'settled.txt'), String(waitForQuietDatabase()));
     const refused = refusals(server.outboundLog) - refusedBefore;
     writeFileSync(join(dir, 'outbound-refused.txt'), String(refused));
+    // From here (snapshot, correctness, the next step's start) the run-level
+    // check still counts every refusal.
+    mark(`after step ${actors}`);
     run('node', [join(TOOLS, 'pgstat.mjs'), 'snapshot', '--out', join(dir, 'pg-after.json')]);
     let correctnessOk = false;
     if (existsSync(join(dir, 'summary.json'))) {
@@ -526,19 +594,94 @@ async function runLadder({
     }
   }
 
-  console.log('\n== report');
-  run('node', [join(TOOLS, 'report.mjs'), '--dir', out]);
-  console.log(`\nReport: ${join(out, 'report.md')}`);
+  teardownAtEnd(args, manifestPath, mark);
+  return failed ? 1 : 0;
+}
 
+function teardownAtEnd(args, manifestPath, mark) {
   if (!args.keep && !args.manifest) {
     console.log('\n== teardown');
+    mark('teardown');
     run('node', [join(TOOLS, 'teardown.mjs'), '--manifest', manifestPath]);
   } else {
     console.log(
       `\nKept the organization. Remove it with: node --env-file=<env> ${join('load-tests', 'k6', 'tools', 'teardown.mjs')} --manifest ${manifestPath}`,
     );
   }
-  return failed ? 1 : 0;
+}
+
+/**
+ * --all-scenarios: run-all.sh, started by this process (it refuses any other
+ * parent), against the app this run started; then one data check over every
+ * scenario's answers, and the outbound count for the whole run.
+ */
+function runAllScenarios({ args, manifestPath, ladder, duration, out, server, mark }) {
+  const dir = join(out, 'scenarios');
+  mkdirSync(dir, { recursive: true });
+  console.log(`\n== single-purpose scenarios (run-all.sh), ${ladder[0]} actors, ${duration} each`);
+  mark('single-purpose scenarios');
+  const since = psql('select now();').trim();
+  const refusedBefore = refusals(server.outboundLog);
+  const code = run(join(HERE, 'run-all.sh'), [], {
+    env: childEnv({
+      LOADTEST_MANIFEST: manifestPath,
+      LOADTEST_ACTORS: String(ladder[0]),
+      LOADTEST_DURATION: duration,
+      LOADTEST_RESULTS_DIR: dir,
+      LOADTEST_WRITE_LOG: '1',
+      // What run-all.sh checks: this process is its parent.
+      LOADTEST_RUNNER_PID: String(process.pid),
+    }),
+  });
+  waitForQuietDatabase();
+  const refused = refusals(server.outboundLog) - refusedBefore;
+  mark('after single-purpose scenarios');
+  // One summary and one console log over all the scenarios, for the data check.
+  const files = readdirSync(dir);
+  const merged = { metrics: {} };
+  for (const f of files.filter((n) => n.endsWith('.json') && !n.endsWith('.export.json'))) {
+    const one = JSON.parse(readFileSync(join(dir, f), 'utf8'));
+    for (const [name, m] of Object.entries(one.metrics || {})) {
+      if (!m.values || typeof m.values.count !== 'number') continue;
+      merged.metrics[name] = merged.metrics[name] || { values: { count: 0 } };
+      merged.metrics[name].values.count += m.values.count;
+    }
+  }
+  writeFileSync(join(out, 'summary-all.json'), JSON.stringify(merged, null, 1));
+  writeFileSync(
+    join(out, 'k6-console-all.log'),
+    files
+      .filter((n) => n.endsWith('.console'))
+      .map((n) => readFileSync(join(dir, n), 'utf8'))
+      .join('\n'),
+  );
+  console.log('-- correctness over every scenario');
+  const correctnessOk =
+    run('node', [
+      join(TOOLS, 'check-correctness.mjs'),
+      '--manifest',
+      manifestPath,
+      '--summary',
+      join(out, 'summary-all.json'),
+      '--console',
+      join(out, 'k6-console-all.log'),
+      '--since',
+      since,
+      '--out',
+      join(out, 'correctness-all.json'),
+    ]) === 0;
+  writeFileSync(
+    join(out, 'single-purpose.json'),
+    JSON.stringify({ runAllExit: code, correctnessOk, outboundRefused: refused }, null, 1),
+  );
+  if (code !== 0)
+    console.log(`!! run-all.sh exited ${code}: a scenario failed a threshold or stopped.`);
+  if (refused > 0)
+    console.log(
+      `!! the app tried to reach outside this machine ${refused} time(s) during the scenarios.`,
+    );
+  if (!correctnessOk) console.log('!! the data check after the scenarios failed.');
+  return code === 0 && correctnessOk && refused === 0 ? 0 : 1;
 }
 
 main().catch((e) => {

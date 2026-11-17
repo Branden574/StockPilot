@@ -17,15 +17,15 @@
 // DEFAULT_STAGES caps at 50, which doesn't push hard enough to find
 // the ceiling).
 //
-// Run:
-//   LOADTEST_BASE_URL=http://127.0.0.1:3600 k6 run \
-//     load-tests/k6/scenarios/99-capacity-anon.js \
-//     --summary-export=load-tests/results/99-capacity-anon.json
+// Run it through the runner (it starts the app under the outbound guard):
+//   node --env-file=<loadtest env> load-tests/k6/run-scale.mjs --app-env <app env> \
+//     --scenario scenarios/99-capacity-anon.js --ladder 1 --warmup 0
 
 import http from 'k6/http';
 import { check, sleep, group } from 'k6';
 import { Trend, Counter, Rate } from 'k6/metrics';
 
+import { plainSummary } from '../lib/plain-summary.js';
 import { assertRequestUrl, localTarget } from '../lib/safety.js';
 
 const BASE_URL = localTarget(__ENV, { needSupabase: false }).baseUrl;
@@ -137,4 +137,9 @@ function checkResult(r, label) {
     [`${label} 2xx`]: () => isOk,
     [`${label} body present`]: () => r.body && r.body.length > 100,
   });
+}
+
+// The JSON summary run-scale.mjs reads (setup_data left out).
+export function handleSummary(data) {
+  return plainSummary(data);
 }

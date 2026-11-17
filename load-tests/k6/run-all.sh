@@ -1,19 +1,27 @@
 #!/usr/bin/env bash
-# Run the single-purpose k6 scenarios one after another against a LOCAL app.
+# The single-purpose k6 scenarios, one after another. It runs ONLY inside
+# run-scale.mjs, which starts the built app itself under the outbound guard
+# with the clean app env, seeds the organization the scenarios read, sets
+# LOADTEST_MANIFEST and the other LOADTEST_* settings, then starts this script
+# and checks the data afterwards:
 #
-# For a measured ladder with seeding, database snapshots, a correctness check
-# and a report, use run-scale.mjs instead (see load-tests/README.md).
+#   node --env-file=<loadtest env file> load-tests/k6/run-scale.mjs \
+#     --app-env <app env file> --all-scenarios
 #
-# Needs the same environment as run-scale.mjs (an env file outside the
-# repository, loaded without printing) plus LOADTEST_MANIFEST, the manifest of
-# an organization seeded with tools/seed.mjs:
-#
-#   set -a; . <loadtest env file>; set +a
-#   LOADTEST_MANIFEST=<manifest.json> ./load-tests/k6/run-all.sh
-#
-# Every scenario refuses an address that is not this machine (lib/safety.js)
-# in its first lines, before any request.
+# Started any other way it refuses: no scenario runs against an app started
+# by hand (06 places orders, and a hand-started app could send their email).
+# Every scenario also refuses an address that is not this machine
+# (lib/safety.js) in its first lines, before any request.
 set -u
+
+# Only the runner: it sets LOADTEST_RUNNER_PID to its own process id and is
+# this script's parent.
+runner_cmd="$(ps -o command= -p "$PPID" 2>/dev/null || true)"
+if [ -z "${LOADTEST_RUNNER_PID:-}" ] || [ "${LOADTEST_RUNNER_PID}" != "$PPID" ] ||
+  [[ "$runner_cmd" != *"load-tests/k6/run-scale.mjs"* ]]; then
+  echo "use load-tests/k6/run-scale.mjs --scenario <name> (or --all-scenarios): run-all.sh runs only inside the runner, which starts the app under the outbound guard." >&2
+  exit 2
+fi
 
 cd "$(dirname "$0")/../.." || exit 1
 
@@ -22,7 +30,8 @@ if [ -z "${LOADTEST_MANIFEST:-}" ]; then
   exit 1
 fi
 
-mkdir -p load-tests/results
+results="${LOADTEST_RESULTS_DIR:-load-tests/results}"
+mkdir -p "$results"
 ts="$(date +%Y%m%d-%H%M%S)"
 
 scenarios=(
@@ -37,10 +46,11 @@ scenarios=(
 status=0
 for name in "${scenarios[@]}"; do
   script="load-tests/k6/scenarios/${name}.js"
-  out="load-tests/results/${name}-${ts}.json"
+  out="${results}/${name}-${ts}.json"
   echo "----"
   echo "Running $script"
-  export K6_NO_USAGE_REPORT=true LOADTEST_SUMMARY_OUT="$out"
+  # K6_CONSOLE_OUTPUT: each adjust's token log, for the runner's data check.
+  export K6_NO_USAGE_REPORT=true LOADTEST_SUMMARY_OUT="$out" K6_CONSOLE_OUTPUT="$out.console"
   if ! k6 run --summary-export "$out.export" "$script"; then
     echo "  (scenario $name failed a threshold or stopped)"
     status=1
@@ -48,5 +58,5 @@ for name in "${scenarios[@]}"; do
 done
 
 echo "----"
-echo "Done. Summaries in load-tests/results/"
+echo "Done. Summaries in ${results}/"
 exit "$status"

@@ -26,8 +26,12 @@ gate.
      environment made only of the app env file plus `PATH` and `HOME`. It
      refuses a port that is already taken and stops the app at the end.
    - The outbound guard refuses every connection the server tries to make to
-     anything but this machine (every TCP and TLS socket, and `fetch`), logs it,
-     and any refusal fails the step. **This is what stops services that need
+     anything but this machine (every TCP and TLS socket, and `fetch`) and logs
+     it. Any refusal fails the run, whenever it happens: in a step (the ladder
+     stops at once), while seeding, between steps, after the last step, or
+     while the server shuts down (late work it finishes after answering, such
+     as email or push). Each one is listed with its phase in the report and in
+     `outbound-refusals.json`. **This is what stops services that need
      no key**: Expo push, Google Books and UPCitemdb lookups, the PostHog
      ingest proxy, and integrations whose credentials are stored in the
      database. Empty keys alone do not stop those.
@@ -35,6 +39,10 @@ gate.
      outside-service key the app reads (email, AI, book lookups, payments,
      analytics, maps, accounting, push, error webhooks, hosting) to empty, so
      none can come from a checkout file (`k6/tools/app-env.mjs`).
+   - Every scenario runs through `run-scale.mjs` (`--scenario`, or
+     `--all-scenarios` for `run-all.sh`'s list). `run-all.sh` refuses to run
+     unless the runner started it: no scenario runs against an app started by
+     hand.
    - Build only in a worktree with **no `apps/web/.env*` file** (Next.js reads
      those, and a checkout's file may hold real keys); `run-scale.mjs` refuses
      a checkout that has one, and an app whose Content-Security-Policy names a
@@ -116,6 +124,7 @@ of the ladder, check the data after each step, write `report.md` and
 | Option | Default | Meaning |
 |---|---|---|
 | `--app-env` | | The app env file `local-env.mjs` wrote (required) |
+| `--all-scenarios` | | Run `run-all.sh`'s scenarios one after another (the first `--ladder` value as actors) instead of a ladder, then one data check over all of them |
 | `--items` | 1000 | Items to seed: 1,000 / 10,001 / 50,000 are the scale points |
 | `--users-per-role` | 20 | Accounts per role; 40-50 for the 250 step so per-person limits are not the bottleneck |
 | `--ladder` | 25,50,100,250 | Concurrent people per step |
@@ -266,13 +275,17 @@ counts before, after and the sampled peak, and the correctness result.
 
 ## Single-purpose scenarios
 
-All need the same environment plus `LOADTEST_MANIFEST` (a seeded
-organization's manifest) except 01, 99 and 99b, which are signed out.
+Every one runs through `run-scale.mjs --scenario`, which starts the app under
+the outbound guard with the clean app env, seeds the organization the
+scenario reads (`LOADTEST_MANIFEST`), checks the data and tears down. There is
+no `k6 run` against an app started by hand: 06 places orders, and a
+hand-started app could send their email. 01, 02, 99 and 99b set their own
+stages, so give them `--ladder 1`.
 
 | # | File | What it does | Auth |
 |---|------|--------------|------|
 | 01 | `01-anon-marketing.js` | `/` and `/pricing` | none |
-| 02 | `02-signin.js` | local Supabase `/auth/v1/token` password grant for one seeded account (`LOADTEST_SIGNIN_EMAIL`; `setup()` derives its password) | n/a |
+| 02 | `02-signin.js` | local Supabase `/auth/v1/token` password grant for the first seeded staff account (`setup()` derives its password) | n/a |
 | 03 | `03-inventory-list.js` | items list pages, filters, low stock (staff, managers) | cookie |
 | 04 | `04-search-palette.js` | `/api/search` spread over every staff, viewer and manager account | cookie |
 | 05 | `05-item-detail.js` | item pages | cookie |
@@ -283,17 +296,15 @@ organization's manifest) except 01, 99 and 99b, which are signed out.
 | 99b | `99b-sustained-250.js` | 250 signed-out VUs for 2 minutes | none |
 
 ```bash
-set -a; . "$STACK/loadtest.env"; set +a
-LOADTEST_MANIFEST=/tmp/lt/manifest.json LOADTEST_ACTORS=25 LOADTEST_DURATION=2m \
-  k6 run --no-usage-report load-tests/k6/scenarios/03-inventory-list.js
-LOADTEST_MANIFEST=/tmp/lt/manifest.json ./load-tests/k6/run-all.sh   # 01 and 03-07 in a row
+node --env-file="$STACK/loadtest.env" load-tests/k6/run-scale.mjs --app-env "$STACK/app.env" \
+  --scenario scenarios/03-inventory-list.js --ladder 25 --duration 2m --warmup 0
+node --env-file="$STACK/loadtest.env" load-tests/k6/run-scale.mjs --app-env "$STACK/app.env" \
+  --scenario scenarios/99b-sustained-250.js --ladder 1 --warmup 0
+node --env-file="$STACK/loadtest.env" load-tests/k6/run-scale.mjs --app-env "$STACK/app.env" \
+  --all-scenarios --ladder 10 --duration 1m   # run-all.sh's list (01, 03-07) in a row, then one data check
 ```
 
-Run them against a stack you can throw away: 06 writes. They need the app
-running already; started by hand it has no outbound guard, so for a measured
-run use `run-scale.mjs --scenario`, which starts the app under the guard. To
-start it by hand anyway, from `apps/web` in a clean worktree:
-`env -i PATH="$PATH" HOME="$HOME" bash -c 'set -a; . "$STACK/app.env"; set +a; exec node --require ../../load-tests/k6/tools/outbound-guard.cjs node_modules/next/dist/bin/next start -p 3600 -H 127.0.0.1'`.
+Run them against a stack you can throw away: 06 writes.
 
 ---
 
@@ -308,8 +319,9 @@ are the suite's proof runs (10 accounts per role, 2 minutes per step, after a
 k6). The first two rows ran on a build without `NEXT_PUBLIC_LIQUID_GLASS`
 (read as `off`) and a server started by hand; the next two on a build pinned to
 `opt-in`, served by `run-scale.mjs` under the outbound guard, on a freshly
-started stack. Their p95 times are higher; what makes the difference was not
-measured. The 25 row is from an earlier version of the runner: its
+started stack; their p95 times are higher. A later 5-actor run of that same
+`opt-in` build (row 5) measured times close to the first rows, so the flag is
+not the likely cause; what made the difference was not measured. The 25 row is from an earlier version of the runner: its
 requests/s counted the `setup()` sign-ins in the step time, and its write p95
 included the viewer's refused writes and the resends.
 
@@ -319,6 +331,7 @@ included the viewer's refused writes and the resends.
 | 1,000 items | 10 | 2.8 | 0 / 296 | 190 | 138 | 153 | 0.00% | pass | unset (off) | main d565102a7 | 2026-11-17 |
 | 1,000 items | 5 | 1.4 | 0 / 144 | 1073 | 352 | 671 | 0.00% | pass | opt-in | main d565102a7 | 2026-11-17 |
 | 1,000 items | 10 | 2.7 | 0 / 296 | 574 | 442 | 431 | 0.00% | pass | opt-in | main d565102a7 | 2026-11-17 |
+| 1,000 items | 5 | 1.3 | 0 / 144 | 259 | 168 | 136 | 0.00% | pass | opt-in | main d565102a7 | 2026-11-17 |
 | 1,000 items | 25 | (5.3) | | 1480 | 779 | (905) | 0.00% | pass | unset (off) | main d565102a7 | 2026-11-17 |
 | 10,001 items | 25-250 | | | | | | | | | | |
 | 50,000 items | 25-250 | | | | | | | | | | |

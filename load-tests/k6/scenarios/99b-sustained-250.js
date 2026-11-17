@@ -5,10 +5,13 @@
 // right answer there). LOCAL ONLY: the address must be this machine
 // (lib/safety.js) and there is no default.
 //
-//   LOADTEST_BASE_URL=http://127.0.0.1:3600 k6 run load-tests/k6/scenarios/99b-sustained-250.js
+// Run it through the runner (it starts the app under the outbound guard):
+//   node --env-file=<loadtest env> load-tests/k6/run-scale.mjs --app-env <app env> \
+//     --scenario scenarios/99b-sustained-250.js --ladder 1 --warmup 0
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 
+import { plainSummary } from '../lib/plain-summary.js';
 import { assertRequestUrl, localTarget } from '../lib/safety.js';
 
 const BASE_URL = localTarget(__ENV, { needSupabase: false }).baseUrl;
@@ -51,4 +54,9 @@ export default function () {
     });
   }
   sleep(Math.random() * 0.4 + 0.1);
+}
+
+// The JSON summary run-scale.mjs reads (setup_data left out).
+export function handleSummary(data) {
+  return plainSummary(data);
 }

@@ -147,6 +147,10 @@ function stepReport(dir, name) {
       };
     }
   }
+  // Scenarios not built on lib/workload.js keep no per-kind counts: use
+  // every request k6 sent (they have no setup() sign-ins).
+  if (appRequests === 0 && summary.metrics.http_reqs)
+    appRequests = summary.metrics.http_reqs.values.count;
   let db = null;
   if (before && after) {
     const delta = statementDelta(before, after);
@@ -223,16 +227,43 @@ function stepReport(dir, name) {
   };
 }
 
-function markdown(run, steps) {
+function liquidGlassText(v) {
+  if (v && typeof v === 'object')
+    return `${v.intended} intended (baked in at build time; the build's own value is not verified)`;
+  return v ?? 'not recorded';
+}
+
+function markdown(run, steps, outbound) {
   const L = [];
   L.push(`# Load test report: ${run.label || run.startedAt}`, '');
   L.push(
     `Local only. App ${run.baseUrl}, database on this machine. Seeded ${run.items} items, ${run.usersPerRole} accounts per role` +
       ` (organization ${run.organizationId}). Each step ran ${run.duration}` +
       `${run.warmup && !/^0s?$/.test(run.warmup) ? `, after one ${run.warmup} warm-up run that is not reported` : ''}.` +
-      ` The app was ${run.server || 'started by hand'}; NEXT_PUBLIC_LIQUID_GLASS=${run.liquidGlass ?? 'not recorded'}.`,
+      ` The app was ${run.server || 'started by hand'}; NEXT_PUBLIC_LIQUID_GLASS ${liquidGlassText(run.liquidGlass)}.`,
     '',
   );
+  if (outbound) {
+    const n = outbound.refusals.length;
+    L.push(
+      n
+        ? `**The run FAILED its outbound check: the app tried to reach outside this machine ${n} time(s), each refused:**`
+        : 'Outbound check: the app tried no connection off this machine, in any phase (start-up to shutdown).',
+      '',
+    );
+    for (const r of outbound.refusals)
+      L.push(`- ${r.phase}: ${r.kind} to \`${r.target}\` at ${r.at}`);
+    if (n) L.push('');
+  }
+  if (run.singlePurpose) {
+    const sp = run.singlePurpose;
+    L.push(
+      `Single-purpose scenarios (run-all.sh, started by the runner): run-all.sh exit ${sp.runAllExit}, ` +
+        `data check ${sp.correctnessOk ? 'pass' : 'FAIL'}, outbound refused ${sp.outboundRefused}. ` +
+        'Per-scenario summaries are in scenarios/, the data check in correctness-all.json.',
+      '',
+    );
+  }
   L.push('## Summary', '');
   L.push(
     '| actors | requests | req/s | dropped / planned | failed | checks | ssr p95 | api p95 | write p95 | unanswered writes | outbound refused | PostgREST stmts/req | peak conns | correctness | k6 exit |',
@@ -343,6 +374,8 @@ function main() {
   const dir = args.dir;
   if (!dir) throw new Error('--dir is required');
   const run = JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8'));
+  if (existsSync(join(dir, 'single-purpose.json')))
+    run.singlePurpose = JSON.parse(readFileSync(join(dir, 'single-purpose.json'), 'utf8'));
   const stepDir = join(dir, 'steps');
   const names = existsSync(stepDir)
     ? readdirSync(stepDir)
@@ -350,8 +383,11 @@ function main() {
         .sort((a, b) => Number(a) - Number(b))
     : [];
   const steps = names.map((n) => stepReport(join(stepDir, n), n));
-  writeFileSync(join(dir, 'report.json'), JSON.stringify({ run, steps }, null, 1));
-  const md = markdown(run, steps);
+  const outbound = existsSync(join(dir, 'outbound-refusals.json'))
+    ? JSON.parse(readFileSync(join(dir, 'outbound-refusals.json'), 'utf8'))
+    : null;
+  writeFileSync(join(dir, 'report.json'), JSON.stringify({ run, steps, outbound }, null, 1));
+  const md = markdown(run, steps, outbound);
   writeFileSync(join(dir, 'report.md'), md);
   const parts = md.split('\n## ');
   console.log([parts[0], parts[1]].filter(Boolean).join('\n## '));

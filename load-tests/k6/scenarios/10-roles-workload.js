@@ -10,12 +10,10 @@
 // refused; the one-warehouse staff probe the other warehouse and must see
 // nothing of it.
 //
-// LOCAL ONLY. Run it through run-scale.sh, which seeds, runs a ladder of
-// rates and writes the report. By hand:
-//   LOADTEST_BASE_URL=http://127.0.0.1:3600 LOADTEST_SUPABASE_URL=http://127.0.0.1:58421 \
-//   LOADTEST_SUPABASE_ANON_KEY=... LOADTEST_SUPABASE_SERVICE_ROLE_KEY=... \
-//   LOADTEST_MANIFEST=<seeder manifest> LOADTEST_ACTORS=25 LOADTEST_DURATION=2m \
-//     k6 run load-tests/k6/scenarios/10-roles-workload.js
+// LOCAL ONLY. Run it through run-scale.mjs (its default scenario), which
+// starts the app under the outbound guard, seeds, runs a ladder of rates and
+// writes the report:
+//   node --env-file=<loadtest env> load-tests/k6/run-scale.mjs --app-env <app env> --ladder 25,50
 import { localTarget } from '../lib/safety.js';
 import {
   buildOptions,
