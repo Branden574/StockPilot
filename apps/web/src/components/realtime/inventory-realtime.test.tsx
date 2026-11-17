@@ -872,8 +872,67 @@ describe('InventoryRealtime: leaving Place an Order while a refresh waits', () =
         h.pathname.value = to;
         view.rerender(<InventoryRealtime organizationId="org-1" />);
       },
+      unmount: () => view.unmount(),
     };
   }
+
+  // A page where realtime is off unmounts the subscription: the waiting
+  // event refreshes once on the way out instead of being lost.
+  it('to a page where realtime is off (Settings): exactly one router.refresh(), at once', async () => {
+    const { onItem, navigate } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    onItem(ORDINARY('r-1'));
+    await vi.advanceTimersByTimeAsync(500);
+    await act(async () => navigate('/dashboard/settings'));
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).not.toHaveBeenCalled();
+  });
+
+  it('unmounted while an ordinary event waits: exactly one router.refresh()', async () => {
+    const { onItem, unmount } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    onItem(ORDINARY('u-1'));
+    onItem(ORDINARY('u-2'));
+    unmount();
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(h.revalidate).not.toHaveBeenCalled();
+  });
+
+  it('a normal unmount with nothing waiting refreshes nothing', async () => {
+    const { unmount } = await mountAt('/dashboard/orders/new');
+    unmount();
+    expect(h.refresh).not.toHaveBeenCalled();
+    expect(h.revalidate).not.toHaveBeenCalled();
+  });
+
+  it('nothing more on unmount once the wait has refreshed, or when only a visibility-only event waits', async () => {
+    const { onItem, unmount } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    onItem(ORDINARY('d-1'));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    onItem(HIDE({ commit_timestamp: 'd-2' }));
+    unmount();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('a hidden tab unmounted while an event waits does no work', async () => {
+    const { onItem, unmount } = await mountAt('/dashboard/orders/new');
+    vi.useFakeTimers();
+    setVisibility('hidden');
+    onItem(ORDINARY('x-1'));
+    unmount();
+    expect(h.refresh).not.toHaveBeenCalled();
+    expect(h.revalidate).not.toHaveBeenCalled();
+  });
 
   it('an ordinary event, then Back to Items: the action runs for Items when the wait ends', async () => {
     const { onItem, navigate } = await mountAt('/dashboard/orders/new');

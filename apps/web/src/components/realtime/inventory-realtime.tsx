@@ -193,7 +193,9 @@ function visibilityRefreshWaits(pathname: string | null | undefined): boolean {
 // every open storefront tab. The wait spreads the tabs out, so when a write
 // expired the catalog one tab rebuilds it and the others read that entry. If
 // the tab has left Place an Order by the time the refresh starts, the waiting
-// ordinary event takes the new page's own path (the action), never dropped.
+// ordinary event takes the new page's own path (the action), never dropped; if
+// the listener unmounts first (a page where realtime is off), it refreshes
+// once on the way out.
 
 /** Whether an ordinary event on this page is a delayed router.refresh()
  *  instead of the action (the storefront). */
@@ -507,6 +509,16 @@ export function InventoryRealtime({
       cleanup.push(() => {
         if (waitTimer) clearTimeout(waitTimer);
         waitTimer = null;
+        // The listener is going away (the tab moved to a page where realtime
+        // is off: Settings, Reports, Team...; or the organization changed)
+        // while an ordinary event from Place an Order still waited. Refresh
+        // once now, or the event is lost: the page being shown, and any page
+        // later restored from the client router cache, would keep the stock
+        // from before the change. A hidden tab still does no work.
+        if (ordinaryWaiting) {
+          ordinaryWaiting = false;
+          if (!isHidden()) router.refresh();
+        }
       });
 
       function onChange(payload?: { commit_timestamp?: unknown }) {
