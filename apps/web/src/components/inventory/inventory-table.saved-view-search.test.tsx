@@ -115,7 +115,6 @@ function row(over: Partial<InstantDatasetItem> & { id: string; name: string }): 
     quantity_on_hand: 10,
     reorder_point: 0,
     unit_cost: 2,
-    retail_price: 5,
     category_id: null,
     charter_id: null,
     primary_location_id: null,

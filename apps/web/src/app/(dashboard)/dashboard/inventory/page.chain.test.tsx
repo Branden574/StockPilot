@@ -1368,3 +1368,78 @@ describe('Items page: classic parity of its own markup', () => {
     await expect(classicMarkup(container)).toMatchFileSnapshot('./__parity__/items-page.html');
   });
 });
+
+/**
+ * The table receives only the columns it reads, and a manager's full dataset
+ * travels packed (lib/inventory/client-row.ts). A page that hands the table
+ * whole loader rows, or the dataset unpacked, fails here.
+ */
+describe('Items page: the table receives reduced rows and a packed dataset', () => {
+  const WIDE_ROW = {
+    ...ROW,
+    description: 'A long description the list never shows',
+    supplier_id: 'sup-1',
+    created_by: 'u-9',
+    custom_fields: { author: 'Someone', rack_number: '12', rack_row: 'B' },
+  };
+  const UNREAD = ['description', 'supplier_id', 'created_by'];
+
+  function expectReduced(rows: Array<Record<string, unknown>>) {
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) {
+      for (const k of UNREAD) expect(r).not.toHaveProperty(k);
+      expect(r.custom_fields).toEqual({ rack_number: '12', rack_row: 'B' });
+    }
+  }
+
+  function expectPacked(items: unknown) {
+    const packed = items as { packed?: string; fields?: string[]; values?: unknown[][] };
+    expect(packed.packed).toBe('inventory-rows-v1');
+    expect(packed.values).toHaveLength(1);
+    for (const k of UNREAD) expect(packed.fields).not.toContain(k);
+  }
+
+  it('manager, default view: the page rows are reduced and the streamed dataset is packed', async () => {
+    m.loadInventoryList.mockImplementation(async () => ({
+      items: [WIDE_ROW],
+      total: 1,
+      valueOnHand: 10,
+      ...LOOKUPS,
+      trends: {},
+      placement: {},
+      expectedCount: 0,
+    }));
+    h.datasetGate = Promise.resolve({ items: [WIDE_ROW], placement: {} });
+    render(await callPage());
+    const props = m.tableProps.mock.calls[0]![0] as {
+      items: Array<Record<string, unknown>>;
+      instantPromise: Promise<{ items: unknown } | null>;
+    };
+    expectReduced(props.items);
+    const payload = await props.instantPromise;
+    expectPacked(payload!.items);
+  });
+
+  it('manager, a deep link: the awaited dataset is packed and the page rows are reduced', async () => {
+    h.datasetGate = Promise.resolve({ items: [WIDE_ROW], placement: {} });
+    render(await callPage({ sort: 'name_asc' }));
+    const props = m.tableProps.mock.calls[0]![0] as {
+      items: Array<Record<string, unknown>>;
+      instant: { items: unknown };
+    };
+    expectPacked(props.instant.items);
+    expectReduced(props.items);
+  });
+
+  it('staff, live path: the page rows are reduced', async () => {
+    h.role = 'staff';
+    m.inventoryList.mockImplementation(async () => ({
+      items: [WIDE_ROW],
+      total: 1,
+      valueOnHand: 10,
+    }));
+    render(await callPage());
+    const props = m.tableProps.mock.calls[0]![0] as { items: Array<Record<string, unknown>> };
+    expectReduced(props.items);
+  });
+});

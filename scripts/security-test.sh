@@ -928,6 +928,24 @@ PGTAP_TESTS=(
   # two-session proof is scripts/db-concurrency/0467_app_row_race.sh; the lock
   # footprint is scripts/db-concurrency/0467_migration_lock_footprint.sh.
   supabase/tests/0467_role_and_sign_in_policy_changes_recorded_by_database.test.sql
+  # 0470: the inventory list's value total runs as the caller (SECURITY
+  # INVOKER), so row level security bounds it: a member of one organization
+  # asking for another's id, a staff member naming a warehouse they cannot
+  # read, and a viewer naming a category they are not granted all get 0;
+  # anon may execute neither function.
+  supabase/tests/0470_inventory_list_totals_in_database.test.sql
+  # When a scheduled job last started each organization (0469): one row per
+  # job and organization, RLS on with no policy, no privilege for anon or
+  # authenticated (a signed-in owner cannot read or write it), service_role
+  # only, and the rows go with the organization.
+  supabase/tests/0469_cron_sweep_attempts.test.sql
+  # The request context reads the caller's own rows by index (0471): the same
+  # answer as 0413's body for every kind of caller (several organizations, an
+  # invitation not accepted, a disabled account, live and expired Act-as
+  # seats, no profile, nobody signed in), row level security still deciding
+  # (an expired seat and a disabled account hidden), invoker rights, no anon
+  # EXECUTE, and a change seen on the next call.
+  supabase/tests/0471_request_context_reads_by_index.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -937,6 +955,16 @@ PGTAP_TESTS=(
 # MANIFEST 2 — apps/web vitest, paths relative to apps/web/
 # ═══════════════════════════════════════════════════════════════════════════
 WEB_TESTS=(
+  # The request context is asked once per page load and again on every new
+  # request: a role change, a removal or an override bites on the next one,
+  # in a page load and in a Server Action (nothing is kept across requests).
+  src/lib/auth/request-context.calls-per-request.test.ts
+
+  # 0470: the inventory list's value total takes the list's own scope (the
+  # caller's readable warehouses, a chosen warehouse only for a manager, a
+  # viewer's category grants) and every row filter; a filter added later
+  # cannot be left out of it (the drift guard).
+  src/server/services/inventory.list-value-filters.test.ts
   # Storage path traversal (HI-8) and upload content verification.
   src/lib/storage-path.test.ts
   src/server/services/storage-path-traversal.test.ts
@@ -1813,6 +1841,10 @@ WEB_TESTS=(
   src/server/services/order-storefront.test.ts
   src/server/loaders/orders-phone-catalog.test.ts
   src/server/loaders/orders-new-catalog.test.ts
+  # The realtime watcher's Server Action expires the Items/Books list caches
+  # of the SESSION's organization only (never one the client names), and only
+  # for a caller whose pages read them (manager and above with items:read).
+  src/server/actions/revalidate-inventory-view.test.ts
   src/server/loaders/orders-kits.test.ts
   src/server/loaders/orders-frequently-ordered.test.ts
 

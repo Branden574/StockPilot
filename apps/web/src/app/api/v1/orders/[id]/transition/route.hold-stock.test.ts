@@ -87,7 +87,9 @@ describe('POST /api/v1/orders/[id]/transition — hold_stock', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ hold });
     expect(stub.rpcCalls).toEqual([{ name: 'hold_order_stock', args: { p_order_id: ORDER } }]);
-    expect(revalidateTag).toHaveBeenCalledWith('orders-new-v2-catalog', 'max');
+    // The hold answers no order row: the caller's organization's catalog,
+    // expired now; never every organization's.
+    expect(vi.mocked(revalidateTag).mock.calls).toEqual([['orders-new-v2-catalog:o1', { expire: 0 }]]);
   });
 
   // Every raise string, from the database's words to the phone's.

@@ -38,6 +38,16 @@ const ENTRY_IDS = [
   CATEGORY_ENTRY,
 ];
 const CONNECTION_SCHEDULE_ID = 'connection-and-schedule-messages-2026-11';
+// Added by docs/releases-low-critical-pages (2026-11-18): the Low + critical pages and list value release (whoever can read items: every role by default), published later, at the top, below the Liquid Glass draft.
+const LOW_CRITICAL_ID = 'low-critical-pages-and-list-value-2026-11';
+const LOW_CRITICAL_AT = '2026-11-18T10:00:00Z';
+const lowCriticalRead = {
+  release_id: LOW_CRITICAL_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-18T10:01:00Z',
+  read_at: '2026-11-18T10:01:00Z',
+};
 const DELETE_CONFIRM_ID = 'delete-account-confirm-2026-11';
 const PUBLISHED_AT = '2026-11-16T12:33:00Z';
 const LIVE_595 = '2026-11-16T12:10:47Z';
@@ -99,29 +109,38 @@ function readerText(r: Release): string[] {
 }
 
 describe('the emptied fields and schedule completion release: order, status and date', () => {
-  it('is published once, as revision 1, directly below the Liquid Glass draft and above the Integrations and schedule event release, the newest published release', () => {
+  // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: directly below the Liquid Glass draft, the newest published release): the Low + critical pages and list value release is published later, at the top, directly below the Liquid Glass draft.
+  it('is published once, as revision 1, directly below the Low + critical pages and list value release (published later, below the Liquid Glass draft at the top) and above the Integrations and schedule event release', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
-    expect(RELEASES.slice(0, 4).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES.slice(0, 4)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    expect(RELEASES.slice(0, 5).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, directly below the Liquid Glass draft.
+      [LOW_CRITICAL_ID, 'published'],
       [ID, 'published'],
       [CONNECTION_SCHEDULE_ID, 'published'],
       [DELETE_CONFIRM_ID, 'published'],
     ]);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: ID): the Low + critical pages and list value release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(LOW_CRITICAL_ID);
   });
 
-  it('is dated on a whole minute after #595 and #597 went live, in the past, with the draft placeholder at the same minute and every release below it older', () => {
+  // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: with the draft placeholder at the same minute): the placeholder moved to the minute of the Low + critical pages and list value release, published later, above this one.
+  it('is dated on a whole minute after #595 and #597 went live, in the past, with the draft placeholder at or after it and every release below it older', () => {
     expect(release().publishedAt).toBe(PUBLISHED_AT);
     const at = Date.parse(release().publishedAt);
     expect(at % 60_000).toBe(0);
     expect(at).toBeGreaterThan(Date.parse(LIVE_595));
     expect(at).toBeGreaterThan(Date.parse(LIVE_597));
     expect(at).toBeLessThanOrEqual(Date.now());
-    expect(RELEASES[0]!.publishedAt).toBe(release().publishedAt);
-    for (const r of RELEASES.slice(2)) {
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES[0].publishedAt equal to this release's): the placeholder is the minute of the Low + critical pages and list value release, published later, above this one.
+    expect(RELEASES[0]!.publishedAt).toBe(LOW_CRITICAL_AT);
+    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES.slice(2)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(3)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -317,12 +336,15 @@ describe('the emptied fields and schedule completion release: who is told', () =
       [locationsOnly, DELETE_CONFIRM_ID],
       [categoriesOnly, DELETE_CONFIRM_ID],
     ];
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: nothing read, and [read]): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (owners, admins, managers, staff and viewers by default), so each reads it first, and every notice this test checks is the one it checked before.
     for (const [v, after] of next) {
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
-      expect(buildReleaseList(RELEASES, v, [read], null).latestUnread?.id, v.role).toBe(after);
+      expect(buildReleaseList(RELEASES, v, [lowCriticalRead], null).latestUnread?.id, v.role).toBe(ID);
+      expect(buildReleaseList(RELEASES, v, [lowCriticalRead, read], null).latestUnread?.id, v.role).toBe(after);
     }
-    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(DELETE_CONFIRM_ID);
-    const legacy = (v: ReleaseViewer) => legacyAnnouncementsFor(RELEASES, v, {})[0];
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: nothing read): as above.
+    expect(buildReleaseList(RELEASES, member, [lowCriticalRead], null).latestUnread?.id).toBe(DELETE_CONFIRM_ID);
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: nothing seen): the Low + critical pages and list value release is published later and reaches whoever can read items, so the phone has seen it first.
+    const legacy = (v: ReleaseViewer) => legacyAnnouncementsFor(RELEASES, v, { [LOW_CRITICAL_ID]: true })[0];
     const base = { id: ID, date: '2026-11-16', title: release().title, body: release().summary };
     expect(legacy(owner)).toEqual({ ...base, cta: SUPPLIERS_LINK });
     expect(legacy(manager)).toEqual({ ...base, cta: SUPPLIERS_LINK });

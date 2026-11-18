@@ -112,6 +112,7 @@ import { dbGuardRefusal } from './lib/db-guard-refusal';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { compensateOpeningStockOrThrow } from './opening-stock-compensation';
 import { fetchAllRows } from './lib/paginate';
+import { postgrestErrorText } from './lib/postgrest-error';
 import { audit, auditMany, type AuditEvent, type AuditPayload } from './audit';
 import { dispatchEvent } from './integration-events';
 import { CustomFieldsService } from './custom-fields';
@@ -188,14 +189,10 @@ export function buildRackFilterClause(
   | { kind: 'none' }
   | { kind: 'eq'; column: string; value: string }
   | { kind: 'or'; expr: string } {
-  const sanitize = (s: string | null | undefined): string =>
-    (s ?? '').replace(/[^A-Za-z0-9-]/g, '').slice(0, 40);
-
-  const label = sanitize(rawRack.trim());
-  const parts = parseRackLabel(label);
-  const num = sanitize(parts.number);
-  const row = sanitize(parts.row);
-  if (!num) return { kind: 'none' };
+  const parts = rackFilterParts(rawRack, itemType);
+  if (!parts) return { kind: 'none' };
+  const { number: num, label } = parts;
+  const row = parts.row ?? '';
 
   const isBook = itemType === 'book';
   const numKey = isBook ? 'custom_fields->>book_rack_number' : 'custom_fields->>rack_number';
@@ -216,6 +213,34 @@ export function buildRackFilterClause(
   return {
     kind: 'or',
     expr: `and(${numKey}.eq.${num},${rowKey}.eq.${row}),${numKey}.eq.${label}`,
+  };
+}
+
+/**
+ * The sanitized parts of a rack filter, and which custom_fields keys it reads
+ * ('book': book_rack_*, 'by_type': each record its own type's keys for
+ * itemType 'all', 'item': rack_*). null when the sanitized number is empty
+ * (no filter). buildRackFilterClause builds the request's clause from these
+ * and buildItemListValueFilters sends them to inventory_list_value, so the
+ * two can never sanitize or split a rack differently.
+ */
+export function rackFilterParts(
+  rawRack: string,
+  itemType: string | undefined,
+): { number: string; row: string | null; label: string; keys: 'item' | 'book' | 'by_type' } | null {
+  const sanitize = (s: string | null | undefined): string =>
+    (s ?? '').replace(/[^A-Za-z0-9-]/g, '').slice(0, 40);
+
+  const label = sanitize(rawRack.trim());
+  const parts = parseRackLabel(label);
+  const num = sanitize(parts.number);
+  const row = sanitize(parts.row);
+  if (!num) return null;
+  return {
+    number: num,
+    row: row || null,
+    label,
+    keys: itemType === 'all' ? 'by_type' : itemType === 'book' ? 'book' : 'item',
   };
 }
 
@@ -301,22 +326,48 @@ const CHARTER_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
  * which searches its list with exactly this clause.
  */
 export function buildItemSearchClause(rawQ: string, isbnVariants?: string[]): string | null {
-  // PostgREST's .or() takes a raw filter string. Strip characters
-  // that would let a search term escape its clause and fan out the
-  // filter tree (commas, parens, asterisks, percent signs). Also
-  // cap at a sane length so a 10MB search term can't be ingested.
-  const term = rawQ.trim().slice(0, 120).replace(/[,()%*]/g, ' ');
+  const term = itemSearchTerm(rawQ);
   if (!term) return null;
   const clause =
     `name.ilike.%${term}%,sku.ilike.%${term}%,barcode.ilike.%${term}%,model_number.ilike.%${term}%`;
-  // ISBNs are digits plus a trailing 'X' check character — anything else is
-  // not an ISBN and must never reach the filter string.
-  const variants = (isbnVariants ?? [])
-    .map((v) => v.replace(/[^0-9Xx]/g, '').toUpperCase())
-    .filter((v) => v.length === 10 || v.length === 13);
+  const variants = itemSearchIsbnVariants(isbnVariants);
   if (variants.length === 0) return clause;
   // in-list-bound: the ISBN-10 and ISBN-13 forms of one search term
   return `${clause},barcode.in.(${variants.map((v) => `"${v}"`).join(',')})`;
+}
+
+/** A UTF-16 surrogate half with no partner. */
+const LONE_SURROGATE_RE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/**
+ * The search term as the `q` clause matches it ('%term%' on each field), or
+ * null when nothing is left to search for. PostgREST's .or() takes a raw
+ * filter string, so the characters that would let a term escape its clause
+ * and fan out the filter tree (commas, parens, asterisks, percent signs)
+ * become spaces, and the term is capped at 120 characters (code points).
+ * Shared by buildItemSearchClause and buildItemListValueFilters.
+ */
+function itemSearchTerm(rawQ: string): string | null {
+  // Cut on whole characters (code points), never between the two halves of
+  // one (an emoji), and turn any half left alone in the input into U+FFFD, as
+  // URLSearchParams does for the page request. A lone half would fail the
+  // value total's JSON body while the page request still searched.
+  const term = Array.from(rawQ.trim())
+    .slice(0, 120)
+    .join('')
+    .replace(LONE_SURROGATE_RE, '\uFFFD')
+    .replace(/[,()%*]/g, ' ');
+  return term ? term : null;
+}
+
+/** The ISBN forms the `q` clause also accepts as an exact barcode. ISBNs are
+ *  digits plus a trailing 'X' check character; anything else is not an ISBN
+ *  and must never reach the filter string. */
+function itemSearchIsbnVariants(isbnVariants: string[] | undefined): string[] {
+  return (isbnVariants ?? [])
+    .map((v) => v.replace(/[^0-9Xx]/g, '').toUpperCase())
+    .filter((v) => v.length === 10 || v.length === 13);
 }
 
 // How many items' rack transfers may be in flight at once during a create-time
@@ -1225,10 +1276,223 @@ function keepGranted<Row extends { category_id: string | null }>(
 }
 
 /** The light columns a group-aware page is planned from (listPlanRows):
- *  what sortInstantRows and runAwarePages read, the value footer, the
- *  low-stock rule and a viewer's grants. */
+ *  what sortInstantRows and runAwarePages read, the value footer, a
+ *  viewer's grants, and the reorder point PlanRow has always carried (the
+ *  low-stock rule itself runs in the database: is_low_stock, 0470). */
 const PLAN_ROW_COLUMNS =
   'id, sku, name, group_id, quantity_on_hand, unit_cost, reorder_point, category_id, status, created_at, updated_at';
+
+/**
+ * Every key of ItemListFilters, sorted into the ones that choose which
+ * records a list shows ('row_filter': applyContentFilters or the list's
+ * scope reads it, and buildItemListValueFilters hands it to the value total)
+ * and the ones that do not ('not_a_row_filter': paging, sorting, the planned
+ * totals a caller already has, the opt-in holdings read). `satisfies` makes a
+ * key added to ItemListFilters a type error until it is sorted here, and
+ * inventory.list-value-filters.test.ts holds every 'row_filter' key to
+ * changing what the builder sends, so a filter cannot silently be left out of
+ * the value footer.
+ */
+export const ITEM_LIST_FILTER_KEYS = {
+  plannedTotals: 'not_a_row_filter',
+  q: 'row_filter',
+  barcode: 'row_filter',
+  rack: 'row_filter',
+  status: 'row_filter',
+  categoryId: 'row_filter',
+  categoryIds: 'row_filter',
+  locationId: 'row_filter',
+  locationIds: 'row_filter',
+  supplierId: 'row_filter',
+  supplierIds: 'row_filter',
+  charterIds: 'row_filter',
+  warehouseId: 'row_filter',
+  ids: 'row_filter',
+  withElsewhere: 'not_a_row_filter',
+  itemType: 'row_filter',
+  itemTypes: 'row_filter',
+  excludeBundles: 'row_filter',
+  orderCatalogVisibleOnly: 'row_filter',
+  lowStock: 'row_filter',
+  outOfStock: 'row_filter',
+  hasUnitCost: 'row_filter',
+  cursor: 'not_a_row_filter',
+  limit: 'not_a_row_filter',
+  offset: 'not_a_row_filter',
+  sort: 'not_a_row_filter',
+  createdSince: 'row_filter',
+  createdUntil: 'row_filter',
+  updatedSince: 'row_filter',
+  updatedUntil: 'row_filter',
+  rentalsOnly: 'row_filter',
+  autoArchived: 'row_filter',
+  expected: 'row_filter',
+  isbnVariants: 'row_filter',
+} as const satisfies Record<keyof ItemListFilters, 'row_filter' | 'not_a_row_filter'>;
+
+/**
+ * What inventory_list_value (migration 0470) reads: the list's filters,
+ * normalized, with the caller's scope. An absent key adds no condition; the
+ * migration's header says what each key means in SQL.
+ */
+export interface ItemListValueFilters {
+  warehouse_ids?: string[];
+  category_grants?: string[];
+  status?: string;
+  auto_archived?: boolean;
+  awaiting_first_receipt?: boolean;
+  search?: string;
+  search_isbn_variants?: string[];
+  barcode?: string;
+  rack?: { number: string; row: string | null; label: string; keys: 'item' | 'book' | 'by_type' };
+  category_ids?: string[];
+  location_ids?: string[];
+  supplier_ids?: string[];
+  charter_ids?: string[];
+  charter_generic?: boolean;
+  out_of_stock?: boolean;
+  has_unit_cost?: boolean;
+  low_stock?: boolean;
+  item_types?: string[];
+  exclude_bundles?: boolean;
+  order_catalog_visible?: boolean;
+  is_rental?: boolean;
+  created_since?: string;
+  created_until?: string;
+  updated_since?: string;
+  updated_until?: string;
+  ids?: string[];
+}
+
+/** inventory_list_value's limits, checked here first so a filter past them
+ *  is a validation error before any request, never a failed total. */
+const VALUE_FILTER_MAX_IDS = 1000;
+const VALUE_FILTER_MAX_ITEM_TYPES = 10;
+const VALUE_FILTER_MAX_ISBN_VARIANTS = 20;
+const VALUE_FILTER_MAX_BARCODE_CHARS = 4096;
+
+function valueFilterIds(ids: readonly string[]): string[] {
+  if (ids.length > VALUE_FILTER_MAX_IDS) {
+    throw new ServiceError(
+      'validation_error',
+      `Filter by at most ${VALUE_FILTER_MAX_IDS} values of one kind at once.`,
+    );
+  }
+  return [...ids];
+}
+
+/**
+ * The value footer's filters: the same normalized filters, from the same
+ * helpers, as the page request applyContentFilters builds, plus the list's
+ * scope (the caller's readable warehouses, or the warehouse a manager chose,
+ * and a viewer's category grants). Pure: one line here per line there, in
+ * the same order, so a reader can hold the two side by side.
+ */
+export function buildItemListValueFilters(
+  filters: ItemListFilters,
+  scope: {
+    access: { hasAllAccess: boolean; readableIds: readonly string[] };
+    categoryGrants: readonly string[] | null;
+  },
+): ItemListValueFilters {
+  const out: ItemListValueFilters = {};
+  if (!scope.access.hasAllAccess) {
+    out.warehouse_ids = valueFilterIds(scope.access.readableIds);
+  } else if (filters.warehouseId) {
+    out.warehouse_ids = [filters.warehouseId];
+  }
+  if (scope.categoryGrants !== null) {
+    out.category_grants = valueFilterIds(scope.categoryGrants);
+  }
+
+  if (!filters.status || filters.status === 'active') {
+    out.status = 'active';
+  } else if (filters.status !== 'all') {
+    out.status = filters.status;
+  }
+  if (filters.autoArchived) out.auto_archived = true;
+  if (filters.expected !== 'any') out.awaiting_first_receipt = filters.expected === true;
+
+  if (filters.q && filters.q.trim()) {
+    const term = itemSearchTerm(filters.q);
+    if (term) {
+      out.search = term;
+      const variants = itemSearchIsbnVariants(filters.isbnVariants);
+      if (variants.length > VALUE_FILTER_MAX_ISBN_VARIANTS) {
+        throw new ServiceError(
+          'validation_error',
+          `Search at most ${VALUE_FILTER_MAX_ISBN_VARIANTS} ISBN forms at once.`,
+        );
+      }
+      if (variants.length > 0) out.search_isbn_variants = variants;
+    }
+  }
+  if (filters.barcode && filters.barcode.trim()) {
+    const barcode = filters.barcode.trim();
+    if (barcode.length > VALUE_FILTER_MAX_BARCODE_CHARS) {
+      throw new ServiceError('validation_error', 'That barcode is too long to search for.');
+    }
+    out.barcode = barcode;
+  }
+  if (filters.rack && filters.rack.trim()) {
+    const rack = rackFilterParts(filters.rack, filters.itemType);
+    if (rack) out.rack = rack;
+  }
+  if (filters.categoryIds && filters.categoryIds.length > 0) {
+    out.category_ids = valueFilterIds(filters.categoryIds);
+  } else if (filters.categoryId) {
+    out.category_ids = [filters.categoryId];
+  }
+  if (filters.locationIds && filters.locationIds.length > 0) {
+    out.location_ids = valueFilterIds(filters.locationIds);
+  } else if (filters.locationId) {
+    out.location_ids = [filters.locationId];
+  }
+  if (filters.supplierIds && filters.supplierIds.length > 0) {
+    out.supplier_ids = valueFilterIds(filters.supplierIds);
+  } else if (filters.supplierId) {
+    out.supplier_ids = [filters.supplierId];
+  }
+  if (filters.charterIds && filters.charterIds.length > 0) {
+    const includesGeneric = filters.charterIds.includes('generic');
+    const realIds = filters.charterIds.filter((id) => id !== 'generic' && CHARTER_ID_RE.test(id));
+    if (includesGeneric) out.charter_generic = true;
+    if (realIds.length > 0) out.charter_ids = valueFilterIds(realIds);
+  }
+  if (filters.outOfStock) out.out_of_stock = true;
+  if (filters.hasUnitCost) out.has_unit_cost = true;
+  if (filters.lowStock) out.low_stock = true;
+
+  if (filters.itemTypes && filters.itemTypes.length > 0) {
+    if (filters.itemTypes.length > VALUE_FILTER_MAX_ITEM_TYPES) {
+      throw new ServiceError(
+        'validation_error',
+        `Filter by at most ${VALUE_FILTER_MAX_ITEM_TYPES} item types.`,
+      );
+    }
+    out.item_types = [...filters.itemTypes];
+  } else if (filters.itemType === undefined) {
+    out.item_types = ['product'];
+  } else if (filters.itemType !== 'all') {
+    // String(): applyContentFilters sends the value as text whatever it is
+    // (a null arrives as the text 'null' and matches nothing).
+    out.item_types = [String(filters.itemType)];
+  }
+
+  if (filters.excludeBundles) out.exclude_bundles = true;
+  if (filters.orderCatalogVisibleOnly) out.order_catalog_visible = true;
+  out.is_rental = filters.rentalsOnly === true;
+
+  if (filters.createdSince) out.created_since = filters.createdSince;
+  if (filters.createdUntil) out.created_until = filters.createdUntil;
+  if (filters.updatedSince) out.updated_since = filters.updatedSince;
+  if (filters.updatedUntil) out.updated_until = filters.updatedUntil;
+
+  if (filters.ids && filters.ids.length > 0) {
+    out.ids = valueFilterIds(filters.ids);
+  }
+  return out;
+}
 
 export interface PlanRow {
   id: string;
@@ -1379,17 +1643,15 @@ export class InventoryService {
       // pool of items whose cost just hasn't been recorded yet.
       query = query.gt('unit_cost', 0);
     }
-    // PostgREST can't express qty_on_hand <= reorder_point in a single
-    // filter, so narrow with an OR pre-filter and do the final
-    // cross-column compare in JS on the rows read (list(), listPlanRows):
-    //   - reorder_point > 0 → traditional "low": qty <= reorder_point
-    //   - qty <= 0           → critical regardless of reorder_point
-    // The OR catches items with reorder_point = 0 AND qty = 0, which
-    // were previously hidden from the "Review low stock" dashboard
-    // alert because the dashboard count = lowStock + outOfStock but
-    // ?stock=low only returned the lowStock half.
+    // Low stock is the computed field is_low_stock (migration 0470), so the
+    // database applies the whole rule and the page, its exact count and every
+    // scan of the view describe the same set:
+    //   - qty <= 0                          → critical whatever the reorder point
+    //   - reorder_point > 0 and qty <= it   → at or under the reorder line
+    // Out counts as low so ?stock=low matches the dashboard's low-stock alert
+    // (lowStock + outOfStock).
     if (filters.lowStock) {
-      query = query.or('reorder_point.gt.0,quantity_on_hand.lte.0');
+      query = query.eq('is_low_stock', true);
     }
 
     // item_type defaults to 'product' so the legacy /dashboard/inventory tab
@@ -1442,9 +1704,10 @@ export class InventoryService {
    * One window of the skinny scan of the WHOLE filtered view: list()'s
    * warehouse scope and every one of its filters (applyContentFilters),
    * selecting only `columns`, ordered by id so the windows never overlap.
-   * list() sums the value from it; listPlanRows plans a group-aware page from
-   * it. `narrow` adds a filter the caller needs (a viewer's category grants);
-   * `count` asks for the view's size with the window.
+   * listPlanRows plans a group-aware page from it (list() asks the database
+   * for its value total instead: inventory_list_value). `narrow` adds a
+   * filter the caller needs (a viewer's category grants); `count` asks for
+   * the view's size with the window.
    */
   private filteredScanPage(
     filters: ItemListFilters,
@@ -1484,7 +1747,7 @@ export class InventoryService {
    * records sort far apart is never split across their pages (the reported XS
    * alone on page 2). Same scope as list(): the caller's own client and RLS,
    * their warehouses, a viewer's category grants, list()'s own filters
-   * (applyContentFilters), the low-stock rule. The first 1000-row window
+   * (applyContentFilters, low stock included). The first 1000-row window
    * brings the view's size: past INSTANT_MODE_MAX_ROWS records it answers
    * null after that one request (the caller keeps fixed pages, as managers'
    * instant mode does past the same cap); the rest of the view is read in
@@ -1567,9 +1830,6 @@ export class InventoryService {
       return true;
     });
     rows = keepGranted(rows, granted);
-    if (filters.lowStock) {
-      rows = rows.filter((r) => r.quantity_on_hand <= r.reorder_point || r.quantity_on_hand <= 0);
-    }
     const valueOnHand = rows.reduce(
       (acc, r) => acc + (Number(r.quantity_on_hand) || 0) * (Number(r.unit_cost) || 0),
       0,
@@ -1655,6 +1915,9 @@ export class InventoryService {
     // Grants that are too long for the URL (see GRANTS_IN_URL_MAX_CHARS) are
     // applied to the returned rows instead.
     let grantsAfterRead: Set<string> | null = null;
+    // The same grants for the value total, which takes them in its body, so
+    // their length never matters there.
+    let valueGrants: string[] | null = null;
     if (this.ctx.role === 'viewer') {
       try {
         const accessibleCats = await viewerGrantsRead;
@@ -1662,6 +1925,7 @@ export class InventoryService {
           if (accessibleCats.size === 0) {
             return { items: [], total: 0, valueOnHand: 0, elsewhereUnavailable: false };
           }
+          valueGrants = [...accessibleCats];
           if (grantsFitInUrl(accessibleCats)) {
             // in-list-bound: grantsFitInUrl keeps this under GRANTS_IN_URL_MAX_CHARS
             query = query.in('category_id', [...accessibleCats]);
@@ -1676,89 +1940,58 @@ export class InventoryService {
       }
     }
 
-    // Every filter of the view, from the one place the value and plan scans
-    // take them too (applyContentFilters).
+    // Every filter of the view, from the one place the plan scan takes them
+    // too (applyContentFilters). Low stock included: the database applies it
+    // (is_low_stock), so the range, the exact count and the rows are all the
+    // low-stock set, and every page is full.
     query = this.applyContentFilters(query, filters);
 
-    // Build a parallel skinny query that mirrors every filter applied
-    // above but selects only the three columns needed for the org-wide
-    // value sum. We need the FULL filtered rowset to sum across all
-    // pages, not just the visible 50. The previous implementation summed
-    // only the current page's rows in the browser, which made the
-    // "$N on hand" footer wrong any time the total exceeded one page
-    // (215 SKUs / page=50 → undercounted by 4 pages of items).
+    // The "$N on hand" footer adds up the WHOLE filtered view, not just the
+    // visible page: one aggregate in the database (inventory_list_value,
+    // migration 0470), asked in parallel with the page. Its filters come from
+    // buildItemListValueFilters, which normalizes the same filters with the
+    // same helpers as applyContentFilters, and takes the same scope (the
+    // caller's warehouses, a viewer's grants). It runs as the caller
+    // (SECURITY INVOKER), so row level security bounds it exactly as it
+    // bounds the page. Before, this paged the whole view through 1000-row
+    // windows one after another and added up here: 51 requests at 50,000
+    // records.
     //
-    // PostgREST clamps any single response to `[api] max_rows = 1000`, so
-    // even though we select only three numeric columns we must PAGINATE in
-    // 1000-row `.range()` windows with a stable `.order('id')` and
-    // accumulate — otherwise the footer silently undercounts for orgs with
-    // >1000 in-scope items, while `total` (count:'exact' on the main query)
-    // stays accurate, making the mismatch visible. (Same 1000-row cap class
-    // fixed in forecasting.ts / order-requests.ts.) filteredScanPage applies
-    // the main query's warehouse scope and every one of its filters
-    // (applyContentFilters), with its own columns and pagination. A viewer's
-    // category grants are left to RLS here, which enforces the same grants the
-    // page query above also checks in code (listPlanRows checks them in code
-    // too). Build per page so each `.range()` is applied to a fresh query
-    // (reusing one builder would stack range headers).
-    const buildSumPage = (from: number, to: number) =>
-      this.filteredScanPage(
-        filters,
-        access,
-        'quantity_on_hand, unit_cost, reorder_point',
-        from,
-        to,
-      ) as unknown as PromiseLike<{
-        data: Array<{ quantity_on_hand: number; unit_cost: number; reorder_point: number }> | null;
-        error: { message: string } | null;
-      }>;
-
     // A planned group-aware page (Phase 2) brings the whole view's totals from
-    // listPlanRows: no second scan of the view for the page it already planned.
+    // listPlanRows: no second read of the view for the page it already planned.
     const planned = filters.plannedTotals ?? null;
-    const [mainRes, sumRowsRaw] = await Promise.all([
-      query,
-      planned
-        ? Promise.resolve(
-            [] as Array<{ quantity_on_hand: number; unit_cost: number; reorder_point: number }>,
-          )
-        : fetchAllRows<{ quantity_on_hand: number; unit_cost: number; reorder_point: number }>(
-            (from, to) => buildSumPage(from, to),
-          ),
-    ]);
+    const valueRead = planned
+      ? null
+      : this.ctx.supabase.rpc('inventory_list_value', {
+          p_organization_id: this.ctx.organizationId,
+          p_filters: buildItemListValueFilters(filters, { access, categoryGrants: valueGrants }),
+        });
+    const [mainRes, valueRes] = await Promise.all([query, valueRead]);
     const { data, error, count } = mainRes;
     if (error) throw new ServiceError('internal_error', error.message);
 
-    let rows = keepGranted(data ?? [], grantsAfterRead);
-    let totalCount = count ?? 0;
-    let sumRows = sumRowsRaw;
-    if (filters.lowStock) {
-      const filtered = rows.filter(
-        (r: { quantity_on_hand: number; reorder_point: number }) =>
-          // Below or at reorder line, OR critically out of stock even
-          // when no reorder line was set. Matches the dashboard alert
-          // count (lowStockCount + outOfStockCount).
-          r.quantity_on_hand <= r.reorder_point || r.quantity_on_hand <= 0,
-      );
-      rows = filtered;
-      // Apply the same JS-side filter to the sum rowset so the value
-      // footer matches what the user actually sees in the table.
-      sumRows = sumRows.filter(
-        (r) => r.quantity_on_hand <= r.reorder_point || r.quantity_on_hand <= 0,
-      );
-      // totalCount must reflect the full org-wide filtered set (sumRows), not
-      // the current page (`filtered` is ≤ page size) — otherwise "Page X of Y"
-      // is wrong whenever the low-stock set spans more than one page.
-      totalCount = sumRows.length;
+    let valueOnHand: number;
+    if (planned) {
+      valueOnHand = planned.valueOnHand;
+    } else {
+      // A failed or empty answer fails the list, as a failed window of the old
+      // scan did: never a footer of 0 that is not true. numeric may arrive as
+      // a number or as a numeric string.
+      if (!valueRes || valueRes.error) {
+        throw new ServiceError(
+          'internal_error',
+          valueRes?.error ? postgrestErrorText(valueRes.error, valueRes) : 'No value total came back.',
+        );
+      }
+      const value = valueRes.data == null ? Number.NaN : Number(valueRes.data);
+      if (!Number.isFinite(value)) {
+        throw new ServiceError('internal_error', 'The value total came back as a non-number.');
+      }
+      valueOnHand = value;
     }
 
-    const valueOnHand = planned
-      ? planned.valueOnHand
-      : sumRows.reduce(
-          (acc, r) => acc + (Number(r.quantity_on_hand) || 0) * (Number(r.unit_cost) || 0),
-          0,
-        );
-    if (planned) totalCount = planned.total;
+    const rows = keepGranted(data ?? [], grantsAfterRead);
+    const totalCount = planned ? planned.total : (count ?? 0);
 
     // Per-item placement, derived from the ACTUAL holdings (item_stock_levels),
     // NOT the free-text bin_location label (which can go stale — an item placed
