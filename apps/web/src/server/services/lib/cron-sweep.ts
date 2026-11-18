@@ -301,6 +301,17 @@ export function cronAttemptRecorder(
  */
 export const DAILY_CLAIM_HOLD_MS = 20 * 60 * 60_000;
 
+/**
+ * What a claiming job does with an organization whose claim cannot be
+ * recorded (cronAttemptClaimer): 'run' it unclaimed (fail open, the default)
+ * or 'skip' it for this run (fail closed).
+ */
+export type OnClaimUnavailable = 'skip' | 'run';
+
+/** cronAttemptClaimer's answer, with onClaimUnavailable 'skip', for an
+ *  organization whose claim could not be recorded: skip it this run. */
+export const CLAIM_UNAVAILABLE = 'claim_unavailable' as const;
+
 function isUniqueViolation(error: { code?: string; message?: string }): boolean {
   return error.code === '23505' || (error.message ?? '').includes('duplicate key value');
 }
@@ -323,11 +334,21 @@ function isUniqueViolation(error: { code?: string; message?: string }): boolean 
  * `finish` corrects it, so an attempt killed at maxDuration is a failure and
  * the organization is at the back of the line (and held until the hold ends).
  *
- * FAILS OPEN on an error other than the key (the table missing because the
- * web deploy went out before the migration, a refused write): the caller runs
- * the organization unclaimed, as before this table existed, and each job's
- * own guards still apply; reported once per run under `reportTag`. Never
- * throws.
+ * When the claim cannot be recorded (an error other than the key: the table
+ * missing because the web deploy went out before the migration, a refused
+ * write), `onClaimUnavailable` decides:
+ *   'run' (the default): FAILS OPEN. The caller runs the organization
+ *     unclaimed, as before this table existed, and the job's own atomic guard
+ *     still applies (the reorder lock, the template schedule's
+ *     compare-and-set, the archive and purge updates' row guards). Reported
+ *     once per run under `reportTag`.
+ *   'skip': FAILS CLOSED, for a job with no atomic guard of its own, where
+ *     two runs at once would do the same work twice. `claim` resolves to
+ *     CLAIM_UNAVAILABLE and the caller skips the organization for this run.
+ *     Nothing is written, so the organization keeps its place at the front of
+ *     the next run's order. Reported once per run under `reportTag`, with the
+ *     error's code only.
+ * Never throws.
  */
 export function cronAttemptClaimer(
   admin: ReturnType<typeof createAdminClient>,
@@ -336,8 +357,14 @@ export function cronAttemptClaimer(
     failuresBefore: ReadonlyMap<string, number>;
     reportTag: string;
     holdMs: number;
+    onClaimUnavailable?: OnClaimUnavailable;
   },
-): { claim(orgId: string): Promise<((result: CronAttemptResult) => Promise<number>) | null> } {
+): {
+  claim(
+    orgId: string,
+  ): Promise<((result: CronAttemptResult) => Promise<number>) | null | typeof CLAIM_UNAVAILABLE>;
+} {
+  const skipUnclaimed = opts.onClaimUnavailable === 'skip';
   let reported = false;
   const report = (error: { message: string }, step: string) => {
     if (reported) return;
@@ -347,6 +374,21 @@ export function cronAttemptClaimer(
       level: 'warning',
       extra: { step, job },
     });
+  };
+  let reportedSkip = false;
+  const skip = (error: { code?: string }): typeof CLAIM_UNAVAILABLE => {
+    if (!reportedSkip) {
+      reportedSkip = true;
+      void reportError(
+        new Error('Scheduled job skipped organizations whose claim could not be recorded'),
+        {
+          tag: opts.reportTag,
+          level: 'warning',
+          extra: { step: 'claim', job, code: error.code ?? 'unknown', onClaimUnavailable: 'skip' },
+        },
+      );
+    }
+    return CLAIM_UNAVAILABLE;
   };
   return {
     async claim(orgId) {
@@ -379,6 +421,7 @@ export function cronAttemptClaimer(
         .lt('last_attempt_at', new Date(at - opts.holdMs).toISOString())
         .select('organization_id');
       if (taken.error) {
+        if (skipUnclaimed) return skip(taken.error);
         report(taken.error, 'claim');
         return unrecorded;
       }
@@ -389,6 +432,7 @@ export function cronAttemptClaimer(
         .insert({ job, organization_id: orgId, ...stamp });
       if (!inserted.error) return finish;
       if (isUniqueViolation(inserted.error)) return null;
+      if (skipUnclaimed) return skip(inserted.error);
       report(inserted.error, 'claim');
       return unrecorded;
     },
@@ -441,6 +485,10 @@ export interface OrgSweepOutcome<V> {
   threw: number;
   /** Organizations another run held (claimed within the hold); skipped. */
   heldByAnotherRun: number;
+  /** Organizations skipped because their claim could not be recorded
+   *  (onClaimUnavailable 'skip'; always 0 otherwise). Nothing was written for
+   *  them, so they go first on the next run. */
+  claimUnavailable: number;
   /** Organizations not started: the deadline or the budget came first. They
    *  go first on the next run. */
   leftForNextRun: number;
@@ -478,6 +526,11 @@ export const REPEATED_FAILURES = 3;
  * at most RETRY_FIRST_LIMIT a run) goes to the front: an attempt killed at
  * maxDuration leaves exactly that, and at the front it gets the whole run.
  *
+ * With `holdMs`, `onClaimUnavailable` says what to do with an organization
+ * whose claim cannot be recorded: 'run' it unclaimed (the default, for a job
+ * with its own atomic guard) or 'skip' it for this run (counted in
+ * `claimUnavailable`), see cronAttemptClaimer.
+ *
  * When the attempt records cannot be read the run is reported
  * (`<tag>.attempts`) and goes in rotateByClock order (`slotMs`: the job's
  * cadence), so even then a cut does not fall on the same organizations every
@@ -492,6 +545,8 @@ export async function sweepOrganizations<V>(
     deadlineAt: number;
     slotMs: number;
     holdMs?: number;
+    /** Only with `holdMs`. Default 'run'. */
+    onClaimUnavailable?: OnClaimUnavailable;
     stopWhen?: () => boolean;
   },
   work: (orgId: string, index: number) => Promise<OrgWorkOutcome<V>>,
@@ -517,7 +572,12 @@ export async function sweepOrganizations<V>(
   const reportTag = `${opts.tag}.attempts`;
   const claimer =
     opts.holdMs !== undefined
-      ? cronAttemptClaimer(admin, opts.job, { failuresBefore, reportTag, holdMs: opts.holdMs })
+      ? cronAttemptClaimer(admin, opts.job, {
+          failuresBefore,
+          reportTag,
+          holdMs: opts.holdMs,
+          onClaimUnavailable: opts.onClaimUnavailable,
+        })
       : null;
   const recorder = claimer
     ? null
@@ -527,6 +587,7 @@ export async function sweepOrganizations<V>(
   let threw = 0;
   let failed = 0;
   let heldByAnotherRun = 0;
+  let claimUnavailable = 0;
   let failingRepeatedly = 0;
   const sweep = await sweepUntilDeadline(
     ordered,
@@ -536,6 +597,10 @@ export async function sweepOrganizations<V>(
       const finish = claimer ? await claimer.claim(orgId) : recorder!.start(orgId);
       if (finish === null) {
         heldByAnotherRun += 1;
+        return;
+      }
+      if (finish === CLAIM_UNAVAILABLE) {
+        claimUnavailable += 1;
         return;
       }
       let result: CronAttemptResult;
@@ -569,6 +634,7 @@ export async function sweepOrganizations<V>(
     failed,
     threw,
     heldByAnotherRun,
+    claimUnavailable,
     leftForNextRun: sweep.leftForNextRun,
     stoppedAtDeadline,
     failingRepeatedly,

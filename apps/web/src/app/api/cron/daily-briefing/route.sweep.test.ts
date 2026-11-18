@@ -60,6 +60,13 @@ const eqValue = (call: MockCall, col: string) =>
   call.args.find((a, i) => call.methods[i] === 'eq' && a[0] === col)?.[1] as string | undefined;
 
 function client(table: ReturnType<typeof cronAttemptsTable>) {
+  return stubFor(table).client;
+}
+
+function stubFor(
+  table: ReturnType<typeof cronAttemptsTable>,
+  extra: Parameters<typeof makeSupabaseStub>[0] = {},
+) {
   return makeSupabaseStub({
     ...table.results,
     'organization_modules.select': (call: MockCall) =>
@@ -76,7 +83,8 @@ function client(table: ReturnType<typeof cronAttemptsTable>) {
           : { data: [{ user_id: 'admin-1', role: 'owner' }], error: null },
     // No briefing yet today for anyone (the per-user check).
     'notifications.select': { data: [], error: null },
-  }).client;
+    ...extra,
+  });
 }
 
 const get = () =>
@@ -171,5 +179,103 @@ describe('GET /api/cron/daily-briefing reaches every organization', () => {
     // No organization id anywhere in the report: the count is in the log line.
     expect(reports[0]![1]).toEqual({ tag: 'cron.daily-briefing.context' });
     expect((reports[0]![0] as Error).message).not.toMatch(/org-/);
+  });
+});
+
+describe('GET /api/cron/daily-briefing when the day claim cannot be recorded', () => {
+  /** The calls that read or write a briefing (the per-person check, the send). */
+  const briefingCalls = (stub: ReturnType<typeof stubFor>) =>
+    stub.fromCalls.filter((t) => t === 'notifications').length + sent.length;
+
+  const claimReports = () =>
+    reportError.mock.calls.filter(
+      ([, c]) => (c as { tag?: string }).tag === 'cron.daily-briefing.attempts',
+    );
+
+  it('the claim update fails: every organization is skipped for this run, counted, and reported once', async () => {
+    const stub = stubFor(cronAttemptsTable(), {
+      'cron_sweep_attempts.update': {
+        data: null,
+        error: { message: 'relation "cron_sweep_attempts" does not exist', code: '42P01' },
+      },
+    });
+    adminHolder.client = stub.client;
+    expect(await (await get()).json()).toMatchObject({ orgsProcessed: 0, briefingsSent: 0 });
+    expect(gathered).toEqual([]);
+    expect(briefingCalls(stub)).toBe(0);
+    expect(logLine()).toMatchObject({ claimUnavailable: 6, heldByAnotherRun: 0, failed: 0 });
+    const reports = claimReports().filter(
+      ([, c]) => (c as { extra?: { step?: string } }).extra?.step === 'claim',
+    );
+    expect(reports).toHaveLength(1);
+    expect(reports[0]![1]).toMatchObject({
+      level: 'warning',
+      extra: { step: 'claim', job: 'daily_briefing', code: '42P01', onClaimUnavailable: 'skip' },
+    });
+    // No organization id in the report.
+    expect(JSON.stringify(reports[0]![1])).not.toMatch(/org-/);
+    expect((reports[0]![0] as Error).message).not.toMatch(/org-/);
+  });
+
+  it('the claim insert fails with an error other than the key: the same', async () => {
+    const stub = stubFor(cronAttemptsTable(), {
+      'cron_sweep_attempts.insert': {
+        data: null,
+        error: { message: 'permission denied for table cron_sweep_attempts', code: '42501' },
+      },
+    });
+    adminHolder.client = stub.client;
+    await get();
+    expect(gathered).toEqual([]);
+    expect(briefingCalls(stub)).toBe(0);
+    expect(logLine()).toMatchObject({ claimUnavailable: 6, failed: 0 });
+    const reports = claimReports();
+    expect(reports).toHaveLength(1);
+    expect(reports[0]![1]).toMatchObject({ extra: { step: 'claim', code: '42501' } });
+  });
+
+  it('a run that overlaps another while the claim cannot be recorded sends no second briefing', async () => {
+    cost.wait = true;
+    const stub = stubFor(cronAttemptsTable(), {
+      'cron_sweep_attempts.update': {
+        data: null,
+        error: { message: 'canceling statement due to statement timeout', code: '57014' },
+      },
+    });
+    adminHolder.client = stub.client;
+    await Promise.all([get(), get()]);
+    expect(sent).toEqual([]);
+  });
+
+  it('one organization whose claim cannot be written waits for the next run, where it goes first', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const table = cronAttemptsTable();
+    const failing = new Set<string>();
+    const update = table.results['cron_sweep_attempts.update'];
+    const day = (n: number) => {
+      vi.setSystemTime(Date.parse('2026-11-17T13:00:00.000Z') + n * 24 * 60 * 60_000);
+      gathered.length = 0;
+      info.mockClear();
+      adminHolder.client = stubFor(table, {
+        'cron_sweep_attempts.update': (call: MockCall) =>
+          failing.has(eqValue(call, 'organization_id') ?? '')
+            ? { data: null, error: { message: 'permission denied', code: '42501' } }
+            : update(call),
+      }).client;
+      return get();
+    };
+    cost.ms = 1_000;
+    await day(0);
+    expect(gathered).toEqual(ORGS);
+
+    failing.add('org-1');
+    await day(1);
+    expect(gathered).toEqual(ORGS.slice(1));
+    expect(logLine()).toMatchObject({ claimUnavailable: 1, orgsProcessed: 5 });
+
+    failing.clear();
+    await day(2);
+    expect(gathered[0]).toBe('org-1');
+    expect([...gathered].sort()).toEqual(ORGS);
   });
 });

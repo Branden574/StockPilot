@@ -70,6 +70,15 @@ const RUN_DEADLINE_MS = 50_000;
  * delivered twice can still spend up to twice the cap in total, split between
  * the organizations each run claimed; no book is looked up by both.
  *
+ * The claim is the only thing that keeps two runs apart: the refresh picks
+ * the books by a plain read (oldest last_priced_at first), so two runs
+ * working the same organization would look up the same books, spend the
+ * Google quota shared with scanning twice on them, and record each price
+ * twice. So an organization whose claim cannot be recorded is SKIPPED for
+ * this run (onClaimUnavailable 'skip'), never worked unclaimed: counted in
+ * the log line (claimUnavailable), reported once per run, and first in line
+ * on the next run.
+ *
  * GOOGLE NOT ANSWERING. A rate limit (429), another error reply or no reply
  * is not "no price found": the refresh stops at that book, leaves it and the
  * ones after it as they were (not stamped), and the run asks Google nothing
@@ -180,6 +189,7 @@ export async function GET(req: Request) {
       deadlineAt: deadlineMs,
       slotMs: DAY_MS,
       holdMs: DAILY_CLAIM_HOLD_MS,
+      onClaimUnavailable: 'skip',
       stopWhen: () => left() <= 0 || googleUnavailable,
     },
     async (orgId, index): Promise<{ result: 'success' | 'failure'; value: null }> => {
@@ -235,6 +245,7 @@ export async function GET(req: Request) {
       googleUnavailable,
       failed: sweep.failed,
       heldByAnotherRun: sweep.heldByAnotherRun,
+      claimUnavailable: sweep.claimUnavailable,
       orderedBy: sweep.orderedBy,
       promoted: sweep.promoted,
       leftForNextRun: sweep.leftForNextRun,

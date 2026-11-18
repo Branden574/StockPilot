@@ -50,6 +50,13 @@ function secretsEqual(a: string, b: string): boolean {
  *    cron re-fire never double-notifies.
  * CRON_SECRET-gated; FAIL-OPEN per org (one org's error never blocks the rest).
  *
+ * The per-person check is a read, then an insert, so it is not atomic: two
+ * runs at once could both pass it. What keeps them apart is the day's claim
+ * on the organization below, and when that claim cannot be recorded the
+ * organization is SKIPPED for this run (onClaimUnavailable 'skip'), never
+ * worked unclaimed. It is counted in the log line (claimUnavailable),
+ * reported once per run, and goes first on the next run.
+ *
  * Order: the organizations this job reached longest ago first
  * (cron_sweep_attempts, job 'daily_briefing'), so a run cut by its deadline
  * leaves different organizations each day, and those go first the next run.
@@ -95,7 +102,9 @@ export async function GET(req: NextRequest) {
     // (sweepOrganizations, job 'daily_briefing'): a second delivery of this
     // tick, or a manual run the same day, skips every organization this run
     // has started, so the per-user check below (read, then insert) is not
-    // raced by another run.
+    // raced by another run. An organization whose claim cannot be recorded
+    // is skipped for this run ('skip'): run unclaimed, the per-user check
+    // alone could let two runs at once both send.
     const sweep = await sweepOrganizations(
       admin,
       {
@@ -105,6 +114,7 @@ export async function GET(req: NextRequest) {
         deadlineAt: startedAt + RUN_DEADLINE_MS,
         slotMs: DAY_MS,
         holdMs: DAILY_CLAIM_HOLD_MS,
+        onClaimUnavailable: 'skip',
       },
       async (orgId): Promise<{ result: 'success' | 'failure' | 'neither'; value: null }> => {
         try {
@@ -204,10 +214,10 @@ export async function GET(req: NextRequest) {
 
             // One briefing per user per day — idempotent across cron re-fires.
             // Read-then-insert (not atomic) on its own; two runs at once never
-            // reach this for the same organization, because each organization
-            // is claimed for the day as it starts (sweepOrganizations above).
-            // Only when that claim cannot be recorded (reported) does the old
-            // residual risk of a double send between two runs at once remain.
+            // reach this for the same organization, because a run reaches it
+            // only for an organization it has claimed for the day
+            // (sweepOrganizations above). An organization whose claim cannot
+            // be recorded is skipped for the run before this point.
             const { data: existing } = await admin
               .from('notifications')
               .select('id')
@@ -276,6 +286,7 @@ export async function GET(req: NextRequest) {
         turnedOff,
         failed: sweep.failed,
         heldByAnotherRun: sweep.heldByAnotherRun,
+        claimUnavailable: sweep.claimUnavailable,
         failingRepeatedly: sweep.failingRepeatedly,
         orderedBy: sweep.orderedBy,
         promoted: sweep.promoted,
