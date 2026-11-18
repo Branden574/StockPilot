@@ -174,9 +174,10 @@ const CORE_MARKER_FILE = 'auth/context-unavailable.ts';
  * statement too, and each is safe to send again: the first two carry the
  * queued row's idempotency key, size count events are taken once per event
  * key, and a line cleared a second time stays cleared. The count line record
- * reads the clock first (isClockRead) and calls the gate as its second
- * statement; a count sent again writes the same value to the same line, and
- * the phone sends only the newest queued count for a line.
+ * reads the clock first (isClockRead; the only route in CLOCK_READ_ROUTES) and
+ * calls the gate as its second statement; a count sent again writes the same
+ * value to the same line, and the phone sends only the newest queued count for
+ * a line.
  */
 const GATED_ROUTES = [
   'app/api/v1/account/email/cancel/route.ts',
@@ -198,6 +199,16 @@ const GATED_ROUTES = [
   'app/api/v1/serials/[id]/route.ts',
   'app/api/v1/size-counts/[id]/events/route.ts',
 ];
+
+/**
+ * The reviewed routes that may read the clock before the gate (isClockRead).
+ * The count line record places an offline count at the moment the request
+ * arrived, so it reads the clock before the context step; every other gated
+ * route calls the gate as its first statement.
+ */
+const CLOCK_READ_ROUTES: ReadonlySet<string> = new Set([
+  'app/api/v1/cycle-counts/[id]/lines/[lineId]/record/route.ts',
+]);
 
 const SOURCE_FILE = /\.(ts|tsx|mts)$/;
 const TEST_FILE = /\.(test|spec)\.(ts|tsx|mts)$/;
@@ -393,7 +404,11 @@ function isClockRead(st: ts.Statement, gateVar: string): boolean {
   );
 }
 
-/** Does the file bind a `Date` of its own (an import, a declaration, a parameter)? */
+/**
+ * Does the file bind a `Date` of its own: an import (named, default, namespace
+ * or `import Date = require(...)`), a variable, a destructured name, a
+ * parameter, a function, a class, an enum or a namespace?
+ */
 function bindsOwnDate(sf: ts.SourceFile): boolean {
   let found = false;
   const visit = (n: ts.Node): void => {
@@ -403,10 +418,14 @@ function bindsOwnDate(sf: ts.SourceFile): boolean {
       (ts.isImportSpecifier(n) ||
         ts.isImportClause(n) ||
         ts.isNamespaceImport(n) ||
+        ts.isImportEqualsDeclaration(n) ||
         ts.isVariableDeclaration(n) ||
+        ts.isBindingElement(n) ||
         ts.isParameter(n) ||
         ts.isFunctionDeclaration(n) ||
-        ts.isClassDeclaration(n)) &&
+        ts.isClassDeclaration(n) ||
+        ts.isEnumDeclaration(n) ||
+        ts.isModuleDeclaration(n)) &&
       name &&
       ts.isIdentifier(name) &&
       name.text === 'Date'
@@ -422,14 +441,22 @@ function bindsOwnDate(sf: ts.SourceFile): boolean {
 
 /**
  * `const gate = await <gate>(<the handler's first parameter>);` as the first
- * statement, or as the second after one clock read (isClockRead).
+ * statement, or, in a route of CLOCK_READ_ROUTES only (`clockAllowed`), as the
+ * second after one clock read (isClockRead).
  */
-function isGateFirstStatement(fn: ts.FunctionLikeDeclaration, gate: string): boolean {
+function isGateFirstStatement(
+  fn: ts.FunctionLikeDeclaration,
+  gate: string,
+  clockAllowed: boolean,
+): boolean {
   const body = fn.body;
   if (!body || !ts.isBlock(body)) return false;
   const leading = body.statements[0];
   const clockFirst =
-    leading !== undefined && isClockRead(leading, 'gate') && !bindsOwnDate(fn.getSourceFile());
+    clockAllowed &&
+    leading !== undefined &&
+    isClockRead(leading, 'gate') &&
+    !bindsOwnDate(fn.getSourceFile());
   const first = body.statements[clockFirst ? 1 : 0];
   const param = fn.parameters[0];
   if (!first || !param || !ts.isIdentifier(param.name)) return false;
@@ -470,8 +497,9 @@ function isModulesOption(arg: ts.Expression): boolean {
  * GUARD 3, FIRST STATEMENT. The marker promises that nothing was written, which
  * holds only while the gate runs before the route does anything. So every
  * handler of a file that imports the gate starts with
- * `const gate = await apiContextGate(<its own request>)`, or makes one clock
- * read (`const <name> = Date.now();`) and then that statement, and the files that
+ * `const gate = await apiContextGate(<its own request>)`, or, in a route of
+ * CLOCK_READ_ROUTES only, makes one clock read (`const <name> = Date.now();`)
+ * and then that statement, and the files that
  * load the gate's module are exactly the reviewed routes: a helper that called
  * it after some work would break the promise out of this guard's sight.
  */
@@ -498,7 +526,7 @@ function firstStatementFindings(web: Map<string, string>): string[] {
     const expected = `const gate = await ${gate}(<its request>)`;
     for (const h of handlers) {
       if (!h.fn) found.push(`${file} ${h.method}: not a function this guard can read`);
-      else if (!isGateFirstStatement(h.fn, gate)) {
+      else if (!isGateFirstStatement(h.fn, gate, CLOCK_READ_ROUTES.has(file))) {
         found.push(`${file} ${h.method}: the first statement is not \`${expected}\``);
       }
     }
@@ -587,7 +615,14 @@ describe('a route that uses the gate calls it first, and only the reviewed route
     for (const route of GATED_ROUTES) expect(WEB.has(route), route).toBe(true);
   });
 
-  it('plant: one clock read before the gate passes, and every other leading shape fails', () => {
+  it('the routes that may read the clock first are reviewed routes', () => {
+    expect([...CLOCK_READ_ROUTES]).toEqual([
+      'app/api/v1/cycle-counts/[id]/lines/[lineId]/record/route.ts',
+    ]);
+    for (const route of CLOCK_READ_ROUTES) expect(GATED_ROUTES, route).toContain(route);
+  });
+
+  it('plant: one clock read before the gate passes in the count line record only, and every other leading shape fails', () => {
     const imp = `import { apiContextGate } from '@/server/lib/api-context-gate';
        import { checkRateLimit } from '@/lib/rate-limit';`;
     const handler = (method: string, lead: string) =>
@@ -622,12 +657,8 @@ describe('a route that uses the gate calls it first, and only the reviewed route
         handler('OPTIONS', 'const a = Date.now'),
       ].join('\n'),
     );
-    web.set(
-      EVENTS,
-      [`import { Date } from '@/lib/clock';`, imp, handler('POST', 'const a = Date.now();')].join(
-        '\n',
-      ),
-    );
+    // The accepted shape, in a reviewed route that may not read the clock first.
+    web.set(EVENTS, [imp, handler('POST', 'const arrivedAt = Date.now();')].join('\n'));
     const not = (file: string, method: string) =>
       `${file} ${method}: the first statement is not \`const gate = await apiContextGate(<its request>)\``;
     expect(firstStatementFindings(web)).toEqual([
@@ -647,6 +678,36 @@ describe('a route that uses the gate calls it first, and only the reviewed route
       not(EVENTS, 'POST'),
     ]);
   });
+
+  it.each([
+    ['a named import', `import { Date } from '@/lib/clock';`],
+    ['a default import', `import Date from '@/lib/clock';`],
+    ['a namespace import', `import * as Date from '@/lib/clock';`],
+    ['an import that requires a module', `import Date = require('@/lib/clock');`],
+    ['a variable', `const Date = { now: () => 0 };`],
+    ['a destructured name', `const { Date } = globalThis;`],
+    ['a name destructured from an array', `const [Date] = [globalThis.Date];`],
+    ['a function', `function Date() { return 0; }`],
+    ['a class', `class Date { static now() { return 0; } }`],
+    ['an enum', `enum Date { now }`],
+    ['a namespace', `namespace Date { export const now = () => 0; }`],
+  ])(
+    'plant: the clock read in the count line record fails when the file binds its own Date (%s)',
+    (_shape, binding) => {
+      const RECORD = 'app/api/v1/cycle-counts/[id]/lines/[lineId]/record/route.ts';
+      const imp = `import { apiContextGate } from '@/server/lib/api-context-gate';`;
+      const handler = `export async function POST(req: Request) { const arrivedAt = Date.now(); const gate = await apiContextGate(req); return [arrivedAt, gate]; }`;
+      const web = new Map(
+        GATED_ROUTES.map((route) => [route, WEB.get(route)!] as [string, string]),
+      );
+      web.set(RECORD, [imp, handler].join('\n'));
+      expect(firstStatementFindings(web)).toEqual([]);
+      web.set(RECORD, [imp, binding, handler].join('\n'));
+      expect(firstStatementFindings(web)).toEqual([
+        `${RECORD} POST: the first statement is not \`const gate = await apiContextGate(<its request>)\``,
+      ]);
+    },
+  );
 
   it('plant: a route whose first statement is not the gate fails it, and so does an unreviewed importer', () => {
     // The reviewed routes beside the plants (the adjust route is replaced).

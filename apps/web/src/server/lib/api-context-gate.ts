@@ -48,8 +48,11 @@ import type { ServiceContext } from '@/server/services/context';
  * throw is a bug that must stay loud, and Next.js control flow stays Next's
  * (recurring pattern #23). Nothing is reported here: the loaders already
  * report two of the failures (`auth.permissions.read`,
- * `auth.account-status.read`), and the membership choice logs one line naming
- * the read that did not answer (lib/auth/api-context.ts pickActiveMembership).
+ * `auth.account-status.read`), the membership choice logs one line naming
+ * the read that did not answer (lib/auth/api-context.ts pickActiveMembership),
+ * and a policy that was not read is reported where the context is marked
+ * (`auth.mfa_policy.unread`, at most once per cause per ten minutes per
+ * server).
  *
  * THE MODULES THE ROUTE NEEDS (docket S81). `opts.modules` names the
  * optional modules the route refuses without. When withApiContext could not

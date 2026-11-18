@@ -44,7 +44,8 @@ vi.mock('@/lib/supabase/server', () => ({ createClient: async () => refs.client 
 
 import { verifiedSessionAuth } from '@/test/verified-session-stub';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
+import { resetPolicyUnreadReportsForTests, withApiContext } from '@/lib/auth/api-context';
 import { mfaPolicyWasUnread } from '@/lib/auth/mfa-policy';
 
 import { apiContextGate } from './api-context-gate';
@@ -407,6 +408,85 @@ describe("which requests get the marker, and which get the route's answer", () =
         ]);
       }
     }
+  });
+
+  describe('the report an operator gets: one per cause per ten minutes per server, the cause code only', () => {
+    const CAUSES = [
+      ['hidden', 'hidden_row'],
+      ['odd', 'not_a_policy'],
+      ['error', 'read_failed'],
+      ['rejects', 'read_failed'],
+    ] as const;
+    const reports = () =>
+      vi.mocked(reportError).mock.calls.filter((c) => c[1].tag === 'auth.mfa_policy.unread');
+
+    beforeEach(() => {
+      resetPolicyUnreadReportsForTests();
+    });
+
+    it.each(CAUSES)(
+      'organization row %s: the first request reports %s once at warning level; the next ones log their line and do not report',
+      async (org, cause) => {
+        arrange({ ...owed, policy: 'optional' }, 'separate queries', org);
+        for (let i = 0; i < 3; i += 1) await apiContextGate(request('bearer', 'POST'));
+        expect(reports()).toHaveLength(1);
+        const [err, context] = reports()[0]!;
+        expect(context).toEqual({
+          tag: 'auth.mfa_policy.unread',
+          level: 'warning',
+          extra: { cause },
+        });
+        // Nothing from the request or the row: no id, address or value.
+        const sent = JSON.stringify([String(err), context]);
+        for (const value of [ORG_ID, USER_ID, 'member@example.com', 'something_else']) {
+          expect(sent).not.toContain(value);
+        }
+        // Every request still logs (the gate's line, and the cause's own line).
+        const gateLines = vi
+          .mocked(console.warn)
+          .mock.calls.filter((c) => String(c[0]).startsWith('[api-context-gate]'));
+        expect(gateLines).toHaveLength(3);
+      },
+    );
+
+    it('each cause is reported on its own, and again once the ten minutes are over', async () => {
+      const clock = vi.spyOn(Date, 'now');
+      try {
+        clock.mockReturnValue(1_800_000_000_000);
+        for (const org of ['hidden', 'odd', 'error'] as const) {
+          arrange({ ...owed, policy: 'optional' }, 'separate queries', org);
+          await withApiContext(request('bearer', 'POST'));
+          await withApiContext(request('bearer', 'POST'));
+        }
+        expect(reports().map((c) => c[1].extra?.cause)).toEqual([
+          'hidden_row',
+          'not_a_policy',
+          'read_failed',
+        ]);
+        clock.mockReturnValue(1_800_000_000_000 + 10 * 60_000 - 1);
+        arrange({ ...owed, policy: 'optional' }, 'separate queries', 'hidden');
+        await withApiContext(request('bearer', 'POST'));
+        expect(reports()).toHaveLength(3);
+        clock.mockReturnValue(1_800_000_000_000 + 10 * 60_000);
+        await withApiContext(request('bearer', 'POST'));
+        expect(reports().map((c) => c[1].extra?.cause)).toEqual([
+          'hidden_row',
+          'not_a_policy',
+          'read_failed',
+          'hidden_row',
+        ]);
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    it('a policy that was read reports nothing', async () => {
+      for (const read of READS) {
+        arrange({ ...owed, policy: 'optional' }, read, 'stored');
+        await apiContextGate(request('bearer', 'POST'));
+      }
+      expect(reports()).toEqual([]);
+    });
   });
 
   it('a verified authenticator at aal2 passes in every state', async () => {
