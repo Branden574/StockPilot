@@ -7,8 +7,16 @@ import {
   ExceptionOccurrencesService,
   type ExceptionSyncOutcome,
 } from '@/server/services/exception-occurrences';
+import {
+  cronAttemptRecorder,
+  readCronAttempts,
+  sweepUntilDeadline,
+  type CronAttempts,
+} from '@/server/services/lib/cron-sweep';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { secretsEqual } from '@/server/services/lib/system-context';
+
+import { exceptionSweepOrder } from './sweep-order';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -33,45 +41,17 @@ export const maxDuration = 300;
  */
 const SWEEP_DEADLINE_MS = 45_000;
 
-/** Last synced longer ago than this: due for this run. */
-const OVERDUE_MS = 10 * 60_000;
-/** Last synced longer ago than this, with a sync every 15 minutes: it has
- *  been failing, so it goes after the orgs that are healthy. */
-const FAILING_MS = 60 * 60_000;
-
 /**
- * The sweep order. By tier, then least recently synced first:
- *   0. due: synced 10 to 60 minutes ago (the normal case);
- *   1. never synced (a new org's first check), in id order;
- *   2. not synced for over an hour (failing run after run: an RPC error, a
- *      lock that is always busy), so they cannot use up the time budget
- *      ahead of healthy orgs;
- *   3. synced in the last 10 minutes (a posted count's follow-up), which
- *      are cheap or throttled.
- * Ordering "never synced" first, as before, let a set of orgs that never
- * complete a sync (for example one with no owner or admin) lead every run.
- * The sort is stable, so ties keep id order. Without the sync-state read
- * every org is tier 1, which is plain id order.
+ * One org at a time, as before: each sync already runs its rule groups in
+ * parallel against the shared database pool, so several orgs at once would
+ * multiply that. Fairness comes from the order, not from parallelism. The
+ * deadline is checked before each start.
  */
-function sweepOrder(
-  orgIds: readonly string[],
-  lastSynced: ReadonlyMap<string, number>,
-  now: number,
-): string[] {
-  const rank = (id: string): [number, number] => {
-    const last = lastSynced.get(id);
-    if (last === undefined || !Number.isFinite(last)) return [1, 0];
-    const age = now - last;
-    if (age < OVERDUE_MS) return [3, last];
-    if (age < FAILING_MS) return [0, last];
-    return [2, last];
-  };
-  return [...orgIds].sort((a, b) => {
-    const [ta, la] = rank(a);
-    const [tb, lb] = rank(b);
-    return ta !== tb ? ta - tb : la - lb;
-  });
-}
+const CONCURRENCY = 1;
+
+/** An organization whose attempts have ended without a sync this many times
+ *  in a row is counted in the run's log line (failingRepeatedly). */
+const REPEATED_FAILURES = 3;
 
 /**
  * EXCEPTION CENTER SYNC (F1-1), every 15 minutes (vercel.json).
@@ -89,9 +69,11 @@ function sweepOrder(
  * CRON_SECRET-gated (the shared constant-time secretsEqual). FAIL-OPEN per
  * org: syncOrg never throws, reports its own failures
  * (exceptions.sync_failed), and one org's failure never stops the rest.
- * Orgs run one at a time, in sweepOrder (due orgs first, least recently
- * synced first), so the sweep never herds the database and a deadline cut
- * rotates fairly.
+ * Orgs run one at a time, least recently REACHED first (exceptionSweepOrder:
+ * the later of the last applied sync and the cron's last attempt). The cron
+ * records each attempt (cron_sweep_attempts, 0469) as it starts the org,
+ * so an org it reached goes to the back of the line whether or not the sync
+ * applied, and a deadline cut rotates through every org.
  */
 export async function GET(req: NextRequest) {
   if (!env.CRON_SECRET) {
@@ -114,12 +96,16 @@ export async function GET(req: NextRequest) {
 
   try {
     const admin = createAdminClient();
-    const orgs = await fetchAllRows<{ id: string }>((from, to) =>
-      admin.from('organizations').select('id').order('id', { ascending: true }).range(from, to),
+    const orgs = await fetchAllRows<{ id: string; created_at?: string | null }>((from, to) =>
+      admin
+        .from('organizations')
+        .select('id, created_at')
+        .order('id', { ascending: true })
+        .range(from, to),
     );
 
-    // Ordering only (sweepOrder); if this read fails the sweep still runs, in
-    // id order.
+    // Ordering only (exceptionSweepOrder); if a read fails the sweep still
+    // runs, ordered by what the other read gave (both failed: id order).
     const lastSynced = new Map<string, number>();
     try {
       const states = await fetchAllRows<{ organization_id: string; last_synced_at: string }>(
@@ -134,13 +120,64 @@ export async function GET(req: NextRequest) {
     } catch (err) {
       void reportError(err, { tag: 'cron.exception-occurrences.order', level: 'warning' });
     }
-    const ordered = sweepOrder(
-      orgs.map((o) => o.id),
+    let attempts: CronAttempts = { lastAttempt: new Map(), failures: new Map() };
+    try {
+      attempts = await readCronAttempts(admin, 'exception_sync');
+    } catch (err) {
+      void reportError(err, { tag: 'cron.exception-occurrences.attempts', level: 'warning' });
+    }
+    const ordered = exceptionSweepOrder(
+      orgs.map((o) => ({ id: o.id, createdAt: o.created_at ?? null })),
       lastSynced,
+      attempts.lastAttempt,
       startedAt,
-    ).map((id) => ({ id }));
+    );
 
-    let processed = 0;
+    // The attempt record (cron_sweep_attempts, job 'exception_sync'). A
+    // failed write never stops a sync (the record is for ordering and the log
+    // line only) and is reported once per run.
+    const recorder = cronAttemptRecorder(admin, 'exception_sync', {
+      failuresBefore: attempts.failures,
+      reportTag: 'cron.exception-occurrences.attempts',
+    });
+
+    let failingRepeatedly = 0;
+    const sweep = await sweepUntilDeadline(
+      ordered,
+      { concurrency: CONCURRENCY, deadlineAt: startedAt + SWEEP_DEADLINE_MS },
+      async (orgId): Promise<ExceptionSyncOutcome> => {
+        // Recorded as the org starts: the write is sent before the sync's
+        // first read, and awaited after it.
+        const finish = recorder.start(orgId);
+        // Unforced: an org synced within the last minute (a count was just
+        // posted there) is skipped by syncOrg's own throttle. syncOrg never
+        // throws; the catch is there so one org can never end the sweep even
+        // if that promise is ever broken.
+        let outcome: ExceptionSyncOutcome;
+        try {
+          outcome = await ExceptionOccurrencesService.syncOrg(orgId, { reason: 'cron' });
+        } catch (err) {
+          void reportError(err, {
+            tag: 'exceptions.sync_failed',
+            organizationId: orgId,
+            extra: { reason: 'cron' },
+          });
+          outcome = { status: 'failed' };
+        }
+        // Attempts in a row that ended without a sync. busy (another sync
+        // held the lock) is neither: that org is being synced.
+        const inARow = await finish(
+          outcome.status === 'failed' || outcome.status === 'no_system_actor'
+            ? 'failure'
+            : outcome.status === 'busy'
+              ? 'neither'
+              : 'success',
+        );
+        if (inARow >= REPEATED_FAILURES) failingRepeatedly += 1;
+        return outcome;
+      },
+    );
+
     // Summed over the orgs applied, for the run's log line (L102) and the
     // body. settled: count_variance entries held because their count line was
     // confirmed (0386).
@@ -148,23 +185,9 @@ export async function GET(req: NextRequest) {
     let resolved = 0;
     let recountsClosed = 0;
     let settled = 0;
-    for (const org of ordered) {
-      if (Date.now() - startedAt >= SWEEP_DEADLINE_MS) break;
-      // Unforced: an org synced within the last minute (a count was just
-      // posted there) is skipped by syncOrg's own throttle. syncOrg never
-      // throws; the catch is there so one org can never end the sweep even
-      // if that promise is ever broken.
-      let outcome: ExceptionSyncOutcome;
-      try {
-        outcome = await ExceptionOccurrencesService.syncOrg(org.id, { reason: 'cron' });
-      } catch (err) {
-        void reportError(err, {
-          tag: 'exceptions.sync_failed',
-          organizationId: org.id,
-          extra: { reason: 'cron' },
-        });
-        outcome = { status: 'failed' };
-      }
+    for (const entry of sweep.entries) {
+      if (!entry.started) continue;
+      const outcome: ExceptionSyncOutcome = entry.ok ? entry.value : { status: 'failed' };
       tally[outcome.status] += 1;
       if (outcome.status === 'applied') {
         raised += outcome.raised;
@@ -172,9 +195,9 @@ export async function GET(req: NextRequest) {
         recountsClosed += outcome.recountsClosed;
         settled += outcome.settled;
       }
-      processed += 1;
     }
-    const deferred = ordered.length - processed;
+    const processed = sweep.started;
+    const deferred = sweep.leftForNextRun;
     if (deferred > 0) {
       void reportError(new Error('Exception sync sweep stopped at its deadline'), {
         tag: 'cron.exception-occurrences.deadline',
@@ -192,6 +215,7 @@ export async function GET(req: NextRequest) {
         processed,
         deferredForTime: deferred,
         ...tally,
+        failingRepeatedly,
         raised,
         resolved,
         recountsClosed,

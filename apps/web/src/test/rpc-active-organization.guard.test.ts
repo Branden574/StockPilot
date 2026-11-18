@@ -398,6 +398,10 @@ const REGISTRY: Record<string, Entry> = {
   ],
   'server/services/inventory.ts::inventory_distinct_racks': RO(),
   'server/services/inventory.ts::inventory_distinct_racks_for_org': RO(),
+  'server/services/inventory.ts::inventory_list_value': [
+    'takes_org',
+    "Passes the active organization; the list's value total, read as the caller (STABLE, SECURITY INVOKER).",
+  ],
   'server/services/inventory.ts::inventory_set_bin_location': [
     'callers_pin',
     'The rack label after a placement whose stock moved to a destination in the organization.',

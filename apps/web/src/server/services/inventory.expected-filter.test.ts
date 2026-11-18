@@ -45,7 +45,11 @@ function buildSupabaseStub(rows: Array<Record<string, unknown>>, count?: number)
     then: (cb: (r: { data: unknown; count: number; error: null }) => unknown) =>
       cb({ data: rows, count: count ?? rows.length, error: null }),
   };
-  return { from: () => chain, _eqCalls: eqCalls, _inCalls: inCalls, _orCalls: orCalls, _filterCalls: filterCalls };
+  return {
+    from: () => chain,
+    // list() asks inventory_list_value (0470) for its value total.
+    rpc: async () => ({ data: 0, error: null }),
+    _eqCalls: eqCalls, _inCalls: inCalls, _orCalls: orCalls, _filterCalls: filterCalls };
 }
 
 function makeSvc(stub: ReturnType<typeof buildSupabaseStub>) {
@@ -98,15 +102,20 @@ describe('InventoryService.list — expected-items predicate (mig 0277)', () => 
     expect(result.items.map((i) => i.id).sort()).toEqual(['a', 'b']);
   });
 
-  it('the parallel value-footer sum query mirrors the exclusion (both builders record it)', async () => {
-    const stub = buildSupabaseStub([]);
-    await makeSvc(stub).list({});
-    // list() builds the main query AND the buildSumPage mirror against the
-    // same recording chain — the predicate must appear twice (once each).
-    const calls = stub._eqCalls.filter(
-      (c) => c[0] === 'awaiting_first_receipt' && c[1] === false,
-    );
-    expect(calls.length).toBeGreaterThanOrEqual(2);
+  it('the value total takes the same predicate as the page, in each of the three modes', async () => {
+    for (const [expected, want] of [
+      [undefined, false],
+      [true, true],
+      ['any', undefined],
+    ] as const) {
+      const stub = buildSupabaseStub([]);
+      const rpc = vi.fn(async () => ({ data: 0, error: null }));
+      (stub as { rpc: unknown }).rpc = rpc;
+      await makeSvc(stub).list(expected === undefined ? {} : { expected });
+      expect(rpc).toHaveBeenCalledTimes(1);
+      const pFilters = (rpc.mock.calls[0] as unknown[])[1] as { p_filters: Record<string, unknown> };
+      expect(pFilters.p_filters.awaiting_first_receipt).toBe(want);
+    }
   });
 });
 
