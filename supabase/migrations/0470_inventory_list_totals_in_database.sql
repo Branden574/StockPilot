@@ -116,6 +116,13 @@
 -- inventory_list_value pins search_path to '' and schema-qualifies every
 -- name; is_low_stock binds its names at creation (above).
 
+-- LOCKS: no user table is locked to commit. Creating the two functions takes
+-- pg_proc's unique name index and SHARE on pg_description; behind an
+-- uncommitted function of the same name and signature, or behind
+-- maintenance on the catalog, that wait ends after 900ms with 55P03 and
+-- nothing applied, and the push can be run again later.
+set lock_timeout = '900ms';
+
 create or replace function public.is_low_stock(p_item public.inventory_items)
 returns boolean
 language sql

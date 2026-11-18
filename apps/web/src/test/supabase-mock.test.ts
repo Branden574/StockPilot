@@ -98,11 +98,75 @@ describe('servedLikePostgrest', () => {
     expect((all.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['a', 'c', 'b']);
   });
 
+  it('evaluates an .or() logic tree: is, eq, gt, quoted values and a nested and()', async () => {
+    const stub = makeSupabaseStub({ 'items.select': servedLikePostgrest(rows) });
+    const some = await stub.client
+      .from('items')
+      .select('id')
+      .eq('org', 'o1')
+      .or('gone.is.null,id.eq.d')
+      .order('id');
+    expect((some.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['a', 'c', 'd']);
+    // A keyset cursor: after (b) by id, or b itself only in org o2.
+    const keyset = await stub.client
+      .from('items')
+      .select('id')
+      .or('id.gt."b",and(id.eq."b",org.eq.o2)')
+      .order('id');
+    expect((keyset.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['b', 'c', 'd']);
+    // Two .or() calls both apply (PostgREST ANDs them).
+    const both = await stub.client
+      .from('items')
+      .select('id')
+      .or('id.eq.a,id.eq.b')
+      .or('org.eq.o2')
+      .order('id');
+    expect((both.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['b']);
+  });
+
+  it('compares in an .or() by type: numbers as numbers, timestamps as times', async () => {
+    const stub = makeSupabaseStub({
+      'q.select': servedLikePostgrest([
+        { id: 'x', qty: 9, at: '2026-08-24T20:00:00+00:00' },
+        { id: 'y', qty: 12, at: '2026-08-24T21:00:00+00:00' },
+      ]),
+    });
+    // '9' > '10' as text; 9 < 10 as the number it is.
+    const gt = await stub.client.from('q').select('id').or('qty.gt.10').order('id');
+    expect((gt.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['y']);
+    const lt = await stub.client.from('q').select('id').or('qty.lt.10').order('id');
+    expect((lt.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['x']);
+    // PostgREST's +00:00 against a toISOString() Z value: the same instant.
+    const at = await stub.client
+      .from('q')
+      .select('id')
+      .or('at.lte."2026-08-24T20:30:00.000Z"')
+      .order('id');
+    expect((at.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['x']);
+    const same = await stub.client.from('q').select('id').or('at.eq."2026-08-24T20:00:00.000Z"');
+    expect((same.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['x']);
+  });
+
+  it('refuses an .or() comparison it cannot make the way the database would', async () => {
+    const stub = makeSupabaseStub({
+      'q.select': servedLikePostgrest([{ id: 'x', qty: 9, name: 'Blue Pen', at: '2026-08-24T20:00:00Z' }]),
+    });
+    const run = (filter: string) =>
+      Promise.resolve().then(() => stub.client.from('q').select('id').or(filter));
+    await expect(run('qty.gt.ten')).rejects.toThrow(/cannot compare/);
+    await expect(run('name.gt.Apple')).rejects.toThrow(/cannot compare/); // collation order
+    await expect(run('at.lt.tomorrow')).rejects.toThrow(/cannot compare/);
+    await expect(run('name.eq."Blue\\ Pen"')).rejects.toThrow(/cannot compare/);
+    // Equality on text is fine.
+    const eq = await stub.client.from('q').select('id').or('name.eq."Blue Pen"');
+    expect((eq.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['x']);
+  });
+
   it('refuses a filter it cannot evaluate rather than ignoring it', async () => {
     const stub = makeSupabaseStub({ 'items.select': servedLikePostgrest(rows) });
     await expect(
-      Promise.resolve().then(() => stub.client.from('items').select('id').or('a.eq.1,b.eq.2')),
-    ).rejects.toThrow(/cannot evaluate \.or\(\)/);
+      Promise.resolve().then(() => stub.client.from('items').select('id').or('a.like.1*,b.eq.2')),
+    ).rejects.toThrow(/cannot evaluate the \.or\(\) term a\.like\.1\*/);
   });
 
   it('evaluates .not(col, "is", null): keeps only the rows whose col is set (an archived-only list)', async () => {

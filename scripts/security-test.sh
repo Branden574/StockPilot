@@ -934,6 +934,11 @@ PGTAP_TESTS=(
   # read, and a viewer naming a category they are not granted all get 0;
   # anon may execute neither function.
   supabase/tests/0470_inventory_list_totals_in_database.test.sql
+  # When a scheduled job last started each organization (0469): one row per
+  # job and organization, RLS on with no policy, no privilege for anon or
+  # authenticated (a signed-in owner cannot read or write it), service_role
+  # only, and the rows go with the organization.
+  supabase/tests/0469_cron_sweep_attempts.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
