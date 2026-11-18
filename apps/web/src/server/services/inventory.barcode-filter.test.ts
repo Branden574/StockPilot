@@ -31,7 +31,11 @@ function buildSupabaseStub(rows: Array<{ id: string; barcode: string }>) {
     then: (cb: (r: { data: unknown; count: number; error: null }) => unknown) =>
       cb({ data: rows, count: rows.length, error: null }),
   };
-  return { from: () => chain, _eqCalls: eqCalls };
+  return {
+    from: () => chain,
+    // list() asks inventory_list_value (0470) for its value total.
+    rpc: async () => ({ data: 0, error: null }),
+    _eqCalls: eqCalls };
 }
 
 describe('InventoryService.list barcode filter', () => {

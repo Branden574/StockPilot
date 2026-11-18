@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -116,11 +116,12 @@ describe('rental items are listed by the database, on both clients', () => {
     expect(code).toMatch(/rentalTotal\s*=\s*inventory\.total/);
   });
 
-  it('the service filters is_rental in BOTH the page query and the value sum', () => {
+  it('the service filters is_rental in the page query, the plan scan AND the value total', () => {
     const code = codeOnly(readFileSync(INVENTORY_SERVICE, 'utf8'));
     expect(code).not.toContain('includeRentals');
-    // Since PR #364 the page query and the value sum take every filter from
-    // one method, so the rental rule is written once and both must call it.
+    // Since PR #364 the page query and the plan scan take every filter from
+    // one method, so the request's rental rule is written once and both must
+    // call it.
     const rental = /\.eq\(\s*'is_rental'\s*,\s*filters\.rentalsOnly\s*===\s*true\s*\)/;
     expect(code.match(new RegExp(rental.source, 'g'))?.length).toBe(1);
     expect(methodBody(code, 'private applyContentFilters(')).toMatch(rental);
@@ -128,9 +129,36 @@ describe('rental items are listed by the database, on both clients', () => {
     expect(list, 'the page query').toMatch(
       /this\.applyContentFilters\(\s*query\s*,\s*filters\s*\)/,
     );
-    expect(list, 'the value sum reads the scan').toMatch(/this\.filteredScanPage\(/);
-    expect(methodBody(code, 'private filteredScanPage('), 'the value sum').toMatch(
+    expect(methodBody(code, 'private filteredScanPage('), 'the plan scan').toMatch(
       /this\.applyContentFilters\(\s*sumQuery\s*,\s*filters\s*\)/,
+    );
+    // Since migration 0470 the value total is one aggregate in the database,
+    // asked with the filters buildItemListValueFilters builds from the same
+    // filters (inventory.list-value-filters.test.ts holds every filter to
+    // reaching it). The rental rule there is the same comparison, once, and
+    // the function applies it to the column.
+    expect(list, 'the value total').toMatch(
+      /this\.ctx\.supabase\.rpc\(\s*'inventory_list_value'[\s\S]*?buildItemListValueFilters\(\s*filters\s*,/,
+    );
+    const builderStart = code.indexOf('export function buildItemListValueFilters(');
+    expect(builderStart).toBeGreaterThanOrEqual(0);
+    const builder = code.slice(builderStart, code.indexOf('\n}\n', builderStart));
+    const valueRental = /out\.is_rental\s*=\s*filters\.rentalsOnly\s*===\s*true\s*;/;
+    expect(builder, 'the value total').toMatch(valueRental);
+    expect(code.match(new RegExp(valueRental.source, 'g'))?.length).toBe(1);
+    const migrations = path.join(REPO, 'supabase/migrations');
+    const latest = readdirSync(migrations)
+      .filter((f) => f.endsWith('.sql'))
+      .sort()
+      .filter((f) =>
+        /create or replace function public\.inventory_list_value\(/i.test(
+          readFileSync(path.join(migrations, f), 'utf8'),
+        ),
+      )
+      .pop();
+    expect(latest, 'the value function exists').toBeDefined();
+    expect(readFileSync(path.join(migrations, latest!), 'utf8')).toMatch(
+      /\(v_is_rental is null or i\.is_rental = v_is_rental\)/,
     );
   });
 

@@ -948,6 +948,11 @@ PGTAP_TESTS=(
 # MANIFEST 2 — apps/web vitest, paths relative to apps/web/
 # ═══════════════════════════════════════════════════════════════════════════
 WEB_TESTS=(
+  # 0470: the inventory list's value total takes the list's own scope (the
+  # caller's readable warehouses, a chosen warehouse only for a manager, a
+  # viewer's category grants) and every row filter; a filter added later
+  # cannot be left out of it (the drift guard).
+  src/server/services/inventory.list-value-filters.test.ts
   # Storage path traversal (HI-8) and upload content verification.
   src/lib/storage-path.test.ts
   src/server/services/storage-path-traversal.test.ts

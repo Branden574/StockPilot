@@ -121,6 +121,7 @@ describe('list()', () => {
     grants.current = new Set(ids(5, 'c'));
     const short = makeSupabaseStub({
       'inventory_items.select': { data: rowsFor(), error: null, count: 2 },
+      'rpc:inventory_list_value': { data: 0, error: null },
     });
     await svc(short.client, 'viewer').list();
     const shortMain = short.chainsAll.get('inventory_items.select')?.[0] ?? [];
@@ -133,12 +134,18 @@ describe('list()', () => {
     grants.current = new Set(ids(150, 'c'));
     const long = makeSupabaseStub({
       'inventory_items.select': { data: rowsFor(), error: null, count: 2 },
+      'rpc:inventory_list_value': { data: 0, error: null },
     });
     const out = await svc(long.client, 'viewer').list();
     for (const chain of long.chainArgsAll.get('inventory_items.select') ?? []) {
       expect(chain.some((a) => a[0] === 'category_id' && Array.isArray(a[1]))).toBe(false);
     }
     expect(out.items.map((i) => i.id)).toEqual([uuid(1)]);
+    // The value total takes every grant in its body, where length is no limit.
+    expect(long.rpcCalls).toHaveLength(1);
+    const pFilters = (long.rpcCalls[0]!.args as { p_filters: { category_grants?: string[] } })
+      .p_filters;
+    expect(new Set(pFilters.category_grants)).toEqual(new Set(ids(150, 'c')));
   });
 });
 

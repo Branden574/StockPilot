@@ -68,6 +68,7 @@ describe('InventoryService.list — placement holdings past the 1000-row cap', (
         error: null,
         count: 1,
       },
+      'rpc:inventory_list_value': { data: 0, error: null },
       'item_stock_levels.select': pagedHoldings([
         {
           id: 'lvl-target',
@@ -95,6 +96,7 @@ describe('InventoryService.list — placement holdings past the 1000-row cap', (
         error: null,
         count: 1,
       },
+      'rpc:inventory_list_value': { data: 0, error: null },
       'item_stock_levels.select': { data: null, error: { message: 'fetch failed' } },
     });
     const svc = new InventoryService(makeServiceContext(stub.client));
