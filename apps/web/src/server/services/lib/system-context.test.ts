@@ -26,11 +26,12 @@ const MODULES = {
   error: null,
 };
 
-const admin = (members: unknown, modules: unknown) =>
+const stubOf = (members: unknown, modules: unknown) =>
   makeSupabaseStub({
     'organization_members.select': members as never,
     'organization_modules.select': modules as never,
-  }).client as never;
+  });
+const admin = (members: unknown, modules: unknown) => stubOf(members, modules).client as never;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -48,6 +49,18 @@ describe('loadSystemContext', () => {
       isSystem: true,
     });
     expect([...loaded.ctx.enabledModules].sort()).toEqual(['inventory', 'purchase_orders']);
+  });
+
+  it("both reads are filtered to the organization (never another tenant's owner or modules)", async () => {
+    const stub = stubOf(OWNER, MODULES);
+    await loadSystemContext(stub.client as never, 'org-1');
+    const members = stub.chainArgsAll.get('organization_members.select') ?? [];
+    const modules = stub.chainArgsAll.get('organization_modules.select') ?? [];
+    expect(members).toHaveLength(1);
+    expect(modules).toHaveLength(1);
+    expect(members[0]).toContainEqual(['organization_id', 'org-1']);
+    expect(modules[0]).toContainEqual(['organization_id', 'org-1']);
+    expect(modules[0]).toContainEqual(['enabled', true]);
   });
 
   it('a failed members read is read_failed, never no_actor', async () => {

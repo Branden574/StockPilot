@@ -179,6 +179,25 @@ describe('when Google does not answer (a rate limit, an error, no reply)', () =>
     expect([...tried]).toEqual(['i1']);
   });
 
+  it('the bulk Refresh prices (on demand) returns googleUnavailable to its caller', async () => {
+    const items = ['i1', 'i2'].map((id) => ({ id, barcode: '9780306406157', last_priced_at: null }));
+    const stub = makeSupabaseStub({
+      'inventory_items.select': { data: items, error: null },
+      'inventory_items.update': { data: null, error: null },
+      'item_price_observations.insert': { data: null, error: null },
+    });
+    const svc = new PriceTrackingService(
+      makeServiceContext(stub.client, { enabledModules: withPT() }),
+      limitedClient(0),
+    );
+    await expect(svc.refreshOrgBookPrices()).resolves.toMatchObject({
+      written: 0,
+      lookups: 1,
+      googleUnavailable: true,
+    });
+    expect(stub.chainArgsAll.get('inventory_items.update')).toBeUndefined();
+  });
+
   it('a person asking for one price gets the latest observation, and the book is not stamped', async () => {
     const latest = { item_id: 'i1', list_price: 9.99, observed_at: '2026-11-01T00:00:00.000Z' };
     const stub = makeSupabaseStub({

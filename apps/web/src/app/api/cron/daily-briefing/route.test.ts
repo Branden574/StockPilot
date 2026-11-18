@@ -632,12 +632,14 @@ function copiesOf(
  * either table is a failure (never "no owner", never "no modules").
  */
 const SYSTEM_CONTEXT_PINS = [
-  ".from('organization_members')",
+  // Each read's chain from its table to its organization filter, so neither
+  // read can lose `.eq('organization_id', orgId)` (a set of every tenant's
+  // modules, or an actor from another organization).
+  ".from('organization_members') .select('user_id, role') .eq('organization_id', orgId)",
   ".in('role', ['owner', 'admin'])",
   ".not('accepted_at', 'is', null)",
   ".is('impersonation_expires_at', null)",
-  ".from('organization_modules')",
-  ".eq('enabled', true)",
+  ".from('organization_modules') .select('module_id') .eq('organization_id', orgId) .eq('enabled', true)",
   "if (members.error || mods.error) return { ok: false, reason: 'read_failed' };",
   "if (!actor) return { ok: false, reason: 'no_actor' };",
   ' isSystem: true,',
@@ -695,8 +697,9 @@ describe('duplicated cron helpers must not diverge', () => {
   });
 
   it('the pins catch a changed predicate (a pin that cannot fail guards nothing)', () => {
-    // Negative pin: a shared body that dropped the impersonation filter, or
-    // went back to ignoring a read error, must be caught.
+    // Negative pin: a shared body that dropped the impersonation filter or an
+    // organization filter, or went back to ignoring a read error, must be
+    // caught.
     const body = extractFunction(readFileSync(SHARED_MODULE, 'utf8'), 'loadSystemContext')!;
     const noImpersonationFilter = body.replace(".is('impersonation_expires_at', null)", '');
     expect(noImpersonationFilter).not.toBe(body);
@@ -709,5 +712,19 @@ describe('duplicated cron helpers must not diverge', () => {
     expect(missingPins(errorsIgnored)).toHaveLength(1);
     const notSystem = body.replace('isSystem: true,', 'isSystem: false,');
     expect(missingPins(notSystem)).toEqual([' isSystem: true,']);
+    // Either read losing its organization filter.
+    const [membersFilter, modulesFilter] = [0, 1].map((n) => {
+      let at = -1;
+      for (let i = 0; i <= n; i += 1) at = body.indexOf(".eq('organization_id', orgId)", at + 1);
+      return at;
+    });
+    expect(membersFilter).toBeGreaterThan(-1);
+    expect(modulesFilter).toBeGreaterThan(membersFilter);
+    const drop = (at: number) =>
+      body.slice(0, at) + body.slice(at + ".eq('organization_id', orgId)".length);
+    expect(missingPins(drop(membersFilter))).toEqual([SYSTEM_CONTEXT_PINS[0]]);
+    expect(missingPins(drop(modulesFilter))).toEqual([
+      ".from('organization_modules') .select('module_id') .eq('organization_id', orgId) .eq('enabled', true)",
+    ]);
   });
 });

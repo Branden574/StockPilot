@@ -47,6 +47,14 @@ describe('googleBooksClient.fetchVolumeByIsbn', () => {
     });
   });
 
+  it('a 200 whose body is not JSON throws it too: Google did not really answer', async () => {
+    fetchMock.mockResolvedValue(new Response('<html>busy</html>', { status: 200 }));
+    await expect(googleBooksClient.fetchVolumeByIsbn('9780306406157')).rejects.toMatchObject({
+      name: 'GoogleBooksUnavailableError',
+      status: 200,
+    });
+  });
+
   it('an answer with no volume is returned as it is: a real "no price found"', async () => {
     fetchMock.mockResolvedValue(
       new Response(JSON.stringify({ kind: 'books#volumes', totalItems: 0 }), { status: 200 }),
