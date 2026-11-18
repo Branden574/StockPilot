@@ -298,8 +298,52 @@ describe('GET /api/cron/weekly-digest — at-most-once per (org, user, week)', (
       level: 'warning',
       extra: { step: 'claim', job: 'weekly_digest', code: '42P01' },
     });
-    // No id, no address, no database text.
+    // No id, no address, no database text; the code is in the message.
     expect(JSON.stringify(reports[0])).not.toMatch(/user-|org-|@|idempotency_keys/);
+    expect((reports[0]![0] as Error).message).toContain('(code 42P01)');
+    // Every member it tried was skipped: one error-level report.
+    const down = vi
+      .mocked(reportError)
+      .mock.calls.filter(([, c]) => (c as { tag?: string }).tag === 'cron.weekly-digest.claims_down');
+    expect(down).toHaveLength(1);
+    expect(down[0]![1]).toEqual({
+      tag: 'cron.weekly-digest.claims_down',
+      level: 'error',
+      extra: { job: 'weekly_digest', code: '42P01', skipped: 2 },
+    });
+    expect(JSON.stringify(down[0])).not.toMatch(/user-|org-|@/);
+  });
+
+  it('a claim insert that errors once and then works is retried, and the digest is sent', async () => {
+    let inserts = 0;
+    const stub = makeSupabaseStub({
+      'user_profiles.select': { data: [recipientRow('user-a', 'a@acme.test')], error: null },
+      'user_profiles.select.maybeSingle': {
+        data: { email_digest_optin: true, disabled_at: null },
+        error: null,
+      },
+      'organization_members.select.maybeSingle': {
+        data: { user_id: 'user-a', accepted_at: '2026-01-01T00:00:00Z' },
+        error: null,
+      },
+      'idempotency_keys.insert': () =>
+        ++inserts === 1
+          ? { data: null, error: { message: 'fetch failed', code: '' } }
+          : { data: null, error: null },
+    });
+    adminHolder.client = stub.client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ ok: true, sent: 1 });
+    expect(inserts).toBe(2);
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    expect(
+      vi.mocked(reportError).mock.calls.filter(([, c]) =>
+        ['cron.weekly-digest.claim', 'cron.weekly-digest.claims_down'].includes(
+          String((c as { tag?: string }).tag),
+        ),
+      ),
+    ).toHaveLength(0);
   });
 });
 

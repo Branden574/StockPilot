@@ -308,6 +308,11 @@ describe('GET /api/cron/price-pull when the day claim cannot be recorded', () =>
       ([, c]) => (c as { tag?: string }).tag === 'cron.price-pull.attempts',
     );
     expect(reports).toHaveLength(2);
+    expect(
+      reportError.mock.calls.filter(
+        ([, c]) => (c as { tag?: string }).tag === 'cron.price-pull.claims_down',
+      ),
+    ).toHaveLength(2);
     for (const [err, ctx] of reports) {
       expect(ctx).toMatchObject({
         extra: { step: 'claim', job: 'price_pull', code: '42501', onClaimUnavailable: 'skip' },

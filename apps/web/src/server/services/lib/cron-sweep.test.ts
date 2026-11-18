@@ -546,6 +546,127 @@ describe('cronAttemptClaimer (one run per organization per hold)', () => {
       expect(reportError).not.toHaveBeenCalled();
     });
 
+    it('retries once: a claim update that errors and then works claims the organization, with no report', async () => {
+      reportError.mockClear();
+      const table = cronAttemptsTable();
+      let updates = 0;
+      const stub = makeSupabaseStub({
+        ...table.results,
+        'cron_sweep_attempts.update': (call) =>
+          ++updates === 1
+            ? { data: null, error: { message: 'fetch failed', code: '' } }
+            : table.results['cron_sweep_attempts.update'](call),
+      });
+      const claimer = cronAttemptClaimer(stub.client, 'daily_briefing', {
+        failuresBefore: new Map(),
+        reportTag: 'test.attempts',
+        holdMs: DAY,
+        onClaimUnavailable: 'skip',
+        retryDelayMs: 1,
+      });
+      expect(typeof (await claimer.claim('o1'))).toBe('function');
+      expect(updates).toBe(2);
+      expect(table.rows).toHaveLength(1);
+      expect(reportError).not.toHaveBeenCalled();
+    });
+
+    it('retries once: a claim insert that errors and then works claims the organization', async () => {
+      const table = cronAttemptsTable();
+      let inserts = 0;
+      const stub = makeSupabaseStub({
+        ...table.results,
+        'cron_sweep_attempts.insert': (call) =>
+          ++inserts === 1
+            ? { data: null, error: { message: 'permission denied', code: '42501' } }
+            : table.results['cron_sweep_attempts.insert'](call),
+      });
+      const claimer = cronAttemptClaimer(stub.client, 'daily_briefing', {
+        failuresBefore: new Map(),
+        reportTag: 'test.attempts',
+        holdMs: DAY,
+        onClaimUnavailable: 'skip',
+        retryDelayMs: 1,
+      });
+      expect(typeof (await claimer.claim('o1'))).toBe('function');
+      expect(inserts).toBe(2);
+    });
+
+    it('a first insert that committed but answered an error: the retry meets the key and answers held', async () => {
+      reportError.mockClear();
+      const table = cronAttemptsTable();
+      let inserts = 0;
+      const stub = makeSupabaseStub({
+        ...table.results,
+        'cron_sweep_attempts.insert': (call) => {
+          const answer = table.results['cron_sweep_attempts.insert'](call);
+          // The row is written, but the reply is lost.
+          return ++inserts === 1
+            ? { data: null, error: { message: 'fetch failed', code: '' } }
+            : answer;
+        },
+      });
+      const claimer = cronAttemptClaimer(stub.client, 'daily_briefing', {
+        failuresBefore: new Map(),
+        reportTag: 'test.attempts',
+        holdMs: DAY,
+        onClaimUnavailable: 'skip',
+        retryDelayMs: 1,
+      });
+      expect(await claimer.claim('o1')).toBeNull();
+      expect(table.rows).toHaveLength(1);
+      expect(reportError).not.toHaveBeenCalled();
+    });
+
+    it("an empty code is reported as 'unknown', in the message too", async () => {
+      reportError.mockClear();
+      const stub = makeSupabaseStub({
+        'cron_sweep_attempts.update': { data: null, error: { message: 'fetch failed', code: '' } },
+      });
+      const claimer = cronAttemptClaimer(stub.client, 'daily_briefing', {
+        failuresBefore: new Map(),
+        reportTag: 'test.attempts',
+        holdMs: DAY,
+        onClaimUnavailable: 'skip',
+        retryDelayMs: 1,
+      });
+      expect(await claimer.claim('o1')).toBe(CLAIM_UNAVAILABLE);
+      expect(claimer.unavailableCode).toBe('unknown');
+      expect(reportError.mock.calls[0]![1].extra.code).toBe('unknown');
+      expect((reportError.mock.calls[0]![0] as Error).message).toContain('(code unknown)');
+    });
+
+    it('stops retrying after three failed retries in a run, and never retries by default', async () => {
+      let updates = 0;
+      const failing = () =>
+        makeSupabaseStub({
+          'cron_sweep_attempts.update': () => {
+            updates += 1;
+            return { data: null, error: { message: 'down', code: '42P01' } };
+          },
+        });
+      const skipping = cronAttemptClaimer(failing().client, 'daily_briefing', {
+        failuresBefore: new Map(),
+        reportTag: 'test.attempts',
+        holdMs: DAY,
+        onClaimUnavailable: 'skip',
+        retryDelayMs: 1,
+      });
+      for (const o of ['o1', 'o2', 'o3', 'o4', 'o5']) {
+        expect(await skipping.claim(o)).toBe(CLAIM_UNAVAILABLE);
+      }
+      // Three organizations tried twice, then once each.
+      expect(updates).toBe(3 * 2 + 2);
+
+      updates = 0;
+      const running = cronAttemptClaimer(failing().client, 'auto_reorder', {
+        failuresBefore: new Map(),
+        reportTag: 'test.attempts',
+        holdMs: DAY,
+      });
+      for (const o of ['o1', 'o2']) expect(typeof (await running.claim(o))).toBe('function');
+      expect(updates).toBe(2);
+    });
+
     it('claims as usual when the claim can be recorded', async () => {
       const table = cronAttemptsTable();
       const stub = makeSupabaseStub(table.results);
@@ -730,7 +851,7 @@ describe('sweepOrganizations', () => {
           deadlineAt: Date.now() + 60_000,
           slotMs: DAY,
           holdMs: 20 * 60 * 60_000,
-          ...(onClaimUnavailable ? { onClaimUnavailable } : {}),
+          ...(onClaimUnavailable ? { onClaimUnavailable, retryDelayMs: 1 } : {}),
         },
         async (orgId) => {
           worked.push(orgId);
@@ -771,12 +892,39 @@ describe('sweepOrganizations', () => {
       expect(claimReports[0]![1]).toMatchObject({
         extra: { step: 'claim', job: 'daily_briefing', code: '42501' },
       });
+      // Not every organization was skipped: no error-level report.
+      expect(
+        reportError.mock.calls.filter(
+          ([, c]) => (c as { tag?: string }).tag === 'cron.test.claims_down',
+        ),
+      ).toHaveLength(0);
 
       // Day 2: the write works again, and 'a' is first in line.
       env.failing.clear();
       const day2 = await runDay(env, 2, 'skip');
       expect(day2.worked).toEqual(['a', 'b', 'c']);
       expect(day2.out.claimUnavailable).toBe(0);
+    });
+
+    it("with 'skip': a run that skips every organization it tried reports an error, with the code in the message", async () => {
+      reportError.mockClear();
+      vi.useFakeTimers({ toFake: ['Date'] });
+      const env = flaky();
+      for (const o of ['a', 'b', 'c']) env.failing.add(o);
+      const run = await runDay(env, 0, 'skip');
+      expect(run.worked).toEqual([]);
+      expect(run.out.claimUnavailable).toBe(3);
+      const down = reportError.mock.calls.filter(
+        ([, c]) => (c as { tag?: string }).tag === 'cron.test.claims_down',
+      );
+      expect(down).toHaveLength(1);
+      expect(down[0]![1]).toEqual({
+        tag: 'cron.test.claims_down',
+        level: 'error',
+        extra: { job: 'daily_briefing', code: '42501', skipped: 3 },
+      });
+      expect((down[0]![0] as Error).message).toContain('(code 42501)');
+      expect((down[0]![0] as Error).message).not.toMatch(/\ba\b|\bb\b|\bc\b/);
     });
 
     it('by default (every job but the daily briefing and the price pull) it runs unclaimed, as before', async () => {

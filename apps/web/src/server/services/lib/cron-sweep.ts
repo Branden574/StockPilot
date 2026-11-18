@@ -312,6 +312,39 @@ export type OnClaimUnavailable = 'skip' | 'run';
  *  organization whose claim could not be recorded: skip it this run. */
 export const CLAIM_UNAVAILABLE = 'claim_unavailable' as const;
 
+/** How long a claim that errored waits before its one retry. */
+export const CLAIM_RETRY_MS = 250;
+/** Failed retries in one run after which a claim that errors is no longer
+ *  retried: the claims are likely down for everyone, and waiting on each
+ *  would spend the run's time for nothing. */
+export const CLAIM_RETRY_GIVE_UP_AFTER = 3;
+
+/**
+ * One run's retries of claims that errored (an error other than the key): a
+ * claim is tried again once, after `delayMs`, so one passing error does not
+ * cost an organization its day or a member their week. Once
+ * CLAIM_RETRY_GIVE_UP_AFTER retries in the run have failed too, `wait`
+ * answers false at once (no retry).
+ */
+export function claimRetries(delayMs: number = CLAIM_RETRY_MS): {
+  /** Waits before a retry; false when the run has stopped retrying. */
+  wait(): Promise<boolean>;
+  /** Records a retry that failed too. */
+  retryFailed(): void;
+} {
+  let failed = 0;
+  return {
+    async wait() {
+      if (failed >= CLAIM_RETRY_GIVE_UP_AFTER) return false;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      return true;
+    },
+    retryFailed() {
+      failed += 1;
+    },
+  };
+}
+
 function isUniqueViolation(error: { code?: string; message?: string }): boolean {
   return error.code === '23505' || (error.message ?? '').includes('duplicate key value');
 }
@@ -343,11 +376,19 @@ function isUniqueViolation(error: { code?: string; message?: string }): boolean 
  *     compare-and-set, the archive and purge updates' row guards). Reported
  *     once per run under `reportTag`.
  *   'skip': FAILS CLOSED, for a job with no atomic guard of its own, where
- *     two runs at once would do the same work twice. `claim` resolves to
- *     CLAIM_UNAVAILABLE and the caller skips the organization for this run.
- *     Nothing is written, so the organization keeps its place at the front of
- *     the next run's order. Reported once per run under `reportTag`, with the
- *     error's code only.
+ *     two runs at once would do the same work twice. The claim is tried once
+ *     more after CLAIM_RETRY_MS (claimRetries), so one passing error does not
+ *     cost the organization its day. When the retry errors too, `claim`
+ *     resolves to CLAIM_UNAVAILABLE and the caller skips the organization for
+ *     this run. Reported once per run under `reportTag`, with the error's
+ *     code only (in the message too: a chat webhook shows only the message).
+ *     Usually nothing was written, so the organization keeps its place at the
+ *     front of the next run's order. Not always: an UPDATE or INSERT that
+ *     committed but whose reply was lost did write the stamp, so the hold
+ *     applies (the next run within it skips the organization as held) and
+ *     its count of failures in a row has gone up by one. The retry then
+ *     meets that stamp (the UPDATE matches nothing and the INSERT meets the
+ *     key) and answers null: held, which is right, as the stamp is there.
  * Never throws.
  */
 export function cronAttemptClaimer(
@@ -358,11 +399,15 @@ export function cronAttemptClaimer(
     reportTag: string;
     holdMs: number;
     onClaimUnavailable?: OnClaimUnavailable;
+    /** The wait before a retry with 'skip' (default CLAIM_RETRY_MS). */
+    retryDelayMs?: number;
   },
 ): {
   claim(
     orgId: string,
   ): Promise<((result: CronAttemptResult) => Promise<number>) | null | typeof CLAIM_UNAVAILABLE>;
+  /** The code of the last claim error that skipped an organization, if any. */
+  readonly unavailableCode: string | null;
 } {
   const skipUnclaimed = opts.onClaimUnavailable === 'skip';
   let reported = false;
@@ -376,21 +421,31 @@ export function cronAttemptClaimer(
     });
   };
   let reportedSkip = false;
+  let unavailableCode: string | null = null;
   const skip = (error: { code?: string }): typeof CLAIM_UNAVAILABLE => {
+    // `||`: a fetch-level failure can carry an empty code.
+    const code = error.code || 'unknown';
+    unavailableCode = code;
     if (!reportedSkip) {
       reportedSkip = true;
       void reportError(
-        new Error('Scheduled job skipped organizations whose claim could not be recorded'),
+        new Error(
+          `Scheduled job skipped organizations whose claim could not be recorded (code ${code})`,
+        ),
         {
           tag: opts.reportTag,
           level: 'warning',
-          extra: { step: 'claim', job, code: error.code ?? 'unknown', onClaimUnavailable: 'skip' },
+          extra: { step: 'claim', job, code, onClaimUnavailable: 'skip' },
         },
       );
     }
     return CLAIM_UNAVAILABLE;
   };
+  const retries = claimRetries(opts.retryDelayMs);
   return {
+    get unavailableCode() {
+      return unavailableCode;
+    },
     async claim(orgId) {
       const at = Date.now();
       const attemptedAt = new Date(at).toISOString();
@@ -413,27 +468,42 @@ export function cronAttemptClaimer(
         return settled;
       };
 
-      const taken = await admin
-        .from('cron_sweep_attempts')
-        .update(stamp)
-        .eq('job', job)
-        .eq('organization_id', orgId)
-        .lt('last_attempt_at', new Date(at - opts.holdMs).toISOString())
-        .select('organization_id');
-      if (taken.error) {
-        if (skipUnclaimed) return skip(taken.error);
-        report(taken.error, 'claim');
-        return unrecorded;
-      }
-      if (Array.isArray(taken.data) && taken.data.length > 0) return finish;
+      // The error of the last attempt that failed (kept here, never answered).
+      const last: { failure: { message: string; code?: string } | null } = { failure: null };
+      const FAILED = Symbol('claim failed');
+      const attempt = async (): Promise<typeof finish | null | typeof FAILED> => {
+        last.failure = null;
+        const taken = await admin
+          .from('cron_sweep_attempts')
+          .update(stamp)
+          .eq('job', job)
+          .eq('organization_id', orgId)
+          .lt('last_attempt_at', new Date(at - opts.holdMs).toISOString())
+          .select('organization_id');
+        if (taken.error) {
+          last.failure = taken.error;
+          return FAILED;
+        }
+        if (Array.isArray(taken.data) && taken.data.length > 0) return finish;
 
-      const inserted = await admin
-        .from('cron_sweep_attempts')
-        .insert({ job, organization_id: orgId, ...stamp });
-      if (!inserted.error) return finish;
-      if (isUniqueViolation(inserted.error)) return null;
-      if (skipUnclaimed) return skip(inserted.error);
-      report(inserted.error, 'claim');
+        const inserted = await admin
+          .from('cron_sweep_attempts')
+          .insert({ job, organization_id: orgId, ...stamp });
+        if (!inserted.error) return finish;
+        if (isUniqueViolation(inserted.error)) return null;
+        last.failure = inserted.error;
+        return FAILED;
+      };
+
+      let outcome = await attempt();
+      if (skipUnclaimed && outcome === FAILED && (await retries.wait())) {
+        outcome = await attempt();
+        if (outcome === FAILED) retries.retryFailed();
+      }
+      if (outcome !== FAILED) return outcome;
+      const error = last.failure ?? { message: 'claim failed' };
+      if (skipUnclaimed) return skip(error);
+      report(error, 'claim');
       return unrecorded;
     },
   };
@@ -528,8 +598,9 @@ export const REPEATED_FAILURES = 3;
  *
  * With `holdMs`, `onClaimUnavailable` says what to do with an organization
  * whose claim cannot be recorded: 'run' it unclaimed (the default, for a job
- * with its own atomic guard) or 'skip' it for this run (counted in
- * `claimUnavailable`), see cronAttemptClaimer.
+ * with its own atomic guard) or 'skip' it for this run after one retry
+ * (counted in `claimUnavailable`), see cronAttemptClaimer. A run that skips
+ * every organization it tried reports it as an error (`<tag>.claims_down`).
  *
  * When the attempt records cannot be read the run is reported
  * (`<tag>.attempts`) and goes in rotateByClock order (`slotMs`: the job's
@@ -547,6 +618,8 @@ export async function sweepOrganizations<V>(
     holdMs?: number;
     /** Only with `holdMs`. Default 'run'. */
     onClaimUnavailable?: OnClaimUnavailable;
+    /** The wait before a claim's retry with 'skip' (default CLAIM_RETRY_MS). */
+    retryDelayMs?: number;
     stopWhen?: () => boolean;
   },
   work: (orgId: string, index: number) => Promise<OrgWorkOutcome<V>>,
@@ -577,6 +650,7 @@ export async function sweepOrganizations<V>(
           reportTag,
           holdMs: opts.holdMs,
           onClaimUnavailable: opts.onClaimUnavailable,
+          retryDelayMs: opts.retryDelayMs,
         })
       : null;
   const recorder = claimer
@@ -617,6 +691,21 @@ export async function sweepOrganizations<V>(
       if ((await finish(result)) >= REPEATED_FAILURES) failingRepeatedly += 1;
     },
   );
+  if (claimUnavailable > 0 && claimUnavailable === sweep.started) {
+    // Every organization this run tried was skipped: the claims are down for
+    // everyone, not one passing error. An error, not a warning.
+    const code = claimer?.unavailableCode || 'unknown';
+    void reportError(
+      new Error(
+        `Scheduled job skipped every organization it tried: claims could not be recorded (code ${code})`,
+      ),
+      {
+        tag: `${opts.tag}.claims_down`,
+        level: 'error',
+        extra: { job: opts.job, code, skipped: claimUnavailable },
+      },
+    );
+  }
   const stoppedAtDeadline = sweep.leftForNextRun > 0 && Date.now() >= opts.deadlineAt;
   if (stoppedAtDeadline) {
     void reportError(new Error('Scheduled job stopped at the run deadline'), {

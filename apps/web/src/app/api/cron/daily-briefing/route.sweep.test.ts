@@ -212,9 +212,36 @@ describe('GET /api/cron/daily-briefing when the day claim cannot be recorded', (
       level: 'warning',
       extra: { step: 'claim', job: 'daily_briefing', code: '42P01', onClaimUnavailable: 'skip' },
     });
-    // No organization id in the report.
+    // No organization id in the report; the code is in the message.
     expect(JSON.stringify(reports[0]![1])).not.toMatch(/org-/);
     expect((reports[0]![0] as Error).message).not.toMatch(/org-/);
+    expect((reports[0]![0] as Error).message).toContain('(code 42P01)');
+    // Every organization it tried was skipped: one error-level report.
+    const down = reportError.mock.calls.filter(
+      ([, c]) => (c as { tag?: string }).tag === 'cron.daily-briefing.claims_down',
+    );
+    expect(down).toHaveLength(1);
+    expect(down[0]![1]).toMatchObject({ level: 'error', extra: { code: '42P01', skipped: 6 } });
+    expect((down[0]![0] as Error).message).not.toMatch(/org-/);
+  });
+
+  it('a claim that errors once and then works is retried, and the organization gets its briefing', async () => {
+    const table = cronAttemptsTable();
+    let firstOrg1Update = true;
+    const update = table.results['cron_sweep_attempts.update'];
+    adminHolder.client = stubFor(table, {
+      'cron_sweep_attempts.update': (call: MockCall) => {
+        if (eqValue(call, 'organization_id') === 'org-1' && firstOrg1Update) {
+          firstOrg1Update = false;
+          return { data: null, error: { message: 'fetch failed', code: '' } };
+        }
+        return update(call);
+      },
+    }).client;
+    await get();
+    expect(gathered).toEqual(ORGS);
+    expect(logLine()).toMatchObject({ claimUnavailable: 0, orgsProcessed: 6 });
+    expect(claimReports()).toHaveLength(0);
   });
 
   it('the claim insert fails with an error other than the key: the same', async () => {

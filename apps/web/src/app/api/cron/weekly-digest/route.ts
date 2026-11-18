@@ -23,7 +23,7 @@ import {
   loadDigestReaderData,
 } from '@/server/services/digest';
 import { rawErrorText } from '@/server/services/lib/fetch-by-ids';
-import { sweepOrganizations } from '@/server/services/lib/cron-sweep';
+import { claimRetries, sweepOrganizations } from '@/server/services/lib/cron-sweep';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 
 export const runtime = 'nodejs';
@@ -115,20 +115,27 @@ type ClaimReport = (step: DigestClaimStep, error?: { code?: string } | null) => 
 
 /**
  * The run's claim reports: each step reported at most once per run, under
- * cron.weekly-digest.claim, with the step, the job and the error's code only.
+ * cron.weekly-digest.claim, with the step, the job and the error's code only
+ * (`lastClaimCode`: the last code of a claim that could not be recorded).
  * The counts are in the run's log line.
  */
-function claimReporter(): ClaimReport {
+function claimReporter(): ClaimReport & { lastClaimCode(): string } {
   const done = new Set<DigestClaimStep>();
-  return (step, error) => {
+  let lastClaimCode = 'none';
+  const report: ClaimReport = (step, error) => {
+    // `||`: a fetch-level failure can carry an empty code. The code is in
+    // the message too: a chat webhook shows only the message.
+    const code = error?.code || 'none';
+    if (step === 'claim') lastClaimCode = code;
     if (done.has(step)) return;
     done.add(step);
-    void reportError(new Error(CLAIM_STEP_MESSAGE[step]), {
+    void reportError(new Error(`${CLAIM_STEP_MESSAGE[step]} (code ${code})`), {
       tag: 'cron.weekly-digest.claim',
       level: 'warning',
-      extra: { step, job: 'weekly_digest', code: error?.code ?? 'none' },
+      extra: { step, job: 'weekly_digest', code },
     });
   };
+  return Object.assign(report, { lastClaimCode: () => lastClaimCode });
 }
 
 interface DigestClaimRow {
@@ -286,6 +293,11 @@ export async function GET(req: Request) {
   const claimKeyMaterial = digestClaimKeyMaterial(env.UNSUBSCRIBE_SECRET);
   let unsignedReported = false;
   const reportClaim = claimReporter();
+  // A member claim that errors is tried once more (claimRetries), so one
+  // passing error does not cost the member their week.
+  const retries = claimRetries();
+  /** Members whose claim insert was tried (for the all-skipped report). */
+  let claimsTried = 0;
   let sendReported = false;
 
   let sent = 0;
@@ -569,7 +581,15 @@ export async function GET(req: Request) {
               request_hash: signature ?? unsignedClaimHash(orgId, claimKey),
               status: 'completed',
             };
-            const { error: claimErr } = await admin.from('idempotency_keys').insert(claim);
+            claimsTried += 1;
+            let { error: claimErr } = await admin.from('idempotency_keys').insert(claim);
+            if (claimErr && !isDuplicateClaim(claimErr) && (await retries.wait())) {
+              // A retry that meets the key finds a claim already there (this
+              // run's own first insert, if it committed and only its reply was
+              // lost): handled as any duplicate below.
+              ({ error: claimErr } = await admin.from('idempotency_keys').insert(claim));
+              if (claimErr && !isDuplicateClaim(claimErr)) retries.retryFailed();
+            }
             if (claimErr) {
               // Already sent this week (the whole point). A signed run sends
               // anyway when the row does not carry its signature
@@ -585,15 +605,17 @@ export async function GET(req: Request) {
               }
               if (taken === 'unavailable') {
                 // Any OTHER claim failure (the table missing, a refused
-                // write) FAILS CLOSED: without the claim nothing stops a
-                // second run in the same week from sending this member the
-                // same digest, so the member is skipped for this run, counted
-                // (claimUnavailable) and reported once per run, codes only.
-                // Nothing is written, so a run started again the same week
-                // sends it once the claim can be recorded. The only scheduled
-                // run is Monday's (vercel.json, 0 14 * * 1) and next Monday's
-                // run is a new week, so without such a run the member gets no
-                // digest for this week.
+                // write), on the retry too, FAILS CLOSED: without the claim
+                // nothing stops a second run in the same week from sending
+                // this member the same digest, so the member is skipped for
+                // this run, counted (claimUnavailable) and reported once per
+                // run, codes only. Usually nothing was written, so a run
+                // started again the same week sends it once the claim can be
+                // recorded. (An insert that committed but whose reply was lost
+                // did write the claim: that run then takes the week as sent.)
+                // The only scheduled run is Monday's (vercel.json,
+                // 0 14 * * 1) and next Monday's run is a new week, so without
+                // such a run the member gets no digest for this week.
                 claimUnavailable += 1;
                 // (mayClaimTakenWeek reports its own.)
                 if (!isDuplicateClaim(claimErr)) reportClaim('claim', claimErr);
@@ -660,6 +682,21 @@ export async function GET(req: Request) {
         }
       },
     );
+
+    if (claimUnavailable > 0 && claimUnavailable === claimsTried) {
+      // Every member this run tried to claim was skipped: the claims are down
+      // for everyone, not one passing error. An error, not a warning.
+      void reportError(
+        new Error(
+          `Weekly digest skipped every member it tried: week claims could not be recorded (code ${reportClaim.lastClaimCode()})`,
+        ),
+        {
+          tag: 'cron.weekly-digest.claims_down',
+          level: 'error',
+          extra: { job: 'weekly_digest', code: reportClaim.lastClaimCode(), skipped: claimUnavailable },
+        },
+      );
+    }
 
     // One line per run, counts only (no org ids, no addresses).
     console.info(
