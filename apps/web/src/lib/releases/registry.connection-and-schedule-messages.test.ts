@@ -33,6 +33,15 @@ const DELETE_CONFIRM_ID = 'delete-account-confirm-2026-11';
 // Added by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16): the emptied fields and schedule completion release, published later, at the top, below the Liquid Glass draft and above this one.
 const EMPTIED_FIELDS_ID = 'emptied-fields-and-schedule-completion-2026-11';
 const AUTH_SET_UP_ID = 'authenticator-set-up-first-2026-11';
+// Added by docs/releases-low-critical-pages (2026-11-18): the Low + critical pages and list value release (whoever can read items: every role by default), published later, at the top, below the Liquid Glass draft.
+const LOW_CRITICAL_ID = 'low-critical-pages-and-list-value-2026-11';
+const lowCriticalRead = {
+  release_id: LOW_CRITICAL_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-18T10:01:00Z',
+  read_at: '2026-11-18T10:01:00Z',
+};
 const PUBLISHED_AT = '2026-11-16T09:39:00Z';
 const LIVE_591 = '2026-11-16T09:38:20Z';
 const LIVE_590 = '2026-11-16T09:11:17Z';
@@ -82,8 +91,11 @@ describe('the Integrations and schedule event release: order, status and date', 
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
     // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: RELEASES.slice(0, 4)): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so the list takes one more.
-    expect(RELEASES.slice(0, 5).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES.slice(0, 5)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    expect(RELEASES.slice(0, 6).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, directly below the Liquid Glass draft.
+      [LOW_CRITICAL_ID, 'published'],
       // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: without it): the emptied fields and schedule completion release is published later, at the top, directly below the Liquid Glass draft.
       [EMPTIED_FIELDS_ID, 'published'],
       [ID, 'published'],
@@ -91,7 +103,8 @@ describe('the Integrations and schedule event release: order, status and date', 
       [AUTH_SET_UP_ID, 'published'],
     ]);
     // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: ID): the emptied fields and schedule completion release is published after it, at the top, the newest published release.
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(EMPTIED_FIELDS_ID);
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: EMPTIED_FIELDS_ID): the Low + critical pages and list value release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(LOW_CRITICAL_ID);
   });
 
   // Renamed by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: "is dated on a whole minute after #590 and #591 went live, in the past, with the draft placeholder at the same minute and every release below it older"): the emptied fields and schedule completion release above is dated later, and the draft placeholder moved to its minute. Claim kept: a whole minute after #590 and #591 went live, in the past, every release below it older.
@@ -105,7 +118,8 @@ describe('the Integrations and schedule event release: order, status and date', 
     // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: RELEASES[0]!.publishedAt toBe this minute): the draft placeholder moved to the minute of the emptied fields and schedule completion release, published later, directly above this one.
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
     // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: every pinned position one place higher): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(3)) {
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES.slice(3)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(4)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -221,14 +235,17 @@ describe('the Integrations and schedule event release: who is told', () => {
     };
     for (const v of [owner, admin, integrationsOnly, scheduleOnly]) {
       // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: nothing read, and [read]): the emptied fields and schedule completion release is published later, at the top, and reaches every reader here but integrationsOnly, so it is read first, and every notice this test checks is the one it checked before.
-      expect(buildReleaseList(RELEASES, v, [emptiedRead], null).latestUnread?.id, v.role).toBe(ID);
+      // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (owners, admins, managers, staff and viewers by default), so each reads it first, and every notice this test checks is the one it checked before.
+      expect(buildReleaseList(RELEASES, v, [lowCriticalRead, emptiedRead], null).latestUnread?.id, v.role).toBe(ID);
       expect(
-        buildReleaseList(RELEASES, v, [emptiedRead, read], null).latestUnread?.id,
+        buildReleaseList(RELEASES, v, [lowCriticalRead, emptiedRead, read], null).latestUnread?.id,
         v.role,
       ).toBe(DELETE_CONFIRM_ID);
     }
-    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(DELETE_CONFIRM_ID);
-    expect(legacyAnnouncementsFor(RELEASES, integrationsOnly, {})[0]).toEqual({
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: nothing read): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (owners, admins, managers, staff and viewers by default), so each reads it first, and every notice this test checks is the one it checked before.
+    expect(buildReleaseList(RELEASES, member, [lowCriticalRead], null).latestUnread?.id).toBe(DELETE_CONFIRM_ID);
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: nothing seen): the Low + critical pages and list value release is published later and reaches whoever can read items, so the phone has seen it first.
+    expect(legacyAnnouncementsFor(RELEASES, integrationsOnly, { [LOW_CRITICAL_ID]: true })[0]).toEqual({
       id: ID,
       date: '2026-11-16',
       title: release().title,
@@ -237,7 +254,8 @@ describe('the Integrations and schedule event release: who is told', () => {
     });
     // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: nothing seen): the emptied fields and schedule completion release is published later, at the top, and reaches whoever manages the schedule with Schedule on, so it is seen first.
     expect(
-      legacyAnnouncementsFor(RELEASES, scheduleOnly, { [EMPTIED_FIELDS_ID]: true })[0],
+      // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later and reaches whoever can read items, so the phone has seen it first.
+      legacyAnnouncementsFor(RELEASES, scheduleOnly, { [LOW_CRITICAL_ID]: true, [EMPTIED_FIELDS_ID]: true })[0],
     ).toEqual({
       id: ID,
       date: '2026-11-16',
