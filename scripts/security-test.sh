@@ -939,6 +939,13 @@ PGTAP_TESTS=(
   # authenticated (a signed-in owner cannot read or write it), service_role
   # only, and the rows go with the organization.
   supabase/tests/0469_cron_sweep_attempts.test.sql
+  # The request context reads the caller's own rows by index (0471): the same
+  # answer as 0413's body for every kind of caller (several organizations, an
+  # invitation not accepted, a disabled account, live and expired Act-as
+  # seats, no profile, nobody signed in), row level security still deciding
+  # (an expired seat and a disabled account hidden), invoker rights, no anon
+  # EXECUTE, and a change seen on the next call.
+  supabase/tests/0471_request_context_reads_by_index.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -948,6 +955,11 @@ PGTAP_TESTS=(
 # MANIFEST 2 — apps/web vitest, paths relative to apps/web/
 # ═══════════════════════════════════════════════════════════════════════════
 WEB_TESTS=(
+  # The request context is asked once per page load and again on every new
+  # request: a role change, a removal or an override bites on the next one,
+  # in a page load and in a Server Action (nothing is kept across requests).
+  src/lib/auth/request-context.calls-per-request.test.ts
+
   # 0470: the inventory list's value total takes the list's own scope (the
   # caller's readable warehouses, a chosen warehouse only for a manager, a
   # viewer's category grants) and every row filter; a filter added later
