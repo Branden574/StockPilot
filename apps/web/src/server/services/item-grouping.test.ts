@@ -281,7 +281,9 @@ describe('ItemGroupingService.splitSku', () => {
       ],
     });
     expect(h.invalidate).toHaveBeenCalledWith(ORG, 'item.grouping');
-    expect(h.revalidateTag).toHaveBeenCalledWith('orders-new-v2-catalog', 'max');
+    // This organization's order catalog (it shows SKUs), expired now so the
+    // next read shows the new SKUs; never every organization's.
+    expect(h.revalidateTag.mock.calls).toEqual([[`orders-new-v2-catalog:${ORG}`, { expire: 0 }]]);
   });
 
   it('a replay is answered as one and still refreshes (the first answer may have been lost)', async () => {

@@ -1,40 +1,26 @@
-// Scenario 07 — procedures list page.
-//
-// SSR GET /dashboard/procedures. Cookie-auth required (see scenario
-// 03 for why bearer tokens don't work on SSR pages).
-//
-// Run:
-//   BASE_URL=https://preview-xxx.vercel.app \
-//     SUPABASE_AUTH_COOKIE='...' \
-//     k6 run load-tests/k6/scenarios/07-procedure-list.js
-
-import http from 'k6/http';
-import { check, sleep } from 'k6';
-
+// Scenario 07: the procedures page, /dashboard/procedures, signed in.
+// LOCAL ONLY; needs the seeder manifest.
+import { localTarget } from '../lib/safety.js';
 import {
-  DEFAULT_STAGES,
-  DEFAULT_THRESHOLDS,
-  requireBaseUrl,
-  sessionCookieHeader,
-} from '../lib/auth.js';
+  buildOptions,
+  iterate as runIteration,
+  setupSessions,
+  summarize,
+} from '../lib/workload.js';
 
-export const options = {
-  stages: DEFAULT_STAGES,
-  thresholds: DEFAULT_THRESHOLDS,
+localTarget(__ENV);
+
+const PLAN = {
+  staff: { share: 0.6, actions: { procedures_list: 1 } },
+  manager: { share: 0.4, actions: { procedures_list: 1 } },
 };
-
-const BASE_URL = requireBaseUrl(__ENV);
-const cookieHeader = sessionCookieHeader(__ENV);
-
-export default function () {
-  const res = http.get(`${BASE_URL}/dashboard/procedures`, {
-    headers: cookieHeader ?? {},
-    redirects: 0,
-    tags: { name: 'GET /dashboard/procedures' },
-  });
-  check(res, {
-    'procedures 200': (r) => r.status === 200,
-    'procedures rendered': (r) => r.body && r.body.length > 500,
-  });
-  sleep(Math.random() * 2 + 1);
+export const options = buildOptions(PLAN);
+export function setup() {
+  return setupSessions(PLAN);
+}
+export function iterate(data) {
+  runIteration(PLAN, data);
+}
+export function handleSummary(data) {
+  return summarize(data);
 }

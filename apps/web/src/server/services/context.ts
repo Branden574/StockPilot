@@ -96,8 +96,8 @@ export interface ServiceContext {
    */
   cookieClient?: Awaited<ReturnType<typeof createClient>>;
   /**
-   * True only for the context a scheduled job runs under (the cron
-   * `buildSystemContext` copies and the shared one in lib/system-context.ts).
+   * True only for the context a scheduled job runs under (the shared
+   * `loadSystemContext` in lib/system-context.ts).
    * Such a context BORROWS an owner's or admin's `userId`, because service
    * code needs a user to attribute writes to; the person did not act.
    * `audit()` stamps `metadata.is_system` on every row written under it, so

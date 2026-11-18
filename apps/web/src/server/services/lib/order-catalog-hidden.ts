@@ -51,8 +51,10 @@ export const ORDER_CATALOG_HIDE_MARGIN_MS = 30_000;
 /** The ordering catalog's per-organization cache tag. Every entry of the
  *  organization carries it; a Show or Hide expires it (with `{ expire: 0 }`,
  *  never 'max') only when its answer did not name the warehouses it touched.
- *  The global tag 'orders-new-v2-catalog' stays on every entry for the
- *  existing callers. */
+ *  An order write, a grouping write and a category grant change expire it or
+ *  the warehouse tag below (orders-catalog-expiry.ts). The global tag
+ *  'orders-new-v2-catalog' stays on every entry, but nothing expires it now:
+ *  one organization's write must not mark every organization's catalog. */
 export function ordersCatalogTag(organizationId: string): string {
   return `orders-new-v2-catalog:${organizationId}`;
 }

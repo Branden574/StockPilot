@@ -157,38 +157,33 @@ const READERS: Record<string, { unread: Unread; note: string }> = {
   // ── Scheduled jobs ────────────────────────────────────────────────────────
   // The list of organizations a job runs for is read with a helper that
   // throws on a failed page, so the run fails. The per-organization context a
-  // job then builds reads that organization's rows and drops a failed read:
-  // its set is empty. A job whose service asks about an optional module is
-  // then refused for that organization on that run, and the next run reads
-  // again. A job that asks about no optional module runs as it would with the
-  // rows read: the empty set changes nothing for it.
+  // job then runs as comes from the shared loadSystemContext, which answers a
+  // failed read with read_failed: that organization is a failure for that run
+  // (reported once per run), never run with an empty set, and the next run
+  // reads again.
   'app/api/cron/auto-archive-zero-stock/route.ts': {
-    unread: 'closed',
-    note: 'list read throws; the per-organization set is empty on a failed read, and this job, which asks about no optional module, runs as it would otherwise',
+    unread: 'error',
+    note: 'list read throws; the settings read again as each organization starts throws; the per-organization set comes from loadSystemContext',
   },
   'app/api/cron/auto-delete-archived/route.ts': {
-    unread: 'closed',
-    note: 'list read throws; the per-organization set is empty on a failed read, and this job, which asks about no optional module, runs as it would otherwise',
+    unread: 'error',
+    note: 'list read throws; the settings read again as each organization starts throws; the per-organization set comes from loadSystemContext',
   },
   'app/api/cron/auto-reorder/route.ts': {
-    unread: 'closed',
-    note: 'list read throws; the per-organization set is empty on a failed read, so the purchase order service refuses and nothing is drafted for that organization on that run',
+    unread: 'error',
+    note: 'list read throws; the settings read again as each organization starts throws; the per-organization set comes from loadSystemContext',
   },
   'app/api/cron/daily-briefing/route.ts': {
-    unread: 'closed',
-    note: 'list read throws; an organization whose set could not be confirmed is skipped and reported',
+    unread: 'error',
+    note: 'list read throws; the per-organization set comes from loadSystemContext, and an organization whose set could not be read is a failure for the run, reported once',
   },
   'app/api/cron/recurring-pos/route.ts': {
-    unread: 'closed',
-    note: 'list read throws; the per-organization set is empty on a failed read, so the purchase order service refuses and no template runs for that organization on that run',
-  },
-  'app/api/cron/restore-points/route.ts': {
-    unread: 'closed',
-    note: 'the per-organization set is empty on a failed read, and this job, which asks about no optional module, runs as it would otherwise',
+    unread: 'error',
+    note: 'list read throws; the per-organization set comes from loadSystemContext',
   },
   'server/services/lib/system-context.ts': {
-    unread: 'closed',
-    note: 'the shared per-organization context: an empty set on a failed read; a job that asks about an optional module is refused, and one that asks about none runs as it would otherwise',
+    unread: 'error',
+    note: 'the shared per-organization context: a failed read is read_failed (buildSystemContext throws), never an empty set',
   },
   'app/api/cron/maintenance-draft-reminders/route.ts': { unread: 'error', note: '500; no run' },
   'app/api/cron/price-pull/route.ts': { unread: 'error', note: '500; no run' },
