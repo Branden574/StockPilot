@@ -713,11 +713,8 @@ describe('duplicated cron helpers must not diverge', () => {
     const notSystem = body.replace('isSystem: true,', 'isSystem: false,');
     expect(missingPins(notSystem)).toEqual([' isSystem: true,']);
     // Either read losing its organization filter.
-    const [membersFilter, modulesFilter] = [0, 1].map((n) => {
-      let at = -1;
-      for (let i = 0; i <= n; i += 1) at = body.indexOf(".eq('organization_id', orgId)", at + 1);
-      return at;
-    });
+    const membersFilter = body.indexOf(".eq('organization_id', orgId)");
+    const modulesFilter = body.indexOf(".eq('organization_id', orgId)", membersFilter + 1);
     expect(membersFilter).toBeGreaterThan(-1);
     expect(modulesFilter).toBeGreaterThan(membersFilter);
     const drop = (at: number) =>
