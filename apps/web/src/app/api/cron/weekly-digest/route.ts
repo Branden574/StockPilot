@@ -101,6 +101,36 @@ const LAST_UNSIGNED_CLAIM_WEEK = '2026-11-09'; // the release owner raises this 
 /** How many times a run tries to hold the week's claim before it sends unclaimed. */
 const MAX_CLAIM_TRIES = 3;
 
+/** The steps of a member's week claim that can go wrong (claimReporter). */
+type DigestClaimStep = 'claim' | 'read' | 'take_over';
+
+/** What each claim step's report says. No id, no address, no database text. */
+const CLAIM_STEP_MESSAGE: Record<DigestClaimStep, string> = {
+  claim: 'Weekly digest skipped members whose week claim could not be recorded',
+  read: 'Weekly digest could not read a week claim and left the week marked sent',
+  take_over: 'Weekly digest claim under the key is not signed and could not be taken over',
+};
+
+type ClaimReport = (step: DigestClaimStep, error?: { code?: string } | null) => void;
+
+/**
+ * The run's claim reports: each step reported at most once per run, under
+ * cron.weekly-digest.claim, with the step, the job and the error's code only.
+ * The counts are in the run's log line.
+ */
+function claimReporter(): ClaimReport {
+  const done = new Set<DigestClaimStep>();
+  return (step, error) => {
+    if (done.has(step)) return;
+    done.add(step);
+    void reportError(new Error(CLAIM_STEP_MESSAGE[step]), {
+      tag: 'cron.weekly-digest.claim',
+      level: 'warning',
+      extra: { step, job: 'weekly_digest', code: error?.code ?? 'none' },
+    });
+  };
+}
+
 interface DigestClaimRow {
   organization_id: string;
   scope: 'weekly_digest';
@@ -120,11 +150,11 @@ type DigestClaimRead =
   | { kind: 'unreadable' };
 
 /** The row under (org, weekly_digest, key), judged against the signature. A
- *  failed read is reported here. */
+ *  failed read is reported here (once per run). */
 async function readDigestClaim(
   admin: ReturnType<typeof createAdminClient>,
   claim: DigestClaimRow,
-  userId: string,
+  report: ClaimReport,
 ): Promise<DigestClaimRead> {
   const orgId = claim.organization_id;
   const { data, error } = await admin
@@ -135,10 +165,7 @@ async function readDigestClaim(
     .eq('key', claim.key)
     .maybeSingle();
   if (error) {
-    void reportError(new Error(error.message ?? 'digest claim read failed'), {
-      tag: 'cron.weekly-digest.claim',
-      extra: { orgId, userId },
-    });
+    report('read', error);
     return { kind: 'unreadable' };
   }
   const row = data as { id: string; request_hash: string | null } | null;
@@ -152,37 +179,37 @@ async function readDigestClaim(
 }
 
 /**
- * After the signed insert met an existing row: true when this run may send.
- * Up to MAX_CLAIM_TRIES times, the row is read and:
+ * After the signed insert met an existing row: 'send' when this run may send,
+ * 'sent' when the week is already marked sent, 'unavailable' when the claim
+ * cannot be recorded. Up to MAX_CLAIM_TRIES times, the row is read and:
  *   * a signed claim (or an unsigned one of a week up to
- *     LAST_UNSIGNED_CLAIM_WEEK): already sent, false;
- *   * the row cannot be read: reported, false (a row is there; at most once
+ *     LAST_UNSIGNED_CLAIM_WEEK): already sent, 'sent';
+ *   * the row cannot be read: reported, 'sent' (a row is there; at most once
  *     wins without proof it is not signed);
  *   * a row without the cron's signature: taken over by a compare-and-set on
- *     the hash it was read with; true when it holds;
- *   * no row any more: claimed again; true when the insert holds.
- * A try that misses (the row changed first) reads again. After the last miss
- * the run reports and sends without holding the claim.
+ *     the hash it was read with; 'send' when it holds, 'unavailable'
+ *     (reported) when the write errors;
+ *   * no row any more: claimed again; 'send' when the insert holds,
+ *     'unavailable' (reported) when it fails with an error other than the key.
+ * A try that misses (the row changed first, no error) reads again. After the
+ * last miss the run reports and sends without holding the claim.
  */
 async function mayClaimTakenWeek(
   admin: ReturnType<typeof createAdminClient>,
   claim: DigestClaimRow,
-  userId: string,
-): Promise<boolean> {
+  report: ClaimReport,
+): Promise<'send' | 'sent' | 'unavailable'> {
   const orgId = claim.organization_id;
   for (let attempt = 0; attempt < MAX_CLAIM_TRIES; attempt += 1) {
-    const held = await readDigestClaim(admin, claim, userId);
-    if (held.kind === 'ours' || held.kind === 'unreadable') return false;
+    const held = await readDigestClaim(admin, claim, report);
+    if (held.kind === 'ours' || held.kind === 'unreadable') return 'sent';
     if (held.kind === 'none') {
       const { error: insertErr } = await admin.from('idempotency_keys').insert(claim);
-      if (!insertErr) return true;
+      if (!insertErr) return 'send';
+      // Fails closed, as the first claim does: the member is skipped.
       if (!isDuplicateClaim(insertErr)) {
-        // Fails open on the marker, as the first claim does.
-        void reportError(new Error(insertErr.message ?? 'digest claim failed'), {
-          tag: 'cron.weekly-digest.claim',
-          extra: { orgId, userId },
-        });
-        return true;
+        report('claim', insertErr);
+        return 'unavailable';
       }
       continue;
     }
@@ -193,13 +220,14 @@ async function mayClaimTakenWeek(
       .eq('id', held.id)
       .eq('request_hash', held.hash)
       .select('id');
-    if (!error && Array.isArray(data) && data.length > 0) return true;
+    if (error) {
+      report('claim', error);
+      return 'unavailable';
+    }
+    if (Array.isArray(data) && data.length > 0) return 'send';
   }
-  void reportError(new Error('digest claim under the key is not signed and could not be taken over'), {
-    tag: 'cron.weekly-digest.claim',
-    extra: { orgId, userId },
-  });
-  return true;
+  report('take_over');
+  return 'send';
 }
 
 // The cron iterates orgs + sends emails sequentially (each Resend send is a
@@ -231,7 +259,8 @@ const WEEK_MS = 7 * 24 * 60 * 60_000;
  * Nothing is claimed per organization: the week's claim per (organization,
  * member) below keeps every member at one digest a week, and lets a run
  * started again the same week finish an organization another run left half
- * way.
+ * way. A member whose claim cannot be recorded is skipped for the run, never
+ * sent unclaimed (counted in the log line as claimUnavailable).
  *
  * Spec: docs/superpowers/specs/2026-05-08-weekly-email-digest-design.md
  */
@@ -256,10 +285,14 @@ export async function GET(req: Request) {
   // once; null claims unsigned, reported once per run.
   const claimKeyMaterial = digestClaimKeyMaterial(env.UNSUBSCRIBE_SECRET);
   let unsignedReported = false;
+  const reportClaim = claimReporter();
+  let sendReported = false;
 
   let sent = 0;
   let skipped = 0;
   let failed = 0;
+  /** Members skipped because their week claim could not be recorded. */
+  let claimUnavailable = 0;
 
   try {
     const admin = createAdminClient();
@@ -538,25 +571,33 @@ export async function GET(req: Request) {
             };
             const { error: claimErr } = await admin.from('idempotency_keys').insert(claim);
             if (claimErr) {
-              if (isDuplicateClaim(claimErr)) {
-                // Already sent this week (the whole point). A signed run sends
-                // anyway when the row does not carry its signature
-                // (mayClaimTakenWeek); an unsigned run takes any row as sent.
-                if (!signature || !(await mayClaimTakenWeek(admin, claim, userId))) {
-                  skipped += 1;
-                  continue;
-                }
-              } else {
-                // Any OTHER claim failure fails OPEN on the MARKER, never on
-                // the send: a missing table/permission blip must degrade to a
-                // possible duplicate, not a fleet-wide digest outage (the
-                // deploy-before-migrate class — see the account-disable
-                // landmine). Reported so a silent duplicate-forever state is
-                // visible.
-                void reportError(new Error(claimErr.message ?? 'digest claim failed'), {
-                  tag: 'cron.weekly-digest.claim',
-                  extra: { orgId, userId },
-                });
+              // Already sent this week (the whole point). A signed run sends
+              // anyway when the row does not carry its signature
+              // (mayClaimTakenWeek); an unsigned run takes any row as sent.
+              const taken = isDuplicateClaim(claimErr)
+                ? signature
+                  ? await mayClaimTakenWeek(admin, claim, reportClaim)
+                  : 'sent'
+                : 'unavailable';
+              if (taken === 'sent') {
+                skipped += 1;
+                continue;
+              }
+              if (taken === 'unavailable') {
+                // Any OTHER claim failure (the table missing, a refused
+                // write) FAILS CLOSED: without the claim nothing stops a
+                // second run in the same week from sending this member the
+                // same digest, so the member is skipped for this run, counted
+                // (claimUnavailable) and reported once per run, codes only.
+                // Nothing is written, so a run started again the same week
+                // sends it once the claim can be recorded. The only scheduled
+                // run is Monday's (vercel.json, 0 14 * * 1) and next Monday's
+                // run is a new week, so without such a run the member gets no
+                // digest for this week.
+                claimUnavailable += 1;
+                // (mayClaimTakenWeek reports its own.)
+                if (!isDuplicateClaim(claimErr)) reportClaim('claim', claimErr);
+                continue;
               }
             }
 
@@ -593,10 +634,14 @@ export async function GET(req: Request) {
             if (res.ok) sent += 1;
             else {
               failed += 1;
-              void reportError(new Error(res.error ?? 'send failed'), {
-                tag: 'cron.weekly-digest.send',
-                extra: { to, orgId },
-              });
+              // Once per run, no address and no id: the count is in the log
+              // line, and sendEmail logs the provider's own answer.
+              if (!sendReported) {
+                sendReported = true;
+                void reportError(new Error('Weekly digest emails could not be sent'), {
+                  tag: 'cron.weekly-digest.send',
+                });
+              }
             }
           }
           return { result: 'success', value: null };
@@ -624,6 +669,7 @@ export async function GET(req: Request) {
         sent,
         skipped,
         failed,
+        claimUnavailable,
         failingRepeatedly: sweep.failingRepeatedly,
         orderedBy: sweep.orderedBy,
         promoted: sweep.promoted,

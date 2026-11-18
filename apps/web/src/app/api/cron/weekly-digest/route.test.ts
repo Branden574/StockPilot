@@ -257,13 +257,14 @@ describe('GET /api/cron/weekly-digest — at-most-once per (org, user, week)', (
     expect(String(insertArgs!.key)).toContain('user-a');
   });
 
-  it('still sends when the claim write itself errors (deploy-before-migrate)', async () => {
-    // Fail OPEN on the marker, never on the send: if the claim table is
-    // unreachable the worst case must be a possible duplicate, not a
-    // fleet-wide digest outage.
+  it('skips the member, sends nothing, counts and reports once when the claim write itself errors', async () => {
+    // Fails CLOSED: without the claim a second run the same week could send
+    // the same digest again. Nothing is written, so a run started again the
+    // same week sends it once the claim can be recorded.
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
     const stub = makeSupabaseStub({
       'user_profiles.select': {
-        data: [recipientRow('user-a', 'a@acme.test')],
+        data: [recipientRow('user-a', 'a@acme.test'), recipientRow('user-b', 'b@acme.test')],
         error: null,
       },
       'user_profiles.select.maybeSingle': {
@@ -282,8 +283,23 @@ describe('GET /api/cron/weekly-digest — at-most-once per (org, user, week)', (
     adminHolder.client = stub.client;
 
     const res = await GET(buildRequest('Bearer test-cron-secret'));
-    expect(await res.json()).toMatchObject({ ok: true, sent: 1 });
-    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    expect(await res.json()).toMatchObject({ ok: true, sent: 0, failed: 0 });
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    const line = info.mock.calls.find((c) => c[0] === '[cron.weekly-digest]');
+    expect(JSON.parse(String(line?.[1]))).toMatchObject({ sent: 0, claimUnavailable: 2 });
+    info.mockRestore();
+
+    const reports = vi
+      .mocked(reportError)
+      .mock.calls.filter(([, c]) => (c as { tag?: string }).tag === 'cron.weekly-digest.claim');
+    expect(reports).toHaveLength(1);
+    expect(reports[0]![1]).toEqual({
+      tag: 'cron.weekly-digest.claim',
+      level: 'warning',
+      extra: { step: 'claim', job: 'weekly_digest', code: '42P01' },
+    });
+    // No id, no address, no database text.
+    expect(JSON.stringify(reports[0])).not.toMatch(/user-|org-|@|idempotency_keys/);
   });
 });
 
@@ -592,6 +608,146 @@ describe('GET /api/cron/weekly-digest — a week is marked sent only by a signed
     expect(await res.json()).toMatchObject({ ok: true, sent: 0, skipped: 1 });
     expect(sendEmailMock).not.toHaveBeenCalled();
     expect(reportsTagged('cron.weekly-digest.claim')).toHaveLength(1);
+  });
+});
+
+describe('GET /api/cron/weekly-digest — a claim that cannot be recorded, and what the reports carry', () => {
+  const signable = env as Record<string, string | undefined>;
+  // A dull value under a neutral name (secret-shaped-fixtures guard).
+  const CLAIM_SIGNING_VALUE = 'claim-sign-' + 'k'.repeat(24);
+  const DUPLICATE = {
+    data: null,
+    error: { message: 'duplicate key value violates unique constraint "idempotency_keys_..."', code: '23505' },
+  };
+  type Answer = QueryResult | ((call: MockCall) => QueryResult);
+
+  afterEach(() => {
+    delete signable.UNSUBSCRIBE_SECRET;
+  });
+
+  function stubWith(
+    answers: { insert?: Answer; select?: Answer; update?: Answer },
+    send: { ok: boolean; error?: string } = { ok: true },
+  ) {
+    sendEmailMock.mockImplementation(async () => send);
+    return makeSupabaseStub({
+      'user_profiles.select': {
+        data: [recipientRow('user-a', 'a@acme.test'), recipientRow('user-b', 'b@acme.test')],
+        error: null,
+      },
+      'user_profiles.select.maybeSingle': {
+        data: { email_digest_optin: true, disabled_at: null },
+        error: null,
+      },
+      'organization_members.select.maybeSingle': {
+        data: { user_id: 'user-a', accepted_at: '2026-01-01T00:00:00Z', role: 'staff' },
+        error: null,
+      },
+      ...(answers.insert ? { 'idempotency_keys.insert': answers.insert } : {}),
+      ...(answers.select ? { 'idempotency_keys.select': answers.select } : {}),
+      ...(answers.update ? { 'idempotency_keys.update': answers.update } : {}),
+    });
+  }
+
+  const allReports = () => vi.mocked(reportError).mock.calls;
+  const tagged = (tag: string) =>
+    allReports().filter(([, c]) => (c as { tag?: string } | undefined)?.tag === tag);
+  /** No report names a member, an organization or an address. */
+  const expectNoIds = () => {
+    for (const [err, ctx] of allReports()) {
+      expect(JSON.stringify(ctx)).not.toMatch(/user-|org-1|@/);
+      expect(String((err as Error).message)).not.toMatch(/user-|org-1|@/);
+    }
+  };
+
+  afterEach(() => {
+    sendEmailMock.mockImplementation(async () => ({ ok: true }));
+  });
+
+  it('the duplicate key still skips the member as sent, with no claim report', async () => {
+    const stub = stubWith({ insert: DUPLICATE });
+    adminHolder.client = stub.client;
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ ok: true, sent: 0, skipped: 2 });
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(tagged('cron.weekly-digest.claim')).toHaveLength(0);
+  });
+
+  it('a signed run whose re-claim of a vanished row fails with another error skips the member, reported once', async () => {
+    signable.UNSUBSCRIBE_SECRET = CLAIM_SIGNING_VALUE;
+    let inserts = 0;
+    const stub = stubWith({
+      insert: () =>
+        ++inserts % 2 === 1
+          ? DUPLICATE
+          : { data: null, error: { message: 'permission denied for table idempotency_keys', code: '42501' } },
+      select: { data: null, error: null },
+    });
+    adminHolder.client = stub.client;
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ ok: true, sent: 0 });
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    const reports = tagged('cron.weekly-digest.claim');
+    expect(reports).toHaveLength(1);
+    expect(reports[0]![1]).toMatchObject({ extra: { step: 'claim', job: 'weekly_digest', code: '42501' } });
+    expectNoIds();
+  });
+
+  it('a signed run whose take-over write errors skips the member, reported once', async () => {
+    signable.UNSUBSCRIBE_SECRET = CLAIM_SIGNING_VALUE;
+    const stub = stubWith({
+      insert: DUPLICATE,
+      select: { data: { id: 'row-1', request_hash: 'f'.repeat(64) }, error: null },
+      update: { data: null, error: { message: 'canceling statement due to statement timeout', code: '57014' } },
+    });
+    adminHolder.client = stub.client;
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ ok: true, sent: 0 });
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    const reports = tagged('cron.weekly-digest.claim');
+    expect(reports).toHaveLength(1);
+    expect(reports[0]![1]).toMatchObject({ extra: { step: 'claim', code: '57014' } });
+    expectNoIds();
+  });
+
+  it('a claim row that cannot be read, a take-over that keeps missing and a failed send are each reported once per run, with no id or address', async () => {
+    signable.UNSUBSCRIBE_SECRET = CLAIM_SIGNING_VALUE;
+    // The read fails: the week stays marked sent.
+    adminHolder.client = stubWith({
+      insert: DUPLICATE,
+      select: { data: null, error: { message: 'read failed for org-1', code: '57014' } },
+    }).client;
+    await GET(buildRequest('Bearer test-cron-secret'));
+    expect(tagged('cron.weekly-digest.claim')).toHaveLength(1);
+    expect(tagged('cron.weekly-digest.claim')[0]![1]).toMatchObject({
+      extra: { step: 'read', job: 'weekly_digest', code: '57014' },
+    });
+    expectNoIds();
+
+    // Every compare-and-set misses: sent anyway, reported once for both.
+    vi.mocked(reportError).mockClear();
+    let reads = 0;
+    adminHolder.client = stubWith({
+      insert: DUPLICATE,
+      select: () => ({ data: { id: 'row-1', request_hash: String(++reads % 10).repeat(64) }, error: null }),
+      update: { data: [], error: null },
+    }).client;
+    await GET(buildRequest('Bearer test-cron-secret'));
+    expect(tagged('cron.weekly-digest.claim')).toHaveLength(1);
+    expect(tagged('cron.weekly-digest.claim')[0]![1]).toMatchObject({ extra: { step: 'take_over' } });
+    expectNoIds();
+
+    // Both sends fail: one report, no address.
+    vi.mocked(reportError).mockClear();
+    adminHolder.client = stubWith(
+      { insert: { data: null, error: null } },
+      { ok: false, error: 'rejected a@acme.test' },
+    ).client;
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ failed: 2 });
+    expect(tagged('cron.weekly-digest.send')).toHaveLength(1);
+    expect(tagged('cron.weekly-digest.send')[0]![1]).toEqual({ tag: 'cron.weekly-digest.send' });
+    expectNoIds();
   });
 });
 
