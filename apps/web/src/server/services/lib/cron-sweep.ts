@@ -1,0 +1,578 @@
+import 'server-only';
+
+import { reportError } from '@/lib/error-reporter';
+import type { createAdminClient } from '@/lib/supabase/admin';
+import { mapWithConcurrency } from '@/lib/supabase/in-filter';
+
+import { fetchAllRows } from './paginate';
+
+/**
+ * Helpers for scheduled jobs that visit every organization: an order that
+ * puts the organizations a job reached longest ago first, a record of each
+ * job's attempts per organization (cron_sweep_attempts, 0469) that keeps
+ * that order honest across runs, and a sweep that stops STARTING work at a
+ * soft deadline and says how much it left.
+ *
+ * Why. A job that walks the organizations in the same order every run, and
+ * stops at its time limit, reaches the same first ones every run and never
+ * the rest. Ordering by "longest since this job last reached it" makes a
+ * cut fall on different organizations each run,
+ * so every one is reached within a bounded number of runs. The deadline only
+ * stops new work from starting; work already started finishes inside the
+ * route's maxDuration, so nothing is cut half way.
+ */
+
+/**
+ * `ids` sorted so that the one with the oldest `lastAt` comes first. An id
+ * with no entry (never reached, or the read that would say failed) comes
+ * before every id that has one. Ties, including all the ids with no entry,
+ * keep their order in `ids` (the sort is stable).
+ */
+export function oldestFirst(ids: readonly string[], lastAt: ReadonlyMap<string, number>): string[] {
+  const keyOf = (id: string): number => {
+    const v = lastAt.get(id);
+    return v === undefined || !Number.isFinite(v) ? Number.NEGATIVE_INFINITY : v;
+  };
+  return [...ids].sort((a, b) => {
+    const ka = keyOf(a);
+    const kb = keyOf(b);
+    if (ka === kb) return 0;
+    return ka < kb ? -1 : 1;
+  });
+}
+
+/**
+ * The newest time per key in `rows` (for example the last restore point per
+ * organization), as epoch milliseconds. Rows whose time does not parse are
+ * left out.
+ */
+export function newestPerKey<Row>(
+  rows: readonly Row[],
+  keyOf: (row: Row) => string,
+  timeOf: (row: Row) => string | null | undefined,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const row of rows) {
+    const t = Date.parse(timeOf(row) ?? '');
+    if (!Number.isFinite(t)) continue;
+    const key = keyOf(row);
+    const prev = out.get(key);
+    if (prev === undefined || t > prev) out.set(key, t);
+  }
+  return out;
+}
+
+/** What happened to one item of a deadline sweep. */
+export type SweepEntry<T, R> =
+  | { item: T; started: false }
+  | { item: T; started: true; ok: true; value: R }
+  | { item: T; started: true; ok: false; error: unknown };
+
+/**
+ * Runs `fn` over `items` in order, at most `concurrency` at once, and starts
+ * no item once `Date.now()` has reached `deadlineAt`. The check is made
+ * right before each start, with nothing awaited between it and the call to
+ * `fn`. An item that throws is recorded and never stops the others. Items
+ * not started are returned as `started: false`, in order, so the caller can
+ * report how many it left for the next run.
+ */
+export async function sweepUntilDeadline<T, R>(
+  items: readonly T[],
+  opts: {
+    concurrency: number;
+    deadlineAt: number;
+    /** Checked with the deadline: true stops starting items too (a budget). */
+    stopWhen?: () => boolean;
+  },
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<{ entries: SweepEntry<T, R>[]; started: number; leftForNextRun: number }> {
+  const entries = await mapWithConcurrency(
+    items,
+    opts.concurrency,
+    async (item, index): Promise<SweepEntry<T, R>> => {
+      if (Date.now() >= opts.deadlineAt || opts.stopWhen?.() === true) {
+        return { item, started: false };
+      }
+      try {
+        return { item, started: true, ok: true, value: await fn(item, index) };
+      } catch (error) {
+        return { item, started: true, ok: false, error };
+      }
+    },
+  );
+  const started = entries.filter((e) => e.started).length;
+  return { entries, started, leftForNextRun: entries.length - started };
+}
+
+/** The fractional part of the golden ratio: the step of rotateByClock. */
+const GOLDEN_STEP = (Math.sqrt(5) - 1) / 2;
+
+/**
+ * `ids` turned to start at a place that moves with the clock: the run's slot
+ * (floor(now / slotMs)) times the golden ratio, keeping the fraction, times
+ * the length. This is the order a job falls back to when it cannot read its
+ * attempt records: id order would put the same organizations first on every
+ * run, and a run cut by its deadline would cut the same ones every time.
+ *
+ * The starts of consecutive slots spread over the whole list (a Weyl
+ * sequence: each new start falls in one of the largest gaps the earlier ones
+ * left), so with C organizations reached per run every organization is
+ * reached within about 2.7 * N / C runs. Nothing is stored or read.
+ */
+export function rotateByClock(ids: readonly string[], now: number, slotMs: number): string[] {
+  const n = ids.length;
+  if (n <= 1) return [...ids];
+  const slot = Math.floor(now / Math.max(1, slotMs));
+  const fraction = (((slot * GOLDEN_STEP) % 1) + 1) % 1;
+  const start = Math.min(n - 1, Math.floor(fraction * n));
+  return [...ids.slice(start), ...ids.slice(0, start)];
+}
+
+/**
+ * One run's order: the organizations this job reached longest ago first
+ * (oldestFirst on `lastAttempt`), or, when the attempt records could not be
+ * read (`lastAttempt` null), rotateByClock.
+ */
+export function sweepOrder(
+  ids: readonly string[],
+  lastAttempt: ReadonlyMap<string, number> | null,
+  opts: { now: number; slotMs: number },
+): string[] {
+  return lastAttempt ? oldestFirst(ids, lastAttempt) : rotateByClock(ids, opts.now, opts.slotMs);
+}
+
+/**
+ * The jobs that record their attempts in cron_sweep_attempts (0469). The
+ * table's CHECK takes any short lower-case name; this union keeps the code to
+ * the names in use.
+ */
+export type CronSweepJob =
+  | 'exception_sync'
+  | 'restore_points'
+  | 'prewarm'
+  | 'auto_reorder'
+  | 'auto_delete_archived'
+  | 'auto_archive_zero_stock'
+  | 'recurring_pos'
+  | 'daily_briefing'
+  | 'weekly_digest'
+  | 'price_pull';
+
+/** One job's attempt records, per organization. */
+export interface CronAttempts {
+  /** When the job last started the organization (epoch ms). */
+  lastAttempt: Map<string, number>;
+  /** Attempts in a row that ended without success. */
+  failures: Map<string, number>;
+}
+
+/**
+ * Reads one job's attempt records (cron_sweep_attempts, 0469), a page at a
+ * time. Throws on a failed read: the caller orders without them and reports.
+ */
+export async function readCronAttempts(
+  admin: ReturnType<typeof createAdminClient>,
+  job: CronSweepJob,
+): Promise<CronAttempts> {
+  const rows = await fetchAllRows<{
+    organization_id: string;
+    last_attempt_at: string;
+    consecutive_failures: number | null;
+  }>((from, to) =>
+    admin
+      .from('cron_sweep_attempts')
+      .select('organization_id, last_attempt_at, consecutive_failures')
+      .eq('job', job)
+      .order('organization_id', { ascending: true })
+      .range(from, to),
+  );
+  const out: CronAttempts = { lastAttempt: new Map(), failures: new Map() };
+  for (const r of rows) {
+    out.lastAttempt.set(r.organization_id, Date.parse(r.last_attempt_at));
+    out.failures.set(r.organization_id, Number(r.consecutive_failures ?? 0));
+  }
+  return out;
+}
+
+/** How one attempt ended: success resets the count, failure adds one, and
+ *  neither (nothing to do: the job is off for the organization, or it has no
+ *  owner or admin to act as) leaves it, see settledFailures. */
+export type CronAttemptResult = 'success' | 'failure' | 'neither';
+
+/**
+ * The attempts-in-a-row count an attempt that FINISHED leaves (`before`: the
+ * count when the run read it). Success: 0. Failure: one more. Neither: the
+ * count as it was, except that a neither right after a FIRST failure clears
+ * it (0).
+ *
+ * Why the exception: one failure (count 1) is what retryFirstOnce moves to
+ * the front of the next run, meant for an attempt killed at maxDuration. If a
+ * neither left that 1 as it was, an organization that failed once and then
+ * had nothing to do (the job turned off, no owner) would stay at 1 and be
+ * moved to the front on every run while it stayed that way. Its attempt
+ * after the failure did finish, so the front place has done its job.
+ * (Leaving the count unwritten is not an option: the stamp at the start has
+ * already counted the attempt as a failure in advance, so no write would make
+ * every neither a failure, and an organization with the job off would count
+ * as failing repeatedly after three runs.)
+ */
+export function settledFailures(result: CronAttemptResult, before: number): number {
+  if (result === 'success') return 0;
+  if (result === 'failure') return before + 1;
+  return before === 1 ? 0 : before;
+}
+
+/**
+ * Records one run's attempts for a job. `start(orgId)` SENDS the attempt
+ * stamp at once (before the caller's own first request for the organization)
+ * and returns `finish(result)`, which awaits the stamp and answers the
+ * attempts-in-a-row count.
+ *
+ * The stamp counts the attempt as a failure in advance (consecutive_failures
+ * one more than before), and `finish` corrects it (settledFailures): success
+ * writes 0, neither writes the old count back (0 after a first failure),
+ * failure leaves it. So an attempt that never
+ * finishes, because the function was killed at maxDuration, is still counted
+ * as a failure, and the organization still goes to the back of the line.
+ *
+ * With `countFailures: false` (a job with nothing to count, such as the
+ * prewarm) the stamp writes only the time and `finish` only awaits it.
+ *
+ * A failed write never throws (the record is for ordering and counting only)
+ * and is reported once per run under `reportTag`.
+ */
+export function cronAttemptRecorder(
+  admin: ReturnType<typeof createAdminClient>,
+  job: CronSweepJob,
+  opts: {
+    failuresBefore: ReadonlyMap<string, number>;
+    reportTag: string;
+    countFailures?: boolean;
+  },
+): { start(orgId: string): (result: CronAttemptResult) => Promise<number> } {
+  let reported = false;
+  const countFailures = opts.countFailures !== false;
+  const write = async (
+    orgId: string,
+    row: { last_attempt_at: string; consecutive_failures?: number },
+  ): Promise<void> => {
+    const { error } = await admin
+      .from('cron_sweep_attempts')
+      .upsert({ job, organization_id: orgId, ...row }, { onConflict: 'job,organization_id' });
+    if (error && !reported) {
+      reported = true;
+      void reportError(new Error(error.message), {
+        tag: opts.reportTag,
+        level: 'warning',
+        extra: { step: 'write', job },
+      });
+    }
+  };
+  return {
+    start(orgId) {
+      const attemptedAt = new Date().toISOString();
+      const before = opts.failuresBefore.get(orgId) ?? 0;
+      const stamp = write(
+        orgId,
+        countFailures
+          ? { last_attempt_at: attemptedAt, consecutive_failures: before + 1 }
+          : { last_attempt_at: attemptedAt },
+      );
+      return async (result) => {
+        await stamp;
+        if (!countFailures) return before;
+        const settled = settledFailures(result, before);
+        if (result === 'failure') return settled;
+        await write(orgId, { last_attempt_at: attemptedAt, consecutive_failures: settled });
+        return settled;
+      };
+    },
+  };
+}
+
+/**
+ * How long a once-a-day job's claim on an organization holds: a second
+ * delivery of the same tick, or a manual run the same day, finds it held.
+ * Shorter than a day so the next day's run is never refused (4 hours of
+ * slack for a late delivery). The cost: a manual run does nothing for an
+ * organization started in the last 20 hours, a failed one included (it waits
+ * for the next day), and a manual run late in the day makes the next
+ * scheduled run skip what it started.
+ */
+export const DAILY_CLAIM_HOLD_MS = 20 * 60 * 60_000;
+
+function isUniqueViolation(error: { code?: string; message?: string }): boolean {
+  return error.code === '23505' || (error.message ?? '').includes('duplicate key value');
+}
+
+/**
+ * Like cronAttemptRecorder, but the attempt stamp is also a CLAIM: one run per
+ * organization per `holdMs`. `claim(orgId)` resolves to null when another run
+ * started the organization less than `holdMs` ago (a cron tick delivered
+ * twice, or a manual run over the scheduled one); the caller skips it. Else it
+ * resolves to `finish(result)`, as cronAttemptRecorder's start does, after
+ * the stamp is written.
+ *
+ * The claim is atomic in the database: an UPDATE of the job's row for the
+ * organization only when its last_attempt_at is older than the hold, then,
+ * when no row matched, an INSERT that the primary key (job, organization_id)
+ * lets only one run make. Two runs racing for the same organization: one
+ * update or insert wins, the other matches nothing and meets the key.
+ *
+ * Like the recorder, the stamp counts the attempt as a failure in advance and
+ * `finish` corrects it, so an attempt killed at maxDuration is a failure and
+ * the organization is at the back of the line (and held until the hold ends).
+ *
+ * FAILS OPEN on an error other than the key (the table missing because the
+ * web deploy went out before the migration, a refused write): the caller runs
+ * the organization unclaimed, as before this table existed, and each job's
+ * own guards still apply; reported once per run under `reportTag`. Never
+ * throws.
+ */
+export function cronAttemptClaimer(
+  admin: ReturnType<typeof createAdminClient>,
+  job: CronSweepJob,
+  opts: {
+    failuresBefore: ReadonlyMap<string, number>;
+    reportTag: string;
+    holdMs: number;
+  },
+): { claim(orgId: string): Promise<((result: CronAttemptResult) => Promise<number>) | null> } {
+  let reported = false;
+  const report = (error: { message: string }, step: string) => {
+    if (reported) return;
+    reported = true;
+    void reportError(new Error(error.message), {
+      tag: opts.reportTag,
+      level: 'warning',
+      extra: { step, job },
+    });
+  };
+  return {
+    async claim(orgId) {
+      const at = Date.now();
+      const attemptedAt = new Date(at).toISOString();
+      const before = opts.failuresBefore.get(orgId) ?? 0;
+      const stamp = { last_attempt_at: attemptedAt, consecutive_failures: before + 1 };
+      const unrecorded = async (): Promise<number> => before;
+      const finish = async (result: CronAttemptResult): Promise<number> => {
+        const settled = settledFailures(result, before);
+        if (result === 'failure') return settled;
+        const { error } = await admin.from('cron_sweep_attempts').upsert(
+          {
+            job,
+            organization_id: orgId,
+            last_attempt_at: attemptedAt,
+            consecutive_failures: settled,
+          },
+          { onConflict: 'job,organization_id' },
+        );
+        if (error) report(error, 'write');
+        return settled;
+      };
+
+      const taken = await admin
+        .from('cron_sweep_attempts')
+        .update(stamp)
+        .eq('job', job)
+        .eq('organization_id', orgId)
+        .lt('last_attempt_at', new Date(at - opts.holdMs).toISOString())
+        .select('organization_id');
+      if (taken.error) {
+        report(taken.error, 'claim');
+        return unrecorded;
+      }
+      if (Array.isArray(taken.data) && taken.data.length > 0) return finish;
+
+      const inserted = await admin
+        .from('cron_sweep_attempts')
+        .insert({ job, organization_id: orgId, ...stamp });
+      if (!inserted.error) return finish;
+      if (isUniqueViolation(inserted.error)) return null;
+      report(inserted.error, 'claim');
+      return unrecorded;
+    },
+  };
+}
+
+/** The most organizations retryFirstOnce moves to the front of one run. */
+export const RETRY_FIRST_LIMIT = 3;
+
+/**
+ * `ordered` with the organizations whose last attempt is their FIRST in a row
+ * without success (consecutive_failures 1) moved to the front, in their
+ * order, at most `limit` of them (the rest keep their place). Why: a run that
+ * starts every organization stamps them in its own order, so the next run's
+ * oldest-first order is the same, and an organization that does not fit in
+ * the time the others leave at the end would be killed at maxDuration every
+ * run, forever. A killed attempt keeps its provisional count (one more than
+ * before), so it is first next run, with the whole run's time. From the
+ * second failure in a row it goes back to the plain order, so one that never
+ * fits cannot take the front every day, and an attempt that finishes with
+ * nothing to do clears a first failure (settledFailures). The limit keeps a
+ * bad day (many organizations failing once) from turning the next run's
+ * order upside down. `promoted`: how many were moved (for the log line).
+ */
+export function retryFirstOnce(
+  ordered: readonly string[],
+  failures: ReadonlyMap<string, number>,
+  limit: number = RETRY_FIRST_LIMIT,
+): { order: string[]; promoted: number } {
+  const first = ordered.filter((id) => failures.get(id) === 1).slice(0, Math.max(0, limit));
+  if (first.length === 0) return { order: [...ordered], promoted: 0 };
+  const moved = new Set(first);
+  return { order: [...first, ...ordered.filter((id) => !moved.has(id))], promoted: first.length };
+}
+
+/** One organization's work in sweepOrganizations: what to count, and how the
+ *  attempt ended for the attempts-in-a-row count. */
+export interface OrgWorkOutcome<V> {
+  result: CronAttemptResult;
+  value: V;
+}
+
+/** What sweepOrganizations did, for the route's one log line and its body. */
+export interface OrgSweepOutcome<V> {
+  /** The organizations worked, in the order they started, with their values. */
+  done: Array<{ orgId: string; value: V }>;
+  /** Organizations whose attempt ended as a failure, a throw included. */
+  failed: number;
+  /** Of those, the ones whose work threw (reported under `<tag>.org`). */
+  threw: number;
+  /** Organizations another run held (claimed within the hold); skipped. */
+  heldByAnotherRun: number;
+  /** Organizations not started: the deadline or the budget came first. They
+   *  go first on the next run. */
+  leftForNextRun: number;
+  /** True when the leftovers were left by the deadline (not the budget). */
+  stoppedAtDeadline: boolean;
+  /** Organizations whose attempts have now ended without success this many
+   *  times in a row or more (REPEATED_FAILURES). */
+  failingRepeatedly: number;
+  /** 'attempts' normally; 'clock' when the attempt records could not be read
+   *  and the run went in rotateByClock order. */
+  orderedBy: 'attempts' | 'clock';
+  /** Organizations moved to the front because their last attempt was their
+   *  first failure (retryFirstOnce, at most RETRY_FIRST_LIMIT). */
+  promoted: number;
+}
+
+/** Attempts in a row without success from which an organization is counted
+ *  in failingRepeatedly. */
+export const REPEATED_FAILURES = 3;
+
+/**
+ * The shared loop of a scheduled job that visits organizations one at a
+ * time: least recently attempted first (this job's rows in
+ * cron_sweep_attempts), each organization's attempt stamped as it starts
+ * (and, with `holdMs`, claimed: see cronAttemptClaimer), no organization
+ * started once `deadlineAt` has passed or `stopWhen` says so, and a warning
+ * to the error reporter (`<tag>.deadline`) when the deadline left some.
+ *
+ * `work(orgId, index)` does one organization (index: its place in this run's
+ * order, from 0) and says how it ended. A throw is reported (`<tag>.org`),
+ * counted as a failure, and never stops the rest. One at a time, as these
+ * jobs always ran: the fairness comes from the order, not from parallel work.
+ *
+ * An organization whose last attempt was its first failure (retryFirstOnce,
+ * at most RETRY_FIRST_LIMIT a run) goes to the front: an attempt killed at
+ * maxDuration leaves exactly that, and at the front it gets the whole run.
+ *
+ * When the attempt records cannot be read the run is reported
+ * (`<tag>.attempts`) and goes in rotateByClock order (`slotMs`: the job's
+ * cadence), so even then a cut does not fall on the same organizations every
+ * run.
+ */
+export async function sweepOrganizations<V>(
+  admin: ReturnType<typeof createAdminClient>,
+  opts: {
+    job: CronSweepJob;
+    tag: string;
+    orgIds: readonly string[];
+    deadlineAt: number;
+    slotMs: number;
+    holdMs?: number;
+    stopWhen?: () => boolean;
+  },
+  work: (orgId: string, index: number) => Promise<OrgWorkOutcome<V>>,
+): Promise<OrgSweepOutcome<V>> {
+  let attempts: CronAttempts | null = null;
+  try {
+    attempts = await readCronAttempts(admin, opts.job);
+  } catch (err) {
+    void reportError(err, {
+      tag: `${opts.tag}.attempts`,
+      level: 'warning',
+      extra: { step: 'read' },
+    });
+  }
+  const { order: ordered, promoted } = retryFirstOnce(
+    sweepOrder(opts.orgIds, attempts?.lastAttempt ?? null, {
+      now: Date.now(),
+      slotMs: opts.slotMs,
+    }),
+    attempts?.failures ?? new Map<string, number>(),
+  );
+  const failuresBefore = attempts?.failures ?? new Map<string, number>();
+  const reportTag = `${opts.tag}.attempts`;
+  const claimer =
+    opts.holdMs !== undefined
+      ? cronAttemptClaimer(admin, opts.job, { failuresBefore, reportTag, holdMs: opts.holdMs })
+      : null;
+  const recorder = claimer
+    ? null
+    : cronAttemptRecorder(admin, opts.job, { failuresBefore, reportTag });
+
+  const done: Array<{ orgId: string; value: V }> = [];
+  let threw = 0;
+  let failed = 0;
+  let heldByAnotherRun = 0;
+  let failingRepeatedly = 0;
+  const sweep = await sweepUntilDeadline(
+    ordered,
+    { concurrency: 1, deadlineAt: opts.deadlineAt, stopWhen: opts.stopWhen },
+    async (orgId, index) => {
+      // Stamped (and claimed) before the organization's first read.
+      const finish = claimer ? await claimer.claim(orgId) : recorder!.start(orgId);
+      if (finish === null) {
+        heldByAnotherRun += 1;
+        return;
+      }
+      let result: CronAttemptResult;
+      try {
+        const outcome = await work(orgId, index);
+        done.push({ orgId, value: outcome.value });
+        result = outcome.result;
+      } catch (e) {
+        threw += 1;
+        void reportError(e, { tag: `${opts.tag}.org`, extra: { orgId } });
+        result = 'failure';
+      }
+      if (result === 'failure') failed += 1;
+      if ((await finish(result)) >= REPEATED_FAILURES) failingRepeatedly += 1;
+    },
+  );
+  const stoppedAtDeadline = sweep.leftForNextRun > 0 && Date.now() >= opts.deadlineAt;
+  if (stoppedAtDeadline) {
+    void reportError(new Error('Scheduled job stopped at the run deadline'), {
+      tag: `${opts.tag}.deadline`,
+      level: 'warning',
+      extra: {
+        organizations: ordered.length,
+        started: sweep.started,
+        leftForNextRun: sweep.leftForNextRun,
+      },
+    });
+  }
+  return {
+    done,
+    failed,
+    threw,
+    heldByAnotherRun,
+    leftForNextRun: sweep.leftForNextRun,
+    stoppedAtDeadline,
+    failingRepeatedly,
+    orderedBy: attempts ? 'attempts' : 'clock',
+    promoted,
+  };
+}

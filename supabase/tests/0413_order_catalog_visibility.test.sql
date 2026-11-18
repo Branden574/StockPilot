@@ -1291,7 +1291,7 @@ select is(
   || '|' || (select string_agg(p.proname, ',' order by p.proname) from pg_proc p
     where p.pronamespace in ('public'::regnamespace, 'ledger'::regnamespace) and p.prosrc ~* 'order_catalog_visible\M'),
   'set_order_catalog_visibility|_order_items_hidden_from_orders,_return_exchange_item_ok,_return_exchange_requester_options,'
-  'add_order_request_lines,duplicate_inventory_item,public_link_eligible_items,return_exchange_candidates,'
+  'add_order_request_lines,duplicate_inventory_item,inventory_list_value,public_link_eligible_items,return_exchange_candidates,'
   'set_order_catalog_visibility,tg_inventory_items_order_visibility_guard,tg_order_request_lines_order_visibility',
   'C1: the only function that UPDATEs the column is set_order_catalog_visibility; these are every body that names it (duplicate is the one INSERT that carries it)');
 select is(

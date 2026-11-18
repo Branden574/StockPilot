@@ -92,8 +92,7 @@ test-results/
 **/tests/perf/.auth/
 **/perf-results/
 
-# Load tests — local env + result artifacts
-load-tests/.env.local.loadtest
+# Load tests — result artifacts
 load-tests/results/
 
 # Expo prebuild output — apps/mobile/ios + apps/mobile/android are

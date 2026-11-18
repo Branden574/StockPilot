@@ -58,7 +58,11 @@ function makeStub() {
     then: (cb: (r: { data: unknown; count: number; error: null }) => unknown) =>
       cb({ data: [], count: 0, error: null }),
   });
-  return { from: () => chain, _filterCalls: filterCalls, _orCalls: orCalls };
+  return {
+    from: () => chain,
+    // list() asks inventory_list_value (0470) for its value total.
+    rpc: async () => ({ data: 0, error: null }),
+    _filterCalls: filterCalls, _orCalls: orCalls };
 }
 
 function svc(stub: ReturnType<typeof makeStub>) {

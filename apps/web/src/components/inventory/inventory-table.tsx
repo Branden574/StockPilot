@@ -123,6 +123,7 @@ import {
   type InstantModeState,
   type InstantPlacementLine,
 } from '@/lib/inventory/instant-mode';
+import { unpackInventoryClientRows, type PackedInventoryRows } from '@/lib/inventory/client-row';
 import {
   deselectPage,
   isPageFullySelected,
@@ -148,7 +149,6 @@ interface Item {
   warehouse_id?: string | null;
   reorder_point: number;
   unit_cost: number;
-  retail_price: number;
   category_id: string | null;
   charter_id: string | null;
   primary_location_id: string | null;
@@ -304,6 +304,11 @@ type StyledEntry =
   | { kind: 'style'; group: SizeRunGroup<RenderEntry>; items: Item[] }
   | { kind: 'passthrough'; entry: RenderEntry };
 
+/** The row shape the table reads. The pages send only these columns
+ *  (lib/inventory/client-row.ts, INVENTORY_CLIENT_ROW_FIELDS), so a column
+ *  added here must be added there too; its size test checks the two agree. */
+export type InventoryTableItem = Item;
+
 /** A full-dataset row for instant mode: the table row shape plus the
  *  columns the local matcher (barcode/model_number) and the created_*
  *  sorts read. The pages build these from InventoryListItemRow. */
@@ -329,14 +334,21 @@ export type InstantDatasetItem = Item & {
  * semantics, selection-utils).
  */
 export interface InstantInventoryDataset {
-  /** ALL rows for the view — every status, every page. */
-  items: InstantDatasetItem[];
+  /** ALL rows for the view — every status, every page. The pages send them
+   *  packed (field names once, lib/inventory/client-row.ts); the table
+   *  unpacks them once, and rows sent as objects are read as they are. */
+  items: InstantDatasetItem[] | PackedInventoryRows<InstantDatasetItem>;
   /** Items page only: holdings for the one-line-per-rack expansion.
    *  Omitted by the Books page (books never split rows). */
   placement?: Record<string, InstantPlacementLine[]>;
   /** Which per-view semantics apply (rack custom-field keys). */
   view: 'items' | 'books';
 }
+
+/** The dataset with its rows unpacked: what the derivation runs over. */
+type UnpackedInstantDataset = Omit<InstantInventoryDataset, 'items'> & {
+  items: InstantDatasetItem[];
+};
 
 /**
  * FIRST-ROWS-FIRST STREAMING (React 19 use()): what the page's UNAWAITED
@@ -357,7 +369,8 @@ export interface InstantInventoryDataset {
  * bug pattern #15).
  */
 export interface InstantAdoptedPayload {
-  items: InstantDatasetItem[];
+  /** Packed or not, as InstantInventoryDataset['items']. */
+  items: InstantDatasetItem[] | PackedInventoryRows<InstantDatasetItem>;
   placement?: Record<string, InstantPlacementLine[]>;
   /** Full-dataset 14-day series — replaces the first page's `trends` prop
    *  the moment instant mode takes over, so every locally-derived page has
@@ -862,10 +875,22 @@ export function InventoryTable({
 
   // The dataset the derivation actually runs over: the awaited prop
   // (deep links) wins; otherwise the adopted streamed payload.
-  const effectiveInstant: InstantInventoryDataset | null = React.useMemo(() => {
-    if (instant) return instant;
+  // The rows arrive packed (lib/inventory/client-row.ts) and are unpacked
+  // here, once per dataset, into the objects everything below reads.
+  const effectiveInstant: UnpackedInstantDataset | null = React.useMemo(() => {
+    if (instant) {
+      return {
+        items: unpackInventoryClientRows(instant.items),
+        placement: instant.placement,
+        view: instant.view,
+      };
+    }
     if (adopted) {
-      return { items: adopted.items, placement: adopted.placement, view: adopted.view };
+      return {
+        items: unpackInventoryClientRows(adopted.items),
+        placement: adopted.placement,
+        view: adopted.view,
+      };
     }
     return null;
   }, [instant, adopted]);

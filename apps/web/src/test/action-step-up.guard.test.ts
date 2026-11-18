@@ -268,7 +268,7 @@ const REVIEWED: Record<string, Reviewed> = {
   'server/actions/revalidate-inventory-view.ts#revalidateInventoryViewAction': {
     kind: 'best-effort',
     reason:
-      'Marks the list cache of the organization withContext() resolves as stale: for a session that owes its code nothing is marked, and it answers false.',
+      "Re-renders the caller's page and, for a manager or above on Items or Books, marks the list cache of the organization withContext() resolves as stale: for a session that owes its code nothing is marked or re-rendered, and it answers false.",
   },
 
   // ── self only ──
