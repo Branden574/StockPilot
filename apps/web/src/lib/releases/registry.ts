@@ -137,7 +137,10 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was:
     // '2026-11-16T09:39:00Z'): the emptied fields and schedule completion release below is dated
     // 2026-11-16T12:33:00Z, so the placeholder is that same minute.
-    publishedAt: '2026-11-16T12:33:00Z',
+    // Moved again by docs/releases-low-critical-pages (2026-11-18; was: '2026-11-16T12:33:00Z'): the Low +
+    // critical pages and list value release below is dated 2026-11-18T10:00:00Z, so the placeholder is that
+    // same minute.
+    publishedAt: '2026-11-18T10:00:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -222,6 +225,100 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'low-critical-pages-and-list-value-2026-11',
+    revision: 1,
+    // One web change, no phone update:
+    // - #609 (squash 86625dbbf), live in production since 2026-11-18
+    //   09:59:07Z (deployment dpl_4Bu6aVJihnSbh9sd2GdF7vLCTBGn). It uses the
+    //   two database functions of migration 0470 (#614, squash 01782aa99),
+    //   applied before #609 merged.
+    // publishedAt is the whole minute after that deployment went live. It is
+    // the newest published release, so it sits directly below the Liquid
+    // Glass draft, whose placeholder moved to the same minute.
+    // Claims checked against the code at 86625dbbf (paths under apps/web/src
+    // unless they start with supabase/):
+    // - Low + critical is stock=low (components/inventory/inventory-table.tsx
+    //   VIEWS and the chip that sets stock=low), filters.lowStock in
+    //   InventoryService (inventory/page.tsx and books/page.tsx both pass
+    //   lowStock: params.stock === 'low'; both pages are 30 records a page,
+    //   PAGE_SIZE).
+    // - The low rule is the computed field is_low_stock
+    //   (supabase/migrations/0470: no stock, or a reorder point above 0 with
+    //   the quantity at or under it), applied in the request by
+    //   applyContentFilters (server/services/inventory.ts, query.eq
+    //   ('is_low_stock', true)), which list()'s page and its exact count, and
+    //   listPlanRows' scan (filteredScanPage), all go through. So a fixed page
+    //   is the requested 30-record slice of the low or critical records
+    //   (.range on the filtered query), the count is theirs, and listPlanRows'
+    //   2,000 cap (INSTANT_MODE_MAX_ROWS, lib/inventory/instant-mode.ts;
+    //   first.count > INSTANT_MODE_MAX_ROWS returns null) counts them. Before
+    //   (86625dbbf^), the request carried only the pre-filter
+    //   or(reorder_point.gt.0, quantity_on_hand.lte.0) and list() kept the
+    //   low ones among the 30 it read, while the count came from the whole
+    //   low set; the plan's cap counted the pre-filtered records. A list of
+    //   2,000 or fewer is planned (planLivePage in
+    //   server/services/lib/planned-page.ts, for every role, on Items and
+    //   Books: pages that keep a header's records together, which can end
+    //   before 30 records), so the 30-per-page words are said of longer lists
+    //   only.
+    // - The value: list() asks inventory_list_value once, with
+    //   buildItemListValueFilters (the same filters and the caller's
+    //   warehouse and category scope), in parallel with the page, unless the
+    //   page is planned (planned pages bring plannedTotals from listPlanRows,
+    //   unchanged). The function (0470) adds up quantity_on_hand * unit_cost
+    //   in one SELECT, as the caller (SECURITY INVOKER, row level security).
+    //   Before, fetchAllRows read the filtered view 1,000 records at a time
+    //   ordered by id, in parallel with the page, and list() returned once
+    //   both were done; a record added or removed between two reads moves the
+    //   later windows, so one could be read twice or not at all. The figure
+    //   is the "on hand" amount in the count line above the list, beside the
+    //   top pager (inventory-table.tsx). Managers, admins and owners on the
+    //   default view (page 1 of the whole list, no filter, default order) are
+    //   served the stored figure 'inventory-value-v1'
+    //   (server/loaders/inventory-list.ts, loadInventoryValueOnHand: the
+    //   inventory_value_on_hand aggregate of 0227), unchanged, and the words
+    //   say so.
+    // - Measured on a local copy only; no speed is claimed.
+    // Who is told: whoever can read items (items:read), on both entries, as
+    // the release that planned Low + critical pages; no links.
+    status: 'published',
+    title:
+      'Every page of a long Low + critical list is full, and the on hand value is added up in one read',
+    summary:
+      'On the web, a Low + critical list on Items or Books of more than 2,000 low or critical records now shows 30 of them on every page but the last, and its count and pages are those of the low or critical records. The on hand value above a long list is now added up in one read, so a record added or removed while it is being added up can no longer be counted twice or left out.',
+    publishedAt: '2026-11-18T10:00:00Z',
+    entries: [
+      {
+        id: 'low-critical-pages-full',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Every page of a long Low + critical list is full',
+        whatChanged:
+          "On the web, with Low + critical chosen on Items or Books, a list of more than 2,000 low or critical records, cut every 30 records, now shows 30 of them on every page but the last. A list of 2,000 or fewer keeps each header's records together on a page, as other lists of that size do, however many records have a reorder point.",
+        whyItMatters:
+          'A page cut every 30 records used to read 30 records that have a reorder point or no stock and then show only the low or critical ones among them, so it could show a few or none while later pages held more. A list with more than 2,000 such records was cut that way even when far fewer of them were low or critical.',
+        howItAffectsYou:
+          'The count above the list and the number of pages are those of the low or critical records, and no page before the last is short or empty.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        id: 'list-value-added-up-in-one-read',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'The on hand value above a long list is added up in one read',
+        whatChanged:
+          'On the web, the on hand value above Items or Books (quantity on hand times unit cost, over every record the list matches) is now added up in one read when the list has more than 2,000 records. Managers, admins and owners looking at the first page of the whole list in its usual order, with no filter, keep the figure StockPilot already stores for it.',
+        whyItMatters:
+          'It used to be added up by reading every record of the list, 1,000 at a time, before the page was shown. A record added or removed between two of those reads could be counted twice or left out.',
+        howItAffectsYou:
+          'The value covers the same records as before: the filters and rack you chose, Low + critical, and only what you are allowed to see. Lists of 2,000 records or fewer add it up as before.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:read'] },
       },
     ],
   },
