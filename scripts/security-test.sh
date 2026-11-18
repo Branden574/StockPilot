@@ -2180,6 +2180,17 @@ WEB_TESTS=(
   src/app/api/v1/change-routes.audit-rows.test.ts
   src/server/services/schedule.create-warehouse-check.test.ts
   src/server/services/schedule.complete-warehouse-check.test.ts
+
+  # Load tests reach this machine only. Every k6 scenario imports the shared
+  # guard (load-tests/k6/lib/safety.js) and calls it before any request, every
+  # request passes assertRequestUrl, no scenario follows a redirect, no file of
+  # the suite holds an address that is not 127.0.0.1 or [::1], and the guard
+  # refuses the parser tricks that make a remote address look local. The Node
+  # tools fetch only with redirects refused and refuse to run behind Node's
+  # environment proxy, the app env they write sets every outside-service key
+  # the app reads to empty, and the app server the runner starts carries an
+  # outbound guard that refuses any connection off this machine.
+  src/test/load-tests-safety.guard.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
