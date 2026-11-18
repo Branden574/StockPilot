@@ -928,6 +928,12 @@ PGTAP_TESTS=(
   # two-session proof is scripts/db-concurrency/0467_app_row_race.sh; the lock
   # footprint is scripts/db-concurrency/0467_migration_lock_footprint.sh.
   supabase/tests/0467_role_and_sign_in_policy_changes_recorded_by_database.test.sql
+  # 0470: the inventory list's value total runs as the caller (SECURITY
+  # INVOKER), so row level security bounds it: a member of one organization
+  # asking for another's id, a staff member naming a warehouse they cannot
+  # read, and a viewer naming a category they are not granted all get 0;
+  # anon may execute neither function.
+  supabase/tests/0470_inventory_list_totals_in_database.test.sql
   # When a scheduled job last started each organization (0469): one row per
   # job and organization, RLS on with no policy, no privilege for anon or
   # authenticated (a signed-in owner cannot read or write it), service_role
