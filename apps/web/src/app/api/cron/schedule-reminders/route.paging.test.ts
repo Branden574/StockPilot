@@ -193,8 +193,9 @@ describe('GET /api/cron/schedule-reminders: which events, in what order', () => 
 
   it('pages past PAGE_SIZE through events that share one start time, each reminded exactly once', async () => {
     const same = 3 * HOUR;
+    // Uuid ids, as the table's: the keyset compares them in byte order.
     const store = Array.from({ length: 450 }, (_, i) =>
-      ev(`e-${String(i).padStart(3, '0')}`, same),
+      ev(`00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, same),
     );
     const stub = stubOver(store);
     const body = await run();
@@ -238,6 +239,28 @@ describe('GET /api/cron/schedule-reminders: one tick delivered twice', () => {
     expect(body.remindersSent).toBe(0);
     expect(notified).toHaveLength(0);
     expect(store[0]!.reminded_24h_at).toBeNull();
+  });
+});
+
+describe('GET /api/cron/schedule-reminders: the one-hour line is a time, not a string', () => {
+  it('an event exactly one hour away is reminded "in 1 hour" whatever offset its start is written in', async () => {
+    // NOW + 1 h is 21:20:00.000Z. PostgREST writes timestamps with an offset
+    // (+00:00 for UTC); compared as strings, a start written with another
+    // offset fell on the wrong side of the line.
+    stubOver([
+      ev('exact-utc', 0, { starts_at: '2026-08-24T21:20:00+00:00' }),
+      ev('exact-offset', 0, { starts_at: '2026-08-24T22:20:00+01:00' }),
+      ev('second-after-utc', 0, { starts_at: '2026-08-24T21:20:01+00:00' }),
+      ev('second-after-offset', 0, { starts_at: '2026-08-24T22:20:01+01:00' }),
+    ]);
+    await run();
+    const horizonOf = Object.fromEntries(notified.map((n) => [n.eventId, n.horizon]));
+    expect(horizonOf).toEqual({
+      'exact-utc': '1h',
+      'exact-offset': '1h',
+      'second-after-utc': '24h',
+      'second-after-offset': '24h',
+    });
   });
 });
 

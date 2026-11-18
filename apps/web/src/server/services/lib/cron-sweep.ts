@@ -78,16 +78,23 @@ export type SweepEntry<T, R> =
  */
 export async function sweepUntilDeadline<T, R>(
   items: readonly T[],
-  opts: { concurrency: number; deadlineAt: number },
-  fn: (item: T) => Promise<R>,
+  opts: {
+    concurrency: number;
+    deadlineAt: number;
+    /** Checked with the deadline: true stops starting items too (a budget). */
+    stopWhen?: () => boolean;
+  },
+  fn: (item: T, index: number) => Promise<R>,
 ): Promise<{ entries: SweepEntry<T, R>[]; started: number; leftForNextRun: number }> {
   const entries = await mapWithConcurrency(
     items,
     opts.concurrency,
-    async (item): Promise<SweepEntry<T, R>> => {
-      if (Date.now() >= opts.deadlineAt) return { item, started: false };
+    async (item, index): Promise<SweepEntry<T, R>> => {
+      if (Date.now() >= opts.deadlineAt || opts.stopWhen?.() === true) {
+        return { item, started: false };
+      }
       try {
-        return { item, started: true, ok: true, value: await fn(item) };
+        return { item, started: true, ok: true, value: await fn(item, index) };
       } catch (error) {
         return { item, started: true, ok: false, error };
       }
@@ -97,12 +104,59 @@ export async function sweepUntilDeadline<T, R>(
   return { entries, started, leftForNextRun: entries.length - started };
 }
 
+/** The fractional part of the golden ratio: the step of rotateByClock. */
+const GOLDEN_STEP = (Math.sqrt(5) - 1) / 2;
+
+/**
+ * `ids` turned to start at a place that moves with the clock: the run's slot
+ * (floor(now / slotMs)) times the golden ratio, keeping the fraction, times
+ * the length. This is the order a job falls back to when it cannot read its
+ * attempt records: id order would put the same organizations first on every
+ * run, and a run cut by its deadline would cut the same ones every time.
+ *
+ * The starts of consecutive slots spread over the whole list (a Weyl
+ * sequence: each new start falls in one of the largest gaps the earlier ones
+ * left), so with C organizations reached per run every organization is
+ * reached within about 2.7 * N / C runs. Nothing is stored or read.
+ */
+export function rotateByClock(ids: readonly string[], now: number, slotMs: number): string[] {
+  const n = ids.length;
+  if (n <= 1) return [...ids];
+  const slot = Math.floor(now / Math.max(1, slotMs));
+  const fraction = (((slot * GOLDEN_STEP) % 1) + 1) % 1;
+  const start = Math.min(n - 1, Math.floor(fraction * n));
+  return [...ids.slice(start), ...ids.slice(0, start)];
+}
+
+/**
+ * One run's order: the organizations this job reached longest ago first
+ * (oldestFirst on `lastAttempt`), or, when the attempt records could not be
+ * read (`lastAttempt` null), rotateByClock.
+ */
+export function sweepOrder(
+  ids: readonly string[],
+  lastAttempt: ReadonlyMap<string, number> | null,
+  opts: { now: number; slotMs: number },
+): string[] {
+  return lastAttempt ? oldestFirst(ids, lastAttempt) : rotateByClock(ids, opts.now, opts.slotMs);
+}
+
 /**
  * The jobs that record their attempts in cron_sweep_attempts (0469). The
  * table's CHECK takes any short lower-case name; this union keeps the code to
  * the names in use.
  */
-export type CronSweepJob = 'exception_sync' | 'restore_points' | 'prewarm';
+export type CronSweepJob =
+  | 'exception_sync'
+  | 'restore_points'
+  | 'prewarm'
+  | 'auto_reorder'
+  | 'auto_delete_archived'
+  | 'auto_archive_zero_stock'
+  | 'recurring_pos'
+  | 'daily_briefing'
+  | 'weekly_digest'
+  | 'price_pull';
 
 /** One job's attempt records, per organization. */
 export interface CronAttempts {
@@ -141,8 +195,32 @@ export async function readCronAttempts(
 }
 
 /** How one attempt ended: success resets the count, failure adds one, and
- *  neither (for example another run holds the organization) leaves it. */
+ *  neither (nothing to do: the job is off for the organization, or it has no
+ *  owner or admin to act as) leaves it, see settledFailures. */
 export type CronAttemptResult = 'success' | 'failure' | 'neither';
+
+/**
+ * The attempts-in-a-row count an attempt that FINISHED leaves (`before`: the
+ * count when the run read it). Success: 0. Failure: one more. Neither: the
+ * count as it was, except that a neither right after a FIRST failure clears
+ * it (0).
+ *
+ * Why the exception: one failure (count 1) is what retryFirstOnce moves to
+ * the front of the next run, meant for an attempt killed at maxDuration. If a
+ * neither left that 1 as it was, an organization that failed once and then
+ * had nothing to do (the job turned off, no owner) would stay at 1 and be
+ * moved to the front on every run while it stayed that way. Its attempt
+ * after the failure did finish, so the front place has done its job.
+ * (Leaving the count unwritten is not an option: the stamp at the start has
+ * already counted the attempt as a failure in advance, so no write would make
+ * every neither a failure, and an organization with the job off would count
+ * as failing repeatedly after three runs.)
+ */
+export function settledFailures(result: CronAttemptResult, before: number): number {
+  if (result === 'success') return 0;
+  if (result === 'failure') return before + 1;
+  return before === 1 ? 0 : before;
+}
 
 /**
  * Records one run's attempts for a job. `start(orgId)` SENDS the attempt
@@ -151,8 +229,9 @@ export type CronAttemptResult = 'success' | 'failure' | 'neither';
  * attempts-in-a-row count.
  *
  * The stamp counts the attempt as a failure in advance (consecutive_failures
- * one more than before), and `finish` corrects it: success writes 0, neither
- * writes the old count back, failure leaves it. So an attempt that never
+ * one more than before), and `finish` corrects it (settledFailures): success
+ * writes 0, neither writes the old count back (0 after a first failure),
+ * failure leaves it. So an attempt that never
  * finishes, because the function was killed at maxDuration, is still counted
  * as a failure, and the organization still goes to the back of the line.
  *
@@ -202,11 +281,298 @@ export function cronAttemptRecorder(
       return async (result) => {
         await stamp;
         if (!countFailures) return before;
-        if (result === 'failure') return before + 1;
-        const settled = result === 'success' ? 0 : before;
+        const settled = settledFailures(result, before);
+        if (result === 'failure') return settled;
         await write(orgId, { last_attempt_at: attemptedAt, consecutive_failures: settled });
         return settled;
       };
     },
+  };
+}
+
+/**
+ * How long a once-a-day job's claim on an organization holds: a second
+ * delivery of the same tick, or a manual run the same day, finds it held.
+ * Shorter than a day so the next day's run is never refused (4 hours of
+ * slack for a late delivery). The cost: a manual run does nothing for an
+ * organization started in the last 20 hours, a failed one included (it waits
+ * for the next day), and a manual run late in the day makes the next
+ * scheduled run skip what it started.
+ */
+export const DAILY_CLAIM_HOLD_MS = 20 * 60 * 60_000;
+
+function isUniqueViolation(error: { code?: string; message?: string }): boolean {
+  return error.code === '23505' || (error.message ?? '').includes('duplicate key value');
+}
+
+/**
+ * Like cronAttemptRecorder, but the attempt stamp is also a CLAIM: one run per
+ * organization per `holdMs`. `claim(orgId)` resolves to null when another run
+ * started the organization less than `holdMs` ago (a cron tick delivered
+ * twice, or a manual run over the scheduled one); the caller skips it. Else it
+ * resolves to `finish(result)`, as cronAttemptRecorder's start does, after
+ * the stamp is written.
+ *
+ * The claim is atomic in the database: an UPDATE of the job's row for the
+ * organization only when its last_attempt_at is older than the hold, then,
+ * when no row matched, an INSERT that the primary key (job, organization_id)
+ * lets only one run make. Two runs racing for the same organization: one
+ * update or insert wins, the other matches nothing and meets the key.
+ *
+ * Like the recorder, the stamp counts the attempt as a failure in advance and
+ * `finish` corrects it, so an attempt killed at maxDuration is a failure and
+ * the organization is at the back of the line (and held until the hold ends).
+ *
+ * FAILS OPEN on an error other than the key (the table missing because the
+ * web deploy went out before the migration, a refused write): the caller runs
+ * the organization unclaimed, as before this table existed, and each job's
+ * own guards still apply; reported once per run under `reportTag`. Never
+ * throws.
+ */
+export function cronAttemptClaimer(
+  admin: ReturnType<typeof createAdminClient>,
+  job: CronSweepJob,
+  opts: {
+    failuresBefore: ReadonlyMap<string, number>;
+    reportTag: string;
+    holdMs: number;
+  },
+): { claim(orgId: string): Promise<((result: CronAttemptResult) => Promise<number>) | null> } {
+  let reported = false;
+  const report = (error: { message: string }, step: string) => {
+    if (reported) return;
+    reported = true;
+    void reportError(new Error(error.message), {
+      tag: opts.reportTag,
+      level: 'warning',
+      extra: { step, job },
+    });
+  };
+  return {
+    async claim(orgId) {
+      const at = Date.now();
+      const attemptedAt = new Date(at).toISOString();
+      const before = opts.failuresBefore.get(orgId) ?? 0;
+      const stamp = { last_attempt_at: attemptedAt, consecutive_failures: before + 1 };
+      const unrecorded = async (): Promise<number> => before;
+      const finish = async (result: CronAttemptResult): Promise<number> => {
+        const settled = settledFailures(result, before);
+        if (result === 'failure') return settled;
+        const { error } = await admin.from('cron_sweep_attempts').upsert(
+          {
+            job,
+            organization_id: orgId,
+            last_attempt_at: attemptedAt,
+            consecutive_failures: settled,
+          },
+          { onConflict: 'job,organization_id' },
+        );
+        if (error) report(error, 'write');
+        return settled;
+      };
+
+      const taken = await admin
+        .from('cron_sweep_attempts')
+        .update(stamp)
+        .eq('job', job)
+        .eq('organization_id', orgId)
+        .lt('last_attempt_at', new Date(at - opts.holdMs).toISOString())
+        .select('organization_id');
+      if (taken.error) {
+        report(taken.error, 'claim');
+        return unrecorded;
+      }
+      if (Array.isArray(taken.data) && taken.data.length > 0) return finish;
+
+      const inserted = await admin
+        .from('cron_sweep_attempts')
+        .insert({ job, organization_id: orgId, ...stamp });
+      if (!inserted.error) return finish;
+      if (isUniqueViolation(inserted.error)) return null;
+      report(inserted.error, 'claim');
+      return unrecorded;
+    },
+  };
+}
+
+/** The most organizations retryFirstOnce moves to the front of one run. */
+export const RETRY_FIRST_LIMIT = 3;
+
+/**
+ * `ordered` with the organizations whose last attempt is their FIRST in a row
+ * without success (consecutive_failures 1) moved to the front, in their
+ * order, at most `limit` of them (the rest keep their place). Why: a run that
+ * starts every organization stamps them in its own order, so the next run's
+ * oldest-first order is the same, and an organization that does not fit in
+ * the time the others leave at the end would be killed at maxDuration every
+ * run, forever. A killed attempt keeps its provisional count (one more than
+ * before), so it is first next run, with the whole run's time. From the
+ * second failure in a row it goes back to the plain order, so one that never
+ * fits cannot take the front every day, and an attempt that finishes with
+ * nothing to do clears a first failure (settledFailures). The limit keeps a
+ * bad day (many organizations failing once) from turning the next run's
+ * order upside down. `promoted`: how many were moved (for the log line).
+ */
+export function retryFirstOnce(
+  ordered: readonly string[],
+  failures: ReadonlyMap<string, number>,
+  limit: number = RETRY_FIRST_LIMIT,
+): { order: string[]; promoted: number } {
+  const first = ordered.filter((id) => failures.get(id) === 1).slice(0, Math.max(0, limit));
+  if (first.length === 0) return { order: [...ordered], promoted: 0 };
+  const moved = new Set(first);
+  return { order: [...first, ...ordered.filter((id) => !moved.has(id))], promoted: first.length };
+}
+
+/** One organization's work in sweepOrganizations: what to count, and how the
+ *  attempt ended for the attempts-in-a-row count. */
+export interface OrgWorkOutcome<V> {
+  result: CronAttemptResult;
+  value: V;
+}
+
+/** What sweepOrganizations did, for the route's one log line and its body. */
+export interface OrgSweepOutcome<V> {
+  /** The organizations worked, in the order they started, with their values. */
+  done: Array<{ orgId: string; value: V }>;
+  /** Organizations whose attempt ended as a failure, a throw included. */
+  failed: number;
+  /** Of those, the ones whose work threw (reported under `<tag>.org`). */
+  threw: number;
+  /** Organizations another run held (claimed within the hold); skipped. */
+  heldByAnotherRun: number;
+  /** Organizations not started: the deadline or the budget came first. They
+   *  go first on the next run. */
+  leftForNextRun: number;
+  /** True when the leftovers were left by the deadline (not the budget). */
+  stoppedAtDeadline: boolean;
+  /** Organizations whose attempts have now ended without success this many
+   *  times in a row or more (REPEATED_FAILURES). */
+  failingRepeatedly: number;
+  /** 'attempts' normally; 'clock' when the attempt records could not be read
+   *  and the run went in rotateByClock order. */
+  orderedBy: 'attempts' | 'clock';
+  /** Organizations moved to the front because their last attempt was their
+   *  first failure (retryFirstOnce, at most RETRY_FIRST_LIMIT). */
+  promoted: number;
+}
+
+/** Attempts in a row without success from which an organization is counted
+ *  in failingRepeatedly. */
+export const REPEATED_FAILURES = 3;
+
+/**
+ * The shared loop of a scheduled job that visits organizations one at a
+ * time: least recently attempted first (this job's rows in
+ * cron_sweep_attempts), each organization's attempt stamped as it starts
+ * (and, with `holdMs`, claimed: see cronAttemptClaimer), no organization
+ * started once `deadlineAt` has passed or `stopWhen` says so, and a warning
+ * to the error reporter (`<tag>.deadline`) when the deadline left some.
+ *
+ * `work(orgId, index)` does one organization (index: its place in this run's
+ * order, from 0) and says how it ended. A throw is reported (`<tag>.org`),
+ * counted as a failure, and never stops the rest. One at a time, as these
+ * jobs always ran: the fairness comes from the order, not from parallel work.
+ *
+ * An organization whose last attempt was its first failure (retryFirstOnce,
+ * at most RETRY_FIRST_LIMIT a run) goes to the front: an attempt killed at
+ * maxDuration leaves exactly that, and at the front it gets the whole run.
+ *
+ * When the attempt records cannot be read the run is reported
+ * (`<tag>.attempts`) and goes in rotateByClock order (`slotMs`: the job's
+ * cadence), so even then a cut does not fall on the same organizations every
+ * run.
+ */
+export async function sweepOrganizations<V>(
+  admin: ReturnType<typeof createAdminClient>,
+  opts: {
+    job: CronSweepJob;
+    tag: string;
+    orgIds: readonly string[];
+    deadlineAt: number;
+    slotMs: number;
+    holdMs?: number;
+    stopWhen?: () => boolean;
+  },
+  work: (orgId: string, index: number) => Promise<OrgWorkOutcome<V>>,
+): Promise<OrgSweepOutcome<V>> {
+  let attempts: CronAttempts | null = null;
+  try {
+    attempts = await readCronAttempts(admin, opts.job);
+  } catch (err) {
+    void reportError(err, {
+      tag: `${opts.tag}.attempts`,
+      level: 'warning',
+      extra: { step: 'read' },
+    });
+  }
+  const { order: ordered, promoted } = retryFirstOnce(
+    sweepOrder(opts.orgIds, attempts?.lastAttempt ?? null, {
+      now: Date.now(),
+      slotMs: opts.slotMs,
+    }),
+    attempts?.failures ?? new Map<string, number>(),
+  );
+  const failuresBefore = attempts?.failures ?? new Map<string, number>();
+  const reportTag = `${opts.tag}.attempts`;
+  const claimer =
+    opts.holdMs !== undefined
+      ? cronAttemptClaimer(admin, opts.job, { failuresBefore, reportTag, holdMs: opts.holdMs })
+      : null;
+  const recorder = claimer
+    ? null
+    : cronAttemptRecorder(admin, opts.job, { failuresBefore, reportTag });
+
+  const done: Array<{ orgId: string; value: V }> = [];
+  let threw = 0;
+  let failed = 0;
+  let heldByAnotherRun = 0;
+  let failingRepeatedly = 0;
+  const sweep = await sweepUntilDeadline(
+    ordered,
+    { concurrency: 1, deadlineAt: opts.deadlineAt, stopWhen: opts.stopWhen },
+    async (orgId, index) => {
+      // Stamped (and claimed) before the organization's first read.
+      const finish = claimer ? await claimer.claim(orgId) : recorder!.start(orgId);
+      if (finish === null) {
+        heldByAnotherRun += 1;
+        return;
+      }
+      let result: CronAttemptResult;
+      try {
+        const outcome = await work(orgId, index);
+        done.push({ orgId, value: outcome.value });
+        result = outcome.result;
+      } catch (e) {
+        threw += 1;
+        void reportError(e, { tag: `${opts.tag}.org`, extra: { orgId } });
+        result = 'failure';
+      }
+      if (result === 'failure') failed += 1;
+      if ((await finish(result)) >= REPEATED_FAILURES) failingRepeatedly += 1;
+    },
+  );
+  const stoppedAtDeadline = sweep.leftForNextRun > 0 && Date.now() >= opts.deadlineAt;
+  if (stoppedAtDeadline) {
+    void reportError(new Error('Scheduled job stopped at the run deadline'), {
+      tag: `${opts.tag}.deadline`,
+      level: 'warning',
+      extra: {
+        organizations: ordered.length,
+        started: sweep.started,
+        leftForNextRun: sweep.leftForNextRun,
+      },
+    });
+  }
+  return {
+    done,
+    failed,
+    threw,
+    heldByAnotherRun,
+    leftForNextRun: sweep.leftForNextRun,
+    stoppedAtDeadline,
+    failingRepeatedly,
+    orderedBy: attempts ? 'attempts' : 'clock',
+    promoted,
   };
 }

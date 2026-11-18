@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { KNOWN_HOT_ORG_IDS, ORG_SWEEP_CAP, ORG_SWEEP_WINDOW, planOrgSweep } from './org-sweep';
+import {
+  KNOWN_HOT_ORG_IDS,
+  ORG_SWEEP_CAP,
+  ORG_SWEEP_SLOT_MS,
+  ORG_SWEEP_WINDOW,
+  planOrgSweep,
+} from './org-sweep';
 
 const orgs = (n: number) =>
   Array.from({ length: n }, (_, i) => `org-${String(i).padStart(4, '0')}`);
@@ -14,6 +20,7 @@ describe('planOrgSweep', () => {
       activeOrgIds: ['org-a', 'hot-2', 'org-b'],
       windowSize: 48,
       lastWarmed: none,
+      now: 0,
     });
     expect(plan.orgIds).toEqual(['hot-1', 'hot-2', 'org-a', 'org-b']);
     expect(plan.windowOrgIds).toEqual(['org-a', 'org-b']);
@@ -27,6 +34,7 @@ describe('planOrgSweep', () => {
       activeOrgIds: active,
       windowSize: 48,
       lastWarmed: new Map(active.map((id, i) => [id, 1_000 - i])),
+      now: 0,
     });
     expect(plan.orgIds).toHaveLength(49);
     expect(new Set(plan.windowOrgIds)).toEqual(new Set(active));
@@ -43,6 +51,7 @@ describe('planOrgSweep', () => {
       activeOrgIds: active,
       windowSize: 48,
       lastWarmed,
+      now: 0,
     });
     expect(plan.windowOrgIds).toEqual(active.slice(50, 98));
     expect(plan.orgIds).toEqual(['hot-1', ...active.slice(50, 98)]);
@@ -66,6 +75,7 @@ describe('planOrgSweep', () => {
           activeOrgIds: active,
           windowSize: ORG_SWEEP_WINDOW,
           lastWarmed,
+          now: 0,
         });
         expect(plan.orgIds.slice(0, 2)).toEqual([...KNOWN_HOT_ORG_IDS]);
         expect(plan.orgIds).toHaveLength(ORG_SWEEP_CAP);
@@ -83,6 +93,7 @@ describe('planOrgSweep', () => {
           activeOrgIds: active,
           windowSize: ORG_SWEEP_WINDOW,
           lastWarmed,
+          now: 0,
         });
         for (const id of plan.windowOrgIds.slice(0, PER_RUN)) {
           expect(run - (lastWarmed.get(id) ?? -1), `N=${n} ${id}`).toBeLessThanOrEqual(bound);
@@ -98,12 +109,37 @@ describe('planOrgSweep', () => {
     }
   });
 
+  it('when the attempt records cannot be read, the window moves with the clock, never the same first 48 by id', () => {
+    const active = orgs(500);
+    const plan = (slot: number) =>
+      planOrgSweep({
+        knownHotOrgIds: KNOWN_HOT_ORG_IDS,
+        activeOrgIds: active,
+        windowSize: ORG_SWEEP_WINDOW,
+        lastWarmed: null,
+        now: slot * ORG_SWEEP_SLOT_MS,
+      });
+    const first = plan(980_000);
+    expect(first.orgIds.slice(0, 2)).toEqual([...KNOWN_HOT_ORG_IDS]);
+    expect(first.windowOrgIds).toHaveLength(ORG_SWEEP_WINDOW);
+    expect(plan(980_001).windowOrgIds[0]).not.toBe(first.windowOrgIds[0]);
+    // 30 of each window warmed (the deadline cuts the rest): every org is
+    // still warmed within the clock order's bound.
+    const warmed = new Set<string>();
+    const bound = Math.ceil((2.7 * active.length) / 30) + 1;
+    for (let run = 0; run < bound; run += 1) {
+      for (const id of plan(980_000 + run).windowOrgIds.slice(0, 30)) warmed.add(id);
+    }
+    expect(warmed.size).toBe(active.length);
+  });
+
   it('handles an empty enumeration (no active orgs) — known-hot still warm', () => {
     const plan = planOrgSweep({
       knownHotOrgIds: ['hot-1', 'hot-2'],
       activeOrgIds: [],
       windowSize: 48,
       lastWarmed: none,
+      now: 0,
     });
     expect(plan.orgIds).toEqual(['hot-1', 'hot-2']);
     expect(plan).toMatchObject({ rotating: 0, outsideWindow: 0, runsToCoverAll: 1 });
@@ -115,6 +151,7 @@ describe('planOrgSweep', () => {
       activeOrgIds: ['', 'org-a'],
       windowSize: 48,
       lastWarmed: none,
+      now: 0,
     });
     expect(plan.orgIds).toEqual(['hot-1', 'org-a']);
   });

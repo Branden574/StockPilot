@@ -118,6 +118,33 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     expect(save?.args).toMatchObject({ p_po_id: null, p_actor: 'user-test', p_supplier_id: 'sup-1' });
   });
 
+  it('a template the cron did not reach for three weeks makes ONE purchase order, and its next run moves past now', async () => {
+    // The scheduled job can leave an organization for a later run (its soft
+    // deadline). When it is reached, the missed periods are not made up.
+    const threeWeeksLate = new Date(DUE_AT.getTime() - 21 * 24 * 60 * 60_000).toISOString();
+    const template = { ...TEMPLATE_BASE, send_mode: 'draft' as const, next_run_at: threeWeeksLate };
+    const stub = makeSupabaseStub({
+      'recurring_po_templates.select': { data: [template], error: null },
+      'inventory_items.select': ORDERABLE_ITEM_1,
+      'rpc:save_purchase_order_draft': { data: { id: 'po-new', stamped: 0, stamp_error: null }, error: null },
+      'purchase_orders.update': { data: { id: 'po-new' }, error: null },
+      'recurring_po_templates.update': { data: { id: 'tpl-1' }, error: null },
+      'rpc:next_po_number': { data: 'PO-100', error: null },
+      'suppliers.select': { data: { id: 'sup-1' }, error: null },
+    });
+    const svc = new RecurringPoTemplatesService(makeServiceContext(stub.client, { role: 'owner' }) as never);
+    const result = await svc.runDueTemplates(NOW);
+
+    expect(result.created).toBe(1);
+    expect(stub.rpcCalls.filter((c) => c.name === 'save_purchase_order_draft')).toHaveLength(1);
+    const advances = stub.chainArgsAll.get('recurring_po_templates.update') ?? [];
+    expect(advances).toHaveLength(1);
+    const patch = advances[0]![0]![0] as { next_run_at: string };
+    expect(Date.parse(patch.next_run_at)).toBeGreaterThan(NOW.getTime());
+    // The claim compares the value it read.
+    expect(advances[0]).toContainEqual(['next_run_at', threeWeeksLate]);
+  });
+
   it('send mode within cap and approval threshold: auto-sends the PO', async () => {
     const template = {
       ...TEMPLATE_BASE,

@@ -107,13 +107,21 @@ describe('servedLikePostgrest', () => {
       .or('gone.is.null,id.eq.d')
       .order('id');
     expect((some.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['a', 'c', 'd']);
-    // A keyset cursor: after (b) by id, or b itself only in org o2.
-    const keyset = await stub.client
+    // A keyset cursor over uuid ids: after B by id, or B itself only in org o2.
+    const [A, B, C] = ['1', '2', '3'].map((n) => `00000000-0000-4000-8000-00000000000${n}`);
+    const keyed = makeSupabaseStub({
+      'items.select': servedLikePostgrest([
+        { id: A, org: 'o1' },
+        { id: B, org: 'o2' },
+        { id: C, org: 'o1' },
+      ]),
+    });
+    const keyset = await keyed.client
       .from('items')
       .select('id')
-      .or('id.gt."b",and(id.eq."b",org.eq.o2)')
+      .or(`id.gt."${B}",and(id.eq."${B}",org.eq.o2)`)
       .order('id');
-    expect((keyset.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['b', 'c', 'd']);
+    expect((keyset.data as Array<{ id: string }>).map((r) => r.id)).toEqual([B, C]);
     // Two .or() calls both apply (PostgREST ANDs them).
     const both = await stub.client
       .from('items')
@@ -157,6 +165,24 @@ describe('servedLikePostgrest', () => {
     await expect(run('name.gt.Apple')).rejects.toThrow(/cannot compare/); // collation order
     await expect(run('at.lt.tomorrow')).rejects.toThrow(/cannot compare/);
     await expect(run('name.eq."Blue\\ Pen"')).rejects.toThrow(/cannot compare/);
+    // Text is ordered only uuid against uuid: a lower-case word, or other
+    // hyphenated text, may sort differently under the column's collation.
+    const words = makeSupabaseStub({
+      'w.select': servedLikePostgrest([{ id: 'x', code: 'a-c', word: 'b', on: false }]),
+    });
+    const ask = (filter: string) =>
+      Promise.resolve().then(() => words.client.from('w').select('id').or(filter));
+    await expect(ask('code.gt.ab')).rejects.toThrow(/cannot compare/);
+    await expect(ask('word.lt.c')).rejects.toThrow(/cannot compare/);
+    // A boolean: eq and neq only (false < true, which a 0/1 answer cannot say).
+    await expect(ask('on.lt.true')).rejects.toThrow(/cannot compare/);
+    await expect(ask('on.gt.true')).rejects.toThrow(/cannot compare/);
+    const off = await words.client.from('w').select('id').or('on.eq.false');
+    expect((off.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['x']);
+    const notOn = await words.client.from('w').select('id').or('on.neq.true');
+    expect((notOn.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['x']);
+    const word = await words.client.from('w').select('id').or('word.neq.c,code.eq.a-c');
+    expect((word.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['x']);
     // Equality on text is fine.
     const eq = await stub.client.from('q').select('id').or('name.eq."Blue Pen"');
     expect((eq.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['x']);

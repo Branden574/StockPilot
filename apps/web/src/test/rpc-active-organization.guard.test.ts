@@ -771,6 +771,10 @@ const TABLE_WRITES: Record<string, ClassifiedWrite> = {
     'not_org_data',
     'Scheduled job: claims the reminder on the event row it just read; no active organization.',
   ],
+  'server/services/lib/cron-sweep.ts#cronAttemptClaimer::cron_sweep_attempts.update': [
+    'not_org_data',
+    "Scheduled job: claims its own attempt row for an organization (job and organization id, only when the last attempt is older than the hold); the service role's bookkeeping, no active organization.",
+  ],
   'app/api/integrations/quickbooks/callback/route.ts#GET::org_connections.update': [
     'not_org_data',
     'OAuth callback: the connection row found by the one-time state value; no active organization.',
@@ -3022,12 +3026,13 @@ describe('every table write in apps/web/src stays in the active organization and
     );
     for (const [, why] of Object.values(TABLE_WRITES)) expect(why.trim()).not.toBe('');
     // 5 rows in hand (the 5th: the audit writer's later try of its own rows)
-    // and 56 jobs, webhooks, callbacks, public token paths, platform console
+    // and 57 jobs, webhooks, callbacks, public token paths, platform console
     // and sign-up writes today (the 56th: the weekly digest re-signing its
-    // week's claim row). A new one is added here on purpose, with its reason,
-    // never to quiet a failure.
+    // week's claim row; the 57th: a scheduled job claiming its own attempt
+    // row for an organization). A new one is added here on purpose, with its
+    // reason, never to quiet a failure.
     expect(stated.filter(([k]) => k === 'row_in_hand')).toHaveLength(5);
-    expect(stated.filter(([k]) => k === 'not_org_data')).toHaveLength(56);
+    expect(stated.filter(([k]) => k === 'not_org_data')).toHaveLength(57);
     expect(Object.keys(ROW_PROOF_EXEMPT)).toHaveLength(8);
     // One write serves several tables, and no query builder is kept in a
     // variable.

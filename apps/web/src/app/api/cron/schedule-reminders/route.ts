@@ -148,7 +148,8 @@ export async function GET(req: Request) {
 
   const admin = createAdminClient();
   const now = Date.now();
-  const in1h = new Date(now + 60 * 60 * 1000).toISOString();
+  const in1hMs = now + 60 * 60 * 1000;
+  const in1h = new Date(in1hMs).toISOString();
   const in24h = new Date(now + 24 * 60 * 60 * 1000).toISOString();
   const nowIso = new Date(now).toISOString();
 
@@ -249,7 +250,10 @@ export async function GET(req: Request) {
         break pageLoop;
       }
       try {
-        const isOneHour = ev.starts_at <= in1h && !ev.reminded_1h_at;
+        // As times: the database writes the start with an offset (+00:00),
+        // in1h is a toISOString() Z value, and as strings the two order
+        // wrongly once the offsets or the fraction digits differ.
+        const isOneHour = Date.parse(ev.starts_at) <= in1hMs && !ev.reminded_1h_at;
         // 24h reminder is only meaningful BEFORE the 1h one. An event that
         // enters the system already inside the 1h window (or whose 1h notice
         // was sent) must never get a late "tomorrow" notice — the field bug
