@@ -58,7 +58,7 @@ function secretsEqual(a: string, b: string): boolean {
  *
  * Order: least recently reached first: the later of the organization's last
  * automatic restore point and this cron's last attempt at it
- * (cron_sweep_attempts, job 'restore_points', 0492; recorded as the
+ * (cron_sweep_attempts, job 'restore_points', 0469; recorded as the
  * organization starts). Neither in the last three days: first of all, in id
  * order. Counting the attempt sends an organization whose snapshot fails (or
  * that has no owner or admin) to the back of the line too, so it cannot be

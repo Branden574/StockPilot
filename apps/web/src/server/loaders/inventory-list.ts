@@ -78,7 +78,7 @@ import 'server-only';
 //     cached figure serves only the default view, whose filters it
 //     mirrors exactly.
 
-import { unstable_cache } from 'next/cache';
+import { refresh, unstable_cache } from 'next/cache';
 
 import {
   inventoryDefaultLifecycle,
@@ -156,11 +156,11 @@ export { inventoryListTag, revalidateInventoryList };
  * succeeded, and a failed invalidation only means up to 60s of
  * staleness, which must not turn a successful action into an error.
  *
- * Resolves true only when the tag really was invalidated. Write actions can
- * ignore it; the realtime watcher cannot (revalidateInventoryViewAction):
- * inside a Server Action, an invalidation is also what makes Next re-render
- * the current page into the action's response, so false means "nothing will
- * refresh unless you do it yourself".
+ * Resolves true only when the tag really was invalidated. Inside a Server
+ * Action, an invalidation is also what makes Next re-render the current page
+ * into the action's response. (The realtime watcher uses
+ * refreshInventoryViewForCurrentOrg below, which expires only where it can
+ * matter.)
  */
 export async function revalidateInventoryListForCurrentOrg(): Promise<boolean> {
   try {
@@ -169,6 +169,55 @@ export async function revalidateInventoryListForCurrentOrg(): Promise<boolean> {
     return true;
   } catch (err) {
     console.warn('[inventory-list] revalidate skipped:', err);
+    return false;
+  }
+}
+
+/** The two pages that read the org-shared list caches. */
+export function isInventoryListView(view: unknown): view is InventoryListView {
+  return view === 'items' || view === 'books';
+}
+
+/**
+ * The realtime watcher's refresh (revalidateInventoryViewAction), called once
+ * per change transaction by each visible tab. Re-renders the caller's page
+ * into the action's response, and expires the organization's shared list
+ * caches ONLY where that can matter: the tab is on Items or Books (`view`, the
+ * one thing the client says) AND the caller may read those caches
+ * (canUseSharedInventoryCaches: manager and above with items:read; nobody
+ * else's page reads them). The organization is the session's (withContext),
+ * never the client's.
+ *
+ * Why not always expire, as before: every write path that goes through this
+ * server already expires the tag itself (invalidateInventoryListAfterWrite,
+ * enforced by inventory-list-invalidation.guard.test.ts), the phone writes
+ * stock through /api/v1, so the watcher's expiry only covers writes that
+ * bypass the server (SQL, platform tooling). A staff tab, or any tab on
+ * another page, expired a cache its page never reads, once per tab per event,
+ * and the next manager on Items paid for the rebuild. A manager's Items or
+ * Books tab keeps the expiry, so it is never left on data from before a write.
+ *
+ * Both branches re-render the page in the action's response, one round trip:
+ * the list expiry (a tag expired with { expire: 0 }) and refresh() each set
+ * workStore.pathWasRevalidated (next 16.4.3 revalidate.js, pinned by
+ * revalidate-inventory-view.contract.test.ts). refresh() leaves every cache
+ * alone.
+ *
+ * Resolves true when a re-render is coming, false when the context could not
+ * be read (signed out, an authenticator code owed, a failed read): nothing
+ * was marked, and the caller refreshes by itself. Never throws.
+ */
+export async function refreshInventoryViewForCurrentOrg(view: unknown): Promise<boolean> {
+  try {
+    const ctx = await withContext();
+    if (isInventoryListView(view) && canUseSharedInventoryCaches(ctx)) {
+      revalidateInventoryList(ctx.organizationId);
+    } else {
+      refresh();
+    }
+    return true;
+  } catch (err) {
+    console.warn('[inventory-list] realtime refresh skipped:', err);
     return false;
   }
 }
@@ -1653,15 +1702,22 @@ export function deriveInventoryTrends(
  * and this function's sign fan-out. The client fetches the master on
  * demand from the org-scoped /api/items/[id]/image-master route (same
  * 25-day per-path cache → same stable URL). Rows WITHOUT a thumb keep
- * their master/cfThumb inline — it's their only image. The default view's
+ * their master/cfThumb inline — it's their only image. A row whose thumb
+ * does not sign falls back to its master (signed in one more batched call
+ * for exactly those rows), as the full path shows it. The default view's
  * cached page-1 payload and every server-mode path stay full-fidelity.
+ *
+ * `opts.keepLqip` (Books instant dataset): the diet rows keep their LQIP, so
+ * a cover still paints its blur placeholder while the thumb loads; only the
+ * master URL is left to the on-demand route.
  */
 export async function resolveInventoryListImages(
   organizationId: string,
   rows: InventoryListCachedRow[],
-  opts: { payloadDiet?: boolean } = {},
+  opts: { payloadDiet?: boolean; keepLqip?: boolean } = {},
 ): Promise<InventoryListItemRow[]> {
   const diet = opts.payloadDiet === true;
+  const keepLqip = opts.keepLqip === true;
   const paths = new Set<string>();
   for (const r of rows) {
     // Diet: don't even request a master sign for thumb-carrying rows —
@@ -1669,10 +1725,29 @@ export async function resolveInventoryListImages(
     if (r.image_storage_path && !(diet && r.image_thumb_path)) paths.add(r.image_storage_path);
     if (r.image_thumb_path) paths.add(r.image_thumb_path);
   }
+  const images = new ItemImagesService(adminReadContext(organizationId));
   const urlByPath =
-    paths.size > 0
-      ? await new ItemImagesService(adminReadContext(organizationId)).signedUrls([...paths])
-      : new Map<string, string>();
+    paths.size > 0 ? await images.signedUrls([...paths]) : new Map<string, string>();
+
+  // Diet rows whose thumb did not sign (a missing or unreadable thumb
+  // object) fall back to their master, as the full path shows it: one more
+  // batched sign for exactly those masters, normally none at all.
+  if (diet) {
+    const masters = new Set<string>();
+    for (const r of rows) {
+      if (
+        r.image_thumb_path &&
+        r.image_storage_path &&
+        !urlByPath.has(r.image_thumb_path) &&
+        !urlByPath.has(r.image_storage_path)
+      ) {
+        masters.add(r.image_storage_path);
+      }
+    }
+    if (masters.size > 0) {
+      for (const [path, url] of await images.signedUrls([...masters])) urlByPath.set(path, url);
+    }
+  }
 
   return rows.map((r) => {
     const { image_storage_path, image_thumb_path, image_lqip, ...rest } = r;
@@ -1685,14 +1760,28 @@ export async function resolveInventoryListImages(
         : null;
     if (diet && image_thumb_path) {
       const thumbUrl = urlByPath.get(image_thumb_path) ?? null;
+      const fallbackMaster =
+        !thumbUrl && image_storage_path ? (urlByPath.get(image_storage_path) ?? null) : null;
+      if (fallbackMaster) {
+        // The thumb did not sign but the master did: show the master, as
+        // the full path would (with the LQIP when asked for).
+        return {
+          ...rest,
+          image_url: fallbackMaster,
+          image_thumb_url: null,
+          image_lqip: keepLqip ? image_lqip : null,
+        };
+      }
       return {
         ...rest,
-        // Master intentionally absent (fetched on demand); if the thumb
-        // failed to sign, degrade to the cfThumb fallback like the full
-        // path would for a failed master.
+        // Master intentionally absent (fetched on demand); if neither the
+        // thumb nor the master signed, degrade to the cfThumb fallback like
+        // the full path would for a failed master.
         image_url: thumbUrl ? null : cfThumb,
         image_thumb_url: thumbUrl,
-        image_lqip: null,
+        // The placeholder belongs to the photo shown: kept only beside a
+        // signed thumb, and only when asked for.
+        image_lqip: keepLqip && thumbUrl ? image_lqip : null,
       };
     }
     const masterUrl = image_storage_path ? (urlByPath.get(image_storage_path) ?? null) : null;

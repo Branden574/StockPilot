@@ -230,7 +230,7 @@ describe('GET /api/cron/exception-occurrences — the sweep', () => {
   });
 });
 
-describe('GET /api/cron/exception-occurrences — attempts and rotation (0492)', () => {
+describe('GET /api/cron/exception-occurrences — attempts and rotation (0469)', () => {
   const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
   const upserts = (stub: ReturnType<typeof orgsStub>) =>
     (stub.chainArgsAll.get('cron_sweep_attempts.insert') ?? []).map((args) => ({

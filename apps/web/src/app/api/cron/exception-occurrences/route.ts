@@ -71,7 +71,7 @@ const REPEATED_FAILURES = 3;
  * (exceptions.sync_failed), and one org's failure never stops the rest.
  * Orgs run one at a time, least recently REACHED first (exceptionSweepOrder:
  * the later of the last applied sync and the cron's last attempt). The cron
- * records each attempt (cron_sweep_attempts, 0492) as it starts the org,
+ * records each attempt (cron_sweep_attempts, 0469) as it starts the org,
  * so an org it reached goes to the back of the line whether or not the sync
  * applied, and a deadline cut rotates through every org.
  */

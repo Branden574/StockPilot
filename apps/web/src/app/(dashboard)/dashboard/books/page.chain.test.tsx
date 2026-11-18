@@ -1121,3 +1121,79 @@ describe('Books page: classic parity of its own markup', () => {
     await expect(classicMarkup(container)).toMatchFileSnapshot('./__parity__/books-page.html');
   });
 });
+
+/**
+ * The table receives only the columns it reads, and a manager's full dataset
+ * travels packed (lib/inventory/client-row.ts), its covers resolved with the
+ * thumb and placeholder kept and the master left to hover. A page that hands
+ * the table whole loader rows, or the dataset unpacked, fails here.
+ */
+describe('Books page: the table receives reduced rows and a packed dataset', () => {
+  const WIDE_BOOK = {
+    ...BOOK,
+    description: 'A long description the list never shows',
+    supplier_id: 'sup-1',
+    created_by: 'u-9',
+    custom_fields: {
+      author: 'Someone',
+      description: 'A catalogue description',
+      book_rack_number: '38',
+      book_rack_row: 'A',
+    },
+  };
+  const UNREAD = ['description', 'supplier_id', 'created_by'];
+
+  function expectReduced(rows: Array<Record<string, unknown>>) {
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) {
+      for (const k of UNREAD) expect(r).not.toHaveProperty(k);
+      expect(r.custom_fields).toEqual({ book_rack_number: '38', book_rack_row: 'A' });
+    }
+  }
+
+  it('manager: the dataset is packed, the page rows are reduced, and covers keep thumb and placeholder', async () => {
+    m.loadInventoryDataset.mockImplementation(async () => ({ items: [WIDE_BOOK], placement: {} }));
+    render(await callPage());
+    const props = m.tableProps.mock.calls[0]![0] as {
+      items: Array<Record<string, unknown>>;
+      instant: { items: { packed?: string; fields?: string[]; values?: unknown[][] } };
+    };
+    expect(props.instant.items.packed).toBe('inventory-rows-v1');
+    expect(props.instant.items.values).toHaveLength(1);
+    for (const k of UNREAD) expect(props.instant.items.fields).not.toContain(k);
+    expectReduced(props.items);
+    expect(m.resolveInventoryListImages).toHaveBeenCalledWith('org-1', [WIDE_BOOK], {
+      payloadDiet: true,
+      keepLqip: true,
+    });
+  });
+
+  it('staff, live path: the page rows are reduced', async () => {
+    h.role = 'staff';
+    m.inventoryList.mockImplementation(async () => ({
+      items: [WIDE_BOOK],
+      total: 1,
+      valueOnHand: 3,
+    }));
+    render(await callPage());
+    expectReduced(
+      (m.tableProps.mock.calls[0]![0] as { items: Array<Record<string, unknown>> }).items,
+    );
+  });
+
+  it('manager over the instant cap, default view: the cached page rows are reduced', async () => {
+    m.loadInventoryDataset.mockImplementation(async () => null);
+    m.loadInventoryList.mockImplementation(async () => ({
+      items: [WIDE_BOOK],
+      total: 1,
+      valueOnHand: 3,
+      ...LOOKUPS,
+      trends: {},
+      expectedCount: 0,
+    }));
+    render(await callPage());
+    expectReduced(
+      (m.tableProps.mock.calls[0]![0] as { items: Array<Record<string, unknown>> }).items,
+    );
+  });
+});
