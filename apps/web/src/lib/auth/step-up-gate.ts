@@ -5,7 +5,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { factorsOf, type MfaFactorList } from '@/lib/auth/mfa-factors';
-import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
+import { readOrganizationMfaPolicy } from '@/lib/auth/mfa-policy';
+import { OrganizationRowUnavailableError } from '@/lib/auth/organization-row-unavailable';
 import { orgRowFromMembership, type BundleMembership } from '@/lib/auth/request-context-bundle';
 import { orSessionEnded } from '@/lib/auth/session-ended';
 import {
@@ -150,9 +151,10 @@ export async function stepUpIsOwed(reads: StepUpReads, userId: string): Promise<
  *     and the member never got this far;
  *   - the policy comes from the membership that resolved the context
  *     (`held`), and only without one from the request-cached organization
- *     row the dashboard layout reads too. A row that came back empty is held
- *     to the strictest policy (enforcedMfaPolicy); a read that FAILED throws,
- *     the "could not check your access" state, as it does in the layout.
+ *     row the dashboard layout reads too. A read that FAILED throws, the
+ *     "could not check your access" state, as it does in the layout; so does
+ *     a row that came back empty or with a value that is not a policy, for a
+ *     member with no verified factor (policyNotRead below).
  */
 export async function authenticatorSetUpIsOwed(
   reads: StepUpReads,
@@ -178,10 +180,10 @@ export async function authenticatorSetUpIsOwed(
  * (readSessionOrganization in lib/auth/session.ts).
  *
  * The policy is read as above: from the membership when it carries the
- * organization row, else the request-cached row. A row that came back empty is
- * held to the strictest policy (enforcedMfaPolicy); a read that FAILED throws
- * OrganizationRowUnavailableError, the "could not check your access" state.
- * A verified factor reads nothing.
+ * organization row, else the request-cached row. A read that FAILED throws
+ * OrganizationRowUnavailableError, the "could not check your access" state,
+ * and so does a row that came back empty or with a value that is not a policy
+ * (policyNotRead below). A verified factor reads nothing.
  */
 export async function authenticatorSetUpIsOwedByUser(
   member: { organizationId: string; role: Role },
@@ -190,7 +192,33 @@ export async function authenticatorSetUpIsOwedByUser(
 ): Promise<boolean> {
   if ((factors ?? []).some((f) => f.status === 'verified')) return false;
   const orgRow = orgRowFromMembership(held) ?? (await getOrgRowForRequest(member.organizationId));
-  return authenticatorSetUpOwed(enforcedMfaPolicy(orgRow), member.role, factors);
+  const policy = readOrganizationMfaPolicy(orgRow);
+  if (policy === null) throw policyNotRead(orgRow);
+  return authenticatorSetUpOwed(policy, member.role, factors);
+}
+
+/**
+ * THE POLICY WAS NOT READ: the organization row came back hidden from this
+ * member, or with a value that is not a policy. Held to the strictest policy
+ * (enforcedMfaPolicy), a member with no verified authenticator would owe
+ * set-up, but whether their organization asks for one is not known, so
+ * "set up an authenticator" would be a guess. They are told what is true:
+ * their access could not be checked, try again. The error is
+ * OrganizationRowUnavailableError, the state a row read that FAILED is in
+ * already: a page shows its "couldn't check your access" card, a Server
+ * Action answers the class's try-again sentence, and nothing is written (it
+ * is thrown where the set-up redirect would have been). Nothing passes that
+ * the strictest policy refuses: the member gets no context. A verified factor
+ * never reaches here (it reads nothing, above).
+ *
+ * One log line with the cause code, never a value from the row.
+ */
+function policyNotRead(orgRow: unknown): OrganizationRowUnavailableError {
+  console.warn(
+    '[step-up-gate] authenticator policy not read:',
+    orgRow ? 'not_a_policy' : 'hidden_row',
+  );
+  return new OrganizationRowUnavailableError();
 }
 
 /**

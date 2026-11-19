@@ -3,6 +3,7 @@ import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 
+import { AccessUncheckedBanner } from '@/components/dashboard/access-unchecked-banner';
 import { AuthenticatorSetUpPanel } from '@/components/dashboard/authenticator-set-up-panel';
 import { DashboardShell } from '@/components/dashboard/dashboard-shell';
 import { MfaRequiredBanner } from '@/components/dashboard/mfa-required-banner';
@@ -27,7 +28,7 @@ import {
 } from '@/lib/dashboard/request-cache';
 import { factorsOf } from '@/lib/auth/mfa-factors';
 import { moduleSetUnreadable } from '@/lib/modules/module-state';
-import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
+import { enforcedMfaPolicy, readOrganizationMfaPolicy } from '@/lib/auth/mfa-policy';
 import { openBeforeAuthenticatorSetUp } from '@/lib/auth/authenticator-set-up';
 import { orSessionEnded } from '@/lib/auth/session-ended';
 import { getVerifiedSessionClaimsForRequest } from '@/lib/auth/verified-claims';
@@ -197,11 +198,24 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const ownFactors = factorsOf(mfaFactors, ctx.userId);
   if (!ownFactors) redirect(await mfaChallengePath());
   const hasVerifiedFactor = ownFactors.some((f) => f.status === 'verified');
+  // Held to the strictest policy above, but whether this organization asks
+  // anything of the member is not known: the row came back hidden, or with a
+  // value that is not a policy.
+  const policyRead = readOrganizationMfaPolicy(orgRow) !== null;
   // The policy requires an authenticator of this member's role and they have
   // none verified (@stockpilot/core). They see the banner on the pages open to
   // them before set-up; every other page sends them there itself
-  // (requireOrgContext()), so this layout never redirects for it.
-  const setUpOwed = authenticatorSetUpOwed(policy, ctx.role, ownFactors);
+  // (requireOrgContext()), so this layout never redirects for it. Only for a
+  // policy that was read.
+  const strictestOwed = authenticatorSetUpOwed(policy, ctx.role, ownFactors);
+  const setUpOwed = policyRead && strictestOwed;
+  // A policy that was not read, for a member with no verified authenticator:
+  // set-up would be a guess, so the strip says their access could not be
+  // checked, in the words of the pages' own "couldn't check your access"
+  // card; every page that is not open before set-up gives that card itself
+  // (requireOrgContext(), lib/auth/step-up-gate.ts). Display only, like the
+  // banner: the pages and the services refuse on their own.
+  const accessUnchecked = !policyRead && strictestOwed;
   // A session whose token says the code was entered but that has no verified
   // authenticator left: the pages answer aal2 from the token alone, with no
   // factor read. This layout has the factor list in hand, so on a full page
@@ -291,6 +305,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
       >
         <ImpersonationBanner />
         {setUpOwed && <MfaRequiredBanner />}
+        {accessUnchecked && <AccessUncheckedBanner />}
         {moduleStateUnknown && <ModulesUnreadBanner />}
         {setUpPanel ? <AuthenticatorSetUpPanel /> : children}
         {/* "Last seen" for the platform console (mig 0352). Scope keeps one account or

@@ -1211,6 +1211,17 @@ WEB_TESTS=(
   src/lib/dashboard/request-cache.organization-row.test.ts
   'src/app/(dashboard)/layout.organization-row.test.tsx'
   src/server/actions/organization-row-unread.actions.test.ts
+  # An organization row that came back hidden, or with a value that is not a
+  # policy: the member is held to the strictest policy, and one with no
+  # verified authenticator is told their access could not be checked (the
+  # page's card, the action's try-again sentence from the context or from the
+  # service gate on an open page, the layout's strip), never sent to set-up,
+  # and nothing is written. A policy that was read keeps set-up; a verified
+  # authenticator at aal2 writes. An API context keeps the service gate's 403
+  # (src/server/lib/api-context-gate.policy-unread.test.ts, listed below).
+  src/server/actions/policy-unread.actions.test.ts
+  'src/app/(dashboard)/layout.authenticator-set-up.test.tsx'
+  src/components/dashboard/access-unchecked-banner.test.tsx
   src/app/api/v1/mobile/snapshot/route.step-up.test.ts
   src/app/api/client-error/route.test.ts
   # A session that still owes its authenticator code gets no organization
