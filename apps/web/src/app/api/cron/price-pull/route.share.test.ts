@@ -269,3 +269,56 @@ describe('GET /api/cron/price-pull — a fair share of the run per organization'
     expect(calls[0]!.orgId).toBe('org-003');
   });
 });
+
+describe('GET /api/cron/price-pull when the day claim cannot be recorded', () => {
+  it('skips every organization for this run, so two runs at once never look up the same books, and reports once', async () => {
+    const orgs = orgIds(3);
+    for (const o of orgs) backlog.set(o, 50);
+    const table = cronAttemptsTable();
+    adminHolder.client = makeSupabaseStub({
+      ...table.results,
+      'cron_sweep_attempts.update': {
+        data: null,
+        error: { message: 'permission denied for table cron_sweep_attempts', code: '42501' },
+      },
+      'organization_modules.select': (call) => {
+        const [from, to] = (call.args[call.methods.indexOf('range')] ?? [0, 999]) as [
+          number,
+          number,
+        ];
+        return {
+          data: orgs.slice(from, to + 1).map((id) => ({ organization_id: id })),
+          error: null,
+        };
+      },
+    }).client;
+
+    cost.wait = true;
+    await Promise.all([get(), get()]);
+    expect(calls).toEqual([]);
+    const lines = info.mock.calls
+      .filter((c) => c[0] === '[cron.price-pull]')
+      .map((c) => JSON.parse(String(c[1])) as Record<string, unknown>);
+    expect(lines).toHaveLength(2);
+    for (const line of lines) {
+      expect(line).toMatchObject({ claimUnavailable: 3, lookups: 0, failed: 0 });
+    }
+    // Once per run (two runs), the code only.
+    const reports = reportError.mock.calls.filter(
+      ([, c]) => (c as { tag?: string }).tag === 'cron.price-pull.attempts',
+    );
+    expect(reports).toHaveLength(2);
+    expect(
+      reportError.mock.calls.filter(
+        ([, c]) => (c as { tag?: string }).tag === 'cron.price-pull.claims_down',
+      ),
+    ).toHaveLength(2);
+    for (const [err, ctx] of reports) {
+      expect(ctx).toMatchObject({
+        extra: { step: 'claim', job: 'price_pull', code: '42501', onClaimUnavailable: 'skip' },
+      });
+      expect(JSON.stringify(ctx)).not.toMatch(/org-/);
+      expect((err as Error).message).not.toMatch(/org-/);
+    }
+  });
+});
