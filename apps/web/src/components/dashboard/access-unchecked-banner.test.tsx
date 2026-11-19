@@ -7,6 +7,7 @@ vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: nav.refresh }) 
 import { knownErrorState, ACCESS_UNCHECKED_DIGEST } from '@/lib/known-error-states';
 
 import { AccessUncheckedBanner } from './access-unchecked-banner';
+import { AccessUncheckedPanel } from './access-unchecked-panel';
 
 beforeEach(() => nav.refresh.mockReset());
 afterEach(() => vi.restoreAllMocks());
@@ -36,6 +37,31 @@ describe('AccessUncheckedBanner', () => {
   it('Try again loads the whole page again', () => {
     const reload = vi.spyOn(window.location, 'reload').mockImplementation(() => {});
     render(<AccessUncheckedBanner />);
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(nav.refresh).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The panel the layout draws IN PLACE of the page for a token at aal2 with no
+ * verified factor left, when the policy was not read: the card's heading and
+ * sentence, no set-up words or link, and Try again as a full page load.
+ */
+describe('AccessUncheckedPanel', () => {
+  it("is the card's heading and sentence, and never asks for set-up", () => {
+    render(<AccessUncheckedPanel />);
+    const card = knownErrorState({ digest: ACCESS_UNCHECKED_DIGEST })!;
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(card.title);
+    const text = document.body.textContent ?? '';
+    expect(text).toContain(card.body);
+    expect(text).not.toMatch(/authenticator|two-factor|MFA|enroll|set up|requires|required/i);
+    expect(screen.queryByRole('link')).toBeNull();
+  });
+
+  it('Try again loads the whole page again', () => {
+    const reload = vi.spyOn(window.location, 'reload').mockImplementation(() => {});
+    render(<AccessUncheckedPanel />);
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(reload).toHaveBeenCalledTimes(1);
     expect(nav.refresh).not.toHaveBeenCalled();

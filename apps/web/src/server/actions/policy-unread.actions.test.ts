@@ -95,6 +95,8 @@ vi.mock('@/lib/supabase/server', () => ({
             return state.organizations;
           case 'organization_modules':
             return { data: [{ module_id: 'schedule' }], error: null };
+          case 'notification_preferences':
+            return { data: null, error: null };
           case 'schedule_events':
             return {
               error: null,
@@ -147,6 +149,9 @@ vi.mock('@/lib/supabase/server', () => ({
 
 import type { CreateScheduleEventInput } from '@stockpilot/core';
 
+import { NOTIFICATION_PREF_KEYS } from '@/lib/notification-prefs';
+
+import { updateNotificationPreferencesAction } from './notification-preferences';
 import { updateProfileNameAction } from './profile';
 import { createScheduleEventAction } from './schedule';
 
@@ -172,19 +177,24 @@ const UNREAD_NO_AUTHENTICATOR = UNREAD_STATES.flatMap((s) =>
   (['none', 'unverified only'] as const).map((f) => [s, f] as const),
 );
 
-type Factors = 'none' | 'unverified only' | 'verified at aal2';
+/**
+ * 'aal2 token, none left': a token that says aal2 (a code was entered) while
+ * the member's own list has no verified factor any more.
+ */
+type Factors = 'none' | 'unverified only' | 'verified at aal2' | 'aal2 token, none left';
 const FACTORS: Factors[] = ['none', 'unverified only', 'verified at aal2'];
 
 function arrange(organizations: { data: unknown; error: unknown }, factors: Factors, page: string) {
   state.organizations = organizations;
   state.page = page;
   state.factors =
-    factors === 'none'
+    factors === 'none' || factors === 'aal2 token, none left'
       ? []
       : factors === 'unverified only'
         ? [{ status: 'unverified' }]
         : [{ status: 'verified' }];
-  state.aal = factors === 'verified at aal2' ? 'aal2' : 'aal1';
+  state.aal =
+    factors === 'verified at aal2' || factors === 'aal2 token, none left' ? 'aal2' : 'aal1';
 }
 
 /** The redirect the action ended in (Next's own redirect error), or null when it answered. */
@@ -325,4 +335,69 @@ describe('an action from the profile page, open before set-up (change the name)'
       expect(state.writes).toEqual(['user_profiles.update']);
     },
   );
+});
+
+/**
+ * An action that asks requireOrgContext() and nothing more before it writes
+ * (the member's own notification preferences: no service gate after the
+ * context). Only the context's own rule (lib/auth/step-up-gate.ts) stands
+ * between a member whose policy was not read and the write.
+ */
+describe('an action refused by the context alone (change notification preferences)', () => {
+  const PAGE = '/dashboard/settings/notifications';
+  const PATCH = { [NOTIFICATION_PREF_KEYS[0]!]: false };
+  const WRITTEN = { answer: { ok: true, data: { changed: 1 } } };
+  const TRY_AGAIN_ANSWER = {
+    answer: { ok: false, error: { code: 'internal_error', message: TRY_AGAIN } },
+  };
+
+  it.each([
+    ...UNREAD_NO_AUTHENTICATOR,
+    ...UNREAD_STATES.map((s) => [s, 'aal2 token, none left'] as const),
+  ])('%s, %s: the try-again sentence, and nothing written', async (unread, factors) => {
+    arrange(UNREAD[unread], factors, PAGE);
+    expect(await outcome(() => updateNotificationPreferencesAction(PATCH))).toEqual(
+      TRY_AGAIN_ANSWER,
+    );
+    expect(state.writes).toEqual([]);
+    expect(vi.mocked(reportError).mock.calls[0]![0]).toMatchObject({
+      name: 'OrganizationRowUnavailableError',
+    });
+  });
+
+  it.each(['none', 'unverified only'] as const)(
+    'a policy that was read and requires an authenticator, %s: sent to set-up, nothing written',
+    async (factors) => {
+      arrange(READ_ALL_REQUIRED, factors, PAGE);
+      expect(await outcome(() => updateNotificationPreferencesAction(PATCH))).toEqual({
+        redirect: SET_UP,
+      });
+      expect(state.writes).toEqual([]);
+    },
+  );
+
+  it.each([...UNREAD_STATES, 'a policy that was read'] as const)(
+    '%s, verified at aal2: written',
+    async (row) => {
+      arrange(
+        row === 'a policy that was read' ? READ_ALL_REQUIRED : UNREAD[row],
+        'verified at aal2',
+        PAGE,
+      );
+      expect(await outcome(() => updateNotificationPreferencesAction(PATCH))).toEqual(WRITTEN);
+      expect(state.writes).toEqual(['notification_preferences.upsert']);
+    },
+  );
+
+  it('a policy that was read, an aal2 token with no verified factor left: the context answers from the token, written', async () => {
+    arrange(READ_ALL_REQUIRED, 'aal2 token, none left', PAGE);
+    expect(await outcome(() => updateNotificationPreferencesAction(PATCH))).toEqual(WRITTEN);
+    expect(state.writes).toEqual(['notification_preferences.upsert']);
+  });
+
+  it('a policy that was read and asks nothing of this member: written', async () => {
+    arrange(READ_OPTIONAL, 'none', PAGE);
+    expect(await outcome(() => updateNotificationPreferencesAction(PATCH))).toEqual(WRITTEN);
+    expect(state.writes).toEqual(['notification_preferences.upsert']);
+  });
 });

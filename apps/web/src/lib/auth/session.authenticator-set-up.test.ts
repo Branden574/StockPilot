@@ -424,6 +424,57 @@ describe('a policy that was not read, on a page load and a Server Action', () =>
   );
 
   it.each(ROW_CASES)(
+    '%s, a %s whose token says aal2 with no verified factor left: could not check, on every page that is not open, whatever the page reads',
+    async (state, role) => {
+      for (const factors of [[], [{ status: 'unverified' }]]) {
+        for (const page of [...PAGES, ...NOT_OPEN]) {
+          unread(state, role, page);
+          world.aal = 'aal2';
+          world.factors = factors;
+          await expect(requireOrgContext(), page).rejects.toMatchObject(COULD_NOT_CHECK);
+          await expect(withContext(), page).rejects.toMatchObject(COULD_NOT_CHECK);
+        }
+      }
+      expect(redirect).not.toHaveBeenCalled();
+    },
+  );
+
+  it('a token at aal2 whose factor list is of another account: could not check', async () => {
+    unread('a hidden row', 'staff');
+    world.aal = 'aal2';
+    world.factors = VERIFIED;
+    world.factorsOf = '33333333-3333-4333-8333-333333333333';
+    await expect(requireOrgContext()).rejects.toMatchObject(COULD_NOT_CHECK);
+  });
+
+  it.each(ROLES)(
+    'a policy that was read, a %s whose token says aal2 with no verified factor left: the context, answered from the token with no read',
+    async (role) => {
+      as('all_required', role);
+      world.aal = 'aal2';
+      expect((await requireOrgContext()).organizationId).toBe(ORG);
+      expect(count('auth:getUser')).toBe(0);
+      expect(world.calls.filter((c) => c.startsWith('from:'))).toEqual([]);
+    },
+  );
+
+  it('a token at aal2 when the policy was not read: the organization row and the factor list are read, on that path only', async () => {
+    unread('a hidden row', 'staff');
+    world.aal = 'aal2';
+    world.factors = VERIFIED;
+    expect((await requireOrgContext()).organizationId).toBe(ORG);
+    expect(count('from:organizations')).toBe(1);
+    expect(count('auth:getUser')).toBe(1);
+  });
+
+  it('the layout question at aal2 with no verified factor left, policy not read: the page answer', async () => {
+    unread('a value that is not a policy', 'viewer', '/dashboard/purchase-orders/imports');
+    world.aal = 'aal2';
+    await expect(authenticatorSetUpOwedForLayout()).rejects.toMatchObject(COULD_NOT_CHECK);
+    expect(redirect).not.toHaveBeenCalled();
+  });
+
+  it.each(ROW_CASES)(
     '%s, a %s with a verified authenticator at aal1: the code page, as in every state',
     async (state, role) => {
       unread(state, role);

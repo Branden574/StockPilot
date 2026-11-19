@@ -145,7 +145,9 @@ export async function stepUpIsOwed(reads: StepUpReads, userId: string): Promise<
  *     list). The dashboard layout, which has the list in hand on a full page
  *     load or a refresh, also shows it a set-up prompt where the page would
  *     be; that is a prompt, not a data stop (the page still runs), and the
- *     layout never redirects;
+ *     layout never redirects. One exception reads more: when the membership
+ *     does not carry the organization's policy (aal2SessionHeldForUnreadPolicy
+ *     below);
  *   - otherwise the factor list is the one stepUpIsOwed() already awaited
  *     (the same promise), and a verified factor there means the code was owed
  *     and the member never got this far;
@@ -162,12 +164,45 @@ export async function authenticatorSetUpIsOwed(
   held: BundleMembership | null,
 ): Promise<boolean> {
   const claims = await reads.claims;
-  if (claims?.userId === member.userId && claims.aal === 'aal2') return false;
+  if (claims?.userId === member.userId && claims.aal === 'aal2') {
+    return aal2SessionHeldForUnreadPolicy(reads, member, held);
+  }
   const own = factorsOf(await orSessionEnded(reads.factors()), member.userId);
   // Another account's list: stepUpIsOwed() already sent this session to the
   // code page, so this is never reached with one; no answer, no set-up.
   if (!own) return false;
   return authenticatorSetUpIsOwedByUser(member, held, own);
+}
+
+/**
+ * A SESSION AT AAL2, which owes no set-up: it entered a code, so it had a
+ * factor. Answered from the membership's policy with no read when it carries
+ * one, which is every request whose context came back in one round trip with
+ * its organization: false, as for every session at aal2.
+ *
+ * When the policy was not read (the membership carries no organization row,
+ * or no membership was held), the request-cached organization row is asked
+ * (the one the dashboard layout reads too). A policy read there: false. Not
+ * read: the member's own factor list decides. A verified factor passes, as
+ * at aal2 in every state. None left (it was removed after this token was
+ * issued), or a list that is not this member's: the could-not-check error
+ * (policyNotRead below), so the page and every action refuse on their own,
+ * before any work, whatever they read; the layout shows its could-not-check
+ * panel in place of the page. A read that fails throws its own could-not-check
+ * error. These reads happen only on that path; a session at aal2 whose
+ * membership carries its policy reads nothing here.
+ */
+async function aal2SessionHeldForUnreadPolicy(
+  reads: StepUpReads,
+  member: { userId: string; organizationId: string },
+  held: BundleMembership | null,
+): Promise<false> {
+  if (readOrganizationMfaPolicy(orgRowFromMembership(held)) !== null) return false;
+  const orgRow = await getOrgRowForRequest(member.organizationId);
+  if (readOrganizationMfaPolicy(orgRow) !== null) return false;
+  const own = factorsOf(await orSessionEnded(reads.factors()), member.userId);
+  if (own?.some((f) => f.status === 'verified')) return false;
+  throw policyNotRead(orgRow);
 }
 
 /**

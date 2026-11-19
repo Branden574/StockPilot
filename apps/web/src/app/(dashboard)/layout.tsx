@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 
 import { AccessUncheckedBanner } from '@/components/dashboard/access-unchecked-banner';
+import { AccessUncheckedPanel } from '@/components/dashboard/access-unchecked-panel';
 import { AuthenticatorSetUpPanel } from '@/components/dashboard/authenticator-set-up-panel';
 import { DashboardShell } from '@/components/dashboard/dashboard-shell';
 import { MfaRequiredBanner } from '@/components/dashboard/mfa-required-banner';
@@ -225,10 +226,18 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   // that session's reads and writes are refused where the services ask for an
   // authenticator. Rendered, never a redirect. The claims are awaited only
   // here, for a member who owes set-up on a page that is not open to them.
-  const setUpPanel =
-    setUpOwed &&
+  // A session at aal2 with no verified authenticator, on a page that is not
+  // open before set-up. Asked only when one of the two panels below could
+  // apply; the claims are awaited only then.
+  const aal2WithoutFactorOnClosedPage = async () =>
     !openBeforeAuthenticatorSetUp((await headers()).get('x-pathname')) &&
     (await claimsRead.then((c) => c?.userId === ctx.userId && c.aal === 'aal2'));
+  const setUpPanel = setUpOwed && (await aal2WithoutFactorOnClosedPage());
+  // The same session when the policy was not read: the could-not-check panel
+  // in place of the page, never the page. Its page refuses on its own too
+  // (requireOrgContext(): lib/auth/step-up-gate.ts
+  // aal2SessionHeldForUnreadPolicy), before any work.
+  const uncheckedPanel = accessUnchecked && (await aal2WithoutFactorOnClosedPage());
 
   // Hard gate for ENROLLED users (HI-6): a verified TOTP factor must be
   // satisfied regardless of org policy — otherwise an attacker with only
@@ -307,7 +316,13 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         {setUpOwed && <MfaRequiredBanner />}
         {accessUnchecked && <AccessUncheckedBanner />}
         {moduleStateUnknown && <ModulesUnreadBanner />}
-        {setUpPanel ? <AuthenticatorSetUpPanel /> : children}
+        {setUpPanel ? (
+          <AuthenticatorSetUpPanel />
+        ) : uncheckedPanel ? (
+          <AccessUncheckedPanel />
+        ) : (
+          children
+        )}
         {/* "Last seen" for the platform console (mig 0352). Scope keeps one account or
             organization from throttling another on a shared device; it never leaves
             the browser, and the server stamps the session's own user and org. */}
