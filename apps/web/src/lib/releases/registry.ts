@@ -141,9 +141,9 @@ export const RELEASES: Release[] = [
     // critical pages and list value release below is dated 2026-11-18T10:00:00Z, so the placeholder is that
     // same minute.
     // Moved again by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: '2026-11-18T10:00:00Z'): the
-    // receiving release below is dated 2026-11-19T04:30:00Z, so the placeholder is that same minute. Set at merge
-    // with that release's publishedAt.
-    publishedAt: '2026-11-19T04:30:00Z',
+    // receiving release below is dated 2026-11-19T05:20:00Z (the whole minute after its change went live),
+    // so the placeholder is that same minute.
+    publishedAt: '2026-11-19T05:20:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -268,7 +268,7 @@ export const RELEASES: Release[] = [
     title: 'Receive items on a purchase order shows only for people who can receive',
     summary:
       'On the web, Receive items on a purchase order now shows only for managers, admins and owners with the Adjust on-hand permission, and staff see "Only a manager can receive purchase orders." in its place. The mobile app does the same after its next update. Until then, Post receipt in the app answers a staff member with that sentence instead of "PO or line not found."',
-    publishedAt: '2026-11-19T04:30:00Z',
+    publishedAt: '2026-11-19T05:20:00Z',
     entries: [
       {
         id: 'receive-items-for-people-who-can-receive',

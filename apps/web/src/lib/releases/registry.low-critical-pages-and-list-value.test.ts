@@ -31,7 +31,7 @@ const VALUE_ENTRY = 'list-value-added-up-in-one-read';
 const EMPTIED_FIELDS_ID = 'emptied-fields-and-schedule-completion-2026-11';
 // Added by docs/whats-new-receiving-shown-to-managers (2026-11-19): the receiving release (whoever can open a purchase order where Receiving is on), published later, at the top, below the Liquid Glass draft.
 const RECEIVING_ID = 'receiving-shown-to-managers-2026-11';
-const RECEIVING_AT = '2026-11-19T04:30:00Z';
+const RECEIVING_AT = '2026-11-19T05:20:00Z';
 const PUBLISHED_AT = '2026-11-18T10:00:00Z';
 const LIVE_609 = '2026-11-18T09:59:07Z';
 

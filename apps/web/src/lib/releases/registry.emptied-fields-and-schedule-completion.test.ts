@@ -50,7 +50,7 @@ const lowCriticalRead = {
 };
 // Added by docs/whats-new-receiving-shown-to-managers (2026-11-19): the receiving release (whoever can open a purchase order where Receiving is on), published later, at the top, below the Liquid Glass draft.
 const RECEIVING_ID = 'receiving-shown-to-managers-2026-11';
-const RECEIVING_AT = '2026-11-19T04:30:00Z';
+const RECEIVING_AT = '2026-11-19T05:20:00Z';
 const DELETE_CONFIRM_ID = 'delete-account-confirm-2026-11';
 const PUBLISHED_AT = '2026-11-16T12:33:00Z';
 const LIVE_595 = '2026-11-16T12:10:47Z';
