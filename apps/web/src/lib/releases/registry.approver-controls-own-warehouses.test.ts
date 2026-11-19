@@ -79,6 +79,8 @@ const NEWER_IDS_1113 = [
   // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: without it): the Integrations and schedule event release is published later, at the top, and reaches whoever can manage integrations where Integrations is on and whoever can manage the schedule where Schedule is on, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
   // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: without it): the emptied fields and schedule completion release is published later, at the top, and reaches owners and admins, managers for its location and category entries, and whoever manages the schedule or suppliers with those modules on, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
   // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (owners, admins, managers, staff and viewers by default), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+  // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), an owner with every permission and module among them, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+  'export-receipt-access-fixes-2026-11',
   // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: without it): the receiving release is published later, at the top, and reaches whoever can open a purchase order where Receiving is on (owners, admins, managers, staff and viewers by default), an owner with every permission and module among them, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
   'receiving-shown-to-managers-2026-11',
   'low-critical-pages-and-list-value-2026-11',
@@ -231,7 +233,8 @@ describe('the S2 release: order, status and date', () => {
     // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: every pinned position one place higher): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES[23]): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES[24]): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[25]?.id).toBe(COUNT_SHEET_ID);
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES[25]): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[26]?.id).toBe(COUNT_SHEET_ID);
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -240,7 +243,8 @@ describe('the S2 release: order, status and date', () => {
     // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: every pinned position one place higher): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES[24]): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES[25]): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[26]?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES[26]): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[27]?.id).toBe(ID);
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -249,7 +253,8 @@ describe('the S2 release: order, status and date', () => {
     // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: every pinned position one place higher): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES[25]): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES[26]): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[27]?.id).toBe(EXPORT_ID);
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES[27]): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[28]?.id).toBe(EXPORT_ID);
     // Re-pinned by feat/order-add-all (2026-11-10; was: COUNT_SHEET_ID): the Add all release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: ADD_ALL_ID): the returns request and names release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: the returns request and names release, the newest published): the phone appearance and returns release is published later, at the top, directly below the Liquid Glass draft.
@@ -270,7 +275,8 @@ describe('the S2 release: order, status and date', () => {
       // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: the Integrations and schedule event release): the emptied fields and schedule completion release is published after it, at the top, the newest published release.
       // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: the emptied fields and schedule completion release): the Low + critical pages and list value release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: the Low + critical pages and list value release): the receiving release is published after it, at the top, the newest published release.
-      'receiving-shown-to-managers-2026-11',
+      // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: the receiving release): the export, receipt and access release is published after it, at the top, the newest published release.
+      'export-receipt-access-fixes-2026-11',
     );
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
       'liquid-glass-2026-11',
@@ -310,7 +316,8 @@ describe('the S2 release: order, status and date', () => {
     // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: every pinned position one place higher): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES.slice(25)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(26)): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(27)) {
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(27)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(28)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -463,6 +470,8 @@ describe('the S2 release: who is told', () => {
           // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: without it): the Integrations and schedule event release is published later, at the top, and reaches whoever can manage integrations where Integrations is on and whoever can manage the schedule where Schedule is on, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: without it): the emptied fields and schedule completion release is published later, at the top, and reaches owners and admins, managers for its location and category entries, and whoever manages the schedule or suppliers with those modules on, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (owners, admins, managers, staff and viewers by default), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+          // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), an owner with every permission and module among them, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          'export-receipt-access-fixes-2026-11': true,
           // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: without it): the receiving release is published later, at the top, and reaches whoever can open a purchase order where Receiving is on (owners, admins, managers, staff and viewers by default), an owner with every permission and module among them, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           'receiving-shown-to-managers-2026-11': true,
           'low-critical-pages-and-list-value-2026-11': true,
