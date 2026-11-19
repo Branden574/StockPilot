@@ -33,6 +33,16 @@ const ID = 'receiving-shown-to-managers-2026-11';
 const ENTRY = 'receive-items-for-people-who-can-receive';
 const LOW_CRITICAL_ID = 'low-critical-pages-and-list-value-2026-11';
 const LOW_CRITICAL_AT = '2026-11-18T10:00:00Z';
+// Added by docs/whats-new-small-fixes-1119 (2026-11-19): the export, receipt and access release (every member: its access entry has no audience), published later, at the top, below the Liquid Glass draft.
+const EXPORT_RECEIPT_ACCESS_ID = 'export-receipt-access-fixes-2026-11';
+const EXPORT_RECEIPT_ACCESS_AT = '2026-11-19T16:00:00Z';
+const exportReceiptAccessRead = {
+  release_id: EXPORT_RECEIPT_ACCESS_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-19T15:31:00Z',
+  read_at: '2026-11-19T15:31:00Z',
+};
 /** core RECEIVE_MANAGER_ONLY_COPY in #617: the page note and the refusal. */
 const MANAGER_ONLY = 'Only a manager can receive purchase orders.';
 /** ReceivingService's answer to the database's refusal of staff before #617. */
@@ -80,26 +90,35 @@ function readerText(r: Release): string[] {
 }
 
 describe('the receiving release: order, status and date', () => {
-  it('is published once, as revision 1, directly below the Liquid Glass draft and above the Low + critical pages and list value release, the newest published release', () => {
+  // Renamed by docs/whats-new-small-fixes-1119 (2026-11-19; was: "directly below the Liquid Glass draft and above the Low + critical pages and list value release, the newest published release"): the export, receipt and access release is published later, at the top, directly below the Liquid Glass draft.
+  it('is published once, as revision 1, directly below the export, receipt and access release (published later, below the Liquid Glass draft at the top) and above the Low + critical pages and list value release', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
-    expect(RELEASES.slice(0, 3).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(0, 3)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    expect(RELEASES.slice(0, 4).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, directly below the Liquid Glass draft.
+      [EXPORT_RECEIPT_ACCESS_ID, 'published'],
       [ID, 'published'],
       [LOW_CRITICAL_ID, 'published'],
     ]);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: ID): the export, receipt and access release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(EXPORT_RECEIPT_ACCESS_ID);
   });
 
-  it('is dated on a whole minute, in the past, after the release below it, with the draft placeholder at the same minute and every release below it older', () => {
+  // Renamed by docs/whats-new-small-fixes-1119 (2026-11-19; was: "with the draft placeholder at the same minute"): the placeholder moved to the minute of the export, receipt and access release, published later, above this one.
+  it('is dated on a whole minute, in the past, after the release below it, with the draft placeholder at or after it and every release below it older', () => {
     const at = Date.parse(release().publishedAt);
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
     expect(at).toBeGreaterThan(Date.parse(LOW_CRITICAL_AT));
     expect(at).toBeLessThanOrEqual(Date.now());
-    expect(RELEASES[0]!.publishedAt).toBe(release().publishedAt);
-    for (const r of RELEASES.slice(2)) {
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES[0].publishedAt equal to this release's): the placeholder is the minute of the export, receipt and access release, published later, above this one.
+    expect(RELEASES[0]!.publishedAt).toBe(EXPORT_RECEIPT_ACCESS_AT);
+    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(2)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(3)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -191,13 +210,27 @@ describe('the receiving release: who is told', () => {
       read_at: '2026-11-19T04:31:00Z',
     };
     for (const v of [owner, admin, manager, staff, member]) {
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
-      expect(buildReleaseList(RELEASES, v, [read], null).latestUnread?.id, v.role).not.toBe(ID);
+      // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
+      expect(
+        buildReleaseList(RELEASES, v, [exportReceiptAccessRead], null).latestUnread?.id,
+        v.role,
+      ).toBe(ID);
+      expect(
+        buildReleaseList(RELEASES, v, [exportReceiptAccessRead, read], null).latestUnread?.id,
+        v.role,
+      ).not.toBe(ID);
     }
-    expect(buildReleaseList(RELEASES, owner, [read], null).latestUnread?.id).toBe(LOW_CRITICAL_ID);
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
+    expect(
+      buildReleaseList(RELEASES, owner, [exportReceiptAccessRead, read], null).latestUnread?.id,
+    ).toBe(LOW_CRITICAL_ID);
     expect(buildReleaseList(RELEASES, receivingOff, [], null).latestUnread?.id).not.toBe(ID);
     for (const v of [owner, staff, member]) {
-      expect(legacyAnnouncementsFor(RELEASES, v, {})[0], v.role).toEqual({
+      // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
+      expect(
+        legacyAnnouncementsFor(RELEASES, v, { [EXPORT_RECEIPT_ACCESS_ID]: true })[0],
+        v.role,
+      ).toEqual({
         id: ID,
         date: release().publishedAt.slice(0, 10),
         title: release().title,
