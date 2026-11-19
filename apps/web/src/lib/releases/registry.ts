@@ -143,7 +143,10 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: '2026-11-18T10:00:00Z'): the
     // receiving release below is dated 2026-11-19T05:20:00Z (the whole minute after its change went live),
     // so the placeholder is that same minute.
-    publishedAt: '2026-11-19T05:20:00Z',
+    // Moved again by docs/whats-new-small-fixes-1119 (2026-11-19; was: '2026-11-19T05:20:00Z'): the export,
+    // receipt and access release below is dated 2026-11-19T16:00:00Z (a stand-in until the integrator sets
+    // the real minute at merge), so the placeholder is that same minute.
+    publishedAt: '2026-11-19T16:00:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -228,6 +231,132 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'export-receipt-access-fixes-2026-11',
+    revision: 1,
+    // Three fixes already live on the web, each its own pull request:
+    // "Inventory export, its preview and the bundle list answer a service
+    // refusal by its code" (#619), "A receipt writes its audit row and sends
+    // its webhook, Slack and Teams messages once" (#621) and "A page or Server
+    // Action whose authenticator policy was not read tells the member their
+    // access could not be checked" (#622). SET AT MERGE: publishedAt is a
+    // stand-in, 2026-11-19T16:00:00Z; the integrator sets the whole minute at
+    // or after the last of the three production deployments going live, and
+    // the Liquid Glass draft placeholder above takes the same minute.
+    // Left out as not visible: "Reversing a receipt follows the rule the
+    // database applies" (#620). The web already showed Reverse only to a
+    // manager or above with Adjust on-hand (purchase-orders/[id]/page.tsx
+    // canReverse), and the phone has no Reverse, so only a call made outside
+    // the app meets the new sentence "Only a manager can reverse a receipt.".
+    // The database refusing what the app already refused is not visible to
+    // anyone using the app as intended, so it has no entry (the rule this
+    // registry has followed since the order approvals release). Also left
+    // out: #619's phone kit list (GET /api/v1/bundles), which changes only
+    // the words of a failed read.
+    // Who is told: every member, through access-could-not-be-checked (no
+    // audience); the export entry to whoever can export items
+    // (items:export), and the receipt entry to whoever can receive (core
+    // canPostReceipt: a manager or above with stock:adjust, Receiving on). No
+    // links: the export dialog sits on Items and Books, which items:read
+    // opens, and anyPermission cannot ask for both.
+    status: 'published',
+    title:
+      'Export refusals say why, a receipt sent again is recorded once, and pages say when your access could not be checked',
+    summary:
+      "On the web, the Customize export dialog now says so when you do not have permission to export, instead of offering Try again. A receipt sent again, for example after a slow connection, now shows once in the Audit log and reaches webhooks, Slack and Teams once. When StockPilot can't read your organization's sign-in settings for a moment, the web now says your access could not be checked and offers Try again, instead of asking you to set up an authenticator app.",
+    publishedAt: '2026-11-19T16:00:00Z',
+    entries: [
+      {
+        // platform: web (the phone has no Items export). From: #619. Checked
+        // at f9848e806: both export routes answer through
+        // server/lib/service-error-response.ts (a ServiceError other than
+        // internal_error keeps its code, its words and its status, 403 for
+        // forbidden; anything else goes to internalErrorResponse, reported,
+        // with "Something went wrong. Please try again."). Before, every
+        // ServiceError answered 500 with its own words.
+        // lib/download-export.ts errorFromResponse turns a 403 forbidden into
+        // ExportRefusedError; the dialog's sample (export-builder-dialog.tsx
+        // :235, export-builder-preview.tsx :79-81) then shows that sentence
+        // with no Try again, where a 500 showed "Could not load a sample of
+        // this export. You can still export the file." with Try again
+        // (:82-95). The export itself already showed the server's words
+        // inside the dialog (export-builder-dialog.tsx :413). The route asks
+        // items:export before the service, so a refusal is rare: the entry
+        // says "when", not how often.
+        id: 'export-refusals-say-why',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Export says why when it is refused',
+        whatChanged:
+          'In the Customize export dialog on Items and Books, when the server refuses to show a sample of the export because you do not have permission, the sample area now says so, with no Try again. When an export fails on the server, the dialog says "Something went wrong. Please try again." and the failure is recorded so it can be found and fixed.',
+        whyItMatters:
+          'A refusal looked like a failure: the sample said it could not load and offered Try again, which could not help.',
+        howItAffectsYou:
+          'Nothing changes for an export that works. If an export is refused, the dialog tells you why.',
+        whatToDo: 'No action needed. If the dialog says you do not have permission, ask an admin.',
+        audience: { anyPermission: ['items:export'] },
+      },
+      {
+        // platform: web and phone, through the server (no app update). From:
+        // #621. Checked at f9848e806: server/services/receiving.ts records the
+        // export event first (publishOutboxEvent, key receipt.posted:<receipt
+        // id>, unique per organization: publish_outbox returns the new id to
+        // one call and null to every other one); when the answer is false (the
+        // event was already recorded) it returns the receipt with no audit row
+        // (stock.receipt.posted, the Audit log), no po.received message
+        // (dispatchEvent: webhooks, Slack, Teams) and no auto-unarchive. The
+        // QuickBooks Bill is made from that event, which was already recorded
+        // once. A retry with the same key never moved stock again
+        // (post_receipt_v2 answers the stored receipt).
+        // Audience: whoever can post a receipt (core canPostReceipt: manager or
+        // above with stock:adjust), where Receiving is on.
+        id: 'receipt-sent-again-recorded-once',
+        category: 'fixed',
+        area: 'Receiving',
+        title: 'A receipt sent again is recorded once',
+        whatChanged:
+          'When a receipt on a purchase order is sent again, for example after a slow connection, the Audit log now shows it once, and webhooks, Slack and Teams hear about it once.',
+        whyItMatters:
+          'A receipt sent again only added stock once, but the Audit log could show it twice, and webhooks, Slack and Teams could be told about it twice.',
+        howItAffectsYou:
+          'Nothing changes in how you receive. If you use QuickBooks, its bill for the receipt was already made once.',
+        whatToDo: 'No action needed.',
+        audience: {
+          roles: ['owner', 'admin', 'manager'],
+          anyPermission: ['stock:adjust'],
+          modules: ['receiving'],
+        },
+      },
+      {
+        // platform: web (no API answer changed, so the phone sees nothing
+        // new). From: #622. Checked at f9848e806: app/(dashboard)/layout.tsx
+        // draws AccessUncheckedBanner (components/dashboard/
+        // access-unchecked-banner.tsx: "We couldn't check your access just
+        // now. Some pages may be unavailable. This is usually temporary."
+        // with Try again) when the organization's policy was not read and the
+        // member has no verified authenticator, and no longer the set-up
+        // banner; every page not open before set-up shows the card "This page
+        // couldn't be loaded" / "We couldn't check your access just now. This
+        // is usually temporary." (lib/known-error-states.ts:50-51,
+        // lib/auth/step-up-gate.ts), never the redirect to set-up; an action
+        // answers "Your access could not be checked. Please try again." and
+        // writes nothing. Before, the member was held to the strictest policy
+        // and sent to set up an authenticator, whatever the organization asks.
+        // Audience: none (every member).
+        id: 'access-could-not-be-checked',
+        category: 'fixed',
+        area: 'Account',
+        title: "Pages say when your access couldn't be checked",
+        whatChanged:
+          'If StockPilot can\'t read your organization\'s sign-in settings for a moment and you have not set up an authenticator app, the web now says "We couldn\'t check your access just now." at the top of the page, with Try again, and most pages show "This page couldn\'t be loaded" with the same words. A change made then is not saved and says "Your access could not be checked. Please try again."',
+        whyItMatters:
+          'Before, the web asked you to set up an authenticator app in that moment, even if your organization does not ask for one.',
+        howItAffectsYou:
+          'This is usually temporary. Press Try again a moment later. If your organization does ask for an authenticator app, you are asked to set one up once the settings can be read.',
+        whatToDo: 'No action needed. If the message stays, try again later or tell your admin.',
       },
     ],
   },
