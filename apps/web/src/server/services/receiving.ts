@@ -447,6 +447,10 @@ export class ReceivingService {
     // even one that arrives while the first post is still running, writes
     // nothing again. When the event's write fails or its answer is not
     // known, the rest still runs (a second audit row is better than none).
+    // The one gap: if this process stops after the event is recorded and
+    // before the audit row below (one await), every retry answers false and
+    // that receipt keeps no audit row or po.received message; its stock and
+    // its QuickBooks Bill are unaffected (the restock trigger unarchives).
     //
     // The QuickBooks Bill is made from this event. Recorded through the
     // service client by the one export-event helper
