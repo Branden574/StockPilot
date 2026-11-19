@@ -177,6 +177,9 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
   // With the permission but below manager, the page says who receives.
   const managerOnlyNote =
     receivableHere && canAdjustStock && !canReceive ? RECEIVE_MANAGER_ONLY_COPY : null;
+  // Reverse on a receipt: the same rule (reverse_receipt asks what
+  // post_receipt_v2 asks; core canPostReceipt, which ReceivingService.
+  // reverseReceipt asks), written as the What's New registry test pins it.
   const canReverse = isManagerOrAbove(ctx.role) && canAdjustStock;
 
   const lineRows = lines.map((l) => {
