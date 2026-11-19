@@ -1237,6 +1237,19 @@ WEB_TESTS=(
   # a kind, a reason and the writes it makes (a sweep on the syntax tree, with
   # a mutation table that takes each gate out and expects it reported).
   src/test/authenticator-write.guard.test.ts
+  # A write through the API context gate from a member whose organization's
+  # authenticator policy could not be read, with no verified authenticator,
+  # gets the gate's retryable 503 before the route does anything; a member
+  # whose policy was read keeps the route's own answer (the real API context
+  # for every policy, role, factor and level; the phone's outbox routes).
+  src/server/lib/api-context-gate.policy-unread.test.ts
+  src/app/api/v1/outbox-writes.phone-contract.test.ts
+  'src/app/api/v1/items/[id]/adjust/route.phone-contract.test.ts'
+  # Only the reviewed routes load the gate, and each calls it as its first
+  # statement (after at most one read of the clock).
+  src/server/lib/api-context-gate.test.ts
+  # A receipt checks the module and the permission before it reads the order.
+  'src/app/api/v1/po/[id]/receive-line/route.test.ts'
   # A member who owes authenticator set-up is sent to it by every page and
   # action through requireOrgContext(); only Security and Profile open; no
   # layout reaches that check or redirects to a path under itself, and only
