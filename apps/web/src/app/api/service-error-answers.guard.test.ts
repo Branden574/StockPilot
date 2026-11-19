@@ -137,12 +137,12 @@ const OWN_ANSWERS: Record<string, { branches: number; reason: string }> = {
   'v1/cycle-counts/[id]/reassign/route.ts': {
     branches: 1,
     reason:
-      "The phone's reassign sheet reads this route's own status table; other faults go to forbiddenOrInternalResponse.",
+      'Deferred to its own change: its own status table (no plan-limit case, an internal_error not reported); the phone sheet shows only the message, so it can move.',
   },
   'v1/cycle-counts/[id]/release/route.ts': {
     branches: 1,
     reason:
-      "The phone's release sheet reads this route's own status table; other faults go to forbiddenOrInternalResponse.",
+      'Deferred to its own change: its own status table (no plan-limit case, an internal_error not reported); the phone sheet shows only the message, so it can move.',
   },
   'v1/bundles/[id]/distribute/route.ts': {
     branches: 1,
@@ -162,12 +162,12 @@ const OWN_ANSWERS: Record<string, { branches: number; reason: string }> = {
   'v1/items/route.ts': {
     branches: 1,
     reason:
-      "Sends details (null when the service set none) for the phone's sports codes; a ForbiddenError is a 403.",
+      "Deferred until the phone's item screens are checked: sends details (null when the service set none) for the sports codes; a ForbiddenError is a 403.",
   },
   'v1/items/sized-variants/route.ts': {
     branches: 1,
     reason:
-      "Sends details (null when the service set none) for the phone's size codes; a ForbiddenError is a 403.",
+      "Deferred until the phone's size screens are checked: sends details (null when the service set none) for the size codes; a ForbiddenError is a 403.",
   },
   'v1/product-groups/linking/route.ts': {
     branches: 1,
@@ -190,11 +190,11 @@ const OWN_ANSWERS: Record<string, { branches: number; reason: string }> = {
   },
   'v1/items/[id]/history/route.ts': {
     branches: 1,
-    reason: "A ForbiddenError is a 403 refusal for the phone's item history.",
+    reason: "Deferred until the phone's item history is checked: a ForbiddenError is a final 403.",
   },
   'v1/inventory/staging/route.ts': {
     branches: 1,
-    reason: "A ForbiddenError is a 403 refusal for the phone's staging list.",
+    reason: "Deferred until the phone's staging list is checked: a ForbiddenError is a final 403.",
   },
   // Grouping.
   'v1/items/grouping/route.ts': {
@@ -230,11 +230,12 @@ const OWN_ANSWERS: Record<string, { branches: number; reason: string }> = {
   },
   'v1/orders/[id]/pick-line/route.ts': {
     branches: 1,
-    reason: 'A ForbiddenError is a 403 refusal for the picker.',
+    reason: "Deferred until the phone's picker is checked: a ForbiddenError is a final 403.",
   },
   'v1/orders/[id]/transition/route.ts': {
     branches: 1,
-    reason: 'The hold_stock fault sentence; a ForbiddenError is a 403.',
+    reason:
+      "Deferred until the phone's order screens are checked: the hold_stock fault sentence; a ForbiddenError is a final 403.",
   },
   'v1/orders/[id]/needed-by/route.ts': {
     branches: 1,
@@ -326,14 +327,50 @@ function branchAt(src: string, at: number): string {
   return src.slice(at, end === -1 ? src.length : end + 1);
 }
 
-/** Hand-written ServiceError answers in one source text. */
+/** The rest of the block that holds position `from`, to its closing brace. */
+function restOfBlock(src: string, from: number): string {
+  let d = 0;
+  for (let k = from; k < src.length; k++) {
+    if (src[k] === '{') d++;
+    else if (src[k] === '}') {
+      d--;
+      if (d < 0) return src.slice(from, k);
+    }
+  }
+  return src.slice(from);
+}
+
+/**
+ * Hand-written ServiceError answers in one source text. A negated test that
+ * throws everything else (`if (!(e instanceof ServiceError)) throw e;`) leaves
+ * only ServiceErrors below it, so the rest of its block is the branch.
+ */
 function ownServiceErrorAnswers(source: string): number {
   const src = stripComments(source);
   let count = 0;
   for (const m of src.matchAll(/instanceof\s+ServiceError\b/g)) {
-    if (ANSWER_RE.test(branchAt(src, m.index!))) count++;
+    const at = m.index!;
+    let branch = branchAt(src, at);
+    const negated = /!\(\s*[\w.]+\s*$/.test(src.slice(Math.max(0, at - 60), at));
+    if (negated && /\bthrow\b/.test(branch)) {
+      branch = restOfBlock(src, src.indexOf(branch, at) + branch.length);
+    }
+    if (ANSWER_RE.test(branch)) count++;
   }
   return count;
+}
+
+/** Files under app/api that rename ServiceError or call serviceErrorStatus. */
+function scanOther(): { aliases: string[]; statusCallers: string[] } {
+  const aliases: string[] = [];
+  const statusCallers: string[] = [];
+  for (const file of walk(API_ROOT)) {
+    const src = stripComments(readFileSync(file, 'utf8'));
+    const rel = relative(API_ROOT, file).split(sep).join('/');
+    if (/\bServiceError\s+as\s+\w/.test(src)) aliases.push(rel);
+    if (/serviceErrorStatus\(/.test(src)) statusCallers.push(rel);
+  }
+  return { aliases, statusCallers };
 }
 
 function scan(): Map<string, number> {
@@ -382,6 +419,31 @@ describe('ServiceError answers under app/api go through serviceErrorResponse', (
           return serviceErrorResponse(e, 'tag');
         }`),
     ).toBe(0);
+  });
+
+  it('a negated test that throws everything else counts the answer below it', () => {
+    expect(
+      ownServiceErrorAnswers(`
+        } catch (e) {
+          if (!(e instanceof ServiceError)) throw e;
+          return NextResponse.json({ error: e.code }, { status: 409 });
+        }`),
+    ).toBe(1);
+    expect(
+      ownServiceErrorAnswers(`
+        } catch (e) {
+          if (!(e instanceof ServiceError)) {
+            throw e;
+          }
+          return NextResponse.json({ error: e.code }, { status: 409 });
+        }`),
+    ).toBe(1);
+  });
+
+  it('no route renames ServiceError, and only listed files call serviceErrorStatus', () => {
+    const { aliases, statusCallers } = scanOther();
+    expect(aliases).toEqual([]);
+    expect(statusCallers.filter((f) => !OWN_ANSWERS[f])).toEqual([]);
   });
 
   it('every hand-written answer is listed, with the count in its file', () => {
