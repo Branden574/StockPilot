@@ -46,9 +46,11 @@ import { formatCurrency, formatRelative } from '@/lib/utils';
 
 import {
   can,
+  canPostReceipt,
   dbPermissionRefusedCopy,
   formatCalendarDate,
   isManagerOrAbove,
+  RECEIVE_MANAGER_ONLY_COPY,
 } from '@stockpilot/core';
 
 // The Liquid Glass operations composition (stage 4: pages/ops.css, the
@@ -164,11 +166,17 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
   // the permission the page says why, in the words the server's refusal maps
   // to, where the receiving hint would be.
   const canAdjustStock = can(ctx, 'stock:adjust');
-  const canReceive = receivableHere && canAdjustStock;
+  // Receive items only for a member the database lets post a receipt (core
+  // canPostReceipt: manager or above with stock:adjust, the rule
+  // ReceivingService.postReceipt asks).
+  const canReceive = receivableHere && canPostReceipt(ctx);
   // The What's New registry test (lib/releases/registry.test.ts) pins this
   // statement on one line, so Prettier leaves it as written.
   // prettier-ignore
   const receiveRefusal = receivableHere && !canAdjustStock ? dbPermissionRefusedCopy('receipt_post') : null;
+  // With the permission but below manager, the page says who receives.
+  const managerOnlyNote =
+    receivableHere && canAdjustStock && !canReceive ? RECEIVE_MANAGER_ONLY_COPY : null;
   const canReverse = isManagerOrAbove(ctx.role) && canAdjustStock;
 
   const lineRows = lines.map((l) => {
@@ -205,7 +213,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
   const receiveNote =
     canReceive && warehouseId
       ? 'Items arrived? Use “Receive items” to record what was received.'
-      : receiveRefusal;
+      : (receiveRefusal ?? managerOnlyNote);
 
   return (
     <div className={PAGE} data-glass-page="ops" data-glass-view="purchase-order">
