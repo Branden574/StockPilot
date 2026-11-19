@@ -41,7 +41,6 @@ const ENTRY_IDS = [
 const CONNECTION_SCHEDULE_ID = 'connection-and-schedule-messages-2026-11';
 // Added by docs/releases-low-critical-pages (2026-11-18): the Low + critical pages and list value release (whoever can read items: every role by default), published later, at the top, below the Liquid Glass draft.
 const LOW_CRITICAL_ID = 'low-critical-pages-and-list-value-2026-11';
-const LOW_CRITICAL_AT = '2026-11-18T10:00:00Z';
 const lowCriticalRead = {
   release_id: LOW_CRITICAL_ID,
   revision: 1,
@@ -49,6 +48,9 @@ const lowCriticalRead = {
   opened_at: '2026-11-18T10:01:00Z',
   read_at: '2026-11-18T10:01:00Z',
 };
+// Added by docs/whats-new-receiving-shown-to-managers (2026-11-19): the receiving release (whoever can open a purchase order where Receiving is on), published later, at the top, below the Liquid Glass draft.
+const RECEIVING_ID = 'receiving-shown-to-managers-2026-11';
+const RECEIVING_AT = '2026-11-19T05:20:00Z';
 const DELETE_CONFIRM_ID = 'delete-account-confirm-2026-11';
 const PUBLISHED_AT = '2026-11-16T12:33:00Z';
 const LIVE_595 = '2026-11-16T12:10:47Z';
@@ -122,8 +124,11 @@ describe('the emptied fields and schedule completion release: order, status and 
     expect(release().revision).toBe(2);
     expect(release().withdrawnNote).toBeUndefined();
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES.slice(0, 4)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so the list takes one more.
-    expect(RELEASES.slice(0, 5).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(0, 5)): the receiving release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    expect(RELEASES.slice(0, 6).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: without it): the receiving release is published later, at the top, directly below the Liquid Glass draft.
+      [RECEIVING_ID, 'published'],
       // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, directly below the Liquid Glass draft.
       [LOW_CRITICAL_ID, 'published'],
       [ID, 'published'],
@@ -131,7 +136,8 @@ describe('the emptied fields and schedule completion release: order, status and 
       [DELETE_CONFIRM_ID, 'published'],
     ]);
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: ID): the Low + critical pages and list value release is published after it, at the top, the newest published release.
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(LOW_CRITICAL_ID);
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: the Low + critical pages and list value release): the receiving release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(RECEIVING_ID);
   });
 
   // Added by bundles/hand-out-follows-the-manager-rule (2026-11-16): revision 2 is told again.
@@ -165,10 +171,12 @@ describe('the emptied fields and schedule completion release: order, status and 
     expect(at).toBeGreaterThan(Date.parse(LIVE_597));
     expect(at).toBeLessThanOrEqual(Date.now());
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES[0].publishedAt equal to this release's): the placeholder is the minute of the Low + critical pages and list value release, published later, above this one.
-    expect(RELEASES[0]!.publishedAt).toBe(LOW_CRITICAL_AT);
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: the minute of the Low + critical pages and list value release, '2026-11-18T10:00:00Z'): the placeholder is the minute of the receiving release, published later, above this one.
+    expect(RELEASES[0]!.publishedAt).toBe(RECEIVING_AT);
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES.slice(2)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(3)) {
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(3)): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(4)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });

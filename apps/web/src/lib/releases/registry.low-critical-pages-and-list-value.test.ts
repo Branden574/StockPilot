@@ -29,6 +29,9 @@ const ID = 'low-critical-pages-and-list-value-2026-11';
 const PAGES_ENTRY = 'low-critical-pages-full';
 const VALUE_ENTRY = 'list-value-added-up-in-one-read';
 const EMPTIED_FIELDS_ID = 'emptied-fields-and-schedule-completion-2026-11';
+// Added by docs/whats-new-receiving-shown-to-managers (2026-11-19): the receiving release (whoever can open a purchase order where Receiving is on), published later, at the top, below the Liquid Glass draft.
+const RECEIVING_ID = 'receiving-shown-to-managers-2026-11';
+const RECEIVING_AT = '2026-11-19T05:20:00Z';
 const PUBLISHED_AT = '2026-11-18T10:00:00Z';
 const LIVE_609 = '2026-11-18T09:59:07Z';
 
@@ -71,28 +74,37 @@ function readerText(r: Release): string[] {
 }
 
 describe('the Low + critical pages and list value release: order, status and date', () => {
-  it('is published once, as revision 1, directly below the Liquid Glass draft and above the emptied fields and schedule completion release, the newest published release', () => {
+  // Renamed by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: "is published once, as revision 1, directly below the Liquid Glass draft and above the emptied fields and schedule completion release, the newest published release"): the receiving release is published later, at the top, directly below the Liquid Glass draft.
+  it('is published once, as revision 1, directly below the receiving release (published later, below the Liquid Glass draft at the top) and above the emptied fields and schedule completion release', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
-    expect(RELEASES.slice(0, 3).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(0, 3)): the receiving release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    expect(RELEASES.slice(0, 4).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: without it): the receiving release is published later, at the top, directly below the Liquid Glass draft.
+      [RECEIVING_ID, 'published'],
       [ID, 'published'],
       [EMPTIED_FIELDS_ID, 'published'],
     ]);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: ID): the receiving release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(RECEIVING_ID);
   });
 
-  it('is dated the whole minute after #609 went live, in the past, with the draft placeholder at the same minute and every release below it older', () => {
+  // Renamed by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: "is dated the whole minute after #609 went live, in the past, with the draft placeholder at the same minute and every release below it older"): the placeholder moved to the minute of the receiving release, published later, above this one.
+  it('is dated the whole minute after #609 went live, in the past, with the draft placeholder at or after it and every release below it older', () => {
     expect(release().publishedAt).toBe(PUBLISHED_AT);
     const at = Date.parse(release().publishedAt);
     expect(at % 60_000).toBe(0);
     expect(at).toBeGreaterThan(Date.parse(LIVE_609));
     expect(at - Date.parse(LIVE_609)).toBeLessThan(60_000);
     expect(at).toBeLessThanOrEqual(Date.now());
-    expect(RELEASES[0]!.publishedAt).toBe(PUBLISHED_AT);
-    for (const r of RELEASES.slice(2)) {
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES[0].publishedAt equal to this release's): the placeholder is the minute of the receiving release, published later, above this one.
+    expect(RELEASES[0]!.publishedAt).toBe(RECEIVING_AT);
+    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(2)): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(3)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
