@@ -81,9 +81,10 @@ import {
  *   1b. a held handler (rule 1, or rule 4's 'read') calls nothing before its
  *      gate, in the order the code runs, awaited or not, in a `?:`, in the
  *      gate's own arguments, and builds no answer (`NextResponse.json(...)`,
- *      `new X(...)`), except exactly the calls its PRE_GATE entry lists: the
- *      reviewed checks of its own address and their 400s. Every entry is
- *      current and has a reason;
+ *      `new X(...)`), runs no tagged template and awaits no value that is
+ *      not a call (its own route params aside), except exactly the calls its
+ *      PRE_GATE entry lists: the reviewed checks of its own address and their
+ *      400s. Every entry is current and has a reason;
  *   4. every POST, PUT, PATCH and DELETE handler under /api that the write
  *      reading (test/gate-reach.ts writeGate, as the write guard reads it)
  *      finds writing nothing hands a read gate 'read' as its first step, or is
@@ -93,16 +94,21 @@ import {
  *   5. no handler of a route file served outside /api reaches, through the
  *      call graph (test/gate-reach.ts), a function that builds a member
  *      context, and there is no file under pages/api. Every route file served
- *      outside /api is on OUTSIDE_ROUTES with its kind and a reason; an entry
- *      is current; a 'sign-in' file calls no `.from(` and no `.rpc(` itself,
- *      and a 'token-link' or 'forwarder' file imports no session reader.
+ *      outside /api, and every metadata file Next.js serves (opengraph-image,
+ *      twitter-image, icon, apple-icon, sitemap, robots, manifest), is on
+ *      OUTSIDE_ROUTES with its kind and a reason; an entry is current; a
+ *      'sign-in' file calls no `.from(` and no `.rpc(` itself and reaches no
+ *      function of a module that reads a table with the cookie client; a
+ *      'token-link' or 'forwarder' file imports no session reader; a
+ *      'metadata' file imports no session reader and no database client.
  *
  * WHAT IT IS NOT. It reads where the gate is, not what the handler does with
  * its answer: a handler that keeps the answer and goes on is caught by the
  * route sweep (app/api/v1/set-up-owed-reads.routes.test.ts), which calls every
  * held handler with recording clients (the service client, the cookie client
  * and `fetch`) and fails on any use before the answer. A read reached through
- * a getter or a module's top-level code is not a call this reading sees.
+ * a getter on a plain property read, or a module's top-level code, is not a
+ * step this reading sees.
  * Rule 5's call graph is gate-reach.ts's: it does not follow instance methods
  * (a service built from a context that was already resolved) or functions
  * held in variables, and a principal built by hand (the cookie client, then
@@ -444,9 +450,20 @@ const MEMBER_CONTEXT_BUILDERS: readonly string[] = [
  *   - token-link: a link that carries its own signed or hashed token and
  *     reads no member session (no session reader imported);
  *   - forwarder: passes a request on to another service and reads no member
- *     session (no session reader imported).
+ *     session (no session reader imported);
+ *   - metadata: a metadata file Next.js serves (an image, the manifest, the
+ *     robots file, the sitemap); it imports no session reader and no
+ *     database client at all.
+ *
+ * The sign-in check reads the file's own calls, and through the call graph
+ * (graphOf) each function the handler reaches: no handler may reach a
+ * function of a module that imports the cookie client
+ * (`@/lib/supabase/server`) and calls `.from(` or `.rpc(` itself. A table
+ * read through a client handed on by a parameter to a module that does not
+ * import the cookie client, or through an instance method, is not seen
+ * (the graph's limits, gate-reach.ts).
  */
-type OutsideKind = 'sign-in' | 'token-link' | 'forwarder';
+type OutsideKind = 'sign-in' | 'token-link' | 'forwarder' | 'metadata';
 
 /** Every route file served outside /api, by file (apps/web/src relative). */
 const OUTSIDE_ROUTES: Record<string, { kind: OutsideKind; reason: string }> = {
@@ -485,9 +502,33 @@ const OUTSIDE_ROUTES: Record<string, { kind: OutsideKind; reason: string }> = {
     reason:
       "An email's unsubscribe link behind its signed token, limited per address; no member session is read.",
   },
+  'app/apple-icon.tsx': {
+    kind: 'metadata',
+    reason: 'The home-screen icon, drawn by next/og from fixed shapes; it reads nothing.',
+  },
+  'app/manifest.ts': {
+    kind: 'metadata',
+    reason: 'The web app manifest: fixed names, colours and icon addresses; it reads nothing.',
+  },
+  'app/opengraph-image.tsx': {
+    kind: 'metadata',
+    reason: 'The link preview image, drawn by next/og from fixed text; it reads nothing.',
+  },
+  'app/robots.ts': {
+    kind: 'metadata',
+    reason: 'The robots file: fixed allow and disallow rules and the sitemap address.',
+  },
+  'app/sitemap.ts': {
+    kind: 'metadata',
+    reason: 'The sitemap: the fixed public pages and their addresses; it reads nothing.',
+  },
 };
 
-const HANDLER_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
+/** A database client a metadata file may not import. */
+const DATABASE_CLIENT = /^(@\/lib\/supabase\/|@supabase\/)/;
+
+/** The handlers of a route file, and a metadata file's default export. */
+const HANDLER_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'default'];
 
 /**
  * The call graph over every source, with every call counted. gate-reach.ts
@@ -547,16 +588,55 @@ function tableCallLines(file: string, src: string): number[] {
 }
 
 /**
- * Rule 5's reviewed list: every route file served outside /api is listed with
- * its kind and a reason, every entry is current, and each file keeps to its
- * kind.
+ * The functions (`<absolute file>#<name>`) of every module that imports the
+ * cookie client and calls `.from(` or `.rpc(` in that function's own body:
+ * the module's top-level functions, declared or held in a const.
+ */
+function cookieTableReaders(sources: Sources): string[] {
+  const out: string[] = [];
+  for (const [file, src] of sources) {
+    if (!src.includes('@/lib/supabase/server')) continue;
+    if (!importsOf(file, src).some((i) => i.specifier === '@/lib/supabase/server')) continue;
+    const sf = parse(file, src);
+    const fns: Array<[string, ts.Node]> = [];
+    for (const st of sf.statements) {
+      if (ts.isFunctionDeclaration(st) && st.name && st.body) fns.push([st.name.text, st.body]);
+      if (ts.isVariableStatement(st)) {
+        for (const d of st.declarationList.declarations) {
+          if (
+            ts.isIdentifier(d.name) &&
+            d.initializer &&
+            (ts.isArrowFunction(d.initializer) || ts.isFunctionExpression(d.initializer))
+          ) {
+            fns.push([d.name.text, d.initializer.body]);
+          }
+        }
+      }
+    }
+    for (const [name, body] of fns) {
+      if (tableCallLines(file, body.getText(sf)).length > 0) {
+        out.push(`${path.join(WEB_SRC, file)}#${name}`);
+      }
+    }
+  }
+  return out.sort();
+}
+
+/**
+ * Rule 5's reviewed list: every route file served outside /api (and every
+ * metadata file Next.js serves) is listed with its kind and a reason, every
+ * entry is current, and each file keeps to its kind.
  */
 function outsideListFindings(
   sources: Sources,
   listed: Record<string, { kind: OutsideKind; reason: string }>,
+  graph?: ReturnType<typeof graphOf>,
 ): string[] {
   const found: string[] = [];
   const files = routeFilesOutsideScope(sources).filter((f) => !f.startsWith('pages/api/'));
+  let readers: ReturnType<ReturnType<typeof graphOf>['reach']> | null = null;
+  const tableReach = () =>
+    (readers ??= (graph ?? graphOf(sources)).reach(cookieTableReaders(sources)));
   for (const file of files) {
     const entry = listed[file];
     if (!entry) {
@@ -567,6 +647,25 @@ function outsideListFindings(
     if (entry.kind === 'sign-in') {
       for (const line of tableCallLines(file, src)) {
         found.push(`${file}: listed as sign-in, but calls .from( or .rpc( at line ${line}`);
+      }
+      for (const method of HANDLER_METHODS) {
+        const chain = tableReach().pathToTarget(path.join(WEB_SRC, file), method);
+        const end = chain?.at(-1) ?? '';
+        // A read in the file itself is reported above, by line.
+        if (chain && !end.startsWith(`${file}#`)) {
+          found.push(
+            `${file} ${method}: listed as sign-in, but reaches ${end}, which reads a table with the cookie client`,
+          );
+        }
+      }
+    } else if (entry.kind === 'metadata') {
+      for (const r of sessionReadersIn(file, src)) {
+        found.push(`${file}: listed as metadata, but imports ${r}`);
+      }
+      for (const i of importsOf(file, src)) {
+        if (DATABASE_CLIENT.test(i.specifier)) {
+          found.push(`${file}: listed as metadata, but imports ${i.specifier}`);
+        }
       }
     } else {
       for (const r of sessionReadersIn(file, src)) {
@@ -837,6 +936,9 @@ function realWritesOf(): WritesOf {
 }
 
 const SHIPPED = shippedSources();
+let SHIPPED_GRAPH: ReturnType<typeof graphOf> | null = null;
+/** The call graph over the shipped tree, built once for the rule 5 tests. */
+const shippedGraph = () => (SHIPPED_GRAPH ??= graphOf(SHIPPED));
 const SCAN = { timeout: 120_000 };
 
 describe('every API read holds a member who must set up an authenticator first', () => {
@@ -893,8 +995,8 @@ describe('every API read holds a member who must set up an authenticator first',
     },
   );
 
-  it('5. no endpoint served outside /api builds a member context', () => {
-    const graph = graphOf(SHIPPED);
+  it('5. no endpoint served outside /api builds a member context', SCAN, () => {
+    const graph = shippedGraph();
     // The reading follows real chains: an /api handler that builds one is seen.
     const reach = graph.reach(MEMBER_CONTEXT_BUILDERS.map((k) => path.join(WEB_SRC, k)));
     expect(
@@ -906,10 +1008,18 @@ describe('every API read holds a member who must set up an authenticator first',
     expect(outsideScopeFindings(SHIPPED, graph)).toEqual([]);
   });
 
-  it('5. every route file served outside /api is on the reviewed list and keeps to its kind', () => {
-    expect(Object.keys(OUTSIDE_ROUTES).length).toBeGreaterThan(0);
-    expect(outsideListFindings(SHIPPED, OUTSIDE_ROUTES)).toEqual([]);
-  });
+  it(
+    '5. every route file served outside /api is on the reviewed list and keeps to its kind',
+    SCAN,
+    () => {
+      expect(Object.keys(OUTSIDE_ROUTES).length).toBeGreaterThan(0);
+      // The metadata files Next.js serves are read too.
+      expect(routeFilesOutsideScope(SHIPPED)).toContain('app/opengraph-image.tsx');
+      // The sign-in reading follows real chains: the cookie client's table readers are found.
+      expect(cookieTableReaders(SHIPPED).length).toBeGreaterThan(0);
+      expect(outsideListFindings(SHIPPED, OUTSIDE_ROUTES, shippedGraph())).toEqual([]);
+    },
+  );
 });
 
 /* ───────────────────── self-test: each rule can fail ───────────────────── */
@@ -1061,8 +1171,42 @@ describe('self-test: a planted violation of each rule is reported', () => {
     ]);
   });
 
-  it("1b. work before the gate: late, not awaited, in a ternary, in the gate's arguments, an answer first; the reviewed list current", () => {
+  it("1b. work before the gate: late, not awaited, in a ternary, in the gate's arguments, an answer first, a tagged template, an awaited value; the reviewed list current", () => {
     const tree = base({
+      'app/api/v1/tagged/route.ts': `import { apiReadContext } from '@/server/lib/api-read-context';
+        import { sql } from '@/server/lib/sql';
+        export async function GET(req: Request) {
+          await sql\`select id from items\`;
+          const read = await apiReadContext(req);
+          return read;
+        }`,
+      'app/api/v1/awaited-value/route.ts': `import { apiReadContext } from '@/server/lib/api-read-context';
+        import { loadItems } from '@/server/lib/items';
+        const warm = loadItems();
+        export async function GET(req: Request) {
+          await warm;
+          const read = await apiReadContext(req);
+          return read;
+        }`,
+      'app/api/v1/awaited-property/route.ts': `import { apiReadContext } from '@/server/lib/api-read-context';
+        import { store } from '@/server/lib/items';
+        export async function GET(req: Request) {
+          const rows = await store.rows;
+          const read = await apiReadContext(req);
+          return [read, rows];
+        }`,
+      'app/api/v1/params-first/[id]/route.ts': `import { apiReadContext } from '@/server/lib/api-read-context';
+        export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
+          const { id } = await params;
+          const read = await apiReadContext(req);
+          return [read, id];
+        }`,
+      'app/api/v1/context-params-first/[id]/route.ts': `import { apiReadContext } from '@/server/lib/api-read-context';
+        export async function GET(req: Request, context: { params: Promise<{ id: string }> }) {
+          const { id } = await context.params;
+          const read = await apiReadContext(req);
+          return [read, id];
+        }`,
       'app/api/v1/held/route.ts': HELD_ROUTE,
       'app/api/v1/late/route.ts': `import { apiReadContext } from '@/server/lib/api-read-context';
         import { createAdminClient } from '@/lib/supabase/admin';
@@ -1120,6 +1264,9 @@ describe('self-test: a planted violation of each rule is reported', () => {
         'app/api/v1/in-ternary/route.ts GET: before its read gate it calls [loadItems()], reviewed: []',
         "app/api/v1/late/route.ts GET: before its read gate it calls [createAdminClient() | createAdminClient().from('items') | createAdminClient().from('items').select('id')], reviewed: []",
         'app/api/v1/not-awaited/route.ts GET: before its read gate it calls [warm(req)], reviewed: []',
+        'app/api/v1/tagged/route.ts GET: before its read gate it calls [sql`select id from items`], reviewed: []',
+        'app/api/v1/awaited-value/route.ts GET: before its read gate it calls [await warm], reviewed: []',
+        'app/api/v1/awaited-property/route.ts GET: before its read gate it calls [await store.rows], reviewed: []',
         "app/api/v1/reviewed-changed/route.ts GET: before its read gate it calls [new URL(req.url) | url.searchParams.get('q')], reviewed: [new URL(req.url)]",
       ].sort(),
     );
@@ -1265,9 +1412,54 @@ describe('self-test: a planted violation of each rule is reported', () => {
     );
     // The real list, with one of its files left out, reports that file.
     const { 'app/unsubscribe/route.ts': _left, ...rest } = OUTSIDE_ROUTES;
-    expect(outsideListFindings(SHIPPED, rest)).toEqual([
+    expect(outsideListFindings(SHIPPED, rest, shippedGraph())).toEqual([
       'app/unsubscribe/route.ts: served outside /api, but not on OUTSIDE_ROUTES',
     ]);
+    // And with a metadata file left out, that file.
+    const { 'app/robots.ts': _robots, ...noRobots } = OUTSIDE_ROUTES;
+    expect(outsideListFindings(SHIPPED, noRobots, shippedGraph())).toEqual([
+      'app/robots.ts: served outside /api, but not on OUTSIDE_ROUTES',
+    ]);
+  });
+
+  it('5. metadata files Next.js serves: each must be listed, and a listed one reads no session and no database; a sign-in route that hands its session to a helper that reads a table', () => {
+    const tree = base({
+      'app/opengraph-image.tsx': `import { ImageResponse } from 'next/og';
+        export default async function Image() { return new ImageResponse(null as never); }`,
+      'app/(site)/shop/twitter-image.tsx': `import { createClient } from '@/lib/supabase/server';
+        export default async function Image() { const s = await createClient(); return s.from('items').select('name'); }`,
+      'app/icon2.ts': `import { createAdminClient } from '@/lib/supabase/admin';
+        export default function icon() { return createAdminClient(); }`,
+      'app/api/sitemap.ts': `export default function sitemap() { return []; }`,
+      'app/robots.ts': `export default function robots() { return {}; }`,
+      'app/icon.svg.ts.bak': `export default 1;`,
+      'lib/supabase/server.ts': `export async function createClient() { return {} as never; }`,
+      'server/lib/org-read.ts': `import { createClient } from '@/lib/supabase/server';
+        export async function readOrg() { const s = await createClient(); return s.from('organizations').select('name'); }
+        export function quiet() { return createClient(); }`,
+      'app/auth/hands-on/route.ts': `import { readOrg } from '@/server/lib/org-read';
+        export async function GET() { return readOrg(); }`,
+      'app/auth/quiet/route.ts': `import { quiet } from '@/server/lib/org-read';
+        export async function GET() { return quiet(); }`,
+    });
+    const reason = 'A planted entry with a reason that is long enough.';
+    const listed: Record<string, { kind: OutsideKind; reason: string }> = {
+      'app/opengraph-image.tsx': { kind: 'metadata', reason },
+      'app/(site)/shop/twitter-image.tsx': { kind: 'metadata', reason },
+      'app/icon2.ts': { kind: 'metadata', reason },
+      'app/auth/hands-on/route.ts': { kind: 'sign-in', reason },
+      'app/auth/quiet/route.ts': { kind: 'sign-in', reason },
+    };
+    expect(outsideListFindings(tree, listed)).toEqual(
+      [
+        'app/(site)/shop/twitter-image.tsx: listed as metadata, but imports @/lib/supabase/server',
+        'app/(site)/shop/twitter-image.tsx: listed as metadata, but imports createClient from @/lib/supabase/server',
+        'app/icon2.ts: listed as metadata, but imports @/lib/supabase/admin',
+        'app/api/sitemap.ts: served outside /api, but not on OUTSIDE_ROUTES',
+        'app/auth/hands-on/route.ts GET: listed as sign-in, but reaches server/lib/org-read.ts#readOrg, which reads a table with the cookie client',
+        'app/robots.ts: served outside /api, but not on OUTSIDE_ROUTES',
+      ].sort(),
+    );
   });
 
   it('4. a read by POST held by nothing, one held through a gate, stale and unreasoned entries, a public entry that reads a session', () => {

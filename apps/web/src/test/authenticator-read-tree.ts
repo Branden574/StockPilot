@@ -130,16 +130,32 @@ export function unreadableRouteFiles(sources: Sources): string[] {
 }
 
 /**
+ * A metadata file Next.js serves as an endpoint of its own when it is code
+ * (opengraph-image, twitter-image, icon, apple-icon, sitemap, robots,
+ * manifest; a number may follow the name), with any code extension.
+ */
+const METADATA_ROUTE_FILE =
+  /^(opengraph-image|twitter-image|icon|apple-icon|sitemap|robots|manifest)\d*\.(ts|tsx|js|jsx|mjs|cjs)$/;
+
+/** Is this a metadata file Next.js serves as an endpoint (anywhere under app/)? */
+export function isMetadataRouteFile(file: string): boolean {
+  return servedPath(file) !== null && METADATA_ROUTE_FILE.test(path.posix.basename(file));
+}
+
+/**
  * Files served as endpoints outside READ_SCOPE: every route file under app/
- * whose address is not under /api (any extension), and every file under
- * pages/api. The read rule does not read their handlers, so the guard holds
- * them to building no member context at all.
+ * whose address is not under /api (any extension), every metadata file
+ * Next.js serves as an endpoint (anywhere under app/, under /api too, since
+ * no rule above reads one), and every file under pages/api. The read rule
+ * does not read their handlers, so the guard holds them to building no
+ * member context at all.
  */
 export function routeFilesOutsideScope(sources: Sources): string[] {
   return [...sources.keys()]
     .filter(
       (f) =>
         (ANY_ROUTE_FILE.test(path.posix.basename(f)) && servedPath(f) !== null && !servesApi(f)) ||
+        isMetadataRouteFile(f) ||
         f.startsWith('pages/api/'),
     )
     .sort();
@@ -268,9 +284,33 @@ export interface FirstStep {
    * arguments before the call itself), awaited or not, as written with its
    * whitespace collapsed; the file's own functions are read through. Every
    * `new X(...)` is here too (`new URL(...)`, `new NextResponse(...)`), and so
-   * is every answer built in place (`NextResponse.json(...)`). The guard holds each handler to its reviewed list (PRE_GATE).
+   * is every answer built in place (`NextResponse.json(...)`). So is every
+   * tagged template (`sql\`...\``), and every awaited value that is not a
+   * call (`await cached`, `await store.rows`), as `await <text>`; awaiting
+   * the handler's own route params (`await params`, `await ctx.params`) is
+   * not. The guard holds each handler to its reviewed list (PRE_GATE).
    */
   before: string[];
+}
+
+/**
+ * The texts of the handler's own route params promise, which an await may
+ * read before the gate: `params` when the handler's second parameter binds
+ * it (`{ params }`), or `<name>.params` when the second parameter is a name.
+ */
+function routeParamsTexts(fn: ts.FunctionLikeDeclaration): Set<string> {
+  const out = new Set<string>();
+  const second = fn.parameters[1]?.name;
+  if (!second) return out;
+  if (ts.isIdentifier(second)) out.add(`${second.text}.params`);
+  if (ts.isObjectBindingPattern(second)) {
+    for (const el of second.elements) {
+      const prop =
+        el.propertyName && ts.isIdentifier(el.propertyName) ? el.propertyName.text : null;
+      if (ts.isIdentifier(el.name) && (prop ?? el.name.text) === 'params') out.add(el.name.text);
+    }
+  }
+  return out;
 }
 
 const normalized = (n: ts.Node, sf: ts.SourceFile) => n.getText(sf).replace(/\s+/g, ' ');
@@ -291,9 +331,35 @@ function firstStepOf(
   before: string[] = [],
 ): FirstStep {
   let found: { gate: string; asksRead: boolean } | null = null;
+  const paramsTexts = routeParamsTexts(fn);
   const visit = (n: ts.Node, within: ts.FunctionLikeDeclaration): void => {
     if (found) return;
     if (n !== within && FUNCTION_KINDS(n)) return;
+    if (ts.isTaggedTemplateExpression(n)) {
+      // A tag is a function call by another name: it can read.
+      ts.forEachChild(n, (c) => visit(c, within));
+      if (!found) before.push(normalized(n, sf));
+      return;
+    }
+    if (ts.isAwaitExpression(n)) {
+      let operand: ts.Expression = n.expression;
+      while (ts.isParenthesizedExpression(operand)) operand = operand.expression;
+      visit(n.expression, within);
+      if (found) return;
+      // A value that is not a call or a `new` (a promise started elsewhere, a
+      // getter) is work this reading cannot follow, unless it is the
+      // handler's own route params.
+      const text = normalized(operand, sf);
+      if (
+        !ts.isCallExpression(operand) &&
+        !ts.isNewExpression(operand) &&
+        !ts.isTaggedTemplateExpression(operand) &&
+        !(within === fn && paramsTexts.has(text))
+      ) {
+        before.push(`await ${text}`);
+      }
+      return;
+    }
     if (ts.isCallExpression(n)) {
       visit(n.expression, within);
       for (const a of n.arguments) visit(a, within);

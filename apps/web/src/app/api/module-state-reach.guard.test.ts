@@ -74,8 +74,8 @@ const NO_MODULE_READ = new Set([
   // Rack holdings for items (server/services/rack-holdings.ts): placement rows.
   'fetchRackHoldingsByItem',
   // The read answer for a member who must set up an authenticator first
-  // (server/lib/api-read-context.ts): the context's three authenticator labels
-  // and the request's method and path; no module.
+  // (server/lib/api-read-context.ts): the context's three authenticator labels,
+  // the request's method and how the session came; never the path, no module.
   'refuseSetUpOwedRead',
 ]);
 

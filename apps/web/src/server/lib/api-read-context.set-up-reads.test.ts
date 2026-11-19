@@ -6,7 +6,7 @@ import { AUTHENTICATOR_SET_UP_OWED_COPY, CONTEXT_UNAVAILABLE_COPY } from '@stock
  * The API read wrapper over the REAL API context: a read by a member who must
  * set up an authenticator first.
  *
- * withApiContext builds the context as before on every path and labels a
+ * withApiContext builds the context on every path and labels a
  * member who owes set-up (core authenticatorSetUpOwed: the organization's
  * policy requires an authenticator of the member's role and the account has
  * no verified one; a policy that could not be read is held to the strictest,
@@ -19,10 +19,10 @@ import { AUTHENTICATOR_SET_UP_OWED_COPY, CONTEXT_UNAVAILABLE_COPY } from '@stock
  * paths (bearer and cookie) and both ways the context is read (one round trip
  * and the separate reads), for a GET, a HEAD and a POST:
  *   - a session that owes its code: withApiContext's null, before anything is
- *     read, as before, whatever the method;
+ *     read, whatever the method;
  *   - a member who owes set-up: the 403 for a GET, a HEAD and a POST handed
- *     'read'; for any other POST, the context withApiContext gives, labelled
- *     as before;
+ *     'read'; for any other POST, the context withApiContext gives, with its
+ *     set-up labels;
  *   - everyone else: exactly the context withApiContext gives.
  */
 
@@ -292,7 +292,7 @@ describe.each(PATHS)('apiReadContext over withApiContext (%s)', (path) => {
         expect(plain?.userId).toBe(USER_ID);
 
         if (owesSetUp(s)) {
-          // The labels the context carries for set-up owed, as before.
+          // The labels withApiContext gives a member who owes set-up.
           expect({
             required: plain?.mfaRequired,
             satisfied: plain?.mfaSatisfied,
@@ -365,7 +365,7 @@ describe('an organization policy that could not be read: held to the strictest, 
   );
 
   it.each(CASES)(
-    '%s: withApiContext gives the same labelled context as before, marked as not read',
+    '%s: withApiContext gives the context labelled as set-up owed, marked as not read',
     async (_n, read, org) => {
       for (const path of PATHS) {
         arrange(staff, read, org);
