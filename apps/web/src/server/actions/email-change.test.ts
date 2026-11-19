@@ -283,13 +283,14 @@ describe('authenticator set-up in the current organization (request and resend)'
     );
   });
 
-  it('an organization row that came back empty is held to the strictest policy', async () => {
+  it('an organization row that came back empty is held to the strictest policy: the access could not be checked, and the service is never asked', async () => {
     readSessionOrganization.mockResolvedValue(inOrg(null));
     orgMaybeSingle.mockResolvedValue({ data: null, error: null });
-    await requestEmailChangeAction(INPUT);
-    expect(requestEmailChange).toHaveBeenCalledWith(
-      expect.objectContaining({ mfa: expect.objectContaining({ setUpOwed: true }) }),
-    );
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await requestEmailChangeAction(INPUT)).toEqual(COULD_NOT_CHECK);
+    expect(await resendEmailChangeAction()).toEqual(COULD_NOT_CHECK);
+    expect(requestEmailChange).not.toHaveBeenCalled();
+    expect(resendEmailChange).not.toHaveBeenCalled();
   });
 
   it('an organization row that could not be read: the access could not be checked, and the service is never asked', async () => {
