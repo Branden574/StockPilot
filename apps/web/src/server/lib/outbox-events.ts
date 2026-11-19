@@ -34,6 +34,12 @@ import type { ServiceContext } from '@/server/services/context';
  * write (an error answer, a thrown call, a missing service key) is reported
  * under the tag `outbox.publish` instead of being dropped. A repeated key is
  * not an error: the function answers no id and the first event stands.
+ *
+ * publishOutboxEvent answers which of those happened: true when this call
+ * recorded the event, false when the event was already recorded (the key
+ * was there), undefined when it is not known (refused, failed or thrown).
+ * A caller whose other effects must happen once per document can follow
+ * that answer: the unique key makes exactly one call the first.
  */
 
 /** Each topic the app records: the aggregate it names, and the permission of
@@ -91,7 +97,7 @@ const TAG = 'outbox.publish';
 export async function publishOutboxEvent<T extends MemberOutboxTopic>(
   ctx: ServiceContext,
   event: OutboxEventInput<T>,
-): Promise<void> {
+): Promise<boolean | undefined> {
   const permission = EVENT_TOPICS[event.topic]?.permission;
   if (!permission || !can(ctx, permission)) {
     void reportError(
@@ -104,9 +110,9 @@ export async function publishOutboxEvent<T extends MemberOutboxTopic>(
         extra: { topic: event.topic, aggregateId: event.aggregateId, reason: 'permission' },
       },
     );
-    return;
+    return undefined;
   }
-  await write(ctx.organizationId, event);
+  return write(ctx.organizationId, event);
 }
 
 /**
@@ -134,10 +140,15 @@ export async function publishOutboxEventForResolvedOrganization<T extends Resolv
   await write(resolved.organizationId, event);
 }
 
-async function write(organizationId: string, event: OutboxEventInput<OutboxTopic>): Promise<void> {
+/** true: recorded by this call; false: already recorded (no id back, no
+ *  error); undefined: not known (an error answer or a thrown call). */
+async function write(
+  organizationId: string,
+  event: OutboxEventInput<OutboxTopic>,
+): Promise<boolean | undefined> {
   const extra = { topic: event.topic, aggregateId: event.aggregateId };
   try {
-    const { error } = await createAdminClient().rpc('publish_outbox', {
+    const { data, error } = await createAdminClient().rpc('publish_outbox', {
       p_org_id: organizationId,
       p_topic: event.topic,
       p_aggregate_type: EVENT_TOPICS[event.topic].aggregateType,
@@ -151,8 +162,15 @@ async function write(organizationId: string, event: OutboxEventInput<OutboxTopic
         organizationId,
         extra: { ...extra, reason: 'write_failed' },
       });
+      return undefined;
     }
+    // publish_outbox returns the new row's id, or null when the key was
+    // already there (on conflict do nothing). Any other answer is not known.
+    if (typeof data === 'string' && data !== '') return true;
+    if (data === null) return false;
+    return undefined;
   } catch (err) {
     void reportError(err, { tag: TAG, organizationId, extra: { ...extra, reason: 'threw' } });
+    return undefined;
   }
 }

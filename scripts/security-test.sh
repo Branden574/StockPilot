@@ -2233,6 +2233,11 @@ WEB_TESTS=(
   # every row of the pgTAP case table in receipt_post_rule.test.sql.
   src/server/services/receiving.receipt-rule.test.ts
   src/server/services/lib/receipt-post-rule.parity.test.ts
+  # A receipt's audit row, export event and webhook / Slack / Teams message
+  # are written once per receipt: the call that records the export event
+  # (its key is unique) writes the rest; a retry with the same key writes
+  # nothing again, and the same key with other lines is the conflict.
+  src/server/services/receiving.replay-writes-once.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
