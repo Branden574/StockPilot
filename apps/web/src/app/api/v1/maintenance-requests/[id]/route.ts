@@ -4,8 +4,8 @@ import { z } from 'zod';
 import { can } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { reportError } from '@/lib/error-reporter';
-import { serviceErrorStatus, ServiceError } from '@/server/services/context';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
+import { ServiceError } from '@/server/services/context';
 import { MaintenanceRequestsService } from '@/server/services/maintenance-requests';
 import { MaintenanceAttachmentsService } from '@/server/services/maintenance-attachments';
 import { MaintenanceShareLinksService, maintenanceShareLinksEnabled } from '@/server/services/maintenance-share-links';
@@ -78,11 +78,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       canManage: can(ctx, 'maintenance_requests:manage'),
     });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      return NextResponse.json({ error: e.code, message: e.message }, { status: serviceErrorStatus(e.code) });
-    }
-    void reportError(e, { tag: 'api.v1.maintenance-requests.get' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return serviceErrorResponse(e, 'api.v1.maintenance-requests.get');
   }
 }
 
@@ -121,10 +117,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     await new MaintenanceRequestsService(ctx).update(id, body);
     return NextResponse.json({ ok: true });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      return NextResponse.json({ error: e.code, message: e.message }, { status: serviceErrorStatus(e.code) });
-    }
-    void reportError(e, { tag: 'api.v1.maintenance-requests.update' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return serviceErrorResponse(e, 'api.v1.maintenance-requests.update');
   }
 }

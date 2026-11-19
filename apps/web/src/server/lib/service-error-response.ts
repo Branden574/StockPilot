@@ -3,7 +3,7 @@ import 'server-only';
 import { NextResponse } from 'next/server';
 
 import {
-  internalErrorResponse,
+  forbiddenOrInternalResponse,
   type InternalErrorResponseOptions,
 } from '@/server/lib/api-error-response';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
@@ -19,10 +19,16 @@ import { ServiceError, serviceErrorStatus } from '@/server/services/context';
  * reason such as aal2_required) when it wrote any. These are the caller's
  * answers, not faults, so nothing is reported.
  *
- * An internal_error, and anything that is not a ServiceError, goes to
- * internalErrorResponse: reported once under the route's tag (the reporter
- * logs the service's internalDetail, never the database's row details), and
- * answered with the fixed sentence at 500. Its details are never sent.
+ * A warehouse check's ForbiddenError (lib/auth/warehouse.ts) answers as
+ * forbiddenOrInternalResponse answers it: 403 forbidden with its words, or,
+ * when the caller's own warehouse access could not be read
+ * (accessUnreadable), the retryable 503 check_failed with Retry-After,
+ * reported as a warning.
+ *
+ * An internal_error, and anything else, goes to internalErrorResponse:
+ * reported once under the route's tag (the reporter logs the service's
+ * internalDetail, never the database's row details), and answered with the
+ * fixed sentence at 500. Its details are never sent.
  *
  * The area helpers app/api/v1/change-error-response.ts,
  * app/api/v1/exceptions/error-response.ts and app/api/v1/returns/http.ts
@@ -39,5 +45,5 @@ export function serviceErrorResponse(
       { status: serviceErrorStatus(e.code) },
     );
   }
-  return internalErrorResponse(e, tag, opts);
+  return forbiddenOrInternalResponse(e, tag, opts);
 }

@@ -117,7 +117,7 @@ describe('GET /api/v1/bundles — a ServiceError answers by its code', () => {
     expect(reportError).not.toHaveBeenCalled();
   });
 
-  it('internal_error answers the fixed sentence and is reported once with codes only', async () => {
+  it('internal_error answers the fixed sentence and is reported once with the route tag and organization id', async () => {
     vi.mocked(reportError).mockClear();
     const err = new ServiceError('internal_error', 'relation "bundle_components" does not exist');
     mockList(async () => {

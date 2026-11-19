@@ -2,9 +2,8 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { ServiceError, serviceErrorStatus } from '@/server/services/context';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import { PoImportsService } from '@/server/services/po-imports';
 
 import { approvePoImportSchema } from '@stockpilot/core';
@@ -79,13 +78,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const { poId } = await svc.approve({ ...parsed.data, poImportId: id });
     return NextResponse.json({ ok: true, poId });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      return NextResponse.json(
-        { error: e.code, message: e.message },
-        { status: serviceErrorStatus(e.code) },
-      );
-    }
-    void reportError(e, { tag: 'api.v1.po-imports.approve' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return serviceErrorResponse(e, 'api.v1.po-imports.approve');
   }
 }

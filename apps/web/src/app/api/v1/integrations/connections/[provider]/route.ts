@@ -1,9 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { reportError } from '@/lib/error-reporter';
 import { ConnectionsService } from '@/server/services/connections';
-import { ServiceError, serviceErrorStatus } from '@/server/services/context';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 
 import type { ConnectorProviderId } from '@stockpilot/core';
 
@@ -37,20 +36,6 @@ export async function DELETE(
     await new ConnectionsService(ctx).disconnect(provider as ConnectorProviderId);
     return NextResponse.json({ ok: true });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      // details as the other v1 routes send them (never an internal_error's,
-      // S13): the phone tells the MFA gate's refusal (details.reason
-      // aal2_required / mfa_required) from a missing permission by it.
-      return NextResponse.json(
-        {
-          error: e.code,
-          message: e.message,
-          ...(e.code !== 'internal_error' && e.details ? { details: e.details } : {}),
-        },
-        { status: serviceErrorStatus(e.code) },
-      );
-    }
-    void reportError(e, { tag: 'api.v1.integrations.connections.disconnect' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return serviceErrorResponse(e, 'api.v1.integrations.connections.disconnect');
   }
 }

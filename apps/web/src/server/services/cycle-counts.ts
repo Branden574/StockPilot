@@ -503,8 +503,9 @@ export class CycleCountsService {
         p_page_size: args.pageSize,
       });
       if (error) {
-        // Reported here because the routes do not report a ServiceError. The
-        // database text stays server-side (ServiceError keeps it as
+        // Reported here with the page arguments' context for the web count
+        // page, which does not report it; the /api/v1 list route reports the
+        // ServiceError again under its own tag. The database text stays server-side (ServiceError keeps it as
         // internalDetail; the public message of an internal_error is generic).
         void reportError(new Error(`cycle_counts_page failed: ${error.message}`), {
           tag: 'cycle_counts.list_page',
