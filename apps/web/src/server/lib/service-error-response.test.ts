@@ -1,6 +1,8 @@
+import { ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY } from '@stockpilot/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
+import { ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { ServiceError } from '@/server/services/context';
 
@@ -74,5 +76,36 @@ describe('serviceErrorResponse', () => {
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: 'internal_error', message: err.message });
     expect(reportError).toHaveBeenCalledWith(err, { tag: 'test.tag', level: 'warning' });
+  });
+
+  it('a warehouse refusal answers 403 forbidden with its words, unreported', async () => {
+    const res = serviceErrorResponse(
+      new ForbiddenError('You do not work in this warehouse.'),
+      'test.tag',
+      { organizationId: 'org-1' },
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: 'forbidden',
+      message: 'You do not work in this warehouse.',
+    });
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it("a warehouse check that could not read the caller's access answers a retryable 503, reported as a warning", async () => {
+    const err = new ForbiddenError('Made-up sentence.', { accessUnreadable: true });
+    const res = serviceErrorResponse(err, 'test.tag', { organizationId: 'org-1' });
+    expect(res.status).toBe(503);
+    expect(res.headers.get('Retry-After')).toBe('5');
+    expect(await res.json()).toEqual({
+      error: 'check_failed',
+      message: ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY,
+    });
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError).toHaveBeenCalledWith(err, {
+      tag: 'test.tag',
+      organizationId: 'org-1',
+      level: 'warning',
+    });
   });
 });

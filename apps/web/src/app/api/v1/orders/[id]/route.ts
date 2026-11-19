@@ -1,10 +1,9 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { reportError } from '@/lib/error-reporter';
 import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
 import { invalidPathIdResponse } from '@/server/lib/path-id';
-import { ServiceError, serviceErrorStatus } from '@/server/services/context';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import { OrderRequestsService } from '@/server/services/order-requests';
 
 export const runtime = 'nodejs';
@@ -68,13 +67,6 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       exchangesEnabled: exchangeCreateEnabled(),
     });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      return NextResponse.json(
-        { error: e.code, message: e.message },
-        { status: serviceErrorStatus(e.code) },
-      );
-    }
-    void reportError(e, { tag: 'api.v1.orders.get' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return serviceErrorResponse(e, 'api.v1.orders.get');
   }
 }

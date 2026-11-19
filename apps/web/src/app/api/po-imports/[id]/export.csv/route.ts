@@ -3,9 +3,8 @@ import { NextResponse } from 'next/server';
 import { withApiContext } from '@/lib/auth/api-context';
 import { csvFilename, toCsv } from '@/lib/csv';
 import { exportRateLimited } from '@/lib/export-rate-limit';
-import { reportError } from '@/lib/error-reporter';
 import { invalidPathIdResponse } from '@/server/lib/path-id';
-import { ServiceError, serviceErrorStatus } from '@/server/services/context';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import { PoImportsService, type PoImportLineRow } from '@/server/services/po-imports';
 
 import { can } from '@stockpilot/core';
@@ -158,14 +157,6 @@ export async function GET(
       },
     });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      // not_found → 404, module_disabled/forbidden → 403, etc.
-      return NextResponse.json(
-        { error: e.code, message: e.message },
-        { status: serviceErrorStatus(e.code) },
-      );
-    }
-    void reportError(e, { tag: 'po-imports.export-csv' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return serviceErrorResponse(e, 'po-imports.export-csv');
   }
 }

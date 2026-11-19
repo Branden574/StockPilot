@@ -5,8 +5,9 @@ import { reportError } from '@/lib/error-reporter';
 import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { internalErrorResponse, unreadableRequestResponse } from '@/server/lib/api-error-response';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import { PoImportsService } from '@/server/services/po-imports';
-import { ServiceError, serviceErrorStatus } from '@/server/services/context';
+import { ServiceError } from '@/server/services/context';
 
 import { optionalPoImportDisplayNameSchema } from '@stockpilot/core';
 
@@ -345,18 +346,10 @@ export async function POST(req: Request) {
       lowConfidenceLines: result.lowConfidenceLines,
     });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      // Use the shared mapper rather than a hand-rolled ladder: the local one
-      // had no 'conflict' case, so a legitimate 409 (concurrent re-import of
-      // the same file) reached the browser as a 500 with a red console error,
-      // making an ordinary "someone beat you to it" look like a crash.
-      return NextResponse.json(
-        { error: e.code, message: e.message },
-        { status: serviceErrorStatus(e.code) },
-      );
-    }
-    // Storage, the vision call or a database write: reported, never answered.
-    return internalErrorResponse(e, 'po-imports.scan', {
+    // A refusal keeps its own status (a concurrent re-import of the same file
+    // is a 409). Storage, the vision call or a database write: reported,
+    // never answered.
+    return serviceErrorResponse(e, 'po-imports.scan', {
       organizationId: ctx.organizationId,
       userIdHash: ctx.userId,
     });

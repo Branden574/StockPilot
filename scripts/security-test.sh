@@ -1551,6 +1551,15 @@ WEB_TESTS=(
   # not reported; an internal_error answers the fixed sentence, never the
   # database's text or its details, and is reported once with the route's tag.
   src/server/lib/service-error-response.test.ts
+  # The routes that answer by it, per code, plus a warehouse refusal (403, or
+  # the retryable 503 when the caller's access could not be read); and the
+  # census that every other hand-written ServiceError answer under app/api is
+  # listed with its reason.
+  src/app/api/service-error-routes.test.ts
+  src/app/api/service-error-answers.guard.test.ts
+  # The server-log text for a failed PostgREST call keeps its status, code and
+  # hint, never a server error's `details` (row values): reports carry it.
+  src/server/services/lib/postgrest-error.test.ts
   # S31: a Server Action answers a failure it did not expect with a fixed
   # sentence, never the error's own text, and reports it with the action's
   # tag (server/lib/action-error-result.ts). The same census reads every

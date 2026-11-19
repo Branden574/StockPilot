@@ -4,6 +4,7 @@ import { NextRequest } from 'next/server';
 import type { ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { reportError } from '@/lib/error-reporter';
 import { ServiceError } from '@/server/services/context';
 import { PoAttachmentsService } from '@/server/services/po-attachments';
 
@@ -146,7 +147,29 @@ describe('POST /api/v1/purchase-orders/[id]/attachments', () => {
     add.mockRejectedValueOnce(new Error('pg: connection reset'));
     const res = await POST(postReq(PO_ID, validBody()), { params: params(PO_ID) });
     expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ error: 'internal_error' });
+    expect(await res.json()).toEqual({
+      error: 'internal_error',
+      message: 'Something went wrong. Please try again.',
+    });
+  });
+
+  it('an internal_error answers the fixed sentence and is reported once with the route tag', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx() as never);
+    const err = new ServiceError('internal_error', 'relation "made_up_table" does not exist');
+    add.mockRejectedValueOnce(err);
+    const res = await POST(postReq(PO_ID, validBody()), { params: params(PO_ID) });
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'internal_error',
+      message: 'Something went wrong. Please try again.',
+    });
+    expect(text).not.toContain('made_up_table');
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError).toHaveBeenCalledWith(
+      err,
+      expect.objectContaining({ tag: 'api.v1.purchase-orders.attachments' }),
+    );
   });
 
   it('omitted optional metadata becomes explicit nulls for the service', async () => {

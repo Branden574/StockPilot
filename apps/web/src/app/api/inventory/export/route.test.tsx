@@ -761,7 +761,7 @@ describe('POST /api/inventory/export — a ServiceError answers by its code', ()
       message: 'Something went wrong. Please try again.',
     });
     expect(text).not.toContain('inventory_list_value');
-    expect(text).not.toContain('items');
+    expect(JSON.parse(text)).not.toHaveProperty('details');
     expect(reportError).toHaveBeenCalledTimes(1);
     expect(reportError).toHaveBeenCalledWith(err, { tag: 'inventory.export' });
   });
