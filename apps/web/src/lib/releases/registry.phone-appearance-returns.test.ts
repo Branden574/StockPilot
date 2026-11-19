@@ -69,6 +69,8 @@ const NEWER_IDS_1113 = [
   // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: without it): the Integrations and schedule event release is published later, at the top, and reaches whoever can manage integrations or schedule events with those modules on (owners and admins, and managers for its schedule entry, by default), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
   // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: without it): the emptied fields and schedule completion release is published later, at the top, and reaches whoever can manage the schedule or suppliers where those modules are on and whoever can manage the organization, locations or categories (owners and admins, and managers for all but its charter and warehouse entry, by default), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
   // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (every role by default; not a member with no permission), an owner with every permission included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+  // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: without it): the receiving release is published later, at the top, and reaches whoever can open a purchase order where Receiving is on (owners, admins, managers, staff and viewers by default), an owner with every permission and module among them, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+  'receiving-shown-to-managers-2026-11',
   'low-critical-pages-and-list-value-2026-11',
   'emptied-fields-and-schedule-completion-2026-11',
   'connection-and-schedule-messages-2026-11',
@@ -192,7 +194,8 @@ describe('the phone appearance and returns release: order, status and date', () 
     // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: every pinned position one place higher): the Integrations and schedule event release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: every pinned position one place higher): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: every pinned position one place higher): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[21]?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES[21]): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[22]?.id).toBe(ID);
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -200,7 +203,8 @@ describe('the phone appearance and returns release: order, status and date', () 
     // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: every pinned position one place higher): the Integrations and schedule event release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: every pinned position one place higher): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: every pinned position one place higher): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[22]?.id).toBe(RETURNS_REQUEST_ID);
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES[22]): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[23]?.id).toBe(RETURNS_REQUEST_ID);
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: this release, the newest published): the Release count, AI Assistant and not found releases are published later, directly above it.
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: RELEASES.slice(1, 4), without it): the emailed links release is published later, directly above the Release count release.
     // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: RELEASES.slice(1, 5), without them): the phone authenticator code and access check releases are published later, directly above the emailed links release.
@@ -216,13 +220,16 @@ describe('the phone appearance and returns release: order, status and date', () 
     // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: RELEASES.slice(1, 18), without it): the Integrations and schedule event release is published later, at the top, directly below the Liquid Glass draft.
     // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: RELEASES.slice(1, 19), without it): the emptied fields and schedule completion release is published later, at the top, directly below the Liquid Glass draft, so the list takes one more.
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES.slice(1, 20)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so the list takes one more.
-    expect(RELEASES.slice(1, 21).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(1, 21), without it): the receiving release is published later, at the top, directly below the Liquid Glass draft.
+    expect(RELEASES.slice(1, 22).map((r) => [r.id, r.status])).toEqual([
       // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, directly below the Liquid Glass draft.
       // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, directly below the Liquid Glass draft.
       // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: without it): the delete account release is published later, at the top, directly below the Liquid Glass draft.
       // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: without it): the Integrations and schedule event release is published later, at the top, directly below the Liquid Glass draft.
       // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: without it): the emptied fields and schedule completion release is published later, at the top, directly below the Liquid Glass draft.
       // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, directly below the Liquid Glass draft.
+      // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: without it): the receiving release is published later, at the top, directly below the Liquid Glass draft.
+      ['receiving-shown-to-managers-2026-11', 'published'],
       ['low-critical-pages-and-list-value-2026-11', 'published'],
       ['emptied-fields-and-schedule-completion-2026-11', 'published'],
       ['connection-and-schedule-messages-2026-11', 'published'],
@@ -262,7 +269,8 @@ describe('the phone appearance and returns release: order, status and date', () 
       // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: the delete account release): the Integrations and schedule event release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: the Integrations and schedule event release): the emptied fields and schedule completion release is published after it, at the top, the newest published release.
       // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: the emptied fields and schedule completion release): the Low + critical pages and list value release is published after it, at the top, the newest published release.
-      'low-critical-pages-and-list-value-2026-11',
+      // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: the Low + critical pages and list value release): the receiving release is published after it, at the top, the newest published release.
+      'receiving-shown-to-managers-2026-11',
     );
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
       'liquid-glass-2026-11',
@@ -309,7 +317,8 @@ describe('the phone appearance and returns release: order, status and date', () 
     // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: every pinned position one place higher): the Integrations and schedule event release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: every pinned position one place higher): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: slice(21)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(22)) {
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(22)): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(23)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });

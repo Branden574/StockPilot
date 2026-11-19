@@ -76,7 +76,8 @@ describe('the Release count release', () => {
     // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: every pinned position one place higher): the Integrations and schedule event release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: every pinned position one place higher): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: every pinned position one place higher): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[18]?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES[18]): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[19]?.id).toBe(ID);
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -84,7 +85,8 @@ describe('the Release count release', () => {
     // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: every pinned position one place higher): the Integrations and schedule event release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: every pinned position one place higher): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: every pinned position one place higher): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[19]?.id).toBe('ai-assistant-plain-words-2026-11');
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES[19]): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[20]?.id).toBe('ai-assistant-plain-words-2026-11');
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: this release, the newest published): the emailed links release is published later, directly above it.
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -95,7 +97,8 @@ describe('the Release count release', () => {
     // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: every pinned position one place higher): the Integrations and schedule event release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: every pinned position one place higher): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: every pinned position one place higher): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[17]?.id).toBe('emailed-links-name-their-account-2026-11');
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES[17]): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[18]?.id).toBe('emailed-links-name-their-account-2026-11');
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
       // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: the emailed links release): the phone authenticator code release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: the phone authenticator code release): the order request alerts release is published after it, at the top, the newest published release.
@@ -110,7 +113,8 @@ describe('the Release count release', () => {
       // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: the delete account release): the Integrations and schedule event release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: the Integrations and schedule event release): the emptied fields and schedule completion release is published after it, at the top, the newest published release.
       // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: the emptied fields and schedule completion release): the Low + critical pages and list value release is published after it, at the top, the newest published release.
-      'low-critical-pages-and-list-value-2026-11',
+      // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: the Low + critical pages and list value release): the receiving release is published after it, at the top, the newest published release.
+      'receiving-shown-to-managers-2026-11',
     );
     // Migration 0419 reached production at 08:17:32Z; #444's web build went live at 07:54Z.
     expect(release().publishedAt).toBe('2026-11-13T08:18:00Z');

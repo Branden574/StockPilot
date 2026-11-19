@@ -76,6 +76,15 @@ const lowCriticalRead = {
   opened_at: '2026-11-18T10:01:00Z',
   read_at: '2026-11-18T10:01:00Z',
 };
+// Added by docs/whats-new-receiving-shown-to-managers (2026-11-19): the receiving release (whoever can open a purchase order where Receiving is on), published later, at the top, below the Liquid Glass draft.
+const RECEIVING_ID = 'receiving-shown-to-managers-2026-11';
+const receivingRead = {
+  release_id: RECEIVING_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-19T04:31:00Z',
+  read_at: '2026-11-19T04:31:00Z',
+};
 
 const PAGES = 'pages-say-when-modules-not-checked';
 const MODULE_SETTINGS = 'module-settings-say-when-not-checked';
@@ -146,7 +155,8 @@ describe('the module check release: order, status and date', () => {
     // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: every pinned position one place higher): the Integrations and schedule event release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: every pinned position one place higher): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: slice(8, 12)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES.slice(9, 13).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(9, 13)): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES.slice(10, 14).map((r) => [r.id, r.status])).toEqual([
       [SETTINGS_ID, 'published'],
       [ID, 'published'],
       [COUNT_RELEASE_ID, 'published'],
@@ -168,7 +178,8 @@ describe('the module check release: order, status and date', () => {
     // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: every pinned position one place higher): the Integrations and schedule event release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: every pinned position one place higher): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: every pinned position one place higher): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(Date.parse(RELEASES[9]!.publishedAt)).toBeGreaterThan(at);
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES[9]): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(Date.parse(RELEASES[10]!.publishedAt)).toBeGreaterThan(at);
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -178,7 +189,8 @@ describe('the module check release: order, status and date', () => {
     // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: every pinned position one place higher): the Integrations and schedule event release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: every pinned position one place higher): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: slice(10)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(11)) {
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(11)): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(12)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -320,14 +332,16 @@ describe('the module check release: who is told', () => {
       // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: without it): the delete account release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
       // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (every role by default), so it is read or seen first, and the notice this test checks is the one it checked before.
-      expect(buildReleaseList(RELEASES, v, [lowCriticalRead, deleteConfirmRead, authSetUpRead], null).latestUnread?.id, v.role).toBe(
+      // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: without it): the receiving release is published later, at the top, and reaches whoever can open a purchase order where Receiving is on (owners, admins, managers, staff and viewers by default), so it is read or seen first, and the notice this test checks is the one it checked before.
+      expect(buildReleaseList(RELEASES, v, [receivingRead, lowCriticalRead, deleteConfirmRead, authSetUpRead], null).latestUnread?.id, v.role).toBe(
         ID,
       );
       // An older phone build shows the newest one it has not seen: this title and summary.
       // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: without it): the delete account release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
       // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (every role by default), so it is read or seen first, and the notice this test checks is the one it checked before.
-      expect(legacyAnnouncementsFor(RELEASES, v, { [LOW_CRITICAL_ID]: true, [DELETE_CONFIRM_ID]: true, [AUTH_SET_UP_ID]: true })[0], v.role).toEqual({
+      // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: without it): the receiving release is published later, at the top, and reaches whoever can open a purchase order where Receiving is on (owners, admins, managers, staff and viewers by default), so it is read or seen first, and the notice this test checks is the one it checked before.
+      expect(legacyAnnouncementsFor(RELEASES, v, { [RECEIVING_ID]: true, [LOW_CRITICAL_ID]: true, [DELETE_CONFIRM_ID]: true, [AUTH_SET_UP_ID]: true })[0], v.role).toEqual({
         id: ID,
         date: '2026-11-15',
         title: release().title,
@@ -348,6 +362,8 @@ describe('the module check release: who is told', () => {
             // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: without it): the Integrations and schedule event release is published later, at the top, and reaches whoever can manage integrations or schedule events with those modules on (owners and admins, and managers for its schedule entry, by default), so it is read or seen with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
             // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: without it): the emptied fields and schedule completion release is published later, at the top, and reaches whoever can manage the schedule or suppliers where those modules are on and whoever can manage the organization, locations or categories (owners and admins, and managers for all but its charter and warehouse entry, by default), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
             // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (every role by default), so it is read or seen first, and the notice this test checks is the one it checked before.
+            // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: without it): the receiving release is published later, at the top, and reaches whoever can open a purchase order where Receiving is on (owners, admins, managers, staff and viewers by default), so it is read or seen first, and the notice this test checks is the one it checked before.
+            readNow(RECEIVING_ID),
             readNow(LOW_CRITICAL_ID),
             readNow(EMPTIED_FIELDS_ID),
             readNow(CONNECTION_SCHEDULE_ID),
@@ -374,6 +390,8 @@ describe('the module check release: who is told', () => {
             // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: without it): the Integrations and schedule event release is published later, at the top, and reaches whoever can manage integrations or schedule events with those modules on (owners and admins, and managers for its schedule entry, by default), so it is read or seen with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
             // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: without it): the emptied fields and schedule completion release is published later, at the top, and reaches whoever can manage the schedule or suppliers where those modules are on and whoever can manage the organization, locations or categories (owners and admins, and managers for all but its charter and warehouse entry, by default), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
             // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (every role by default), so it is read or seen first, and the notice this test checks is the one it checked before.
+            // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: without it): the receiving release is published later, at the top, and reaches whoever can open a purchase order where Receiving is on (owners, admins, managers, staff and viewers by default), so it is read or seen first, and the notice this test checks is the one it checked before.
+            readNow(RECEIVING_ID),
             readNow(LOW_CRITICAL_ID),
             readNow(EMPTIED_FIELDS_ID),
             readNow(CONNECTION_SCHEDULE_ID),

@@ -140,7 +140,10 @@ export const RELEASES: Release[] = [
     // Moved again by docs/releases-low-critical-pages (2026-11-18; was: '2026-11-16T12:33:00Z'): the Low +
     // critical pages and list value release below is dated 2026-11-18T10:00:00Z, so the placeholder is that
     // same minute.
-    publishedAt: '2026-11-18T10:00:00Z',
+    // Moved again by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: '2026-11-18T10:00:00Z'): the
+    // receiving release below is dated 2026-11-19T04:30:00Z, so the placeholder is that same minute. Set at merge
+    // with that release's publishedAt.
+    publishedAt: '2026-11-19T04:30:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -225,6 +228,62 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'receiving-shown-to-managers-2026-11',
+    revision: 1,
+    // Web change with a phone half (the pull request "Receiving follows the
+    // rule the database applies", #617). SET AT MERGE: publishedAt is the
+    // whole minute after #617's production deployment went live; this
+    // release merges right after it, and the Liquid Glass draft placeholder
+    // above takes the same minute.
+    // Claims checked against #617's code (paths under apps/web/src unless
+    // they start with apps/mobile or packages/):
+    // - Who may post a receipt: packages/core canPostReceipt (manager or
+    //   above with stock:adjust), the rule post_receipt_v2 applies
+    //   (supabase/tests/receipt_post_rule.test.sql). ReceivingService
+    //   refuses anyone else before anything is read, with core
+    //   RECEIVE_MANAGER_ONLY_COPY, "Only a manager can receive purchase
+    //   orders." (server/services/lib/receipt-post-rule.ts).
+    // - The web page (app/(dashboard)/dashboard/purchase-orders/[id]/
+    //   page.tsx): Receive items when canPostReceipt holds; that sentence for
+    //   a member with stock:adjust below manager; without stock:adjust the
+    //   earlier sentence (dbPermissionRefusedCopy('receipt_post')), as the
+    //   receiving-follows-permission entry told.
+    // - The phone after its next update: showReceiveCta and receiveNoticeFor
+    //   (apps/mobile/src/lib/cta-gating.ts) on app/po/[id].tsx. Before that
+    //   update, Post receipt posts to POST /api/v1/po/[id]/receipts, which
+    //   answers 403 with the sentence and no details, and the screen's
+    //   failure arm shows it (receipt-post-error.ts default arm) in place of
+    //   "PO or line not found.", the answer to the database's refusal before.
+    // - The Roles page: Manage purchase orders reads "Create, approve, and
+    //   cancel POs. Receiving a PO needs a manager or above." (core
+    //   PERMISSION_META).
+    // Who is told: whoever can open a purchase order where Receiving is on
+    // (purchase_orders:read, module receiving), as the
+    // receiving-follows-permission entry. No link.
+    status: 'published',
+    title: 'Receive items on a purchase order shows only for people who can receive',
+    summary:
+      'On the web, Receive items on a purchase order now shows only for managers, admins and owners with the Adjust on-hand permission, and staff see "Only a manager can receive purchase orders." in its place. The mobile app does the same after its next update. Until then, Post receipt in the app answers a staff member with that sentence instead of "PO or line not found."',
+    publishedAt: '2026-11-19T04:30:00Z',
+    entries: [
+      {
+        id: 'receive-items-for-people-who-can-receive',
+        category: 'fixed',
+        area: 'Receiving',
+        title: 'Receive items shows only for people who can receive',
+        whatChanged:
+          'On the web, on a purchase order ready to receive, Receive items now shows only for managers, admins and owners with the Adjust on-hand permission. Staff with Adjust on-hand see "Only a manager can receive purchase orders." in its place, and still see what was ordered and received. In the mobile app, Scan, the quantities and Post receipt follow the same rule after the next update. Until then, when a staff member taps Post receipt in the app, it says "Only a manager can receive purchase orders." On the Roles page, Manage purchase orders says that receiving a PO needs a manager or above.',
+        whyItMatters:
+          'Only managers, admins and owners have ever been able to post a receipt. Staff were offered Receive items and Post receipt, and every receipt they posted was refused with "PO or line not found." Nothing was recorded.',
+        howItAffectsYou:
+          'Nothing changes in who can receive. If you are on staff, ask a manager to post the receipt. Without Adjust on-hand, a purchase order says what it said before.',
+        whatToDo:
+          'No action needed. In the mobile app, the next update comes when the app says Update ready: tap Restart now, or close the app completely and open it again.',
+        audience: { anyPermission: ['purchase_orders:read'], modules: ['receiving'] },
       },
     ],
   },
