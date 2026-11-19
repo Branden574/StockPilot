@@ -2,9 +2,8 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { internalErrorResponse } from '@/server/lib/api-error-response';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import { BundlesService } from '@/server/services/bundles';
-import { ServiceError } from '@/server/services/context';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -41,10 +40,7 @@ export async function GET(req: NextRequest) {
     const rows = await svc.list({ search, includeInactive });
     return NextResponse.json({ bundles: rows });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      return NextResponse.json({ error: e.code, message: e.message }, { status: 500 });
-    }
-    return internalErrorResponse(e, 'api.v1.bundles.list', {
+    return serviceErrorResponse(e, 'api.v1.bundles.list', {
       organizationId: ctx.organizationId,
     });
   }
