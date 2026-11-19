@@ -268,7 +268,12 @@ describe('the export, receipt and access release: the code the words rest on', (
     const answer = source('apps/web/src/server/lib/service-error-response.ts');
     expect(answer).toContain("if (e instanceof ServiceError && e.code !== 'internal_error') {");
     expect(answer).toContain('{ status: serviceErrorStatus(e.code) },');
-    expect(answer).toContain('return internalErrorResponse(e, tag, opts);');
+    // Anything that is not a refusal goes on to forbiddenOrInternalResponse,
+    // which ends in internalErrorResponse (the report and the fixed sentence).
+    expect(answer).toContain('return forbiddenOrInternalResponse(e, tag, opts);');
+    expect(source('apps/web/src/server/lib/api-error-response.ts')).toContain(
+      'return internalErrorResponse(e, tag, opts);',
+    );
     expect(source('apps/web/src/app/api/inventory/export/route.tsx')).toContain(
       "return serviceErrorResponse(e, 'inventory.export');",
     );
