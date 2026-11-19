@@ -946,6 +946,11 @@ PGTAP_TESTS=(
   # (an expired seat and a disabled account hidden), invoker rights, no anon
   # EXECUTE, and a change seen on the next call.
   supabase/tests/0471_request_context_reads_by_index.test.sql
+  # Who may post a receipt on a purchase order, for every role and the
+  # overrides that could change it: manager or above with stock:adjust; staff
+  # granted purchase_orders:manage are refused. Its case table is the one the
+  # app's rule is checked against (receipt-post-rule.parity.test.ts).
+  supabase/tests/receipt_post_rule.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -1248,7 +1253,8 @@ WEB_TESTS=(
   # Only the reviewed routes load the gate, and each calls it as its first
   # statement (after at most one read of the clock).
   src/server/lib/api-context-gate.test.ts
-  # A receipt checks the module and the permission before it reads the order.
+  # A receipt checks the module, the permission and the role before it reads
+  # the order, and a retry is answered from the receipt its key names.
   'src/app/api/v1/po/[id]/receive-line/route.test.ts'
   # A member who owes authenticator set-up is sent to it by every page and
   # action through requireOrgContext(); only Security and Profile open; no
@@ -2215,6 +2221,13 @@ WEB_TESTS=(
   # handed out); the sentence after a hand-out that failed names no path or id.
   src/server/services/bundles.hand-out-role.test.ts
   src/server/services/schedule.complete-kit-role.test.ts
+  # A receipt is posted only by a member the database accepts for it (core
+  # canPostReceipt: manager or above with stock:adjust). ReceivingService and
+  # the receive-line route refuse anyone else before anything is read, the
+  # role refusal with one sentence and no details; the rule is checked against
+  # every row of the pgTAP case table in receipt_post_rule.test.sql.
+  src/server/services/receiving.receipt-rule.test.ts
+  src/server/services/lib/receipt-post-rule.parity.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   can,
   canDistributeBundles,
+  canPostReceipt,
   effectivePermissions,
   FULLY_GRANTABLE_PERMISSIONS,
   hasPermission,
@@ -17,6 +18,7 @@ import {
   PLATFORM_MANAGED_PERMISSIONS,
   ROLE_PERMISSIONS,
   roleCanHandOutKits,
+  roleCanReceivePurchaseOrders,
   withoutPlatformManaged,
   type Permission,
 } from './permissions';
@@ -295,6 +297,46 @@ describe('roleCanHandOutKits', () => {
     for (const role of ['owner', 'admin', 'manager', 'staff', 'viewer'] as const) {
       const granted = effectivePermissions(role, [{ permission: 'bundles:distribute', granted: true }]);
       expect(canDistributeBundles({ role, permissions: granted }), role).toBe(roleCanHandOutKits(role));
+    }
+  });
+});
+
+describe('canPostReceipt', () => {
+  it('is true by default for owner, admin and manager, and false for staff and viewer', () => {
+    for (const role of ['owner', 'admin', 'manager'] as const) {
+      expect(roleCanReceivePurchaseOrders(role), role).toBe(true);
+      expect(canPostReceipt({ role }), role).toBe(true);
+      expect(canPostReceipt({ role, permissions: effectivePermissions(role) }), role).toBe(true);
+    }
+    for (const role of ['staff', 'viewer'] as const) {
+      expect(roleCanReceivePurchaseOrders(role), role).toBe(false);
+      expect(canPostReceipt({ role }), role).toBe(false);
+      expect(canPostReceipt({ role, permissions: effectivePermissions(role) }), role).toBe(false);
+    }
+  });
+
+  it('is false for staff holding stock:adjust and granted purchase_orders:manage', () => {
+    const granted = effectivePermissions('staff', [{ permission: 'purchase_orders:manage', granted: true }]);
+    expect(granted.has('stock:adjust')).toBe(true);
+    expect(canPostReceipt({ role: 'staff', permissions: granted })).toBe(false);
+  });
+
+  it('is false for a manager without stock:adjust', () => {
+    const revoked = effectivePermissions('manager', [], [{ permission: 'stock:adjust', granted: false }]);
+    expect(canPostReceipt({ role: 'manager', permissions: revoked })).toBe(false);
+  });
+
+  it('is true for a manager without purchase_orders:manage or without purchase_orders:read', () => {
+    for (const permission of ['purchase_orders:manage', 'purchase_orders:read'] as const) {
+      const revoked = effectivePermissions('manager', [], [{ permission, granted: false }]);
+      expect(canPostReceipt({ role: 'manager', permissions: revoked }), permission).toBe(true);
+    }
+  });
+
+  it('answers false, without throwing, for a role that is not one of the five', () => {
+    for (const role of ['custom', '', null, undefined] as unknown as Role[]) {
+      expect(roleCanReceivePurchaseOrders(role), String(role)).toBe(false);
+      expect(canPostReceipt({ role }), String(role)).toBe(false);
     }
   });
 });

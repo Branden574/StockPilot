@@ -85,6 +85,9 @@ interface Route {
   succeeds: unknown;
   /** The reads the route makes before the service, for a stub. */
   reads?: Parameters<typeof makeSupabaseStub>[0];
+  /** The caller's role: staff unless the route itself asks for more (a
+   *  receipt is posted only by a manager or above, checked before the read). */
+  role?: 'manager';
   send: () => Promise<Response>;
 }
 
@@ -103,6 +106,7 @@ const ROUTES: Route[] = [
     method: 'postReceipt',
     succeeds: { id: KEY_2, receipt_number: 'RCV-0001' },
     reads: RECEIVE_READS,
+    role: 'manager',
     send: () =>
       receiveLine(
         post(`/api/v1/po/${PO}/receive-line`, {
@@ -186,12 +190,12 @@ const MODULES_ON = new Set<ModuleId>([
   'cycle_counts',
 ] as ModuleId[]);
 
-/** A staff member's context on a stub client, marked when `unread`. */
+/** A staff member's context (or the route's own role) on a stub client, marked when `unread`. */
 function arrange(route: Route, mfa: Mfa, unread: boolean) {
   const stub = makeSupabaseStub(route.reads ?? {});
   const ctx = {
     ...makeServiceContext(stub.client, {
-      role: 'staff',
+      role: route.role ?? 'staff',
       mfaRequired: mfa.mfaRequired,
       mfaSatisfied: mfa.mfaSatisfied,
       enabledModules: MODULES_ON,

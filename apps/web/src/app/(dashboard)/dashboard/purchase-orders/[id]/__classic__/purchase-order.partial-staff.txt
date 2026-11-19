@@ -42,7 +42,7 @@
             <h2 class="text-foreground min-w-0 text-[13.5px] font-medium leading-5" id="po-line-items-heading">
               "Line items"
             <span class="text-muted-foreground text-[12px] max-w-sm">
-              "Items arrived? Use “Receive items” to record what was received."
+              "Only a manager can receive purchase orders."
           <div class="" data-slot="detail-section-body">
             <div aria-labelledby="po-line-items-heading" class="focus-visible:outline-ring focus-visible:outline-solid relative w-full overflow-auto first:rounded-t-[inherit] last:rounded-b-[inherit] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:ring-0 focus-visible:ring-offset-0" role="region">
               <table class="w-full caption-bottom text-[13.5px]">
@@ -139,8 +139,6 @@
               "Subtotal"
               <span class="text-foreground ml-1.5 font-mono font-medium tabular-nums">
                 "$3,860.00"
-            <button type="button">
-              "Receive items"
         <section class="border-border bg-card text-card-foreground min-w-0 overflow-hidden rounded-lg border" data-slot="detail-section">
           <div class="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-[18px] py-2.5" data-slot="detail-section-header">
             <h2 class="text-foreground min-w-0 text-[13.5px] font-medium leading-5">
