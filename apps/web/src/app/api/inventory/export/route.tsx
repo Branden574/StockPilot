@@ -30,8 +30,7 @@ import { computeExportPdfLayout } from '@/lib/exports/pdf-layout';
 import type { InventoryExportSourceRow } from '@/lib/exports/source-row';
 import { prefetchPdfLogo } from '@/lib/pdf/image-prefetch';
 import { buildExportPdfRows, InventoryExportPdf } from '@/lib/pdf/inventory-export-pdf';
-import { internalErrorResponse } from '@/server/lib/api-error-response';
-import { ServiceError } from '@/server/services/context';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import type { ItemListSort } from '@/server/services/inventory';
 
 import { can, type Permission } from '@stockpilot/core';
@@ -303,9 +302,6 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      return NextResponse.json({ error: e.code, message: e.message }, { status: 500 });
-    }
-    return internalErrorResponse(e, 'inventory.export');
+    return serviceErrorResponse(e, 'inventory.export');
   }
 }

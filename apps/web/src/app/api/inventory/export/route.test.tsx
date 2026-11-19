@@ -17,6 +17,7 @@ import {
   fetchExportImageBytes,
 } from '@/lib/exports/export-images';
 import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
+import { ServiceError } from '@/server/services/context';
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
 /**
@@ -707,5 +708,61 @@ describe('POST /api/inventory/export — an unexpected failure', () => {
       message: 'Account status could not be verified. Please try again.',
     });
     expect(reportError).toHaveBeenCalledWith(err, { tag: 'inventory.export', level: 'warning' });
+  });
+});
+
+// A ServiceError keeps its code's status (serviceErrorStatus). A refusal or a
+// bad request is the caller's answer and is not reported; an internal_error
+// answers the fixed sentence and is reported once, with the route's tag only.
+describe('POST /api/inventory/export — a ServiceError answers by its code', () => {
+  it.each([
+    ['forbidden', 403],
+    ['module_disabled', 403],
+    ['validation_error', 400],
+    ['not_found', 404],
+    ['conflict', 409],
+    ['plan_limit_exceeded', 409],
+    ['unauthenticated', 401],
+  ] as const)('%s answers %i with its own words and is not reported', async (code, status) => {
+    vi.mocked(reportError).mockClear();
+    vi.mocked(buildInventoryExportSourceRows).mockRejectedValueOnce(
+      new ServiceError(code, 'Made-up refusal sentence.'),
+    );
+    const res = await POST(buildRequest({ format: 'csv', scope: 'all' }));
+    expect(res.status).toBe(status);
+    expect(await res.json()).toEqual({ error: code, message: 'Made-up refusal sentence.' });
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('a refusal carries the reason the service wrote', async () => {
+    vi.mocked(buildInventoryExportSourceRows).mockRejectedValueOnce(
+      new ServiceError('forbidden', 'Step up first.', { reason: 'aal2_required' }),
+    );
+    const res = await POST(buildRequest({ format: 'csv', scope: 'all' }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: 'forbidden',
+      message: 'Step up first.',
+      details: { reason: 'aal2_required' },
+    });
+  });
+
+  it('internal_error answers the fixed sentence and is reported once with the route tag only', async () => {
+    vi.mocked(reportError).mockClear();
+    const err = new ServiceError('internal_error', 'function inventory_list_value(uuid) does not exist', {
+      table: 'items',
+    });
+    vi.mocked(buildInventoryExportSourceRows).mockRejectedValueOnce(err);
+    const res = await POST(buildRequest({ format: 'xlsx', scope: 'all' }));
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'internal_error',
+      message: 'Something went wrong. Please try again.',
+    });
+    expect(text).not.toContain('inventory_list_value');
+    expect(text).not.toContain('items');
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError).toHaveBeenCalledWith(err, { tag: 'inventory.export' });
   });
 });
