@@ -16,6 +16,7 @@ import {
 } from './lib/fetch-by-ids';
 import { readInActiveOrg } from './lib/in-active-org';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
+import { assertRoleCanPostReceipt } from './lib/receipt-post-rule';
 
 import { DELETED_USER_LABEL, isDeletedPerson } from '@stockpilot/core';
 import type {
@@ -248,7 +249,11 @@ export class ReceivingService {
    */
   async postReceipt(input: PostReceiptInput): Promise<ReceiptRow> {
     assertModuleEnabled(this.ctx, 'receiving');
+    // The rule post_receipt_v2 applies (core canPostReceipt: manager or above
+    // with stock:adjust), before anything is read. The receive-line route asks
+    // the same three checks (assertCanPostReceipt).
     assertPermission(this.ctx, 'stock:adjust');
+    assertRoleCanPostReceipt(this.ctx);
 
     const requestHash = hashReceiptRequest(input);
 

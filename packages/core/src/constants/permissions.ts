@@ -298,6 +298,45 @@ export function roleCanHandOutKits(role: Role): boolean {
   return ROLE_LABELS[role]?.isManager === true;
 }
 
+/**
+ * Whether a member's ROLE lets them post a receipt on a purchase order,
+ * whatever their permissions. post_receipt_v2 locks the purchase order with
+ * SELECT ... FOR UPDATE, which purchase_orders_write's USING filters (manager,
+ * or purchase_orders:manage), and then asks has_org_role(org, 'manager')
+ * itself, so below manager the database refuses every receipt, a grant of
+ * purchase_orders:manage included. A role that is not one of the five answers
+ * false.
+ */
+export function roleCanReceivePurchaseOrders(role: Role): boolean {
+  return ROLE_LABELS[role]?.isManager === true;
+}
+
+/**
+ * Whether a member may post a receipt: the rule the database applies, asked
+ * in one place by ReceivingService.postReceipt, the web purchase order page
+ * and the phone's purchase order screen.
+ *   - manager or above (roleCanReceivePurchaseOrders: post_receipt_v2's own
+ *     check, and the order's row lock);
+ *   - stock:adjust (the post_receipt_v2 wrapper asks has_permission; an
+ *     override applies through the effective set).
+ * Nothing else a member holds changes it: purchase_orders_write is FOR ALL,
+ * so a manager reads and locks the order without purchase_orders:read, and
+ * a grant of purchase_orders:manage below manager stops at the role check.
+ * supabase/tests/receipt_post_rule.test.sql pins the database's side for
+ * every role and override, and receipt-post-rule.parity.test.ts in apps/web
+ * checks this function against the same table.
+ */
+export function canPostReceipt(ctx: {
+  readonly role: Role;
+  readonly permissions?: ReadonlySet<Permission>;
+}): boolean {
+  return roleCanReceivePurchaseOrders(ctx.role) && can(ctx, 'stock:adjust');
+}
+
+/** Said where Receive would be, and as the refusal of a receipt post, to a
+ *  member below manager. Web and phone. */
+export const RECEIVE_MANAGER_ONLY_COPY = 'Only a manager can receive purchase orders.';
+
 export function assertPermission(role: Role, permission: Permission): void {
   if (!hasPermission(role, permission)) {
     throw new Error(`Permission denied: ${role} cannot ${permission}`);
