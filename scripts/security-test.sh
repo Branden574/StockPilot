@@ -1535,6 +1535,11 @@ WEB_TESTS=(
   # marker.
   src/app/api/no-raw-error-text.guard.test.ts
   src/server/lib/api-error-response.test.ts
+  # A route with no error shape of its own answers a ServiceError by its code
+  # (server/lib/service-error-response.ts): a refusal keeps its words and is
+  # not reported; an internal_error answers the fixed sentence, never the
+  # database's text or its details, and is reported once with the route's tag.
+  src/server/lib/service-error-response.test.ts
   # S31: a Server Action answers a failure it did not expect with a fixed
   # sentence, never the error's own text, and reports it with the action's
   # tag (server/lib/action-error-result.ts). The same census reads every

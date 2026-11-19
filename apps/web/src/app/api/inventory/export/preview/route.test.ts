@@ -11,6 +11,7 @@ import {
   inventoryExportPreviewRequestSchema,
   inventoryExportRequestSchema,
 } from '@/lib/exports/export-request';
+import { ServiceError } from '@/server/services/context';
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
 vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
@@ -248,6 +249,49 @@ describe('POST /api/inventory/export/preview — an unexpected failure', () => {
       message: 'Something went wrong. Please try again.',
     });
     expect(text).not.toContain('order_catalog_visible');
+    expect(reportError).toHaveBeenCalledWith(err, { tag: 'inventory.export.preview' });
+  });
+});
+
+// A ServiceError keeps its code's status (serviceErrorStatus). A refusal or a
+// bad request is the caller's answer and is not reported; an internal_error
+// answers the fixed sentence and is reported once, with the route's tag only.
+describe('POST /api/inventory/export/preview — a ServiceError answers by its code', () => {
+  it.each([
+    ['forbidden', 403],
+    ['module_disabled', 403],
+    ['validation_error', 400],
+    ['not_found', 404],
+    ['conflict', 409],
+    ['plan_limit_exceeded', 409],
+    ['unauthenticated', 401],
+  ] as const)('%s answers %i with its own words and is not reported', async (code, status) => {
+    vi.mocked(reportError).mockClear();
+    vi.mocked(buildInventoryExportSourceRows).mockRejectedValueOnce(
+      new ServiceError(code, 'Made-up refusal sentence.'),
+    );
+    const res = await POST(buildRequest({ scope: 'all' }));
+    expect(res.status).toBe(status);
+    expect(await res.json()).toEqual({ error: code, message: 'Made-up refusal sentence.' });
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('internal_error answers the fixed sentence and is reported once with the route tag only', async () => {
+    vi.mocked(reportError).mockClear();
+    const err = new ServiceError(
+      'internal_error',
+      'function inventory_list_value(uuid) does not exist',
+    );
+    vi.mocked(buildInventoryExportSourceRows).mockRejectedValueOnce(err);
+    const res = await POST(buildRequest({ scope: 'all' }));
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'internal_error',
+      message: 'Something went wrong. Please try again.',
+    });
+    expect(text).not.toContain('inventory_list_value');
+    expect(reportError).toHaveBeenCalledTimes(1);
     expect(reportError).toHaveBeenCalledWith(err, { tag: 'inventory.export.preview' });
   });
 });
