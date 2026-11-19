@@ -1,7 +1,8 @@
 -- supabase/tests/receipt_post_rule.test.sql
 --
 -- Who the database lets post a receipt on a purchase order, for every role and
--- for the permission overrides that could change it.
+-- for the permission overrides that could change it: the member's own and the
+-- organization-wide override for the member's role.
 --
 -- post_receipt_v2 (the wrapper, then ledger.post_receipt_v2) admits a caller
 -- only when all of these hold:
@@ -25,7 +26,7 @@
 -- begin/rollback.
 
 begin;
-select plan(16);
+select plan(22);
 
 \set org  '\'7ece1700-0000-4000-8000-00000000000a\''
 \set wh   '\'7ece1700-0000-4000-8000-0000000000c1\''
@@ -34,33 +35,42 @@ select plan(16);
 \set ln   '\'7ece1700-0000-4000-8000-0000000000e2\''
 
 -- ══ The case table ════════════════════════════════════════════════════════
--- grants and revokes are per-member overrides (user_permission_overrides),
--- comma separated. posts: the receipt is recorded. answer: 'ok:1', or the
--- refusal's SQLSTATE and hint ('-' for none).
+-- grants and revokes are the member's own overrides (user_permission_overrides);
+-- role_grants and role_revokes are organization-wide overrides for the
+-- member's role (role_permission_overrides), written inside that case's
+-- undone attempt only, so no other case sees them. All comma separated.
+-- posts: the receipt is recorded. answer: 'ok:1', or the refusal's SQLSTATE
+-- and hint ('-' for none).
 create temp table rule_cases (
-  n       int primary key,
-  who     text not null,
-  role    text not null,
-  grants  text not null,
-  revokes text not null,
-  posts   boolean not null,
-  answer  text not null
+  n           int primary key,
+  who         text not null,
+  role        text not null,
+  grants      text not null,
+  revokes     text not null,
+  role_grants  text not null,
+  role_revokes text not null,
+  posts       boolean not null,
+  answer      text not null
 );
 -- RULE CASES BEGIN
-insert into rule_cases (n, who, role, grants, revokes, posts, answer) values
-  ( 1, 'owner', 'owner', '', '', true, 'ok:1'),
-  ( 2, 'admin', 'admin', '', '', true, 'ok:1'),
-  ( 3, 'manager', 'manager', '', '', true, 'ok:1'),
-  ( 4, 'staff', 'staff', '', '', false, 'P0002:-'),
-  ( 5, 'viewer', 'viewer', '', '', false, '42501:permission'),
-  ( 6, 'staff granted purchase_orders:manage', 'staff', 'purchase_orders:manage', '', false, '42501:-'),
-  ( 7, 'staff granted purchase_orders:manage without stock:adjust', 'staff', 'purchase_orders:manage', 'stock:adjust', false, '42501:permission'),
-  ( 8, 'viewer granted stock:adjust', 'viewer', 'stock:adjust', '', false, 'P0002:-'),
-  ( 9, 'viewer granted stock:adjust and purchase_orders:manage', 'viewer', 'stock:adjust,purchase_orders:manage', '', false, '42501:-'),
-  (10, 'manager without stock:adjust', 'manager', '', 'stock:adjust', false, '42501:permission'),
-  (11, 'manager without purchase_orders:read', 'manager', '', 'purchase_orders:read', true, 'ok:1'),
-  (12, 'manager without purchase_orders:manage', 'manager', '', 'purchase_orders:manage', true, 'ok:1'),
-  (13, 'admin without stock:adjust', 'admin', '', 'stock:adjust', false, '42501:permission');
+insert into rule_cases (n, who, role, grants, revokes, role_grants, role_revokes, posts, answer) values
+  ( 1, 'owner', 'owner', '', '', '', '', true, 'ok:1'),
+  ( 2, 'admin', 'admin', '', '', '', '', true, 'ok:1'),
+  ( 3, 'manager', 'manager', '', '', '', '', true, 'ok:1'),
+  ( 4, 'staff', 'staff', '', '', '', '', false, 'P0002:-'),
+  ( 5, 'viewer', 'viewer', '', '', '', '', false, '42501:permission'),
+  ( 6, 'staff granted purchase_orders:manage', 'staff', 'purchase_orders:manage', '', '', '', false, '42501:-'),
+  ( 7, 'staff granted purchase_orders:manage without stock:adjust', 'staff', 'purchase_orders:manage', 'stock:adjust', '', '', false, '42501:permission'),
+  ( 8, 'viewer granted stock:adjust', 'viewer', 'stock:adjust', '', '', '', false, 'P0002:-'),
+  ( 9, 'viewer granted stock:adjust and purchase_orders:manage', 'viewer', 'stock:adjust,purchase_orders:manage', '', '', '', false, '42501:-'),
+  (10, 'manager without stock:adjust', 'manager', '', 'stock:adjust', '', '', false, '42501:permission'),
+  (11, 'manager without purchase_orders:read', 'manager', '', 'purchase_orders:read', '', '', true, 'ok:1'),
+  (12, 'manager without purchase_orders:manage', 'manager', '', 'purchase_orders:manage', '', '', true, 'ok:1'),
+  (13, 'admin without stock:adjust', 'admin', '', 'stock:adjust', '', '', false, '42501:permission'),
+  (14, 'owner without stock:adjust', 'owner', '', 'stock:adjust', '', '', true, 'ok:1'),
+  (15, 'manager whose role has stock:adjust taken away for the organization', 'manager', '', '', '', 'stock:adjust', false, '42501:permission'),
+  (16, 'manager whose role lost stock:adjust, given it back as a member', 'manager', 'stock:adjust', '', '', 'stock:adjust', true, 'ok:1'),
+  (17, 'staff whose role is granted purchase_orders:manage for the organization', 'staff', '', '', 'purchase_orders:manage', '', false, '42501:-');
 -- RULE CASES END
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
@@ -103,11 +113,15 @@ create function pg_temp.hint(p_hint text) returns text language sql immutable as
 $$;
 -- One statement as an authenticated p_sub, then ALWAYS undone: 'ok:<rows>',
 -- else '<sqlstate>:<hint or ->:<message>'.
-create function pg_temp.attempt(p_sub uuid, p_sql text)
+-- p_prep runs first, as the superuser, inside the same undone subtransaction.
+create function pg_temp.attempt(p_sub uuid, p_sql text, p_prep text default null)
 returns text language plpgsql as $$
 declare v_state text; v_msg text; v_hint text; v_n bigint;
 begin
   begin
+    if p_prep is not null then
+      execute p_prep;
+    end if;
     perform set_config('request.jwt.claim.sub', p_sub::text, true);
     perform set_config('request.jwt.claim.role', 'authenticated', true);
     perform set_config('role', 'authenticated', true);
@@ -134,8 +148,20 @@ create function pg_temp.rcpt_sql(p_n int) returns text language sql stable as $$
                 '7ece1700-0000-4000-8000-0000000000e1', '7ece1700-0000-4000-8000-0000000000c1',
                 '7ece1700-0000-4000-8000-0000000000e2', 'rule-' || p_n, 'rule-hash-' || p_n)
 $$;
+-- The case's organization-wide overrides for its role, as one statement (or none).
+create function pg_temp.role_prep(p_role text, p_grants text, p_revokes text) returns text language sql stable as $$
+  select case when p_grants = '' and p_revokes = '' then null else
+    'insert into public.role_permission_overrides (organization_id, role, permission, granted) values '
+    || (select string_agg(format('(%L, %L, %L, %L)', '7ece1700-0000-4000-8000-00000000000a', p_role, x.p, x.g), ', ')
+          from (select g.p, true as g from unnest(string_to_array(nullif(p_grants, ''), ',')) as g(p)
+                union all
+                select r.p, false from unnest(string_to_array(nullif(p_revokes, ''), ',')) as r(p)) x)
+  end
+$$;
 create temp table results (n int primary key, raw text not null);
-insert into results (n, raw) select n, pg_temp.attempt(pg_temp.member(n), pg_temp.rcpt_sql(n)) from rule_cases;
+insert into results (n, raw)
+  select n, pg_temp.attempt(pg_temp.member(n), pg_temp.rcpt_sql(n), pg_temp.role_prep(role, role_grants, role_revokes))
+    from rule_cases;
 
 -- ══ T. The table covers the rule ══════════════════════════════════════════
 select is(
@@ -144,9 +170,19 @@ select is(
   'T1: the case table has a row for every role');
 select is(
   (select count(*)::int from rule_cases
-    where role in ('staff', 'viewer') and string_to_array(grants, ',') @> array['purchase_orders:manage']),
+    where role in ('staff', 'viewer')
+      and (string_to_array(grants, ',') @> array['purchase_orders:manage']
+           or string_to_array(role_grants, ',') @> array['purchase_orders:manage'])),
+  4,
+  'T2: the case table grants purchase_orders:manage below manager, with and without stock:adjust, to the member and to the role');
+select is(
+  (select count(*)::int from rule_cases where role_grants <> '' or role_revokes <> ''),
   3,
-  'T2: the case table grants purchase_orders:manage below manager, with and without stock:adjust');
+  'T3: the case table has organization-wide role overrides, a revoke and a grant');
+select is(
+  (select count(*)::int from public.role_permission_overrides where organization_id = :org),
+  0,
+  'T4: no organization-wide override outlives its case');
 
 -- ══ R. Each case: the database's answer is the table's ════════════════════
 select is(

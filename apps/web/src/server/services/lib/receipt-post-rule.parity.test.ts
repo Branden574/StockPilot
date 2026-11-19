@@ -37,8 +37,12 @@ interface RuleCase {
   n: number;
   who: string;
   role: Role;
+  /** The member's own overrides (user_permission_overrides). */
   grants: Permission[];
   revokes: Permission[];
+  /** Organization-wide overrides for the member's role (role_permission_overrides). */
+  roleGrants: Permission[];
+  roleRevokes: Permission[];
   posts: boolean;
   answer: string;
 }
@@ -63,7 +67,7 @@ function readCases(sql: string): RuleCase[] {
     .filter((l) => /^\s*\(/.test(l));
   return rows.map((line) => {
     const m =
-      /^\s*\(\s*(\d+),\s*'([^']*)',\s*'([^']*)',\s*'([^']*)',\s*'([^']*)',\s*(true|false),\s*'([^']*)'\)[,;]\s*$/.exec(
+      /^\s*\(\s*(\d+),\s*'([^']*)',\s*'([^']*)',\s*'([^']*)',\s*'([^']*)',\s*'([^']*)',\s*'([^']*)',\s*(true|false),\s*'([^']*)'\)[,;]\s*$/.exec(
         line,
       );
     expect(m, `a case row: ${line}`).not.toBeNull();
@@ -73,32 +77,40 @@ function readCases(sql: string): RuleCase[] {
       role: m![3] as Role,
       grants: list(m![4]!),
       revokes: list(m![5]!),
-      posts: m![6] === 'true',
-      answer: m![7]!,
+      roleGrants: list(m![6]!),
+      roleRevokes: list(m![7]!),
+      posts: m![8] === 'true',
+      answer: m![9]!,
     };
   });
 }
 
 const CASES = readCases(SQL);
 
-function overridesOf(c: RuleCase): PermissionOverride[] {
+function overrides(grants: Permission[], revokes: Permission[]): PermissionOverride[] {
   return [
-    ...c.grants.map((permission) => ({ permission, granted: true })),
-    ...c.revokes.map((permission) => ({ permission, granted: false })),
+    ...grants.map((permission) => ({ permission, granted: true })),
+    ...revokes.map((permission) => ({ permission, granted: false })),
   ];
 }
 
 describe('the database test case table', () => {
   it('is read whole: numbered 1..n, every role, only known permissions, and posts matches answer', () => {
-    expect(CASES.length).toBeGreaterThanOrEqual(13);
+    expect(CASES.length).toBeGreaterThanOrEqual(17);
     expect(CASES.map((c) => c.n)).toEqual(CASES.map((_, i) => i + 1));
     expect([...new Set(CASES.map((c) => c.role))].sort()).toEqual([...ROLES].sort());
     for (const c of CASES) {
-      for (const p of [...c.grants, ...c.revokes]) {
+      for (const p of [...c.grants, ...c.revokes, ...c.roleGrants, ...c.roleRevokes]) {
         expect(PERMISSIONS as readonly string[], `${c.who}: ${p}`).toContain(p);
       }
       expect(c.answer === 'ok:1', c.who).toBe(c.posts);
     }
+  });
+
+  it('tries the owner without stock:adjust, and organization-wide role overrides', () => {
+    expect(CASES.some((c) => c.role === 'owner' && c.revokes.includes('stock:adjust'))).toBe(true);
+    expect(CASES.some((c) => c.roleRevokes.includes('stock:adjust'))).toBe(true);
+    expect(CASES.some((c) => c.roleGrants.includes('purchase_orders:manage'))).toBe(true);
   });
 
   it('tries staff granted purchase_orders:manage, with stock:adjust and without it', () => {
@@ -113,7 +125,13 @@ describe('the database test case table', () => {
 describe('the app asks the rule the database applies, case by case', () => {
   for (const c of CASES) {
     it(`${c.n}. ${c.who}: ${c.posts ? 'posts' : 'refused'}`, () => {
-      const permissions = effectivePermissions(c.role, [], overridesOf(c));
+      // The server's own resolution (lib/auth/effective-permissions.ts): the
+      // role's organization-wide overrides, then the member's, which win.
+      const permissions = effectivePermissions(
+        c.role,
+        overrides(c.roleGrants, c.roleRevokes),
+        overrides(c.grants, c.revokes),
+      );
       expect(canPostReceipt({ role: c.role, permissions })).toBe(c.posts);
 
       const ctx = makeServiceContext(null, { role: c.role, permissions });
