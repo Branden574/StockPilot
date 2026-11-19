@@ -90,6 +90,8 @@ const NIGHT_IDS = [
   // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: without it): the emptied fields and schedule completion release is published later, at the top, and reaches owners and admins, managers for its location and category entries, and whoever manages the schedule or suppliers with those modules on, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
   // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (owners, admins, managers, staff and viewers by default), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
   // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), an owner with every permission and module among them, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+  // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, and reaches a manager or above who can assign counts where Cycle Counts is on (an owner with every permission and module among them), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+  'count-start-access-check-2026-11',
   'export-receipt-access-fixes-2026-11',
   // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: without it): the receiving release is published later, at the top, and reaches whoever can open a purchase order where Receiving is on (owners, admins, managers, staff and viewers by default), an owner with every permission and module among them, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
   'receiving-shown-to-managers-2026-11',
@@ -250,7 +252,8 @@ describe('the authenticator code release (S43a, release 1)', () => {
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES[31]): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES[32]): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES[33]): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[34]?.id).toBe(AUTH_CODE_ID);
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES[34]): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[35]?.id).toBe(AUTH_CODE_ID);
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -260,7 +263,8 @@ describe('the authenticator code release (S43a, release 1)', () => {
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES[31]): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES[32]): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES[33]): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[34]?.status).toBe('published');
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES[34]): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[35]?.status).toBe('published');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -270,7 +274,8 @@ describe('the authenticator code release (S43a, release 1)', () => {
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES[32]): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES[33]): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES[34]): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[35]?.id).toBe(RETRIES_ID);
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES[35]): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[36]?.id).toBe(RETRIES_ID);
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -280,7 +285,8 @@ describe('the authenticator code release (S43a, release 1)', () => {
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES[33]): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES[34]): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES[35]): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[36]?.id).toBe(LISTS_ID);
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES[36]): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[37]?.id).toBe(LISTS_ID);
     // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: AUTH_CODE_ID): the web fixes release is published later, at the top, the newest published release.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: WEB_FIXES_ID): the Export items release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: export-items-permission-2026-11): the S2 release is published after it, at the top, the newest published release.
@@ -306,7 +312,8 @@ describe('the authenticator code release (S43a, release 1)', () => {
       // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: the emptied fields and schedule completion release): the Low + critical pages and list value release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: the Low + critical pages and list value release): the receiving release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: the receiving release): the export, receipt and access release is published after it, at the top, the newest published release.
-      'export-receipt-access-fixes-2026-11',
+      // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: the export, receipt and access release): the count start access check release is published after it, at the top, the newest published release.
+      'count-start-access-check-2026-11',
     );
   });
 
@@ -345,7 +352,8 @@ describe('the authenticator code release (S43a, release 1)', () => {
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES.slice(31)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(32)): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(33)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(at).toBe(Math.max(...RELEASES.slice(34).map((r) => Date.parse(r.publishedAt))));
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(34)): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(at).toBe(Math.max(...RELEASES.slice(35).map((r) => Date.parse(r.publishedAt))));
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -355,7 +363,8 @@ describe('the authenticator code release (S43a, release 1)', () => {
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES.slice(32)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(33)): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(34)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(35)) {
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(35)): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(36)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -559,7 +568,8 @@ describe('the integration retries release (B49, B81 and B82)', () => {
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES[31]): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES[32]): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES[33]): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[34]?.id).toBe(AUTH_CODE_ID);
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES[34]): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[35]?.id).toBe(AUTH_CODE_ID);
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -569,7 +579,8 @@ describe('the integration retries release (B49, B81 and B82)', () => {
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES[32]): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES[33]): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES[34]): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[35]?.id).toBe(RETRIES_ID);
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES[35]): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[36]?.id).toBe(RETRIES_ID);
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -579,7 +590,8 @@ describe('the integration retries release (B49, B81 and B82)', () => {
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES[33]): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES[34]): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES[35]): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[36]?.id).toBe(LISTS_ID);
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES[36]): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[37]?.id).toBe(LISTS_ID);
   });
 
   it('is dated in the past on a whole minute, a minute before the authenticator code release, after #454 merged, and after every release below it', () => {
@@ -613,7 +625,8 @@ describe('the integration retries release (B49, B81 and B82)', () => {
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES.slice(33)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(34)): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(35)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(36)) {
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(36)): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(37)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
