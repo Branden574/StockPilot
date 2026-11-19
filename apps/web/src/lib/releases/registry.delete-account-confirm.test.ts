@@ -48,7 +48,8 @@ const lowCriticalRead = {
 };
 const emptiedRead = {
   release_id: EMPTIED_FIELDS_ID,
-  revision: 1,
+  // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: revision 1): the emptied fields and schedule completion release is re-announced as revision 2, so a read of it is recorded at revision 2.
+  revision: 2,
   dismissed_at: null,
   opened_at: '2026-11-16T12:34:00Z',
   read_at: '2026-11-16T12:34:00Z',

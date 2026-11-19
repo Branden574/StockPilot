@@ -40,6 +40,7 @@ import { revalidatePath } from 'next/cache';
 
 import {
   DEFAULT_MODULE_IDS,
+  effectivePermissions,
   ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY,
   type ModuleId,
 } from '@stockpilot/core';
@@ -183,13 +184,23 @@ function clientFor(w: World): SupabaseStub {
   });
 }
 
-function signIn(over: Partial<World> = {}) {
+/**
+ * Staff by default. The stored kit's warehouse check and the hand-out are
+ * reached only by a member whose role may hand out kits (the role is checked
+ * first; schedule.complete-kit-role.test.ts holds that check), so those cases
+ * sign in as a manager, with the warehouse answer stubbed.
+ */
+function signIn(over: Partial<World> = {}, role: 'staff' | 'manager' = 'staff') {
   world = makeWorld(over);
   stub = clientFor(world);
   const ctx = makeServiceContext(stub.client, {
-    role: 'staff',
-    userId: 'user-staff',
-    permissions: new Set(['schedule:manage']),
+    role,
+    userId: `user-${role}`,
+    // A manager holds the role's defaults (bundles:distribute among them).
+    permissions:
+      role === 'manager'
+        ? new Set([...effectivePermissions('manager'), 'schedule:manage'])
+        : new Set(['schedule:manage']),
     enabledModules: new Set<ModuleId>([...DEFAULT_MODULE_IDS, 'schedule' as ModuleId]),
   });
   h.withContext.mockResolvedValue(ctx);
@@ -231,7 +242,7 @@ beforeEach(() => {
 
 describe('completing an in-progress event whose kit comes from a warehouse the caller may not write', () => {
   it('refuses before anything is written, with a sentence that names no id', async () => {
-    const svc = signIn();
+    const svc = signIn({}, 'manager');
     refuse(KIT_WAREHOUSE, outOfScope);
     const err = await svc.update(EVENT, { status: 'completed' }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ServiceError);
@@ -241,7 +252,7 @@ describe('completing an in-progress event whose kit comes from a warehouse the c
   });
 
   it('the web action answers forbidden with that sentence and writes nothing', async () => {
-    signIn();
+    signIn({}, 'manager');
     refuse(KIT_WAREHOUSE, outOfScope);
     const res = await updateScheduleEventAction(EVENT, { status: 'completed' });
     expect(res).toEqual({ ok: false, error: { code: 'forbidden', message: COMPLETE_REFUSED } });
@@ -281,7 +292,7 @@ describe('completing an in-progress event whose kit comes from a warehouse the c
 
 describe('completing when the access could not be read', () => {
   it('throws the ForbiddenError as it is, before anything is written', async () => {
-    const svc = signIn();
+    const svc = signIn({}, 'manager');
     refuse(KIT_WAREHOUSE, unreadable);
     const err = await svc.update(EVENT, { status: 'completed' }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ForbiddenError);
@@ -290,7 +301,7 @@ describe('completing when the access could not be read', () => {
   });
 
   it('the web action answers the shared "could not check" sentence, retryable', async () => {
-    signIn();
+    signIn({}, 'manager');
     refuse(KIT_WAREHOUSE, unreadable);
     const res = await updateScheduleEventAction(EVENT, { status: 'completed' });
     expect(res).toEqual({
@@ -307,7 +318,7 @@ describe('completing when the access could not be read', () => {
 
 describe('completing as a member who may write the kit warehouse', () => {
   it('saves the status, hands the kit out once and writes the completion audit row', async () => {
-    const svc = signIn();
+    const svc = signIn({}, 'manager');
     const row = await svc.update(EVENT, { status: 'completed' });
     expect(row.status).toBe('completed');
     expect(world.payloads).toEqual([expect.objectContaining({ status: 'completed' })]);
@@ -326,7 +337,7 @@ describe('completing as a member who may write the kit warehouse', () => {
   });
 
   it('the web action answers ok and refreshes the schedule pages', async () => {
-    signIn();
+    signIn({}, 'manager');
     const res = await updateScheduleEventAction(EVENT, { status: 'completed' });
     expect(res).toEqual({ ok: true, data: { id: EVENT } });
     expect(stub.rpcCalls).toHaveLength(1);
@@ -334,13 +345,13 @@ describe('completing as a member who may write the kit warehouse', () => {
   });
 
   it('a kit warehouse that changed in between is checked again after the save, with no id in the answer', async () => {
-    const svc = signIn({ savedOver: { bundle_warehouse_id: OTHER_WAREHOUSE } });
+    const svc = signIn({ savedOver: { bundle_warehouse_id: OTHER_WAREHOUSE } }, 'manager');
     refuse(OTHER_WAREHOUSE, outOfScope);
     const err = await svc.update(EVENT, { status: 'completed' }).catch((e: unknown) => e);
     expect(err).toMatchObject({ code: 'conflict' });
     expect((err as Error).message).toBe(
       "Event marked complete, but bundle distribution failed: You don't have write access to the warehouse its kit comes from. " +
-        `Retry from /dashboard/bundles/${KIT}.`,
+        "Hand it out from the kit's page.",
     );
     expect((err as Error).message).not.toContain(OTHER_WAREHOUSE);
     expect(stub.rpcCalls).toEqual([]);
@@ -348,12 +359,13 @@ describe('completing as a member who may write the kit warehouse', () => {
   });
 
   it('that second check, when the access could not be read, answers the could-not-hand-out sentence', async () => {
-    const svc = signIn({ savedOver: { bundle_warehouse_id: OTHER_WAREHOUSE } });
+    const svc = signIn({ savedOver: { bundle_warehouse_id: OTHER_WAREHOUSE } }, 'manager');
     refuse(OTHER_WAREHOUSE, unreadable);
     const err = await svc.update(EVENT, { status: 'completed' }).catch((e: unknown) => e);
     expect(err).toMatchObject({
       code: 'conflict',
-      message: `Event marked complete, but the bundle could not be distributed. Retry from /dashboard/bundles/${KIT}.`,
+      message:
+        "Event marked complete, but the bundle could not be distributed. Hand it out from the kit's page.",
     });
     expect(stub.rpcCalls).toEqual([]);
     expect(completedExtra()).toEqual({ autoDistributed: false });
@@ -387,7 +399,7 @@ describe('the other completions keep their behaviour', () => {
   });
 
   it('reopen, start and complete an event with no hand-out yet: the kit is handed out once', async () => {
-    const svc = signIn({ row: eventRow({ status: 'cancelled' }) });
+    const svc = signIn({ row: eventRow({ status: 'cancelled' }) }, 'manager');
     await svc.update(EVENT, { status: 'scheduled' });
     await svc.update(EVENT, { status: 'in_progress' });
     await svc.update(EVENT, { status: 'completed' });
@@ -456,10 +468,26 @@ describe('the checks of warehouses named in the patch', () => {
 
 describe('an update the row policy refuses', () => {
   it('answers a plain forbidden sentence, with no hand-out and no audit row', async () => {
-    const svc = signIn({ mayUpdate: false });
+    // An event with no kit: completing it hands nothing out, so the save
+    // reaches the row policy.
+    const svc = signIn({
+      mayUpdate: false,
+      row: eventRow({ bundle_id: null, bundle_quantity: null, bundle_warehouse_id: null }),
+    });
     const err = await svc.update(EVENT, { status: 'completed' }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ServiceError);
     expect(err).toMatchObject({ code: 'forbidden', message: UPDATE_REFUSED });
+    expect(world.row.status).toBe('in_progress');
+    expect(stub.rpcCalls).toEqual([]);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('completing an event with a kit that matches no row (deleted in between) never reaches the hand-out', async () => {
+    const svc = signIn({ mayUpdate: false }, 'manager');
+    const err = await svc.update(EVENT, { status: 'completed' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ServiceError);
+    expect(err).toMatchObject({ code: 'forbidden', message: UPDATE_REFUSED });
+    expect(world.payloads).toEqual([expect.objectContaining({ status: 'completed' })]);
     expect(world.row.status).toBe('in_progress');
     expect(stub.rpcCalls).toEqual([]);
     expect(audit).not.toHaveBeenCalled();
@@ -480,7 +508,7 @@ describe('an update the database does not answer with rows', () => {
   ] as const)(
     '%s is the internal error, never the row-policy sentence, with no hand-out and no audit row',
     async (_label, updateAnswer) => {
-      const svc = signIn({ updateAnswer });
+      const svc = signIn({ updateAnswer }, 'manager');
       const err = await svc.update(EVENT, { status: 'completed' }).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(ServiceError);
       expect(err).toMatchObject({
@@ -494,7 +522,7 @@ describe('an update the database does not answer with rows', () => {
   );
 
   it('the web action answers the internal error for a database fault', async () => {
-    signIn({ updateAnswer: 'fault' });
+    signIn({ updateAnswer: 'fault' }, 'manager');
     const res = await updateScheduleEventAction(EVENT, { status: 'completed' });
     expect(res).toEqual({
       ok: false,

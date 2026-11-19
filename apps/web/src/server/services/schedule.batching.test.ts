@@ -302,7 +302,7 @@ describe('ScheduleService distributed flag', () => {
       expect(err).toMatchObject({
         code: 'conflict',
         message:
-          'Event marked complete, but the bundle could not be distributed. Retry from /dashboard/bundles/bundle-1.',
+          "Event marked complete, but the bundle could not be distributed. Hand it out from the kit's page.",
       });
       expect(err.message).not.toContain('stock_movements');
       const distReport = reportError.mock.calls.find(
@@ -326,7 +326,7 @@ describe('ScheduleService distributed flag', () => {
       const err = (await run().catch((e: unknown) => e)) as { code: string; message: string };
       expect(err.code).toBe('conflict');
       expect(err.message).toContain(
-        "Event marked complete, but bundle distribution failed: A component of this kit isn't in your inventory view, so the kit can't be built from it. Retry from /dashboard/bundles/",
+        "Event marked complete, but bundle distribution failed: A component of this kit isn't in your inventory view, so the kit can't be built from it. Hand it out from the kit's page.",
       );
       expect(err.message).not.toContain('component_not_visible');
     });
@@ -393,7 +393,7 @@ describe('ScheduleService distributed flag', () => {
       const err = (await run().catch((e: unknown) => e)) as { code: string; message: string };
       expect(err.code).toBe('conflict');
       expect(err.message).toBe(
-        `Event marked complete, but bundle distribution failed: ${sentence}. Retry from /dashboard/bundles/bundle-1.`,
+        `Event marked complete, but bundle distribution failed: ${sentence}. Hand it out from the kit's page.`,
       );
     });
   });
