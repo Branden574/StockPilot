@@ -28,7 +28,8 @@ const bodySchema = z.object({
 
 /**
  * Mobile bundle distribute. Same flow as the web modal, exposed for the
- * mobile distribute screen. Requires bundles:distribute (staff+).
+ * mobile distribute screen. Requires bundles:distribute and a role of manager
+ * or above (roleCanHandOutKits).
  *
  * Mobile is expected to:
  *   1. Hit BundlesService.preview() (via this endpoint shape too?

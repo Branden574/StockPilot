@@ -1,5 +1,5 @@
 import type { Role } from './roles';
-import { isManagerOrAbove } from './terminology';
+import { ROLE_LABELS } from './terminology';
 
 export const PERMISSIONS = [
   'organization:update',
@@ -277,7 +277,25 @@ export function canDistributeBundles(ctx: {
   readonly role: Role;
   readonly permissions?: ReadonlySet<Permission>;
 }): boolean {
-  return isManagerOrAbove(ctx.role) && can(ctx, 'bundles:distribute');
+  return roleCanHandOutKits(ctx.role) && can(ctx, 'bundles:distribute');
+}
+
+/**
+ * Whether a member's ROLE lets them hand out a kit, whatever their
+ * permissions. distribute_bundle's body reads the kit with SELECT ... FOR
+ * UPDATE, which the bundles_update policy's USING filters (manager or above),
+ * and then asks has_org_role(org, 'manager') itself, so below manager the
+ * database refuses every hand-out: from the Bundles page, the API and the
+ * Schedule's completion alike. The permission is asked beside it where the
+ * database asks it (canDistributeBundles above; the Schedule's completion
+ * needs the role only, 0415). Every app check of the role floor (the bundle
+ * page and the phone's Distribute, BundlesService.distribute and
+ * ScheduleService.update) asks this one function, so a change of that floor
+ * in the database is made here once. A role that is not one of the five
+ * (unknown, empty, null or missing) answers false, so every check refuses.
+ */
+export function roleCanHandOutKits(role: Role): boolean {
+  return ROLE_LABELS[role]?.isManager === true;
 }
 
 export function assertPermission(role: Role, permission: Permission): void {

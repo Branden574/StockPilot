@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { effectivePermissions, type Role } from '@stockpilot/core';
+import { effectivePermissions, roleCanHandOutKits, type Role } from '@stockpilot/core';
 
 /**
  * The Distribute button matches the database (2026-09-27).
@@ -117,4 +117,16 @@ describe('bundle page: Distribute is offered only where the database accepts it'
     );
     expect(screen.queryByRole('button', { name: 'Distribute' })).toBeNull();
   });
+
+  it.each(['owner', 'admin', 'manager', 'staff', 'viewer'] as const)(
+    '%s holding bundles:distribute is offered Distribute exactly when the role may hand out kits (the service and the Schedule use the same rule)',
+    async (role) => {
+      await renderAs(
+        role,
+        effectivePermissions(role, [{ permission: 'bundles:distribute', granted: true }]),
+      );
+      expect(screen.getByRole('heading', { name: 'New Hire Bundle' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Distribute' }) !== null).toBe(roleCanHandOutKits(role));
+    },
+  );
 });

@@ -2204,6 +2204,17 @@ WEB_TESTS=(
   # the app reads to empty, and the app server the runner starts carries an
   # outbound guard that refuses any connection off this machine.
   src/test/load-tests-safety.guard.test.ts
+  # A kit is handed out only by a member whose role the database accepts for
+  # it (core roleCanHandOutKits: manager or above, the floor distribute_bundle
+  # applies). The Bundles service, its website action and the hand-out route
+  # refuse anyone below it with one sentence before anything is read or
+  # written (the route: 403), and the rule is the one the bundle page offers
+  # Distribute by. Completing a schedule event whose kit is still to be handed
+  # out is refused for such a member before anything is saved, by role only
+  # (a manager whose bundles:distribute is revoked completes and the kit is
+  # handed out); the sentence after a hand-out that failed names no path or id.
+  src/server/services/bundles.hand-out-role.test.ts
+  src/server/services/schedule.complete-kit-role.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
