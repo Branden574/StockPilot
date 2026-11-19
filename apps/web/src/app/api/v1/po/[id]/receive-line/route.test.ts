@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { ServiceError } from '@/server/services/context';
+import { assertModuleEnabled, assertPermission, ServiceError } from '@/server/services/context';
 import { ReceivingService } from '@/server/services/receiving';
 
 import { POST } from './route';
@@ -77,7 +77,8 @@ function buildCtx(tables: Record<string, TableFixture>) {
     role: 'manager' as const,
     mfaRequired: false,
     mfaSatisfied: true,
-    enabledModules: new Set<ModuleId>(),
+    // The module the receipt needs, so the route reaches the order.
+    enabledModules: new Set<ModuleId>(['receiving']),
     supabase: {
       from: (table: string) =>
         makeBuilder(tables[table] ?? { rows: [] }),
@@ -293,5 +294,94 @@ describe('receive-line: ServiceError mapping', () => {
       idempotencyKey: KEY,
     });
     expect(res.status).toBe(409);
+  });
+});
+
+describe('receive-line: the module and the permission are checked before the order is read', () => {
+  const BODY = { itemId: ITEM, qty: 1, warehouseId: WH, idempotencyKey: KEY };
+  const ORDER = () => ({
+    purchase_orders: openPo(),
+    purchase_order_items: { rows: [poLine(LINE_OPEN, 5, 0)] },
+  });
+  const NO_ORDER = () => ({});
+
+  /** The route as a caller with `overrides`, recording every table it reads. */
+  async function sendAs(overrides: Row, tables: Record<string, TableFixture>) {
+    const read: string[] = [];
+    vi.mocked(withApiContext).mockResolvedValue({
+      ...buildCtx(tables),
+      ...overrides,
+      supabase: {
+        from: (table: string) => {
+          read.push(table);
+          return makeBuilder(tables[table] ?? { rows: [] });
+        },
+      },
+    } as never);
+    const res = await POST(buildRequest(BODY), params);
+    return { read, status: res.status, body: (await res.json()) as unknown };
+  }
+
+  const REFUSED: Array<[string, Row, () => void]> = [
+    [
+      'receiving is off',
+      { enabledModules: new Set<ModuleId>() },
+      () =>
+        assertModuleEnabled(
+          { ...buildCtx({}), enabledModules: new Set<ModuleId>() } as never,
+          'receiving',
+        ),
+    ],
+    [
+      'the role cannot adjust stock',
+      { role: 'viewer' },
+      () => assertPermission({ ...buildCtx({}), role: 'viewer' } as never, 'stock:adjust'),
+    ],
+    [
+      'an authenticator must be set up first',
+      { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false },
+      () =>
+        assertPermission(
+          { ...buildCtx({}), mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false } as never,
+          'stock:adjust',
+        ),
+    ],
+  ];
+
+  it.each(REFUSED)(
+    '%s: refused before any read, with the answer the receipt gives, whether or not the order exists',
+    async (_label, overrides, refusal) => {
+      // The receipt's own answer to the same refusal (the service refusing it).
+      let thrown: unknown;
+      try {
+        refusal();
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBeInstanceOf(ServiceError);
+      postReceipt.mockRejectedValueOnce(thrown);
+      const fromTheReceipt = await sendAs({ enabledModules: new Set<ModuleId>(['receiving']) }, ORDER());
+
+      const withOrder = await sendAs(overrides, ORDER());
+      const withoutOrder = await sendAs(overrides, NO_ORDER());
+
+      expect(withOrder.status).toBe(403);
+      expect(withOrder.read).toEqual([]);
+      expect(withoutOrder.read).toEqual([]);
+      expect(withoutOrder).toEqual(withOrder);
+      expect({ status: withOrder.status, body: withOrder.body }).toEqual({
+        status: fromTheReceipt.status,
+        body: fromTheReceipt.body,
+      });
+      expect(postReceipt).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('a member who passes both checks reads the order, then the receipt runs', async () => {
+    const passed = await sendAs({}, ORDER());
+    expect(passed.status).toBe(200);
+    expect(passed.read).toEqual(['purchase_orders', 'purchase_order_items']);
+    const missing = await sendAs({}, NO_ORDER());
+    expect(missing).toMatchObject({ status: 404, body: { error: 'po_not_found' } });
   });
 });

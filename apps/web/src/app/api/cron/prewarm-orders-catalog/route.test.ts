@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { reportError } from '@/lib/error-reporter';
-import { makeSupabaseStub } from '@/test/supabase-mock';
+import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 import { KNOWN_HOT_ORG_IDS } from './org-sweep';
 
@@ -192,7 +192,7 @@ describe('GET /api/cron/prewarm-orders-catalog', () => {
     expect(prewarmInventorySpy).not.toHaveBeenCalled();
   });
 
-  it('filters enumeration to orgs with an accepted member, ordered by recent activity', async () => {
+  it('lists every org with an accepted member, in id order, a page at a time', async () => {
     const stub = makeSupabaseStub({
       'organizations.select': { data: [], error: null, count: 0 },
       'warehouses.select': { data: [], error: null },
@@ -209,11 +209,37 @@ describe('GET /api/cron/prewarm-orders-catalog', () => {
     // accepted_at IS NOT NULL filter present.
     expect(chain).toContain('not');
     expect(args).toContain('organization_members.accepted_at');
-    // Activity ordering + the disclosed cap.
+    // Every active org in id order, paged (no activity order, no limit:
+    // the rotating window, not the read, decides which orgs this run warms).
     expect(chain).toContain('order');
-    expect(args).toContain('updated_at');
-    expect(chain).toContain('limit');
-    expect(args).toContain(50);
+    expect(args).toContain('id');
+    expect(args).not.toContain('updated_at');
+    expect(chain).not.toContain('limit');
+    expect(chain).toContain('range');
+    expect(args).toEqual(expect.arrayContaining([0, 999]));
+  });
+
+  it('pages past 1000 active orgs, so the rotation sees all of them', async () => {
+    // The embed's accepted_at filter, as servedLikePostgrest reads it.
+    const all = Array.from({ length: 1500 }, (_, i) => ({
+      id: `org-${String(i).padStart(4, '0')}`,
+      'organization_members.accepted_at': '2026-01-01T00:00:00Z',
+    }));
+    const stub = makeSupabaseStub({
+      'organizations.select': servedLikePostgrest(all),
+      'warehouses.select': { data: [], error: null },
+    });
+    adminClientHolder.client = stub.client;
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const body = await (await GET(buildRequest('Bearer test-cron-secret'))).json();
+    expect(stub.chainsAll.get('organizations.select')).toHaveLength(2);
+    expect(body.orgSweep).toMatchObject({
+      activeOrgTotal: 1500,
+      swept: 50,
+      truncatedByCap: 1452,
+      runsToCoverAll: 32,
+    });
   });
 
   it('isolates a failing org: the sweep continues past a throwing prewarm', async () => {
@@ -267,30 +293,148 @@ describe('GET /api/cron/prewarm-orders-catalog', () => {
     });
   });
 
-  it('discloses cap truncation when more active orgs exist than the cap', async () => {
+  it('discloses the orgs outside this run\'s window in an info line, and warns only when work was shed for time', async () => {
     const stub = makeSupabaseStub({
       'organizations.select': {
-        // Simulate the capped page of a 120-org fleet.
-        data: Array.from({ length: 50 }, (_, i) => ({ id: `org-${i}` })),
+        // A 120-org fleet: the two known-hot orgs and a window of 48 run now.
+        data: Array.from({ length: 120 }, (_, i) => ({ id: `org-${String(i).padStart(3, '0')}` })),
         error: null,
-        count: 120,
       },
       'warehouses.select': { data: [], error: null },
     });
     adminClientHolder.client = stub.client;
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
 
     const res = await GET(buildRequest('Bearer test-cron-secret'));
     const body = await res.json();
 
-    expect(body.orgSweep.truncatedByCap).toBe(70);
-    // Repo rule: no silent caps — shed work must hit the logs too.
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('truncatedByCap=70'));
+    expect(body.orgSweep).toMatchObject({
+      activeOrgTotal: 120,
+      swept: 50,
+      truncatedByCap: 72,
+      runsToCoverAll: 3,
+      skippedForBudget: 0,
+    });
+    // Repo rule: no silent caps. The window is routine, so an info line;
+    // nothing was shed for time, so no warning.
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('truncatedByCap=72 runsToCoverAll=3'));
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('shed work'));
     warnSpy.mockRestore();
+    infoSpy.mockRestore();
   });
 
-  // Phone ordering PO-3: the phone storefront's photo map is warmed for every
-  // pair the web catalog is warmed for, after it, with its own result list.
+  it('warns when the deadline sheds work', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-17T12:00:00.000Z'));
+    adminClientHolder.client = makeSupabaseStub({
+      'organizations.select': {
+        data: Array.from({ length: 10 }, (_, i) => ({ id: `org-${i}` })),
+        error: null,
+      },
+      'warehouses.select': { data: [], error: null },
+    }).client;
+    prewarmInventorySpy.mockImplementation(async (organizationId, warehouseId) => {
+      vi.setSystemTime(Date.now() + 20_000);
+      return inventoryResult(organizationId, warehouseId);
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+
+    const body = await (await GET(buildRequest('Bearer test-cron-secret'))).json();
+    // Warms start at 0, 20 and 40 s; the fourth would start at 60 s.
+    expect(body.orgSweep.skippedForBudget).toBe(9);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('skippedForBudget=9'));
+    vi.useRealTimers();
+  });
+
+  it('runs cut by the deadline still warm every org: the ones left go first next run', async () => {
+    // 96 orgs; each warm takes 1.6 s, so about 30 of each window of 48 are
+    // warmed before the 50 s deadline. A window chosen from the clock alone
+    // cut the same tail every time and never warmed a third of them.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const fleet = Array.from({ length: 96 }, (_, i) => ({
+      id: `org-${String(i).padStart(3, '0')}`,
+      'organization_members.accepted_at': '2026-01-01T00:00:00Z',
+    }));
+    const attempts: Array<{ job: string; organization_id: string; last_attempt_at: string }> = [];
+    prewarmInventorySpy.mockImplementation(async (organizationId, warehouseId) => {
+      vi.setSystemTime(Date.now() + 1_600);
+      return inventoryResult(organizationId, warehouseId);
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    const warmed = new Set<string>();
+    const t0 = Date.parse('2026-11-17T12:00:00.000Z');
+    const runs = Math.ceil(96 / 30) + 1;
+    for (let run = 0; run < runs; run += 1) {
+      vi.setSystemTime(t0 + run * 30 * 60_000);
+      const stub = makeSupabaseStub({
+        'organizations.select': servedLikePostgrest(fleet),
+        'warehouses.select': { data: [], error: null },
+        'cron_sweep_attempts.select': servedLikePostgrest(() => attempts),
+        'cron_sweep_attempts.insert': (call) => {
+          const row = call.args[call.methods.indexOf('upsert')]![0] as {
+            job: string;
+            organization_id: string;
+            last_attempt_at: string;
+          };
+          const prev = attempts.find((a) => a.organization_id === row.organization_id);
+          if (prev) Object.assign(prev, row);
+          else attempts.push({ ...row });
+          return { data: null, error: null };
+        },
+      });
+      adminClientHolder.client = stub.client;
+      prewarmInventorySpy.mockClear();
+      const body = await (await GET(buildRequest('Bearer test-cron-secret'))).json();
+      const calls = prewarmInventorySpy.mock.calls.map((c) => c[0]);
+      // The known-hot orgs lead every run.
+      expect(calls.slice(0, 2)).toEqual([HOT_1, HOT_2]);
+      expect(body.orgSweep.skippedForBudget).toBeGreaterThan(0);
+      for (const id of calls.slice(2)) warmed.add(id);
+      // Only window orgs are recorded, under job 'prewarm'.
+      for (const args of stub.chainArgsAll.get('cron_sweep_attempts.insert') ?? []) {
+        const row = args[0]![0] as { job: string; organization_id: string };
+        expect(row.job).toBe('prewarm');
+        expect([HOT_1, HOT_2]).not.toContain(row.organization_id);
+      }
+    }
+    expect(warmed.size).toBe(96);
+    vi.useRealTimers();
+  });
+
+  it('when the attempt records cannot be read: reported, and the window is not the first 48 by id on every run', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const fleet = Array.from({ length: 200 }, (_, i) => ({
+      id: `org-${String(i).padStart(3, '0')}`,
+      'organization_members.accepted_at': '2026-01-01T00:00:00Z',
+    }));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    const firstOfWindow: string[] = [];
+    for (let run = 0; run < 3; run += 1) {
+      vi.setSystemTime(Date.parse('2026-11-17T12:00:00.000Z') + run * 30 * 60_000);
+      adminClientHolder.client = makeSupabaseStub({
+        'organizations.select': servedLikePostgrest(fleet),
+        'warehouses.select': { data: [], error: null },
+        'cron_sweep_attempts.select': { data: null, error: { message: 'attempts read failed' } },
+      }).client;
+      prewarmInventorySpy.mockClear();
+      await GET(buildRequest('Bearer test-cron-secret'));
+      const calls = prewarmInventorySpy.mock.calls.map((c) => c[0]);
+      expect(calls.slice(0, 2)).toEqual([HOT_1, HOT_2]);
+      firstOfWindow.push(calls[2]!);
+    }
+    expect(new Set(firstOfWindow).size).toBe(3);
+    expect(firstOfWindow).not.toContain('org-000');
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'cron.prewarm-orders-catalog.attempts' }),
+    );
+    vi.useRealTimers();
+  });
+
   it('warms the phone photo map for each known-hot pair, and a failure does not stop the sweep', async () => {
     const stub = makeSupabaseStub({
       'organizations.select': { data: [{ id: HOT_1 }], error: null, count: 1 },

@@ -3,6 +3,7 @@ import 'server-only';
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 
 import { env } from '@/lib/env';
+import { reportError } from '@/lib/error-reporter';
 import { createClient } from '@/lib/supabase/server';
 import { guardedServerSupabaseFetch } from '@/lib/supabase/url-length-guard.server';
 import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
@@ -26,6 +27,7 @@ import {
   effectivePermissions,
   policyRequiresAuthenticator,
   stepUpOwed,
+  unwrapOrganizationEmbed,
 } from '@stockpilot/core';
 
 import {
@@ -44,6 +46,57 @@ import {
  */
 function withPolicyMark<T extends object>(ctx: T, policyUnread: boolean): T {
   return policyUnread ? markMfaPolicyUnread(ctx) : ctx;
+}
+
+/** Why an organization's authenticator policy was not read. */
+type PolicyUnreadCause = 'hidden_row' | 'not_a_policy' | 'read_failed';
+
+/**
+ * At most one report per cause per this many milliseconds per server
+ * instance. Every request in the state still writes its console line; the
+ * report tells an operator the state exists (a phone sends a refused write
+ * again at every sync, so the requests repeat for as long as it lasts).
+ */
+const POLICY_UNREAD_REPORT_INTERVAL_MS = 10 * 60_000;
+const policyUnreadReportedAt = new Map<PolicyUnreadCause, number>();
+
+/** Test hook: forget when each cause was last reported. */
+export function resetPolicyUnreadReportsForTests(): void {
+  policyUnreadReportedAt.clear();
+}
+
+/**
+ * One warning report for the cause, unless one went out from this instance
+ * within the interval. It carries the cause code only: no organization, user,
+ * row value or address.
+ */
+function reportPolicyUnread(cause: PolicyUnreadCause): void {
+  const now = Date.now();
+  const last = policyUnreadReportedAt.get(cause);
+  const since = last === undefined ? null : now - last;
+  if (since !== null && since >= 0 && since < POLICY_UNREAD_REPORT_INTERVAL_MS) return;
+  policyUnreadReportedAt.set(cause, now);
+  void reportError(
+    new Error(
+      "An organization's authenticator policy could not be read; the request was held to the strictest policy",
+    ),
+    { tag: 'auth.mfa_policy.unread', level: 'warning', extra: { cause } },
+  );
+}
+
+/**
+ * Whether the organization row (or embed) that came back carries no policy
+ * this app knows: hidden from this member, or a value that is not a policy.
+ * When it does not, one log line with a fixed message and a cause code,
+ * never a value, id or address from the row, and the cause's report
+ * (reportPolicyUnread). A read that errors logs in its own catch instead.
+ */
+function policyNotReadFrom(org: Parameters<typeof readOrganizationMfaPolicy>[0]): boolean {
+  if (readOrganizationMfaPolicy(org) !== null) return false;
+  const cause = unwrapOrganizationEmbed(org) === null ? 'hidden_row' : 'not_a_policy';
+  console.warn('[api-context] authenticator policy not read:', cause);
+  reportPolicyUnread(cause);
+  return true;
 }
 
 /**
@@ -133,7 +186,7 @@ async function resolveApiMfaState(
     // policy instead of 'optional' (lib/auth/mfa-policy.ts).
     if (error) throw new Error(`mfa_policy unreadable: ${error.code || 'unknown'}`);
     policy = enforcedMfaPolicy(org);
-    policyUnread = readOrganizationMfaPolicy(org) === null;
+    policyUnread = policyNotReadFrom(org);
   } catch (err) {
     // Fail CLOSED: a read that errors is held to the STRICTEST policy, exactly
     // like a hidden row, never to a lesser one. A flaky org lookup must NOT
@@ -147,6 +200,7 @@ async function resolveApiMfaState(
     // so nothing passes here that the unread policy would refuse. Mirrors
     // resolveMfaState() in services/context.ts.
     console.error('[resolveApiMfaState] failed:', err);
+    reportPolicyUnread('read_failed');
     policy = UNREADABLE_ORG_MFA_POLICY;
     policyUnread = true;
   }
@@ -891,7 +945,7 @@ export async function withApiContext(
           },
           fast.held,
         ),
-        readOrganizationMfaPolicy(fast.held.organization) === null,
+        policyNotReadFrom(fast.held.organization),
       );
     }
 
@@ -1008,7 +1062,7 @@ export async function withApiContext(
         },
         fast.held,
       ),
-      readOrganizationMfaPolicy(fast.held.organization) === null,
+      policyNotReadFrom(fast.held.organization),
     );
   }
 

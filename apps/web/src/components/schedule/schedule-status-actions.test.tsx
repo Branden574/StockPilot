@@ -9,13 +9,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   update: vi.fn(),
+  push: vi.fn(),
   refresh: vi.fn(),
   success: vi.fn(),
   error: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: vi.fn(), refresh: h.refresh }),
+  useRouter: () => ({ push: h.push, refresh: h.refresh }),
 }));
 vi.mock('sonner', () => ({ toast: { success: h.success, error: h.error } }));
 vi.mock('@/server/actions/schedule', () => ({ updateScheduleEventAction: h.update }));
@@ -89,5 +90,51 @@ describe('ScheduleStatusActions', () => {
     await waitFor(() => {
       for (const b of screen.getAllByRole('button')) expect(b).toBeEnabled();
     });
+  });
+
+  it('a completion saved without its kit handed out links to the kit page from the toast', async () => {
+    const kit = 'd4d4d4d4-0000-4000-8000-000000000401';
+    const message =
+      "Event marked complete, but the bundle could not be distributed. Hand it out from the kit's page.";
+    h.update.mockResolvedValue({
+      ok: false,
+      error: { code: 'conflict', message, details: { kitId: kit } },
+    });
+    const user = userEvent.setup();
+    render(<ScheduleStatusActions eventId="ev-1" currentStatus="in_progress" />);
+    await user.click(screen.getByRole('button', { name: 'Mark complete' }));
+    await waitFor(() => expect(h.error).toHaveBeenCalledTimes(1));
+    const [said, options] = h.error.mock.calls[0]! as [
+      string,
+      { action: { label: string; onClick: () => void } },
+    ];
+    expect(said).toBe(message);
+    expect(options.action.label).toBe('Open kit');
+    options.action.onClick();
+    expect(h.push).toHaveBeenCalledWith(`/dashboard/bundles/${kit}`);
+  });
+
+  it('an answer that names no kit gets no link', async () => {
+    const message =
+      "Event marked complete, but the bundle could not be distributed. Ask a manager to hand it out from the kit's page.";
+    h.update.mockResolvedValue({ ok: false, error: { code: 'conflict', message } });
+    const user = userEvent.setup();
+    render(<ScheduleStatusActions eventId="ev-1" currentStatus="in_progress" />);
+    await user.click(screen.getByRole('button', { name: 'Mark complete' }));
+    await waitFor(() => expect(h.error).toHaveBeenCalledWith(message));
+    expect(h.error.mock.calls[0]).toHaveLength(1);
+    expect(h.push).not.toHaveBeenCalled();
+  });
+
+  it('a kit id that is not an id gets no link', async () => {
+    h.update.mockResolvedValue({
+      ok: false,
+      error: { code: 'conflict', message: 'Not handed out.', details: { kitId: '../settings' } },
+    });
+    const user = userEvent.setup();
+    render(<ScheduleStatusActions eventId="ev-1" currentStatus="in_progress" />);
+    await user.click(screen.getByRole('button', { name: 'Mark complete' }));
+    await waitFor(() => expect(h.error).toHaveBeenCalledWith('Not handed out.'));
+    expect(h.error.mock.calls[0]).toHaveLength(1);
   });
 });

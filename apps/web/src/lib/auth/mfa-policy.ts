@@ -28,10 +28,10 @@ export {
  * withApiContext (lib/auth/api-context.ts) holds a policy it could not read
  * (the organization row failed, came back hidden, or carried no policy it
  * knows) to the strictest one, so the context's labels read exactly like a
- * member whose organization does require an authenticator. The read wrapper
- * (server/lib/api-read-context.ts) tells the two apart: a member whose policy
- * was not read is told their access could not be checked and to try again,
- * never that their organization requires something it may not.
+ * member whose organization does require an authenticator. The API context
+ * gate (server/lib/api-context-gate.ts) tells the two apart: a write by a
+ * member whose policy was not read gets the retryable answer that their
+ * access could not be checked, and nothing is written.
  *
  * The mark lives beside the context, not on it, so the context keeps exactly
  * the fields and values it had and everything that compares or copies one

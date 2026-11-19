@@ -36,6 +36,7 @@ vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: vi.fn(async () => ({ allowed: true, resetAt: Date.now() + 60_000 })),
 }));
 
+import { resetPolicyUnreadReportsForTests } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -54,11 +55,26 @@ let world: LegacyContextWorld;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetPolicyUnreadReportsForTests();
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   world = legacyContextWorld({ role: 'admin' });
   refs.client = legacyContextClient(world);
 });
+
+/** The reports filed under the snapshot's own tag. */
+const snapshotReports = () =>
+  vi.mocked(reportError).mock.calls.filter((c) => c[1].tag === 'mobile.snapshot.module_state');
+/**
+ * The causes of the authenticator policy reports: an organization row that
+ * fails or comes back hidden is the policy's row too, so withApiContext
+ * reports that the policy was not read (lib/auth/api-context.ts).
+ */
+const policyReportCauses = () =>
+  vi
+    .mocked(reportError)
+    .mock.calls.filter((c) => c[1].tag === 'auth.mfa_policy.unread')
+    .map((c) => c[1].extra?.cause);
 
 // A member with an authenticator sends a token at aal2, as a phone does once
 // the code was entered.
@@ -72,8 +88,8 @@ const pull = () =>
   );
 
 describe('GET /api/v1/mobile/snapshot with the module state unreadable', () => {
-  it.each<[string, Partial<LegacyContextWorld>]>([
-    ['the rows read failed', { moduleRowsFail: true }],
+  it.each<[string, Partial<LegacyContextWorld>, string[]]>([
+    ['the rows read failed', { moduleRowsFail: true }, []],
     // The organization row itself could not be read, so its authenticator
     // policy was not read either and is held to the strictest: a member with
     // an authenticator at aal2 passes it and meets the module state; one
@@ -81,19 +97,22 @@ describe('GET /api/v1/mobile/snapshot with the module state unreadable', () => {
     [
       'the comp flag read failed',
       { organizationFail: true, moduleRows: ['orders'], authenticator: true },
+      ['read_failed'],
     ],
     [
       'the organization row read back hidden',
       { organizationHidden: true, moduleRows: ['orders'], authenticator: true },
+      ['hidden_row'],
     ],
-    ['the rows read answered no list', { moduleRowsNoList: true }],
+    ['the rows read answered no list', { moduleRowsNoList: true }, []],
     [
       'the organization row answered without its comp flag',
       { organizationNoComp: true, moduleRows: ['orders'] },
+      [],
     ],
   ])(
     '%s: a 500 with the fixed sentence, its own tag at warning level, and no read after it',
-    async (_what, failure) => {
+    async (_what, failure, policyCauses) => {
       Object.assign(world, failure);
       const res = await pull();
       expect(res.status).toBe(500);
@@ -107,8 +126,12 @@ describe('GET /api/v1/mobile/snapshot with the module state unreadable', () => {
       expect(checkRateLimit).not.toHaveBeenCalled();
       expect(routeWork(world)).toEqual([]);
       // Reported once, under its own tag, as a warning: never as uncaught.
-      expect(reportError).toHaveBeenCalledTimes(1);
-      const [err, context] = vi.mocked(reportError).mock.calls[0]!;
+      // The only other report is the policy's, when the organization row
+      // behind both reads failed or came back hidden.
+      expect(snapshotReports()).toHaveLength(1);
+      expect(policyReportCauses()).toEqual(policyCauses);
+      expect(reportError).toHaveBeenCalledTimes(1 + policyCauses.length);
+      const [err, context] = snapshotReports()[0]!;
       expect(err).toBeInstanceOf(ModulesUnavailableError);
       expect(context).toEqual(
         expect.objectContaining({ tag: 'mobile.snapshot.module_state', level: 'warning' }),
@@ -116,12 +139,20 @@ describe('GET /api/v1/mobile/snapshot with the module state unreadable', () => {
     },
   );
 
-  it.each<[string, Partial<LegacyContextWorld>]>([
-    ['the comp flag read failed', { organizationFail: true, moduleRows: ['orders'] }],
-    ['the organization row read back hidden', { organizationHidden: true, moduleRows: ['orders'] }],
+  it.each<[string, Partial<LegacyContextWorld>, string]>([
+    [
+      'the comp flag read failed',
+      { organizationFail: true, moduleRows: ['orders'] },
+      'read_failed',
+    ],
+    [
+      'the organization row read back hidden',
+      { organizationHidden: true, moduleRows: ['orders'] },
+      'hidden_row',
+    ],
   ])(
-    '%s, for a member with no authenticator: the policy was not read either, so a retryable 503 check_failed, never the set-up sentence, with no read and nothing reported',
-    async (_what, failure) => {
+    '%s, for a member with no authenticator: the policy was not read either, so a retryable 503 check_failed, never the set-up sentence, with no read and only the policy reported',
+    async (_what, failure, policyCause) => {
       Object.assign(world, failure);
       const res = await pull();
       expect(res.status).toBe(503);
@@ -136,7 +167,11 @@ describe('GET /api/v1/mobile/snapshot with the module state unreadable', () => {
       expect(JSON.stringify(body)).not.toContain(AUTHENTICATOR_SET_UP_OWED_COPY);
       expect(checkRateLimit).not.toHaveBeenCalled();
       expect(routeWork(world)).toEqual([]);
-      expect(reportError).not.toHaveBeenCalled();
+      // The snapshot reports nothing of its own; withApiContext reports that
+      // the policy was not read.
+      expect(snapshotReports()).toEqual([]);
+      expect(policyReportCauses()).toEqual([policyCause]);
+      expect(reportError).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -254,7 +289,8 @@ describe('GET /api/v1/mobile/snapshot: module-gated lists with the module state 
       message: 'Your access could not be checked. Please try again.',
     });
     expect(world.calls.filter((c) => LIST_TABLES.includes(c))).toEqual([]);
-    expect(vi.mocked(reportError).mock.calls[0]?.[1]).toEqual(
+    expect(snapshotReports()).toHaveLength(1);
+    expect(snapshotReports()[0]?.[1]).toEqual(
       expect.objectContaining({ tag: 'mobile.snapshot.module_state', level: 'warning' }),
     );
   });

@@ -48,8 +48,11 @@ import type { ServiceContext } from '@/server/services/context';
  * throw is a bug that must stay loud, and Next.js control flow stays Next's
  * (recurring pattern #23). Nothing is reported here: the loaders already
  * report two of the failures (`auth.permissions.read`,
- * `auth.account-status.read`), and the membership choice logs one line naming
- * the read that did not answer (lib/auth/api-context.ts pickActiveMembership).
+ * `auth.account-status.read`), the membership choice logs one line naming
+ * the read that did not answer (lib/auth/api-context.ts pickActiveMembership),
+ * and a policy that was not read is reported where the context is marked
+ * (`auth.mfa_policy.unread`, at most once per cause per ten minutes per
+ * server).
  *
  * THE MODULES THE ROUTE NEEDS (docket S81). `opts.modules` names the
  * optional modules the route refuses without. When withApiContext could not
@@ -65,14 +68,12 @@ import type { ServiceContext } from '@/server/services/context';
  *
  * A POLICY THAT COULD NOT BE READ. When withApiContext could not read the
  * organization's authenticator policy, it holds the member to the strictest
- * one and marks the context (lib/auth/mfa-policy.ts). A member with no
- * verified authenticator then looks like one who must set one up first, and
- * the route's service gate would answer the write 403 `mfa_required`: a
- * sentence that may be untrue, and one the phone treats as final for a
- * queued change. Such a write (any method but GET and HEAD) gets the marker
- * from here instead, before the route does anything, so the phone keeps the
- * change and sends it again. A member whose policy was read keeps the
- * route's own answer, and so does a member with a verified authenticator.
+ * one and marks the context (lib/auth/mfa-policy.ts). A write (any method
+ * but GET and HEAD) from a member in that state with no verified
+ * authenticator gets the gate's retryable answer, before the route does
+ * anything: nothing was written, send it again. A member whose policy was
+ * read keeps the route's own answer, and so does a member with a verified
+ * authenticator.
  *
  * Shape as returnsContext (app/api/v1/returns/http.ts): `{ response }` to
  * answer at once, or `{ ctx }`, where a null ctx is the route's own 401.
@@ -126,7 +127,10 @@ function policyUnreadForWrite(req: Request, ctx: ServiceContext): boolean {
 
 /** The marker, and one log line that names the class and never a message. */
 function refusedBeforeAnyWork(className: string): { response: NextResponse } {
-  // The class only: the loader that refused has already reported the read.
+  // The class only. The read behind it has logged its own line already: a
+  // loader that threw or a module set that could not be read where the read
+  // was made, and a policy that was not read where the context was marked
+  // (lib/auth/api-context.ts).
   console.warn(
     '[api-context-gate] access could not be checked, refused before any work:',
     className,

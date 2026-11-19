@@ -134,7 +134,13 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was:
     // '2026-11-16T04:03:00Z'): the Integrations and schedule event release below is dated
     // 2026-11-16T09:39:00Z, so the placeholder is that same minute.
-    publishedAt: '2026-11-16T09:39:00Z',
+    // Moved again by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was:
+    // '2026-11-16T09:39:00Z'): the emptied fields and schedule completion release below is dated
+    // 2026-11-16T12:33:00Z, so the placeholder is that same minute.
+    // Moved again by docs/releases-low-critical-pages (2026-11-18; was: '2026-11-16T12:33:00Z'): the Low +
+    // critical pages and list value release below is dated 2026-11-18T10:00:00Z, so the placeholder is that
+    // same minute.
+    publishedAt: '2026-11-18T10:00:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -223,6 +229,272 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    id: 'low-critical-pages-and-list-value-2026-11',
+    revision: 1,
+    // One web change, no phone update:
+    // - #609 (squash 86625dbbf), live in production since 2026-11-18
+    //   09:59:07Z (deployment dpl_4Bu6aVJihnSbh9sd2GdF7vLCTBGn). It uses the
+    //   two database functions of migration 0470 (#614, squash 01782aa99),
+    //   applied before #609 merged.
+    // publishedAt is the whole minute after that deployment went live. It is
+    // the newest published release, so it sits directly below the Liquid
+    // Glass draft, whose placeholder moved to the same minute.
+    // Claims checked against the code at 86625dbbf (paths under apps/web/src
+    // unless they start with supabase/):
+    // - Low + critical is stock=low (components/inventory/inventory-table.tsx
+    //   VIEWS and the chip that sets stock=low), filters.lowStock in
+    //   InventoryService (inventory/page.tsx and books/page.tsx both pass
+    //   lowStock: params.stock === 'low'; both pages are 30 records a page,
+    //   PAGE_SIZE).
+    // - The low rule is the computed field is_low_stock
+    //   (supabase/migrations/0470: no stock, or a reorder point above 0 with
+    //   the quantity at or under it), applied in the request by
+    //   applyContentFilters (server/services/inventory.ts, query.eq
+    //   ('is_low_stock', true)), which list()'s page and its exact count, and
+    //   listPlanRows' scan (filteredScanPage), all go through. So a fixed page
+    //   is the requested 30-record slice of the low or critical records
+    //   (.range on the filtered query), the count is theirs, and listPlanRows'
+    //   2,000 cap (INSTANT_MODE_MAX_ROWS, lib/inventory/instant-mode.ts;
+    //   first.count > INSTANT_MODE_MAX_ROWS returns null) counts them. Before
+    //   (86625dbbf^), the request carried only the pre-filter
+    //   or(reorder_point.gt.0, quantity_on_hand.lte.0) and list() kept the
+    //   low ones among the 30 it read, while the count came from the whole
+    //   low set; the plan's cap counted the pre-filtered records. A list of
+    //   2,000 or fewer is planned (planLivePage in
+    //   server/services/lib/planned-page.ts, for every role, on Items and
+    //   Books: pages that keep a header's records together, which can end
+    //   before 30 records), so the 30-per-page words are said of longer lists
+    //   only.
+    // - The value: list() asks inventory_list_value once, with
+    //   buildItemListValueFilters (the same filters and the caller's
+    //   warehouse and category scope), in parallel with the page, unless the
+    //   page is planned (planned pages bring plannedTotals from listPlanRows,
+    //   unchanged). The function (0470) adds up quantity_on_hand * unit_cost
+    //   in one SELECT, as the caller (SECURITY INVOKER, row level security).
+    //   Before, fetchAllRows read the filtered view 1,000 records at a time
+    //   ordered by id, in parallel with the page, and list() returned once
+    //   both were done; a record added or removed between two reads moves the
+    //   later windows, so one could be read twice or not at all. The figure
+    //   is the "on hand" amount in the count line above the list, beside the
+    //   top pager (inventory-table.tsx). Managers, admins and owners on the
+    //   default view (page 1 of the whole list, no filter, default order) are
+    //   served the stored figure 'inventory-value-v1'
+    //   (server/loaders/inventory-list.ts, loadInventoryValueOnHand: the
+    //   inventory_value_on_hand aggregate of 0227), unchanged, and the words
+    //   say so.
+    // - Measured on a local copy only; no speed is claimed.
+    // Who is told: whoever can read items (items:read), on both entries, as
+    // the release that planned Low + critical pages; no links.
+    status: 'published',
+    title:
+      'Every page of a long Low + critical list is full, and the on hand value is added up in one read',
+    summary:
+      'On the web, a Low + critical list on Items or Books of more than 2,000 low or critical records now shows 30 of them on every page but the last, and its count and pages are those of the low or critical records. The on hand value above a long list is now added up in one read, so a record added or removed while it is being added up can no longer be counted twice or left out.',
+    publishedAt: '2026-11-18T10:00:00Z',
+    entries: [
+      {
+        id: 'low-critical-pages-full',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Every page of a long Low + critical list is full',
+        whatChanged:
+          "On the web, with Low + critical chosen on Items or Books, a list of more than 2,000 low or critical records, cut every 30 records, now shows 30 of them on every page but the last. A list of 2,000 or fewer keeps each header's records together on a page, as other lists of that size do, however many records have a reorder point.",
+        whyItMatters:
+          'A page cut every 30 records used to read 30 records that have a reorder point or no stock and then show only the low or critical ones among them, so it could show a few or none while later pages held more. A list with more than 2,000 such records was cut that way even when far fewer of them were low or critical.',
+        howItAffectsYou:
+          'The count above the list and the number of pages are those of the low or critical records, and no page before the last is short or empty.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        id: 'list-value-added-up-in-one-read',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'The on hand value above a long list is added up in one read',
+        whatChanged:
+          'On the web, the on hand value above Items or Books (quantity on hand times unit cost, over every record the list matches) is now added up in one read when the list has more than 2,000 records. Managers, admins and owners looking at the first page of the whole list in its usual order, with no filter, keep the figure StockPilot already stores for it.',
+        whyItMatters:
+          'It used to be added up by reading every record of the list, 1,000 at a time, before the page was shown. A record added or removed between two of those reads could be counted twice or left out.',
+        howItAffectsYou:
+          'The value covers the same records as before: the filters and rack you chose, Low + critical, and only what you are allowed to see. Lists of 2,000 records or fewer add it up as before.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:read'] },
+      },
+    ],
+  },
+  {
+    id: 'emptied-fields-and-schedule-completion-2026-11',
+    // Revision 2 (bundles/hand-out-follows-the-manager-rule, 2026-11-16; was:
+    // 1): #603 checks the caller's role, against the floor of a kit hand-out
+    // (packages/core roleCanHandOutKits: manager or above), before the stored
+    // kit warehouse when an event with a kit not handed out yet is completed.
+    // Only staff and viewers can lack write access to a warehouse of their
+    // organization (managers and above work in every warehouse), so everyone
+    // revision 1's schedule entry describes reads the role sentence from Mark
+    // complete, and the warehouse sentence it quotes is read by nobody there:
+    // a material change (docs/releases/PUBLISHING.md: bump the revision to
+    // re-announce). The schedule entry and the summary's schedule sentence are
+    // rewritten to the code at #603's head and the release is told again to
+    // whoever read revision 1. Its place and its date stay: the registry is
+    // newest first by first publication. The four field entries are as they were.
+    revision: 2,
+    // Two web changes, no phone update and no migration:
+    // - #595 (squash c05cf8ffa), live in production since 2026-11-16
+    //   12:10:47Z (its GitHub deployment status, Production, success, is
+    //   stamped 12:10:31Z).
+    // - #597 (squash 0a6215d57), live in production since 2026-11-16
+    //   12:32:17Z (its deployment status is stamped 12:32:00Z).
+    // publishedAt is the whole minute after both. #597 went live after #591,
+    // so this release sits above the Integrations and schedule event release
+    // and is the newest published release.
+    // Claims checked against the code at 0a6215d57 (paths under apps/web/src):
+    // - The four field entries: lib/edited-optional-text.ts
+    //   editedOptionalText sends an emptied field whose record had text as
+    //   '', and leaves out an empty field whose record had none; update() in
+    //   server/services/{suppliers,charters,warehouses,locations,categories}.ts
+    //   stores '' as null and keeps a column whose key is left out. The
+    //   fields named are the ones each edit dialog sends through the helper:
+    //   components/suppliers/suppliers-manager.tsx (Contact name, Phone,
+    //   Email, Website, Notes), components/admin/charters-manager.tsx (Code,
+    //   Description, the Contact name, email and phone boxes, Internal
+    //   notes), components/admin/warehouses-manager.tsx (the Contact name,
+    //   email and phone boxes, Notes), components/locations/
+    //   locations-manager.tsx (Notes), components/categories/
+    //   categories-manager.tsx (Description). The charter address and a
+    //   category's colour are not sent through it and are not named. Each
+    //   dialog's edit button reads Save changes.
+    // - Who is told about the fields, one entry per gate, so nobody is told
+    //   of a dialog they cannot open: suppliers/page.tsx checks the suppliers
+    //   module and passes canManage (suppliers:manage) for Edit, and
+    //   SuppliersService.update asserts both; admin/layout.tsx sends anyone
+    //   without organization:update away from admin/charters and
+    //   admin/warehouses, and both services' update() assert it; Edit on
+    //   locations/page.tsx needs locations:manage and on categories/page.tsx
+    //   categories:manage, which LocationsService.update and
+    //   CategoriesService.update assert (neither page nor service checks a
+    //   module).
+    // - The schedule entry (revision 2, checked against the code at #603's
+    //   head): server/services/schedule.ts update(). A save that moves an
+    //   event from in progress to completed, with no hand-out yet, whose kit
+    //   (bundle, quantity and kit warehouse, the patch over the stored row;
+    //   the schema takes the three together) is set, refuses a caller whose
+    //   role is below manager (roleCanHandOutKits) before anything is written,
+    //   with the ServiceError 'forbidden' and SCHEDULE_COMPLETE_KIT_HAND_OUT_
+    //   REFUSED. Only after that does it check write access to a kit warehouse
+    //   the patch does not name (SCHEDULE_COMPLETE_KIT_WAREHOUSE_REFUSED), which
+    //   a manager or above passes for every warehouse of the organization, so
+    //   Mark complete answers that sentence to nobody and the entry does not
+    //   quote it. Mark complete (components/schedule/schedule-status-actions.tsx,
+    //   shown for an in progress event) sends only { status: 'completed' },
+    //   so those are the checks it meets; it shows the result's message as an
+    //   error toast, and the event keeps its status. A change the row policy
+    //   refuses (SCHEDULE_EVENT_UPDATE_REFUSED) is met by any other save; a
+    //   completion of someone else's event with a kit not handed out yet meets
+    //   the role check first, so the entry says "any other change". The event page shows the
+    //   buttons with canManage (schedule:manage) and checks the schedule
+    //   module (schedule/[id]/page.tsx), and its Linked bundle line says how
+    //   many kits will be distributed from which warehouse when the event is
+    //   marked complete. The Edit and New event form
+    //   (components/schedule/schedule-event-form.tsx) sends the event's
+    //   warehouse and, with a bundle, its Distribute from warehouse, so its
+    //   refusals are SCHEDULE_EVENT_WAREHOUSE_REFUSED and
+    //   SCHEDULE_KIT_WAREHOUSE_REFUSED (create() and update() through
+    //   assertWarehouseWrite). An update that comes back with no row is
+    //   SCHEDULE_EVENT_UPDATE_REFUSED. server/actions/schedule.ts answers
+    //   each through actionErrorResult, which keeps a ServiceError's words.
+    //   The entry says only who completes such an event and that anyone else
+    //   is refused before anything is saved: it does not say that completing
+    //   always hands a kit out, nor that a completed event always has its
+    //   hand-out. The phone
+    //   has no Mark complete (apps/mobile/app/(drawer)/schedule.tsx lists
+    //   events; apps/mobile/app/schedule/new.tsx inserts through its own
+    //   path).
+    // - Not told: #595's charter and warehouse edit payloads leave the status
+    //   out (an edit keeps it), and a blank charter code is stored as null on
+    //   create too; #597's four API routes that answer 403 when their module
+    //   is off. None changes what a page shows.
+    status: 'published',
+    title:
+      'Emptying a field and saving clears it, and clearer messages when a schedule event is not saved',
+    summary:
+      "On the website, emptying an optional field when you edit a supplier, charter, warehouse, location or category, and saving, now clears it. Mark complete on a schedule event whose kits have not been handed out yet says, before anything is saved, when the event has to be completed by a manager, and the event stays In progress. The mobile app is unchanged.",
+    // #595 is live in production since 2026-11-16 12:10:47Z, #597 since 12:32:17Z.
+    publishedAt: '2026-11-16T12:33:00Z',
+    entries: [
+      {
+        id: 'schedule-complete-kit-warehouse-refused',
+        category: 'improved',
+        area: 'Schedule',
+        title: 'Mark complete says right away when a schedule event has to be completed by a manager',
+        whatChanged:
+          "On the website, a schedule event whose kits have not been handed out yet is marked complete by a manager, an admin or an owner. When anyone else chooses Mark complete on it, the event is not completed and StockPilot says: You can't complete this event because its kit has to be handed out by a manager. Ask a manager to complete it.",
+        whyItMatters: 'You find out before anything is saved, and the event stays In progress.',
+        howItAffectsYou:
+          "Saving an event on New event or Edit with a warehouse you don't have write access to now says: You don't have write access to the warehouse set for this event, so nothing was saved. Choose a warehouse you work in, or ask a manager. For the Distribute from warehouse, the message says the warehouse this event's kit comes from. Any other change to an event you may not change says: You can't change this event. Ask a manager. Nothing is saved in each case. The mobile app is unchanged.",
+        whatToDo:
+          'If you see one of these messages, choose a warehouse you work in, or ask a manager to complete the event, to make the change or to give you access to that warehouse.',
+        audience: { anyPermission: ['schedule:manage'], modules: ['schedule'] },
+      },
+      {
+        id: 'supplier-emptied-field-cleared',
+        category: 'fixed',
+        area: 'Suppliers',
+        title: 'Emptying a field on a supplier and saving clears it',
+        whatChanged:
+          'On the website, when you edit a supplier, empty its Contact name, Phone, Email, Website or Notes and choose Save changes, that field is now cleared.',
+        whyItMatters:
+          'You can remove a contact detail or a note that is out of date without typing something in its place.',
+        howItAffectsYou:
+          'The fields you leave as they are keep what they hold. The mobile app is unchanged.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/suppliers', label: 'Open Suppliers' },
+        audience: { anyPermission: ['suppliers:manage'], modules: ['suppliers'] },
+      },
+      {
+        id: 'charter-warehouse-emptied-field-cleared',
+        category: 'fixed',
+        area: 'Charters and warehouses',
+        title: 'Emptying a field on a charter or a warehouse and saving clears it',
+        whatChanged:
+          'On the website, when you edit a charter and empty its Code, Description, contact name, email or phone, or Internal notes, or edit a warehouse and empty its contact name, email or phone, or Notes, then choose Save changes, that field is now cleared.',
+        whyItMatters:
+          'You can remove a contact detail or a note that is out of date without typing something in its place.',
+        howItAffectsYou:
+          'The fields you leave as they are keep what they hold. The mobile app is unchanged.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['organization:update'] },
+      },
+      {
+        id: 'location-emptied-notes-cleared',
+        category: 'fixed',
+        area: 'Locations',
+        title: "Emptying a location's notes and saving clears them",
+        whatChanged:
+          'On the website, when you edit a location, empty its Notes and choose Save changes, the notes are now cleared.',
+        whyItMatters:
+          'You can remove a note that is out of date without typing something in its place.',
+        howItAffectsYou: 'The other fields keep what they hold. The mobile app is unchanged.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/locations', label: 'Open Locations' },
+        audience: { anyPermission: ['locations:manage'] },
+      },
+      {
+        id: 'category-emptied-description-cleared',
+        category: 'fixed',
+        area: 'Categories',
+        title: "Emptying a category's description and saving clears it",
+        whatChanged:
+          'On the website, when you edit a category, empty its Description and choose Save changes, the description is now cleared.',
+        whyItMatters:
+          'You can remove a description that is out of date without typing something in its place.',
+        howItAffectsYou: 'The other fields keep what they hold. The mobile app is unchanged.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/categories', label: 'Open Categories' },
+        audience: { anyPermission: ['categories:manage'] },
+      },
+    ],
+  },
+  {
     id: 'connection-and-schedule-messages-2026-11',
     revision: 1,
     // Two web changes, no phone update and no migration:
@@ -253,16 +525,23 @@ export const RELEASES: Release[] = [
     // - Entry 2: server/services/schedule.ts create() assertWarehouseWrite
     //   throws assertWarehouseAccess's ForbiddenError as it is when
     //   accessUnreadable is set (the caller's own access could not be read),
-    //   and keeps the ServiceError 'forbidden' with the check's words for a
-    //   real refusal. server/actions/schedule.ts createScheduleEventAction
+    //   and answers a real refusal with the ServiceError 'forbidden' and a
+    //   sentence of its own. server/actions/schedule.ts createScheduleEventAction
     //   answers through server/lib/action-error-result.ts actionErrorResult,
     //   which gives ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY (packages/core
     //   guards/db-guard-copy.ts: "Your warehouse access couldn't be checked
     //   just now, so nothing was changed. Try again.") as a retryable
     //   conflict; components/schedule/schedule-event-form.tsx shows the
     //   result's message as an error toast and keeps the form as it was. A
-    //   real refusal keeps the words of lib/auth/warehouse.ts ("User does not
-    //   have write access to warehouse" and the id). Told to whoever can
+    //   real refusal reads SCHEDULE_EVENT_WAREHOUSE_REFUSED or
+    //   SCHEDULE_KIT_WAREHOUSE_REFUSED ("You don't have write access to the
+    //   warehouse set for this event, so nothing was saved. ..." and the kit
+    //   version), which name no warehouse id. (Re-read by
+    //   docs/whats-new-emptied-fields-and-schedule-completion, 2026-11-16,
+    //   against 0a6215d57 (#597), which gave a real refusal these sentences;
+    //   at 7bbbbd33f it kept the words of lib/auth/warehouse.ts. The reader
+    //   text, about the access that could not be checked, holds at both.)
+    //   Told to whoever can
     //   open New event (schedule/new/page.tsx checks schedule:manage) with the
     //   schedule module on. The phone's New event (apps/mobile/app/schedule/
     //   new.tsx) writes through its own path and is unchanged. No link: a
@@ -7103,9 +7382,15 @@ export const RELEASES: Release[] = [
     //   fit, and a unit larger than 30 records fills a page of its own;
     // - limits: past INSTANT_MODE_MAX_ROWS (2000) records in the filtered view
     //   listPlanRows answers null and the page keeps fixed 30-record slices
-    //   (so does a failed scan); with stock=low the size it checks is the low
-    //   pre-filter's (a reorder point set, or no stock), counted before the
-    //   low rule, so the words say what the 2,000 counts there; a search in
+    //   (so does a failed scan); with stock=low the size it checked was the
+    //   low pre-filter's (a reorder point set, or no stock), counted before
+    //   the low rule, so the words said what the 2,000 counted there.
+    //   Corrected (wording only, revision kept) when migration 0470 moved
+    //   the whole low rule into the request (the computed field
+    //   is_low_stock, applied by applyContentFilters to the page, its count
+    //   and the plan scan): the 2,000 now counts the low or critical records
+    //   themselves, and the words say so (was: "for Low + critical, the
+    //   2,000 counts every record with a reorder point or no stock"); a search in
     //   the box shows /api/items/search's first pageSize (30) matches with no
     //   pager (the table's planned is null while q is set);
     // - the footer: a planned page prints "N SKUs" (distinctSkus) and, when it
@@ -7156,7 +7441,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           "Pages used to be cut every 30 records in the list's order, so a record that sorted far from the others under its header could sit alone on another page. A shirt's other sizes could show on page 1 while its XS sat alone on page 2, where it was easy to miss when ordering. On a list of more than one page, the header of a SKU or a group with two or more records also showed a * after its on hand figure, as other pages might hold more of it. With Low + critical chosen, a page used to show only the low or critical ones among 30 records, so it could show few or none, and some could be on no page.",
         howItAffectsYou:
-          "A page can end before 30 records so that a header's records are not cut in two, and a header of more than 30 records gets a page of its own. With Low + critical chosen, every low or critical record is now on a page. The count above the list now starts with the number of SKUs, then gives the number of items (rows on Books) when some SKUs have more than one record. Lists of more than 2,000 records are still cut every 30 records, as before (for Low + critical, the 2,000 counts every record with a reorder point or no stock), and a search typed into the search box still shows its first 30 matches.",
+          "A page can end before 30 records so that a header's records are not cut in two, and a header of more than 30 records gets a page of its own. With Low + critical chosen, every low or critical record is now on a page. The count above the list now starts with the number of SKUs, then gives the number of items (rows on Books) when some SKUs have more than one record. Lists of more than 2,000 records are still cut every 30 records, as before (for Low + critical, the 2,000 counts the low or critical records), and a search typed into the search box still shows its first 30 matches.",
         whatToDo: 'No action needed.',
         audience: { anyPermission: ['items:read'] },
       },

@@ -42,7 +42,12 @@ vi.mock('./user-categories', () => ({
 
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
 
-import { buildRackFilterClause, InventoryService, type ItemListFilters } from './inventory';
+import {
+  buildItemListValueFilters,
+  buildRackFilterClause,
+  InventoryService,
+  type ItemListFilters,
+} from './inventory';
 
 const arg = (call: MockCall, method: string, col?: string) => {
   const i = call.methods.findIndex(
@@ -173,12 +178,24 @@ describe('InventoryService.listPlanRows', () => {
     await expect(svc.listPlanRows({})).rejects.toMatchObject({ code: 'internal_error' });
   });
 
-  it('applies the low-stock filter to the rows as list() does', async () => {
-    const { stub } = viewStub(4, (n) => lightRow(n, { quantity_on_hand: n, reorder_point: 1 }));
+  it('leaves low stock to the database: the scan asks is_low_stock and plans every row it returns', async () => {
+    // The stub plays the database: it answers whatever the request asks. The
+    // rows here are NOT low by the rule; were the plan still filtering in code
+    // it would drop them, and its total would disagree with the count the
+    // database gave the page.
+    const { stub } = viewStub(3, (n) =>
+      lightRow(n, { quantity_on_hand: 10 + n, reorder_point: 1 }),
+    );
     const svc = new InventoryService(makeServiceContext(stub.client, { role: 'staff' }));
     const out = await svc.listPlanRows({ lowStock: true });
-    expect(out!.rows.map((r) => r.quantity_on_hand)).toEqual([0, 1]);
-    expect(out!.total).toBe(2);
+    const call = stub.chainArgsAll.get('inventory_items.select')![0]!;
+    const methods = stub.chainsAll.get('inventory_items.select')![0]!;
+    expect(call.find((a, k) => methods[k] === 'eq' && a[0] === 'is_low_stock')).toEqual([
+      'is_low_stock',
+      true,
+    ]);
+    expect(out!.rows).toHaveLength(3);
+    expect(out!.total).toBe(3);
   });
 
   it('a staff member with no warehouse reads nothing', async () => {
@@ -230,20 +247,24 @@ describe('InventoryService.list with planned totals', () => {
       offset: 0,
       plannedTotals: { total: 485, valueOnHand: 1234.5 },
     });
-    // One read of inventory_items (the page), no value scan of the view.
+    // One read of inventory_items (the page), and no value total asked.
     expect(calls).toHaveLength(1);
+    expect(stub.rpcCalls).toEqual([]);
     expect(arg(calls[0]!, 'in', 'id')).toEqual(['id', ['id-b', 'id-a']]);
     expect(out.total).toBe(485);
     expect(out.valueOnHand).toBe(1234.5);
   });
 });
 
-describe("list()'s page, its value scan and the plan scan take one set of filters", () => {
+describe("list()'s page, its value total and the plan scan take one set of filters", () => {
   // PR #364 review: the scans kept their own copy of list()'s filters and
   // missed `?rack=` (and unit cost, and ids), so a staff member's rack view was
   // planned over the WHOLE view: "Page 1 of 17", the whole view's total and
-  // value, and pages with nothing on them. Every filter now comes from one
-  // place (applyContentFilters); these cases pin that the three queries agree.
+  // value, and pages with nothing on them. The page and the plan scan take
+  // every filter from one place (applyContentFilters); the value total takes
+  // them from buildItemListValueFilters, built from the same helpers. These
+  // cases pin that the page and the plan agree, and that the value total is
+  // asked once with the builder's filters for the same scope.
   const UUID_A = '11111111-1111-4111-8111-111111111111';
   const UUID_B = '22222222-2222-4222-8222-222222222222';
   const CASES: Array<[string, ItemListFilters]> = [
@@ -337,28 +358,42 @@ describe("list()'s page, its value scan and the plan scan take one set of filter
       });
       const stub = makeSupabaseStub({
         'inventory_items.select': { data: [], error: null, count: 0 },
+        'rpc:inventory_list_value': { data: 0, error: null },
       });
       const svc = new InventoryService(makeServiceContext(stub.client, { role }));
       await svc.list({ ...filters, limit: 30, offset: 0 });
       await svc.listPlanRows(filters);
       const methods = stub.chainsAll.get('inventory_items.select')!;
       const args = stub.chainArgsAll.get('inventory_items.select')!;
-      // The page reads rows 0-29; each scan reads a 1000-row window.
+      // The page reads rows 0-29; the plan scan reads a 1000-row window.
       const isPage = (k: number) =>
         args[k]!.some((a, i) => methods[k]![i] === 'range' && JSON.stringify(a) === '[0,29]');
       const page = methods.findIndex((_m, k) => isPage(k));
       const scans = methods.map((_m, k) => k).filter((k) => !isPage(k));
-      // One value-scan window (an empty view) and one plan window.
+      // One plan window (an empty view); no value scan of the view.
       expect(page).toBeGreaterThanOrEqual(0);
-      expect(scans).toHaveLength(2);
+      expect(scans).toHaveLength(1);
       const want = filtersOf(methods[page]!, args[page]!);
       for (const k of scans) expect(filtersOf(methods[k]!, args[k]!)).toEqual(want);
-      // 0413: the opt-in narrows the page and every scan; absent, none of them.
+      // The value total: one call, with the builder's filters for this scope.
+      const pFilters = buildItemListValueFilters(filters, {
+        access: ACCESS[role],
+        categoryGrants: null,
+      });
+      expect(stub.rpcCalls).toEqual([
+        {
+          name: 'inventory_list_value',
+          args: { p_organization_id: expect.any(String), p_filters: pFilters },
+        },
+      ]);
+      // 0413: the opt-in narrows the page, the plan and the total; absent, none.
       const shownOnly = 'eq:["order_catalog_visible",true]';
       if ((filters as { orderCatalogVisibleOnly?: boolean }).orderCatalogVisibleOnly) {
         expect(want).toContain(shownOnly);
+        expect(pFilters.order_catalog_visible).toBe(true);
       } else {
         expect(want).not.toContain(shownOnly);
+        expect(pFilters).not.toHaveProperty('order_catalog_visible');
       }
     });
   }
