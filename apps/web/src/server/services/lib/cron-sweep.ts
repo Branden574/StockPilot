@@ -261,10 +261,13 @@ export function cronAttemptRecorder(
       .upsert({ job, organization_id: orgId, ...row }, { onConflict: 'job,organization_id' });
     if (error && !reported) {
       reported = true;
-      void reportError(new Error(error.message), {
+      // Codes only: no database text (`||`: a fetch-level failure can carry
+      // an empty code). The code is in the message for a chat webhook.
+      const code = error.code || 'unknown';
+      void reportError(new Error(`Scheduled job could not record its attempt (code ${code})`), {
         tag: opts.reportTag,
         level: 'warning',
-        extra: { step: 'write', job },
+        extra: { step: 'write', job, code },
       });
     }
   };
@@ -411,14 +414,23 @@ export function cronAttemptClaimer(
 } {
   const skipUnclaimed = opts.onClaimUnavailable === 'skip';
   let reported = false;
-  const report = (error: { message: string }, step: string) => {
+  const report = (error: { code?: string }, step: 'claim' | 'write') => {
     if (reported) return;
     reported = true;
-    void reportError(new Error(error.message), {
-      tag: opts.reportTag,
-      level: 'warning',
-      extra: { step, job },
-    });
+    // Codes only, the shape of the skip report: no database text.
+    const code = error.code || 'unknown';
+    void reportError(
+      new Error(
+        step === 'claim'
+          ? `Scheduled job ran organizations whose claim could not be recorded (code ${code})`
+          : `Scheduled job could not record its attempt (code ${code})`,
+      ),
+      {
+        tag: opts.reportTag,
+        level: 'warning',
+        extra: { step, job, code },
+      },
+    );
   };
   let reportedSkip = false;
   let unavailableCode: string | null = null;
@@ -599,8 +611,9 @@ export const REPEATED_FAILURES = 3;
  * With `holdMs`, `onClaimUnavailable` says what to do with an organization
  * whose claim cannot be recorded: 'run' it unclaimed (the default, for a job
  * with its own atomic guard) or 'skip' it for this run after one retry
- * (counted in `claimUnavailable`), see cronAttemptClaimer. A run that skips
- * every organization it tried reports it as an error (`<tag>.claims_down`).
+ * (counted in `claimUnavailable`), see cronAttemptClaimer. A run that claims
+ * nothing and skips at least one organization (the rest, if any, held by
+ * another run) reports it as an error (`<tag>.claims_down`).
  *
  * When the attempt records cannot be read the run is reported
  * (`<tag>.attempts`) and goes in rotateByClock order (`slotMs`: the job's
@@ -691,8 +704,9 @@ export async function sweepOrganizations<V>(
       if ((await finish(result)) >= REPEATED_FAILURES) failingRepeatedly += 1;
     },
   );
-  if (claimUnavailable > 0 && claimUnavailable === sweep.started) {
-    // Every organization this run tried was skipped: the claims are down for
+  if (claimUnavailable > 0 && claimUnavailable === sweep.started - heldByAnotherRun) {
+    // Nothing this run tried was claimed: every organization it started was
+    // skipped, apart from those another run holds. The claims are down for
     // everyone, not one passing error. An error, not a warning.
     const code = claimer?.unavailableCode || 'unknown';
     void reportError(

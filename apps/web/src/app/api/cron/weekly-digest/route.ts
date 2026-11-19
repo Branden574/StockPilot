@@ -116,17 +116,18 @@ type ClaimReport = (step: DigestClaimStep, error?: { code?: string } | null) => 
 /**
  * The run's claim reports: each step reported at most once per run, under
  * cron.weekly-digest.claim, with the step, the job and the error's code only
- * (`lastClaimCode`: the last code of a claim that could not be recorded).
+ * (`lastCode`: the last code any step reported with, so a run whose claims
+ * all failed names it).
  * The counts are in the run's log line.
  */
-function claimReporter(): ClaimReport & { lastClaimCode(): string } {
+function claimReporter(): ClaimReport & { lastCode(): string } {
   const done = new Set<DigestClaimStep>();
-  let lastClaimCode = 'none';
+  let lastCode = 'none';
   const report: ClaimReport = (step, error) => {
     // `||`: a fetch-level failure can carry an empty code. The code is in
     // the message too: a chat webhook shows only the message.
-    const code = error?.code || 'none';
-    if (step === 'claim') lastClaimCode = code;
+    const code = error ? error.code || 'unknown' : 'none';
+    if (error) lastCode = code;
     if (done.has(step)) return;
     done.add(step);
     void reportError(new Error(`${CLAIM_STEP_MESSAGE[step]} (code ${code})`), {
@@ -135,7 +136,7 @@ function claimReporter(): ClaimReport & { lastClaimCode(): string } {
       extra: { step, job: 'weekly_digest', code },
     });
   };
-  return Object.assign(report, { lastClaimCode: () => lastClaimCode });
+  return Object.assign(report, { lastCode: () => lastCode });
 }
 
 interface DigestClaimRow {
@@ -296,8 +297,9 @@ export async function GET(req: Request) {
   // A member claim that errors is tried once more (claimRetries), so one
   // passing error does not cost the member their week.
   const retries = claimRetries();
-  /** Members whose claim insert was tried (for the all-skipped report). */
-  let claimsTried = 0;
+  /** Members whose week claim this run holds and who go on to the send (for
+   *  the all-skipped report). */
+  let claimsHeld = 0;
   let sendReported = false;
 
   let sent = 0;
@@ -581,7 +583,6 @@ export async function GET(req: Request) {
               request_hash: signature ?? unsignedClaimHash(orgId, claimKey),
               status: 'completed',
             };
-            claimsTried += 1;
             let { error: claimErr } = await admin.from('idempotency_keys').insert(claim);
             if (claimErr && !isDuplicateClaim(claimErr) && (await retries.wait())) {
               // A retry that meets the key finds a claim already there (this
@@ -622,6 +623,7 @@ export async function GET(req: Request) {
                 continue;
               }
             }
+            claimsHeld += 1;
 
             // The recipient's own signed one-click link for this org's digest
             // (lib/email/member-unsubscribe.ts): List-Unsubscribe and
@@ -683,17 +685,17 @@ export async function GET(req: Request) {
       },
     );
 
-    if (claimUnavailable > 0 && claimUnavailable === claimsTried) {
-      // Every member this run tried to claim was skipped: the claims are down
+    if (claimUnavailable > 0 && claimsHeld === 0) {
+      // Nothing claimed and at least one member skipped: the claims are down
       // for everyone, not one passing error. An error, not a warning.
       void reportError(
         new Error(
-          `Weekly digest skipped every member it tried: week claims could not be recorded (code ${reportClaim.lastClaimCode()})`,
+          `Weekly digest skipped every member it tried: week claims could not be recorded (code ${reportClaim.lastCode()})`,
         ),
         {
           tag: 'cron.weekly-digest.claims_down',
           level: 'error',
-          extra: { job: 'weekly_digest', code: reportClaim.lastClaimCode(), skipped: claimUnavailable },
+          extra: { job: 'weekly_digest', code: reportClaim.lastCode(), skipped: claimUnavailable },
         },
       );
     }

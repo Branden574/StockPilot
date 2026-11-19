@@ -167,7 +167,7 @@ export async function GET(req: NextRequest) {
             void reportError(new Error('Daily briefing recipients could not be read'), {
               tag: 'cron.daily-briefing.recipients',
               organizationId: orgId,
-              extra: { code: recipientsError?.code ?? 'unexpected' },
+              extra: { code: recipientsError?.code || 'unexpected' },
             });
             return { result: 'failure', value: null };
           }

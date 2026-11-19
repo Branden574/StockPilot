@@ -444,11 +444,42 @@ describe('cronAttemptClaimer (one run per organization per hold)', () => {
     expect(f2).not.toBeNull();
     expect(await finishOf(f1)('success')).toBe(2);
     expect(reportError).toHaveBeenCalledTimes(1);
-    expect(reportError.mock.calls[0]![1]).toMatchObject({
+    expect(reportError.mock.calls[0]![1]).toEqual({
       tag: 'test.attempts',
       level: 'warning',
-      extra: { step: 'claim', job: 'auto_reorder' },
+      extra: { step: 'claim', job: 'auto_reorder', code: '42P01' },
     });
+    // Codes only: no database text, no organization id.
+    const message = (reportError.mock.calls[0]![0] as Error).message;
+    expect(message).toContain('(code 42P01)');
+    expect(message).not.toMatch(/relation|cron_sweep_attempts|o1|o2/);
+  });
+
+  it('a failed attempt write (recorder or claim finish) is reported with its code only', async () => {
+    reportError.mockClear();
+    const stub = makeSupabaseStub({
+      'cron_sweep_attempts.insert': {
+        data: null,
+        error: {
+          message: 'new row for relation "cron_sweep_attempts" violates check',
+          code: '23514',
+        },
+      },
+    });
+    const recorder = cronAttemptRecorder(stub.client, 'weekly_digest', {
+      failuresBefore: new Map(),
+      reportTag: 'test.attempts',
+    });
+    await recorder.start('o1')('success');
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError.mock.calls[0]![1]).toEqual({
+      tag: 'test.attempts',
+      level: 'warning',
+      extra: { step: 'write', job: 'weekly_digest', code: '23514' },
+    });
+    expect((reportError.mock.calls[0]![0] as Error).message).not.toMatch(
+      /relation|cron_sweep_attempts|o1/,
+    );
   });
 
   it('by default also runs the organization unclaimed when the insert fails with an error other than the key', async () => {
@@ -925,6 +956,50 @@ describe('sweepOrganizations', () => {
       });
       expect((down[0]![0] as Error).message).toContain('(code 42501)');
       expect((down[0]![0] as Error).message).not.toMatch(/\ba\b|\bb\b|\bc\b/);
+    });
+
+    it("with 'skip': one organization held by another run and the rest skipped still reports the error (nothing was claimed)", async () => {
+      reportError.mockClear();
+      vi.useFakeTimers({ toFake: ['Date'] });
+      const env = flaky();
+      // 'a' was started by another run an hour before this one: held.
+      env.table.rows.push({
+        job: 'daily_briefing',
+        organization_id: 'a',
+        last_attempt_at: '2026-11-17T07:00:00.000Z',
+        consecutive_failures: 0,
+      });
+      env.failing.add('b');
+      env.failing.add('c');
+      const run = await runDay(env, 0, 'skip');
+      expect(run.worked).toEqual([]);
+      expect(run.out).toMatchObject({ heldByAnotherRun: 1, claimUnavailable: 2 });
+      const down = reportError.mock.calls.filter(
+        ([, c]) => (c as { tag?: string }).tag === 'cron.test.claims_down',
+      );
+      expect(down).toHaveLength(1);
+      expect(down[0]![1]).toMatchObject({ level: 'error', extra: { skipped: 2 } });
+    });
+
+    it("with 'skip': every organization held by another run is not an error", async () => {
+      reportError.mockClear();
+      vi.useFakeTimers({ toFake: ['Date'] });
+      const env = flaky();
+      for (const o of ['a', 'b', 'c']) {
+        env.table.rows.push({
+          job: 'daily_briefing',
+          organization_id: o,
+          last_attempt_at: '2026-11-17T07:00:00.000Z',
+          consecutive_failures: 0,
+        });
+      }
+      const run = await runDay(env, 0, 'skip');
+      expect(run.out).toMatchObject({ heldByAnotherRun: 3, claimUnavailable: 0 });
+      expect(
+        reportError.mock.calls.filter(
+          ([, c]) => (c as { tag?: string }).tag === 'cron.test.claims_down',
+        ),
+      ).toHaveLength(0);
     });
 
     it('by default (every job but the daily briefing and the price pull) it runs unclaimed, as before', async () => {

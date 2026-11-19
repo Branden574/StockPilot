@@ -754,6 +754,112 @@ describe('GET /api/cron/weekly-digest — a claim that cannot be recorded, and w
     expectNoIds();
   });
 
+  const insertedRow = (call: MockCall) =>
+    call.args[call.methods.indexOf('insert')]?.[0] as { key: string; request_hash: string };
+  const downReports = () => tagged('cron.weekly-digest.claims_down');
+
+  it('stops retrying after three failed retries in a run: five members, eight claim inserts, no send', async () => {
+    const members = ['user-1', 'user-2', 'user-3', 'user-4', 'user-5'];
+    let inserts = 0;
+    sendEmailMock.mockImplementation(async () => ({ ok: true }));
+    adminHolder.client = makeSupabaseStub({
+      'user_profiles.select': {
+        data: members.map((m) => recipientRow(m, `${m}@acme.test`)),
+        error: null,
+      },
+      'user_profiles.select.maybeSingle': {
+        data: { email_digest_optin: true, disabled_at: null },
+        error: null,
+      },
+      'organization_members.select.maybeSingle': {
+        data: { user_id: 'user-1', accepted_at: '2026-01-01T00:00:00Z', role: 'staff' },
+        error: null,
+      },
+      'idempotency_keys.insert': () => {
+        inserts += 1;
+        return { data: null, error: { message: 'permission denied', code: '42501' } };
+      },
+    }).client;
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ ok: true, sent: 0 });
+    // Three members tried twice, then once each.
+    expect(inserts).toBe(3 * 2 + 2);
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(tagged('cron.weekly-digest.claim')).toHaveLength(1);
+    expect(downReports()).toHaveLength(1);
+    expect(downReports()[0]![1]).toMatchObject({ extra: { code: '42501', skipped: 5 } });
+  });
+
+  it('a lost reply: the first insert wrote the claim, the retry meets the key, and the week is taken as sent with no email', async () => {
+    signable.UNSUBSCRIBE_SECRET = CLAIM_SIGNING_VALUE;
+    const written = new Map<string, string>();
+    const stub = stubWith({
+      insert: (call: MockCall) => {
+        const row = insertedRow(call);
+        if (!written.has(row.key)) {
+          // Committed, but the reply is lost.
+          written.set(row.key, row.request_hash);
+          return { data: null, error: { message: 'fetch failed', code: '' } };
+        }
+        return DUPLICATE;
+      },
+      select: (call: MockCall) => {
+        const key = call.args.find((a, i) => call.methods[i] === 'eq' && a[0] === 'key')?.[1];
+        return {
+          data: { id: 'row-1', request_hash: written.get(String(key)) ?? null },
+          error: null,
+        };
+      },
+    });
+    adminHolder.client = stub.client;
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ ok: true, sent: 0, skipped: 2 });
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(stub.chainsAll.has('idempotency_keys.update')).toBe(false);
+    expect(tagged('cron.weekly-digest.claim')).toHaveLength(0);
+    expect(downReports()).toHaveLength(0);
+  });
+
+  it('one member claimed and one skipped is not an error; nothing claimed and one skipped is', async () => {
+    const byMember = (fail: string, other: 'ok' | 'duplicate') => (call: MockCall) => {
+      const { key } = insertedRow(call);
+      if (key.startsWith(`${fail}:`)) {
+        return { data: null, error: { message: 'permission denied', code: '42501' } };
+      }
+      return other === 'ok' ? { data: null, error: null } : DUPLICATE;
+    };
+
+    adminHolder.client = stubWith({ insert: byMember('user-b', 'ok') }).client;
+    expect(await (await GET(buildRequest('Bearer test-cron-secret'))).json()).toMatchObject({
+      sent: 1,
+    });
+    expect(tagged('cron.weekly-digest.claim')).toHaveLength(1);
+    expect(downReports()).toHaveLength(0);
+
+    // The other member's week is already sent (an unsigned run takes the key
+    // as sent): nothing is claimed this run, and one member is skipped.
+    vi.mocked(reportError).mockClear();
+    adminHolder.client = stubWith({ insert: byMember('user-b', 'duplicate') }).client;
+    expect(await (await GET(buildRequest('Bearer test-cron-secret'))).json()).toMatchObject({
+      sent: 0,
+      skipped: 1,
+    });
+    expect(downReports()).toHaveLength(1);
+    expect(downReports()[0]![1]).toMatchObject({
+      level: 'error',
+      extra: { code: '42501', skipped: 1 },
+    });
+  });
+
+  it('an empty code is reported as unknown, never as none', async () => {
+    adminHolder.client = stubWith({
+      insert: { data: null, error: { message: 'fetch failed', code: '' } },
+    }).client;
+    await GET(buildRequest('Bearer test-cron-secret'));
+    expect(tagged('cron.weekly-digest.claim')[0]![1]).toMatchObject({ extra: { code: 'unknown' } });
+    expect(String((downReports()[0]![0] as Error).message)).toContain('(code unknown)');
+  });
+
   it('a claim row that cannot be read, a take-over that keeps missing and a failed send are each reported once per run, with no id or address', async () => {
     signable.UNSUBSCRIBE_SECRET = CLAIM_SIGNING_VALUE;
     // The read fails: the week stays marked sent.
