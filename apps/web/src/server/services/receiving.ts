@@ -16,7 +16,7 @@ import {
 } from './lib/fetch-by-ids';
 import { readInActiveOrg } from './lib/in-active-org';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
-import { assertRoleCanPostReceipt, assertRoleCanReverseReceipt } from './lib/receipt-post-rule';
+import { assertCanReverseReceipt, assertRoleCanPostReceipt } from './lib/receipt-post-rule';
 
 import { DELETED_USER_LABEL, isDeletedPerson, REVERSE_MANAGER_ONLY_COPY } from '@stockpilot/core';
 import type {
@@ -641,12 +641,11 @@ export class ReceivingService {
    * 'reversed' but its row is preserved for audit history.
    */
   async reverseReceipt(input: ReverseReceiptInput): Promise<ReceiptRow> {
-    assertModuleEnabled(this.ctx, 'receiving');
-    // The rule reverse_receipt applies, the same as a post's (core
-    // canPostReceipt: manager or above with stock:adjust), before anything is
-    // read, so a real and a made-up receipt id get the same answer.
-    assertPermission(this.ctx, 'stock:adjust');
-    assertRoleCanReverseReceipt(this.ctx);
+    // The module, then the rule reverse_receipt applies, the same as a post's
+    // (core canPostReceipt: manager or above with stock:adjust), before
+    // anything is read, so a real and a made-up receipt id get the same
+    // answer. One helper, so the parity test checks what runs here.
+    assertCanReverseReceipt(this.ctx);
 
     // S39: the receipt is read in THIS organization first, and a miss refuses
     // before the function, which decides on the receipt's own organization:
@@ -664,8 +663,8 @@ export class ReceivingService {
       if (error.message.includes('receipt_already_reversed')) {
         throw new ServiceError('conflict', 'This receipt has already been reversed.');
       }
-      if (error.message.includes('forbidden')) {
-        // The body's own has_org_role(org, 'manager') check.
+      if (error.code === '42501' && error.message === 'forbidden') {
+        // The body's own has_org_role(org, 'manager') check, matched exactly.
         throw new ServiceError('forbidden', REVERSE_MANAGER_ONLY_COPY);
       }
       if (error.message.includes('receipt_not_found')) {
