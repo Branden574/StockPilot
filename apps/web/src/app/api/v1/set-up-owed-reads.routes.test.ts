@@ -144,6 +144,22 @@ const WRITES: Array<[string, string]> = [
   ['ai/sessions', 'POST'],
 ];
 
+/**
+ * Writes of the member's own records, which hand no read gate 'read' and
+ * return no organization data: the assistant's chat sessions (a new one, one
+ * deleted), a test push to the member's own device, a support message from
+ * the member, and the withdrawal of the member's own order submission. They
+ * are writes (the write reading counts them), so the read rule does not hold
+ * them, and they answer as they do without it.
+ */
+const PERSONAL_WRITES: Array<[string, string]> = [
+  ['ai/sessions', 'POST'],
+  ['ai/sessions/[sessionId]', 'DELETE'],
+  ['v1/push/test', 'POST'],
+  ['v1/support', 'POST'],
+  ['v1/orders/submissions/[key]/withdraw', 'POST'],
+];
+
 type Handler = (req: NextRequest, ctx: { params: Promise<typeof PARAMS> }) => Promise<Response>;
 
 async function call(route: string, method: string): Promise<Response> {
@@ -273,4 +289,25 @@ describe('a write in the same files is not held by the read answer', () => {
     const text = await res.text();
     expect(text).not.toContain(AUTHENTICATOR_SET_UP_OWED_COPY);
   });
+});
+
+describe("a write of the member's own records is not held by the read answer", () => {
+  it.each(PERSONAL_WRITES)('%s %s is not on the held list', (route, method) => {
+    expect(HELD).not.toContainEqual({ route, method });
+  });
+
+  it.each(PERSONAL_WRITES)(
+    '%s %s answers as it does without the read rule, in both policy states',
+    async (route, method) => {
+      for (const ctx of [owedCtx(), markMfaPolicyUnread(owedCtx())]) {
+        vi.mocked(withApiContext).mockClear();
+        h.ctx = ctx;
+        const res = await call(route, method);
+        const text = await res.text();
+        expect(text).not.toContain(AUTHENTICATOR_SET_UP_OWED_COPY);
+        expect(text).not.toContain(CONTEXT_UNAVAILABLE_COPY);
+        expect(withApiContext).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
 });

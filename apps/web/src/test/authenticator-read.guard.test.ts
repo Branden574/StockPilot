@@ -92,7 +92,10 @@ import {
  *      entry reads no session;
  *   5. no handler of a route file served outside /api reaches, through the
  *      call graph (test/gate-reach.ts), a function that builds a member
- *      context, and there is no file under pages/api.
+ *      context, and there is no file under pages/api. Every route file served
+ *      outside /api is on OUTSIDE_ROUTES with its kind and a reason; an entry
+ *      is current; a 'sign-in' file calls no `.from(` and no `.rpc(` itself,
+ *      and a 'token-link' or 'forwarder' file imports no session reader.
  *
  * WHAT IT IS NOT. It reads where the gate is, not what the handler does with
  * its answer: a handler that keeps the answer and goes on is caught by the
@@ -100,6 +103,12 @@ import {
  * held handler with recording clients (the service client, the cookie client
  * and `fetch`) and fails on any use before the answer. A read reached through
  * a getter or a module's top-level code is not a call this reading sees.
+ * Rule 5's call graph is gate-reach.ts's: it does not follow instance methods
+ * (a service built from a context that was already resolved) or functions
+ * held in variables, and a principal built by hand (the cookie client, then
+ * a client keyed on its user) calls none of MEMBER_CONTEXT_BUILDERS; the
+ * reviewed list makes a new route file outside /api fail until it is read and
+ * listed.
  *
  * The self-test at the bottom plants a violation of each rule, so this cannot
  * pass by reading nothing.
@@ -426,6 +435,58 @@ const MEMBER_CONTEXT_BUILDERS: readonly string[] = [
   'server/lib/api-context-gate.ts#apiContextGate',
 ];
 
+/**
+ * Why a route file is served outside /api, and what it may do:
+ *   - sign-in: the sign-in machinery that must run before an authenticator
+ *     exists. It uses the cookie client for the session itself (the user, a
+ *     code exchange, an email code) and calls no `.from(` and no `.rpc(` in
+ *     the file: no table or database function, so no organization data;
+ *   - token-link: a link that carries its own signed or hashed token and
+ *     reads no member session (no session reader imported);
+ *   - forwarder: passes a request on to another service and reads no member
+ *     session (no session reader imported).
+ */
+type OutsideKind = 'sign-in' | 'token-link' | 'forwarder';
+
+/** Every route file served outside /api, by file (apps/web/src relative). */
+const OUTSIDE_ROUTES: Record<string, { kind: OutsideKind; reason: string }> = {
+  'app/auth/callback/route.ts': {
+    kind: 'sign-in',
+    reason:
+      'The sign-in code exchange: the cookie client exchanges the code for a session and sends the browser on; no table is read.',
+  },
+  'app/auth/confirm/route.ts': {
+    kind: 'sign-in',
+    reason:
+      "An email link's one-time code: the cookie client checks it and reads the account's own user; an email change is completed by its own service.",
+  },
+  'app/auth/session-ended/route.ts': {
+    kind: 'sign-in',
+    reason:
+      "Clears the browser's session cookies after a sign-out elsewhere: the cookie client reads the user and signs out; no table is read.",
+  },
+  'app/ingest/[...path]/route.ts': {
+    kind: 'forwarder',
+    reason:
+      "Forwards the website's product analytics to the analytics host; it reads no session and no database.",
+  },
+  'app/m/[token]/photo/[n]/route.ts': {
+    kind: 'token-link',
+    reason:
+      "A maintenance request's photo behind the share link's hashed token, limited per address; no member session is read.",
+  },
+  'app/r/confirm/submit/route.ts': {
+    kind: 'token-link',
+    reason:
+      "A requester confirms their order request with the request's own hashed token; no member session is read.",
+  },
+  'app/unsubscribe/route.ts': {
+    kind: 'token-link',
+    reason:
+      "An email's unsubscribe link behind its signed token, limited per address; no member session is read.",
+  },
+};
+
 const HANDLER_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 
 /**
@@ -463,6 +524,59 @@ function outsideScopeFindings(sources: Sources, graph = graphOf(sources)): strin
         );
       }
     }
+  }
+  return found.sort();
+}
+
+/** The lines of `file` where a call to a property named `.from` or `.rpc` is made. */
+function tableCallLines(file: string, src: string): number[] {
+  const sf = parse(file, src);
+  const lines: number[] = [];
+  const visit = (n: ts.Node): void => {
+    if (
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      (n.expression.name.text === 'from' || n.expression.name.text === 'rpc')
+    ) {
+      lines.push(lineOf(sf, n));
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return lines;
+}
+
+/**
+ * Rule 5's reviewed list: every route file served outside /api is listed with
+ * its kind and a reason, every entry is current, and each file keeps to its
+ * kind.
+ */
+function outsideListFindings(
+  sources: Sources,
+  listed: Record<string, { kind: OutsideKind; reason: string }>,
+): string[] {
+  const found: string[] = [];
+  const files = routeFilesOutsideScope(sources).filter((f) => !f.startsWith('pages/api/'));
+  for (const file of files) {
+    const entry = listed[file];
+    if (!entry) {
+      found.push(`${file}: served outside /api, but not on OUTSIDE_ROUTES`);
+      continue;
+    }
+    const src = sources.get(file)!;
+    if (entry.kind === 'sign-in') {
+      for (const line of tableCallLines(file, src)) {
+        found.push(`${file}: listed as sign-in, but calls .from( or .rpc( at line ${line}`);
+      }
+    } else {
+      for (const r of sessionReadersIn(file, src)) {
+        found.push(`${file}: listed as ${entry.kind}, but imports ${r}`);
+      }
+    }
+  }
+  for (const [key, entry] of Object.entries(listed)) {
+    if (!files.includes(key)) found.push(`${key}: on OUTSIDE_ROUTES but no such route file`);
+    if (entry.reason.length <= 40) found.push(`${key}: no reason given`);
   }
   return found.sort();
 }
@@ -791,6 +905,11 @@ describe('every API read holds a member who must set up an authenticator first',
     ).not.toBeNull();
     expect(outsideScopeFindings(SHIPPED, graph)).toEqual([]);
   });
+
+  it('5. every route file served outside /api is on the reviewed list and keeps to its kind', () => {
+    expect(Object.keys(OUTSIDE_ROUTES).length).toBeGreaterThan(0);
+    expect(outsideListFindings(SHIPPED, OUTSIDE_ROUTES)).toEqual([]);
+  });
 });
 
 /* ───────────────────── self-test: each rule can fail ───────────────────── */
@@ -1090,6 +1209,65 @@ describe('self-test: a planted violation of each rule is reported', () => {
       ].sort(),
     );
     expect(found.join('\n')).toContain('server/services/context.ts#withContext');
+  });
+
+  it('5. the reviewed list: a route file outside /api missing from it, a stale or unreasoned entry, a sign-in file that reads a table, a token link that reads a session', () => {
+    const tree = base({
+      'app/auth/listed/route.ts': `import { createClient } from '@/lib/supabase/server';
+        export async function GET() { const s = await createClient(); return s.auth.getUser(); }`,
+      'app/auth/reads-table/route.ts': `import { createClient } from '@/lib/supabase/server';
+        export async function GET() {
+          const s = await createClient();
+          await s.from('organizations').select('id');
+          return s.rpc('anything');
+        }`,
+      'app/t/[token]/route.ts': `import { createAdminClient } from '@/lib/supabase/admin';
+        export async function GET() { return createAdminClient(); }`,
+      'app/t/session/route.ts': `import { createClient } from '@/lib/supabase/server';
+        export async function GET() { return createClient(); }`,
+      'app/(site)/not-listed/route.ts': `export async function GET() { return new Response('ok'); }`,
+      'app/api/inside/route.ts': `export async function GET() { return new Response('ok'); }`,
+    });
+    const listed: Record<string, { kind: OutsideKind; reason: string }> = {
+      'app/auth/listed/route.ts': {
+        kind: 'sign-in',
+        reason: 'A planted sign-in step that reads the user and nothing else.',
+      },
+      'app/auth/reads-table/route.ts': {
+        kind: 'sign-in',
+        reason: 'A planted sign-in step that reads a table, which its kind does not allow.',
+      },
+      'app/t/[token]/route.ts': {
+        kind: 'token-link',
+        reason: 'A planted token link that reads no member session at all.',
+      },
+      'app/t/session/route.ts': {
+        kind: 'token-link',
+        reason:
+          'A planted token link that imports the cookie client, which its kind does not allow.',
+      },
+      'app/gone/route.ts': {
+        kind: 'forwarder',
+        reason: 'A planted entry whose route file does not exist in the tree.',
+      },
+      'app/t/short/route.ts': { kind: 'forwarder', reason: 'short' },
+    };
+    expect(outsideListFindings(tree, listed)).toEqual(
+      [
+        'app/(site)/not-listed/route.ts: served outside /api, but not on OUTSIDE_ROUTES',
+        'app/auth/reads-table/route.ts: listed as sign-in, but calls .from( or .rpc( at line 4',
+        'app/auth/reads-table/route.ts: listed as sign-in, but calls .from( or .rpc( at line 5',
+        'app/t/session/route.ts: listed as token-link, but imports createClient from @/lib/supabase/server',
+        'app/gone/route.ts: on OUTSIDE_ROUTES but no such route file',
+        'app/t/short/route.ts: on OUTSIDE_ROUTES but no such route file',
+        'app/t/short/route.ts: no reason given',
+      ].sort(),
+    );
+    // The real list, with one of its files left out, reports that file.
+    const { 'app/unsubscribe/route.ts': _left, ...rest } = OUTSIDE_ROUTES;
+    expect(outsideListFindings(SHIPPED, rest)).toEqual([
+      'app/unsubscribe/route.ts: served outside /api, but not on OUTSIDE_ROUTES',
+    ]);
   });
 
   it('4. a read by POST held by nothing, one held through a gate, stale and unreasoned entries, a public entry that reads a session', () => {

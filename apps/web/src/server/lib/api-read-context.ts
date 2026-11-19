@@ -37,12 +37,12 @@ import type { ServiceContext } from '@/server/services/context';
  *     the service gate (mfaGateError) already gives such a member.
  *   - When the organization's policy could not be read (withApiContext held it
  *     to the strictest one and marked the context: lib/auth/mfa-policy.ts),
- *     the labels look the same, but the sentence may be untrue. That member is
- *     told their access could not be checked: 503 `check_failed`, core's
- *     CONTEXT_UNAVAILABLE_COPY, `details: { reason: 'context_unavailable',
- *     retryable: true }`, Retry-After 5, not stored. It carries no "nothing
- *     was written" flag: the API context gate (server/lib/api-context-gate.ts)
- *     is the one place that answers with that marker, and a read needs none.
+ *     the member is told their access could not be checked and to try
+ *     again: 503 `check_failed`, core's CONTEXT_UNAVAILABLE_COPY, `details: {
+ *     reason: 'context_unavailable', retryable: true }`, Retry-After 5, not
+ *     stored. It carries no "nothing was written" flag: the API context gate
+ *     (server/lib/api-context-gate.ts) is the one place that answers with
+ *     that marker, and a read needs none.
  *
  * EVERYONE ELSE. `{ ctx }` with exactly what withApiContext gave (the same
  * object, or null for the route's own 401), so the route answers as it does

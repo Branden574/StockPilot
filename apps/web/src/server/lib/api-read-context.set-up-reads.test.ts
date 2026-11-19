@@ -68,6 +68,8 @@ interface Session {
 }
 
 const state: Session & {
+  /** With no verified authenticator: a factor whose enrolment was never confirmed. */
+  unverified: boolean;
   rpc: boolean;
   /** The organization row: as read, hidden (no row), a failed read, or a policy value it does not know. */
   org: Org;
@@ -77,6 +79,7 @@ const state: Session & {
   role: 'staff',
   authenticator: false,
   aal: 'aal1',
+  unverified: false,
   rpc: true,
   org: 'read',
   calls: [],
@@ -199,7 +202,11 @@ function makeClient() {
             user: {
               id: USER_ID,
               email: 'member@example.com',
-              factors: state.authenticator ? [{ status: 'verified' }] : [],
+              factors: state.authenticator
+                ? [{ status: 'verified' }]
+                : state.unverified
+                  ? [{ status: 'unverified' }]
+                  : [],
             },
           },
           error: null,
@@ -228,8 +235,8 @@ function request(
   return new Request(`https://app.test${at}`, { method, headers });
 }
 
-function arrange(s: Session, read: Read, org: Org = 'read') {
-  Object.assign(state, s, { rpc: read === 'one round trip', org, calls: [] });
+function arrange(s: Session, read: Read, org: Org = 'read', unverified = false) {
+  Object.assign(state, s, { unverified, rpc: read === 'one round trip', org, calls: [] });
   refs.client = makeClient();
 }
 
@@ -381,6 +388,61 @@ describe('an organization policy that could not be read: held to the strictest, 
       arrange({ ...staff, authenticator: true }, read, org);
       const got = await apiReadContext(request('bearer', 'GET'));
       expect('ctx' in got && got.ctx?.userId).toBe(USER_ID);
+    }
+  });
+});
+
+/** The wrapper's answer, comparable: the response's status and body, or the context's fields. */
+async function answerOf(read: Awaited<ReturnType<typeof apiReadContext>>) {
+  if ('response' in read) {
+    return { status: read.response.status, body: await read.response.text() };
+  }
+  return { ctx: shape(read.ctx) };
+}
+
+describe('a factor whose enrolment was never confirmed counts as none', () => {
+  const NO_AUTHENTICATOR = SESSIONS.filter((s) => !s.authenticator);
+
+  describe.each(PATHS)('%s', (path) => {
+    it.each(READS)(
+      'through the %s: every policy, role, level and method answers as for no factor',
+      async (read) => {
+        for (const s of NO_AUTHENTICATOR) {
+          for (const method of METHODS) {
+            for (const kind of [undefined, 'read'] as const) {
+              arrange(s, read);
+              const none = await answerOf(await apiReadContext(request(path, method), kind));
+              arrange(s, read, 'read', true);
+              const unverified = await answerOf(await apiReadContext(request(path, method), kind));
+              expect(unverified, `${label(s)}, ${method}, ${kind ?? 'no kind'}`).toEqual(none);
+              const held = owesSetUp(s) && (method !== 'POST' || kind === 'read');
+              expect(
+                'status' in unverified && unverified.status,
+                `${label(s)}, ${method}, ${kind ?? 'no kind'}`,
+              ).toBe(held ? 403 : false);
+            }
+          }
+        }
+      },
+    );
+  });
+
+  it('a policy that could not be read: the 503 check_failed for a read, as for no factor', async () => {
+    const staff: Session = { policy: 'optional', role: 'staff', authenticator: false, aal: 'aal2' };
+    const cases: [Read, Org][] = [
+      ['one round trip', 'hidden'],
+      ['separate reads', 'hidden'],
+      ['separate reads', 'error'],
+      ['one round trip', 'odd'],
+      ['separate reads', 'odd'],
+    ];
+    for (const path of PATHS) {
+      for (const [read, org] of cases) {
+        arrange(staff, read, org, true);
+        await expectCouldNotCheck(await apiReadContext(request(path, 'GET')));
+        arrange(staff, read, org, true);
+        await expectCouldNotCheck(await apiReadContext(request(path, 'POST'), 'read'));
+      }
     }
   });
 });
