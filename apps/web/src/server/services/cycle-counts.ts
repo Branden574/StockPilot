@@ -22,11 +22,7 @@ import { reportError } from '@/lib/error-reporter';
 import { audit } from './audit';
 import { dispatchEvent } from './integration-events';
 import { readCountScope } from './lib/count-read-scope';
-import {
-  assertAcceptedMember,
-  assertCountStartFloors,
-  gateCountItems,
-} from './lib/count-start-preflight';
+import { assertAcceptedMember, assertCountStartFloors, gateCountItems } from './lib/count-start-preflight';
 import { scheduleExceptionSync } from './lib/exception-sync-schedule';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { readInActiveOrg } from './lib/in-active-org';
@@ -324,7 +320,10 @@ export function mapPostCycleCountError(message: string, detail?: string | null):
     );
   }
   if (message.includes('forbidden')) {
-    return new ServiceError('forbidden', 'You do not have permission to post this cycle count.');
+    return new ServiceError(
+      'forbidden',
+      'You do not have permission to post this cycle count.',
+    );
   }
   if (message.includes('item_out_of_scope')) {
     return new ServiceError(
@@ -353,7 +352,7 @@ export function mapPostCycleCountError(message: string, detail?: string | null):
   if (message.includes('cycle_count_location_out_of_scope')) {
     return new ServiceError(
       'validation_error',
-      "A line was counted at a location outside this count's warehouse. Clear and recount that line, then post again.",
+      'A line was counted at a location outside this count\'s warehouse. Clear and recount that line, then post again.',
     );
   }
   if (message.includes('cycle_count_location_out_of_org')) {
@@ -605,7 +604,7 @@ export class CycleCountsService {
     if (current.status !== 'in_progress') {
       throw new ServiceError(
         'conflict',
-        "This cycle count is closed — assignment can't be changed.",
+        'This cycle count is closed — assignment can\'t be changed.',
       );
     }
 
@@ -648,7 +647,7 @@ export class CycleCountsService {
         if (msg.includes('invalid_status_transition'))
           throw new ServiceError(
             'conflict',
-            "This cycle count is closed — assignment can't be changed.",
+            'This cycle count is closed — assignment can\'t be changed.',
           );
         if (msg.includes('cycle_count_not_found'))
           throw new ServiceError('not_found', 'Cycle count not found.');
@@ -715,9 +714,11 @@ export class CycleCountsService {
     assertModuleEnabled(this.ctx, 'cycle_counts');
     assertPermission(this.ctx, 'stock:adjust');
     if (!reason || reason.trim() === '') {
-      throw new ServiceError('validation_error', 'A release reason is required.', {
-        reason: 'release_reason_required',
-      });
+      throw new ServiceError(
+        'validation_error',
+        'A release reason is required.',
+        { reason: 'release_reason_required' },
+      );
     }
     // S39: the count is read in THIS organization first, and a miss refuses
     // before the function. release_cycle_count decides on the COUNT's own
@@ -736,7 +737,7 @@ export class CycleCountsService {
           reason: 'release_reason_required',
         });
       if (msg.includes('invalid_status_transition'))
-        throw new ServiceError('conflict', "This cycle count is closed — it can't be released.");
+        throw new ServiceError('conflict', 'This cycle count is closed — it can\'t be released.');
       if (msg.includes('cycle_count_not_found'))
         throw new ServiceError('not_found', 'Cycle count not found.');
       if (msg.includes('forbidden')) {
@@ -809,7 +810,11 @@ export class CycleCountsService {
    * the 0282 `force_reassign_cycle_count` RPC. Notifies the new assignee;
    * the previous-assignee notification is a Phase-3 follow-up.
    */
-  async forceReassign(id: string, userId: string, reason: string): Promise<CycleCountRow> {
+  async forceReassign(
+    id: string,
+    userId: string,
+    reason: string,
+  ): Promise<CycleCountRow> {
     assertModuleEnabled(this.ctx, 'cycle_counts');
     // The authenticator answer first (mfaGateError, as assertPermission gives
     // it). Authorization (manager+) is enforced inside the RPC; the module gate
@@ -817,19 +822,20 @@ export class CycleCountsService {
     // manager-by-role but lacks a specific granular grant.
     if (this.ctx.mfaRequired && !this.ctx.mfaSatisfied) throw mfaGateError(this.ctx);
     if (!reason || reason.trim() === '') {
-      throw new ServiceError('validation_error', 'A reassignment reason is required.', {
-        reason: 'reassign_reason_required',
-      });
+      throw new ServiceError(
+        'validation_error',
+        'A reassignment reason is required.',
+        { reason: 'reassign_reason_required' },
+      );
     }
     // S39: read in THIS organization first, as release() does: the function
     // decides on the count's own organization, and the audit row below (the
     // reason and the new assignee) is written here.
     await readInActiveOrg(this.ctx, 'cycle_counts', id, 'Cycle count not found.');
-    const { data, error } = await this.ctx.supabase.rpc('force_reassign_cycle_count', {
-      p_count_id: id,
-      p_user_id: userId,
-      p_reason: reason,
-    });
+    const { data, error } = await this.ctx.supabase.rpc(
+      'force_reassign_cycle_count',
+      { p_count_id: id, p_user_id: userId, p_reason: reason },
+    );
     if (error) {
       const msg = error.message ?? '';
       if (msg.includes('reassign_reason_required'))
@@ -842,7 +848,7 @@ export class CycleCountsService {
           'That user is not an active member of this organization.',
         );
       if (msg.includes('invalid_status_transition'))
-        throw new ServiceError('conflict', "This cycle count is closed — it can't be reassigned.");
+        throw new ServiceError('conflict', 'This cycle count is closed — it can\'t be reassigned.');
       if (msg.includes('cycle_count_not_found'))
         throw new ServiceError('not_found', 'Cycle count not found.');
       if (msg.includes('forbidden'))
@@ -871,7 +877,9 @@ export class CycleCountsService {
     }
   }
 
-  async get(id: string): Promise<{ header: CycleCountRow; lines: CycleCountLineWithItem[] }> {
+  async get(
+    id: string,
+  ): Promise<{ header: CycleCountRow; lines: CycleCountLineWithItem[] }> {
     assertModuleEnabled(this.ctx, 'cycle_counts');
     const { data: header, error: hErr } = await this.ctx.supabase
       .from('cycle_counts')
@@ -1059,7 +1067,9 @@ export class CycleCountsService {
     // variant columns without touching the RPC at all. It is a LEFT-join in
     // spirit: a row the read cannot see just keeps null variant fields and
     // renders exactly as it did before.
-    const pageItemIds = Array.from(new Set(rows.map((r) => r.item_id as string).filter(Boolean)));
+    const pageItemIds = Array.from(
+      new Set(rows.map((r) => r.item_id as string).filter(Boolean)),
+    );
     const variantByItem = new Map<
       string,
       { group_id: string | null; variant_size: string | null; jersey_number: string | null }
@@ -1390,7 +1400,9 @@ export class CycleCountsService {
     });
     if (rpcErr) throw mapStartCycleCountError(rpcErr.message, scope, input.warehouseId);
     const row = (Array.isArray(rpcData) ? rpcData[0] : rpcData) as
-      { cycle_count_id: string; line_count: number } | null | undefined;
+      | { cycle_count_id: string; line_count: number }
+      | null
+      | undefined;
     if (!row?.cycle_count_id) {
       throw new ServiceError('internal_error', 'Cycle count could not be started.');
     }
@@ -1818,7 +1830,10 @@ export class CycleCountsService {
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
     if (!data) {
-      throw new ServiceError('not_found', 'Scan not found or no longer editable.');
+      throw new ServiceError(
+        'not_found',
+        'Scan not found or no longer editable.',
+      );
     }
   }
 
@@ -1874,9 +1889,7 @@ export class CycleCountsService {
         canAssign: can(this.ctx, 'cycle_counts:assign'),
       }).canCancel
     ) {
-      throw new ServiceError('forbidden', CYCLE_COUNT_CANCEL_MANAGER_ONLY_COPY, {
-        reason: 'manager_cancels',
-      });
+      throw new ServiceError('forbidden', CYCLE_COUNT_CANCEL_MANAGER_ONLY_COPY, { reason: 'manager_cancels' });
     }
     await this.assertSessionAccess(id);
     // Use .select().maybeSingle() so a stale page (someone else
@@ -1946,9 +1959,7 @@ export class CycleCountsService {
         canAssign: can(this.ctx, 'cycle_counts:assign'),
       }).canPost
     ) {
-      throw new ServiceError('forbidden', CYCLE_COUNT_POST_MANAGER_ONLY_COPY, {
-        reason: 'manager_posts',
-      });
+      throw new ServiceError('forbidden', CYCLE_COUNT_POST_MANAGER_ONLY_COPY, { reason: 'manager_posts' });
     }
     await this.assertSessionAccess(id);
     const { data, error } = await this.ctx.supabase.rpc('post_cycle_count', {
@@ -1963,9 +1974,7 @@ export class CycleCountsService {
       // cycle_count_line_superseded (0369, with DETAIL superseded_lines=<n>).
       // 0395: and forbidden with hint permission (the wrapper asks
       // stock:adjust, as assertPermission above does), mapped first.
-      throw (
-        dbGuardRefusal(error, 'count_post') ?? mapPostCycleCountError(error.message, error.details)
-      );
+      throw dbGuardRefusal(error, 'count_post') ?? mapPostCycleCountError(error.message, error.details);
     }
     // The RPC has committed the variance adjustments. The Items/Books views
     // must drop their cached quantities here, not in a caller: the phone posts
