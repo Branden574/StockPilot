@@ -37,6 +37,16 @@ const RECEIPT_ENTRY = 'receipt-sent-again-recorded-once';
 const ACCESS_ENTRY = 'access-could-not-be-checked';
 const RECEIVING_ID = 'receiving-shown-to-managers-2026-11';
 const RECEIVING_AT = '2026-11-19T05:20:00Z';
+// Added by docs/whats-new-2026-11-19-errors (2026-11-19): the count start access check release (a manager or above who can assign counts, where Cycle Counts is on), published later, at the top, below the Liquid Glass draft.
+const COUNT_START_ACCESS_ID = 'count-start-access-check-2026-11';
+const COUNT_START_ACCESS_AT = '2026-11-19T20:41:00Z';
+const countStartAccessRead = {
+  release_id: COUNT_START_ACCESS_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-19T20:42:00Z',
+  read_at: '2026-11-19T20:42:00Z',
+};
 /** #622 merged at this instant; its deployment went live after it. */
 const MERGED_622 = '2026-11-19T15:13:43Z';
 /** The words the reader is quoted, as the code has them. */
@@ -91,27 +101,36 @@ function readerText(r: Release): string[] {
 }
 
 describe('the export, receipt and access release: order, status and date', () => {
-  it('is published once, as revision 1, directly below the Liquid Glass draft and above the receiving release, the newest published release', () => {
+  // Renamed by docs/whats-new-2026-11-19-errors (2026-11-19; was: "directly below the Liquid Glass draft and above the receiving release, the newest published release"): the count start access check release is published later, at the top, directly below the Liquid Glass draft.
+  it('is published once, as revision 1, directly below the count start access check release (published later, below the Liquid Glass draft at the top) and above the receiving release', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
-    expect(RELEASES.slice(0, 3).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(0, 3)): the count start access check release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    expect(RELEASES.slice(0, 4).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, directly below the Liquid Glass draft.
+      [COUNT_START_ACCESS_ID, 'published'],
       [ID, 'published'],
       [RECEIVING_ID, 'published'],
     ]);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: ID): the count start access check release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(COUNT_START_ACCESS_ID);
   });
 
-  it('is dated on a whole minute, in the past, after the last of its changes merged and the release below it, with the draft placeholder at the same minute and every release below it older', () => {
+  // Renamed by docs/whats-new-2026-11-19-errors (2026-11-19; was: "with the draft placeholder at the same minute"): the placeholder moved to the minute of the count start access check release, published later, above this one.
+  it('is dated on a whole minute, in the past, after the last of its changes merged and the release below it, with the draft placeholder at or after it and every release below it older', () => {
     const at = Date.parse(release().publishedAt);
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
     expect(at).toBeGreaterThan(Date.parse(MERGED_622));
     expect(at).toBeGreaterThan(Date.parse(RECEIVING_AT));
     expect(at).toBeLessThanOrEqual(Date.now());
-    expect(RELEASES[0]!.publishedAt).toBe(release().publishedAt);
-    for (const r of RELEASES.slice(2)) {
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES[0].publishedAt equal to this release's): the placeholder is the minute of the count start access check release, published later, above this one.
+    expect(RELEASES[0]!.publishedAt).toBe(COUNT_START_ACCESS_AT);
+    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(2)): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(3)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -235,7 +254,8 @@ describe('the export, receipt and access release: who is told', () => {
     expect(shownEntries(managerNoAdjust)).toEqual([EXPORT_ENTRY, ACCESS_ENTRY]);
   });
 
-  it('is the first notice for every member, the receiving release is next for whoever that reaches, and an old phone build lists it first with its title and summary alone', () => {
+  // Renamed by docs/whats-new-2026-11-19-errors (2026-11-19; was: "is the first notice for every member"): the count start access check release, published later, is the first notice for whoever it reaches.
+  it('is the first notice for every member the count start access check release does not reach, and for the rest once that is read, the receiving release is next for whoever that reaches, and an old phone build lists it first with its title and summary alone', () => {
     const read = {
       release_id: ID,
       revision: 1,
@@ -243,17 +263,34 @@ describe('the export, receipt and access release: who is told', () => {
       opened_at: '2026-11-19T16:01:00Z',
       read_at: '2026-11-19T16:01:00Z',
     };
-    for (const v of [owner, admin, manager, staff, member, managerReceivingOff]) {
+    // Added by docs/whats-new-2026-11-19-errors (2026-11-19): these readers have Cycle Counts off, so the count start access check release does not reach them and this release is still their first notice with nothing read.
+    for (const v of [admin, manager, staff, member, managerReceivingOff]) {
       expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
-      expect(buildReleaseList(RELEASES, v, [read], null).latestUnread?.id, v.role).not.toBe(ID);
+    }
+    for (const v of [owner, admin, manager, staff, member, managerReceivingOff]) {
+      // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, and reaches a manager or above who can assign counts where Cycle Counts is on (an owner with every permission and module among them), so it is read or seen first, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+      expect(
+        buildReleaseList(RELEASES, v, [countStartAccessRead], null).latestUnread?.id,
+        v.role,
+      ).toBe(ID);
+      expect(
+        buildReleaseList(RELEASES, v, [countStartAccessRead, read], null).latestUnread?.id,
+        v.role,
+      ).not.toBe(ID);
     }
     for (const v of [owner, manager, staff]) {
-      expect(buildReleaseList(RELEASES, v, [read], null).latestUnread?.id, v.role).toBe(
-        RECEIVING_ID,
-      );
+      // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, and reaches a manager or above who can assign counts where Cycle Counts is on (an owner with every permission and module among them), so it is read or seen first, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+      expect(
+        buildReleaseList(RELEASES, v, [countStartAccessRead, read], null).latestUnread?.id,
+        v.role,
+      ).toBe(RECEIVING_ID);
     }
     for (const v of [owner, staff, member]) {
-      expect(legacyAnnouncementsFor(RELEASES, v, {})[0], v.role).toEqual({
+      // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, and reaches a manager or above who can assign counts where Cycle Counts is on (an owner with every permission and module among them), so it is read or seen first, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+      expect(
+        legacyAnnouncementsFor(RELEASES, v, { [COUNT_START_ACCESS_ID]: true })[0],
+        v.role,
+      ).toEqual({
         id: ID,
         date: release().publishedAt.slice(0, 10),
         title: release().title,

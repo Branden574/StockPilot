@@ -48,6 +48,9 @@ const lowCriticalRead = {
   opened_at: '2026-11-18T10:01:00Z',
   read_at: '2026-11-18T10:01:00Z',
 };
+// Added by docs/whats-new-2026-11-19-errors (2026-11-19): the count start access check release (a manager or above who can assign counts, where Cycle Counts is on), published later, at the top, below the Liquid Glass draft.
+const COUNT_START_ACCESS_ID = 'count-start-access-check-2026-11';
+const COUNT_START_ACCESS_AT = '2026-11-19T20:41:00Z';
 // Added by docs/whats-new-small-fixes-1119 (2026-11-19): the export, receipt and access release (every member: its access entry has no audience), published later, at the top, below the Liquid Glass draft.
 const EXPORT_RECEIPT_ACCESS_ID = 'export-receipt-access-fixes-2026-11';
 const exportReceiptAccessRead = {
@@ -57,7 +60,6 @@ const exportReceiptAccessRead = {
   opened_at: '2026-11-19T15:31:00Z',
   read_at: '2026-11-19T15:31:00Z',
 };
-const EXPORT_RECEIPT_ACCESS_AT = '2026-11-19T16:00:00Z';
 // Added by docs/whats-new-receiving-shown-to-managers (2026-11-19): the receiving release (whoever can open a purchase order where Receiving is on), published later, at the top, below the Liquid Glass draft.
 const RECEIVING_ID = 'receiving-shown-to-managers-2026-11';
 const DELETE_CONFIRM_ID = 'delete-account-confirm-2026-11';
@@ -135,8 +137,11 @@ describe('the emptied fields and schedule completion release: order, status and 
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES.slice(0, 4)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so the list takes one more.
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(0, 5)): the receiving release is published at the top, below the Liquid Glass draft, so the list takes one more.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(0, 6)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so the list takes one more.
-    expect(RELEASES.slice(0, 7).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(0, 7)): the count start access check release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    expect(RELEASES.slice(0, 8).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, directly below the Liquid Glass draft.
+      [COUNT_START_ACCESS_ID, 'published'],
       // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, directly below the Liquid Glass draft.
       [EXPORT_RECEIPT_ACCESS_ID, 'published'],
       // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: without it): the receiving release is published later, at the top, directly below the Liquid Glass draft.
@@ -150,7 +155,8 @@ describe('the emptied fields and schedule completion release: order, status and 
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: ID): the Low + critical pages and list value release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: the Low + critical pages and list value release): the receiving release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: the receiving release): the export, receipt and access release is published after it, at the top, the newest published release.
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(EXPORT_RECEIPT_ACCESS_ID);
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: the export, receipt and access release): the count start access check release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(COUNT_START_ACCESS_ID);
   });
 
   // Added by bundles/hand-out-follows-the-manager-rule (2026-11-16): revision 2 is told again.
@@ -188,12 +194,14 @@ describe('the emptied fields and schedule completion release: order, status and 
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES[0].publishedAt equal to this release's): the placeholder is the minute of the Low + critical pages and list value release, published later, above this one.
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: the minute of the Low + critical pages and list value release, '2026-11-18T10:00:00Z'): the placeholder is the minute of the receiving release, published later, above this one.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: the minute of the receiving release, '2026-11-19T05:20:00Z'): the placeholder is the minute of the export, receipt and access release, published later, above this one.
-    expect(RELEASES[0]!.publishedAt).toBe(EXPORT_RECEIPT_ACCESS_AT);
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: the minute of the export, receipt and access release, '2026-11-19T16:00:00Z'): the placeholder is the minute of the count start access check release, published later, above this one.
+    expect(RELEASES[0]!.publishedAt).toBe(COUNT_START_ACCESS_AT);
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES.slice(2)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(3)): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(4)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(5)) {
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(5)): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(6)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });

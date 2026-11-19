@@ -146,7 +146,9 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whats-new-small-fixes-1119 (2026-11-19; was: '2026-11-19T05:20:00Z'): the export,
     // receipt and access release below is dated 2026-11-19T16:00:00Z (a stand-in until the integrator sets
     // the real minute at merge), so the placeholder is that same minute.
-    publishedAt: '2026-11-19T16:00:00Z',
+    // Moved again by docs/whats-new-2026-11-19-errors (2026-11-19; was: '2026-11-19T16:00:00Z'): the count
+    // start access check release below is dated 2026-11-19T20:41:00Z, so the placeholder is that same minute.
+    publishedAt: '2026-11-19T20:41:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -231,6 +233,97 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'count-start-access-check-2026-11',
+    revision: 1,
+    // One fix already live on the web server: "API routes answer a service
+    // refusal by its code through serviceErrorResponse" (#624, 6e17cdfed).
+    // publishedAt is the whole minute this release's pull request was opened;
+    // it goes live as soon as it merges. The Liquid Glass draft placeholder
+    // above takes the same minute.
+    // Left out as not visible, each checked at 6e17cdfed:
+    // - Connecting Zendesk now answers a refusal with its own status (400,
+    //   409, 401) where it answered 500, but the words were already the
+    //   service's own: the old catch sent { error, message: e.message } for
+    //   every ServiceError, and an internal_error's message was already the
+    //   generic one (server/services/context.ts ServiceError). Only the web
+    //   card's Server Action (server/actions/zendesk.ts) and the phone's
+    //   Zendesk screen ((drawer)/zendesk.tsx, which shows e.message whatever
+    //   the status) connect, and the route is the phone's only. A fault that
+    //   is not a ServiceError reads "Something went wrong. Please try again."
+    //   where it read "Unexpected error": the words of a failure, not a fix.
+    // - Starting a count: the same for every ServiceError (conflict, signed
+    //   out): the old catch already sent its words, and the phone's alert
+    //   shows them whatever the status (count-select-offers.ts
+    //   countStartFailureMessage). Only the warehouse check below changed.
+    // - The phone's Cycle counts list (GET /api/v1/cycle-counts): its service
+    //   (listPage) throws no warehouse refusal. A failed read of the member's
+    //   warehouses is an internal_error (services/lib/count-read-scope.ts
+    //   readCountScope), answered 500 before and after, and the list already
+    //   kept the counts saved on the phone for any answer but a 403
+    //   forbidden or module_disabled ((tabs)/cycle-counts.tsx, the catch of
+    //   the list load). Nothing a member sees changed there.
+    // - Error reports no longer carry the database's row details, and the
+    //   route guard test: internal.
+    // Who is told: whoever can start a count (count-start-preflight.ts
+    // assertCountStartFloors: a manager or above with cycle_counts:assign
+    // and stock:adjust, Cycle Counts on). An audience names one permission
+    // list, any of which counts, so it names cycle_counts:assign, the
+    // permission the start is named for. No link: the phone's New count
+    // opens from the Cycle counts list and the select bar, not a web page.
+    status: 'published',
+    title: "Starting a count in the mobile app says when your access couldn't be checked",
+    summary:
+      'In the mobile app, when StockPilot can\'t check your warehouse access for a moment as you start a count, the app now says "Your warehouse access couldn\'t be checked just now, so nothing was changed. Try again." It used to say you do not have access to the warehouse, and named it by a long code. No app update is needed.',
+    publishedAt: '2026-11-19T20:41:00Z',
+    entries: [
+      {
+        // platform: phone, through the server (no app update; the web starts
+        // a count through its own Server Action, which #624 did not change).
+        // From: #624. Checked at 6e17cdfed: the phone's New count posts to
+        // POST /api/v1/cycle-counts (apps/mobile/app/cycle-count/new.tsx:100)
+        // and shows the answer's message in the alert "Could not start count"
+        // (:120, src/lib/count-select-offers.ts:66: every message but the old
+        // "Missing permission:" one as sent; src/lib/api.ts:221 reads the
+        // body's message whatever the status). A selection count runs
+        // gateCountItems (server/services/cycle-counts.ts:1361), which asks
+        // assertWarehouseAccess(wh, 'write') for each warehouse
+        // (server/services/lib/count-start-preflight.ts:171). When the
+        // member's own access could not be read, that refusal carries
+        // accessUnreadable (lib/auth/warehouse.ts:302-304 and :313-315). The
+        // route now answers through serviceErrorResponse
+        // (app/api/v1/cycle-counts/route.ts:138), which sends a warehouse
+        // refusal to forbiddenOrInternalResponse: 503 check_failed, Retry-After
+        // 5, with core ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY
+        // (server/lib/api-error-response.ts:161-166;
+        // packages/core/src/guards/db-guard-copy.ts:46-47). Before, the route
+        // answered every ForbiddenError 403 with its own message (route.ts:159
+        // at 6e17cdfed^): "User does not have write access to warehouse
+        // <warehouse id>.". The start writes nothing before the check.
+        // Rare: for a manager both the warehouse list and the one-warehouse
+        // read must fail (warehouse.ts accessWhenUnreadable keeps every
+        // warehouse by role), so the entry says "for a moment", not how often.
+        // Audience: as the release comment above.
+        id: 'count-start-access-could-not-be-checked',
+        category: 'fixed',
+        area: 'Cycle counts',
+        title: "Starting a count says when your access couldn't be checked",
+        whatChanged:
+          'In the mobile app, when StockPilot can\'t check your warehouse access for a moment as you start a count, the "Could not start count" message now says "Your warehouse access couldn\'t be checked just now, so nothing was changed. Try again."',
+        whyItMatters:
+          'Before, the message said you do not have access to the warehouse and named it by a long code, even when you do have access and only the check had failed.',
+        howItAffectsYou:
+          'This is usually temporary. Press Start count again a moment later. Nothing changes when the check works.',
+        whatToDo:
+          'No action needed. No app update is needed. If the message stays, try again later or tell your admin.',
+        audience: {
+          roles: ['owner', 'admin', 'manager'],
+          anyPermission: ['cycle_counts:assign'],
+          modules: ['cycle_counts'],
+        },
       },
     ],
   },
