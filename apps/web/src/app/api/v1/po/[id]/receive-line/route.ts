@@ -130,7 +130,8 @@ export async function POST(
     return postLine(ctx, {
       poId,
       // An explicit warehouse is part of the request (another one is refused
-      // as another request); without one, the receipt's own.
+      // as another request). A retry that omits the warehouse is the same
+      // request as the first send, so it uses the stored receipt's warehouse.
       warehouseId: parsed.data.warehouseId ?? prior.warehouse_id,
       idempotencyKey,
       qty,

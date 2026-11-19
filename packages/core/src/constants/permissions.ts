@@ -711,7 +711,7 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
   'purchase_orders:manage': {
     group: 'Purchase orders',
     label: 'Manage purchase orders',
-    description: 'Create, approve, receive, and cancel POs.',
+    description: 'Create, approve, and cancel POs. Receiving a PO needs a manager or above.',
   },
 
   'reports:read': {
