@@ -1,6 +1,6 @@
 // Security invariant (listed in scripts/security-test.sh): the app's rule for
-// posting a receipt is the database's, for every role and override the
-// database's own test tries.
+// posting and reversing a receipt is the database's, for every role and
+// override the database's own test tries.
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -14,6 +14,7 @@ import {
   effectivePermissions,
   PERMISSIONS,
   RECEIVE_MANAGER_ONLY_COPY,
+  REVERSE_MANAGER_ONLY_COPY,
   ROLES,
   type Permission,
   type PermissionOverride,
@@ -22,15 +23,17 @@ import {
 
 import { makeServiceContext } from '@/test/supabase-mock';
 
-import { assertCanPostReceipt } from './receipt-post-rule';
+import { assertCanPostReceipt, assertCanReverseReceipt } from './receipt-post-rule';
 
 /**
- * supabase/tests/receipt_post_rule.test.sql runs post_receipt_v2 as one member
- * per row of its case table and checks the database's answer against the
- * row's `posts` and `answer`. This file reads that same table and checks the
- * app's side against every row: core canPostReceipt (the web page and the
- * phone) and assertCanPostReceipt (ReceivingService.postReceipt and the
- * receive-line route). A row changed there changes here.
+ * supabase/tests/receipt_post_rule.test.sql runs post_receipt_v2, then
+ * reverse_receipt on a posted receipt, as one member per row of its case
+ * table and checks the database's answers against the row's `posts` and
+ * `answer`, `reverses` and `reverse_answer`. This file reads that same table
+ * and checks the app's side against every row: core canPostReceipt (the web
+ * page and the phone), assertCanPostReceipt (ReceivingService.postReceipt and
+ * the receive-line route) and assertCanReverseReceipt
+ * (ReceivingService.reverseReceipt). A row changed there changes here.
  */
 
 interface RuleCase {
@@ -45,6 +48,8 @@ interface RuleCase {
   roleRevokes: Permission[];
   posts: boolean;
   answer: string;
+  reverses: boolean;
+  reverseAnswer: string;
 }
 
 const SQL = readFileSync(
@@ -67,7 +72,7 @@ function readCases(sql: string): RuleCase[] {
     .filter((l) => /^\s*\(/.test(l));
   return rows.map((line) => {
     const m =
-      /^\s*\(\s*(\d+),\s*'([^']*)',\s*'([^']*)',\s*'([^']*)',\s*'([^']*)',\s*'([^']*)',\s*'([^']*)',\s*(true|false),\s*'([^']*)'\)[,;]\s*$/.exec(
+      /^\s*\(\s*(\d+),\s*'([^']*)',\s*'([^']*)',\s*'([^']*)',\s*'([^']*)',\s*'([^']*)',\s*'([^']*)',\s*(true|false),\s*'([^']*)',\s*(true|false),\s*'([^']*)'\)[,;]\s*$/.exec(
         line,
       );
     expect(m, `a case row: ${line}`).not.toBeNull();
@@ -81,6 +86,8 @@ function readCases(sql: string): RuleCase[] {
       roleRevokes: list(m![7]!),
       posts: m![8] === 'true',
       answer: m![9]!,
+      reverses: m![10] === 'true',
+      reverseAnswer: m![11]!,
     };
   });
 }
@@ -95,7 +102,7 @@ function overrides(grants: Permission[], revokes: Permission[]): PermissionOverr
 }
 
 describe('the database test case table', () => {
-  it('is read whole: numbered 1..n, every role, only known permissions, and posts matches answer', () => {
+  it('is read whole: numbered 1..n, every role, only known permissions, posts matches answer and reverses matches reverse_answer', () => {
     expect(CASES.length).toBeGreaterThanOrEqual(17);
     expect(CASES.map((c) => c.n)).toEqual(CASES.map((_, i) => i + 1));
     expect([...new Set(CASES.map((c) => c.role))].sort()).toEqual([...ROLES].sort());
@@ -104,6 +111,7 @@ describe('the database test case table', () => {
         expect(PERMISSIONS as readonly string[], `${c.who}: ${p}`).toContain(p);
       }
       expect(c.answer === 'ok:1', c.who).toBe(c.posts);
+      expect(c.reverseAnswer === 'ok:1', c.who).toBe(c.reverses);
     }
   });
 
@@ -151,6 +159,39 @@ describe('the app asks the rule the database applies, case by case', () => {
           c.answer === '42501:permission'
             ? 'Missing permission: stock:adjust'
             : RECEIVE_MANAGER_ONLY_COPY,
+        );
+      }
+    });
+  }
+});
+
+describe('the app asks the rule the database applies to a reversal, case by case', () => {
+  for (const c of CASES) {
+    it(`${c.n}. ${c.who}: ${c.reverses ? 'reverses' : 'refused'}`, () => {
+      const permissions = effectivePermissions(
+        c.role,
+        overrides(c.roleGrants, c.roleRevokes),
+        overrides(c.grants, c.revokes),
+      );
+      // The web's Reverse and the service ask the receipt rule.
+      expect(canPostReceipt({ role: c.role, permissions })).toBe(c.reverses);
+
+      const ctx = makeServiceContext(null, { role: c.role, permissions });
+      let refusal: unknown = null;
+      try {
+        assertCanReverseReceipt(ctx as never);
+      } catch (e) {
+        refusal = e;
+      }
+      if (c.reverses) {
+        expect(refusal).toBeNull();
+      } else {
+        expect(refusal).toMatchObject({ code: 'forbidden' });
+        expect((refusal as { details?: unknown }).details).toBeUndefined();
+        expect((refusal as Error).message).toBe(
+          c.reverseAnswer === '42501:permission'
+            ? 'Missing permission: stock:adjust'
+            : REVERSE_MANAGER_ONLY_COPY,
         );
       }
     });

@@ -16,9 +16,9 @@ import {
 } from './lib/fetch-by-ids';
 import { readInActiveOrg } from './lib/in-active-org';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
-import { assertRoleCanPostReceipt } from './lib/receipt-post-rule';
+import { assertCanReverseReceipt, assertRoleCanPostReceipt } from './lib/receipt-post-rule';
 
-import { DELETED_USER_LABEL, isDeletedPerson } from '@stockpilot/core';
+import { DELETED_USER_LABEL, isDeletedPerson, REVERSE_MANAGER_ONLY_COPY } from '@stockpilot/core';
 import type {
   PostReceiptInput,
   ReverseReceiptInput,
@@ -429,11 +429,46 @@ export class ReceivingService {
       throw await this.receiptKeyConflict(input);
     }
 
-    // post_receipt_v2 put the accepted units into stock (adjust_stock).
+    // post_receipt_v2 put the accepted units into stock (adjust_stock), or,
+    // for a key it has seen, nothing; a list read again then costs nothing.
     invalidateInventoryListAfterWrite(this.ctx.organizationId, 'receipt.post');
 
     const totalAccepted = input.lines.reduce((s, l) => s + l.qtyAccepted, 0);
     const totalRejected = input.lines.reduce((s, l) => s + (l.qtyRejected ?? 0), 0);
+
+    // Once per receipt. post_receipt_v2 answers a first post and a retry of
+    // it with the same receipt row, so the answer cannot say which this is.
+    // The export event can: its key (receipt.posted:<receipt id>) is unique
+    // per organization, and publish_outbox returns the new event's id only
+    // to the one call that records it and null to every other one, two calls
+    // at once included (the unique index lets one insert). So the event is recorded
+    // first, and the audit row, the webhook / Slack / Teams messages and the
+    // auto-unarchive follow only for the call that recorded it. A retry,
+    // even one that arrives while the first post is still running, writes
+    // nothing again. When the event's write fails or its answer is not
+    // known, the rest still runs (a second audit row is better than none).
+    // The one gap: if this process stops after the event is recorded and
+    // before the audit row below (one await), every retry answers false and
+    // that receipt keeps no audit row or po.received message; its stock and
+    // its QuickBooks Bill are unaffected (the restock trigger unarchives).
+    //
+    // The QuickBooks Bill is made from this event. Recorded through the
+    // service client by the one export-event helper
+    // (server/lib/outbox-events.ts), after the receipt posted; it never
+    // throws, so a failed write does not undo the receipt, and it reports one.
+    const firstAnswer = await publishOutboxEvent(this.ctx, {
+      topic: 'receipt.posted',
+      aggregateId: receipt.id,
+      payload: {
+        purchaseOrderId: input.purchaseOrderId,
+        warehouseId: receipt.warehouse_id,
+        receiptNumber: receipt.receipt_number,
+        lineCount: input.lines.length,
+        totalAccepted,
+        totalRejected,
+      },
+    });
+    if (firstAnswer === false) return receipt;
 
     await audit(
       {
@@ -451,23 +486,6 @@ export class ReceivingService {
       },
       this.ctx,
     );
-
-    // Publish to outbox for downstream consumers (the QuickBooks Bill).
-    // Recorded through the service client by the one export-event helper
-    // (server/lib/outbox-events.ts), after the receipt posted; it never
-    // throws, so a failed write does not undo the receipt, and it reports one.
-    await publishOutboxEvent(this.ctx, {
-      topic: 'receipt.posted',
-      aggregateId: receipt.id,
-      payload: {
-        purchaseOrderId: input.purchaseOrderId,
-        warehouseId: receipt.warehouse_id,
-        receiptNumber: receipt.receipt_number,
-        lineCount: input.lines.length,
-        totalAccepted,
-        totalRejected,
-      },
-    });
 
     // Fan out to configured webhooks / Slack / Teams (best-effort, no-op when
     // the org has no endpoints).
@@ -641,8 +659,11 @@ export class ReceivingService {
    * 'reversed' but its row is preserved for audit history.
    */
   async reverseReceipt(input: ReverseReceiptInput): Promise<ReceiptRow> {
-    assertModuleEnabled(this.ctx, 'receiving');
-    assertPermission(this.ctx, 'stock:adjust');
+    // The module, then the rule reverse_receipt applies, the same as a post's
+    // (core canPostReceipt: manager or above with stock:adjust), before
+    // anything is read, so a real and a made-up receipt id get the same
+    // answer. One helper, so the parity test checks what runs here.
+    assertCanReverseReceipt(this.ctx);
 
     // S39: the receipt is read in THIS organization first, and a miss refuses
     // before the function, which decides on the receipt's own organization:
@@ -660,8 +681,9 @@ export class ReceivingService {
       if (error.message.includes('receipt_already_reversed')) {
         throw new ServiceError('conflict', 'This receipt has already been reversed.');
       }
-      if (error.message.includes('forbidden')) {
-        throw new ServiceError('forbidden', 'You cannot reverse this receipt.');
+      if (error.code === '42501' && error.message === 'forbidden') {
+        // The body's own has_org_role(org, 'manager') check, matched exactly.
+        throw new ServiceError('forbidden', REVERSE_MANAGER_ONLY_COPY);
       }
       if (error.message.includes('receipt_not_found')) {
         throw new ServiceError('not_found', 'Receipt not found.');

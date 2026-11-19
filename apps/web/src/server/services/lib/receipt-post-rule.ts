@@ -1,6 +1,10 @@
 import 'server-only';
 
-import { RECEIVE_MANAGER_ONLY_COPY, roleCanReceivePurchaseOrders } from '@stockpilot/core';
+import {
+  RECEIVE_MANAGER_ONLY_COPY,
+  REVERSE_MANAGER_ONLY_COPY,
+  roleCanReceivePurchaseOrders,
+} from '@stockpilot/core';
 
 import {
   assertModuleEnabled,
@@ -35,4 +39,29 @@ export function assertCanPostReceipt(ctx: ServiceContext): void {
   assertModuleEnabled(ctx, 'receiving');
   assertPermission(ctx, 'stock:adjust');
   assertRoleCanPostReceipt(ctx);
+}
+
+/**
+ * Throws unless this caller's ROLE lets them reverse a receipt: manager or
+ * above, reverse_receipt's own has_org_role check (the same role half as a
+ * post, core canPostReceipt). The refusal carries the sentence only, no
+ * details, as a post's does.
+ */
+export function assertRoleCanReverseReceipt(ctx: ServiceContext): void {
+  if (!roleCanReceivePurchaseOrders(ctx.role)) {
+    throw new ServiceError('forbidden', REVERSE_MANAGER_ONLY_COPY);
+  }
+}
+
+/**
+ * Throws unless this caller may reverse a receipt, before anything is read:
+ * the receiving module, then the rule reverse_receipt applies (core
+ * canPostReceipt): stock:adjust (the wrapper's has_permission check), then
+ * the role (assertRoleCanReverseReceipt). ReceivingService.reverseReceipt
+ * asks the same three checks in the same order.
+ */
+export function assertCanReverseReceipt(ctx: ServiceContext): void {
+  assertModuleEnabled(ctx, 'receiving');
+  assertPermission(ctx, 'stock:adjust');
+  assertRoleCanReverseReceipt(ctx);
 }

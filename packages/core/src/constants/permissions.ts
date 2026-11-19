@@ -322,9 +322,14 @@ export function roleCanReceivePurchaseOrders(role: Role): boolean {
  * Nothing else a member holds changes it: purchase_orders_write is FOR ALL,
  * so a manager reads and locks the order without purchase_orders:read, and
  * a grant of purchase_orders:manage below manager stops at the role check.
+ * Reversing a receipt asks the same rule: reverse_receipt's wrapper asks
+ * has_permission(stock:adjust) and its body asks has_org_role(org,
+ * 'manager'), so ReceivingService.reverseReceipt and the web's Reverse ask
+ * this function too (the phone does not reverse receipts).
  * supabase/tests/receipt_post_rule.test.sql pins the database's side for
- * every role and override, and receipt-post-rule.parity.test.ts in apps/web
- * checks this function against the same table.
+ * every role and override, for a post and for a reversal, and
+ * receipt-post-rule.parity.test.ts in apps/web checks this function against
+ * the same table.
  */
 export function canPostReceipt(ctx: {
   readonly role: Role;
@@ -336,6 +341,10 @@ export function canPostReceipt(ctx: {
 /** Said where Receive would be, and as the refusal of a receipt post, to a
  *  member below manager. Web and phone. */
 export const RECEIVE_MANAGER_ONLY_COPY = 'Only a manager can receive purchase orders.';
+
+/** The refusal of a receipt reversal to a member below manager (canPostReceipt
+ *  is false for them while they hold stock:adjust). */
+export const REVERSE_MANAGER_ONLY_COPY = 'Only a manager can reverse a receipt.';
 
 export function assertPermission(role: Role, permission: Permission): void {
   if (!hasPermission(role, permission)) {
