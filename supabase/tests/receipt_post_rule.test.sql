@@ -1,8 +1,9 @@
 -- supabase/tests/receipt_post_rule.test.sql
 --
--- Who the database lets post a receipt on a purchase order, for every role and
--- for the permission overrides that could change it: the member's own and the
--- organization-wide override for the member's role.
+-- Who the database lets post a receipt on a purchase order, and reverse a
+-- posted receipt, for every role and for the permission overrides that could
+-- change it: the member's own and the organization-wide override for the
+-- member's role.
 --
 -- post_receipt_v2 (the wrapper, then ledger.post_receipt_v2) admits a caller
 -- only when all of these hold:
@@ -15,18 +16,30 @@
 --     which a grant of purchase_orders:manage does not pass.
 -- So: manager, admin or owner, with stock:adjust.
 --
--- The app asks the same rule (core canPostReceipt). The case table below is
+-- reverse_receipt (the wrapper, then ledger.reverse_receipt) asks the same:
+--   - stock:adjust (the wrapper's has_permission check, 42501 hint
+--     permission). The wrapper reads the receipt under receipts_select,
+--     which every accepted member passes;
+--   - the body's SELECT ... FOR UPDATE of the receipt: receipts_write's USING
+--     (staff or above; the row is filtered otherwise, P0002);
+--   - manager or above (the body's own has_org_role check, 42501 forbidden).
+-- So the same members reverse as post; a few refusals carry another code
+-- (a viewer granted stock:adjust stops at the receipt's lock, a staff member
+-- at the role check).
+--
+-- The app asks the same rule for both (core canPostReceipt). The case table below is
 -- read line by line by apps/web/src/server/services/lib/
 -- receipt-post-rule.parity.test.ts, which checks canPostReceipt against
 -- every row, so the two cannot drift: change a row here and that test
 -- changes with it.
 --
 -- Each attempt runs inside an undone subtransaction (pg_temp.attempt), so
--- no attempt sees another's receipt. Made-up data only. Wrapped in
--- begin/rollback.
+-- no attempt sees another's receipt or reversal. The receipt every reversal
+-- attempt tries is posted once, by the owner, before the attempts. Made-up
+-- data only. Wrapped in begin/rollback.
 
 begin;
-select plan(22);
+select plan(40);
 
 \set org  '\'7ece1700-0000-4000-8000-00000000000a\''
 \set wh   '\'7ece1700-0000-4000-8000-0000000000c1\''
@@ -40,7 +53,8 @@ select plan(22);
 -- member's role (role_permission_overrides), written inside that case's
 -- undone attempt only, so no other case sees them. All comma separated.
 -- posts: the receipt is recorded. answer: 'ok:1', or the refusal's SQLSTATE
--- and hint ('-' for none).
+-- and hint ('-' for none). reverses and reverse_answer: the same for a
+-- reversal of a posted receipt.
 create temp table rule_cases (
   n           int primary key,
   who         text not null,
@@ -50,27 +64,29 @@ create temp table rule_cases (
   role_grants  text not null,
   role_revokes text not null,
   posts       boolean not null,
-  answer      text not null
+  answer      text not null,
+  reverses    boolean not null,
+  reverse_answer text not null
 );
 -- RULE CASES BEGIN
-insert into rule_cases (n, who, role, grants, revokes, role_grants, role_revokes, posts, answer) values
-  ( 1, 'owner', 'owner', '', '', '', '', true, 'ok:1'),
-  ( 2, 'admin', 'admin', '', '', '', '', true, 'ok:1'),
-  ( 3, 'manager', 'manager', '', '', '', '', true, 'ok:1'),
-  ( 4, 'staff', 'staff', '', '', '', '', false, 'P0002:-'),
-  ( 5, 'viewer', 'viewer', '', '', '', '', false, '42501:permission'),
-  ( 6, 'staff granted purchase_orders:manage', 'staff', 'purchase_orders:manage', '', '', '', false, '42501:-'),
-  ( 7, 'staff granted purchase_orders:manage without stock:adjust', 'staff', 'purchase_orders:manage', 'stock:adjust', '', '', false, '42501:permission'),
-  ( 8, 'viewer granted stock:adjust', 'viewer', 'stock:adjust', '', '', '', false, 'P0002:-'),
-  ( 9, 'viewer granted stock:adjust and purchase_orders:manage', 'viewer', 'stock:adjust,purchase_orders:manage', '', '', '', false, '42501:-'),
-  (10, 'manager without stock:adjust', 'manager', '', 'stock:adjust', '', '', false, '42501:permission'),
-  (11, 'manager without purchase_orders:read', 'manager', '', 'purchase_orders:read', '', '', true, 'ok:1'),
-  (12, 'manager without purchase_orders:manage', 'manager', '', 'purchase_orders:manage', '', '', true, 'ok:1'),
-  (13, 'admin without stock:adjust', 'admin', '', 'stock:adjust', '', '', false, '42501:permission'),
-  (14, 'owner without stock:adjust', 'owner', '', 'stock:adjust', '', '', true, 'ok:1'),
-  (15, 'manager whose role has stock:adjust taken away for the organization', 'manager', '', '', '', 'stock:adjust', false, '42501:permission'),
-  (16, 'manager whose role lost stock:adjust, given it back as a member', 'manager', 'stock:adjust', '', '', 'stock:adjust', true, 'ok:1'),
-  (17, 'staff whose role is granted purchase_orders:manage for the organization', 'staff', '', '', 'purchase_orders:manage', '', false, '42501:-');
+insert into rule_cases (n, who, role, grants, revokes, role_grants, role_revokes, posts, answer, reverses, reverse_answer) values
+  ( 1, 'owner', 'owner', '', '', '', '', true, 'ok:1', true, 'ok:1'),
+  ( 2, 'admin', 'admin', '', '', '', '', true, 'ok:1', true, 'ok:1'),
+  ( 3, 'manager', 'manager', '', '', '', '', true, 'ok:1', true, 'ok:1'),
+  ( 4, 'staff', 'staff', '', '', '', '', false, 'P0002:-', false, '42501:-'),
+  ( 5, 'viewer', 'viewer', '', '', '', '', false, '42501:permission', false, '42501:permission'),
+  ( 6, 'staff granted purchase_orders:manage', 'staff', 'purchase_orders:manage', '', '', '', false, '42501:-', false, '42501:-'),
+  ( 7, 'staff granted purchase_orders:manage without stock:adjust', 'staff', 'purchase_orders:manage', 'stock:adjust', '', '', false, '42501:permission', false, '42501:permission'),
+  ( 8, 'viewer granted stock:adjust', 'viewer', 'stock:adjust', '', '', '', false, 'P0002:-', false, 'P0002:-'),
+  ( 9, 'viewer granted stock:adjust and purchase_orders:manage', 'viewer', 'stock:adjust,purchase_orders:manage', '', '', '', false, '42501:-', false, 'P0002:-'),
+  (10, 'manager without stock:adjust', 'manager', '', 'stock:adjust', '', '', false, '42501:permission', false, '42501:permission'),
+  (11, 'manager without purchase_orders:read', 'manager', '', 'purchase_orders:read', '', '', true, 'ok:1', true, 'ok:1'),
+  (12, 'manager without purchase_orders:manage', 'manager', '', 'purchase_orders:manage', '', '', true, 'ok:1', true, 'ok:1'),
+  (13, 'admin without stock:adjust', 'admin', '', 'stock:adjust', '', '', false, '42501:permission', false, '42501:permission'),
+  (14, 'owner without stock:adjust', 'owner', '', 'stock:adjust', '', '', true, 'ok:1', true, 'ok:1'),
+  (15, 'manager whose role has stock:adjust taken away for the organization', 'manager', '', '', '', 'stock:adjust', false, '42501:permission', false, '42501:permission'),
+  (16, 'manager whose role lost stock:adjust, given it back as a member', 'manager', 'stock:adjust', '', '', 'stock:adjust', true, 'ok:1', true, 'ok:1'),
+  (17, 'staff whose role is granted purchase_orders:manage for the organization', 'staff', '', '', 'purchase_orders:manage', '', false, '42501:-', false, '42501:-');
 -- RULE CASES END
 
 -- ══ Fixtures ══════════════════════════════════════════════════════════════
@@ -163,6 +179,31 @@ insert into results (n, raw)
   select n, pg_temp.attempt(pg_temp.member(n), pg_temp.rcpt_sql(n), pg_temp.role_prep(role, role_grants, role_revokes))
     from rule_cases;
 
+-- The receipt every reversal attempt tries: posted once by the owner (case
+-- 1's member) through the same function, and kept.
+create function pg_temp.post_as(p_sub uuid, p_sql text) returns uuid language plpgsql as $$
+declare v_id uuid;
+begin
+  perform set_config('request.jwt.claim.sub', p_sub::text, true);
+  perform set_config('request.jwt.claim.role', 'authenticated', true);
+  perform set_config('role', 'authenticated', true);
+  execute p_sql into v_id;
+  perform set_config('role', 'none', true);
+  perform set_config('request.jwt.claim.sub', '', true);
+  perform set_config('request.jwt.claim.role', '', true);
+  return v_id;
+end $$;
+create temp table posted (receipt_id uuid not null);
+insert into posted (receipt_id)
+  select pg_temp.post_as(pg_temp.member(1), pg_temp.rcpt_sql(0));
+create function pg_temp.reverse_sql() returns text language sql stable as $$
+  select format($q$select (public.reverse_receipt(%L, 'rule check')).id$q$, (select receipt_id from posted))
+$$;
+create temp table reversals (n int primary key, raw text not null);
+insert into reversals (n, raw)
+  select n, pg_temp.attempt(pg_temp.member(n), pg_temp.reverse_sql(), pg_temp.role_prep(role, role_grants, role_revokes))
+    from rule_cases;
+
 -- ══ T. The table covers the rule ══════════════════════════════════════════
 select is(
   (select string_agg(distinct role, ',' order by role) from rule_cases),
@@ -183,6 +224,10 @@ select is(
   (select count(*)::int from public.role_permission_overrides where organization_id = :org),
   0,
   'T4: no organization-wide override outlives its case');
+select is(
+  (select count(*)::int from rule_cases where posts <> reverses),
+  0,
+  'T5: every case reverses a receipt exactly when it posts one');
 
 -- ══ R. Each case: the database's answer is the table's ════════════════════
 select is(
@@ -192,13 +237,22 @@ select is(
   from rule_cases c join results r using (n)
   order by c.n;
 
+-- ══ V. Each case: the database's answer to a reversal is the table's ══════
+select is(
+  split_part(r.raw, ':', 1) || ':' || split_part(r.raw, ':', 2),
+  c.reverse_answer,
+  format('V%s: %s %s', c.n, c.who, case when c.reverses then 'reverses a receipt' else 'is refused a reversal' end))
+  from rule_cases c join reversals r using (n)
+  order by c.n;
+
 -- ══ N. Nothing stayed ═════════════════════════════════════════════════════
 select is(
   (select count(*)::int from public.receipts where organization_id = :org)
+  || '|' || (select count(*)::int from public.receipts r join posted p on p.receipt_id = r.id where r.status = 'posted')
   || '|' || (select quantity_received from public.purchase_order_items where id = :ln)::int
   || '|' || (select quantity_on_hand from public.inventory_items where id = :it)::int,
-  '0|0|0',
-  'N1: every attempt was undone: no receipt, nothing received, no stock');
+  '1|1|2|2',
+  'N1: every attempt was undone: only the owner''s receipt, still posted, 2 received and 2 on hand');
 
 select * from finish();
 rollback;

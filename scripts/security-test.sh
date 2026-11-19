@@ -946,10 +946,11 @@ PGTAP_TESTS=(
   # (an expired seat and a disabled account hidden), invoker rights, no anon
   # EXECUTE, and a change seen on the next call.
   supabase/tests/0471_request_context_reads_by_index.test.sql
-  # Who may post a receipt on a purchase order, for every role and the
-  # overrides that could change it: manager or above with stock:adjust; staff
-  # granted purchase_orders:manage are refused. Its case table is the one the
-  # app's rule is checked against (receipt-post-rule.parity.test.ts).
+  # Who may post a receipt on a purchase order, and reverse a posted one, for
+  # every role and the overrides that could change it: manager or above with
+  # stock:adjust; staff granted purchase_orders:manage are refused. Its case
+  # table is the one the app's rule is checked against
+  # (receipt-post-rule.parity.test.ts).
   supabase/tests/receipt_post_rule.test.sql
 
   # AI read scoping.
@@ -2221,11 +2222,12 @@ WEB_TESTS=(
   # handed out); the sentence after a hand-out that failed names no path or id.
   src/server/services/bundles.hand-out-role.test.ts
   src/server/services/schedule.complete-kit-role.test.ts
-  # A receipt is posted only by a member the database accepts for it (core
-  # canPostReceipt: manager or above with stock:adjust). ReceivingService and
-  # the receive-line route refuse anyone else before anything is read, the
-  # role refusal with one sentence and no details; the rule is checked against
-  # every row of the pgTAP case table in receipt_post_rule.test.sql.
+  # A receipt is posted or reversed only by a member the database accepts for
+  # it (core canPostReceipt: manager or above with stock:adjust).
+  # ReceivingService and the receive-line route refuse anyone else before
+  # anything is read, the role refusal with one sentence and no details, the
+  # same for a real and a made-up receipt; the rule is checked against every
+  # row of the pgTAP case table in receipt_post_rule.test.sql.
   src/server/services/receiving.receipt-rule.test.ts
   src/server/services/lib/receipt-post-rule.parity.test.ts
 )

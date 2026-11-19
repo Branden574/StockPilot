@@ -14,7 +14,7 @@ import {
  * member the database lets post a receipt (core canPostReceipt: manager or
  * above with stock:adjust). A member with stock:adjust below
  * manager reads who receives; a member without stock:adjust reads the
- * missing permission, as before.
+ * missing permission, as before. Reverse on a receipt follows the same rule.
  */
 
 const poGet = vi.fn();
@@ -81,7 +81,9 @@ vi.mock('@/components/po/po-attachments-panel', () => ({
   PoAttachmentsList: () => <section data-testid="attachments" />,
 }));
 vi.mock('@/components/po/receipt-history', () => ({
-  ReceiptHistory: () => <div data-testid="receipt-history" />,
+  ReceiptHistory: ({ canReverse }: { canReverse: boolean }) => (
+    <div data-testid="receipt-history" data-can-reverse={String(canReverse)} />
+  ),
 }));
 vi.mock('@/components/po/po-status-badge', () => ({
   PoStatusBadge: ({ status }: { status: string }) => <span data-testid="status">{status}</span>,
@@ -237,8 +239,9 @@ const NOT_OFFERED: Array<[string, Role, PermissionOverride[], string]> = [
 
 describe('Receive items follows the rule the database applies', () => {
   for (const [name, r, overrides] of OFFERED) {
-    it(`${name}: Receive items and the receiving hint`, async () => {
+    it(`${name}: Receive items, the receiving hint and Reverse`, async () => {
       await renderAs(r, overrides);
+      expect(screen.getByTestId('receipt-history').dataset.canReverse).toBe('true');
       const lines = lineItems();
       expect(within(lines).getByRole('button', { name: 'Receive items' })).toBeInTheDocument();
       expect(lines.textContent).toContain(
@@ -249,8 +252,9 @@ describe('Receive items follows the rule the database applies', () => {
   }
 
   for (const [name, r, overrides, note] of NOT_OFFERED) {
-    it(`${name}: no Receive items, and "${note}"`, async () => {
+    it(`${name}: no Receive items, no Reverse, and "${note}"`, async () => {
       await renderAs(r, overrides);
+      expect(screen.getByTestId('receipt-history').dataset.canReverse).toBe('false');
       const lines = lineItems();
       expect(within(lines).queryByRole('button', { name: 'Receive items' })).toBeNull();
       expect(lines.textContent).toContain(note);

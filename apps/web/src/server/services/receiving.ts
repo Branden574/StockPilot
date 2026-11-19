@@ -16,9 +16,9 @@ import {
 } from './lib/fetch-by-ids';
 import { readInActiveOrg } from './lib/in-active-org';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
-import { assertRoleCanPostReceipt } from './lib/receipt-post-rule';
+import { assertRoleCanPostReceipt, assertRoleCanReverseReceipt } from './lib/receipt-post-rule';
 
-import { DELETED_USER_LABEL, isDeletedPerson } from '@stockpilot/core';
+import { DELETED_USER_LABEL, isDeletedPerson, REVERSE_MANAGER_ONLY_COPY } from '@stockpilot/core';
 import type {
   PostReceiptInput,
   ReverseReceiptInput,
@@ -642,7 +642,11 @@ export class ReceivingService {
    */
   async reverseReceipt(input: ReverseReceiptInput): Promise<ReceiptRow> {
     assertModuleEnabled(this.ctx, 'receiving');
+    // The rule reverse_receipt applies, the same as a post's (core
+    // canPostReceipt: manager or above with stock:adjust), before anything is
+    // read, so a real and a made-up receipt id get the same answer.
     assertPermission(this.ctx, 'stock:adjust');
+    assertRoleCanReverseReceipt(this.ctx);
 
     // S39: the receipt is read in THIS organization first, and a miss refuses
     // before the function, which decides on the receipt's own organization:
@@ -661,7 +665,8 @@ export class ReceivingService {
         throw new ServiceError('conflict', 'This receipt has already been reversed.');
       }
       if (error.message.includes('forbidden')) {
-        throw new ServiceError('forbidden', 'You cannot reverse this receipt.');
+        // The body's own has_org_role(org, 'manager') check.
+        throw new ServiceError('forbidden', REVERSE_MANAGER_ONLY_COPY);
       }
       if (error.message.includes('receipt_not_found')) {
         throw new ServiceError('not_found', 'Receipt not found.');
