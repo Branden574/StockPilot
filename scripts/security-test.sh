@@ -946,6 +946,12 @@ PGTAP_TESTS=(
   # (an expired seat and a disabled account hidden), invoker rights, no anon
   # EXECUTE, and a change seen on the next call.
   supabase/tests/0471_request_context_reads_by_index.test.sql
+  # Who may post a receipt on a purchase order, and reverse a posted one, for
+  # every role and the overrides that could change it: manager or above with
+  # stock:adjust; staff granted purchase_orders:manage are refused. Its case
+  # table is the one the app's rule is checked against
+  # (receipt-post-rule.parity.test.ts).
+  supabase/tests/receipt_post_rule.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -1206,6 +1212,17 @@ WEB_TESTS=(
   src/lib/dashboard/request-cache.organization-row.test.ts
   'src/app/(dashboard)/layout.organization-row.test.tsx'
   src/server/actions/organization-row-unread.actions.test.ts
+  # An organization row that came back hidden, or with a value that is not a
+  # policy: the member is held to the strictest policy, and one with no
+  # verified authenticator is told their access could not be checked (the
+  # page's card, the action's try-again sentence from the context or from the
+  # service gate on an open page, the layout's strip), never sent to set-up,
+  # and nothing is written. A policy that was read keeps set-up; a verified
+  # authenticator at aal2 writes. An API context keeps the service gate's 403
+  # (src/server/lib/api-context-gate.policy-unread.test.ts, listed below).
+  src/server/actions/policy-unread.actions.test.ts
+  'src/app/(dashboard)/layout.authenticator-set-up.test.tsx'
+  src/components/dashboard/access-unchecked-banner.test.tsx
   src/app/api/v1/mobile/snapshot/route.step-up.test.ts
   src/app/api/client-error/route.test.ts
   # A session that still owes its authenticator code gets no organization
@@ -1248,7 +1265,8 @@ WEB_TESTS=(
   # Only the reviewed routes load the gate, and each calls it as its first
   # statement (after at most one read of the clock).
   src/server/lib/api-context-gate.test.ts
-  # A receipt checks the module and the permission before it reads the order.
+  # A receipt checks the module, the permission and the role before it reads
+  # the order, and a retry is answered from the receipt its key names.
   'src/app/api/v1/po/[id]/receive-line/route.test.ts'
   # Every GET handler under /api, and every handler there by another method
   # that writes nothing, answers a member who owes authenticator set-up 403
@@ -1546,6 +1564,20 @@ WEB_TESTS=(
   # marker.
   src/app/api/no-raw-error-text.guard.test.ts
   src/server/lib/api-error-response.test.ts
+  # A route with no error shape of its own answers a ServiceError by its code
+  # (server/lib/service-error-response.ts): a refusal keeps its words and is
+  # not reported; an internal_error answers the fixed sentence, never the
+  # database's text or its details, and is reported once with the route's tag.
+  src/server/lib/service-error-response.test.ts
+  # The routes that answer by it, per code, plus a warehouse refusal (403, or
+  # the retryable 503 when the caller's access could not be read); and the
+  # census that every other hand-written ServiceError answer under app/api is
+  # listed with its reason.
+  src/app/api/service-error-routes.test.ts
+  src/app/api/service-error-answers.guard.test.ts
+  # The server-log text for a failed PostgREST call keeps its status, code and
+  # hint, never a server error's `details` (row values): reports carry it.
+  src/server/services/lib/postgrest-error.test.ts
   # S31: a Server Action answers a failure it did not expect with a fixed
   # sentence, never the error's own text, and reports it with the action's
   # tag (server/lib/action-error-result.ts). The same census reads every
@@ -2233,6 +2265,19 @@ WEB_TESTS=(
   # handed out); the sentence after a hand-out that failed names no path or id.
   src/server/services/bundles.hand-out-role.test.ts
   src/server/services/schedule.complete-kit-role.test.ts
+  # A receipt is posted or reversed only by a member the database accepts for
+  # it (core canPostReceipt: manager or above with stock:adjust).
+  # ReceivingService and the receive-line route refuse anyone else before
+  # anything is read, the role refusal with one sentence and no details, the
+  # same for a real and a made-up receipt; the rule is checked against every
+  # row of the pgTAP case table in receipt_post_rule.test.sql.
+  src/server/services/receiving.receipt-rule.test.ts
+  src/server/services/lib/receipt-post-rule.parity.test.ts
+  # A receipt's audit row, export event and webhook / Slack / Teams message
+  # are written once per receipt: the call that records the export event
+  # (its key is unique) writes the rest; a retry with the same key writes
+  # nothing again, and the same key with other lines is the conflict.
+  src/server/services/receiving.replay-writes-once.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

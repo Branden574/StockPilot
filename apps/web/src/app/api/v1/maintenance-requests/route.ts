@@ -4,8 +4,7 @@ import { MAINTENANCE_STATUS_LABELS, type MaintenanceStatus } from '@stockpilot/c
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { apiReadContext } from '@/server/lib/api-read-context';
-import { reportError } from '@/lib/error-reporter';
-import { serviceErrorStatus, ServiceError } from '@/server/services/context';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import { MaintenanceRequestsService } from '@/server/services/maintenance-requests';
 
 export const runtime = 'nodejs';
@@ -44,11 +43,7 @@ export async function GET(req: NextRequest) {
     const requests = await new MaintenanceRequestsService(ctx).list({ scope, q, status });
     return NextResponse.json({ requests });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      return NextResponse.json({ error: e.code, message: e.message }, { status: serviceErrorStatus(e.code) });
-    }
-    void reportError(e, { tag: 'api.v1.maintenance-requests.list' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return serviceErrorResponse(e, 'api.v1.maintenance-requests.list');
   }
 }
 
@@ -83,10 +78,6 @@ export async function POST(req: NextRequest) {
     const res = await new MaintenanceRequestsService(ctx).create(body);
     return NextResponse.json(res, { status: 201 });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      return NextResponse.json({ error: e.code, message: e.message }, { status: serviceErrorStatus(e.code) });
-    }
-    void reportError(e, { tag: 'api.v1.maintenance-requests.create' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return serviceErrorResponse(e, 'api.v1.maintenance-requests.create');
   }
 }

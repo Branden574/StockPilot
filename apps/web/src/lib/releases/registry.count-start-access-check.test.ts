@@ -1,0 +1,278 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+import { describe, expect, it } from 'vitest';
+
+import {
+  MODULE_REGISTRY,
+  ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY,
+  PERMISSIONS,
+  releaseSchema,
+  ROLE_PERMISSIONS,
+  type ModuleId,
+  type Release,
+  type ReleaseViewer,
+} from '@stockpilot/core';
+
+import { buildReleaseList, legacyAnnouncementsFor, visibleReleases } from './logic';
+import { RELEASES } from './registry';
+
+/**
+ * Added by docs/whats-new-2026-11-19-errors (2026-11-19): the What's New for
+ * #624, live on the web since 2026-11-19 20:24Z. One entry: starting a count
+ * in the mobile app, when the member's warehouse access could not be read,
+ * now says it could not be checked and to try again, where it said the
+ * member had no access to a warehouse named by its id. Published at the top,
+ * below the Liquid Glass draft and above the export, receipt and access
+ * release; the draft placeholder takes the same minute.
+ *
+ * Left out, each checked against the code: connecting Zendesk and the other
+ * refusals of starting a count already sent their own words (only the status
+ * changed), and the phone's Cycle counts list already kept the counts saved
+ * on the phone for a failed read, which #624 still answers the same way.
+ */
+const ID = 'count-start-access-check-2026-11';
+const ENTRY = 'count-start-access-could-not-be-checked';
+const EXPORT_RECEIPT_ACCESS_ID = 'export-receipt-access-fixes-2026-11';
+/** #624's production deployment went live at this instant. */
+const LIVE_624 = '2026-11-19T20:24:00Z';
+/** The words the reader is quoted, as the code has them. */
+const UNREADABLE =
+  "Your warehouse access couldn't be checked just now, so nothing was changed. Try again.";
+const ALERT_TITLE = 'Could not start count';
+
+const release = () => RELEASES.find((r) => r.id === ID)!;
+const entry = () => release().entries.find((e) => e.id === ENTRY)!;
+
+const ALL_MODULES = Object.keys(MODULE_REGISTRY) as ModuleId[];
+const viewer = (
+  role: ReleaseViewer['role'],
+  permissions: ReleaseViewer['permissions'],
+  enabledModules: ReleaseViewer['enabledModules'] = ['cycle_counts'],
+): ReleaseViewer => ({ role, permissions, enabledModules });
+const owner = viewer('owner', [...PERMISSIONS], ALL_MODULES);
+const admin = viewer('admin', ROLE_PERMISSIONS.admin);
+const manager = viewer('manager', ROLE_PERMISSIONS.manager);
+const staff = viewer('staff', ROLE_PERMISSIONS.staff);
+const member = viewer('viewer', ROLE_PERMISSIONS.viewer);
+const managerCountsOff = viewer('manager', ROLE_PERMISSIONS.manager, []);
+const managerNoAssign = viewer(
+  'manager',
+  ROLE_PERMISSIONS.manager.filter((p) => p !== 'cycle_counts:assign'),
+);
+const staffWithAssign = viewer('staff', [...ROLE_PERMISSIONS.staff, 'cycle_counts:assign']);
+const shownEntries = (v: ReleaseViewer) =>
+  visibleReleases(RELEASES, v)
+    .find((r) => r.id === ID)
+    ?.entries.map((e) => e.id);
+
+const REPO = resolve(__dirname, '../../../../..');
+/** A source file in the repository, as written. */
+const source = (rel: string) => readFileSync(resolve(REPO, rel), 'utf8');
+
+function readerText(r: Release): string[] {
+  return [
+    r.title,
+    r.summary,
+    ...r.entries.flatMap((e) => [
+      e.title,
+      e.area ?? '',
+      e.whatChanged,
+      e.whyItMatters,
+      e.howItAffectsYou,
+      e.whatToDo,
+      e.link?.label ?? '',
+    ]),
+  ];
+}
+
+describe('the count start access check release: order, status and date', () => {
+  it('is published once, as revision 1, directly below the Liquid Glass draft and above the export, receipt and access release, the newest published release', () => {
+    expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
+    expect(release().status).toBe('published');
+    expect(release().revision).toBe(1);
+    expect(release().withdrawnNote).toBeUndefined();
+    expect(RELEASES.slice(0, 3).map((r) => [r.id, r.status])).toEqual([
+      ['liquid-glass-2026-11', 'draft'],
+      [ID, 'published'],
+      [EXPORT_RECEIPT_ACCESS_ID, 'published'],
+    ]);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+  });
+
+  it('is dated on a whole minute, in the past, at or after #624 went live, with the draft placeholder at the same minute and every release below it older', () => {
+    const at = Date.parse(release().publishedAt);
+    expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
+    expect(at).toBeGreaterThanOrEqual(Date.parse(LIVE_624));
+    expect(at).toBeLessThanOrEqual(Date.now());
+    expect(RELEASES[0]!.publishedAt).toBe(release().publishedAt);
+    for (const r of RELEASES.slice(2)) {
+      expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('parses under the shared schema, in plain text, with its one entry', () => {
+    expect(releaseSchema.safeParse(release()).success).toBe(true);
+    for (const text of readerText(release())) expect(text).not.toMatch(/[<>!]/);
+    expect(release().entries.map((e) => [e.id, e.category, e.area])).toEqual([
+      [ENTRY, 'fixed', 'Cycle counts'],
+    ]);
+    expect(RELEASES.filter((r) => r.entries.some((x) => x.id === ENTRY)).map((r) => r.id)).toEqual([
+      ID,
+    ]);
+  });
+
+  it('has no entry for connecting Zendesk or for the Cycle counts list, whose words nobody sees change', () => {
+    const words = readerText(release()).join(' ');
+    expect(words).not.toMatch(/zendesk/i);
+    expect(words).not.toMatch(/counts saved|saved on (this|the|your) phone|downloaded/i);
+  });
+});
+
+describe('the count start access check release: the words', () => {
+  it('has the title, summary and entry as written', () => {
+    expect(release().title).toBe(
+      "Starting a count in the mobile app says when your access couldn't be checked",
+    );
+    expect(release().summary).toBe(
+      'In the mobile app, when StockPilot can\'t check your warehouse access for a moment as you start a count, the app now says "Your warehouse access couldn\'t be checked just now, so nothing was changed. Try again." It used to say you do not have access to the warehouse, and named it by a long code. No app update is needed.',
+    );
+    expect(entry().title).toBe("Starting a count says when your access couldn't be checked");
+    expect(entry().whatChanged).toBe(
+      'In the mobile app, when StockPilot can\'t check your warehouse access for a moment as you start a count, the "Could not start count" message now says "Your warehouse access couldn\'t be checked just now, so nothing was changed. Try again."',
+    );
+    expect(entry().whyItMatters).toBe(
+      'Before, the message said you do not have access to the warehouse and named it by a long code, even when you do have access and only the check had failed.',
+    );
+    expect(entry().howItAffectsYou).toBe(
+      'This is usually temporary. Press Start count again a moment later. Nothing changes when the check works.',
+    );
+    expect(entry().whatToDo).toBe(
+      'No action needed. No app update is needed. If the message stays, try again later or tell your admin.',
+    );
+  });
+
+  it('quotes the sentences people see', () => {
+    expect(release().summary).toContain(`"${UNREADABLE}"`);
+    expect(entry().whatChanged).toContain(`"${UNREADABLE}"`);
+    expect(entry().whatChanged).toContain(`"${ALERT_TITLE}"`);
+  });
+
+  it('keeps to the wording rules: no emoji, no exclamation mark, no "book", no internal names, and no link', () => {
+    for (const text of readerText(release())) {
+      expect(text).not.toMatch(/\p{Extended_Pictographic}/u);
+      expect(text).not.toMatch(/book/i);
+      expect(text).not.toMatch(
+        /\b[SB]\d{1,3}\b|docket|migration|database|\b04\d\d\b|Claude|\bAI\b/i,
+      );
+      expect(text).not.toMatch(
+        /cycle_counts:assign|stock:adjust|ServiceError|ForbiddenError|check_failed|serviceErrorResponse|\b40[13]\b|\b50[03]\b/,
+      );
+    }
+    expect(entry().link).toBeUndefined();
+  });
+});
+
+describe('the count start access check release: who is told', () => {
+  it('names a manager or above who can assign counts where Cycle Counts is on, on the entry, and nothing on the release', () => {
+    expect(release().audience).toBeUndefined();
+    expect(entry().audience).toEqual({
+      roles: ['owner', 'admin', 'manager'],
+      anyPermission: ['cycle_counts:assign'],
+      modules: ['cycle_counts'],
+    });
+  });
+
+  it('tells owners, admins and managers who can assign counts where Cycle Counts is on, and nobody else', () => {
+    expect(shownEntries(owner)).toEqual([ENTRY]);
+    expect(shownEntries(admin)).toEqual([ENTRY]);
+    expect(shownEntries(manager)).toEqual([ENTRY]);
+    expect(shownEntries(staff)).toBeUndefined();
+    expect(shownEntries(member)).toBeUndefined();
+    expect(shownEntries(staffWithAssign)).toBeUndefined();
+    expect(shownEntries(managerCountsOff)).toBeUndefined();
+    expect(shownEntries(managerNoAssign)).toBeUndefined();
+  });
+
+  it('is the first notice for whoever it reaches, the export, receipt and access release is next, a reader it does not reach keeps that one, and an old phone build lists it first for whoever it reaches', () => {
+    const read = {
+      release_id: ID,
+      revision: 1,
+      dismissed_at: null,
+      opened_at: '2026-11-19T21:00:00Z',
+      read_at: '2026-11-19T21:00:00Z',
+    };
+    for (const v of [owner, admin, manager]) {
+      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
+      expect(buildReleaseList(RELEASES, v, [read], null).latestUnread?.id, v.role).toBe(
+        EXPORT_RECEIPT_ACCESS_ID,
+      );
+      expect(legacyAnnouncementsFor(RELEASES, v, {})[0], v.role).toEqual({
+        id: ID,
+        date: release().publishedAt.slice(0, 10),
+        title: release().title,
+        body: release().summary,
+      });
+    }
+    for (const v of [staff, member, managerCountsOff, managerNoAssign, staffWithAssign]) {
+      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(
+        EXPORT_RECEIPT_ACCESS_ID,
+      );
+      expect(legacyAnnouncementsFor(RELEASES, v, {})[0]?.id, v.role).toBe(EXPORT_RECEIPT_ACCESS_ID);
+    }
+  });
+});
+
+describe('the count start access check release: the code the words rest on', () => {
+  it('the phone starts a count through POST /api/v1/cycle-counts and shows the answer in the alert, whatever its status', () => {
+    const screen = source('apps/mobile/app/cycle-count/new.tsx');
+    expect(screen).toContain("await api<StartResult>('/api/v1/cycle-counts', {");
+    expect(screen).toContain(`Alert.alert('${ALERT_TITLE}', countStartFailureMessage(e));`);
+    const failure = source('apps/mobile/src/lib/count-select-offers.ts');
+    expect(failure).toContain(
+      "if (status === 403 && e.message.startsWith('Missing permission:')) {",
+    );
+    expect(failure).toContain('return e.message;');
+    expect(source('apps/mobile/src/lib/api.ts')).toContain('let message = body.message ?? code;');
+  });
+
+  it('a count start asks the warehouse check for each picked warehouse, and that check says when the access could not be read', () => {
+    expect(source('apps/web/src/server/services/cycle-counts.ts')).toContain(
+      'const gate = await gateCountItems(this.ctx, ids);',
+    );
+    expect(source('apps/web/src/server/services/lib/count-start-preflight.ts')).toContain(
+      "await assertWarehouseAccess(wh, 'write', ctx);",
+    );
+    const warehouse = source('apps/web/src/lib/auth/warehouse.ts');
+    expect(warehouse).toContain("accessUnreadable: inOrg === 'unreadable',");
+    expect(warehouse).toContain('accessUnreadable: access.unreadable === true,');
+  });
+
+  it('the count start route answers that refusal 503 with the quoted sentence, and no longer by hand as a 403', () => {
+    const route = source('apps/web/src/app/api/v1/cycle-counts/route.ts');
+    expect(route).toContain("return serviceErrorResponse(e, 'api.v1.cycle_counts.create');");
+    expect(route).not.toContain('ForbiddenError');
+    expect(source('apps/web/src/server/lib/service-error-response.ts')).toContain(
+      'return forbiddenOrInternalResponse(e, tag, opts);',
+    );
+    const answer = source('apps/web/src/server/lib/api-error-response.ts');
+    expect(answer).toContain('if (e.accessUnreadable) {');
+    expect(answer).toContain(
+      "{ error: 'check_failed', message: ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY },",
+    );
+    expect(answer).toContain("{ status: 503, headers: { 'Retry-After': '5' } },");
+    expect(ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY).toBe(UNREADABLE);
+  });
+
+  it('what was left out: Zendesk on the phone shows the answer whatever its status, and the count list reads a failed access check as a fault it already kept saved counts for', () => {
+    expect(source('apps/mobile/app/(drawer)/zendesk.tsx')).toContain(
+      "Alert.alert('Could not connect', e instanceof Error ? e.message : String(e));",
+    );
+    expect(source('apps/web/src/server/services/lib/count-read-scope.ts')).toContain(
+      "'internal_error',",
+    );
+    const list = source('apps/mobile/app/(drawer)/(tabs)/cycle-counts.tsx');
+    expect(list).toContain('e.status === 403 &&');
+    expect(list).toContain("(e.code === 'forbidden' || e.code === 'module_disabled')");
+  });
+});

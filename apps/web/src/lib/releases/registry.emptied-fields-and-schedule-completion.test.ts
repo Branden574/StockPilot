@@ -41,7 +41,6 @@ const ENTRY_IDS = [
 const CONNECTION_SCHEDULE_ID = 'connection-and-schedule-messages-2026-11';
 // Added by docs/releases-low-critical-pages (2026-11-18): the Low + critical pages and list value release (whoever can read items: every role by default), published later, at the top, below the Liquid Glass draft.
 const LOW_CRITICAL_ID = 'low-critical-pages-and-list-value-2026-11';
-const LOW_CRITICAL_AT = '2026-11-18T10:00:00Z';
 const lowCriticalRead = {
   release_id: LOW_CRITICAL_ID,
   revision: 1,
@@ -49,6 +48,20 @@ const lowCriticalRead = {
   opened_at: '2026-11-18T10:01:00Z',
   read_at: '2026-11-18T10:01:00Z',
 };
+// Added by docs/whats-new-2026-11-19-errors (2026-11-19): the count start access check release (a manager or above who can assign counts, where Cycle Counts is on), published later, at the top, below the Liquid Glass draft.
+const COUNT_START_ACCESS_ID = 'count-start-access-check-2026-11';
+const COUNT_START_ACCESS_AT = '2026-11-19T20:41:00Z';
+// Added by docs/whats-new-small-fixes-1119 (2026-11-19): the export, receipt and access release (every member: its access entry has no audience), published later, at the top, below the Liquid Glass draft.
+const EXPORT_RECEIPT_ACCESS_ID = 'export-receipt-access-fixes-2026-11';
+const exportReceiptAccessRead = {
+  release_id: EXPORT_RECEIPT_ACCESS_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-19T15:31:00Z',
+  read_at: '2026-11-19T15:31:00Z',
+};
+// Added by docs/whats-new-receiving-shown-to-managers (2026-11-19): the receiving release (whoever can open a purchase order where Receiving is on), published later, at the top, below the Liquid Glass draft.
+const RECEIVING_ID = 'receiving-shown-to-managers-2026-11';
 const DELETE_CONFIRM_ID = 'delete-account-confirm-2026-11';
 const PUBLISHED_AT = '2026-11-16T12:33:00Z';
 const LIVE_595 = '2026-11-16T12:10:47Z';
@@ -122,8 +135,17 @@ describe('the emptied fields and schedule completion release: order, status and 
     expect(release().revision).toBe(2);
     expect(release().withdrawnNote).toBeUndefined();
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES.slice(0, 4)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so the list takes one more.
-    expect(RELEASES.slice(0, 5).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(0, 5)): the receiving release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(0, 6)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(0, 7)): the count start access check release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    expect(RELEASES.slice(0, 8).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, directly below the Liquid Glass draft.
+      [COUNT_START_ACCESS_ID, 'published'],
+      // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, directly below the Liquid Glass draft.
+      [EXPORT_RECEIPT_ACCESS_ID, 'published'],
+      // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: without it): the receiving release is published later, at the top, directly below the Liquid Glass draft.
+      [RECEIVING_ID, 'published'],
       // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, directly below the Liquid Glass draft.
       [LOW_CRITICAL_ID, 'published'],
       [ID, 'published'],
@@ -131,7 +153,10 @@ describe('the emptied fields and schedule completion release: order, status and 
       [DELETE_CONFIRM_ID, 'published'],
     ]);
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: ID): the Low + critical pages and list value release is published after it, at the top, the newest published release.
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(LOW_CRITICAL_ID);
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: the Low + critical pages and list value release): the receiving release is published after it, at the top, the newest published release.
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: the receiving release): the export, receipt and access release is published after it, at the top, the newest published release.
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: the export, receipt and access release): the count start access check release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(COUNT_START_ACCESS_ID);
   });
 
   // Added by bundles/hand-out-follows-the-manager-rule (2026-11-16): revision 2 is told again.
@@ -146,9 +171,11 @@ describe('the emptied fields and schedule completion release: order, status and 
     // Re-pinned at the merge of main (2026-11-18; was: only this release's read rows): the Low + critical pages
     // and list value release is newer, so it is marked read here, or it would be the latest unread.
     const newerRead = { ...readAt(1), release_id: LOW_CRITICAL_ID };
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
+    const newestRead = { ...readAt(1), release_id: EXPORT_RECEIPT_ACCESS_ID };
     for (const v of [owner, admin, manager, scheduleOnly, suppliersOnly]) {
-      expect(buildReleaseList(RELEASES, v, [readAt(1), newerRead], null).latestUnread?.id, v.role).toBe(ID);
-      expect(buildReleaseList(RELEASES, v, [readAt(2), newerRead], null).latestUnread?.id, v.role).not.toBe(
+      expect(buildReleaseList(RELEASES, v, [readAt(1), newerRead, newestRead], null).latestUnread?.id, v.role).toBe(ID);
+      expect(buildReleaseList(RELEASES, v, [readAt(2), newerRead, newestRead], null).latestUnread?.id, v.role).not.toBe(
         ID,
       );
     }
@@ -165,10 +192,16 @@ describe('the emptied fields and schedule completion release: order, status and 
     expect(at).toBeGreaterThan(Date.parse(LIVE_597));
     expect(at).toBeLessThanOrEqual(Date.now());
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES[0].publishedAt equal to this release's): the placeholder is the minute of the Low + critical pages and list value release, published later, above this one.
-    expect(RELEASES[0]!.publishedAt).toBe(LOW_CRITICAL_AT);
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: the minute of the Low + critical pages and list value release, '2026-11-18T10:00:00Z'): the placeholder is the minute of the receiving release, published later, above this one.
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: the minute of the receiving release, '2026-11-19T05:20:00Z'): the placeholder is the minute of the export, receipt and access release, published later, above this one.
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: the minute of the export, receipt and access release, '2026-11-19T16:00:00Z'): the placeholder is the minute of the count start access check release, published later, above this one.
+    expect(RELEASES[0]!.publishedAt).toBe(COUNT_START_ACCESS_AT);
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES.slice(2)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(3)) {
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(3)): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(4)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(5)): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(6)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -377,13 +410,17 @@ describe('the emptied fields and schedule completion release: who is told', () =
     ];
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: nothing read, and [read]): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (owners, admins, managers, staff and viewers by default), so each reads it first, and every notice this test checks is the one it checked before.
     for (const [v, after] of next) {
-      expect(buildReleaseList(RELEASES, v, [lowCriticalRead], null).latestUnread?.id, v.role).toBe(ID);
-      expect(buildReleaseList(RELEASES, v, [lowCriticalRead, read], null).latestUnread?.id, v.role).toBe(after);
+      // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
+      expect(buildReleaseList(RELEASES, v, [exportReceiptAccessRead, lowCriticalRead], null).latestUnread?.id, v.role).toBe(ID);
+      // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
+      expect(buildReleaseList(RELEASES, v, [exportReceiptAccessRead, lowCriticalRead, read], null).latestUnread?.id, v.role).toBe(after);
     }
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: nothing read): as above.
-    expect(buildReleaseList(RELEASES, member, [lowCriticalRead], null).latestUnread?.id).toBe(DELETE_CONFIRM_ID);
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
+    expect(buildReleaseList(RELEASES, member, [exportReceiptAccessRead, lowCriticalRead], null).latestUnread?.id).toBe(DELETE_CONFIRM_ID);
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: nothing seen): the Low + critical pages and list value release is published later and reaches whoever can read items, so the phone has seen it first.
-    const legacy = (v: ReleaseViewer) => legacyAnnouncementsFor(RELEASES, v, { [LOW_CRITICAL_ID]: true })[0];
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
+    const legacy = (v: ReleaseViewer) => legacyAnnouncementsFor(RELEASES, v, { [EXPORT_RECEIPT_ACCESS_ID]: true, [LOW_CRITICAL_ID]: true })[0];
     const base = { id: ID, date: '2026-11-16', title: release().title, body: release().summary };
     expect(legacy(owner)).toEqual({ ...base, cta: SUPPLIERS_LINK });
     expect(legacy(manager)).toEqual({ ...base, cta: SUPPLIERS_LINK });

@@ -3,8 +3,7 @@ import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { apiReadContext } from '@/server/lib/api-read-context';
-import { reportError } from '@/lib/error-reporter';
-import { serviceErrorStatus, ServiceError } from '@/server/services/context';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import { MaintenanceRequestsService } from '@/server/services/maintenance-requests';
 
 export const runtime = 'nodejs';
@@ -32,11 +31,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const notes = await new MaintenanceRequestsService(ctx).listNotes(id);
     return NextResponse.json({ notes });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      return NextResponse.json({ error: e.code, message: e.message }, { status: serviceErrorStatus(e.code) });
-    }
-    void reportError(e, { tag: 'api.v1.maintenance-requests.notes.list' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return serviceErrorResponse(e, 'api.v1.maintenance-requests.notes.list');
   }
 }
 
@@ -74,10 +69,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const res = await new MaintenanceRequestsService(ctx).addNote(id, parsed.data.body);
     return NextResponse.json({ id: res.id }, { status: 201 });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      return NextResponse.json({ error: e.code, message: e.message }, { status: serviceErrorStatus(e.code) });
-    }
-    void reportError(e, { tag: 'api.v1.maintenance-requests.notes.add' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return serviceErrorResponse(e, 'api.v1.maintenance-requests.notes.add');
   }
 }

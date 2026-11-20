@@ -333,13 +333,14 @@ describe('a member who must set up an authenticator first, on the profile page',
     expect(svc.cancelled).toBe(1);
   });
 
-  it('an organization row hidden from the member is held to the strictest policy: refused under any policy', async () => {
+  it('an organization row hidden from the member is held to the strictest policy: refused under any policy, as a check that could not be made, not as set-up', async () => {
     world.policy = 'optional';
     world.role = 'staff';
     orgRead.hidden = true;
     orgRead.answer = 'empty';
-    const result = await requestEmailChangeAction(INPUT);
-    expect(result).toMatchObject({ ok: false, error: { details: { reason: 'mfa_required' } } });
+    expect(await requestEmailChangeAction(INPUT)).toEqual(COULD_NOT_CHECK);
+    svc.pending = PENDING;
+    expect(await resendEmailChangeAction()).toEqual(COULD_NOT_CHECK);
     nothingSpent();
   });
 

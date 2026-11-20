@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
 
 import { apiReadContext } from '@/server/lib/api-read-context';
-import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { ServiceError } from '@/server/services/context';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import {
   getDashboardValueComparison,
   type ValueBasis,
@@ -109,16 +108,6 @@ export async function GET(request: Request) {
       headers: { 'Cache-Control': 'no-store' },
     });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      const status =
-        e.code === 'module_disabled' || e.code === 'forbidden'
-          ? 403
-          : e.code === 'validation_error'
-            ? 400
-            : 500;
-      return NextResponse.json({ error: e.code, message: e.message }, { status });
-    }
-    void reportError(e, { tag: 'dashboard.value-series' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return serviceErrorResponse(e, 'dashboard.value-series');
   }
 }

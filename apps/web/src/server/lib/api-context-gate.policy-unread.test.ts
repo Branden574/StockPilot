@@ -47,6 +47,12 @@ import { verifiedSessionAuth } from '@/test/verified-session-stub';
 import { reportError } from '@/lib/error-reporter';
 import { resetPolicyUnreadReportsForTests, withApiContext } from '@/lib/auth/api-context';
 import { mfaPolicyWasUnread } from '@/lib/auth/mfa-policy';
+import {
+  assertPermission,
+  mfaGateError,
+  ServiceError,
+  serviceErrorStatus,
+} from '@/server/services/context';
 
 import { apiContextGate } from './api-context-gate';
 
@@ -531,6 +537,71 @@ describe('a member whose only factor is unverified (enrolment never confirmed) i
           }
         }
       });
+    },
+  );
+});
+
+/**
+ * THE SERVICE GATE OVER AN API CONTEXT. A page or Server Action context built
+ * from a policy that was not read gets the could-not-check error from the
+ * service gate (server/services/context.ts). An API context does not: each
+ * route handler maps a service error to its own answer, and the retryable
+ * answer the phone reads as "nothing was written" has one sender, the API
+ * context gate above. So on a route the gate does not stand in front of, the
+ * service gate keeps its 403 `mfa_required` for a member with no verified
+ * authenticator, whatever the organization row's state, and lets a verified
+ * authenticator at aal2 through.
+ */
+describe('the service gate over the same API context keeps its own answer', () => {
+  const STATES = ORG_STATES.flatMap(([org, reads]) => reads.map((r) => [org, r] as const));
+
+  it.each(STATES)(
+    'organization row %s, through the %s: no verified authenticator gets the 403 mfa_required, never the could-not-check error',
+    async (org, read) => {
+      for (const path of PATHS) {
+        for (const unverifiedOnly of [false, true]) {
+          for (const role of ROLES) {
+            arrange(
+              { policy: 'all_required', role, authenticator: false, aal: 'aal1' },
+              read,
+              org,
+              unverifiedOnly,
+            );
+            const ctx = await withApiContext(request(path, 'POST'));
+            const at = `${path} ${role} ${unverifiedOnly ? 'unverified only' : 'none'}`;
+            expect(ctx, at).not.toBeNull();
+            expect(mfaPolicyWasUnread(ctx!), at).toBe(org !== 'stored');
+            let thrown: unknown;
+            try {
+              assertPermission(ctx!, 'items:read');
+            } catch (e) {
+              thrown = e;
+            }
+            expect(thrown, at).toBeInstanceOf(ServiceError);
+            expect(thrown, at).toMatchObject({
+              code: 'forbidden',
+              details: { reason: 'mfa_required' },
+            });
+            expect(serviceErrorStatus((thrown as ServiceError).code), at).toBe(403);
+            expect(mfaGateError(ctx!), at).toBeInstanceOf(ServiceError);
+          }
+        }
+      }
+    },
+  );
+
+  it.each(STATES)(
+    'organization row %s, through the %s: a verified authenticator at aal2 passes',
+    async (org, read) => {
+      for (const path of PATHS) {
+        arrange(
+          { policy: 'all_required', role: 'staff', authenticator: true, aal: 'aal2' },
+          read,
+          org,
+        );
+        const ctx = await withApiContext(request(path, 'POST'));
+        expect(() => assertPermission(ctx!, 'items:read'), path).not.toThrow();
+      }
     },
   );
 });

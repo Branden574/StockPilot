@@ -140,7 +140,15 @@ export const RELEASES: Release[] = [
     // Moved again by docs/releases-low-critical-pages (2026-11-18; was: '2026-11-16T12:33:00Z'): the Low +
     // critical pages and list value release below is dated 2026-11-18T10:00:00Z, so the placeholder is that
     // same minute.
-    publishedAt: '2026-11-18T10:00:00Z',
+    // Moved again by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: '2026-11-18T10:00:00Z'): the
+    // receiving release below is dated 2026-11-19T05:20:00Z (the whole minute after its change went live),
+    // so the placeholder is that same minute.
+    // Moved again by docs/whats-new-small-fixes-1119 (2026-11-19; was: '2026-11-19T05:20:00Z'): the export,
+    // receipt and access release below is dated 2026-11-19T16:00:00Z (a stand-in until the integrator sets
+    // the real minute at merge), so the placeholder is that same minute.
+    // Moved again by docs/whats-new-2026-11-19-errors (2026-11-19; was: '2026-11-19T16:00:00Z'): the count
+    // start access check release below is dated 2026-11-19T20:41:00Z, so the placeholder is that same minute.
+    publishedAt: '2026-11-19T20:41:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -225,6 +233,279 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'count-start-access-check-2026-11',
+    revision: 1,
+    // One fix already live on the web server: "API routes answer a service
+    // refusal by its code through serviceErrorResponse" (#624, 6e17cdfed).
+    // publishedAt is the whole minute this release's pull request was opened;
+    // it goes live as soon as it merges. The Liquid Glass draft placeholder
+    // above takes the same minute.
+    // Left out as not visible, each checked at 6e17cdfed:
+    // - Connecting Zendesk now answers a refusal with its own status (400,
+    //   409, 401) where it answered 500, but the words were already the
+    //   service's own: the old catch sent { error, message: e.message } for
+    //   every ServiceError, and an internal_error's message was already the
+    //   generic one (server/services/context.ts ServiceError). Only the web
+    //   card's Server Action (server/actions/zendesk.ts) and the phone's
+    //   Zendesk screen ((drawer)/zendesk.tsx, which shows e.message whatever
+    //   the status) connect, and the route is the phone's only. A fault that
+    //   is not a ServiceError reads "Something went wrong. Please try again."
+    //   where it read "Unexpected error": the words of a failure, not a fix.
+    // - Starting a count: the same for every ServiceError (conflict, signed
+    //   out): the old catch already sent its words, and the phone's alert
+    //   shows them whatever the status (count-select-offers.ts
+    //   countStartFailureMessage). Only the warehouse check below changed.
+    // - The phone's Cycle counts list (GET /api/v1/cycle-counts): its service
+    //   (listPage) throws no warehouse refusal. A failed read of the member's
+    //   warehouses is an internal_error (services/lib/count-read-scope.ts
+    //   readCountScope), answered 500 before and after, and the list already
+    //   kept the counts saved on the phone for any answer but a 403
+    //   forbidden or module_disabled ((tabs)/cycle-counts.tsx, the catch of
+    //   the list load). Nothing a member sees changed there.
+    // - Error reports no longer carry the database's row details, and the
+    //   route guard test: internal.
+    // Who is told: whoever can start a count (count-start-preflight.ts
+    // assertCountStartFloors: a manager or above with cycle_counts:assign
+    // and stock:adjust, Cycle Counts on). An audience names one permission
+    // list, any of which counts, so it names cycle_counts:assign, the
+    // permission the start is named for. No link: the phone's New count
+    // opens from the Cycle counts list and the select bar, not a web page.
+    status: 'published',
+    title: "Starting a count in the mobile app says when your access couldn't be checked",
+    summary:
+      'In the mobile app, when StockPilot can\'t check your warehouse access for a moment as you start a count, the app now says "Your warehouse access couldn\'t be checked just now, so nothing was changed. Try again." It used to say you do not have access to the warehouse, and named it by a long code. No app update is needed.',
+    publishedAt: '2026-11-19T20:41:00Z',
+    entries: [
+      {
+        // platform: phone, through the server (no app update; the web starts
+        // a count through its own Server Action, which #624 did not change).
+        // From: #624. Checked at 6e17cdfed: the phone's New count posts to
+        // POST /api/v1/cycle-counts (apps/mobile/app/cycle-count/new.tsx:100)
+        // and shows the answer's message in the alert "Could not start count"
+        // (:120, src/lib/count-select-offers.ts:66: every message but the old
+        // "Missing permission:" one as sent; src/lib/api.ts:221 reads the
+        // body's message whatever the status). A selection count runs
+        // gateCountItems (server/services/cycle-counts.ts:1361), which asks
+        // assertWarehouseAccess(wh, 'write') for each warehouse
+        // (server/services/lib/count-start-preflight.ts:171). When the
+        // member's own access could not be read, that refusal carries
+        // accessUnreadable (lib/auth/warehouse.ts:302-304 and :313-315). The
+        // route now answers through serviceErrorResponse
+        // (app/api/v1/cycle-counts/route.ts:138), which sends a warehouse
+        // refusal to forbiddenOrInternalResponse: 503 check_failed, Retry-After
+        // 5, with core ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY
+        // (server/lib/api-error-response.ts:161-166;
+        // packages/core/src/guards/db-guard-copy.ts:46-47). Before, the route
+        // answered every ForbiddenError 403 with its own message (route.ts:159
+        // at 6e17cdfed^): "User does not have write access to warehouse
+        // <warehouse id>.". The start writes nothing before the check.
+        // Rare: for a manager both the warehouse list and the one-warehouse
+        // read must fail (warehouse.ts accessWhenUnreadable keeps every
+        // warehouse by role), so the entry says "for a moment", not how often.
+        // Audience: as the release comment above.
+        id: 'count-start-access-could-not-be-checked',
+        category: 'fixed',
+        area: 'Cycle counts',
+        title: "Starting a count says when your access couldn't be checked",
+        whatChanged:
+          'In the mobile app, when StockPilot can\'t check your warehouse access for a moment as you start a count, the "Could not start count" message now says "Your warehouse access couldn\'t be checked just now, so nothing was changed. Try again."',
+        whyItMatters:
+          'Before, the message said you do not have access to the warehouse and named it by a long code, even when you do have access and only the check had failed.',
+        howItAffectsYou:
+          'This is usually temporary. Press Start count again a moment later. Nothing changes when the check works.',
+        whatToDo:
+          'No action needed. No app update is needed. If the message stays, try again later or tell your admin.',
+        audience: {
+          roles: ['owner', 'admin', 'manager'],
+          anyPermission: ['cycle_counts:assign'],
+          modules: ['cycle_counts'],
+        },
+      },
+    ],
+  },
+  {
+    id: 'export-receipt-access-fixes-2026-11',
+    revision: 1,
+    // Three fixes already live on the web, each its own pull request:
+    // "Inventory export, its preview and the bundle list answer a service
+    // refusal by its code" (#619), "A receipt writes its audit row and sends
+    // its webhook, Slack and Teams messages once" (#621) and "A page or Server
+    // Action whose authenticator policy was not read tells the member their
+    // access could not be checked" (#622). SET AT MERGE: publishedAt is a
+    // stand-in, 2026-11-19T16:00:00Z; the integrator sets the whole minute at
+    // or after the last of the three production deployments going live, and
+    // the Liquid Glass draft placeholder above takes the same minute.
+    // Left out as not visible: "Reversing a receipt follows the rule the
+    // database applies" (#620). The web already showed Reverse only to a
+    // manager or above with Adjust on-hand (purchase-orders/[id]/page.tsx
+    // canReverse), and the phone has no Reverse, so only a call made outside
+    // the app meets the new sentence "Only a manager can reverse a receipt.".
+    // The database refusing what the app already refused is not visible to
+    // anyone using the app as intended, so it has no entry (the rule this
+    // registry has followed since the order approvals release). Also left
+    // out: #619's phone kit list (GET /api/v1/bundles), which changes only
+    // the words of a failed read.
+    // Who is told: every member, through access-could-not-be-checked (no
+    // audience); the export entry to whoever can export items
+    // (items:export), and the receipt entry to whoever can receive (core
+    // canPostReceipt: a manager or above with stock:adjust, Receiving on). No
+    // links: the export dialog sits on Items and Books, which items:read
+    // opens, and anyPermission cannot ask for both.
+    status: 'published',
+    title:
+      'Export refusals say why, a receipt sent again is recorded once, and pages say when your access could not be checked',
+    summary:
+      "On the web, the Customize export dialog now says so when you do not have permission to export, instead of offering Try again. A receipt sent again, for example after a slow connection, now shows once in the Audit log and reaches webhooks, Slack and Teams once. When StockPilot can't read your organization's sign-in settings for a moment, the web now says your access could not be checked and offers Try again, instead of asking you to set up an authenticator app.",
+    publishedAt: '2026-11-19T16:00:00Z',
+    entries: [
+      {
+        // platform: web (the phone has no Items export). From: #619. Checked
+        // at f9848e806: both export routes answer through
+        // server/lib/service-error-response.ts (a ServiceError other than
+        // internal_error keeps its code, its words and its status, 403 for
+        // forbidden; anything else goes to internalErrorResponse, reported,
+        // with "Something went wrong. Please try again."). Before, every
+        // ServiceError answered 500 with its own words.
+        // lib/download-export.ts errorFromResponse turns a 403 forbidden into
+        // ExportRefusedError; the dialog's sample (export-builder-dialog.tsx
+        // :235, export-builder-preview.tsx :79-81) then shows that sentence
+        // with no Try again, where a 500 showed "Could not load a sample of
+        // this export. You can still export the file." with Try again
+        // (:82-95). The export itself already showed the server's words
+        // inside the dialog (export-builder-dialog.tsx :413). The route asks
+        // items:export before the service, so a refusal is rare: the entry
+        // says "when", not how often.
+        id: 'export-refusals-say-why',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Export says why when it is refused',
+        whatChanged:
+          'In the Customize export dialog on Items and Books, when the server refuses to show a sample of the export because you do not have permission, the sample area now says so, with no Try again. When an export fails on the server, the dialog says "Something went wrong. Please try again." and the failure is recorded so it can be found and fixed.',
+        whyItMatters:
+          'A refusal looked like a failure: the sample said it could not load and offered Try again, which could not help.',
+        howItAffectsYou:
+          'Nothing changes for an export that works. If an export is refused, the dialog tells you why.',
+        whatToDo: 'No action needed. If the dialog says you do not have permission, ask an admin.',
+        audience: { anyPermission: ['items:export'] },
+      },
+      {
+        // platform: web and phone, through the server (no app update). From:
+        // #621. Checked at f9848e806: server/services/receiving.ts records the
+        // export event first (publishOutboxEvent, key receipt.posted:<receipt
+        // id>, unique per organization: publish_outbox returns the new id to
+        // one call and null to every other one); when the answer is false (the
+        // event was already recorded) it returns the receipt with no audit row
+        // (stock.receipt.posted, the Audit log), no po.received message
+        // (dispatchEvent: webhooks, Slack, Teams) and no auto-unarchive. The
+        // QuickBooks Bill is made from that event, which was already recorded
+        // once. A retry with the same key never moved stock again
+        // (post_receipt_v2 answers the stored receipt).
+        // Audience: whoever can post a receipt (core canPostReceipt: manager or
+        // above with stock:adjust), where Receiving is on.
+        id: 'receipt-sent-again-recorded-once',
+        category: 'fixed',
+        area: 'Receiving',
+        title: 'A receipt sent again is recorded once',
+        whatChanged:
+          'When a receipt on a purchase order is sent again, for example after a slow connection, the Audit log now shows it once, and webhooks, Slack and Teams hear about it once.',
+        whyItMatters:
+          'A receipt sent again only added stock once, but the Audit log could show it twice, and webhooks, Slack and Teams could be told about it twice.',
+        howItAffectsYou:
+          'Nothing changes in how you receive. If you use QuickBooks, its bill for the receipt was already made once.',
+        whatToDo: 'No action needed.',
+        audience: {
+          roles: ['owner', 'admin', 'manager'],
+          anyPermission: ['stock:adjust'],
+          modules: ['receiving'],
+        },
+      },
+      {
+        // platform: web (no API answer changed, so the phone sees nothing
+        // new). From: #622. Checked at f9848e806: app/(dashboard)/layout.tsx
+        // draws AccessUncheckedBanner (components/dashboard/
+        // access-unchecked-banner.tsx: "We couldn't check your access just
+        // now. Some pages may be unavailable. This is usually temporary."
+        // with Try again) when the organization's policy was not read and the
+        // member has no verified authenticator, and no longer the set-up
+        // banner; every page not open before set-up shows the card "This page
+        // couldn't be loaded" / "We couldn't check your access just now. This
+        // is usually temporary." (lib/known-error-states.ts:50-51,
+        // lib/auth/step-up-gate.ts), never the redirect to set-up; an action
+        // answers "Your access could not be checked. Please try again." and
+        // writes nothing. Before, the member was held to the strictest policy
+        // and sent to set up an authenticator, whatever the organization asks.
+        // Audience: none (every member).
+        id: 'access-could-not-be-checked',
+        category: 'fixed',
+        area: 'Account',
+        title: "Pages say when your access couldn't be checked",
+        whatChanged:
+          'If StockPilot can\'t read your organization\'s sign-in settings for a moment and you have not set up an authenticator app, the web now says "We couldn\'t check your access just now." at the top of the page, with Try again, and most pages show "This page couldn\'t be loaded" with the same words. A change made then is not saved and says "Your access could not be checked. Please try again."',
+        whyItMatters:
+          'Before, the web asked you to set up an authenticator app in that moment, even if your organization does not ask for one.',
+        howItAffectsYou:
+          'This is usually temporary. Press Try again a moment later. If your organization does ask for an authenticator app, you are asked to set one up once the settings can be read.',
+        whatToDo: 'No action needed. If the message stays, try again later or tell your admin.',
+      },
+    ],
+  },
+  {
+    id: 'receiving-shown-to-managers-2026-11',
+    revision: 1,
+    // Web change with a phone half (the pull request "Receiving follows the
+    // rule the database applies", #617). SET AT MERGE: publishedAt is the
+    // whole minute after #617's production deployment went live; this
+    // release merges right after it, and the Liquid Glass draft placeholder
+    // above takes the same minute.
+    // Claims checked against #617's code (paths under apps/web/src unless
+    // they start with apps/mobile or packages/):
+    // - Who may post a receipt: packages/core canPostReceipt (manager or
+    //   above with stock:adjust), the rule post_receipt_v2 applies
+    //   (supabase/tests/receipt_post_rule.test.sql). ReceivingService
+    //   refuses anyone else before anything is read, with core
+    //   RECEIVE_MANAGER_ONLY_COPY, "Only a manager can receive purchase
+    //   orders." (server/services/lib/receipt-post-rule.ts).
+    // - The web page (app/(dashboard)/dashboard/purchase-orders/[id]/
+    //   page.tsx): Receive items when canPostReceipt holds; that sentence for
+    //   a member with stock:adjust below manager; without stock:adjust the
+    //   earlier sentence (dbPermissionRefusedCopy('receipt_post')), as the
+    //   receiving-follows-permission entry told.
+    // - The phone after its next update: showReceiveCta and receiveNoticeFor
+    //   (apps/mobile/src/lib/cta-gating.ts) on app/po/[id].tsx. Before that
+    //   update, Post receipt posts to POST /api/v1/po/[id]/receipts, which
+    //   answers 403 with the sentence and no details, and the screen's
+    //   failure arm shows it (receipt-post-error.ts default arm) in place of
+    //   "PO or line not found.", the answer to the database's refusal before.
+    // - The Roles page: Manage purchase orders reads "Create, approve, and
+    //   cancel POs. Receiving a PO needs a manager or above." (core
+    //   PERMISSION_META).
+    // Who is told: whoever can open a purchase order where Receiving is on
+    // (purchase_orders:read, module receiving), as the
+    // receiving-follows-permission entry. No link.
+    status: 'published',
+    title: 'Receive items on a purchase order shows only for people who can receive',
+    summary:
+      'On the web, Receive items on a purchase order now shows only for managers, admins and owners with the Adjust on-hand permission, and staff see "Only a manager can receive purchase orders." in its place. The mobile app does the same after its next update. Until then, Post receipt in the app answers a staff member with that sentence instead of "PO or line not found."',
+    publishedAt: '2026-11-19T05:20:00Z',
+    entries: [
+      {
+        id: 'receive-items-for-people-who-can-receive',
+        category: 'fixed',
+        area: 'Receiving',
+        title: 'Receive items shows only for people who can receive',
+        whatChanged:
+          'On the web, on a purchase order ready to receive, Receive items now shows only for managers, admins and owners with the Adjust on-hand permission. Staff with Adjust on-hand see "Only a manager can receive purchase orders." in its place, and still see what was ordered and received. In the mobile app, Scan, the quantities and Post receipt follow the same rule after the next update. Until then, when a staff member taps Post receipt in the app, it says "Only a manager can receive purchase orders." On the Roles page, Manage purchase orders says that receiving a PO needs a manager or above.',
+        whyItMatters:
+          'Only managers, admins and owners have ever been able to post a receipt. Staff were offered Receive items and Post receipt, and every receipt they posted was refused with "PO or line not found." Nothing was recorded.',
+        howItAffectsYou:
+          'Nothing changes in who can receive. If you are on staff, ask a manager to post the receipt. Without Adjust on-hand, a purchase order says what it said before.',
+        whatToDo:
+          'No action needed. In the mobile app, the next update comes when the app says Update ready: tap Restart now, or close the app completely and open it again.',
+        audience: { anyPermission: ['purchase_orders:read'], modules: ['receiving'] },
       },
     ],
   },

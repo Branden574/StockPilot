@@ -1,8 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { apiReadContext } from '@/server/lib/api-read-context';
-import { reportError } from '@/lib/error-reporter';
-import { ServiceError } from '@/server/services/context';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
 
@@ -133,21 +132,6 @@ export async function GET(req: NextRequest) {
       },
     );
   } catch (e) {
-    if (e instanceof ServiceError) {
-      const status =
-        e.code === 'forbidden'
-          ? 403
-          : e.code === 'not_found'
-            ? 404
-            : e.code === 'validation_error'
-              ? 400
-              : 500;
-      return NextResponse.json(
-        { error: e.code, message: e.message },
-        { status },
-      );
-    }
-    void reportError(e, { tag: 'inventory.by-warehouse' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return serviceErrorResponse(e, 'inventory.by-warehouse');
   }
 }

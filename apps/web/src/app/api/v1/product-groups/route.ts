@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { apiReadContext } from '@/server/lib/api-read-context';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { serviceErrorStatus, ServiceError } from '@/server/services/context';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import { ProductGroupsService } from '@/server/services/product-groups';
 
 export const runtime = 'nodejs';
@@ -74,12 +74,8 @@ export async function GET(req: NextRequest) {
       }),
     });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      return NextResponse.json(
-        { error: e.code, message: e.message },
-        { status: serviceErrorStatus(e.code) },
-      );
-    }
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return serviceErrorResponse(e, 'api.v1.product-groups.list', {
+      organizationId: ctx.organizationId,
+    });
   }
 }
