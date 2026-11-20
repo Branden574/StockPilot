@@ -9,9 +9,17 @@
  * used whenever the message is empty. A non-empty message is returned as it
  * is, so every existing log line and test keeps its text.
  *
- * For server logs only. `details` and `hint` can quote row values, so this
- * text never goes to a user; `ServiceError` keeps it in `internalDetail`.
+ * For server logs and error reports only; `ServiceError` keeps it in
+ * `internalDetail`, which the reporter sends (lib/error-text.ts
+ * reportedMessage), so it follows the reporter's own rule (nonErrorText):
+ * the status, a code and any hint are kept; a server error's `details` never
+ * is (a unique or check violation quotes the row's values there). From
+ * `details`, only postgrest-js's own text for a request that got no answer
+ * (code '') is kept: its first "Caused by:" line, which the library builds
+ * from the fetch error.
  */
+
+import { causeOf } from '@/lib/error-text';
 
 export type PostgrestLikeError = {
   message?: string | null;
@@ -41,7 +49,10 @@ export function postgrestErrorText(
     );
   }
   if (error.code) parts.push(`code ${error.code}`);
-  if (error.details) parts.push(`details: ${error.details}`);
+  if (error.code === '') {
+    const cause = causeOf(error.details);
+    if (cause) parts.push(`cause: ${cause}`);
+  }
   if (error.hint) parts.push(`hint: ${error.hint}`);
   if (parts.length === 0) return 'PostgREST error with an empty message and no status';
   return `${parts.join(', ')} (empty error message)`;

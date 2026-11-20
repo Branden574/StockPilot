@@ -177,7 +177,10 @@ database or stack detail to the client. Errors route through `reportError()`
 rather than raw `console.error`, because function stdout **is** captured by the
 platform. `audit_logs` and `activity_logs` are append-only in practice and are
 never rewritten; the movement ledger's actor attribution is pinned server-side
-rather than taken from the client. Hourly and six-hourly anomaly detectors cover
+rather than taken from the client. The database records two events itself, in
+the transaction of the change: a member's role change and a change of an
+organization's sign-in (MFA) policy each get their audit row from a trigger,
+and the app's own row for the same change is not stored a second time. Hourly and six-hourly anomaly detectors cover
 failed-login bursts, password-reset bursts, privilege escalation, mass
 delete/archive and export abuse, with real-time `security.*` events for
 new-device login, MFA changes, API-key lifecycle and role changes. All alerts land

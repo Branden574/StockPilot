@@ -19,6 +19,11 @@
 --   4. A member and a signed-out caller cannot insert at all (RLS on, no
 --      insert policy), so nobody but the server can put a row with an id in
 --      the table ahead of the writer.
+-- The rows here are user.sign_in_failed rows. For two other events
+-- (user.role.changed, organization.mfa_policy.changed) the BEFORE INSERT
+-- trigger zz_fold_app_copy decides first whether the server's row is stored
+-- at all; its own suite is the *_role_and_sign_in_policy_changes_recorded_
+-- by_database test.
 --
 -- Namespace a0800000. Wrapped in begin/rollback: nothing leaks.
 -- Run via `supabase test db` after `supabase db reset`.

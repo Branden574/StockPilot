@@ -1,6 +1,9 @@
 import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { isRefusedBeforeAnyWrite } from '@stockpilot/core';
+
+import { markMfaPolicyUnread } from '@/lib/auth/mfa-policy';
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -218,6 +221,40 @@ describe('POST /api/v1/items/[id]/adjust — the phone item screen, end to end t
     expect(body.details).toEqual({ reason: 'aal2_required' });
     expect(typeof body.message).toBe('string');
     expect(stub.rpcCalls).toEqual([]);
+  });
+
+  it("a member with no authenticator under a policy that was read gets 403 'mfa_required', and nothing is written", async () => {
+    const stub = stubFor();
+    asCaller(stub, { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false });
+
+    const { status, body } = await post(QUEUED_MINUS_ONE);
+
+    expect(status).toBe(403);
+    expect(body.details).toEqual({ reason: 'mfa_required' });
+    expect(stub.rpcCalls).toEqual([]);
+  });
+
+  it('the same member when the policy could not be read gets the marker: the phone keeps the change and sends it again', async () => {
+    const stub = stubFor();
+    vi.mocked(withApiContext).mockResolvedValue(
+      markMfaPolicyUnread({
+        ...makeServiceContext(stub.client, {
+          role: 'staff',
+          mfaRequired: true,
+          mfaSatisfied: false,
+        }),
+        mfaEnrolled: false,
+      }) as never,
+    );
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const { status, body } = await post(QUEUED_MINUS_ONE);
+
+    expect(status).toBe(503);
+    expect(isRefusedBeforeAnyWrite({ status, code: body.error, details: body.details })).toBe(true);
+    expect(JSON.stringify(body)).not.toContain('mfa_required');
+    expect(stub.rpcCalls).toEqual([]);
+    expect(audit).not.toHaveBeenCalled();
   });
 
   it('a -1 the holdings cannot cover is a 400 with the holdings sentence, never a 500', async () => {

@@ -4,6 +4,13 @@ import { ACCESS_UNCHECKED_DIGEST } from '@/lib/known-error-states';
  * The organization row could not be read (getOrgRowForRequest in
  * lib/dashboard/request-cache.ts: a read that answered with an error).
  *
+ * Also the answer when the row's authenticator policy was not read (the row
+ * came back hidden, or with a value that is not a policy) for a member with
+ * no verified authenticator: held to the strictest policy, they would owe
+ * set-up, but whether their organization asks for it is not known
+ * (lib/auth/step-up-gate.ts policyNotRead, and the service gate's
+ * mfaGateError in server/services/context.ts).
+ *
  * WHY AN EXCEPTION, AND NOT A ROW WITH DEFAULT SETTINGS. The row holds the
  * organization's authenticator policy. A page drawn with defaults would hold
  * the member to the strictest policy (lib/auth/mfa-policy.ts), and the

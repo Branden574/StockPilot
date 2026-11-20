@@ -484,39 +484,51 @@ describe('GET /api/cron/daily-briefing — who is told, and what', () => {
     expect(told.signals.map((s) => s.key)).toEqual(['pending_approvals']);
   });
 
-  it('an organization whose module set cannot be read is skipped for the day and reported, never sent a trimmed briefing', async () => {
+  it('an organization whose module set cannot be read is a failure for the day, reported once, never sent a trimmed briefing', async () => {
     gatherMock.mockResolvedValue(APPROVALS_AND_LOW_STOCK);
-    for (const perOrgModules of [
-      // The read failed: buildSystemContext keeps every copy's shape and
-      // drops the error, so the set arrives empty.
-      {
-        data: null,
-        error: { message: 'canceling statement due to statement timeout', code: '57014' },
-      },
-      // Or ai was turned off between the scan and this read.
-      { data: [{ module_id: 'orders' }], error: null },
-    ] as QueryResult[]) {
-      vi.clearAllMocks();
-      adminHolder.client = makeSupabaseStub({
-        'organization_modules.select': (call: MockCall): QueryResult =>
-          call.methods.some((m, i) => m === 'eq' && call.args[i]?.[0] === 'module_id')
-            ? { data: [{ organization_id: 'org-1' }], error: null }
-            : perOrgModules,
-        'organization_members.select': membersAnswer(OWNER_AND_ADMIN),
-        'notifications.select.maybeSingle': { data: null, error: null },
-      }).client;
+    vi.clearAllMocks();
+    adminHolder.client = makeSupabaseStub({
+      'organization_modules.select': (call: MockCall): QueryResult =>
+        call.methods.some((m, i) => m === 'eq' && call.args[i]?.[0] === 'module_id')
+          ? { data: [{ organization_id: 'org-1' }], error: null }
+          : {
+              data: null,
+              error: { message: 'canceling statement due to statement timeout', code: '57014' },
+            },
+      'organization_members.select': membersAnswer(OWNER_AND_ADMIN),
+      'notifications.select.maybeSingle': { data: null, error: null },
+    }).client;
 
-      const res = await GET(buildRequest('Bearer test-cron-secret'));
-      expect(res.status).toBe(200);
-      expect(await res.json()).toMatchObject({ orgsProcessed: 0, briefingsSent: 0 });
-      expect(createNotificationMock).not.toHaveBeenCalled();
-      expect(gatherMock).not.toHaveBeenCalled();
-      const reports = vi
-        .mocked(reportError)
-        .mock.calls.filter(([, c]) => c.tag === 'cron.daily-briefing.modules');
-      expect(reports).toHaveLength(1);
-      expect(reports[0]![1]).toMatchObject({ organizationId: 'org-1' });
-    }
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ orgsProcessed: 0, briefingsSent: 0 });
+    expect(createNotificationMock).not.toHaveBeenCalled();
+    expect(gatherMock).not.toHaveBeenCalled();
+    const reports = vi
+      .mocked(reportError)
+      .mock.calls.filter(([, c]) => c.tag === 'cron.daily-briefing.context');
+    expect(reports).toHaveLength(1);
+    expect(reports[0]![1]).toEqual({ tag: 'cron.daily-briefing.context' });
+    expect((reports[0]![0] as Error).message).not.toMatch(/org-1/);
+  });
+
+  it('an organization whose ai module was turned off since the list was read is skipped, not reported', async () => {
+    gatherMock.mockResolvedValue(APPROVALS_AND_LOW_STOCK);
+    vi.clearAllMocks();
+    adminHolder.client = makeSupabaseStub({
+      'organization_modules.select': (call: MockCall): QueryResult =>
+        call.methods.some((m, i) => m === 'eq' && call.args[i]?.[0] === 'module_id')
+          ? { data: [{ organization_id: 'org-1' }], error: null }
+          : { data: [{ module_id: 'orders' }], error: null },
+      'organization_members.select': membersAnswer(OWNER_AND_ADMIN),
+      'notifications.select.maybeSingle': { data: null, error: null },
+    }).client;
+
+    const res = await GET(buildRequest('Bearer test-cron-secret'));
+    expect(await res.json()).toMatchObject({ orgsProcessed: 0, briefingsSent: 0 });
+    expect(createNotificationMock).not.toHaveBeenCalled();
+    expect(gatherMock).not.toHaveBeenCalled();
+    expect(vi.mocked(reportError)).not.toHaveBeenCalled();
   });
 
   it('a purchase order line is dropped when the Purchase orders module is off', async () => {
@@ -593,13 +605,6 @@ function behaviouralSignature(body: string): string {
       .replace(/as\s*\{[^}]*\}/g, 'as <row>')
       .replace(/\s+/g, ' ')
       .trim()
-      // The shared module's ONLY difference (see the header): its result is
-      // branded. The return type names the branded type and the returned
-      // literal passes through brandSystemContext(); both are types and
-      // identity, not the actor predicate, so they normalise to the route
-      // copies' spelling. Anything else that differs still splits the group.
-      .replace(/Promise<SystemServiceContext \| null>/g, 'Promise<ServiceContext | null>')
-      .replace(/return brandSystemContext\((\{.*\})\);/, 'return $1;')
   );
 }
 
@@ -621,23 +626,51 @@ function copiesOf(
   return found;
 }
 
-describe('duplicated cron helpers must not diverge', () => {
-  it('every private buildSystemContext picks the system actor the same way', () => {
-    const copies = copiesOf('buildSystemContext', { includeShared: true });
-    // The shared module is compared too; a guard that silently stopped
-    // finding it would let it drift from every route copy.
-    expect(copies.map((c) => c.file)).toContain(SHARED_MODULE_LABEL);
-    // Guard the guard: if the extraction lands and every copy disappears,
-    // this must fail loudly rather than pass vacuously.
-    expect(copies.length).toBeGreaterThan(0);
+/**
+ * The parts of the shared system context that a "tightening" or a slip would
+ * change: the actor predicate, the system mark, and that a failed read of
+ * either table is a failure (never "no owner", never "no modules").
+ */
+const SYSTEM_CONTEXT_PINS = [
+  // Each read's chain from its table to its organization filter, so neither
+  // read can lose `.eq('organization_id', orgId)` (a set of every tenant's
+  // modules, or an actor from another organization).
+  ".from('organization_members') .select('user_id, role') .eq('organization_id', orgId)",
+  ".in('role', ['owner', 'admin'])",
+  ".not('accepted_at', 'is', null)",
+  ".is('impersonation_expires_at', null)",
+  ".from('organization_modules') .select('module_id') .eq('organization_id', orgId) .eq('enabled', true)",
+  "if (members.error || mods.error) return { ok: false, reason: 'read_failed' };",
+  "if (!actor) return { ok: false, reason: 'no_actor' };",
+  ' isSystem: true,',
+];
 
-    const bySignature = new Map<string, string[]>();
-    for (const c of copies) {
-      bySignature.set(c.signature, [...(bySignature.get(c.signature) ?? []), c.file]);
-    }
-    // A single group == every copy agrees. On failure the message names the
-    // files on each side of the split.
-    expect([...bySignature.values()]).toEqual([copies.map((c) => c.file)]);
+function missingPins(body: string): string[] {
+  const flat = body.replace(/\s+/g, ' ');
+  return SYSTEM_CONTEXT_PINS.filter((pin) => !flat.includes(pin.replace(/\s+/g, ' ')));
+}
+
+describe('duplicated cron helpers must not diverge', () => {
+  it('no route builds its own system context: every one loads the shared one', () => {
+    // Every route copy of buildSystemContext dropped its read errors; they
+    // are gone, and none may come back under either name.
+    expect(copiesOf('buildSystemContext')).toEqual([]);
+    expect(copiesOf('loadSystemContext')).toEqual([]);
+    // Guard the guard: the extraction still finds the shared functions, so
+    // the two lines above cannot pass because the search broke.
+    const shared = readFileSync(SHARED_MODULE, 'utf8');
+    expect(extractFunction(shared, 'loadSystemContext')).not.toBeNull();
+    expect(extractFunction(shared, 'buildSystemContext')).not.toBeNull();
+  });
+
+  it('the shared system context picks the actor the same way and fails on a failed read', () => {
+    const body = extractFunction(readFileSync(SHARED_MODULE, 'utf8'), 'loadSystemContext');
+    expect(body).not.toBeNull();
+    expect(missingPins(body!)).toEqual([]);
+    // buildSystemContext is a wrapper: it reads nothing of its own.
+    const wrapper = extractFunction(readFileSync(SHARED_MODULE, 'utf8'), 'buildSystemContext');
+    expect(wrapper).toMatch(/await loadSystemContext\(admin, orgId\)/);
+    expect(wrapper).not.toMatch(/\.from\(/);
   });
 
   it('every private secretsEqual compares the cron secret the same way', () => {
@@ -653,35 +686,42 @@ describe('duplicated cron helpers must not diverge', () => {
   });
 
   it('no NEW copy of either helper appears (the count only ever ratchets down)', () => {
-    // Pinned at the counts measured when this guard was written. Migrating a
-    // route to a shared import LOWERS these — update them downward freely.
-    // An INCREASE means a 26th copy was pasted in; import the shared module
-    // (server/services/lib/system-context.ts) instead. These count ROUTE
-    // copies only; the shared module is never one of them.
-    expect(copiesOf('buildSystemContext').length).toBeLessThanOrEqual(6);
+    // Pinned at the counts measured when this guard was written, lowered as
+    // routes moved to the shared module. An INCREASE means a copy was pasted
+    // in; import the shared module (server/services/lib/system-context.ts)
+    // instead. These count ROUTE copies only; the shared module is never one
+    // of them.
+    expect(copiesOf('buildSystemContext').length).toBeLessThanOrEqual(0);
     expect(copiesOf('secretsEqual').length).toBeLessThanOrEqual(19);
-    expect(copiesOf('buildSystemContext').map((c) => c.file)).not.toContain(SHARED_MODULE_LABEL);
+    expect(copiesOf('secretsEqual').map((c) => c.file)).not.toContain(SHARED_MODULE_LABEL);
   });
 
-  it('every copy says the system is acting (isSystem), so the audit rows it writes are marked', () => {
-    // B9: the user id these contexts carry is BORROWED from an owner or admin.
-    // isSystem is how audit() knows to stamp metadata.is_system on the rows,
-    // so Last active and the anomaly monitor never count a job as that person.
-    const copies = copiesOf('buildSystemContext', { includeShared: true });
-    expect(copies.length).toBeGreaterThan(1);
-    for (const c of copies) expect(c.signature, c.file).toContain(' isSystem: true,');
-  });
-
-  it('the shared module brands exactly what the route copies build, and nothing more', () => {
-    // Negative pin on the normalisation above: it must erase ONLY the brand.
-    // A shared body that also changed the actor predicate (here: dropping the
-    // impersonation filter) must still split from the route copies.
-    const shared = extractFunction(readFileSync(SHARED_MODULE, 'utf8'), 'buildSystemContext');
-    expect(shared).not.toBeNull();
-    const tampered = shared!.replace(".is('impersonation_expires_at', null)", '');
-    expect(tampered).not.toBe(shared);
-    const routeSignature = copiesOf('buildSystemContext')[0]!.signature;
-    expect(behaviouralSignature(shared!)).toBe(routeSignature);
-    expect(behaviouralSignature(tampered)).not.toBe(routeSignature);
+  it('the pins catch a changed predicate (a pin that cannot fail guards nothing)', () => {
+    // Negative pin: a shared body that dropped the impersonation filter or an
+    // organization filter, or went back to ignoring a read error, must be
+    // caught.
+    const body = extractFunction(readFileSync(SHARED_MODULE, 'utf8'), 'loadSystemContext')!;
+    const noImpersonationFilter = body.replace(".is('impersonation_expires_at', null)", '');
+    expect(noImpersonationFilter).not.toBe(body);
+    expect(missingPins(noImpersonationFilter)).toEqual([".is('impersonation_expires_at', null)"]);
+    const errorsIgnored = body.replace(
+      "if (members.error || mods.error) return { ok: false, reason: 'read_failed' };",
+      '',
+    );
+    expect(errorsIgnored).not.toBe(body);
+    expect(missingPins(errorsIgnored)).toHaveLength(1);
+    const notSystem = body.replace('isSystem: true,', 'isSystem: false,');
+    expect(missingPins(notSystem)).toEqual([' isSystem: true,']);
+    // Either read losing its organization filter.
+    const membersFilter = body.indexOf(".eq('organization_id', orgId)");
+    const modulesFilter = body.indexOf(".eq('organization_id', orgId)", membersFilter + 1);
+    expect(membersFilter).toBeGreaterThan(-1);
+    expect(modulesFilter).toBeGreaterThan(membersFilter);
+    const drop = (at: number) =>
+      body.slice(0, at) + body.slice(at + ".eq('organization_id', orgId)".length);
+    expect(missingPins(drop(membersFilter))).toEqual([SYSTEM_CONTEXT_PINS[0]]);
+    expect(missingPins(drop(modulesFilter))).toEqual([
+      ".from('organization_modules') .select('module_id') .eq('organization_id', orgId) .eq('enabled', true)",
+    ]);
   });
 });

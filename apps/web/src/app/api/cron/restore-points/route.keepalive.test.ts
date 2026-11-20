@@ -130,7 +130,13 @@ describe('GET /api/cron/restore-points', () => {
     );
 
     expect(status).toBe(200);
-    expect(JSON.parse(body)).toEqual({ eligible: 2, snapshotted: 2 });
+    expect(JSON.parse(body)).toEqual({
+      eligible: 2,
+      snapshotted: 2,
+      noOwner: 0,
+      failed: 0,
+      leftForNextRun: 0,
+    });
     // The cron answers with the last org's audit INSERT still in flight: the
     // response does not wait for it ...
     expect(answeredWhenReturned).toEqual([]);

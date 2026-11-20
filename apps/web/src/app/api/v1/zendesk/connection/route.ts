@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { withApiContext } from '@/lib/auth/api-context';
-import { ServiceError } from '@/server/services/context';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import { ConnectionsService } from '@/server/services/connections';
 import { can } from '@stockpilot/core';
 
@@ -18,10 +18,6 @@ export async function GET(req: NextRequest) {
       canManage: can(ctx, 'integrations:manage'),
     });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      const status = e.code === 'module_disabled' || e.code === 'forbidden' ? 403 : e.code === 'not_found' ? 404 : 500;
-      return NextResponse.json({ error: e.code, message: e.message }, { status });
-    }
-    return NextResponse.json({ error: 'internal_error', message: 'Unexpected error' }, { status: 500 });
+    return serviceErrorResponse(e, 'api.v1.zendesk.connection');
   }
 }

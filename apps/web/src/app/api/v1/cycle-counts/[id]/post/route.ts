@@ -4,8 +4,7 @@ import { isUuid } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { forbiddenOrInternalResponse } from '@/server/lib/api-error-response';
-import { ServiceError, serviceErrorStatus } from '@/server/services/context';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 
 export const runtime = 'nodejs';
@@ -59,18 +58,11 @@ export async function POST(
     const row = await svc.post(id);
     return NextResponse.json({ ok: true, cycleCount: row });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      // serviceErrorStatus covers module_disabled (403) and plan limits too —
-      // the hand-rolled ladders in the sibling routes predate it.
-      return NextResponse.json(
-        { error: e.code, message: e.message },
-        { status: serviceErrorStatus(e.code) },
-      );
-    }
-    // A warehouse refusal (assertSessionAccess's ForbiddenError) is a 403,
-    // final on the phone, or a 503 when the access could not be read;
-    // anything else is the fixed sentence, and reported (S16).
-    return forbiddenOrInternalResponse(e, 'api.v1.cycle_counts.post', {
+    // A refusal keeps its own status; a warehouse refusal
+    // (assertSessionAccess's ForbiddenError) is a 403, final on the phone, or
+    // a 503 when the access could not be read; anything else is the fixed
+    // sentence, and reported.
+    return serviceErrorResponse(e, 'api.v1.cycle_counts.post', {
       organizationId: ctx.organizationId,
     });
   }

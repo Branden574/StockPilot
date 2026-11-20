@@ -6,11 +6,11 @@ import { can } from '@stockpilot/core';
 import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
-import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { invalidPathIdResponse } from '@/server/lib/path-id';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import { PoAttachmentsService } from '@/server/services/po-attachments';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
-import { ServiceError, serviceErrorStatus } from '@/server/services/context';
+import { ServiceError } from '@/server/services/context';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -118,14 +118,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       },
     });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      // Map the service code to the right HTTP status (403/404/…), like the
-      // sibling /pdf route — don't flatten a forbidden/not_found into a 500.
-      return NextResponse.json(
-        { error: e.code, message: e.message },
-        { status: serviceErrorStatus(e.code) },
-      );
-    }
-    return internalErrorResponse(e, 'po.attachments_zip');
+    // A refusal keeps its own status (403, 404, ...); a fault is reported and
+    // answered with the fixed sentence.
+    return serviceErrorResponse(e, 'po.attachments_zip');
   }
 }

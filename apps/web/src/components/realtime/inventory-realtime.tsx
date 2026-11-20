@@ -80,9 +80,12 @@ const REALTIME_SKIP_PREFIXES = [
  * data. The actual data fetching remains in server components — this just
  * nudges Next.js to re-run them.
  *
- * ONE render per refresh. The nudge is revalidateInventoryViewAction, whose
- * invalidation already makes Next re-render the page into the action's
- * response (see the comment on that action). This used to follow every
+ * ONE render per refresh. The nudge is revalidateInventoryViewAction, which
+ * re-renders the page into the action's response (an Items list expiry for a
+ * manager's Items or Books tab, a plain refresh() for every other tab; see the
+ * comment on that action). Place an Order is the exception: a delayed
+ * router.refresh(), never the action (ORDINARY EVENTS ON PLACE AN ORDER).
+ * This used to follow every
  * action with router.refresh() as well, so each event rendered the page
  * twice. Measured 2026-09-22 18:46:24Z: one rpc/adjust_stock by another user
  * re-rendered the owner's Inventory tab 5 times in ~1.3 s, each render a
@@ -140,7 +143,8 @@ export function visibilityEventRule(pathname: string | null | undefined): 'refre
 // (ordering-tab-signal; unknown either way still refreshes), after a random
 // 1 to 4 s, so the first tab's render stores the entry and the others read it.
 // Events that arrive while it waits share that refresh, and any refresh that
-// starts first (an ordinary event's action) takes its place.
+// starts first (a hidden tab's return, say) takes its place. Ordinary events
+// there wait the same way (ORDINARY EVENTS ON PLACE AN ORDER, below).
 //
 // Manage order items refreshes another manager's write at once, but not this
 // tab's own: its save's Server Action response already carried the page.
@@ -177,6 +181,43 @@ export function visibilityEventConcernsTab(
 /** Whether this page waits before a visibility-only refresh (the storefront). */
 function visibilityRefreshWaits(pathname: string | null | undefined): boolean {
   return !!pathname && withinPath(pathname, STOREFRONT_PATH);
+}
+
+// ═══ ORDINARY EVENTS ON PLACE AN ORDER ═══
+//
+// Place an Order shows the ordering catalog, not the Items list, so an
+// ordinary event there gets what a visibility-only one gets: a router.refresh()
+// after the same random 1 to 4 s, shared by every event that lands while it
+// waits, never the action. The action expired the Items list cache, which this
+// page never reads, and its response re-sent the whole catalog at once from
+// every open storefront tab. The wait spreads the tabs out, so when a write
+// expired the catalog one tab rebuilds it and the others read that entry. If
+// the tab has left Place an Order by the time the refresh starts, the waiting
+// ordinary event takes the new page's own path (the action), never dropped; if
+// the listener unmounts first (a page where realtime is off), it refreshes
+// once on the way out.
+
+/** Whether an ordinary event on this page is a delayed router.refresh()
+ *  instead of the action (the storefront). */
+export function ordinaryEventWaits(pathname: string | null | undefined): boolean {
+  return visibilityRefreshWaits(pathname);
+}
+
+// ═══ WHICH LIST THE TAB SHOWS ═══
+//
+// The action expires the organization's shared Items/Books list caches only
+// for a tab on one of those two lists, and only for a caller who reads them
+// (manager and above; the server decides that from the session). Every other
+// tab's action only re-renders it.
+
+/** The list page this tab shows, as the action's `view`; null for any other
+ *  page (an item's own page, a form, another section). */
+export function inventoryListViewFor(pathname: string | null | undefined): 'items' | 'books' | null {
+  if (!pathname) return null;
+  const path = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
+  if (path === '/dashboard/inventory') return 'items';
+  if (path === '/dashboard/books') return 'books';
+  return null;
 }
 
 const PG_TIMESTAMP =
@@ -318,9 +359,19 @@ export function InventoryRealtime({
       let dirtyWhileHidden = false;
       //   needsAction: an ordinary event is waiting, so the next refresh is
       //     the action. While only visibility-only events (on an ordering
-      //     page) are waiting it is a plain router.refresh(): no Items list
-      //     cache expiry for a change that list does not show.
+      //     page), or ordinary events on Place an Order, are waiting it is a
+      //     plain router.refresh(): no Items list cache expiry for a change
+      //     that page does not show.
       let needsAction = false;
+      //   ordinaryWaiting: an ordinary event on Place an Order is waiting for
+      //     the delayed refresh (ordinaryEventWaits). Kept apart from the
+      //     visibility-only events because every page shows stock: if the tab
+      //     has left Place an Order when the refresh starts, the event is not
+      //     dropped (visibilityEventRule would drop it) but takes the current
+      //     page's own path, the action. Otherwise a page restored from the
+      //     client router cache (staleTimes.dynamic, next.config.ts) would
+      //     keep showing the stock from before the change.
+      let ordinaryWaiting = false;
       //   waitTimer: the storefront's delayed visibility refresh (see
       //     visibilityEventConcernsTab). One at a time; a refresh that starts
       //     before it fires reads everything it was waiting for, so it is
@@ -343,14 +394,14 @@ export function InventoryRealtime({
       const covered = new Set<string>();
       const COVERED_MAX = 256;
 
-      // Bust this org's cached default list view, which also re-renders this
-      // page (the action's response carries the new render). Web writes
-      // already invalidate it server-side; this covers writes that bypass
-      // this server entirely (mobile direct-to-Supabase, SQL) — the change
-      // event reaches watching browsers either way, and the watcher
-      // invalidates on the writer's behalf. If the action fails or did not
-      // invalidate, no render is coming, so refresh ourselves: the TTL still
-      // bounds the cached list's staleness at 60s.
+      // Re-render this page through the action (its response carries the new
+      // render). On Items or Books, for a manager, the action also busts the
+      // org's cached list views: web and phone writes already invalidate
+      // them server-side; this covers writes that bypass this server
+      // entirely (SQL, platform tooling), and the watching manager
+      // invalidates on the writer's behalf. If the action fails or answers
+      // that nothing was done, no render is coming, so refresh ourselves:
+      // the TTL still bounds the cached list's staleness at 60s.
       async function refreshNow() {
         if (cancelled) return;
         if (isHidden()) {
@@ -365,7 +416,10 @@ export function InventoryRealtime({
           clearTimeout(waitTimer);
           waitTimer = null;
         }
-        const useAction = needsAction;
+        const path = pathnameRef.current;
+        const ordinary = ordinaryWaiting;
+        ordinaryWaiting = false;
+        const useAction = needsAction || (ordinary && !ordinaryEventWaits(path));
         needsAction = false;
         lastRefreshRef.current = Date.now();
         for (const commit of seenSinceStart) {
@@ -376,9 +430,11 @@ export function InventoryRealtime({
         }
         seenSinceStart.clear();
         if (!useAction) {
-          // Only visibility-only events are waiting: re-render an ordering
-          // page; a page navigated away from in the meantime drops them.
-          if (visibilityEventRule(pathnameRef.current) === 'refresh') router.refresh();
+          // Only visibility-only events, or ordinary events on a tab still on
+          // Place an Order, are waiting: re-render an ordering page. A page
+          // navigated away from in the meantime drops visibility-only events
+          // (no other page shows them); an ordinary one took the action above.
+          if (ordinary || visibilityEventRule(path) === 'refresh') router.refresh();
           return;
         }
         inFlight = true;
@@ -388,7 +444,7 @@ export function InventoryRealtime({
         // The race continues exactly once, so an abandoned action's late
         // answer resolves a promise nobody awaits and cannot touch the lock.
         const revalidated = await Promise.race([
-          revalidateInventoryViewAction().then(
+          revalidateInventoryViewAction(inventoryListViewFor(path)).then(
             (r) => r === true,
             // A redirect (the session ended) counts as handled: the router is
             // already navigating, so no refresh is started under it.
@@ -453,6 +509,16 @@ export function InventoryRealtime({
       cleanup.push(() => {
         if (waitTimer) clearTimeout(waitTimer);
         waitTimer = null;
+        // The listener is going away (the tab moved to a page where realtime
+        // is off: Settings, Reports, Team...; or the organization changed)
+        // while an ordinary event from Place an Order still waited. Refresh
+        // once now, or the event is lost: the page being shown, and any page
+        // later restored from the client router cache, would keep the stock
+        // from before the change. A hidden tab still does no work.
+        if (ordinaryWaiting) {
+          ordinaryWaiting = false;
+          if (!isHidden()) router.refresh();
+        }
       });
 
       function onChange(payload?: { commit_timestamp?: unknown }) {
@@ -468,6 +534,14 @@ export function InventoryRealtime({
           seenSinceStart.add(commit);
         }
         if (!visibilityOnly) {
+          if (ordinaryEventWaits(path)) {
+            // Place an Order: the delayed router.refresh(), never the action
+            // (see ORDINARY EVENTS ON PLACE AN ORDER), unless the tab has left
+            // the page when it fires (see ordinaryWaiting).
+            ordinaryWaiting = true;
+            nudgeLater();
+            return;
+          }
           needsAction = true;
           nudge();
           return;

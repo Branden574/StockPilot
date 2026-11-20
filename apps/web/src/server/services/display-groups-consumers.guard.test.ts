@@ -69,6 +69,8 @@ const ALLOWED: Record<'web' | 'mobile' | 'core', Record<string, string>> = {
     'components/inventory/inventory-table.tsx': 'group headers and chips on the list',
     'components/inventory/item-detail.tsx': "the item page names the record's group",
     'components/inventory/item-form.tsx': 'Group them on a SKU already taken',
+    'lib/inventory/client-row.ts':
+      'the columns the Items and Books tables receive include the row group',
     'lib/inventory/instant-mode.ts': 'the list rows carry their group',
     'lib/releases/registry.ts': "What's New for Group selected",
     'server/actions/item-grouping.ts': "the web review's and Save's actions",

@@ -46,6 +46,36 @@ describe('revalidateTag inside a Server Action re-renders the page (installed Ne
     expect(store.pathWasRevalidated).toBeFalsy();
   });
 
+  // A tab whose page reads no shared list cache (any page but Items and
+  // Books, or a staff member's) is re-rendered by refresh() instead, which
+  // expires nothing. It must still mark the path, or that tab's live updates
+  // would silently stop re-rendering.
+  it('refresh() inside a Server Action also marks the path revalidated (dynamic only)', async () => {
+    const { workAsyncStorage } = await import('next/dist/server/app-render/work-async-storage.external');
+    const { workUnitAsyncStorage } = await import(
+      'next/dist/server/app-render/work-unit-async-storage.external'
+    );
+    const { refresh } = await import('next/cache');
+    const { ActionDidRevalidateDynamicOnly } = await import(
+      'next/dist/shared/lib/action-revalidation-kind'
+    );
+    const store = {
+      incrementalCache: {},
+      route: '/dashboard',
+      page: '/(dashboard)/dashboard/page',
+      cacheLifeProfiles: {},
+    } as unknown as Parameters<typeof workAsyncStorage.run>[0];
+    workAsyncStorage.run(store, () =>
+      workUnitAsyncStorage.run(
+        { type: 'request', phase: 'action' } as unknown as Parameters<typeof workUnitAsyncStorage.run>[0],
+        () => refresh(),
+      ),
+    );
+    const marked = (store as unknown as { pathWasRevalidated?: unknown }).pathWasRevalidated;
+    expect(marked).toBeTruthy();
+    expect(marked).toBe(ActionDidRevalidateDynamicOnly);
+  });
+
   it('our loader invalidates with exactly { expire: 0 }', () => {
     // The call moved to the leaf module the services import (the loader
     // re-exports it); the loader must not grow a second, different call.

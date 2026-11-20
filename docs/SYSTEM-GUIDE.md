@@ -528,7 +528,7 @@ We use it for:
 
 ### Layer 2 — Tag-based invalidation
 
-Caches are tagged. When something changes, the action calls `updateTag('orders-new-v2-catalog')` to purge all entries with that tag. Next visit recomputes.
+Caches are tagged, and a write expires only the entries it changed. Each orders/new catalog entry carries three tags: the global `orders-new-v2-catalog`, its organization's (`orders-new-v2-catalog:<org>`) and its organization's for its warehouse (`orders-new-v2-catalog:<org>:<warehouse>`). An order write expires the tag of the order's warehouse, read from the order row on the server, with `{ expire: 0 }`, so the next visit recomputes (`server/services/lib/orders-catalog-expiry.ts`). A write with no order row in hand, or one that changes the whole organization's catalog (grouping), expires the organization's tag. Nothing expires the global tag: one organization's write never marks every organization's catalog. The `'max'` profile is stale-while-revalidate (the next read still serves the old entry once), so it is used only where the entries stay right, such as a member's category grants (the access key is resolved per request).
 
 **The crucial trick:** for per-user data, the cache key MUST include something user-specific. Otherwise a manager's full-catalog payload could be served to a restricted viewer who shouldn't see all of it. We learned this the hard way on the category-visibility feature — fixed via a hash of the user's accessible categories baked into the cache key.
 

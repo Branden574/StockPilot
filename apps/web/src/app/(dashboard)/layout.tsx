@@ -3,6 +3,8 @@ import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 
+import { AccessUncheckedBanner } from '@/components/dashboard/access-unchecked-banner';
+import { AccessUncheckedPanel } from '@/components/dashboard/access-unchecked-panel';
 import { AuthenticatorSetUpPanel } from '@/components/dashboard/authenticator-set-up-panel';
 import { DashboardShell } from '@/components/dashboard/dashboard-shell';
 import { MfaRequiredBanner } from '@/components/dashboard/mfa-required-banner';
@@ -27,7 +29,7 @@ import {
 } from '@/lib/dashboard/request-cache';
 import { factorsOf } from '@/lib/auth/mfa-factors';
 import { moduleSetUnreadable } from '@/lib/modules/module-state';
-import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
+import { enforcedMfaPolicy, readOrganizationMfaPolicy } from '@/lib/auth/mfa-policy';
 import { openBeforeAuthenticatorSetUp } from '@/lib/auth/authenticator-set-up';
 import { orSessionEnded } from '@/lib/auth/session-ended';
 import { getVerifiedSessionClaimsForRequest } from '@/lib/auth/verified-claims';
@@ -197,11 +199,24 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const ownFactors = factorsOf(mfaFactors, ctx.userId);
   if (!ownFactors) redirect(await mfaChallengePath());
   const hasVerifiedFactor = ownFactors.some((f) => f.status === 'verified');
+  // Held to the strictest policy above, but whether this organization asks
+  // anything of the member is not known: the row came back hidden, or with a
+  // value that is not a policy.
+  const policyRead = readOrganizationMfaPolicy(orgRow) !== null;
   // The policy requires an authenticator of this member's role and they have
   // none verified (@stockpilot/core). They see the banner on the pages open to
   // them before set-up; every other page sends them there itself
-  // (requireOrgContext()), so this layout never redirects for it.
-  const setUpOwed = authenticatorSetUpOwed(policy, ctx.role, ownFactors);
+  // (requireOrgContext()), so this layout never redirects for it. Only for a
+  // policy that was read.
+  const strictestOwed = authenticatorSetUpOwed(policy, ctx.role, ownFactors);
+  const setUpOwed = policyRead && strictestOwed;
+  // A policy that was not read, for a member with no verified authenticator:
+  // set-up would be a guess, so the strip says their access could not be
+  // checked, in the words of the pages' own "couldn't check your access"
+  // card; every page that is not open before set-up gives that card itself
+  // (requireOrgContext(), lib/auth/step-up-gate.ts). Display only, like the
+  // banner: the pages and the services refuse on their own.
+  const accessUnchecked = !policyRead && strictestOwed;
   // A session whose token says the code was entered but that has no verified
   // authenticator left: the pages answer aal2 from the token alone, with no
   // factor read. This layout has the factor list in hand, so on a full page
@@ -211,10 +226,18 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   // that session's reads and writes are refused where the services ask for an
   // authenticator. Rendered, never a redirect. The claims are awaited only
   // here, for a member who owes set-up on a page that is not open to them.
-  const setUpPanel =
-    setUpOwed &&
+  // A session at aal2 with no verified authenticator, on a page that is not
+  // open before set-up. Asked only when one of the two panels below could
+  // apply; the claims are awaited only then.
+  const aal2WithoutFactorOnClosedPage = async () =>
     !openBeforeAuthenticatorSetUp((await headers()).get('x-pathname')) &&
     (await claimsRead.then((c) => c?.userId === ctx.userId && c.aal === 'aal2'));
+  const setUpPanel = setUpOwed && (await aal2WithoutFactorOnClosedPage());
+  // The same session when the policy was not read: the could-not-check panel
+  // in place of the page, never the page. Its page refuses on its own too
+  // (requireOrgContext(): lib/auth/step-up-gate.ts
+  // aal2SessionHeldForUnreadPolicy), before any work.
+  const uncheckedPanel = accessUnchecked && (await aal2WithoutFactorOnClosedPage());
 
   // Hard gate for ENROLLED users (HI-6): a verified TOTP factor must be
   // satisfied regardless of org policy — otherwise an attacker with only
@@ -291,8 +314,15 @@ export default async function DashboardLayout({ children }: { children: ReactNod
       >
         <ImpersonationBanner />
         {setUpOwed && <MfaRequiredBanner />}
+        {accessUnchecked && <AccessUncheckedBanner />}
         {moduleStateUnknown && <ModulesUnreadBanner />}
-        {setUpPanel ? <AuthenticatorSetUpPanel /> : children}
+        {setUpPanel ? (
+          <AuthenticatorSetUpPanel />
+        ) : uncheckedPanel ? (
+          <AccessUncheckedPanel />
+        ) : (
+          children
+        )}
         {/* "Last seen" for the platform console (mig 0352). Scope keeps one account or
             organization from throttling another on a shared device; it never leaves
             the browser, and the server stamps the session's own user and org. */}

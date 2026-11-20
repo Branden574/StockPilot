@@ -46,7 +46,11 @@ function buildSupabaseStub(rows: Array<Record<string, unknown>>, count?: number)
     then: (cb: (r: { data: unknown; count: number; error: null }) => unknown) =>
       cb({ data: rows, count: count ?? rows.length, error: null }),
   };
-  return { from: () => chain, _eqCalls: eqCalls, _inCalls: inCalls, _orCalls: orCalls, _filterCalls: filterCalls };
+  return {
+    from: () => chain,
+    // list() asks inventory_list_value (0470) for its value total.
+    rpc: async () => ({ data: 0, error: null }),
+    _eqCalls: eqCalls, _inCalls: inCalls, _orCalls: orCalls, _filterCalls: filterCalls };
 }
 
 function makeSvc(stub: ReturnType<typeof buildSupabaseStub>) {
@@ -70,34 +74,35 @@ describe('InventoryService.list — rentals are filtered in the query', () => {
 
   const rentalCalls = (stub: ReturnType<typeof buildSupabaseStub>) =>
     stub._eqCalls.filter((c) => c[0] === 'is_rental');
-
-  it('a default call lists non-rentals only, in the page AND the value sum', async () => {
+  /** The page's is_rental predicates, then the value total's is_rental. */
+  async function listBoth(filters: Parameters<InventoryService['list']>[0]) {
     const stub = buildSupabaseStub([]);
-    await makeSvc(stub).list({});
-    expect(rentalCalls(stub)).toEqual([
-      ['is_rental', false],
-      ['is_rental', false],
-    ]);
+    const rpc = vi.fn(async () => ({ data: 0, error: null }));
+    (stub as { rpc: unknown }).rpc = rpc;
+    await makeSvc(stub).list(filters);
+    expect(rpc).toHaveBeenCalledTimes(1);
+    const args = (rpc.mock.calls[0] as unknown[])[1] as { p_filters: Record<string, unknown> };
+    return { stub, page: rentalCalls(stub), value: args.p_filters.is_rental };
+  }
+
+  it('a default call lists non-rentals only, in the page AND the value total', async () => {
+    const { page, value } = await listBoth({});
+    expect(page).toEqual([['is_rental', false]]);
+    expect(value).toBe(false);
   });
 
   it('rentalsOnly lists rentals ONLY — the database pages them, so page one is rentals', async () => {
-    const stub = buildSupabaseStub([]);
-    await makeSvc(stub).list({ rentalsOnly: true, itemType: 'all' });
-    expect(rentalCalls(stub)).toEqual([
-      ['is_rental', true],
-      ['is_rental', true],
-    ]);
+    const { stub, page, value } = await listBoth({ rentalsOnly: true, itemType: 'all' });
+    expect(page).toEqual([['is_rental', true]]);
+    expect(value).toBe(true);
     // Any type: a rental can be a product or a book.
     expect(stub._eqCalls.map((c) => c[0])).not.toContain('item_type');
   });
 
   it('rentalsOnly: false is the default, not "everything"', async () => {
-    const stub = buildSupabaseStub([]);
-    await makeSvc(stub).list({ rentalsOnly: false });
-    expect(rentalCalls(stub)).toEqual([
-      ['is_rental', false],
-      ['is_rental', false],
-    ]);
+    const { page, value } = await listBoth({ rentalsOnly: false });
+    expect(page).toEqual([['is_rental', false]]);
+    expect(value).toBe(false);
   });
 
   it('total is the count the database reports for rentals, not the rows on the page', async () => {

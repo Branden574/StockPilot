@@ -2,9 +2,8 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { reportError } from '@/lib/error-reporter';
 import { isBoundarySafeStoragePath } from '@/lib/storage-path';
-import { ServiceError, serviceErrorStatus } from '@/server/services/context';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import { OrderAttachmentsService } from '@/server/services/order-attachments';
 
 export const runtime = 'nodejs';
@@ -91,18 +90,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     });
     return NextResponse.json(res);
   } catch (e) {
-    if (e instanceof ServiceError) {
-      // Mapped, never swallowed: a refused file must not read to the client
-      // as "the server is broken, retry".
-      return NextResponse.json(
-        { error: e.code, message: e.message },
-        { status: serviceErrorStatus(e.code) },
-      );
-    }
-    void reportError(e, {
-      tag: 'api.v1.orders.attachments',
+    // A refused file keeps its own status and words (never "retry"); a fault
+    // is reported and answered with the fixed sentence.
+    return serviceErrorResponse(e, 'api.v1.orders.attachments', {
       organizationId: ctx.organizationId,
     });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
 }

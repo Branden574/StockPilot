@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import { dbPermissionRefusedCopy, type Permission } from '@stockpilot/core';
 
-import { showWriteCtaForRole } from './cta-gating';
+import { receiveNoticeFor, showWriteCtaForRole } from './cta-gating';
 
 /**
  * Small fixes slice 2 review: two stock actions the phone offered to people
@@ -55,11 +55,12 @@ describe('item screen: Transfer / put away', () => {
   });
 });
 
-describe('PO screen: receiving follows stock:adjust', () => {
-  it('reads the role and the effective permissions and gates receiving on stock:adjust', () => {
+describe('PO screen: receiving follows the rule the database applies', () => {
+  it('reads the role and the effective permissions and gates receiving on showReceiveCta', () => {
     expect(po).toMatch(/const \{ role \} = useRole\(\);/);
     expect(po).toMatch(/const permissions = useEffectivePermissions\(\);/);
-    expect(po).toMatch(/const canReceive = showWriteCtaForRole\(role, permissions, 'stock:adjust'\);/);
+    expect(po).toMatch(/const canReceive = showReceiveCta\(role, permissions\);/);
+    expect(po).toMatch(/const receiveNotice = receiveNoticeFor\(role, permissions\);/);
     expect(po).toMatch(/const readOnly = reviewOnly \|\| !canReceive;/);
   });
 
@@ -72,10 +73,11 @@ describe('PO screen: receiving follows stock:adjust', () => {
   });
 
   it("says why, in the server's words for the same refusal, only when there is something left to receive", () => {
-    expect(po).toMatch(/dbPermissionRefusedCopy\('receipt_post'\)/);
+    expect(receiveNoticeFor('viewer', undefined)).toBe(dbPermissionRefusedCopy('receipt_post'));
     expect(dbPermissionRefusedCopy('receipt_post')).toBe(
       'Receiving stock needs the Adjust on-hand permission. Ask an admin if you need it.',
     );
-    expect(po).toMatch(/!reviewOnly && !canReceive && hasOutstanding/);
+    expect(po).toMatch(/!reviewOnly && !canReceive && hasOutstanding \? \(\s*receiveNotice === null \? null : \(/);
+    expect(po).toMatch(/<Text style=\{styles\.partNoticeText\}>\{receiveNotice\}<\/Text>/);
   });
 });
