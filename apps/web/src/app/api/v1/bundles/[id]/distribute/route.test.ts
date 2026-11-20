@@ -187,9 +187,10 @@ describe('POST /api/v1/bundles/[id]/distribute — warehouse refusals', () => {
       ...KIT_IN_ORG,
       'rpc:distribute_bundle': { data: [{ distribution_id: 'dist-1' }], error: null },
     });
+    // A caller whose role may hand out kits, so the warehouse check is reached
+    // (a caller below manager is refused before it: bundles.hand-out-role.test.ts).
     vi.mocked(withApiContext).mockResolvedValueOnce({
       ...buildCtx(),
-      role: 'staff' as const,
       supabase: stub.client as never,
     });
     vi.mocked(BundlesService).mockImplementationOnce(function (

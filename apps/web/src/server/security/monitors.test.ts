@@ -264,6 +264,49 @@ describe('detectPrivilegeEscalations', () => {
     expect(detectPrivilegeEscalations(rows, 3)).toEqual([]);
   });
 
+  // The row the database writes for a role change: the app's metadata keys,
+  // plus source, made_as, aal and target_user_id; no address; no actor when
+  // the service role or direct SQL made the change.
+  const recordedRoleChange = (org: string, before: string, after: string, actor: string | null) =>
+    auditRow({
+      event: 'user.role.changed',
+      organization_id: org,
+      user_id: actor,
+      ip: null,
+      metadata: {
+        entity_type: 'organization_member',
+        entity_id: '00000000-0000-4000-8000-0000000000m1',
+        warehouse_id: null,
+        before: { role: before },
+        after: { role: after },
+        reason: null,
+        source: 'database',
+        made_as: actor ? 'authenticated' : 'service_role',
+        aal: actor ? 'aal2' : null,
+        target_user_id: '00000000-0000-4000-8000-0000000000u1',
+      },
+    });
+
+  it('counts a row the database recorded as an elevation, with or without an actor', () => {
+    const rows = [
+      recordedRoleChange('org-4', 'staff', 'admin', 'user-1'),
+      recordedRoleChange('org-4', 'admin', 'owner', null),
+      roleChange('org-4', 'manager', 'admin'),
+    ];
+    expect(detectPrivilegeEscalations(rows, 3)).toEqual([{ organizationId: 'org-4', count: 3 }]);
+  });
+
+  it('two recorded rows for one organization stay under the threshold of three', () => {
+    // An ownership transfer: the previous owner to admin (a demotion, not
+    // counted) and the new owner (one elevation), then one more elevation.
+    const rows = [
+      recordedRoleChange('org-5', 'owner', 'admin', null),
+      recordedRoleChange('org-5', 'admin', 'owner', null),
+      recordedRoleChange('org-5', 'staff', 'admin', 'user-1'),
+    ];
+    expect(detectPrivilegeEscalations(rows, 3)).toEqual([]);
+  });
+
   // A role change recorded with no actor and no address, marked
   // metadata.source 'database', beside the same before and after role. The
   // count reads the organization and the two roles only.

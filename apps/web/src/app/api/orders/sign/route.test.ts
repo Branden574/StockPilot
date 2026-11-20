@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { expectCatalogExpiryReaches } from '@/test/orders-catalog-tags';
 import {
   callArgs,
   makeSupabaseStub,
@@ -84,6 +85,8 @@ vi.mock('@/server/services/order-requests', () => ({
   syncOrderScheduleEvent: vi.fn(async () => undefined),
 }));
 
+import { revalidateTag } from 'next/cache';
+
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { dispatchEvent } from '@/server/services/integration-events';
@@ -130,6 +133,8 @@ interface Scenario {
   ownAddressReadFails?: boolean;
   /** Returns RX-2: the order is the exchange replacement for this RMA. */
   replacementForReturnId?: string;
+  /** The order's warehouse on the row read by its token. */
+  warehouseId?: string | null;
 }
 
 const READ_ERROR = { message: 'connection reset' };
@@ -166,7 +171,10 @@ function buildAdmin(s: Scenario) {
   };
 
   return makeSupabaseStub({
-    'order_requests.select.maybeSingle': { data: INTERNAL_ORDER, error: null },
+    'order_requests.select.maybeSingle': {
+      data: s.warehouseId === undefined ? INTERNAL_ORDER : { ...INTERNAL_ORDER, warehouse_id: s.warehouseId },
+      error: null,
+    },
     'order_requests.select.single': statusResult,
     'order_request_lines.select': linesResult,
     'rpc:confirm_order_signature': { data: { id: 'ord-1' }, error: null },
@@ -966,6 +974,60 @@ describe('POST /api/orders/sign — a requester who is no longer a member (S36)'
 // ("Server is missing SUPABASE_SERVICE_ROLE_KEY ..."), to the public signing
 // page and the phone. It says the feature is not set up now, and the report
 // names the setting.
+// The hand-over decrements stock: it expires the Place an Order catalog of the
+// order's warehouse in the order's organization, now, read from the row the
+// token named. Never every organization's catalog.
+describe('POST /api/orders/sign — the storefront catalog it expires', () => {
+  const WH = '00000000-0000-4000-8000-0000000000c1';
+  const OTHER_WH = '00000000-0000-4000-8000-0000000000c2';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("only the order's warehouse catalog in its organization", async () => {
+    adminHolder.client = buildAdmin({
+      status: 'completed',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 5,
+      warehouseId: WH,
+    });
+    const res = await POST(request());
+    expect(res.status).toBe(200);
+    expect(vi.mocked(revalidateTag).mock.calls).toEqual([
+      [`orders-new-v2-catalog:org-1:${WH}`, { expire: 0 }],
+    ]);
+    expectCatalogExpiryReaches(
+      vi.mocked(revalidateTag).mock.calls.map((c) => c[0]),
+      {
+        hits: [['org-1', WH]],
+        misses: [
+          ['org-1', OTHER_WH],
+          ['org-2', WH],
+        ],
+      },
+    );
+  });
+
+  it("an order row without a warehouse: the organization's catalog, no other organization's", async () => {
+    adminHolder.client = buildAdmin({
+      status: 'completed',
+      priorFulfilled: 0,
+      totalRequested: 5,
+      totalFulfilled: 5,
+      warehouseId: null,
+    });
+    const res = await POST(request());
+    expect(res.status).toBe(200);
+    expect(vi.mocked(revalidateTag).mock.calls).toEqual([['orders-new-v2-catalog:org-1', { expire: 0 }]]);
+    expectCatalogExpiryReaches(
+      vi.mocked(revalidateTag).mock.calls.map((c) => c[0]),
+      { hits: [['org-1', WH]], misses: [['org-2', WH]] },
+    );
+  });
+});
+
 describe('POST /api/orders/sign — a server without the service-role key (S31)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

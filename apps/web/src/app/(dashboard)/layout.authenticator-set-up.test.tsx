@@ -6,8 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * The dashboard layout and a member who must set up an authenticator first
  * (their organization's policy requires one of their role and they have none
  * verified: everyone under all_required, owners and admins under
- * admins_required; an organization row that came back empty is held to the
- * strictest policy).
+ * admins_required).
  *
  * THE LAYOUT NEVER REDIRECTS FOR IT. A layout that redirects to a page under
  * itself is kept by the browser after a client-side navigation and replayed
@@ -18,6 +17,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * one session the pages cannot see: a token that still says aal2 although the
  * member's own factor list has no verified factor. On a page that is not open
  * before set-up, that session gets the set-up panel in place of the page.
+ *
+ * A POLICY THAT WAS NOT READ (the organization row came back empty, or with a
+ * value that is not a policy) is held to the strictest policy, but whether
+ * set-up is owed is not known. A member with no verified authenticator then
+ * gets the "couldn't check your access" strip instead of the set-up banner,
+ * and never the set-up panel; the pages give their own could-not-check card
+ * (requireOrgContext(), lib/auth/session.authenticator-set-up.test.ts). The
+ * session whose token says aal2 with no verified factor left gets, on a page
+ * that is not open before set-up, the could-not-check panel IN PLACE of the
+ * page: the page's children are never rendered.
  */
 
 type Role = 'owner' | 'admin' | 'manager' | 'staff' | 'viewer';
@@ -51,6 +60,16 @@ vi.mock('@/components/dashboard/dashboard-shell', () => ({
 }));
 vi.mock('@/components/dashboard/mfa-required-banner', () => ({
   MfaRequiredBanner: function MfaRequiredBanner() {
+    return null;
+  },
+}));
+vi.mock('@/components/dashboard/access-unchecked-banner', () => ({
+  AccessUncheckedBanner: function AccessUncheckedBanner() {
+    return null;
+  },
+}));
+vi.mock('@/components/dashboard/access-unchecked-panel', () => ({
+  AccessUncheckedPanel: function AccessUncheckedPanel() {
     return null;
   },
 }));
@@ -126,13 +145,18 @@ function findByTypeName(node: unknown, name: string): AnyElement | null {
   return findByTypeName(el.props?.children, name);
 }
 
+type RowState = Policy | 'unreadable' | 'not a policy';
+
 function as(
   role: Role,
-  policy: Policy | 'unreadable',
+  policy: RowState,
   opts: { factors?: Array<{ status: string }>; path?: string | null; aal?: 'aal1' | 'aal2' } = {},
 ) {
   state.role = role;
-  state.orgRow = policy === 'unreadable' ? null : { mfa_policy: policy };
+  state.orgRow =
+    policy === 'unreadable'
+      ? null
+      : { mfa_policy: policy === 'not a policy' ? 'not_a_policy' : policy };
   state.factors = opts.factors ?? [];
   state.pathname = opts.path === undefined ? '/dashboard' : opts.path;
   // A verified factor: the code was entered. None: an ordinary aal1 session.
@@ -141,7 +165,12 @@ function as(
 
 type Outcome =
   | { kind: 'redirect'; to: string }
-  | { kind: 'page'; banner: boolean; shows: 'page' | 'set-up panel' };
+  | {
+      kind: 'page';
+      banner: boolean;
+      unchecked: boolean;
+      shows: 'page' | 'set-up panel' | 'could-not-check panel';
+    };
 
 function PageBelow() {
   return null;
@@ -153,11 +182,16 @@ async function load(): Promise<Outcome> {
     expect(findByTypeName(tree, 'DashboardShell')).not.toBeNull();
     const page = findByTypeName(tree, 'PageBelow') !== null;
     const panel = findByTypeName(tree, 'AuthenticatorSetUpPanel') !== null;
-    expect(page !== panel, 'the page or the panel, never both').toBe(true);
+    const uncheckedPanel = findByTypeName(tree, 'AccessUncheckedPanel') !== null;
+    expect(
+      [page, panel, uncheckedPanel].filter(Boolean).length,
+      'the page or one panel, never two',
+    ).toBe(1);
     return {
       kind: 'page',
       banner: findByTypeName(tree, 'MfaRequiredBanner') !== null,
-      shows: panel ? 'set-up panel' : 'page',
+      unchecked: findByTypeName(tree, 'AccessUncheckedBanner') !== null,
+      shows: panel ? 'set-up panel' : uncheckedPanel ? 'could-not-check panel' : 'page',
     };
   } catch (e) {
     const m = /^redirect:(.*)$/.exec(String((e as Error).message));
@@ -166,9 +200,18 @@ async function load(): Promise<Outcome> {
   }
 }
 
-const PAGE = { kind: 'page', banner: false, shows: 'page' } as const;
-const PAGE_WITH_BANNER = { kind: 'page', banner: true, shows: 'page' } as const;
-const PANEL = { kind: 'page', banner: true, shows: 'set-up panel' } as const;
+const PAGE = { kind: 'page', banner: false, unchecked: false, shows: 'page' } as const;
+const PAGE_WITH_BANNER = { kind: 'page', banner: true, unchecked: false, shows: 'page' } as const;
+const PANEL = { kind: 'page', banner: true, unchecked: false, shows: 'set-up panel' } as const;
+/** A policy that was not read, no verified authenticator: the could-not-check strip, the page. */
+const PAGE_UNCHECKED = { kind: 'page', banner: false, unchecked: true, shows: 'page' } as const;
+/** The same, for a token at aal2 with no verified factor on a page that is not open: no page at all. */
+const UNCHECKED_PANEL = {
+  kind: 'page',
+  banner: false,
+  unchecked: true,
+  shows: 'could-not-check panel',
+} as const;
 
 const CLOSED = [
   '/dashboard',
@@ -179,16 +222,20 @@ const CLOSED = [
 const CLOSED_LOOKALIKES = ['/dashboard/settings/security-keys', '/dashboard/settings/profile-old'];
 const OPEN = ['/dashboard/settings/security', '/dashboard/settings/profile'];
 const ALL_ROLES: Role[] = ['owner', 'admin', 'manager', 'staff', 'viewer'];
-const POLICIES: Array<Policy | 'unreadable'> = [
+const POLICIES: RowState[] = [
   'optional',
   'admins_required',
   'all_required',
   'unreadable',
+  'not a policy',
 ];
-const owes = (policy: Policy | 'unreadable', role: Role) =>
+const unread = (policy: RowState) => policy === 'unreadable' || policy === 'not a policy';
+const owes = (policy: RowState, role: Role) =>
   policy === 'all_required' ||
-  policy === 'unreadable' ||
   (policy === 'admins_required' && (role === 'owner' || role === 'admin'));
+/** A member with no verified authenticator: what the layout shows above (or in place of) the page. */
+const noAuthenticator = (policy: RowState, role: Role) =>
+  unread(policy) ? PAGE_UNCHECKED : owes(policy, role) ? PAGE_WITH_BANNER : PAGE;
 const MATRIX = POLICIES.flatMap((p) => ALL_ROLES.map((r) => [p, r] as const));
 
 beforeEach(() => {
@@ -201,7 +248,7 @@ describe('the layout never redirects for set-up', () => {
     async (policy, role) => {
       for (const path of [...CLOSED, ...CLOSED_LOOKALIKES, ...OPEN, null]) {
         as(role, policy, { path });
-        expect(await load(), String(path)).toEqual(owes(policy, role) ? PAGE_WITH_BANNER : PAGE);
+        expect(await load(), String(path)).toEqual(noAuthenticator(policy, role));
       }
       expect(redirect).not.toHaveBeenCalled();
     },
@@ -211,7 +258,7 @@ describe('the layout never redirects for set-up', () => {
     '%s, %s whose only factor is not verified: the same as none',
     async (policy, role) => {
       as(role, policy, { factors: [{ status: 'unverified' }], path: '/dashboard/team' });
-      expect(await load()).toEqual(owes(policy, role) ? PAGE_WITH_BANNER : PAGE);
+      expect(await load()).toEqual(noAuthenticator(policy, role));
       expect(redirect).not.toHaveBeenCalled();
     },
   );
@@ -227,11 +274,13 @@ describe('the layout never redirects for set-up', () => {
 
 describe('a token that says aal2 while the member has no verified factor', () => {
   it.each(MATRIX)(
-    '%s, %s on a page not open before set-up: the set-up panel when set-up is owed',
+    '%s, %s on a page not open before set-up: the set-up panel when set-up is owed; the could-not-check panel, never the page, for a policy that was not read',
     async (policy, role) => {
       for (const path of [...CLOSED, ...CLOSED_LOOKALIKES]) {
         as(role, policy, { path, aal: 'aal2' });
-        expect(await load(), path).toEqual(owes(policy, role) ? PANEL : PAGE);
+        expect(await load(), path).toEqual(
+          unread(policy) ? UNCHECKED_PANEL : owes(policy, role) ? PANEL : PAGE,
+        );
       }
       expect(redirect).not.toHaveBeenCalled();
     },
@@ -240,13 +289,25 @@ describe('a token that says aal2 while the member has no verified factor', () =>
   it.each(MATRIX)('%s, %s on an open page: the page', async (policy, role) => {
     for (const path of OPEN) {
       as(role, policy, { path, aal: 'aal2' });
-      expect(await load(), path).toEqual(owes(policy, role) ? PAGE_WITH_BANNER : PAGE);
+      expect(await load(), path).toEqual(noAuthenticator(policy, role));
     }
   });
 
   it('with no path header: the panel (fails closed), never a redirect', async () => {
     as('admin', 'admins_required', { path: null, aal: 'aal2' });
     expect(await load()).toEqual(PANEL);
+    for (const policy of ['unreadable', 'not a policy'] as const) {
+      as('staff', policy, { path: null, aal: 'aal2' });
+      expect(await load(), policy).toEqual(UNCHECKED_PANEL);
+    }
     expect(redirect).not.toHaveBeenCalled();
   });
+
+  it.each(['unreadable', 'not a policy'] as const)(
+    '%s, with a verified authenticator at aal2: the page, no panel and no strip',
+    async (policy) => {
+      as('staff', policy, { factors: [{ status: 'verified' }], path: '/dashboard/team' });
+      expect(await load()).toEqual(PAGE);
+    },
+  );
 });

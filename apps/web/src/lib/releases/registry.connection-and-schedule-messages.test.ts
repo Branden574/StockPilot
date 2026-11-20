@@ -30,7 +30,31 @@ const ID = 'connection-and-schedule-messages-2026-11';
 const CONNECTION_ENTRY = 'accounting-connection-not-finished';
 const SCHEDULE_ENTRY = 'schedule-event-access-not-checked';
 const DELETE_CONFIRM_ID = 'delete-account-confirm-2026-11';
+// Added by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16): the emptied fields and schedule completion release, published later, at the top, below the Liquid Glass draft and above this one.
+const EMPTIED_FIELDS_ID = 'emptied-fields-and-schedule-completion-2026-11';
 const AUTH_SET_UP_ID = 'authenticator-set-up-first-2026-11';
+// Added by docs/releases-low-critical-pages (2026-11-18): the Low + critical pages and list value release (whoever can read items: every role by default), published later, at the top, below the Liquid Glass draft.
+const LOW_CRITICAL_ID = 'low-critical-pages-and-list-value-2026-11';
+const lowCriticalRead = {
+  release_id: LOW_CRITICAL_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-18T10:01:00Z',
+  read_at: '2026-11-18T10:01:00Z',
+};
+// Added by docs/whats-new-2026-11-19-errors (2026-11-19): the count start access check release (a manager or above who can assign counts, where Cycle Counts is on), published later, at the top, below the Liquid Glass draft.
+const COUNT_START_ACCESS_ID = 'count-start-access-check-2026-11';
+// Added by docs/whats-new-small-fixes-1119 (2026-11-19): the export, receipt and access release (every member: its access entry has no audience), published later, at the top, below the Liquid Glass draft.
+const EXPORT_RECEIPT_ACCESS_ID = 'export-receipt-access-fixes-2026-11';
+const exportReceiptAccessRead = {
+  release_id: EXPORT_RECEIPT_ACCESS_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-19T15:31:00Z',
+  read_at: '2026-11-19T15:31:00Z',
+};
+// Added by docs/whats-new-receiving-shown-to-managers (2026-11-19): the receiving release (whoever can open a purchase order where Receiving is on), published later, at the top, below the Liquid Glass draft.
+const RECEIVING_ID = 'receiving-shown-to-managers-2026-11';
 const PUBLISHED_AT = '2026-11-16T09:39:00Z';
 const LIVE_591 = '2026-11-16T09:38:20Z';
 const LIVE_590 = '2026-11-16T09:11:17Z';
@@ -73,29 +97,57 @@ function readerText(r: Release): string[] {
 }
 
 describe('the Integrations and schedule event release: order, status and date', () => {
-  it('is published once, as revision 1, directly below the Liquid Glass draft and above the delete account release, the newest published release', () => {
+  // Renamed by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: "is published once, as revision 1, directly below the Liquid Glass draft and above the delete account release, the newest published release"): the emptied fields and schedule completion release is published later, directly below the draft and above this one. Claim kept: published once, as revision 1, directly above the delete account release.
+  it('is published once, as revision 1, directly below the emptied fields and schedule completion release (published later, below the Liquid Glass draft at the top) and above the delete account release', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
-    expect(RELEASES.slice(0, 4).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: RELEASES.slice(0, 4)): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES.slice(0, 5)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(0, 6)): the receiving release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(0, 7)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(0, 8)): the count start access check release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    expect(RELEASES.slice(0, 9).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, directly below the Liquid Glass draft.
+      [COUNT_START_ACCESS_ID, 'published'],
+      // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, directly below the Liquid Glass draft.
+      [EXPORT_RECEIPT_ACCESS_ID, 'published'],
+      // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: without it): the receiving release is published later, at the top, directly below the Liquid Glass draft.
+      [RECEIVING_ID, 'published'],
+      // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, directly below the Liquid Glass draft.
+      [LOW_CRITICAL_ID, 'published'],
+      // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: without it): the emptied fields and schedule completion release is published later, at the top, directly below the Liquid Glass draft.
+      [EMPTIED_FIELDS_ID, 'published'],
       [ID, 'published'],
       [DELETE_CONFIRM_ID, 'published'],
       [AUTH_SET_UP_ID, 'published'],
     ]);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: ID): the emptied fields and schedule completion release is published after it, at the top, the newest published release.
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: EMPTIED_FIELDS_ID): the Low + critical pages and list value release is published after it, at the top, the newest published release.
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: the Low + critical pages and list value release): the receiving release is published after it, at the top, the newest published release.
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: the receiving release): the export, receipt and access release is published after it, at the top, the newest published release.
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: the export, receipt and access release): the count start access check release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(COUNT_START_ACCESS_ID);
   });
 
-  it('is dated on a whole minute after #590 and #591 went live, in the past, with the draft placeholder at the same minute and every release below it older', () => {
+  // Renamed by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: "is dated on a whole minute after #590 and #591 went live, in the past, with the draft placeholder at the same minute and every release below it older"): the emptied fields and schedule completion release above is dated later, and the draft placeholder moved to its minute. Claim kept: a whole minute after #590 and #591 went live, in the past, every release below it older.
+  it('is dated on a whole minute after #590 and #591 went live, in the past, with the draft placeholder at or after it and every release below it older', () => {
     expect(release().publishedAt).toBe(PUBLISHED_AT);
     const at = Date.parse(release().publishedAt);
     expect(at % 60_000).toBe(0);
     expect(at).toBeGreaterThan(Date.parse(LIVE_591));
     expect(at).toBeGreaterThan(Date.parse(LIVE_590));
     expect(at).toBeLessThanOrEqual(Date.now());
-    expect(RELEASES[0]!.publishedAt).toBe(release().publishedAt);
-    for (const r of RELEASES.slice(2)) {
+    // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: RELEASES[0]!.publishedAt toBe this minute): the draft placeholder moved to the minute of the emptied fields and schedule completion release, published later, directly above this one.
+    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
+    // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: every pinned position one place higher): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES.slice(3)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(4)): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(5)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(6)): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(7)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -192,7 +244,17 @@ describe('the Integrations and schedule event release: who is told', () => {
     expect(shown(viewer('owner', [...PERMISSIONS], []))).toBeUndefined();
   });
 
-  it('is the first notice for whoever it reaches, the delete account release is next, and an old phone build lists it first with the Integrations link only where that entry is told', () => {
+  // Renamed by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: "is the first notice for whoever it reaches, the delete account release is next, and an old phone build lists it first with the Integrations link only where that entry is told"): the emptied fields and schedule completion release is published later, at the top, and reaches owners, admins and whoever manages the schedule with Schedule on, so they read it first. Claim kept: the notice for whoever it reaches, the delete account release next, and an old phone build lists it first with the Integrations link only where that entry is told.
+  it('is the notice for whoever it reaches once the emptied fields and schedule completion release is read, the delete account release is next, and an old phone build lists it first with the Integrations link only where that entry is told', () => {
+    // Added by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16): a read of the emptied fields and schedule completion release, published later, at the top.
+    const emptiedRead = {
+      release_id: EMPTIED_FIELDS_ID,
+      // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: revision 1): the emptied fields and schedule completion release is re-announced as revision 2, so a read of it is recorded at revision 2.
+      revision: 2,
+      dismissed_at: null,
+      opened_at: '2026-11-16T12:34:00Z',
+      read_at: '2026-11-16T12:34:00Z',
+    };
     const read = {
       release_id: ID,
       revision: 1,
@@ -201,20 +263,36 @@ describe('the Integrations and schedule event release: who is told', () => {
       read_at: '2026-11-16T09:40:00Z',
     };
     for (const v of [owner, admin, integrationsOnly, scheduleOnly]) {
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
-      expect(buildReleaseList(RELEASES, v, [read], null).latestUnread?.id, v.role).toBe(
-        DELETE_CONFIRM_ID,
-      );
+      // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: nothing read, and [read]): the emptied fields and schedule completion release is published later, at the top, and reaches every reader here but integrationsOnly, so it is read first, and every notice this test checks is the one it checked before.
+      // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (owners, admins, managers, staff and viewers by default), so each reads it first, and every notice this test checks is the one it checked before.
+      // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
+      expect(buildReleaseList(RELEASES, v, [exportReceiptAccessRead, lowCriticalRead, emptiedRead], null).latestUnread?.id, v.role).toBe(ID);
+      expect(
+        // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
+        buildReleaseList(RELEASES, v, [exportReceiptAccessRead, lowCriticalRead, emptiedRead, read], null).latestUnread?.id,
+        v.role,
+      ).toBe(DELETE_CONFIRM_ID);
     }
-    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(DELETE_CONFIRM_ID);
-    expect(legacyAnnouncementsFor(RELEASES, integrationsOnly, {})[0]).toEqual({
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: nothing read): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (owners, admins, managers, staff and viewers by default), so each reads it first, and every notice this test checks is the one it checked before.
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
+    expect(buildReleaseList(RELEASES, member, [exportReceiptAccessRead, lowCriticalRead], null).latestUnread?.id).toBe(DELETE_CONFIRM_ID);
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: nothing seen): the Low + critical pages and list value release is published later and reaches whoever can read items, so the phone has seen it first.
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, and reaches a manager or above who can assign counts where Cycle Counts is on (an owner with every permission and module among them), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+    expect(legacyAnnouncementsFor(RELEASES, integrationsOnly, { [COUNT_START_ACCESS_ID]: true, [EXPORT_RECEIPT_ACCESS_ID]: true, [LOW_CRITICAL_ID]: true })[0]).toEqual({
       id: ID,
       date: '2026-11-16',
       title: release().title,
       body: release().summary,
       cta: LINK,
     });
-    expect(legacyAnnouncementsFor(RELEASES, scheduleOnly, {})[0]).toEqual({
+    // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: nothing seen): the emptied fields and schedule completion release is published later, at the top, and reaches whoever manages the schedule with Schedule on, so it is seen first.
+    expect(
+      // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later and reaches whoever can read items, so the phone has seen it first.
+      // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
+      // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, and reaches a manager or above who can assign counts where Cycle Counts is on (an owner with every permission and module among them), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+      legacyAnnouncementsFor(RELEASES, scheduleOnly, { [COUNT_START_ACCESS_ID]: true, [EXPORT_RECEIPT_ACCESS_ID]: true, [LOW_CRITICAL_ID]: true, [EMPTIED_FIELDS_ID]: true })[0],
+    ).toEqual({
       id: ID,
       date: '2026-11-16',
       title: release().title,

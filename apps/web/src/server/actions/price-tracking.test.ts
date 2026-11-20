@@ -27,9 +27,27 @@ describe('price-tracking actions', () => {
     expect(res.ok).toBe(true);
   });
   it('refreshBookPricesAction returns the summary', async () => {
-    refreshOrgBookPrices.mockResolvedValueOnce({ scanned: 5, written: 3, skipped: 2 });
+    refreshOrgBookPrices.mockResolvedValueOnce({
+      scanned: 5,
+      written: 3,
+      skipped: 2,
+      lookups: 5,
+      googleUnavailable: false,
+    });
     const res = await refreshBookPricesAction();
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data.written).toBe(3);
+  });
+  it('refreshBookPricesAction tells its caller when Google stopped answering', async () => {
+    refreshOrgBookPrices.mockResolvedValueOnce({
+      scanned: 5,
+      written: 1,
+      skipped: 0,
+      lookups: 2,
+      googleUnavailable: true,
+    });
+    const res = await refreshBookPricesAction();
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data).toMatchObject({ written: 1, googleUnavailable: true });
   });
 });

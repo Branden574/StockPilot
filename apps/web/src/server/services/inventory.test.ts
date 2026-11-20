@@ -69,6 +69,7 @@ describe('InventoryService.list', () => {
   it('applies default product filter + active status when no filters passed', async () => {
     const stub = makeSupabaseStub({
       'inventory_items.select': { data: [], error: null, count: 0 },
+      'rpc:inventory_list_value': { data: 0, error: null },
     });
     const svc = new InventoryService(makeServiceContext(stub.client));
 
@@ -101,6 +102,7 @@ describe('InventoryService.list', () => {
   it('applies q filter via .or() with name/sku/barcode ilike', async () => {
     const stub = makeSupabaseStub({
       'inventory_items.select': { data: [], error: null, count: 0 },
+      'rpc:inventory_list_value': { data: 0, error: null },
     });
     const svc = new InventoryService(makeServiceContext(stub.client));
 
@@ -119,6 +121,7 @@ describe('InventoryService.list', () => {
     'existed but the select string never asked for it, so every export always read 0)', async () => {
     const stub = makeSupabaseStub({
       'inventory_items.select': { data: [], error: null, count: 0 },
+      'rpc:inventory_list_value': { data: 0, error: null },
     });
     const svc = new InventoryService(makeServiceContext(stub.client));
 
@@ -133,6 +136,7 @@ describe('InventoryService.list', () => {
   it('skips item_type filter when itemType is "all"', async () => {
     const stub = makeSupabaseStub({
       'inventory_items.select': { data: [], error: null, count: 0 },
+      'rpc:inventory_list_value': { data: 0, error: null },
     });
     const svc = new InventoryService(makeServiceContext(stub.client));
 
@@ -156,6 +160,7 @@ describe('InventoryService.list', () => {
     });
     const stub = makeSupabaseStub({
       'inventory_items.select': { data: [{ id: 'should-not-leak' }], error: null, count: 1 },
+      'rpc:inventory_list_value': { data: 0, error: null },
     });
     const svc = new InventoryService(
       makeServiceContext(stub.client, { role: 'staff' }),
@@ -174,6 +179,7 @@ describe('InventoryService.list', () => {
     });
     const stub = makeSupabaseStub({
       'inventory_items.select': { data: [], error: null, count: 0 },
+      'rpc:inventory_list_value': { data: 0, error: null },
     });
     const svc = new InventoryService(
       makeServiceContext(stub.client, { role: 'staff' }),
@@ -189,21 +195,35 @@ describe('InventoryService.list', () => {
     expect(args[inIdx]![1]).toEqual(['wh-a', 'wh-b']);
   });
 
-  it('post-filters lowStock results by qty <= reorder_point', async () => {
+  it('filters lowStock in the database (is_low_stock), so the page is full and the total is the exact count', async () => {
+    // The stub plays the database: these are the rows and the count it gave
+    // for a request that asked is_low_stock=eq.true. list() keeps every row
+    // and the count as they are, with no second judgement in code.
     const rows = [
       { id: 'a', quantity_on_hand: 1, reorder_point: 5 },
-      { id: 'b', quantity_on_hand: 10, reorder_point: 5 },
+      { id: 'b', quantity_on_hand: 0, reorder_point: 0 },
     ];
     const stub = makeSupabaseStub({
       'inventory_items.select': { data: rows, error: null, count: 99 },
+      'rpc:inventory_list_value': { data: 12.5, error: null },
     });
     const svc = new InventoryService(makeServiceContext(stub.client));
 
-    const result = await svc.list({ lowStock: true });
-    expect(result.items).toHaveLength(1);
-    expect((result.items[0] as { id: string }).id).toBe('a');
-    // total reflects the filtered length, not the wire count.
-    expect(result.total).toBe(1);
+    const result = await svc.list({ lowStock: true, limit: 2 });
+    const chain = stub.chainsAll.get('inventory_items.select')![0]!;
+    const args = stub.chainArgsAll.get('inventory_items.select')![0]!;
+    expect(chain.map((m, i) => [m, ...(args[i] ?? [])])).toContainEqual(['eq', 'is_low_stock', true]);
+    // The old two-column pre-filter is gone: the database applies the rule.
+    expect(chain).not.toContain('or');
+    expect(result.items.map((i) => (i as { id: string }).id)).toEqual(['a', 'b']);
+    expect(result.total).toBe(99);
+    expect(result.valueOnHand).toBe(12.5);
+    expect(stub.rpcCalls).toEqual([
+      {
+        name: 'inventory_list_value',
+        args: { p_organization_id: 'org-test', p_filters: expect.objectContaining({ low_stock: true }) },
+      },
+    ]);
   });
 
   it('throws ServiceError when supabase returns error', async () => {
@@ -220,6 +240,7 @@ describe('InventoryService.list', () => {
   it('applies .eq("auto_archived", true) when autoArchived filter is set', async () => {
     const stub = makeSupabaseStub({
       'inventory_items.select': { data: [], error: null, count: 0 },
+      'rpc:inventory_list_value': { data: 0, error: null },
     });
     const svc = new InventoryService(makeServiceContext(stub.client));
 
@@ -238,6 +259,7 @@ describe('InventoryService.list', () => {
   it('omits the auto_archived filter when the flag is not set', async () => {
     const stub = makeSupabaseStub({
       'inventory_items.select': { data: [], error: null, count: 0 },
+      'rpc:inventory_list_value': { data: 0, error: null },
     });
     const svc = new InventoryService(makeServiceContext(stub.client));
 

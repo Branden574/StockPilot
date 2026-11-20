@@ -23,6 +23,8 @@ import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { readInActiveOrg } from './lib/in-active-org';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
+import { roleCanHandOutKits } from '@stockpilot/core';
+
 export interface BundleRow {
   id: string;
   organization_id: string;
@@ -233,6 +235,10 @@ export const BUNDLE_COMPONENT_IS_KIT_ITEM =
  *  kit item, so only support can repair one. */
 export const BUNDLE_PHANTOM_NOT_KIT_ITEM =
   "This kit's pre-assembled stock is linked to an item that isn't this kit's own kit item, so nothing was assembled or handed out. Contact support to repair the bundle.";
+/** A kit is handed out only by a manager or above (roleCanHandOutKits, the
+ *  database's own floor), whatever the permissions say. */
+export const KIT_HAND_OUT_MANAGER_ONLY =
+  'Only a manager can hand out a kit. Ask a manager to hand this one out.';
 
 /**
  * The refusals assemble_bundle() and distribute_bundle() raise by name (0365,
@@ -1006,6 +1012,14 @@ export class BundlesService {
   async distribute(id: string, input: DistributeInput): Promise<{ distributionId: string }> {
     assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:distribute');
+    // distribute_bundle refuses every caller below manager (its FOR UPDATE read
+    // of the kit is filtered by bundles_update's USING, then its own role
+    // floor), whatever they hold. Refused here by role, before anything is
+    // read or written, with a sentence that says who can, so the answer
+    // depends only on the caller and never on the kit.
+    if (!roleCanHandOutKits(this.ctx.role)) {
+      throw new ServiceError('forbidden', KIT_HAND_OUT_MANAGER_ONLY);
+    }
     // bundle_distributions.quantity is numeric(14,4): a quantity with more
     // decimal places would be rounded on insert, after the components were
     // drawn for the unrounded one. Refused here, before anything is read or

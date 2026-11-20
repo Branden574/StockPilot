@@ -1,4 +1,3 @@
-import { revalidateTag } from 'next/cache';
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
@@ -37,6 +36,7 @@ import { insertAuditRowReported } from '@/server/services/audit';
 import { isModuleEnabled, mfaGateError, type ServiceContext } from '@/server/services/context';
 import { dispatchEvent } from '@/server/services/integration-events';
 import { keepAlive } from '@/server/services/lib/defer';
+import { expireOrdersCatalogAfterOrderWrite } from '@/server/services/lib/orders-catalog-expiry';
 import { syncOrderScheduleEvent } from '@/server/services/order-requests';
 
 // Why a route handler instead of a Server Action: the public sign page
@@ -365,7 +365,9 @@ export async function POST(req: NextRequest) {
 
   // Hand-over decrements on-hand + consumes reservations — bust the
   // storefront catalog so the Place-an-Order avail pills update immediately.
-  revalidateTag('orders-new-v2-catalog', 'max');
+  // Only the catalog of this order's warehouse in its organization (the row
+  // read above by its token), expired now (orders-catalog-expiry.ts).
+  expireOrdersCatalogAfterOrderWrite(order.organization_id, order);
 
   // Live tracking: purge the driver's live GPS point after this leg (best-effort).
   // Ahead of the status read below: the leg is over whatever the status is,

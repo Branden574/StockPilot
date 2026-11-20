@@ -3,9 +3,9 @@ import { z } from 'zod';
 
 import { isUuid } from '@stockpilot/core';
 
-import { withApiContext } from '@/lib/auth/api-context';
 import { resolveCapturedAt } from '@/lib/cycle-counts/capture-time';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { apiContextGate } from '@/server/lib/api-context-gate';
 import { forbiddenOrInternalResponse } from '@/server/lib/api-error-response';
 import { refusalReasonDetails } from '@/server/lib/refusal-reason';
 import { CycleCountsService } from '@/server/services/cycle-counts';
@@ -47,7 +47,12 @@ export async function POST(
   // land the capture that much later than the real count, where a pick of the
   // item reads as before the count.
   const arrivedAt = Date.now();
-  const ctx = await withApiContext(req);
+  // Then, before anything else: a context that could not be built because
+  // the caller's access could not be checked answers the 503 the phone may
+  // send again (server/lib/api-context-gate.ts).
+  const gate = await apiContextGate(req);
+  if ('response' in gate) return gate.response;
+  const ctx = gate.ctx;
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }

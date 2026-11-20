@@ -302,7 +302,9 @@ export function instantStateFromSearchParams(params: {
 
 /**
  * Mirrors InventoryService.list()'s q-term preprocessing VERBATIM:
- * trim → cap at 120 chars → replace `[,()%*]` with spaces (the chars
+ * trim → cap at 120 characters, cut on whole code points (never half an
+ * emoji) with any lone surrogate half turned into U+FFFD → replace
+ * `[,()%*]` with spaces (the chars
  * that could escape a PostgREST .or() clause / act as LIKE wildcards).
  * An empty result means "no search filter" — including for terms that
  * collapse to '' (all-stripped input), exactly like the server's
@@ -311,9 +313,10 @@ export function instantStateFromSearchParams(params: {
  * is here too.
  */
 export function buildInstantSearchTerm(q: string): string {
-  return q
-    .trim()
+  return Array.from(q.trim())
     .slice(0, 120)
+    .join('')
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD')
     .replace(/[,()%*]/g, ' ');
 }
 
@@ -346,10 +349,9 @@ export function rowMatchesInstantSearch(row: InstantModeRow, normalizedTerm: str
 
 /* ---- filters ------------------------------------------------------------ */
 
-/** Combined effect of list()'s lowStock OR-pre-filter
- *  (`reorder_point.gt.0,quantity_on_hand.lte.0`) and its JS post-filter
- *  (`qty <= reorder || qty <= 0`): out counts as low even with no
- *  reorder line; qty above 0 needs a positive reorder point. */
+/** The low-stock rule list() asks the database for (the computed field
+ *  is_low_stock, migration 0470): out counts as low even with no reorder
+ *  line; qty above 0 needs a positive reorder point. */
 export function isLowStock(quantityOnHand: number, reorderPoint: number): boolean {
   return quantityOnHand <= 0 || (reorderPoint > 0 && quantityOnHand <= reorderPoint);
 }

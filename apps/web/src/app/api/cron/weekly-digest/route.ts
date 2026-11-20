@@ -23,6 +23,7 @@ import {
   loadDigestReaderData,
 } from '@/server/services/digest';
 import { rawErrorText } from '@/server/services/lib/fetch-by-ids';
+import { claimRetries, sweepOrganizations } from '@/server/services/lib/cron-sweep';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 
 export const runtime = 'nodejs';
@@ -100,6 +101,44 @@ const LAST_UNSIGNED_CLAIM_WEEK = '2026-11-09'; // the release owner raises this 
 /** How many times a run tries to hold the week's claim before it sends unclaimed. */
 const MAX_CLAIM_TRIES = 3;
 
+/** The steps of a member's week claim that can go wrong (claimReporter). */
+type DigestClaimStep = 'claim' | 'read' | 'take_over';
+
+/** What each claim step's report says. No id, no address, no database text. */
+const CLAIM_STEP_MESSAGE: Record<DigestClaimStep, string> = {
+  claim: 'Weekly digest skipped members whose week claim could not be recorded',
+  read: 'Weekly digest could not read a week claim and left the week marked sent',
+  take_over: 'Weekly digest claim under the key is not signed and could not be taken over',
+};
+
+type ClaimReport = (step: DigestClaimStep, error?: { code?: string } | null) => void;
+
+/**
+ * The run's claim reports: each step reported at most once per run, under
+ * cron.weekly-digest.claim, with the step, the job and the error's code only
+ * (`lastCode`: the last code any step reported with, so a run whose claims
+ * all failed names it).
+ * The counts are in the run's log line.
+ */
+function claimReporter(): ClaimReport & { lastCode(): string } {
+  const done = new Set<DigestClaimStep>();
+  let lastCode = 'none';
+  const report: ClaimReport = (step, error) => {
+    // `||`: a fetch-level failure can carry an empty code. The code is in
+    // the message too: a chat webhook shows only the message.
+    const code = error ? error.code || 'unknown' : 'none';
+    if (error) lastCode = code;
+    if (done.has(step)) return;
+    done.add(step);
+    void reportError(new Error(`${CLAIM_STEP_MESSAGE[step]} (code ${code})`), {
+      tag: 'cron.weekly-digest.claim',
+      level: 'warning',
+      extra: { step, job: 'weekly_digest', code },
+    });
+  };
+  return Object.assign(report, { lastCode: () => lastCode });
+}
+
 interface DigestClaimRow {
   organization_id: string;
   scope: 'weekly_digest';
@@ -119,11 +158,11 @@ type DigestClaimRead =
   | { kind: 'unreadable' };
 
 /** The row under (org, weekly_digest, key), judged against the signature. A
- *  failed read is reported here. */
+ *  failed read is reported here (once per run). */
 async function readDigestClaim(
   admin: ReturnType<typeof createAdminClient>,
   claim: DigestClaimRow,
-  userId: string,
+  report: ClaimReport,
 ): Promise<DigestClaimRead> {
   const orgId = claim.organization_id;
   const { data, error } = await admin
@@ -134,10 +173,7 @@ async function readDigestClaim(
     .eq('key', claim.key)
     .maybeSingle();
   if (error) {
-    void reportError(new Error(error.message ?? 'digest claim read failed'), {
-      tag: 'cron.weekly-digest.claim',
-      extra: { orgId, userId },
-    });
+    report('read', error);
     return { kind: 'unreadable' };
   }
   const row = data as { id: string; request_hash: string | null } | null;
@@ -151,37 +187,37 @@ async function readDigestClaim(
 }
 
 /**
- * After the signed insert met an existing row: true when this run may send.
- * Up to MAX_CLAIM_TRIES times, the row is read and:
+ * After the signed insert met an existing row: 'send' when this run may send,
+ * 'sent' when the week is already marked sent, 'unavailable' when the claim
+ * cannot be recorded. Up to MAX_CLAIM_TRIES times, the row is read and:
  *   * a signed claim (or an unsigned one of a week up to
- *     LAST_UNSIGNED_CLAIM_WEEK): already sent, false;
- *   * the row cannot be read: reported, false (a row is there; at most once
+ *     LAST_UNSIGNED_CLAIM_WEEK): already sent, 'sent';
+ *   * the row cannot be read: reported, 'sent' (a row is there; at most once
  *     wins without proof it is not signed);
  *   * a row without the cron's signature: taken over by a compare-and-set on
- *     the hash it was read with; true when it holds;
- *   * no row any more: claimed again; true when the insert holds.
- * A try that misses (the row changed first) reads again. After the last miss
- * the run reports and sends without holding the claim.
+ *     the hash it was read with; 'send' when it holds, 'unavailable'
+ *     (reported) when the write errors;
+ *   * no row any more: claimed again; 'send' when the insert holds,
+ *     'unavailable' (reported) when it fails with an error other than the key.
+ * A try that misses (the row changed first, no error) reads again. After the
+ * last miss the run reports and sends without holding the claim.
  */
 async function mayClaimTakenWeek(
   admin: ReturnType<typeof createAdminClient>,
   claim: DigestClaimRow,
-  userId: string,
-): Promise<boolean> {
+  report: ClaimReport,
+): Promise<'send' | 'sent' | 'unavailable'> {
   const orgId = claim.organization_id;
   for (let attempt = 0; attempt < MAX_CLAIM_TRIES; attempt += 1) {
-    const held = await readDigestClaim(admin, claim, userId);
-    if (held.kind === 'ours' || held.kind === 'unreadable') return false;
+    const held = await readDigestClaim(admin, claim, report);
+    if (held.kind === 'ours' || held.kind === 'unreadable') return 'sent';
     if (held.kind === 'none') {
       const { error: insertErr } = await admin.from('idempotency_keys').insert(claim);
-      if (!insertErr) return true;
+      if (!insertErr) return 'send';
+      // Fails closed, as the first claim does: the member is skipped.
       if (!isDuplicateClaim(insertErr)) {
-        // Fails open on the marker, as the first claim does.
-        void reportError(new Error(insertErr.message ?? 'digest claim failed'), {
-          tag: 'cron.weekly-digest.claim',
-          extra: { orgId, userId },
-        });
-        return true;
+        report('claim', insertErr);
+        return 'unavailable';
       }
       continue;
     }
@@ -192,19 +228,27 @@ async function mayClaimTakenWeek(
       .eq('id', held.id)
       .eq('request_hash', held.hash)
       .select('id');
-    if (!error && Array.isArray(data) && data.length > 0) return true;
+    if (error) {
+      report('claim', error);
+      return 'unavailable';
+    }
+    if (Array.isArray(data) && data.length > 0) return 'send';
   }
-  void reportError(new Error('digest claim under the key is not signed and could not be taken over'), {
-    tag: 'cron.weekly-digest.claim',
-    extra: { orgId, userId },
-  });
-  return true;
+  report('take_over');
+  return 'send';
 }
 
-// Vercel default function timeout is 10s for Hobby. The cron iterates orgs
-// + sends emails sequentially; bump generously since each Resend send is
-// a network round trip.
-export const maxDuration = 60;
+// The cron iterates orgs + sends emails sequentially (each Resend send is a
+// network round trip). 300, up from 60: the job runs once a WEEK, so an
+// organization a run does not reach waits a whole week for its digest. 300 is
+// what the daily per-organization jobs use, and the soft deadline below
+// leaves the organization in flight a minute to finish its sends.
+export const maxDuration = 300;
+
+/** Stop STARTING organizations after this long (see maxDuration). */
+const RUN_DEADLINE_MS = 240_000;
+/** The job's cadence: the slot of the fallback order (rotateByClock). */
+const WEEK_MS = 7 * 24 * 60 * 60_000;
 
 /**
  * Weekly inventory digest. Wired to Vercel Cron via vercel.json
@@ -215,6 +259,16 @@ export const maxDuration = 60;
  * (buildDigestPayload with their reader; see services/digest.ts).
  *
  * Auth: same Bearer ${CRON_SECRET} pattern as purge-ai-chat-history.
+ *
+ * Order: the organizations this job reached longest ago first
+ * (cron_sweep_attempts, job 'weekly_digest', recorded as each starts), so a
+ * run cut by its deadline leaves different organizations each week, and
+ * those go first the next week. One log line per run says how many it left.
+ * Nothing is claimed per organization: the week's claim per (organization,
+ * member) below keeps every member at one digest a week, and lets a run
+ * started again the same week finish an organization another run left half
+ * way. A member whose claim cannot be recorded is skipped for the run, never
+ * sent unclaimed (counted in the log line as claimUnavailable).
  *
  * Spec: docs/superpowers/specs/2026-05-08-weekly-email-digest-design.md
  */
@@ -232,14 +286,27 @@ export async function GET(req: Request) {
   if (!secretsEqual(auth, `Bearer ${env.CRON_SECRET}`)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
+  // The run's deadline counts from here, before the recipient pull: the time
+  // that pull takes is spent from the same maxDuration.
+  const requestStartedAt = Date.now();
   // The claim's signing key for this run (digestClaimKeyMaterial), computed
   // once; null claims unsigned, reported once per run.
   const claimKeyMaterial = digestClaimKeyMaterial(env.UNSUBSCRIBE_SECRET);
   let unsignedReported = false;
+  const reportClaim = claimReporter();
+  // A member claim that errors is tried once more (claimRetries), so one
+  // passing error does not cost the member their week.
+  const retries = claimRetries();
+  /** Members whose week claim this run holds and who go on to the send (for
+   *  the all-skipped report). */
+  let claimsHeld = 0;
+  let sendReported = false;
 
   let sent = 0;
   let skipped = 0;
   let failed = 0;
+  /** Members skipped because their week claim could not be recorded. */
+  let claimUnavailable = 0;
 
   try {
     const admin = createAdminClient();
@@ -366,224 +433,291 @@ export async function GET(req: Request) {
     // spans midnight.
     const runStartedAt = new Date();
 
-    for (const [orgId, group] of byOrg) {
-      try {
-        // The organization's date, not the server's (small fixes slice 8):
-        // this run (Mondays 14:00 UTC) is already Tuesday from UTC+10 east.
-        const subject = weeklyDigestSubject(runStartedAt, group.timeZone);
-        // One org-wide read (the service role sees every row), plus what
-        // decides each recipient's view: their warehouse and category
-        // assignments and the purchase_orders:read permission. A failed read
-        // throws to the per-org catch below, so nobody in the org is sent a
-        // wider view than theirs.
-        //
-        // OVERDUE is decided in the org's own zone as of the run's start: a
-        // purchase order is overdue once the org's date is after its expected
-        // day (core isPastExpectedDay). Before, the Monday run (7 AM in Los
-        // Angeles) flagged every purchase order expected that Monday.
-        const [source, readerData] = await Promise.all([
-          getDigestSource(admin, orgId, { timeZone: group.timeZone, now: runStartedAt }),
-          loadDigestReaderData(
-            admin,
-            orgId,
-            group.recipients.map((r) => r.userId),
-          ),
-        ]);
-        // The plain text's dateline and days, at the run's start, in the
-        // organization's zone like the HTML.
-        const opts = {
-          orgName: group.orgName,
-          appUrl,
-          settingsUrl,
-          now: runStartedAt,
-          timeZone: group.timeZone,
-        };
-        for (const { userId, email: to, name, sections } of group.recipients) {
-          // Re-check membership + opt-in + disabled-status IMMEDIATELY
-          // before sending. The recipient set was assembled at the top of
-          // this run — for a large fleet that gap can be tens of seconds.
-          // If the user toggled the digest off, was removed from the org,
-          // or was disabled, we must not deliver. Two cheap point reads
-          // guard all three axes:
-          //   1) organization_members still active for (org, user)
-          //   2) user_profiles.email_digest_optin still true, and
-          //      user_profiles.disabled_at still null — the SAME row the
-          //      initial pull already filtered on, re-read here to close
-          //      the gap rather than as a new round trip.
-          const [membershipRes, profileRes] = await Promise.all([
-            admin
-              .from('organization_members')
-              .select('user_id, accepted_at, role')
-              .eq('organization_id', orgId)
-              .eq('user_id', userId)
-              // An "act as" grant is not a membership (see the pull above).
-              .is('impersonation_expires_at', null)
-              .maybeSingle(),
-            admin
-              .from('user_profiles')
-              .select('email_digest_optin, disabled_at')
-              .eq('id', userId)
-              .maybeSingle(),
+    const sweep = await sweepOrganizations(
+      admin,
+      {
+        job: 'weekly_digest',
+        tag: 'cron.weekly-digest',
+        orgIds: [...byOrg.keys()],
+        deadlineAt: requestStartedAt + RUN_DEADLINE_MS,
+        slotMs: WEEK_MS,
+      },
+      async (orgId): Promise<{ result: 'success' | 'failure'; value: null }> => {
+        const group = byOrg.get(orgId)!;
+        try {
+          // The organization's date, not the server's (small fixes slice 8):
+          // this run (Mondays 14:00 UTC) is already Tuesday from UTC+10 east.
+          const subject = weeklyDigestSubject(runStartedAt, group.timeZone);
+          // One org-wide read (the service role sees every row), plus what
+          // decides each recipient's view: their warehouse and category
+          // assignments and the purchase_orders:read permission. A failed read
+          // throws to the per-org catch below, so nobody in the org is sent a
+          // wider view than theirs.
+          //
+          // OVERDUE is decided in the org's own zone as of the run's start: a
+          // purchase order is overdue once the org's date is after its expected
+          // day (core isPastExpectedDay). Before, the Monday run (7 AM in Los
+          // Angeles) flagged every purchase order expected that Monday.
+          const [source, readerData] = await Promise.all([
+            getDigestSource(admin, orgId, { timeZone: group.timeZone, now: runStartedAt }),
+            loadDigestReaderData(
+              admin,
+              orgId,
+              group.recipients.map((r) => r.userId),
+            ),
           ]);
-          const membership = membershipRes.data as
-            | { user_id: string; accepted_at: string | null; role: string }
-            | null;
-          const profile = profileRes.data as
-            | { email_digest_optin: boolean | null; disabled_at: string | null }
-            | null;
-          if (!membership || !membership.accepted_at) {
-            skipped += 1;
-            continue;
-          }
-          if (!profile || profile.email_digest_optin === false) {
-            skipped += 1;
-            continue;
-          }
-          if (profile.disabled_at) {
-            skipped += 1;
-            continue;
-          }
-
-          // Each recipient is sent what they may read in StockPilot, which
-          // is also what their "Send preview now" shows: the role read just
-          // now, with their assignments and permission (services/digest.ts
-          // restates the SELECT policies). Then only their opted-in
-          // sections; one or two could be all-empty even when the org's
-          // source isn't.
-          const reader = digestReaderFor(readerData, userId, membership.role);
-          const payload = applySectionOptIns(buildDigestPayload(source, reader), sections);
-          if (isDigestEmpty(payload)) {
-            skipped += 1;
-            continue;
-          }
-          // ═══ AT-MOST-ONCE PER (org, user, week) ═══
-          //
-          // This cron had no send marker of ANY kind, so a second
-          // invocation inside the same week re-sent the identical digest
-          // (same subject dateline) to every opted-in user. Two reachable
-          // paths: a manual `curl -H "Authorization: Bearer $CRON_SECRET"`
-          // / the Vercel dashboard "Run" button after a deploy, and the
-          // honest operational case — a fleet large enough to blow
-          // maxDuration=60 gets cut off mid-loop with no resume point, so
-          // the natural operator response (re-run to finish the list)
-          // re-mails everyone already served.
-          //
-          // The claim rides the generic idempotency_keys table (mig 0013).
-          // Its UNIQUE (organization_id, scope, key) makes claiming ATOMIC
-          // — a read-then-write marker would still double-send under two
-          // overlapping runs — and needs no new column.
-          //
-          // The key is per (org, user, week), NOT per user: a user who
-          // belongs to two orgs legitimately receives two digests every
-          // Monday (this loop fans out per membership), so a per-user key
-          // would silently suppress the second org's digest.
-          //
-          // Claimed BEFORE the send, like schedule-reminders' stamp-first
-          // write: losing one digest to a crash between claim and send
-          // beats re-spamming the fleet.
-          //
-          // The row's request_hash is the run's signature over (org, key)
-          // (digestClaimSignature) when the run can sign: a row under the key
-          // marks the week sent only when it carries it (mayClaimTakenWeek).
-          const claimKey = `${userId}:${digestWeekKey(runStartedAt)}`;
-          const signature = claimKeyMaterial
-            ? digestClaimSignature(claimKeyMaterial, orgId, claimKey)
-            : null;
-          if (!signature && !unsignedReported) {
-            unsignedReported = true;
-            // The condition only: no secret material, no length.
-            void reportError(
-              new Error(
-                'weekly digest claims are unsigned this run: UNSUBSCRIBE_SECRET is unset or shorter than 32 characters',
-              ),
-              { tag: 'cron.weekly-digest.claim_unsigned' },
-            );
-          }
-          const claim: DigestClaimRow = {
-            organization_id: orgId,
-            scope: 'weekly_digest',
-            key: claimKey,
-            request_hash: signature ?? unsignedClaimHash(orgId, claimKey),
-            status: 'completed',
+          // The plain text's dateline and days, at the run's start, in the
+          // organization's zone like the HTML.
+          const opts = {
+            orgName: group.orgName,
+            appUrl,
+            settingsUrl,
+            now: runStartedAt,
+            timeZone: group.timeZone,
           };
-          const { error: claimErr } = await admin.from('idempotency_keys').insert(claim);
-          if (claimErr) {
-            if (isDuplicateClaim(claimErr)) {
+          for (const { userId, email: to, name, sections } of group.recipients) {
+            // Re-check membership + opt-in + disabled-status IMMEDIATELY
+            // before sending. The recipient set was assembled at the top of
+            // this run — for a large fleet that gap can be tens of seconds.
+            // If the user toggled the digest off, was removed from the org,
+            // or was disabled, we must not deliver. Two cheap point reads
+            // guard all three axes:
+            //   1) organization_members still active for (org, user)
+            //   2) user_profiles.email_digest_optin still true, and
+            //      user_profiles.disabled_at still null — the SAME row the
+            //      initial pull already filtered on, re-read here to close
+            //      the gap rather than as a new round trip.
+            const [membershipRes, profileRes] = await Promise.all([
+              admin
+                .from('organization_members')
+                .select('user_id, accepted_at, role')
+                .eq('organization_id', orgId)
+                .eq('user_id', userId)
+                // An "act as" grant is not a membership (see the pull above).
+                .is('impersonation_expires_at', null)
+                .maybeSingle(),
+              admin
+                .from('user_profiles')
+                .select('email_digest_optin, disabled_at')
+                .eq('id', userId)
+                .maybeSingle(),
+            ]);
+            const membership = membershipRes.data as
+              | { user_id: string; accepted_at: string | null; role: string }
+              | null;
+            const profile = profileRes.data as
+              | { email_digest_optin: boolean | null; disabled_at: string | null }
+              | null;
+            if (!membership || !membership.accepted_at) {
+              skipped += 1;
+              continue;
+            }
+            if (!profile || profile.email_digest_optin === false) {
+              skipped += 1;
+              continue;
+            }
+            if (profile.disabled_at) {
+              skipped += 1;
+              continue;
+            }
+
+            // Each recipient is sent what they may read in StockPilot, which
+            // is also what their "Send preview now" shows: the role read just
+            // now, with their assignments and permission (services/digest.ts
+            // restates the SELECT policies). Then only their opted-in
+            // sections; one or two could be all-empty even when the org's
+            // source isn't.
+            const reader = digestReaderFor(readerData, userId, membership.role);
+            const payload = applySectionOptIns(buildDigestPayload(source, reader), sections);
+            if (isDigestEmpty(payload)) {
+              skipped += 1;
+              continue;
+            }
+            // ═══ AT-MOST-ONCE PER (org, user, week) ═══
+            //
+            // This cron had no send marker of ANY kind, so a second
+            // invocation inside the same week re-sent the identical digest
+            // (same subject dateline) to every opted-in user. Two reachable
+            // paths: a manual `curl -H "Authorization: Bearer $CRON_SECRET"`
+            // / the Vercel dashboard "Run" button after a deploy, and the
+            // honest operational case — a fleet large enough to blow
+            // maxDuration=60 gets cut off mid-loop with no resume point, so
+            // the natural operator response (re-run to finish the list)
+            // re-mails everyone already served.
+            //
+            // The claim rides the generic idempotency_keys table (mig 0013).
+            // Its UNIQUE (organization_id, scope, key) makes claiming ATOMIC
+            // — a read-then-write marker would still double-send under two
+            // overlapping runs — and needs no new column.
+            //
+            // The key is per (org, user, week), NOT per user: a user who
+            // belongs to two orgs legitimately receives two digests every
+            // Monday (this loop fans out per membership), so a per-user key
+            // would silently suppress the second org's digest.
+            //
+            // Claimed BEFORE the send, like schedule-reminders' stamp-first
+            // write: losing one digest to a crash between claim and send
+            // beats re-spamming the fleet.
+            //
+            // The row's request_hash is the run's signature over (org, key)
+            // (digestClaimSignature) when the run can sign: a row under the key
+            // marks the week sent only when it carries it (mayClaimTakenWeek).
+            const claimKey = `${userId}:${digestWeekKey(runStartedAt)}`;
+            const signature = claimKeyMaterial
+              ? digestClaimSignature(claimKeyMaterial, orgId, claimKey)
+              : null;
+            if (!signature && !unsignedReported) {
+              unsignedReported = true;
+              // The condition only: no secret material, no length.
+              void reportError(
+                new Error(
+                  'weekly digest claims are unsigned this run: UNSUBSCRIBE_SECRET is unset or shorter than 32 characters',
+                ),
+                { tag: 'cron.weekly-digest.claim_unsigned' },
+              );
+            }
+            const claim: DigestClaimRow = {
+              organization_id: orgId,
+              scope: 'weekly_digest',
+              key: claimKey,
+              request_hash: signature ?? unsignedClaimHash(orgId, claimKey),
+              status: 'completed',
+            };
+            let { error: claimErr } = await admin.from('idempotency_keys').insert(claim);
+            if (claimErr && !isDuplicateClaim(claimErr) && (await retries.wait())) {
+              // A retry that meets the key finds a claim already there (this
+              // run's own first insert, if it committed and only its reply was
+              // lost): handled as any duplicate below.
+              ({ error: claimErr } = await admin.from('idempotency_keys').insert(claim));
+              if (claimErr && !isDuplicateClaim(claimErr)) retries.retryFailed();
+            }
+            if (claimErr) {
               // Already sent this week (the whole point). A signed run sends
               // anyway when the row does not carry its signature
               // (mayClaimTakenWeek); an unsigned run takes any row as sent.
-              if (!signature || !(await mayClaimTakenWeek(admin, claim, userId))) {
+              const taken = isDuplicateClaim(claimErr)
+                ? signature
+                  ? await mayClaimTakenWeek(admin, claim, reportClaim)
+                  : 'sent'
+                : 'unavailable';
+              if (taken === 'sent') {
                 skipped += 1;
                 continue;
               }
-            } else {
-              // Any OTHER claim failure fails OPEN on the MARKER, never on
-              // the send: a missing table/permission blip must degrade to a
-              // possible duplicate, not a fleet-wide digest outage (the
-              // deploy-before-migrate class — see the account-disable
-              // landmine). Reported so a silent duplicate-forever state is
-              // visible.
-              void reportError(new Error(claimErr.message ?? 'digest claim failed'), {
-                tag: 'cron.weekly-digest.claim',
-                extra: { orgId, userId },
-              });
+              if (taken === 'unavailable') {
+                // Any OTHER claim failure (the table missing, a refused
+                // write), on the retry too, FAILS CLOSED: without the claim
+                // nothing stops a second run in the same week from sending
+                // this member the same digest, so the member is skipped for
+                // this run, counted (claimUnavailable) and reported once per
+                // run, codes only. Usually nothing was written, so a run
+                // started again the same week sends it once the claim can be
+                // recorded. (An insert that committed but whose reply was lost
+                // did write the claim: that run then takes the week as sent.)
+                // The only scheduled run is Monday's (vercel.json,
+                // 0 14 * * 1) and next Monday's run is a new week, so without
+                // such a run the member gets no digest for this week.
+                claimUnavailable += 1;
+                // (mayClaimTakenWeek reports its own.)
+                if (!isDuplicateClaim(claimErr)) reportClaim('claim', claimErr);
+                continue;
+              }
+            }
+            claimsHeld += 1;
+
+            // The recipient's own signed one-click link for this org's digest
+            // (lib/email/member-unsubscribe.ts): List-Unsubscribe and
+            // List-Unsubscribe-Post, and the footer's and the text part's
+            // Unsubscribe. /unsubscribe honours it signed out and on a mail
+            // provider's RFC 8058 POST by turning off this member's
+            // email_digest_optin, the settings page's own switch. Without a
+            // signing value it is the settings page, with no -Post header.
+            // Dated with the run's UTC day: the link works for 90 days.
+            const unsubscribe = memberUnsubscribeDelivery({
+              appUrl,
+              settingsUrl,
+              claim: { userId, organizationId: orgId, kind: 'weekly_digest' },
+              issuedAt: runStartedAt,
+            });
+            const html = renderWeeklyDigestHtml(payload, {
+              ...opts,
+              unsubscribeUrl: unsubscribe.url,
+              recipientName: name,
+              now: runStartedAt,
+              timeZone: group.timeZone,
+            });
+            const text = weeklyDigestText(payload, { ...opts, unsubscribeUrl: unsubscribe.url });
+            const res = await sendEmail({
+              to,
+              subject,
+              html,
+              text,
+              from: DIGEST_FROM,
+              headers: unsubscribe.headers,
+            });
+            if (res.ok) sent += 1;
+            else {
+              failed += 1;
+              // Once per run, no address and no id: the count is in the log
+              // line, and sendEmail logs the provider's own answer.
+              if (!sendReported) {
+                sendReported = true;
+                void reportError(new Error('Weekly digest emails could not be sent'), {
+                  tag: 'cron.weekly-digest.send',
+                });
+              }
             }
           }
-
-          // The recipient's own signed one-click link for this org's digest
-          // (lib/email/member-unsubscribe.ts): List-Unsubscribe and
-          // List-Unsubscribe-Post, and the footer's and the text part's
-          // Unsubscribe. /unsubscribe honours it signed out and on a mail
-          // provider's RFC 8058 POST by turning off this member's
-          // email_digest_optin, the settings page's own switch. Without a
-          // signing value it is the settings page, with no -Post header.
-          // Dated with the run's UTC day: the link works for 90 days.
-          const unsubscribe = memberUnsubscribeDelivery({
-            appUrl,
-            settingsUrl,
-            claim: { userId, organizationId: orgId, kind: 'weekly_digest' },
-            issuedAt: runStartedAt,
+          return { result: 'success', value: null };
+        } catch (orgErr) {
+          // One bad org shouldn't kill the whole run.
+          failed += group.recipients.length;
+          // The read's own text (rawErrorText): the reporter logs and posts an
+          // error's message only, and a ServiceError('internal_error') from a
+          // failed or non-list read keeps its text in internalDetail behind the
+          // generic sentence (docket S27).
+          void reportError(new Error(rawErrorText(orgErr)), {
+            tag: 'cron.weekly-digest.org',
+            extra: { orgId },
           });
-          const html = renderWeeklyDigestHtml(payload, {
-            ...opts,
-            unsubscribeUrl: unsubscribe.url,
-            recipientName: name,
-            now: runStartedAt,
-            timeZone: group.timeZone,
-          });
-          const text = weeklyDigestText(payload, { ...opts, unsubscribeUrl: unsubscribe.url });
-          const res = await sendEmail({
-            to,
-            subject,
-            html,
-            text,
-            from: DIGEST_FROM,
-            headers: unsubscribe.headers,
-          });
-          if (res.ok) sent += 1;
-          else {
-            failed += 1;
-            void reportError(new Error(res.error ?? 'send failed'), {
-              tag: 'cron.weekly-digest.send',
-              extra: { to, orgId },
-            });
-          }
+          return { result: 'failure', value: null };
         }
-      } catch (orgErr) {
-        // One bad org shouldn't kill the whole run.
-        failed += group.recipients.length;
-        // The read's own text (rawErrorText): the reporter logs and posts an
-        // error's message only, and a ServiceError('internal_error') from a
-        // failed or non-list read keeps its text in internalDetail behind the
-        // generic sentence (docket S27).
-        void reportError(new Error(rawErrorText(orgErr)), {
-          tag: 'cron.weekly-digest.org',
-          extra: { orgId },
-        });
-      }
+      },
+    );
+
+    if (claimUnavailable > 0 && claimsHeld === 0) {
+      // Nothing claimed and at least one member skipped: the claims are down
+      // for everyone, not one passing error. An error, not a warning.
+      void reportError(
+        new Error(
+          `Weekly digest skipped every member it tried: week claims could not be recorded (code ${reportClaim.lastCode()})`,
+        ),
+        {
+          tag: 'cron.weekly-digest.claims_down',
+          level: 'error',
+          extra: { job: 'weekly_digest', code: reportClaim.lastCode(), skipped: claimUnavailable },
+        },
+      );
     }
 
-    return NextResponse.json({ ok: true, sent, skipped, failed });
+    // One line per run, counts only (no org ids, no addresses).
+    console.info(
+      '[cron.weekly-digest]',
+      JSON.stringify({
+        organizations: byOrg.size,
+        sent,
+        skipped,
+        failed,
+        claimUnavailable,
+        failingRepeatedly: sweep.failingRepeatedly,
+        orderedBy: sweep.orderedBy,
+        promoted: sweep.promoted,
+        leftForNextRun: sweep.leftForNextRun,
+        ms: Date.now() - requestStartedAt,
+      }),
+    );
+
+    return NextResponse.json({ ok: true, sent, skipped, failed, leftForNextRun: sweep.leftForNextRun });
   } catch (err) {
     return internalErrorResponse(err, 'cron.weekly-digest', { body: { sent, skipped, failed } });
   }

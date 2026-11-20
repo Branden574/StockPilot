@@ -1,4 +1,13 @@
-import { can, canDistributeBundles, type Permission, type Role } from '@stockpilot/core';
+import {
+  can,
+  canDistributeBundles,
+  canPostReceipt,
+  dbPermissionRefusedCopy,
+  RECEIVE_MANAGER_ONLY_COPY,
+  roleCanReceivePurchaseOrders,
+  type Permission,
+  type Role,
+} from '@stockpilot/core';
 
 /**
  * COSMETIC write-CTA gate for mobile screens, driven by the effective
@@ -70,6 +79,43 @@ export function showDistributeCta(
 ): boolean {
   if (role === null) return false;
   return canDistributeBundles(perms === undefined ? { role } : { role, permissions: perms });
+}
+
+/**
+ * The purchase order screen's Scan, quantities and Post receipt. Like
+ * Distribute, NOT shown while the role is unknown: the database posts a
+ * receipt only for a manager or above (post_receipt_v2's own check, and the
+ * order's row lock), although staff hold stock:adjust. Offered when the role
+ * is known and core canPostReceipt holds (manager or above with stock:adjust;
+ * the saved effective set when there is one, else the role's defaults): the
+ * rule ReceivingService.postReceipt and the web page ask, from the same role
+ * and permissions /api/v1/me/permissions sends.
+ * Cosmetic: the route refuses on its own.
+ */
+export function showReceiveCta(
+  role: Role | null,
+  perms: ReadonlySet<Permission> | undefined,
+): boolean {
+  if (role === null) return false;
+  return canPostReceipt(perms === undefined ? { role } : { role, permissions: perms });
+}
+
+/**
+ * The notice the purchase order screen shows where receiving would be, for a
+ * member it does not offer receiving to: the missing permission without
+ * stock:adjust (the words the server's refusal maps to), who receives for a
+ * role below manager, and none while the role is unknown or when receiving is
+ * offered.
+ */
+export function receiveNoticeFor(
+  role: Role | null,
+  perms: ReadonlySet<Permission> | undefined,
+): string | null {
+  if (!showWriteCtaForRole(role, perms, 'stock:adjust')) {
+    return dbPermissionRefusedCopy('receipt_post');
+  }
+  if (role === null || roleCanReceivePurchaseOrders(role)) return null;
+  return RECEIVE_MANAGER_ONLY_COPY;
 }
 
 /**

@@ -68,6 +68,7 @@ function receiptReadsClient() {
         select: () => builder,
         eq: () => builder,
         order: () => builder,
+        limit: () => builder,
         maybeSingle: async () => ({ data: data[0] ?? null, error: null }),
         then: (ok: (v: unknown) => unknown, bad?: (e: unknown) => unknown) =>
           Promise.resolve({ data, error: null }).then(ok, bad),

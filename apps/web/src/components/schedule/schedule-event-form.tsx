@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { kitPageToastOptions } from '@/components/schedule/kit-page-toast';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
@@ -275,7 +276,11 @@ export function ScheduleEventForm({
         ? await updateScheduleEventAction(defaults.id, payload)
         : await createScheduleEventAction(payload);
       if (!res.ok) {
-        toast.error(res.error.message);
+        // A completion saved without its kit handed out names the kit: the
+        // toast links to its page (kitPageToastOptions).
+        const kitPage = kitPageToastOptions(res.error.details, (href) => router.push(href));
+        if (kitPage) toast.error(res.error.message, kitPage);
+        else toast.error(res.error.message);
         return;
       }
       toast.success(isEdit ? 'Event updated.' : 'Event created.');

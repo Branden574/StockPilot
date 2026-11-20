@@ -6,6 +6,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { BundlesService } from '@/server/services/bundles';
+import { ServiceError } from '@/server/services/context';
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
 import { GET } from './route';
@@ -71,6 +72,66 @@ describe('GET /api/v1/bundles', () => {
       message: 'Something went wrong. Please try again.',
     });
     expect(text).not.toContain('bundle_components');
+    expect(reportError).toHaveBeenCalledWith(err, {
+      tag: 'api.v1.bundles.list',
+      organizationId: 'org-1',
+    });
+  });
+});
+
+// A ServiceError keeps its code's status (serviceErrorStatus). A refusal is
+// the caller's answer and is not reported; an internal_error answers the fixed
+// sentence and is reported once, with the route's tag and organization id.
+describe('GET /api/v1/bundles — a ServiceError answers by its code', () => {
+  beforeEach(() => {
+    vi.mocked(withApiContext).mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'u-1',
+      role: 'staff' as const,
+      supabase: makeSupabaseStub({}).client as never,
+      mfaRequired: false,
+      mfaSatisfied: true,
+      enabledModules: new Set<ModuleId>(['bundles']),
+    });
+    vi.mocked(checkRateLimit).mockResolvedValue({
+      allowed: true,
+      count: 1,
+      resetAt: Date.now() + 60_000,
+    });
+  });
+
+  it.each([
+    ['module_disabled', 403],
+    ['forbidden', 403],
+    ['validation_error', 400],
+    ['not_found', 404],
+    ['conflict', 409],
+  ] as const)('%s answers %i with its own words and is not reported', async (code, status) => {
+    vi.mocked(reportError).mockClear();
+    mockList(async () => {
+      throw new ServiceError(code, 'Made-up refusal sentence.');
+    });
+    const res = await GET(request());
+    expect(res.status).toBe(status);
+    expect(await res.json()).toEqual({ error: code, message: 'Made-up refusal sentence.' });
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('internal_error answers the fixed sentence and is reported once with the route tag and organization id', async () => {
+    vi.mocked(reportError).mockClear();
+    const err = new ServiceError('internal_error', 'relation "bundle_components" does not exist');
+    mockList(async () => {
+      throw err;
+    });
+    const res = await GET(request());
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      error: 'internal_error',
+      message: 'Something went wrong. Please try again.',
+    });
+    expect(text).not.toContain('bundle_components');
+    expect(reportError).toHaveBeenCalledTimes(1);
     expect(reportError).toHaveBeenCalledWith(err, {
       tag: 'api.v1.bundles.list',
       organizationId: 'org-1',

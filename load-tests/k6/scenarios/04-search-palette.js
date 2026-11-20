@@ -1,93 +1,32 @@
-// Scenario 04 — command palette search.
+// Scenario 04: the search palette, GET /api/search.
 //
-// Hits GET /api/search?q=... — the cross-entity search backing ⌘K.
-// Authenticated via bearer token (this is an API route, so the
-// Authorization header path in withApiContext() works fine).
-//
-// The endpoint requires q.length >= 2; shorter queries return a
-// trivial empty payload that doesn't exercise the DB. We seed a
-// corpus of realistic terms.
-//
-// Run:
-//   BASE_URL=https://preview-xxx.vercel.app \
-//     SUPABASE_ACCESS_TOKEN=eyJ... \
-//     k6 run load-tests/k6/scenarios/04-search-palette.js
-
-import http from 'k6/http';
-import { check, sleep } from 'k6';
-
+// The route allows 120 searches a minute per person (search/route.ts), so the
+// load is spread over every seeded staff, viewer and manager account (one
+// session per VU) instead of one shared account: the per-person limit is not
+// what this measures. Any 429 shows in rate_limited and fails the run through
+// http_req_failed. LOCAL ONLY; needs the seeder manifest.
+import { localTarget } from '../lib/safety.js';
 import {
-  DEFAULT_STAGES,
-  DEFAULT_THRESHOLDS,
-  authHeaders,
-  requireBaseUrl,
-  resolveBearer,
-} from '../lib/auth.js';
+  buildOptions,
+  iterate as runIteration,
+  setupSessions,
+  summarize,
+} from '../lib/workload.js';
 
-export const options = {
-  stages: DEFAULT_STAGES,
-  thresholds: DEFAULT_THRESHOLDS,
+localTarget(__ENV);
+
+const PLAN = {
+  staff: { share: 0.5, actions: { web_search: 1 } },
+  viewer: { share: 0.3, actions: { web_search: 1 } },
+  manager: { share: 0.2, actions: { web_search: 1 } },
 };
-
-const BASE_URL = requireBaseUrl(__ENV);
-
-// resolveBearer is called in setup() so we only sign in once, not
-// once per VU iteration. The returned value is passed to default().
+export const options = buildOptions(PLAN);
 export function setup() {
-  const bearer = resolveBearer(__ENV);
-  if (!bearer) {
-    // We don't fail here — let default() fail with a clear message.
-    return { bearer: null };
-  }
-  return { bearer };
+  return setupSessions(PLAN);
 }
-
-// ~20 plausible search terms. Real-user corpus would be drawn from
-// search analytics; until that exists, use common inventory nouns.
-const TERMS = [
-  'widget',
-  'screw',
-  'cable',
-  'bolt',
-  'nut',
-  'washer',
-  'box',
-  'label',
-  'tape',
-  'shelf',
-  'bin',
-  'order',
-  'PO-',
-  'supplier',
-  'warehouse',
-  'pallet',
-  'forklift',
-  'sensor',
-  'battery',
-  'fuse',
-];
-
-function pickTerm() {
-  return TERMS[Math.floor(Math.random() * TERMS.length)];
+export function iterate(data) {
+  runIteration(PLAN, data);
 }
-
-export default function (data) {
-  const headers = authHeaders(data.bearer);
-  const q = pickTerm();
-  const res = http.get(`${BASE_URL}/api/search?q=${encodeURIComponent(q)}`, {
-    headers,
-    tags: { name: 'GET /api/search' },
-  });
-  check(res, {
-    'search 200': (r) => r.status === 200,
-    'search returned items array': (r) => {
-      try {
-        const json = r.json();
-        return Array.isArray(json.items);
-      } catch (_e) {
-        return false;
-      }
-    },
-  });
-  sleep(Math.random() * 1 + 0.3); // 0.3-1.3s — palette spam is fast
+export function handleSummary(data) {
+  return summarize(data);
 }

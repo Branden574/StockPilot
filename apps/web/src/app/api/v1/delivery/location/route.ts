@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 import { withApiContext } from '@/lib/auth/api-context';
-import { ServiceError } from '@/server/services/context';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import { DeliveryTrackingService } from '@/server/services/delivery-tracking';
 
 export const runtime = 'nodejs';
@@ -37,14 +37,6 @@ export async function POST(req: NextRequest) {
     await svc.shareLocation(orderId, point);
     return NextResponse.json({ ok: true }, { status: 200 });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      const status =
-        e.code === 'not_found' ? 404
-        : e.code === 'validation_error' ? 400
-        : e.code === 'forbidden' || e.code === 'module_disabled' ? 403
-        : 500;
-      return NextResponse.json({ error: e.code, message: e.message }, { status });
-    }
-    return NextResponse.json({ error: 'internal_error', message: 'Unexpected error' }, { status: 500 });
+    return serviceErrorResponse(e, 'api.v1.delivery.location');
   }
 }

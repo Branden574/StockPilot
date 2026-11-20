@@ -60,7 +60,7 @@ import { assertSystemContext, type SystemServiceContext } from './lib/system-con
  * that the evaluation did not report. An evaluation run with a reader's
  * context would see only what that reader can see, and would resolve
  * everything outside their warehouses. So `evaluateForSync` takes a
- * SystemServiceContext, which only the shared `buildSystemContext` issues,
+ * SystemServiceContext, which only the shared `loadSystemContext` issues,
  * and refuses anything else at runtime. Under that service-role client RLS is
  * bypassed, so every read below filters `organization_id` itself; a test fails
  * if any read drops it, because that filter is the only tenant boundary here.
