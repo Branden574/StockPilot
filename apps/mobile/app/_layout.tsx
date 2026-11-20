@@ -241,9 +241,12 @@ function RootGate() {
   // phone that is sitting on the code screen.
   //
   // The same while the authenticator set-up screen holds the app
-  // (`setUpHold`, set-up-hold.ts): nothing of the account syncs, registers
-  // or is noted until the account may use the app in this workspace. Queued
-  // work stays on the phone and is sent after that.
+  // (`setUpHold`, set-up-hold.ts): the data hooks get nobody, and no
+  // snapshot pull runs, whatever asks for one (sync.ts). The two drains keep
+  // their per-row rule: rows of the held workspace wait (could-not-check
+  // tries them, and a row refused for want of an authenticator stays on the
+  // phone); rows of another workspace are sent as usual. Nothing queued is
+  // dropped.
   const dataUser = session && !mfaRequired && !setUpHold ? session.user : null;
 
   // Push: no permission prompt, no registration and no tap handler at the

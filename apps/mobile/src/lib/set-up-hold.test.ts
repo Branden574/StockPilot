@@ -24,12 +24,17 @@ import {
 import {
   createHoldPushUnbinder,
   decideSetUpHold,
+  noteHoldSessionUser,
   noteHoldWorkspace,
   noteSavedHoldWorkspace,
   resetSetUpHoldForTests,
+  setUpCheckAnswered,
   setUpHoldDetails,
   setUpHoldFor,
+  setUpHoldIn,
   setUpHoldQueuedLine,
+  setUpHoldWorkspaces,
+  setUpRecheckDue,
   subscribeSetUpHold,
 } from './set-up-hold';
 
@@ -168,16 +173,16 @@ describe('the states table', () => {
     expect(setUpHoldFor(sessionUser())).toBeNull();
   });
 
-  it('nothing saved, the read failed with an answer: the could-not-check hold', () => {
+  it('nothing saved, the read answered with an error: the app, as with no answer', () => {
     noteSetUpReadOutcome('u1', beginSetUpRead(), 'failed');
-    expect(setUpHoldFor(sessionUser())).toBe('unknown');
+    expect(setUpHoldFor(sessionUser())).toBeNull();
   });
 
-  it('nothing saved, a membership read that failed with an HTTP answer, or with none', () => {
+  it('nothing saved, a membership read that failed with an HTTP answer, or with none: the app', () => {
     noteMembershipReadFailed('u1', beginSetUpRead(), false);
     expect(setUpHoldFor(sessionUser())).toBeNull();
     noteMembershipReadFailed('u1', beginSetUpRead(), true);
-    expect(setUpHoldFor(sessionUser())).toBe('unknown');
+    expect(setUpHoldFor(sessionUser())).toBeNull();
   });
 
   it('nothing saved, read in flight: the app until it answers, then as it says', async () => {
@@ -201,12 +206,21 @@ describe('the states table', () => {
     expect(setUpHoldFor(sessionUser())).toBe('owed');
   });
 
-  it('a saved hidden row: could-not-check only after a failed read with an answer, the app offline', async () => {
+  it('a saved hidden row: the app until a read answers this run, however a failed read ended', async () => {
     await savedByEarlierRun({ 'org-a': { policy: 'hidden', role: 'staff', name: null } });
     expect(setUpHoldFor(sessionUser())).toBeNull();
     noteSetUpReadOutcome('u1', beginSetUpRead(), 'no-answer');
     expect(setUpHoldFor(sessionUser())).toBeNull();
     noteSetUpReadOutcome('u1', beginSetUpRead(), 'failed');
+    expect(setUpHoldFor(sessionUser())).toBeNull();
+    // A read that answers this run with the row still hidden: could-not-check.
+    readMemberships([row('org-a', null)]);
+    expect(setUpHoldFor(sessionUser())).toBe('unknown');
+  });
+
+  it('a policy value that is not a policy reads as a hidden row: could-not-check', () => {
+    readMemberships([row('org-a', org('sometimes'))]);
+    noteServerReadUser({ id: 'u1', factors: [] });
     expect(setUpHoldFor(sessionUser())).toBe('unknown');
   });
 
@@ -239,21 +253,20 @@ describe('decideSetUpHold, the rule alone', () => {
     inputs: { policy: 'all_required' as const, role: 'staff', name: 'North Depot' },
     membershipsFrom: 'this-run' as const,
     hasVerified: false,
-    lastRead: 'answered' as const,
   };
+  const hidden = { policy: 'hidden' as const, role: 'staff', name: null };
   it('each source of memberships', () => {
     expect(decideSetUpHold(base)).toBe('owed');
-    expect(decideSetUpHold({ ...base, membershipsFrom: 'saved', lastRead: null })).toBe('owed');
+    expect(decideSetUpHold({ ...base, membershipsFrom: 'saved' })).toBe('owed');
+    expect(decideSetUpHold({ ...base, hasVerified: true })).toBeNull();
+    // Nothing kept for the workspace: the app, from any source.
     expect(decideSetUpHold({ ...base, inputs: null })).toBeNull();
-    expect(
-      decideSetUpHold({ ...base, inputs: null, membershipsFrom: null, lastRead: 'failed' }),
-    ).toBe('unknown');
-    expect(
-      decideSetUpHold({ ...base, inputs: null, membershipsFrom: 'saved', lastRead: 'failed' }),
-    ).toBe('unknown');
-    expect(
-      decideSetUpHold({ ...base, inputs: null, membershipsFrom: null, lastRead: null }),
-    ).toBeNull();
+    expect(decideSetUpHold({ ...base, inputs: null, membershipsFrom: 'saved' })).toBeNull();
+    expect(decideSetUpHold({ ...base, inputs: null, membershipsFrom: null })).toBeNull();
+    // A row that could not be judged: could-not-check only when read this run.
+    expect(decideSetUpHold({ ...base, inputs: hidden })).toBe('unknown');
+    expect(decideSetUpHold({ ...base, inputs: hidden, membershipsFrom: 'saved' })).toBeNull();
+    expect(decideSetUpHold({ ...base, inputs: hidden, hasVerified: true })).toBeNull();
   });
 });
 
@@ -313,9 +326,32 @@ describe('the policy turned on and off, a switch, two accounts', () => {
     expect(setUpHoldFor(sessionUser('u2'))).toBeNull();
   });
 
+  it("the workspace shown for another account is never this account's: its saved one is held", () => {
+    noteServerReadUser({ id: 'u1', factors: [] });
+    readMemberships([row('org-a', org('all_required')), row('org-b', org('optional'))], 'u1');
+    noteSavedHoldWorkspace({ orgId: 'org-a', ownerId: 'u1' });
+    noteHoldWorkspace('u2', 'org-b');
+    expect(setUpHoldDetails(sessionUser('u1')).orgId).toBe('org-a');
+    expect(setUpHoldFor(sessionUser('u1'))).toBe('owed');
+  });
+
+  it('a sign-out drops the saved workspace read at start, even once the inputs are read again', async () => {
+    noteServerReadUser({ id: 'u1', factors: [] });
+    readMemberships([row('org-a', org('all_required'))]);
+    noteSavedHoldWorkspace({ orgId: 'org-a', ownerId: 'u1' });
+    expect(setUpHoldFor(sessionUser())).toBe('owed');
+    await forgetSetUpInputs();
+    // The same account signs in again: its inputs are read again before any
+    // workspace is shown. The saved workspace went with the sign-out.
+    noteServerReadUser({ id: 'u1', factors: [] });
+    readMemberships([row('org-a', org('all_required'))]);
+    expect(setUpHoldDetails(sessionUser()).orgId).toBeNull();
+    expect(setUpHoldFor(sessionUser())).toBeNull();
+  });
+
   it('a sign-out forgets the outcome and the saved workspace with the inputs', async () => {
     noteSavedHoldWorkspace({ orgId: 'org-a', ownerId: null });
-    noteSetUpReadOutcome('u1', beginSetUpRead(), 'failed');
+    readMemberships([row('org-a', null)]);
     expect(setUpHoldFor(sessionUser())).toBe('unknown');
     await forgetSetUpInputs();
     expect(setUpHoldFor(sessionUser())).toBeNull();
@@ -374,7 +410,7 @@ describe("the screen's reads", () => {
   it('one already in flight: one more read after it, shared by every caller meanwhile', async () => {
     const ends: (() => void)[] = [];
     const read = vi.fn(
-      () =>
+      (_forUserId?: string | null) =>
         new Promise<void>((resolve) => {
           ends.push(resolve);
         }),
@@ -396,6 +432,8 @@ describe("the screen's reads", () => {
     ends[1]!();
     await Promise.all([a, b]);
     expect(read).toHaveBeenCalledTimes(2);
+    // The read after it is the screen's: told whose read it is.
+    expect(read.mock.calls[1]![0]).toBe('u1');
   });
 
   it("the screen's read writes into the store the queue asks, so a held row is released by it", async () => {
@@ -505,6 +543,26 @@ describe('asking for a read after an authenticator answer', () => {
     expect(read).toHaveBeenCalledTimes(2);
   });
 
+  it('an ask that arrives while a read is in flight is kept as one read after it', async () => {
+    const ends: (() => void)[] = [];
+    const read = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          ends.push(resolve);
+        }),
+    );
+    await registerSetUpInputsSource({ storage: memoryStorage(), read });
+    requestSetUpInputsRead(0); // a read already out (it may have started before the policy changed)
+    askForSetUpRead(0);
+    askForSetUpRead(SET_UP_ASK_MIN_INTERVAL_MS); // a second ask joins the same one follow-up
+    expect(read).toHaveBeenCalledTimes(1);
+    ends[0]!();
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    ends[1]!();
+    await setUpInputsReadInFlight();
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it("an ask leaves the queue's 30 s interval as it was", async () => {
     const read = vi.fn(async () => undefined);
     await registerSetUpInputsSource({ storage: memoryStorage(), read });
@@ -539,20 +597,41 @@ describe('outcomes by start number', () => {
 });
 
 describe('push while held', () => {
-  it('unbinds once when the hold turns on, again only after a release; nothing for no hold', () => {
-    const unbind = vi.fn();
+  it('unbinds once when the hold turns on, again only after a release; nothing for no hold', async () => {
+    const unbind = vi.fn(async () => 'deleted');
     const push = createHoldPushUnbinder(unbind);
+    const settle = () => new Promise((r) => setTimeout(r, 0));
     push.update(null);
     expect(unbind).not.toHaveBeenCalled();
     push.update('u1');
     push.update('u1');
     push.update('u1');
+    await settle();
     expect(unbind).toHaveBeenCalledTimes(1);
     push.update(null); // released: the push hook registers again (dataUser)
     push.update('u1');
+    await settle();
     expect(unbind).toHaveBeenCalledTimes(2);
     push.update('u2');
+    await settle();
     expect(unbind).toHaveBeenCalledTimes(3);
+  });
+
+  it('a release and a new hold while an unbind is out: the new hold gets its own', async () => {
+    const finishes: (() => void)[] = [];
+    const unbind = vi.fn(
+      () =>
+        new Promise<unknown>((resolve) => {
+          finishes.push(() => resolve('deleted'));
+        }),
+    );
+    const push = createHoldPushUnbinder(unbind);
+    push.update('u1');
+    push.update(null);
+    push.update('u1');
+    expect(unbind).toHaveBeenCalledTimes(1);
+    finishes[0]!();
+    await vi.waitFor(() => expect(unbind).toHaveBeenCalledTimes(2));
   });
 
   it('an unbind that throws or rejects is swallowed', () => {
@@ -562,6 +641,145 @@ describe('push while held', () => {
     expect(() => push.update('u1')).not.toThrow();
     const rejecting = createHoldPushUnbinder(() => Promise.reject(new Error('no')));
     expect(() => rejecting.update('u1')).not.toThrow();
+  });
+
+  it.each(['deleted', 'none', 'nothing-registered'])(
+    "an unbind that answered '%s' is not tried again",
+    async (answer) => {
+      const unbind = vi.fn(async () => answer);
+      const push = createHoldPushUnbinder(unbind);
+      push.update('u1');
+      await vi.waitFor(() => expect(unbind).toHaveBeenCalledTimes(1));
+      await Promise.resolve();
+      push.retry();
+      push.retry();
+      await Promise.resolve();
+      expect(unbind).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(['timed-out', 'failed', undefined, 'thrown'])(
+    'an unbind that answered %s is tried again at retry, one at a time, while held',
+    async (answer) => {
+      let finish: () => void = () => undefined;
+      const unbind = vi.fn(
+        () =>
+          new Promise<unknown>((resolve, reject) => {
+            finish = () => (answer === 'thrown' ? reject(new Error('no')) : resolve(answer));
+          }),
+      );
+      const push = createHoldPushUnbinder(unbind);
+      push.update('u1');
+      push.retry(); // one already out: nothing more
+      expect(unbind).toHaveBeenCalledTimes(1);
+      finish();
+      await new Promise((r) => setTimeout(r, 0));
+      push.retry();
+      expect(unbind).toHaveBeenCalledTimes(2);
+      finish();
+      await new Promise((r) => setTimeout(r, 0));
+      push.update(null); // released: retry does nothing
+      push.retry();
+      expect(unbind).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it('the hold moving to another account while an unbind is out: that account gets its own', async () => {
+    const finishes: (() => void)[] = [];
+    const unbind = vi.fn(
+      () =>
+        new Promise<unknown>((resolve) => {
+          finishes.push(() => resolve('deleted'));
+        }),
+    );
+    const push = createHoldPushUnbinder(unbind);
+    push.update('u1');
+    push.update('u2');
+    expect(unbind).toHaveBeenCalledTimes(1);
+    finishes[0]!();
+    await vi.waitFor(() => expect(unbind).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe('the decision for callers outside React (the pull, the workspace load, push)', () => {
+  it('the same rule in a named workspace, or the one held by default', () => {
+    noteServerReadUser({ id: 'u1', factors: [] });
+    readMemberships([row('org-a', org('all_required')), row('org-b', org('optional'))]);
+    noteHoldWorkspace('u1', 'org-a');
+    expect(setUpHoldIn('u1')).toBe('owed');
+    expect(setUpHoldIn('u1', 'org-a')).toBe('owed');
+    expect(setUpHoldIn('u1', 'org-b')).toBeNull();
+    expect(setUpHoldIn('u1', null)).toBeNull();
+    expect(setUpHoldIn(null)).toBeNull();
+    expect(setUpHoldIn('u2', 'org-a')).toBeNull();
+  });
+
+  it("the session's factor list only for the session noted, and only that account's", () => {
+    readMemberships([row('org-a', org('all_required'))]);
+    noteHoldWorkspace('u1', 'org-a');
+    // No server list this run, no session noted: nothing verified is known.
+    expect(setUpHoldIn('u1')).toBe('owed');
+    noteHoldSessionUser(sessionUser('u1', [{ status: 'verified' }]));
+    expect(setUpHoldIn('u1')).toBeNull();
+    noteHoldSessionUser(sessionUser('u2', [{ status: 'verified' }]));
+    expect(setUpHoldIn('u1')).toBe('owed');
+    noteHoldSessionUser(null);
+    expect(setUpHoldIn('u1')).toBe('owed');
+    // ...and never into the store the queue asks.
+    expect(setUpOwedIn('u1', 'org-a')).toBe('unknown');
+  });
+});
+
+describe('the re-check on a timer', () => {
+  it('due while nothing has answered this run, however the reads failed; not once one has', async () => {
+    noteHoldWorkspace('u1', 'org-a');
+    expect(setUpRecheckDue(null)).toBe(false);
+    expect(setUpRecheckDue(sessionUser())).toBe(true);
+    noteSetUpReadOutcome('u1', beginSetUpRead(), 'failed');
+    expect(setUpRecheckDue(sessionUser())).toBe(true);
+    await savedByEarlierRun({
+      'org-a': { policy: 'all_required', role: 'staff', name: 'North Depot' },
+    });
+    expect(setUpRecheckDue(sessionUser())).toBe(true);
+    readMemberships([row('org-a', org('all_required'))]);
+    expect(setUpRecheckDue(sessionUser())).toBe(false);
+  });
+
+  it('due while the could-not-check hold is up, even after an answer', () => {
+    noteHoldWorkspace('u1', 'org-a');
+    readMemberships([row('org-a', null)]);
+    expect(setUpHoldFor(sessionUser())).toBe('unknown');
+    expect(setUpRecheckDue(sessionUser())).toBe(true);
+    readMemberships([row('org-a', org('optional'))]);
+    expect(setUpRecheckDue(sessionUser())).toBe(false);
+  });
+});
+
+describe('what the screen reads besides the decision', () => {
+  it('the organizations kept for the account: ids and names only, the same array until they change', () => {
+    expect(setUpHoldWorkspaces(sessionUser())).toEqual([]);
+    readMemberships([row('org-a', org('all_required')), row('org-b', null)]);
+    const first = setUpHoldWorkspaces(sessionUser());
+    expect(first).toEqual([
+      { orgId: 'org-a', name: 'North Depot' },
+      { orgId: 'org-b', name: null },
+    ]);
+    expect(setUpHoldWorkspaces(sessionUser())).toBe(first);
+    expect(setUpHoldWorkspaces(sessionUser('u2'))).toEqual([]);
+    readMemberships([row('org-a', org('all_required'))]);
+    expect(setUpHoldWorkspaces(sessionUser())).not.toBe(first);
+    expect(setUpHoldWorkspaces(sessionUser())).toEqual([{ orgId: 'org-a', name: 'North Depot' }]);
+  });
+
+  it('whether the latest read answered (the line after Check again)', () => {
+    expect(setUpCheckAnswered(sessionUser())).toBe(false);
+    readMemberships([row('org-a', org('all_required'))]);
+    expect(setUpCheckAnswered(sessionUser())).toBe(true);
+    noteSetUpReadOutcome('u1', beginSetUpRead(), 'no-answer');
+    expect(setUpCheckAnswered(sessionUser())).toBe(false);
+    noteSetUpReadOutcome('u1', beginSetUpRead(), 'failed');
+    expect(setUpCheckAnswered(sessionUser())).toBe(false);
+    expect(setUpCheckAnswered(null)).toBe(false);
   });
 });
 

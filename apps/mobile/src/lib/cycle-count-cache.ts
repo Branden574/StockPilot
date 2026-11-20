@@ -595,6 +595,27 @@ export async function totalPendingCount(): Promise<number> {
   return row?.n ?? 0;
 }
 
+/**
+ * The holding screen's tally (authenticator-set-up-screen.tsx): the live
+ * account's unsynced rows (and legacy ones, as the badge counts them) that
+ * are sent under `orgId`: its own rows, and rows with no workspace of their
+ * own while `orgId` is the account's saved workspace (outbox-scope.ts sends
+ * those under it). Never another workspace's.
+ */
+export async function pendingCountInWorkspace(orgId: string): Promise<number> {
+  const db = await getDb();
+  const { userId, orgId: savedOrgId } = await liveOutboxScope();
+  const row = await db.getFirstAsync<{ n: number }>(
+    `select count(*) as n from pending_actions
+       where status in ('pending','failed','sending')
+         and ${OWNED_BY_USER_SQL}
+         and (organization_id = ?
+              or (? = 1 and (organization_id is null or organization_id = '')))`,
+    [userId, orgId, savedOrgId === orgId ? 1 : 0],
+  );
+  return row?.n ?? 0;
+}
+
 export interface OutboxRow {
   id: number;
   kind: string;

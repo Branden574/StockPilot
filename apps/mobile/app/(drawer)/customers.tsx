@@ -10,7 +10,6 @@ import { Body, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { changeCustomerStatus, type CustomerStatusOutcome } from '@/lib/customer-status';
 import { createSequenceGuard } from '@/lib/debounced-list-load';
-import { askForSetUpRead } from '@/lib/set-up-inputs';
 import { supabase } from '@/lib/supabase';
 import { retryWorkspace, useWorkspace } from '@/lib/use-workspace';
 import { useTheme } from '@/lib/use-theme';
@@ -156,10 +155,6 @@ export default function CustomersScreen() {
       // unknown (removed, changed meanwhile, no clear answer), the list is
       // read again, for the workspace on screen when the answer comes.
       Alert.alert(outcome.title, outcome.message);
-      // This account must set up an authenticator in this workspace: the
-      // set-up check reads again, and the holding screen comes up only if
-      // that read finds it owed.
-      if (outcome.setUpRead) askForSetUpRead();
       if (outcome.reload) void latestLoad.current();
       return;
     }

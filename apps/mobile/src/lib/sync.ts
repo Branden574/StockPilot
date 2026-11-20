@@ -57,6 +57,7 @@ import { OutboxSessionChangedError, OWNED_BY_USER_SQL, outboxSendDecision } from
 import { clearPhotoCaches, wipeWithPhotoCaches } from './photo-cache-wipe';
 import { listPending, markFailed, markHeld, markOk, markRejected, markSending } from './queue';
 import { liveOutboxScope } from './session-scope';
+import { setUpHoldIn } from './set-up-hold';
 import {
   forgetRowRefusal,
   keptRefusalNoted,
@@ -384,6 +385,11 @@ export async function pullSnapshot(
   // device is left exactly as it is until the code is entered, and the first
   // sync after that resets or adopts it as usual.
   if (stepUpOwed) return null;
+  // The authenticator set-up hold is up (set-up-hold.ts): nothing is read for
+  // it either, whoever asked (a workspace load or switch, a sign-out), and the
+  // cache is left as it is. The drain that follows in syncNow keeps its
+  // per-row rule.
+  if (setUpHoldIn(liveUserId)) return null;
   const ownerAction = liveUserId
     ? cacheOwnerAction(
         await getMeta(CACHE_USER_META_KEY),

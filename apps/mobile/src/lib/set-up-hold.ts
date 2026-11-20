@@ -1,10 +1,12 @@
 import { policyRequiresAuthenticator, type OrganizationMfaPolicy } from '@stockpilot/core';
 
 import {
+  keptWorkspacesFor,
   readSetUpInputsForHold,
   setUpInputsForgetCount,
   setUpInputsView,
   subscribeSetUpInputs,
+  type KeptWorkspace,
   type SetUpInputsView,
 } from './set-up-inputs';
 import { savedWorkspaceFor, type SavedWorkspace } from './workspace-keys';
@@ -25,22 +27,29 @@ export { readSetUpInputsForHold };
  * use-workspace.ts), else in its saved workspace (the one api.ts names):
  *   'owed'    the organization's policy, as read, asks this role for an
  *             authenticator and the account has no verified one;
- *   'unknown' a check that answered could not tell: the organization's row
- *             could not be read (and no verified factor), or the read failed
- *             with an answer and nothing is kept for the workspace;
- *   null      the app: nothing is owed, or nothing could be read with no
- *             connection (a phone offline at its first start keeps working;
- *             the check runs once a connection exists).
+ *   'unknown' a membership read that ANSWERED this run could not be judged:
+ *             the organization's row could not be read, or its policy is not
+ *             one the app knows (and no verified factor);
+ *   null      the app: nothing is owed, nothing is kept for the workspace, or
+ *             what is kept could not be judged and nothing answered this run.
+ *             A read that failed, with an error answer or with none, counts
+ *             as no answer: the app, and the read is tried again every
+ *             SET_UP_RECHECK_INTERVAL_MS (auth-context.tsx) until one answers.
  *
  * The factor list is the server's, read this run (set-up-inputs.ts), else
- * the stored session's copy, which auth-context hands in with each call. That
- * copy is read here only: it never reaches set-up-inputs.ts, whose answers
- * the queue trusts only from server reads.
+ * the stored session's copy, which auth-context hands in with each call (and
+ * notes here for the callers outside React: noteHoldSessionUser). That copy
+ * is read here only: it never reaches set-up-inputs.ts, whose answers the
+ * queue trusts only from server reads.
  *
- * What the hold does to queued work: nothing is dropped. With the data hooks
- * handed nobody, the sync does not run; rows of a workspace that owes set-up
- * are held by the queue (outbox-scope.ts) and sent once the account has an
- * authenticator; the screen says how many are waiting (setUpHoldQueuedLine).
+ * What the hold does to queued work: nothing is dropped. No snapshot pull
+ * runs while it is up (sync.ts pullSnapshot asks setUpHoldIn), whatever asks
+ * for one. The two drains keep their per-row rule (outbox-scope.ts): rows of
+ * the held workspace wait while it answers 'owed' and are sent once the
+ * account has an authenticator; in 'unknown' they are tried, and a row the
+ * server refuses for want of an authenticator stays queued. Rows of another
+ * workspace are sent as usual. The screen says how many of the held
+ * workspace's rows are waiting (setUpHoldQueuedLine).
  *
  * A LEAF beside set-up-inputs.ts: core and pure modules only.
  */
@@ -53,8 +62,10 @@ export interface SessionUserForSetUp {
   factors?: readonly ({ readonly status?: string | null } | null | undefined)[] | null;
 }
 
-/** The workspace use-workspace.ts shows, and for whom. */
+/** The workspace use-workspace.ts shows (or has just chosen), and for whom. */
 let shown: { userId: string | null; orgId: string | null } = { userId: null, orgId: null };
+/** The session's user as auth-context last rendered it (noteHoldSessionUser). */
+let sessionUser: SessionUserForSetUp | null = null;
 /** The saved workspace as read at start, with the sign-out count it was read at. */
 let savedRead: { saved: SavedWorkspace; forgetCount: number } | null = null;
 
@@ -82,7 +93,8 @@ export function subscribeSetUpHold(fn: () => void): () => void {
 
 /**
  * use-workspace.ts: the workspace it shows for this account (null: none
- * shown). A switch from one workspace to another for the same account also
+ * shown), told as soon as a load has chosen it and again with every publish,
+ * always before the screens are. A switch from one workspace to another for the same account also
  * reads the inputs again (the new workspace's policy may have changed since
  * the memberships were read).
  */
@@ -119,22 +131,16 @@ export function decideSetUpHold(input: {
   inputs: SetUpInputsView['inputs'];
   membershipsFrom: SetUpInputsView['membershipsFrom'];
   hasVerified: boolean;
-  lastRead: SetUpInputsView['lastRead'];
 }): SetUpHold {
-  const { inputs, membershipsFrom, hasVerified, lastRead } = input;
-  if (!inputs) {
-    // Read this run and the workspace is not in it: nothing is owed there;
-    // the workspace load chooses another. Nothing kept: only a read that
-    // failed with an answer is a reason to hold.
-    if (membershipsFrom === 'this-run') return null;
-    return lastRead === 'failed' ? 'unknown' : null;
-  }
+  const { inputs, membershipsFrom, hasVerified } = input;
+  // Nothing kept for the workspace (or the read this run does not hold it:
+  // the workspace load chooses another): the app, however the last read ended.
+  if (!inputs) return null;
   if (inputs.policy === 'hidden') {
     if (hasVerified) return null;
-    // Read this run: the check answered and could not tell. Saved: only when
-    // this run's read failed with an answer; offline, the app.
-    if (membershipsFrom === 'this-run') return 'unknown';
-    return lastRead === 'failed' ? 'unknown' : null;
+    // Answered this run and could not be judged: could-not-check. Saved by an
+    // earlier run: the app until a read answers this run.
+    return membershipsFrom === 'this-run' ? 'unknown' : null;
   }
   if (!policyRequiresAuthenticator(inputs.policy, inputs.role)) return null;
   return hasVerified ? null : 'owed';
@@ -150,23 +156,36 @@ export interface SetUpHoldDetails {
   policy: Exclude<OrganizationMfaPolicy, 'optional'> | null;
 }
 
-export function setUpHoldDetails(
-  sessionUser: SessionUserForSetUp | null | undefined,
+const NOTHING_HELD: SetUpHoldDetails = { hold: null, orgId: null, name: null, policy: null };
+
+function idOf(user: SessionUserForSetUp | null | undefined): string | null {
+  return typeof user?.id === 'string' && user.id ? user.id : null;
+}
+
+/** The decision for one account in one workspace, with the session's factor list for that account. */
+function detailsIn(
+  userId: string,
+  orgId: string | null,
+  sessionFactors: SessionUserForSetUp['factors'],
 ): SetUpHoldDetails {
-  const userId = typeof sessionUser?.id === 'string' && sessionUser.id ? sessionUser.id : null;
-  if (!userId) return { hold: null, orgId: null, name: null, policy: null };
-  const orgId = holdWorkspaceFor(userId);
-  if (!orgId) return { hold: null, orgId: null, name: null, policy: null };
+  if (!orgId) return NOTHING_HELD;
   const view = setUpInputsView(userId, orgId);
   const hold = decideSetUpHold({
     inputs: view.inputs,
     membershipsFrom: view.membershipsFrom,
-    hasVerified: view.serverHasVerified ?? listHasVerified(sessionUser?.factors),
-    lastRead: view.lastRead,
+    hasVerified: view.serverHasVerified ?? listHasVerified(sessionFactors),
   });
   const read = view.inputs?.policy;
   const policy = read === 'admins_required' || read === 'all_required' ? read : null;
   return { hold, orgId, name: view.inputs?.name ?? null, policy };
+}
+
+export function setUpHoldDetails(
+  sessionUser: SessionUserForSetUp | null | undefined,
+): SetUpHoldDetails {
+  const userId = idOf(sessionUser);
+  if (!userId) return NOTHING_HELD;
+  return detailsIn(userId, holdWorkspaceFor(userId), sessionUser?.factors);
 }
 
 /** The snapshot auth-context reads: a primitive, so useSyncExternalStore compares it. */
@@ -175,25 +194,116 @@ export function setUpHoldFor(sessionUser: SessionUserForSetUp | null | undefined
 }
 
 /**
- * Push while held: this phone's token row is deleted once each time the hold
+ * auth-context.tsx: the session's user, for the callers outside React (the
+ * snapshot pull, the workspace load and switch, push registration). Never
+ * reaches set-up-inputs.ts. Tells nobody: those callers ask when they run.
+ */
+export function noteHoldSessionUser(user: SessionUserForSetUp | null | undefined): void {
+  sessionUser = user ?? null;
+}
+
+/**
+ * The decision for code outside React: this account in `orgId` (by default
+ * the workspace held for it), with the session's factor list when the
+ * session noted is this account's. The same rule the screen is shown by.
+ * The code step is not part of it: each caller already holds for that first.
+ */
+export function setUpHoldIn(userId: string | null | undefined, orgId?: string | null): SetUpHold {
+  if (typeof userId !== 'string' || !userId) return null;
+  const factors = idOf(sessionUser) === userId ? sessionUser?.factors : undefined;
+  return detailsIn(userId, orgId === undefined ? holdWorkspaceFor(userId) : orgId, factors).hold;
+}
+
+/** Whether the latest read for this account answered (the holding screen's line after Check again). */
+export function setUpCheckAnswered(sessionUser: SessionUserForSetUp | null | undefined): boolean {
+  const userId = idOf(sessionUser);
+  return userId !== null && setUpInputsView(userId, null).lastRead === 'answered';
+}
+
+/** How often the set-up check is read again on its own (auth-context.tsx), while setUpRecheckDue. */
+export const SET_UP_RECHECK_INTERVAL_MS = 30_000;
+
+/**
+ * Whether the check is read again on a timer for this account: nothing has
+ * answered this run (a read that failed, with an error or with no answer,
+ * leaves the app open, and is tried again until one answers), or the
+ * could-not-check hold is up.
+ */
+export function setUpRecheckDue(sessionUser: SessionUserForSetUp | null | undefined): boolean {
+  const userId = idOf(sessionUser);
+  if (!userId) return false;
+  if (setUpHoldFor(sessionUser) === 'unknown') return true;
+  return setUpInputsView(userId, null).membershipsFrom !== 'this-run';
+}
+
+/**
+ * The organizations the holding screen offers to switch to: those kept for
+ * the account, from the same reads as the decision. Organizations only (no
+ * workspace load runs for the list, and nothing of a workspace's contents
+ * is read for it). The same array until what is kept changes.
+ */
+export function setUpHoldWorkspaces(
+  sessionUser: SessionUserForSetUp | null | undefined,
+): readonly KeptWorkspace[] {
+  return keptWorkspacesFor(idOf(sessionUser));
+}
+
+/** What an unbind answers (push-unbind.ts unbindThisDevice): these three end the attempts. */
+const UNBIND_SETTLED: ReadonlySet<unknown> = new Set(['deleted', 'none', 'nothing-registered']);
+
+/**
+ * Push while held: this phone's token row is deleted each time the hold
  * comes up for an account (the push hook, handed nobody, would otherwise
- * leave an earlier registration receiving). On release the push hook is
- * handed the user again and registers this phone again by itself.
+ * leave an earlier registration receiving). An unbind that did not answer
+ * 'deleted', 'none' or 'nothing-registered' (no connection, no answer in
+ * time, a failure) is tried again at `retry()` while the hold is still up for
+ * that account (auth-context calls it at each read, the return to the
+ * foreground and the connection coming back). One attempt at a time. On
+ * release the push hook is handed the user again and registers this phone
+ * again by itself.
  */
 export function createHoldPushUnbinder(unbind: () => unknown): {
   update(heldUserId: string | null): void;
+  retry(): void;
 } {
   let heldFor: string | null = null;
+  /** Bumped at every change of the hold: an answer belongs to the hold it was asked for. */
+  let generation = 0;
+  let settled = false;
+  let running = false;
+  const attempt = () => {
+    if (!heldFor || settled || running) return;
+    const askedAt = generation;
+    running = true;
+    let result: Promise<unknown>;
+    try {
+      result = Promise.resolve(unbind());
+    } catch {
+      result = Promise.resolve(undefined);
+    }
+    void result
+      .catch(() => undefined)
+      .then((answer) => {
+        running = false;
+        if (askedAt === generation) {
+          if (UNBIND_SETTLED.has(answer)) settled = true;
+          return;
+        }
+        // The hold changed meanwhile (another account, or a release and a
+        // new hold): the hold that is up gets its own attempt.
+        attempt();
+      });
+  };
   return {
     update(heldUserId) {
       if (heldUserId === heldFor) return;
       heldFor = heldUserId;
-      if (!heldUserId) return;
-      try {
-        void Promise.resolve(unbind()).catch(() => undefined);
-      } catch {
-        // Never a reason for the hold to fail.
-      }
+      generation += 1;
+      settled = false;
+      attempt();
+    },
+    retry() {
+      attempt();
     },
   };
 }
@@ -216,6 +326,7 @@ export function setUpHoldQueuedLine(hold: Exclude<SetUpHold, null>, count: numbe
 /** Tests only. */
 export function resetSetUpHoldForTests(): void {
   shown = { userId: null, orgId: null };
+  sessionUser = null;
   savedRead = null;
   listeners.clear();
 }

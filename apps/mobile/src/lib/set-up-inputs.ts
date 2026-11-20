@@ -174,6 +174,8 @@ let reader: SetUpInputsReader | null = null;
 let readInFlight: Promise<void> | null = null;
 /** The one read queued behind a read in flight for the holding screen. */
 let followUp: Promise<void> | null = null;
+/** The account that follow-up reads for: the last one named by a caller that joined it. */
+let followUpFor: string | null = null;
 let lastAskAt = -Infinity;
 let lastReadAskedAt = -Infinity;
 let saveChain: Promise<void> = Promise.resolve();
@@ -376,6 +378,34 @@ export function setUpInputsView(userId: string | null, orgId: string | null): Se
   };
 }
 
+/** One workspace kept for an account: its id and its name as read (null when its row could not be read). */
+export interface KeptWorkspace {
+  orgId: string;
+  name: string | null;
+}
+
+const NO_WORKSPACES: readonly KeptWorkspace[] = Object.freeze([]);
+/** Each kept membership set's list, made once: the holding screen reads it in render. */
+const workspaceLists = new WeakMap<AccountMemberships, readonly KeptWorkspace[]>();
+
+/**
+ * The workspaces kept for this account (this run's read, else an earlier
+ * run's save), in the order read. The same array until what is kept
+ * changes. Organizations only: nothing of a workspace's contents is kept.
+ */
+export function keptWorkspacesFor(userId: string | null): readonly KeptWorkspace[] {
+  const account = userId ? memberships.get(userId) : undefined;
+  if (!account) return NO_WORKSPACES;
+  let list = workspaceLists.get(account);
+  if (!list) {
+    list = Object.freeze(
+      Object.entries(account.orgs).map(([orgId, inputs]) => ({ orgId, name: inputs.name })),
+    );
+    workspaceLists.set(account, list);
+  }
+  return list;
+}
+
 /**
  * For a 403 on a queued send: the answer from reads that STARTED after THIS
  * row's kept refusal (noteKeptRefusal), else 'unknown'. A row with no kept
@@ -516,11 +546,14 @@ function startHoldRead(forUserId: string | null): Promise<void> {
 export function readSetUpInputsForHold(forUserId: string | null): Promise<void> {
   if (!reader) return Promise.resolve();
   if (!readInFlight) return startHoldRead(forUserId);
+  if (forUserId || !followUp) followUpFor = forUserId;
   if (!followUp) {
     const next = readInFlight.then(() => {
       followUp = null;
+      const forWhom = followUpFor;
+      followUpFor = null;
       // A read the queue started in between began after this call: it serves.
-      return readInFlight ?? startHoldRead(forUserId);
+      return readInFlight ?? startHoldRead(forWhom);
     });
     followUp = next;
   }
@@ -533,15 +566,17 @@ export const SET_UP_ASK_MIN_INTERVAL_MS = 10_000;
 /**
  * Ask for the inputs to be read again, from any screen: a route answered
  * that this account must set up an authenticator first. It only asks: the
- * hold comes up only if the read finds set-up owed. Nothing while a read is
- * in flight (it is that recent), at most one per SET_UP_ASK_MIN_INTERVAL_MS,
- * and the queue's own interval and refusal marks are left as they were.
+ * hold comes up only if the read finds set-up owed. At most one per
+ * SET_UP_ASK_MIN_INTERVAL_MS. An ask that arrives while a read is in flight
+ * (one that may have started before the policy changed) is kept as the one
+ * read after it (readSetUpInputsForHold). The queue's own interval and
+ * refusal marks are left as they were.
  */
 export function askForSetUpRead(now: number = Date.now()): void {
-  if (!reader || readInFlight) return;
+  if (!reader) return;
   if (now - lastAskAt < SET_UP_ASK_MIN_INTERVAL_MS) return;
   lastAskAt = now;
-  void startHoldRead(null);
+  void readSetUpInputsForHold(null);
 }
 
 /** For api(): a 403 whose `details.reason` is 'mfa_required' asks for a read; nothing else does. */
@@ -682,6 +717,7 @@ export function resetSetUpInputsForTests(): void {
   reader = null;
   readInFlight = null;
   followUp = null;
+  followUpFor = null;
   lastAskAt = -Infinity;
   lastReadAskedAt = -Infinity;
   saveChain = Promise.resolve();

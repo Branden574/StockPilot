@@ -275,14 +275,11 @@ describe('each refusal: its words, and whether the list is read again', () => {
       true,
     ],
     ['anything else thrown', 'boom', CONNECTION_FAILURE_COPY, false],
-  ])('%s', async (label, thrown, message, reload) => {
-    // Only the set-up answer asks the screen for the set-up read.
-    const setUpRead = label.startsWith('403 mfa_required') ? { setUpRead: true } : {};
+  ])('%s', async (_label, thrown, message, reload) => {
     expect(customerStatusFailure(thrown)).toEqual({
       title: CUSTOMER_STATUS_FAILED_TITLE,
       message,
       reload,
-      ...setUpRead,
     });
     apiMock.api.mockRejectedValueOnce(thrown);
     await expect(changeCustomerStatus(CUSTOMER, 'archived', ORG, USER)).resolves.toEqual({
@@ -290,7 +287,6 @@ describe('each refusal: its words, and whether the list is read again', () => {
       title: CUSTOMER_STATUS_FAILED_TITLE,
       message,
       reload,
-      ...setUpRead,
     });
   });
 
@@ -352,7 +348,6 @@ function screen(
   const queue = [...outcomes];
   const change = vi.fn(async (..._a: unknown[]) => queue.shift());
   const alert = vi.fn();
-  const askForSetUpRead = vi.fn();
   const latest = vi.fn(async () => undefined);
   const latestLoad = { current: latest };
   const inFlight = { current: new Set<string>() };
@@ -364,7 +359,6 @@ function screen(
       userId: opts.userId === undefined ? USER : opts.userId,
       changeCustomerStatus: change,
       Alert: { alert },
-      askForSetUpRead,
       load: () => {
         throw new Error("setStatus re-read through the tapped render's load");
       },
@@ -385,7 +379,7 @@ function screen(
       },
     },
   );
-  return { state, change, alert, askForSetUpRead, latest, latestLoad, inFlight, setStatus };
+  return { state, change, alert, latest, latestLoad, inFlight, setStatus };
 }
 
 const A: Row = { id: CUSTOMER, name: 'Northwind Test Co', status: 'active' };
@@ -451,56 +445,6 @@ describe('the Accounts screen', () => {
     expect(s.state.list).toEqual(LIST);
     expect(s.state.busyHistory).toEqual([[CUSTOMER], []]);
     expect(s.latest).not.toHaveBeenCalled();
-  });
-
-  it('the authenticator set-up answer: the alert, then the set-up read is asked for once', async () => {
-    const s = screen(
-      [
-        {
-          kind: 'refused',
-          title: 'Could not update',
-          message: AUTHENTICATOR_SET_UP_OWED_COPY,
-          reload: false,
-          setUpRead: true,
-        },
-      ],
-      LIST,
-    );
-    await s.setStatus(A, false);
-    expect(s.alert).toHaveBeenCalledWith('Could not update', AUTHENTICATOR_SET_UP_OWED_COPY);
-    expect(s.askForSetUpRead).toHaveBeenCalledTimes(1);
-    expect(s.askForSetUpRead).toHaveBeenCalledWith();
-    expect(s.state.list).toEqual(LIST);
-    expect(s.latest).not.toHaveBeenCalled();
-  });
-
-  it('every other refusal asks for no set-up read', async () => {
-    const s = screen(
-      [
-        {
-          kind: 'refused',
-          title: 'Could not update',
-          message: CUSTOMER_STATUS_COPY.notAllowed,
-          reload: false,
-        },
-        REFUSED_RELOAD,
-      ],
-      LIST,
-    );
-    await s.setStatus(A, false);
-    await s.setStatus(A, false);
-    expect(s.alert).toHaveBeenCalledTimes(2);
-    expect(s.askForSetUpRead).not.toHaveBeenCalled();
-  });
-
-  it('the screen imports the set-up read from the store and calls it only on the set-up answer', () => {
-    const src = readFileSync(path.join(MOBILE_ROOT, SCREEN), 'utf8');
-    expect(src).toContain("import { askForSetUpRead } from '@/lib/set-up-inputs';");
-    expect(src.match(/askForSetUpRead\(/g)).toHaveLength(1);
-    const alertAt = src.indexOf('Alert.alert(outcome.title, outcome.message);');
-    const askAt = src.indexOf('if (outcome.setUpRead) askForSetUpRead();');
-    expect(alertAt).toBeGreaterThan(-1);
-    expect(askAt).toBeGreaterThan(alertAt);
   });
 
   it('a refusal that leaves the account unknown: the newest load reads the list again', async () => {

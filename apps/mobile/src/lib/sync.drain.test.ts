@@ -23,6 +23,7 @@ import {
   syncNow,
   whenSyncSettled,
 } from './sync';
+import { noteHoldWorkspace, resetSetUpHoldForTests, setUpHoldIn } from './set-up-hold';
 import { UNCONFIRMED_SETTLE_MS, unconfirmedStock } from './unconfirmed-stock';
 
 // vi.mock / vi.hoisted are hoisted above these imports by vitest's transform,
@@ -1662,5 +1663,76 @@ describe('drainQueue — a queued change waits while an authenticator is being s
     calls.log = [];
     expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 0 });
     expect(calls.log).toEqual([]);
+  });
+});
+
+/**
+ * The authenticator set-up hold (set-up-hold.ts): no snapshot pull runs while
+ * it is up, whoever asks (a workspace switch, a sign-out), and the drain that
+ * follows keeps its per-row rule: rows of the held workspace wait, rows of
+ * another workspace are sent as usual.
+ */
+describe('syncNow while the authenticator set-up hold is up', () => {
+  const HELD: Row = { ...RECEIPT, organizationId: 'org-a', userId: 'u1' };
+  const ELSEWHERE: Row = { ...BUNDLE, organizationId: 'org-b', userId: 'u1' };
+
+  function heldInOrgA() {
+    recordMembershipInputs(
+      'u1',
+      [
+        { organizationId: 'org-a', role: 'staff', organization: { name: 'A', mfa_policy: 'all_required' } },
+        { organizationId: 'org-b', role: 'staff', organization: { name: 'B', mfa_policy: 'optional' } },
+      ],
+      beginSetUpRead(),
+    );
+    noteServerReadUser({ id: 'u1', factors: [] });
+    noteHoldWorkspace('u1', 'org-a');
+  }
+
+  it("no snapshot is asked for; the held workspace's row waits, the other workspace's is sent", async () => {
+    resetSetUpHoldForTests();
+    heldInOrgA();
+    pending([HELD, ELSEWHERE]);
+    await syncNow(true);
+    expect(calls.log).toEqual(['markSending:3', 'api:/api/v1/bundles/b1/distribute', 'markOk:3']);
+    resetSetUpHoldForTests();
+  });
+
+  it("the could-not-check hold too: no snapshot is asked for, and the held workspace's row is tried", async () => {
+    resetSetUpHoldForTests();
+    // Answered this run with the organization's row unreadable.
+    recordMembershipInputs(
+      'u1',
+      [{ organizationId: 'org-a', role: 'staff', organization: null }],
+      beginSetUpRead(),
+    );
+    noteServerReadUser({ id: 'u1', factors: [] });
+    noteHoldWorkspace('u1', 'org-a');
+    expect(setUpHoldIn('u1')).toBe('unknown');
+    pending([HELD]);
+    await syncNow(true);
+    expect(calls.log).toEqual(['markSending:1', 'api:/api/v1/po/po1/receive-line', 'markOk:1']);
+    resetSetUpHoldForTests();
+  });
+
+  it('once released, the same sync pulls first and then sends what waited', async () => {
+    resetSetUpHoldForTests();
+    heldInOrgA();
+    pending([HELD]);
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      if (path.startsWith('/api/v1/mobile/snapshot')) throw httpError(500, 'internal_error');
+    });
+    await syncNow();
+    expect(calls.log).toEqual([]);
+    noteServerReadUser({ id: 'u1', factors: [{ status: 'verified' }] });
+    await syncNow();
+    expect(calls.log).toEqual([
+      'api:/api/v1/mobile/snapshot',
+      'markSending:1',
+      'api:/api/v1/po/po1/receive-line',
+      'markOk:1',
+    ]);
+    resetSetUpHoldForTests();
   });
 });

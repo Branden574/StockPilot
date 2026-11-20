@@ -59,8 +59,11 @@ import {
 import { hasStoredSession, liveOutboxScope } from './session-scope';
 import {
   createHoldPushUnbinder,
+  noteHoldSessionUser,
   readSetUpInputsForHold,
+  SET_UP_RECHECK_INTERVAL_MS,
   setUpHoldFor,
+  setUpRecheckDue,
   subscribeSetUpHold,
   type SetUpHold,
 } from './set-up-hold';
@@ -216,6 +219,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // The code screen comes first: nothing is held while the code is owed.
   const heldBy = React.useSyncExternalStore(subscribeSetUpHold, () => setUpHoldFor(session?.user));
   const setUpHold: SetUpHold = session && !mfaRequired ? heldBy : null;
+  // The same session's user for the hold's callers outside React (the
+  // snapshot pull, the workspace load, push registration). A layout effect:
+  // it runs before any screen's own effects.
+  React.useLayoutEffect(() => {
+    noteHoldSessionUser(session?.user ?? null);
+  }, [session]);
 
   // The set-up check's own reads (set-up-inputs.ts readSetUpInputsForHold),
   // which never wait for the sync: at sign-in and the cold launch (and when
@@ -243,17 +252,52 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [setUpReadFor]);
 
+  // Read again on a timer while nothing has answered this run (a read that
+  // failed leaves the app open: set-up-hold.ts) and while the could-not-check
+  // hold is up, until a read answers and can be judged.
+  const recheckDue = React.useSyncExternalStore(subscribeSetUpHold, () =>
+    setUpRecheckDue(session?.user),
+  );
+  const recheckFor = setUpReadFor && recheckDue ? setUpReadFor : null;
+  React.useEffect(() => {
+    if (!recheckFor) return;
+    const timer = setInterval(() => {
+      void readSetUpInputsForHold(recheckFor);
+    }, SET_UP_RECHECK_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [recheckFor]);
+
   // Push while held: RootGate hands the push hook nobody, which stops a new
   // registration but leaves an earlier one receiving. This phone's token row
-  // is deleted once each time the hold comes up; on release the push hook is
-  // handed the user again and registers again (use-push-notifications.ts).
+  // is deleted each time the hold comes up, and the delete is tried again at
+  // every change of the hold's inputs (each read, so the return to the
+  // foreground and the connection coming back too) until it answers; on
+  // release the push hook is handed the user again and registers again
+  // (use-push-notifications.ts).
   const [holdPush] = React.useState(() =>
     createHoldPushUnbinder(() => unbindThisDevice({ timeoutMs: SIGN_OUT_UNBIND_TIMEOUT_MS })),
   );
   const heldUserId = setUpHold ? (session?.user?.id ?? null) : null;
   React.useEffect(() => {
     holdPush.update(heldUserId);
+    if (!heldUserId) return;
+    return subscribeSetUpHold(() => holdPush.retry());
   }, [holdPush, heldUserId]);
+
+  // Released with a session (set up, the policy changed, a switch): the
+  // count outbox gets a pass at once, as when the code gate comes down
+  // below. The other outbox drains when RootGate hands useSync its user.
+  const holdSessionUserId = session?.user?.id ?? null;
+  const holdWasUp = React.useRef(false);
+  React.useEffect(() => {
+    if (setUpHold) {
+      holdWasUp.current = true;
+      return;
+    }
+    if (!holdWasUp.current) return;
+    holdWasUp.current = false;
+    if (holdSessionUserId) void cycleCountSync.forceSync().catch(() => undefined);
+  }, [setUpHold, holdSessionUserId]);
 
   // A user the account gate's probe reads from the server (use-account-gate.ts)
   // is handed here, so an authenticator turned on or removed elsewhere reaches

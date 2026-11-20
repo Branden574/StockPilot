@@ -6,7 +6,7 @@ import { useAuth } from './auth-context';
 import { cycleCountSync } from './cycle-count-sync';
 import { deleteOrgData } from './db';
 import { refreshEnabledModules } from './enabled-modules';
-import { noteHoldWorkspace } from './set-up-hold';
+import { noteHoldWorkspace, setUpHoldIn } from './set-up-hold';
 import { beginSetUpRead, noteMembershipReadFailed, recordMembershipInputs } from './set-up-inputs';
 import { refreshCacheOwner } from './use-cache-owner';
 import { syncAfterRunning, syncNow } from './sync';
@@ -393,6 +393,11 @@ async function loadWorkspace(userId: string, given?: OrgOption[]) {
   }
   const choice = chooseActiveOrg({ orgIds: orgs.map((o) => o.id), stored: persisted, profileDefault });
   const activeOrgId = choice.activeOrgId;
+  // The set-up hold is told the workspace as soon as it is chosen, before the
+  // save and the warehouse read (set-up-hold.ts): a fresh sign-in into a
+  // workspace that holds the account is held without waiting for the rest of
+  // this load. The publish below tells it again, before the screens.
+  noteHoldWorkspace(userId, activeOrgId);
   // WHICH WORKSPACE THE CACHE HOLDS is not the same question as which one this
   // account chooses. Another account's saved workspace (persisted is null for
   // it) is not this account's choice, but the cache was pulled for it: that
@@ -550,7 +555,10 @@ async function loadWorkspace(userId: string, given?: OrgOption[]) {
   }
   let warehouses: WarehouseOption[] = [];
   let activeWarehouseId: string | null = null;
-  if (activeOrgId) {
+  // No warehouse is read for a workspace the set-up hold holds the account
+  // in: the hold shows organizations only. The load that runs once the app
+  // is shown again (every screen that mounts runs one) reads them.
+  if (activeOrgId && !setUpHoldIn(userId, activeOrgId)) {
     // Bounded like a switch's read: a hung request must not hold `loading`.
     const read = await loadWarehousesBounded(activeOrgId);
     if (read === null && activeOrgId === cached.activeOrgId && shownEpoch === epochAtStart) {
@@ -738,8 +746,9 @@ async function switchActiveOrg(orgId: string, epoch: number): Promise<void> {
     activeWarehouseName: null,
   });
   // A failed read leaves this new workspace with no warehouse list yet: there
-  // is nothing of its own on screen to keep.
-  const warehouses = (await loadWarehousesBounded(orgId)) ?? [];
+  // is nothing of its own on screen to keep. None is read for a workspace the
+  // set-up hold holds the account in (told by the publish above).
+  const warehouses = setUpHoldIn(ownerId, orgId) ? [] : ((await loadWarehousesBounded(orgId)) ?? []);
   const persistedWh = await AsyncStorage.getItem(WAREHOUSE_STORAGE_KEY(orgId));
   const activeWarehouseId =
     persistedWh && warehouses.some((w) => w.id === persistedWh) ? persistedWh : null;

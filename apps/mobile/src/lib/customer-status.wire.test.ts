@@ -10,6 +10,7 @@ import { notifyUnauthorized } from './account-eviction';
 import { SIGN_IN_AGAIN_COPY } from './api-error-body';
 import { CONNECTION_FAILURE_COPY } from './connection-copy';
 import { changeCustomerStatus, CUSTOMER_STATUS_COPY } from './customer-status';
+import { registerSetUpInputsSource, resetSetUpInputsForTests } from './set-up-inputs';
 import { supabase } from './supabase';
 
 /**
@@ -151,7 +152,7 @@ describe('the customer status change on the wire', () => {
     });
   });
 
-  it('a 403 with details.reason mfa_required reads as the set-up sentence and asks for the set-up read', async () => {
+  it('a 403 with details.reason mfa_required reads as the set-up sentence', async () => {
     respondWith(
       403,
       JSON.stringify({
@@ -166,8 +167,30 @@ describe('the customer status change on the wire', () => {
       title: 'Could not update',
       message: AUTHENTICATOR_SET_UP_OWED_COPY,
       reload: false,
-      setUpRead: true,
     });
+  });
+
+  it('that answer asks for the set-up read once, from api() itself; another 403 asks for none', async () => {
+    resetSetUpInputsForTests();
+    const read = vi.fn(async () => undefined);
+    await registerSetUpInputsSource({
+      storage: { getAllKeys: async () => [], getItem: async () => null, setItem: async () => {} },
+      read,
+    });
+    respondWith(403, JSON.stringify({ error: 'forbidden', details: { reason: 'aal2_required' } }));
+    await changeCustomerStatus(CUSTOMER, 'active', ORG, USER);
+    expect(read).not.toHaveBeenCalled();
+    respondWith(
+      403,
+      JSON.stringify({
+        error: 'forbidden',
+        message: 'Set up first.',
+        details: { reason: 'mfa_required' },
+      }),
+    );
+    await changeCustomerStatus(CUSTOMER, 'active', ORG, USER);
+    expect(read).toHaveBeenCalledTimes(1);
+    resetSetUpInputsForTests();
   });
 
   it('a rejected fetch says the connection sentence, never the platform text', async () => {
