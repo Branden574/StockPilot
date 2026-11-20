@@ -162,6 +162,9 @@ describe('GET /api/v1/cycle-counts', () => {
     });
     const res = await GET(get());
     expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ error: 'internal_error' });
+    expect(await res.json()).toEqual({
+      error: 'internal_error',
+      message: 'Something went wrong. Please try again.',
+    });
   });
 });

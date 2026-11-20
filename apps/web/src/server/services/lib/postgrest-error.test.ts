@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
+import { reportedMessage } from '@/lib/error-text';
+import { ServiceError } from '@/server/services/context';
+
 import { isDefiniteRefusal, isPermanentRefusal, postgrestErrorText } from './postgrest-error';
 
 describe('postgrestErrorText', () => {
@@ -9,15 +12,52 @@ describe('postgrestErrorText', () => {
     );
   });
 
-  it('names the status, code, details and hint when the message is empty', () => {
+  it('names the status, code and hint when the message is empty, never the details', () => {
     expect(
       postgrestErrorText(
-        { message: '', code: 'PGRST000', details: 'upstream closed', hint: 'retry' },
-        { status: 503, statusText: 'Service Unavailable' },
+        {
+          message: '',
+          code: '23505',
+          details: 'Key (email)=(pat.example@example.test) already exists.',
+          hint: 'retry',
+        },
+        { status: 409, statusText: 'Conflict' },
       ),
-    ).toBe(
-      'HTTP 503 Service Unavailable, code PGRST000, details: upstream closed, hint: retry (empty error message)',
+    ).toBe('HTTP 409 Conflict, code 23505, hint: retry (empty error message)');
+  });
+
+  it("keeps a check violation's failing row out of the text", () => {
+    const text = postgrestErrorText(
+      { message: '', code: '23514', details: 'Failing row contains (Sample Person, 555-0100).' },
+      { status: 400, statusText: 'Bad Request' },
     );
+    expect(text).toBe('HTTP 400 Bad Request, code 23514 (empty error message)');
+    expect(text).not.toContain('Sample Person');
+  });
+
+  it('keeps only the first "Caused by:" line of postgrest-js\'s own no-answer details', () => {
+    expect(
+      postgrestErrorText(
+        {
+          message: '',
+          code: '',
+          details:
+            'TypeError: fetch failed\n    at node:internal/x\n\nCaused by: ECONNRESET (read)\nError: read\n    at y',
+        },
+        { status: 0 },
+      ),
+    ).toBe('no HTTP response, cause: ECONNRESET (read) (empty error message)');
+  });
+
+  it('a ServiceError built from it reports no row values', () => {
+    const e = new ServiceError(
+      'internal_error',
+      postgrestErrorText(
+        { message: '', code: '23505', details: 'Key (sku)=(SAMPLE-SKU-1) already exists.' },
+        { status: 409 },
+      ),
+    );
+    expect(reportedMessage(e)).toBe('HTTP 409, code 23505 (empty error message)');
   });
 
   it('says there was no HTTP answer for status 0', () => {

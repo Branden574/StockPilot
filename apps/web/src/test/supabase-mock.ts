@@ -96,9 +96,12 @@ export function inFilters(call: MockCall): Array<[string, unknown[]]> {
  * calls and its `.range()`/`.limit()` window (capped at max_rows, 1000) to
  * `rows`. Several `.order()` calls sort as PostgREST's `order=a,b` does: the
  * FIRST is the primary key and each later one only breaks its ties.
+ * An `.or()` is evaluated too, for the logic-tree forms `col.op.value` with
+ * op eq, neq, gt, gte, lt, lte or is (null, true, false), a value in double
+ * quotes, and nested `and(...)` / `or(...)` (see evaluateLogicTree).
  * So a test fails when the code under test forgets a filter, instead of the
  * stub handing back every row whatever was asked. Any other method in the
- * chain (an `.or()`, or any other `.not()`, it cannot evaluate) throws, so
+ * chain (any other `.not()`, or an `.or()` form it cannot evaluate) throws, so
  * nothing is ignored silently. `rows` may be a function, to change the data
  * between calls.
  */
@@ -142,6 +145,15 @@ export function servedLikePostgrest(
         case 'in':
           out = out.filter((r) => (value as unknown[]).includes(r[col]));
           break;
+        case 'or': {
+          if ((value as { referencedTable?: unknown; foreignTable?: unknown } | undefined)?.referencedTable
+            || (value as { foreignTable?: unknown } | undefined)?.foreignTable) {
+            throw new Error('servedLikePostgrest cannot evaluate an .or() on a referenced table');
+          }
+          const terms = splitLogicTerms(col);
+          out = out.filter((r) => terms.some((t) => evaluateLogicTree(t, r)));
+          break;
+        }
         case 'not': {
           // Only `.not(col, 'is', null)`: the rows whose col is set.
           const operand = call.args[i]?.[2];
@@ -184,6 +196,118 @@ export function servedLikePostgrest(
     }
     return { data: out.slice(from, Math.min(to, from + 999) + 1), error: null };
   };
+}
+
+/** Splits a PostgREST logic-tree list (`a.eq.1,and(b.gt.2,c.is.null)`) at
+ *  its top-level commas, leaving commas inside parentheses or double quotes. */
+function splitLogicTerms(list: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let quoted = false;
+  let current = '';
+  for (const ch of list) {
+    if (ch === '"') quoted = !quoted;
+    if (!quoted && ch === '(') depth += 1;
+    if (!quoted && ch === ')') depth -= 1;
+    if (!quoted && depth === 0 && ch === ',') {
+      out.push(current);
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  if (current.length > 0) out.push(current);
+  return out;
+}
+
+/**
+ * One term of a PostgREST logic tree against one row: `and(...)`, `or(...)`
+ * or `col.op.value`, with op eq, neq, gt, gte, lt, lte or is. A
+ * double-quoted value has its quotes taken off; the comparison follows the
+ * row value's type (compareLogicValue); `is` takes null, true or false.
+ * Anything else throws.
+ */
+function evaluateLogicTree(term: string, row: Record<string, unknown>): boolean {
+  const nested = /^(and|or)\((.*)\)$/s.exec(term);
+  if (nested) {
+    const parts = splitLogicTerms(nested[2] as string);
+    return nested[1] === 'and'
+      ? parts.every((p) => evaluateLogicTree(p, row))
+      : parts.some((p) => evaluateLogicTree(p, row));
+  }
+  const m = /^([A-Za-z0-9_]+)\.(eq|neq|gt|gte|lt|lte|is)\.(.*)$/s.exec(term);
+  if (!m) throw new Error(`servedLikePostgrest cannot evaluate the .or() term ${term}`);
+  const [, col, op, raw] = m as unknown as [string, string, string, string];
+  const value = raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2 ? raw.slice(1, -1) : raw;
+  const cell = row[col] ?? null;
+  if (op === 'is') {
+    const want = value === 'null' ? null : value === 'true' ? true : value === 'false' ? false : undefined;
+    if (want === undefined) throw new Error(`servedLikePostgrest cannot evaluate ${term}`);
+    return cell === want;
+  }
+  if (cell === null) return false;
+  const c = compareLogicValue(cell, value, term, op === 'eq' || op === 'neq');
+  switch (op) {
+    case 'eq':
+      return c === 0;
+    case 'neq':
+      return c !== 0;
+    case 'gt':
+      return c > 0;
+    case 'gte':
+      return c >= 0;
+    case 'lt':
+      return c < 0;
+    default:
+      return c <= 0;
+  }
+}
+
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
+const NUMERIC = /^-?\d+(\.\d+)?$/;
+/** A uuid: the one kind of text whose byte order is the database's order
+ *  (a uuid column compares the 128-bit value; a text column's collation may
+ *  ignore the hyphens, so other hyphenated text is not ordered here). */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * Compares a row's value with a logic-tree value the way Postgres would for
+ * the column's type, or throws when it cannot tell: a number numerically, a
+ * timestamp as a time (so `+00:00` and `Z` agree), a numeric string
+ * numerically, and a uuid against a uuid in byte order. A boolean, and any
+ * other text, is compared for equality only (`equalityOnly`: the term is eq
+ * or neq); an order asked of them is refused, as is a backslash escape.
+ */
+function compareLogicValue(cell: unknown, value: string, term: string, equalityOnly: boolean): number {
+  const refuse = (): never => {
+    throw new Error(`servedLikePostgrest cannot compare in the .or() term ${term}`);
+  };
+  if (value.includes('\\')) refuse();
+  const cmp = (a: number, b: number) => (a < b ? -1 : a > b ? 1 : 0);
+  if (typeof cell === 'number') {
+    const v = Number(value);
+    if (!NUMERIC.test(value) || !Number.isFinite(v)) refuse();
+    return cmp(cell, v);
+  }
+  if (typeof cell === 'boolean') {
+    // Only eq/neq: false < true in Postgres, which a 0/1 answer cannot say.
+    if ((value !== 'true' && value !== 'false') || !equalityOnly) refuse();
+    return String(cell) === value ? 0 : 1;
+  }
+  if (typeof cell !== 'string') return refuse();
+  if (ISO_TIMESTAMP.test(cell) || ISO_TIMESTAMP.test(value)) {
+    const a = Date.parse(cell);
+    const b = Date.parse(value);
+    if (!ISO_TIMESTAMP.test(cell) || !ISO_TIMESTAMP.test(value) || Number.isNaN(a) || Number.isNaN(b)) {
+      refuse();
+    }
+    return cmp(a, b);
+  }
+  if (NUMERIC.test(cell) && NUMERIC.test(value)) return cmp(Number(cell), Number(value));
+  if (UUID.test(cell) && UUID.test(value)) return cell < value ? -1 : cell > value ? 1 : 0;
+  // Other text: equality only (a collation may order it differently).
+  if (!equalityOnly) refuse();
+  return cell === value ? 0 : 1;
 }
 
 /**

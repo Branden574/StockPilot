@@ -1,0 +1,6 @@
+{
+  "name": "stockpilot-load-tests",
+  "private": true,
+  "type": "module",
+  "description": "k6 load tests and their local-only tools. Not a workspace package: nothing here is installed or built."
+}

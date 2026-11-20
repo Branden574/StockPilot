@@ -285,3 +285,38 @@ describe('a failed write is reported and never thrown', () => {
     expect(reportErrorMock).not.toHaveBeenCalled();
   });
 });
+
+describe('publishOutboxEvent answers whether this call recorded the event', () => {
+  const event = {
+    topic: 'receipt.posted' as const,
+    aggregateId: ID,
+    payload: { receiptNumber: 'RCV-000001' },
+  };
+
+  it('true when publish_outbox returns the new id', async () => {
+    useAdmin({ 'rpc:publish_outbox': { data: 'evt-1', error: null } });
+    await expect(publishOutboxEvent(ctx(), event)).resolves.toBe(true);
+  });
+
+  it('false when the key was already held (no id back, no error)', async () => {
+    useAdmin({ 'rpc:publish_outbox': { data: null, error: null } });
+    await expect(publishOutboxEvent(ctx(), event)).resolves.toBe(false);
+  });
+
+  it('not known (undefined) on an error answer, a thrown call, an odd answer or a refused context', async () => {
+    useAdmin({ 'rpc:publish_outbox': { data: null, error: { message: 'publish failed' } } });
+    await expect(publishOutboxEvent(ctx(), event)).resolves.toBeUndefined();
+    useAdmin({
+      'rpc:publish_outbox': () => {
+        throw new Error('fetch failed');
+      },
+    });
+    await expect(publishOutboxEvent(ctx(), event)).resolves.toBeUndefined();
+    useAdmin({ 'rpc:publish_outbox': { data: undefined, error: null } });
+    await expect(publishOutboxEvent(ctx(), event)).resolves.toBeUndefined();
+    useAdmin();
+    await expect(
+      publishOutboxEvent(ctx({ permissions: new Set() }), event),
+    ).resolves.toBeUndefined();
+  });
+});

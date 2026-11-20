@@ -18,7 +18,12 @@ import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { listRows } from './lib/list-rows';
 import { postgrestErrorText } from './lib/postgrest-error';
 
-import { DELETED_USER_LABEL, isDeletedPerson } from '@stockpilot/core';
+import {
+  canDistributeBundles,
+  DELETED_USER_LABEL,
+  isDeletedPerson,
+  roleCanHandOutKits,
+} from '@stockpilot/core';
 import type {
   CreateScheduleEventInput,
   ScheduleStatus,
@@ -90,6 +95,32 @@ const SELECT_COLUMNS = `
  * goes wrong). When hit, we log a warning so we know to paginate.
  */
 const RANGE_LIMIT = 500;
+
+/**
+ * The refusals of create() and update(). None names a warehouse id: the
+ * person may not be able to see that warehouse at all, and managers work in
+ * every warehouse.
+ */
+const SCHEDULE_EVENT_WAREHOUSE_REFUSED =
+  "You don't have write access to the warehouse set for this event, so nothing was saved. Choose a warehouse you work in, or ask a manager.";
+const SCHEDULE_KIT_WAREHOUSE_REFUSED =
+  "You don't have write access to the warehouse this event's kit comes from, so nothing was saved. Choose a warehouse you work in, or ask a manager.";
+/** Completing hands out the kit from its warehouse, so that is checked before the status is saved. */
+const SCHEDULE_COMPLETE_KIT_WAREHOUSE_REFUSED =
+  "You can't complete this event because you don't have write access to the warehouse its kit comes from. Ask a manager to complete it, or to give you access to that warehouse.";
+/** The row policy lets the event's creator or a manager change it; for anyone else the update matches no row. */
+const SCHEDULE_EVENT_UPDATE_REFUSED = "You can't change this event. Ask a manager.";
+/** A kit warehouse that changed between the check and the save, refused after the save (the hand-out's own failure words). */
+const KIT_WAREHOUSE_REFUSED_AFTER_SAVE =
+  "You don't have write access to the warehouse its kit comes from.";
+/** Completing hands out the kit, which only a manager or above may do (roleCanHandOutKits), so the role is checked before the status is saved. */
+const SCHEDULE_COMPLETE_KIT_HAND_OUT_REFUSED =
+  "You can't complete this event because its kit has to be handed out by a manager. Ask a manager to complete it.";
+/** The same rule, met after the save (a kit added to the row in between): the hand-out's own failure words. */
+const KIT_HAND_OUT_REFUSED_AFTER_SAVE = 'Only a manager can hand out a kit.';
+/** How the "marked complete, but" sentence ends: the next step, for a member who may hand the kit out from its page, and for one who may not. */
+const KIT_HAND_OUT_RETRY = "Hand it out from the kit's page.";
+const KIT_HAND_OUT_ASK_A_MANAGER = "Ask a manager to hand it out from the kit's page.";
 
 /**
  * Allowed status transitions. The form's status dropdown lets the
@@ -374,20 +405,21 @@ export class ScheduleService {
   }
 
   /**
-   * create()'s warehouse check. A refusal of the caller's real scope is the
-   * ServiceError 'forbidden' with the check's words. A refusal that comes
-   * from a failed read of the caller's own access (ForbiddenError's
-   * accessUnreadable) is thrown as it is, so the callers' shared answers
-   * keep it apart: the web action's actionErrorResult answers the "could not
-   * check" sentence as a retryable conflict, and an API route's
-   * forbiddenOrInternalResponse answers 503 check_failed.
+   * The warehouse check of create() and update(). A refusal of the caller's
+   * real scope is the ServiceError 'forbidden' with `refusal`, a sentence that
+   * names no warehouse id. A refusal that comes from a failed read of the
+   * caller's own access (ForbiddenError's accessUnreadable) is thrown as it
+   * is, so the callers' shared answers keep it apart: the web action's
+   * actionErrorResult answers the "could not check" sentence as a retryable
+   * conflict, and an API route's forbiddenOrInternalResponse answers 503
+   * check_failed.
    */
-  private async assertWarehouseWrite(warehouseId: string): Promise<void> {
+  private async assertWarehouseWrite(warehouseId: string, refusal: string): Promise<void> {
     try {
       await assertWarehouseAccess(warehouseId, 'write', this.ctx);
     } catch (e) {
       if (e instanceof ForbiddenError && !e.accessUnreadable) {
-        throw new ServiceError('forbidden', e.message);
+        throw new ServiceError('forbidden', refusal);
       }
       throw e;
     }
@@ -405,10 +437,10 @@ export class ScheduleService {
     // warehouse-scoped manager could schedule a kit to be auto-
     // distributed FROM a warehouse they have no rights to.
     if (input.warehouseId) {
-      await this.assertWarehouseWrite(input.warehouseId);
+      await this.assertWarehouseWrite(input.warehouseId, SCHEDULE_EVENT_WAREHOUSE_REFUSED);
     }
     if (input.bundleWarehouseId) {
-      await this.assertWarehouseWrite(input.bundleWarehouseId);
+      await this.assertWarehouseWrite(input.bundleWarehouseId, SCHEDULE_KIT_WAREHOUSE_REFUSED);
     }
 
     const { data, error } = await this.ctx.supabase
@@ -492,22 +524,14 @@ export class ScheduleService {
     // Verify caller has write access to any warehouse mentioned in the
     // patch — both the event-pin warehouse and the bundle-source
     // warehouse. Same reasoning as create(): bundle_warehouse_id isn't
-    // covered by RLS on schedule_events.
+    // covered by RLS on schedule_events. A check that could not read the
+    // caller's access is thrown as it is (assertWarehouseWrite), so the web
+    // action answers it as retryable.
     if (patch.warehouseId) {
-      try {
-        await assertWarehouseAccess(patch.warehouseId, 'write', this.ctx);
-      } catch (e) {
-        if (e instanceof ForbiddenError) throw new ServiceError('forbidden', e.message);
-        throw e;
-      }
+      await this.assertWarehouseWrite(patch.warehouseId, SCHEDULE_EVENT_WAREHOUSE_REFUSED);
     }
     if (patch.bundleWarehouseId) {
-      try {
-        await assertWarehouseAccess(patch.bundleWarehouseId, 'write', this.ctx);
-      } catch (e) {
-        if (e instanceof ForbiddenError) throw new ServiceError('forbidden', e.message);
-        throw e;
-      }
+      await this.assertWarehouseWrite(patch.bundleWarehouseId, SCHEDULE_KIT_WAREHOUSE_REFUSED);
     }
 
     // Lock down bundle fields after distribution has fired — once kits
@@ -538,6 +562,43 @@ export class ScheduleService {
               'distribution. Adjust on the bundle page if needed.',
           );
         }
+      }
+    }
+
+    // Completing an in-progress event hands out its kit from the kit's
+    // warehouse (below, after the save). The caller's write access to that
+    // warehouse is checked HERE, before the status is written, so a refusal
+    // writes nothing: an event saved as completed is never handed out by a
+    // later save (that only happens on the move from in progress). The kit is
+    // the one the save leaves: the patch's kit fields over the stored ones. A
+    // kit warehouse named in the patch was checked just above.
+    //
+    // The caller's role is checked first, against the same floor
+    // distribute_bundle applies (roleCanHandOutKits): it is the refusal that
+    // stands whatever warehouse access the person is given, so its sentence is
+    // the step that lets the event be completed, and it needs no read. The
+    // role only: distribute_bundle lets the Schedule's own completion through
+    // without bundles:distribute (0415), so a manager whose permission is
+    // revoked completes and the kit is handed out.
+    const completing = patch.status === 'completed' && beforeStatus === 'in_progress';
+    if (completing && !distributedBefore.has(id)) {
+      const kitId =
+        patch.bundleId !== undefined ? patch.bundleId : (beforeRow.bundle_id as string | null);
+      const kitQuantity =
+        patch.bundleQuantity !== undefined
+          ? patch.bundleQuantity
+          : beforeRow.bundle_quantity == null
+            ? null
+            : Number(beforeRow.bundle_quantity);
+      const kitWarehouseId =
+        patch.bundleWarehouseId !== undefined
+          ? patch.bundleWarehouseId
+          : (beforeRow.bundle_warehouse_id as string | null);
+      if (kitId && kitQuantity && kitWarehouseId && !roleCanHandOutKits(this.ctx.role)) {
+        throw new ServiceError('forbidden', SCHEDULE_COMPLETE_KIT_HAND_OUT_REFUSED);
+      }
+      if (kitId && kitQuantity && kitWarehouseId && kitWarehouseId !== patch.bundleWarehouseId) {
+        await this.assertWarehouseWrite(kitWarehouseId, SCHEDULE_COMPLETE_KIT_WAREHOUSE_REFUSED);
       }
     }
 
@@ -582,15 +643,23 @@ export class ScheduleService {
     if (patch.bundleWarehouseId !== undefined)
       updates.bundle_warehouse_id = patch.bundleWarehouseId ?? null;
 
-    const { data, error } = await this.ctx.supabase
+    // The updated rows come back as a list. The row was read above, so an
+    // empty list is an update the row policy refused (schedule_events_update:
+    // the event's creator or a manager), or a row deleted in between. A
+    // database fault (`error`) and an answer that is not a list (an empty
+    // body) decide nothing and are the internal error.
+    const { data: updatedRows, error } = await this.ctx.supabase
       .from('schedule_events')
       .update(updates)
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
-      .select(SELECT_COLUMNS)
-      .single();
+      .select(SELECT_COLUMNS);
     if (error) throw new ServiceError('internal_error', error.message);
-    if (!data) throw new ServiceError('not_found', 'Event not found');
+    if (!Array.isArray(updatedRows)) {
+      throw new ServiceError('internal_error', 'schedule_events update answered no list');
+    }
+    const data = updatedRows[0];
+    if (!data) throw new ServiceError('forbidden', SCHEDULE_EVENT_UPDATE_REFUSED);
 
     // Auto-distribute on first transition INTO 'completed' FROM
     // 'in_progress'. The old gate (status !== 'completed') let a
@@ -627,23 +696,42 @@ export class ScheduleService {
         // together prevent double-fire. If the unique constraint trips
         // (23505) we treat it as benign — another concurrent caller
         // already distributed for this event.
-        if (!distributedBefore.has(id)) {
-          // assertWarehouseAccess guards above only cover the case
-          // where the patch mutates bundle_warehouse_id. When the
-          // caller is just flipping status and the bundle warehouse
-          // was set by someone else earlier, re-check now.
+        //
+        // The saved kit warehouse is checked here, before the hand-out. It is
+        // the one checked before the save unless the row changed in between;
+        // then this is the only check of the warehouse the hand-out draws
+        // from. The status is already saved, so a refusal here is the
+        // hand-out's own failure: the completion audit row is written and the
+        // person reads the "marked complete, but" sentence below, with no
+        // warehouse id.
+        let mayHandOut = true;
+        if (!distributedBefore.has(id) && !roleCanHandOutKits(this.ctx.role)) {
+          // The kit was not on the row when the role was checked before the
+          // save. distribute_bundle would refuse this caller, so it is not
+          // called; the person reads the "marked complete, but" sentence.
+          mayHandOut = false;
+          autoDistFailed = { message: KIT_HAND_OUT_REFUSED_AFTER_SAVE, bundleId };
+        } else if (!distributedBefore.has(id)) {
           try {
             await assertWarehouseAccess(bundleWarehouseId, 'write', this.ctx);
           } catch (e) {
-            if (e instanceof ForbiddenError) {
-              throw new ServiceError(
-                'forbidden',
-                `Cannot auto-distribute: no write access to source warehouse. ${e.message}`,
-              );
+            if (!(e instanceof ForbiddenError)) throw e;
+            mayHandOut = false;
+            if (e.accessUnreadable) {
+              void reportError(e, {
+                tag: 'schedule.auto_distribute',
+                organizationId: this.ctx.organizationId,
+                level: 'warning',
+                extra: { bundleId, scheduleEventId: id },
+              });
             }
-            throw e;
+            autoDistFailed = {
+              message: e.accessUnreadable ? null : KIT_WAREHOUSE_REFUSED_AFTER_SAVE,
+              bundleId,
+            };
           }
-
+        }
+        if (!distributedBefore.has(id) && mayHandOut) {
           const { error: distErr } = await this.ctx.supabase.rpc(
             'distribute_bundle',
             {
@@ -753,13 +841,19 @@ export class ScheduleService {
     }
 
     if (autoDistFailed) {
-      const retry = `Retry from /dashboard/bundles/${autoDistFailed.bundleId}.`;
+      // The next step names no path or id. A member the kit's page offers
+      // Distribute to (canDistributeBundles, the page's own rule) is told to
+      // hand it out there, and `details.kitId` lets the Schedule page put a
+      // link to that page on the message; anyone else is told to ask a manager.
+      const mayRetry = canDistributeBundles(this.ctx);
+      const next = mayRetry ? KIT_HAND_OUT_RETRY : KIT_HAND_OUT_ASK_A_MANAGER;
       throw new ServiceError(
         'conflict',
         autoDistFailed.message === null
-          ? `Event marked complete, but the bundle could not be distributed. ${retry}`
+          ? `Event marked complete, but the bundle could not be distributed. ${next}`
           : `Event marked complete, but bundle distribution failed: ` +
-              `${autoDistFailed.message.replace(/\.$/, '')}. ${retry}`,
+              `${autoDistFailed.message.replace(/\.$/, '')}. ${next}`,
+        mayRetry ? { kitId: autoDistFailed.bundleId } : undefined,
       );
     }
 

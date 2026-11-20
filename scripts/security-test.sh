@@ -920,6 +920,38 @@ PGTAP_TESTS=(
   # production's with its added lines removed. The lock footprint is
   # scripts/db-concurrency/0466_migration_lock_footprint.sh.
   supabase/tests/0466_retry_keys_written_by_their_functions.test.sql
+  # Changes the database records itself (0467): a change of a member's role
+  # and of an organization's sign-in policy each get their audit row from a
+  # trigger, in the transaction of the change (actor from the token, before,
+  # after, source, made_as, aal), and the app's own row for a recorded change
+  # is not stored a second time; no stored audit row is ever changed. The
+  # two-session proof is scripts/db-concurrency/0467_app_row_race.sh; the lock
+  # footprint is scripts/db-concurrency/0467_migration_lock_footprint.sh.
+  supabase/tests/0467_role_and_sign_in_policy_changes_recorded_by_database.test.sql
+  # 0470: the inventory list's value total runs as the caller (SECURITY
+  # INVOKER), so row level security bounds it: a member of one organization
+  # asking for another's id, a staff member naming a warehouse they cannot
+  # read, and a viewer naming a category they are not granted all get 0;
+  # anon may execute neither function.
+  supabase/tests/0470_inventory_list_totals_in_database.test.sql
+  # When a scheduled job last started each organization (0469): one row per
+  # job and organization, RLS on with no policy, no privilege for anon or
+  # authenticated (a signed-in owner cannot read or write it), service_role
+  # only, and the rows go with the organization.
+  supabase/tests/0469_cron_sweep_attempts.test.sql
+  # The request context reads the caller's own rows by index (0471): the same
+  # answer as 0413's body for every kind of caller (several organizations, an
+  # invitation not accepted, a disabled account, live and expired Act-as
+  # seats, no profile, nobody signed in), row level security still deciding
+  # (an expired seat and a disabled account hidden), invoker rights, no anon
+  # EXECUTE, and a change seen on the next call.
+  supabase/tests/0471_request_context_reads_by_index.test.sql
+  # Who may post a receipt on a purchase order, and reverse a posted one, for
+  # every role and the overrides that could change it: manager or above with
+  # stock:adjust; staff granted purchase_orders:manage are refused. Its case
+  # table is the one the app's rule is checked against
+  # (receipt-post-rule.parity.test.ts).
+  supabase/tests/receipt_post_rule.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -929,6 +961,16 @@ PGTAP_TESTS=(
 # MANIFEST 2 — apps/web vitest, paths relative to apps/web/
 # ═══════════════════════════════════════════════════════════════════════════
 WEB_TESTS=(
+  # The request context is asked once per page load and again on every new
+  # request: a role change, a removal or an override bites on the next one,
+  # in a page load and in a Server Action (nothing is kept across requests).
+  src/lib/auth/request-context.calls-per-request.test.ts
+
+  # 0470: the inventory list's value total takes the list's own scope (the
+  # caller's readable warehouses, a chosen warehouse only for a manager, a
+  # viewer's category grants) and every row filter; a filter added later
+  # cannot be left out of it (the drift guard).
+  src/server/services/inventory.list-value-filters.test.ts
   # Storage path traversal (HI-8) and upload content verification.
   src/lib/storage-path.test.ts
   src/server/services/storage-path-traversal.test.ts
@@ -1170,6 +1212,17 @@ WEB_TESTS=(
   src/lib/dashboard/request-cache.organization-row.test.ts
   'src/app/(dashboard)/layout.organization-row.test.tsx'
   src/server/actions/organization-row-unread.actions.test.ts
+  # An organization row that came back hidden, or with a value that is not a
+  # policy: the member is held to the strictest policy, and one with no
+  # verified authenticator is told their access could not be checked (the
+  # page's card, the action's try-again sentence from the context or from the
+  # service gate on an open page, the layout's strip), never sent to set-up,
+  # and nothing is written. A policy that was read keeps set-up; a verified
+  # authenticator at aal2 writes. An API context keeps the service gate's 403
+  # (src/server/lib/api-context-gate.policy-unread.test.ts, listed below).
+  src/server/actions/policy-unread.actions.test.ts
+  'src/app/(dashboard)/layout.authenticator-set-up.test.tsx'
+  src/components/dashboard/access-unchecked-banner.test.tsx
   src/app/api/v1/mobile/snapshot/route.step-up.test.ts
   src/app/api/client-error/route.test.ts
   # A session that still owes its authenticator code gets no organization
@@ -1201,6 +1254,20 @@ WEB_TESTS=(
   # a kind, a reason and the writes it makes (a sweep on the syntax tree, with
   # a mutation table that takes each gate out and expects it reported).
   src/test/authenticator-write.guard.test.ts
+  # A write through the API context gate from a member whose organization's
+  # authenticator policy could not be read, with no verified authenticator,
+  # gets the gate's retryable 503 before the route does anything; a member
+  # whose policy was read keeps the route's own answer (the real API context
+  # for every policy, role, factor and level; the phone's outbox routes).
+  src/server/lib/api-context-gate.policy-unread.test.ts
+  src/app/api/v1/outbox-writes.phone-contract.test.ts
+  'src/app/api/v1/items/[id]/adjust/route.phone-contract.test.ts'
+  # Only the reviewed routes load the gate, and each calls it as its first
+  # statement (after at most one read of the clock).
+  src/server/lib/api-context-gate.test.ts
+  # A receipt checks the module, the permission and the role before it reads
+  # the order, and a retry is answered from the receipt its key names.
+  'src/app/api/v1/po/[id]/receive-line/route.test.ts'
   # A member who owes authenticator set-up is sent to it by every page and
   # action through requireOrgContext(); only Security and Profile open; no
   # layout reaches that check or redirects to a path under itself, and only
@@ -1479,6 +1546,20 @@ WEB_TESTS=(
   # marker.
   src/app/api/no-raw-error-text.guard.test.ts
   src/server/lib/api-error-response.test.ts
+  # A route with no error shape of its own answers a ServiceError by its code
+  # (server/lib/service-error-response.ts): a refusal keeps its words and is
+  # not reported; an internal_error answers the fixed sentence, never the
+  # database's text or its details, and is reported once with the route's tag.
+  src/server/lib/service-error-response.test.ts
+  # The routes that answer by it, per code, plus a warehouse refusal (403, or
+  # the retryable 503 when the caller's access could not be read); and the
+  # census that every other hand-written ServiceError answer under app/api is
+  # listed with its reason.
+  src/app/api/service-error-routes.test.ts
+  src/app/api/service-error-answers.guard.test.ts
+  # The server-log text for a failed PostgREST call keeps its status, code and
+  # hint, never a server error's `details` (row values): reports carry it.
+  src/server/services/lib/postgrest-error.test.ts
   # S31: a Server Action answers a failure it did not expect with a fixed
   # sentence, never the error's own text, and reports it with the action's
   # tag (server/lib/action-error-result.ts). The same census reads every
@@ -1805,6 +1886,10 @@ WEB_TESTS=(
   src/server/services/order-storefront.test.ts
   src/server/loaders/orders-phone-catalog.test.ts
   src/server/loaders/orders-new-catalog.test.ts
+  # The realtime watcher's Server Action expires the Items/Books list caches
+  # of the SESSION's organization only (never one the client names), and only
+  # for a caller whose pages read them (manager and above with items:read).
+  src/server/actions/revalidate-inventory-view.test.ts
   src/server/loaders/orders-kits.test.ts
   src/server/loaders/orders-frequently-ordered.test.ts
 
@@ -2096,6 +2181,21 @@ WEB_TESTS=(
   src/server/services/team.update-member-role.test.ts
   src/server/actions/mfa.policy-unchanged.test.ts
 
+  # The routes the phone's outbox sends queued changes to (record and clear a
+  # count, receive a PO line, distribute a kit, append size-count events): a
+  # refusal carries only a string `details.reason` from the ServiceError
+  # (server/lib/refusal-reason.ts), so the authenticator answers
+  # ('mfa_required', 'aal2_required') are told apart from a missing
+  # permission; no other field of `details` is forwarded; an internal error
+  # keeps its fixed sentence with no details and none of the raw text. Both
+  # files carry the "Security invariant" marker. The reason is forwarded only
+  # when it is a fixed lower-case word of at most 64 characters. The size-count
+  # suite pins that the other size-count handlers answer the code and message
+  # alone, with no details.
+  src/app/api/v1/outbox-refusal-details.routes.test.ts
+  src/server/lib/refusal-reason.test.ts
+  src/app/api/v1/size-counts/route.test.ts
+
   # Schedule events, serial numbers and customer status over /api/v1 (cookie
   # or Bearer). POST /api/v1/schedule, POST
   # /api/v1/items/[id]/serials, PATCH and DELETE /api/v1/serials/[id] and
@@ -2112,14 +2212,54 @@ WEB_TESTS=(
   # refuses the change. A warehouse check on a new event that could not read
   # the caller's own access keeps that apart from a real refusal: the web
   # action answers the shared "could not check" sentence and the route the
-  # retryable 503, where a warehouse outside the scope is forbidden. All six
-  # files carry the "Security invariant" marker.
+  # retryable 503, where a warehouse outside the scope is forbidden. A change
+  # to an event checks every warehouse it depends on before anything is
+  # written, the kit's warehouse too when the change completes the event, with
+  # the same two answers and sentences that name no warehouse id; an update
+  # the row policy refuses is a plain forbidden. All seven files carry the
+  # "Security invariant" marker.
   src/app/api/v1/schedule/route.test.ts
   'src/app/api/v1/items/[id]/serials/route.test.ts'
   'src/app/api/v1/serials/[id]/route.test.ts'
   'src/app/api/v1/customers/[id]/status/route.test.ts'
   src/app/api/v1/change-routes.audit-rows.test.ts
   src/server/services/schedule.create-warehouse-check.test.ts
+  src/server/services/schedule.complete-warehouse-check.test.ts
+
+  # Load tests reach this machine only. Every k6 scenario imports the shared
+  # guard (load-tests/k6/lib/safety.js) and calls it before any request, every
+  # request passes assertRequestUrl, no scenario follows a redirect, no file of
+  # the suite holds an address that is not 127.0.0.1 or [::1], and the guard
+  # refuses the parser tricks that make a remote address look local. The Node
+  # tools fetch only with redirects refused and refuse to run behind Node's
+  # environment proxy, the app env they write sets every outside-service key
+  # the app reads to empty, and the app server the runner starts carries an
+  # outbound guard that refuses any connection off this machine.
+  src/test/load-tests-safety.guard.test.ts
+  # A kit is handed out only by a member whose role the database accepts for
+  # it (core roleCanHandOutKits: manager or above, the floor distribute_bundle
+  # applies). The Bundles service, its website action and the hand-out route
+  # refuse anyone below it with one sentence before anything is read or
+  # written (the route: 403), and the rule is the one the bundle page offers
+  # Distribute by. Completing a schedule event whose kit is still to be handed
+  # out is refused for such a member before anything is saved, by role only
+  # (a manager whose bundles:distribute is revoked completes and the kit is
+  # handed out); the sentence after a hand-out that failed names no path or id.
+  src/server/services/bundles.hand-out-role.test.ts
+  src/server/services/schedule.complete-kit-role.test.ts
+  # A receipt is posted or reversed only by a member the database accepts for
+  # it (core canPostReceipt: manager or above with stock:adjust).
+  # ReceivingService and the receive-line route refuse anyone else before
+  # anything is read, the role refusal with one sentence and no details, the
+  # same for a real and a made-up receipt; the rule is checked against every
+  # row of the pgTAP case table in receipt_post_rule.test.sql.
+  src/server/services/receiving.receipt-rule.test.ts
+  src/server/services/lib/receipt-post-rule.parity.test.ts
+  # A receipt's audit row, export event and webhook / Slack / Teams message
+  # are written once per receipt: the call that records the export event
+  # (its key is unique) writes the rest; a retry with the same key writes
+  # nothing again, and the same key with other lines is the conflict.
+  src/server/services/receiving.replay-writes-once.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

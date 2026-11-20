@@ -2,7 +2,8 @@ import 'server-only';
 
 import { cache } from 'react';
 
-import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
+import { enforcedMfaPolicy, readOrganizationMfaPolicy } from '@/lib/auth/mfa-policy';
+import { OrganizationRowUnavailableError } from '@/lib/auth/organization-row-unavailable';
 import {
   getVerifiedSessionClaimsForRequest,
   readVerifiedSessionClaimsOf,
@@ -96,8 +97,8 @@ export interface ServiceContext {
    */
   cookieClient?: Awaited<ReturnType<typeof createClient>>;
   /**
-   * True only for the context a scheduled job runs under (the cron
-   * `buildSystemContext` copies and the shared one in lib/system-context.ts).
+   * True only for the context a scheduled job runs under (the shared
+   * `loadSystemContext` in lib/system-context.ts).
    * Such a context BORROWS an owner's or admin's `userId`, because service
    * code needs a user to attribute writes to; the person did not act.
    * `audit()` stamps `metadata.is_system` on every row written under it, so
@@ -152,7 +153,13 @@ async function resolveMfaState(
   // The member the context resolved: the factor list and the claims count
   // only as THEIR session's.
   userId: string,
-): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean; mfaEnrolled: boolean }> {
+): Promise<{
+  mfaRequired: boolean;
+  mfaSatisfied: boolean;
+  mfaEnrolled: boolean;
+  /** The organization's policy was not read (POLICY_UNREAD_CONTEXTS below). */
+  policyUnread?: true;
+}> {
   try {
     // The org row (incl. mfa_policy) comes from the membership that resolved the
     // context when it can, else from the request-cached helper the dashboard
@@ -173,6 +180,9 @@ async function resolveMfaState(
     // A row this member cannot read, hidden or failed, is held to the STRICTEST
     // policy, never 'optional' (see lib/auth/mfa-policy.ts).
     const policy = enforcedMfaPolicy(org);
+    // Hidden, failed, or a value that is not a policy: held to the strictest
+    // policy above, and the context says so (mfaGateError below).
+    const unread = readOrganizationMfaPolicy(org) === null ? ({ policyUnread: true } as const) : {};
     const policyRequired =
       policy === 'all_required' ||
       (policy === 'admins_required' && isAdminRole(role));
@@ -185,7 +195,7 @@ async function resolveMfaState(
     const hasVerifiedFactor = factors.some((f) => f.status === 'verified');
     const mfaRequired = policyRequired || hasVerifiedFactor;
     if (!mfaRequired) {
-      return { mfaRequired: false, mfaSatisfied: true, mfaEnrolled: false };
+      return { mfaRequired: false, mfaSatisfied: true, mfaEnrolled: false, ...unread };
     }
     // SHORT-CIRCUIT: a user with NO verified factor can never be at AAL2, so
     // skip the assurance-level read and fail closed directly (only reachable
@@ -193,7 +203,7 @@ async function resolveMfaState(
     // the level to confirm the session actually stepped up. Same fail-closed
     // outcome as before, fewer reads.
     if (!hasVerifiedFactor) {
-      return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false };
+      return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false, ...unread };
     }
     // The access token's `aal` claim once its signature checks out (a local
     // ES256 check, no Auth round trip), never the cookie decoded unchecked:
@@ -215,6 +225,7 @@ async function resolveMfaState(
       mfaRequired: true,
       mfaSatisfied: claims?.userId === userId && claims.aal === 'aal2',
       mfaEnrolled: true,
+      ...unread,
     };
   } catch (err) {
     // Fail CLOSED — assume MFA is required and unsatisfied. A flaky
@@ -277,17 +288,18 @@ export const withContext = cache(async (): Promise<ServiceContext> => {
   // held as UNKNOWN, never as "off" and never as a wider entitlement than the
   // reads showed: asking about such a module throws ModulesUnavailableError
   // (lib/modules/module-state), the same state the API context holds.
-  const [{ mfaRequired, mfaSatisfied, mfaEnrolled }, enabledModules] = await Promise.all([
-    resolveMfaState(
-      ctx.role,
-      () => orgRowFromMembership(held) ?? getOrgRowForRequest(ctx.organizationId),
-      factorsRead,
-      ctx.userId,
-    ),
-    modulesFromMembership(held) ?? getModulesForRequest(ctx.organizationId),
-  ]);
+  const [{ mfaRequired, mfaSatisfied, mfaEnrolled, policyUnread }, enabledModules] =
+    await Promise.all([
+      resolveMfaState(
+        ctx.role,
+        () => orgRowFromMembership(held) ?? getOrgRowForRequest(ctx.organizationId),
+        factorsRead,
+        ctx.userId,
+      ),
+      modulesFromMembership(held) ?? getModulesForRequest(ctx.organizationId),
+    ]);
   logContextTiming('withContext', startMs);
-  return {
+  const serviceContext: ServiceContext = {
     organizationId: ctx.organizationId,
     userId: ctx.userId,
     role: ctx.role,
@@ -299,7 +311,36 @@ export const withContext = cache(async (): Promise<ServiceContext> => {
     enabledModules,
     cookieClient: supabase,
   };
+  if (policyUnread) POLICY_UNREAD_CONTEXTS.add(serviceContext);
+  return serviceContext;
 });
+
+/**
+ * WHICH PAGE AND SERVER ACTION CONTEXTS WERE BUILT WITHOUT READING THE POLICY.
+ *
+ * withContext() holds a policy it could not read (the organization row came
+ * back hidden, failed, or carried a value that is not a policy) to the
+ * strictest one, so the context's labels read exactly like a member whose
+ * organization requires an authenticator. Such a member with no verified
+ * authenticator gets a context only where set-up is not asked
+ * (requireOrgContext() refuses them everywhere else with the could-not-check
+ * error, lib/auth/step-up-gate.ts): the security and profile pages, and a
+ * session whose token says aal2. There the service gate tells the two apart
+ * (mfaGateError below).
+ *
+ * Kept beside the context, not on it, so the context keeps exactly its fields
+ * and values. Only the object withContext() returned is in the set; a copy
+ * (`{ ...ctx }`) is not, and gets the set-up answer, which refuses all the
+ * same. In memory only.
+ *
+ * NOT THE API'S MARK. withApiContext marks its own contexts
+ * (lib/auth/mfa-policy.ts markMfaPolicyUnread), and the API answers them
+ * through the API context gate (server/lib/api-context-gate.ts), the one
+ * place that sends the retryable answer the phone reads as "nothing was
+ * written". A route handler maps a service error to its answer itself, so the
+ * service gate keeps its 403 for an API context.
+ */
+const POLICY_UNREAD_CONTEXTS = new WeakSet<object>();
 
 export class ServiceError extends Error {
   /**
@@ -346,6 +387,10 @@ export class ServiceError extends Error {
  *   - UNENROLLED (policy demands MFA, no factor yet): the original
  *     `reason: 'mfa_required'` shape, byte-for-byte — enroll first.
  *
+ * And one case where nothing is returned: an UNENROLLED member of a page or
+ * Server Action context built from a policy that was not read. There the
+ * could-not-check error is thrown (see the first statement).
+ *
  * EXPORTED because the gate is duplicated outside `assertPermission`: the
  * profile actions and the custom-fields service each re-check
  * `mfaRequired && !mfaSatisfied` themselves (deliberately — they are their
@@ -355,6 +400,18 @@ export class ServiceError extends Error {
  * than construct its own ServiceError.
  */
 export function mfaGateError(ctx: Pick<ServiceContext, 'mfaEnrolled'>): ServiceError {
+  // A page or Server Action context built from a policy that was not read
+  // (POLICY_UNREAD_CONTEXTS above), for a member with no verified
+  // authenticator: whether set-up is owed is not known, so the answer is that
+  // their access could not be checked (OrganizationRowUnavailableError: the
+  // action's try-again sentence, the page's "couldn't check your access"
+  // card). THROWN here rather than returned, so every `throw mfaGateError(ctx)`
+  // and every reader of the returned error's `details` refuses with it as
+  // they stand. Still a refusal, at the same point: nothing passes and
+  // nothing is written.
+  if (!ctx.mfaEnrolled && POLICY_UNREAD_CONTEXTS.has(ctx)) {
+    throw new OrganizationRowUnavailableError();
+  }
   if (ctx.mfaEnrolled) {
     return new ServiceError(
       'forbidden',

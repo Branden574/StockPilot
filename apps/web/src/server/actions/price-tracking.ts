@@ -21,7 +21,17 @@ export async function fetchItemPriceAction(itemId: string): Promise<ActionResult
   }
 }
 
-export async function refreshBookPricesAction(): Promise<ActionResult<{ scanned: number; written: number; skipped: number }>> {
+export async function refreshBookPricesAction(): Promise<
+  ActionResult<{
+    scanned: number;
+    written: number;
+    skipped: number;
+    lookups: number;
+    /** Google stopped answering (a rate limit or an error): the refresh
+     *  stopped early, and the books it did not reach are left as they were. */
+    googleUnavailable: boolean;
+  }>
+> {
   try {
     const svc = await PriceTrackingService.forCurrentUser();
     const summary = await svc.refreshOrgBookPrices();

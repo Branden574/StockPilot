@@ -41,6 +41,18 @@ const authSetUpRead = {
 };
 // Added by docs/whats-new-delete-account-confirm (2026-11-16): the delete account release (every member: its entry has no audience), published later, at the top, below the Liquid Glass draft.
 const DELETE_CONFIRM_ID = 'delete-account-confirm-2026-11';
+// Added by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16): the Integrations and schedule event release (whoever can manage integrations where Integrations is on, and whoever can manage the schedule where Schedule is on), published later, at the top, below the Liquid Glass draft.
+const CONNECTION_SCHEDULE_ID = 'connection-and-schedule-messages-2026-11';
+// Added by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16): the emptied fields and schedule completion release (whoever can manage the schedule or suppliers where those modules are on, and whoever can manage the organization, locations or categories), published later, at the top, below the Liquid Glass draft.
+const EMPTIED_FIELDS_ID = 'emptied-fields-and-schedule-completion-2026-11';
+const emptiedFieldsRead = {
+  release_id: EMPTIED_FIELDS_ID,
+  // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: revision 1): the emptied fields and schedule completion release is re-announced as revision 2, so a read of it is recorded at revision 2.
+  revision: 2,
+  dismissed_at: null,
+  opened_at: '2026-11-16T12:34:00Z',
+  read_at: '2026-11-16T12:34:00Z',
+};
 const deleteConfirmRead = {
   release_id: DELETE_CONFIRM_ID,
   revision: 1,
@@ -50,11 +62,34 @@ const deleteConfirmRead = {
 };
 const apiKeyAuditRead = {
   release_id: API_KEY_AUDIT_ID,
-  revision: 1,
+  // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: revision 1): the API key audit release is re-announced as revision 2, so a read of it is recorded at revision 2.
+  revision: 2,
   dismissed_at: null,
   opened_at: '2026-11-15T21:30:00Z',
   read_at: '2026-11-15T21:30:00Z',
 };
+// Added by docs/releases-low-critical-pages (2026-11-18): the Low + critical pages and list value release (whoever can read items: every role by default), published later, at the top, below the Liquid Glass draft.
+const LOW_CRITICAL_ID = 'low-critical-pages-and-list-value-2026-11';
+const lowCriticalRead = {
+  release_id: LOW_CRITICAL_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-18T10:01:00Z',
+  read_at: '2026-11-18T10:01:00Z',
+};
+// Added by docs/whats-new-2026-11-19-errors (2026-11-19): the count start access check release (a manager or above who can assign counts, where Cycle Counts is on), published later, at the top, below the Liquid Glass draft.
+const COUNT_START_ACCESS_ID = 'count-start-access-check-2026-11';
+// Added by docs/whats-new-small-fixes-1119 (2026-11-19): the export, receipt and access release (every member: its access entry has no audience), published later, at the top, below the Liquid Glass draft.
+const EXPORT_RECEIPT_ACCESS_ID = 'export-receipt-access-fixes-2026-11';
+const exportReceiptAccessRead = {
+  release_id: EXPORT_RECEIPT_ACCESS_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-19T15:31:00Z',
+  read_at: '2026-11-19T15:31:00Z',
+};
+// Added by docs/whats-new-receiving-shown-to-managers (2026-11-19): the receiving release (whoever can open a purchase order where Receiving is on), published later, at the top, below the Liquid Glass draft.
+const RECEIVING_ID = 'receiving-shown-to-managers-2026-11';
 const PUBLISHED_AT = '2026-11-15T17:39:00Z';
 
 const release = () => RELEASES.find((r) => r.id === ID)!;
@@ -103,11 +138,29 @@ describe('the invitation audit release: order, status and date', () => {
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: RELEASES.slice(0, 3), without it): the API key audit release is published later, at the top, directly below the Liquid Glass draft.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: every pinned position one place higher): the delete account release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES.slice(0, 6).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: RELEASES.slice(0, 6)): the Integrations and schedule event release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: RELEASES.slice(0, 7)): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES.slice(0, 8)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(0, 9)): the receiving release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(0, 10)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(0, 11)): the count start access check release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    expect(RELEASES.slice(0, 12).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, directly below the Liquid Glass draft.
+      [COUNT_START_ACCESS_ID, 'published'],
+      // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, directly below the Liquid Glass draft.
+      [EXPORT_RECEIPT_ACCESS_ID, 'published'],
+      // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: without it): the receiving release is published later, at the top, directly below the Liquid Glass draft.
+      [RECEIVING_ID, 'published'],
+      // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, directly below the Liquid Glass draft.
+      [LOW_CRITICAL_ID, 'published'],
       // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: without it): the API key audit release is published later, at the top, directly below the Liquid Glass draft.
       // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, directly below the Liquid Glass draft.
       // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: without it): the delete account release is published later, at the top, directly below the Liquid Glass draft.
+      // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: without it): the Integrations and schedule event release is published later, at the top, directly below the Liquid Glass draft.
+      // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: without it): the emptied fields and schedule completion release is published later, at the top, directly below the Liquid Glass draft.
+      [EMPTIED_FIELDS_ID, 'published'],
+      [CONNECTION_SCHEDULE_ID, 'published'],
       [DELETE_CONFIRM_ID, 'published'],
       [AUTH_SET_UP_ID, 'published'],
       [API_KEY_AUDIT_ID, 'published'],
@@ -117,7 +170,13 @@ describe('the invitation audit release: order, status and date', () => {
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: ID): the API key audit release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: API_KEY_AUDIT_ID): the authenticator set-up release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: AUTH_SET_UP_ID): the delete account release is published after it, at the top, the newest published release.
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(DELETE_CONFIRM_ID);
+    // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: DELETE_CONFIRM_ID): the Integrations and schedule event release is published after it, at the top, the newest published release.
+    // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: the Integrations and schedule event release): the emptied fields and schedule completion release is published after it, at the top, the newest published release.
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: EMPTIED_FIELDS_ID): the Low + critical pages and list value release is published after it, at the top, the newest published release.
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: the Low + critical pages and list value release): the receiving release is published after it, at the top, the newest published release.
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: the receiving release): the export, receipt and access release is published after it, at the top, the newest published release.
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: the export, receipt and access release): the count start access check release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(COUNT_START_ACCESS_ID);
   });
 
   // Renamed by docs/whats-new-api-key-audit (2026-11-15; was: "is dated on a whole minute after #579 went live, in the past, with the draft placeholder at the same minute and every release below it older"): the API key audit release above is dated later, and the draft placeholder moved to its minute. Claim kept: a whole minute after #579 went live, in the past, every release below it older.
@@ -131,7 +190,13 @@ describe('the invitation audit release: order, status and date', () => {
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: every pinned position one place higher): the delete account release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(5)) {
+    // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: every pinned position one place higher): the Integrations and schedule event release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: every pinned position one place higher): the emptied fields and schedule completion release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: every pinned position one place higher): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(8)): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(9)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(10)): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(11)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -205,7 +270,8 @@ describe('the invitation audit release: who is told', () => {
   // Renamed by docs/whats-new-api-key-audit (2026-11-15; was: "is the first notice for whoever it reaches, and the navigation release is next for owners and admins"): the API key audit release is published later and reaches the same readers, who read it first. Claim kept: the notice for whoever it reaches, and the navigation release next for owners and admins.
   // Renamed by docs/whats-new-authenticator-set-up-first (2026-11-15; was: "is the notice for whoever it reaches once the API key audit release is read, and the navigation release is next for owners and admins"): the authenticator set-up release is published later and reaches every member, who read it first. Claim kept: the notice for whoever it reaches, and the navigation release next for owners and admins.
   // Renamed by docs/whats-new-delete-account-confirm (2026-11-16; was: "is the notice for whoever it reaches once the authenticator set-up and API key audit releases are read, and the navigation release is next for owners and admins"): the delete account release is published later and reaches every member, who read it first. Claim kept: the notice for whoever it reaches, and the navigation release next for owners and admins.
-  it('is the notice for whoever it reaches once the delete account, authenticator set-up and API key audit releases are read, and the navigation release is next for owners and admins', () => {
+  // Renamed by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: "is the notice for whoever it reaches once the delete account, authenticator set-up and API key audit releases are read, and the navigation release is next for owners and admins"): the emptied fields and schedule completion release is published later, at the top, and reaches owners, admins and managers by default, so it is read first. Claim kept: the notice for whoever it reaches once the newer releases are read, and the navigation release next for owners and admins.
+  it('is the notice for whoever it reaches once the emptied fields, delete account, authenticator set-up and API key audit releases are read, and the navigation release is next for owners and admins', () => {
     const read = {
       release_id: ID,
       revision: 1,
@@ -217,8 +283,12 @@ describe('the invitation audit release: who is told', () => {
       // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: nothing read): the API key audit release is published later, at the top, and reaches the same readers, so each reads it first, and the notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: without it): the delete account release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
+      // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: without it): the emptied fields and schedule completion release is published later, at the top, and reaches owners, admins and managers by default (its location and category entries need no module), so it is read or seen first, and the notice this test checks is the one it checked before.
       expect(
-        buildReleaseList(RELEASES, v, [deleteConfirmRead, authSetUpRead, apiKeyAuditRead], null).latestUnread?.id,
+        // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (every role by default), so it is read or seen first, and the notice this test checks is the one it checked before.
+        // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
+        buildReleaseList(RELEASES, v, [exportReceiptAccessRead, lowCriticalRead, emptiedFieldsRead, deleteConfirmRead, authSetUpRead, apiKeyAuditRead], null)
+          .latestUnread?.id,
         v.role,
       ).toBe(ID);
     }
@@ -227,15 +297,24 @@ describe('the invitation audit release: who is told', () => {
       expect(
         // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
         // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: without it): the delete account release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
-        buildReleaseList(RELEASES, v, [deleteConfirmRead, authSetUpRead, apiKeyAuditRead, read], null).latestUnread
-          ?.id,
+        // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: without it): the emptied fields and schedule completion release is published later, at the top, and reaches owners, admins and managers by default (its location and category entries need no module), so it is read or seen first, and the notice this test checks is the one it checked before.
+        buildReleaseList(
+          RELEASES,
+          v,
+          // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (every role by default), so it is read or seen first, and the notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
+          [exportReceiptAccessRead, lowCriticalRead, emptiedFieldsRead, deleteConfirmRead, authSetUpRead, apiKeyAuditRead, read],
+          null,
+        ).latestUnread?.id,
         v.role,
       ).toBe(NAVIGATION_ID);
     }
     // A reader it does not reach keeps the notice they had.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: without it): the authenticator set-up release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
     // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: without it): the delete account release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
-    expect(buildReleaseList(RELEASES, staff, [deleteConfirmRead, authSetUpRead], null).latestUnread?.id).not.toBe(ID);
+    // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (every role by default), so it is read or seen first, and the notice this test checks is the one it checked before.
+    // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
+    expect(buildReleaseList(RELEASES, staff, [exportReceiptAccessRead, lowCriticalRead, deleteConfirmRead, authSetUpRead], null).latestUnread?.id).not.toBe(ID);
     // An older phone build shows the newest one it has not seen: this title and summary, with
     // the link to the page.
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: nothing seen): the API key audit release is published later and reaches managers, so the phone has seen it first.
@@ -243,6 +322,14 @@ describe('the invitation audit release: who is told', () => {
     // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: without it): the delete account release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
     expect(
       legacyAnnouncementsFor(RELEASES, manager, {
+        // Re-pinned by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was: without it): the emptied fields and schedule completion release is published later, at the top, and reaches owners, admins and managers by default (its location and category entries need no module), so it is read or seen first, and the notice this test checks is the one it checked before.
+        // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (every role by default), so it is read or seen first, and the notice this test checks is the one it checked before.
+        // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, and reaches a manager or above who can assign counts where Cycle Counts is on (an owner with every permission and module among them), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+        [COUNT_START_ACCESS_ID]: true,
+        // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
+        [EXPORT_RECEIPT_ACCESS_ID]: true,
+        [LOW_CRITICAL_ID]: true,
+        [EMPTIED_FIELDS_ID]: true,
         [DELETE_CONFIRM_ID]: true,
         [AUTH_SET_UP_ID]: true,
         [API_KEY_AUDIT_ID]: true,

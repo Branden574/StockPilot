@@ -71,6 +71,86 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+describe('WarehousesManager edit and create payloads', () => {
+  const FILLED = {
+    ...ROW,
+    contact_name: 'Dana Example',
+    contact_email: 'dana@example.com',
+    contact_phone: '555-010-0123',
+    notes: 'Dock door 4',
+  };
+
+  function renderRows(rows: Parameters<typeof WarehousesManager>[0]['initial']) {
+    return render(
+      <WarehousesManager
+        view="active"
+        initial={rows}
+        charters={CHARTERS}
+        managers={[{ id: 'm1', name: 'Morgan Manager' }]}
+        termSingular="Depot"
+        charterSingular="Region"
+        eyebrow="Admin"
+        title="Depots"
+        subline="Physical locations stock lives in."
+      />,
+    );
+  }
+
+  it('Edit sends emptied fields as cleared and keeps the others', async () => {
+    actions.update.mockResolvedValue({ ok: true });
+    renderRows([FILLED]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Contact name' }), {
+      target: { value: '' },
+    });
+    fireEvent.change(within(dialog).getByLabelText(/Notes/), { target: { value: '' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(actions.update).toHaveBeenCalledTimes(1));
+    expect(actions.update).toHaveBeenCalledWith('w1', {
+      name: 'North DC',
+      code: 'NDC',
+      charterIds: ['c1'],
+      managerUserId: null,
+      contactName: '',
+      contactEmail: 'dana@example.com',
+      contactPhone: '555-010-0123',
+      notes: '',
+    });
+    // An edit never sets the record's status.
+    expect('status' in actions.update.mock.calls[0]![1]).toBe(false);
+  });
+
+  it('Edit leaves out an optional field that was empty and stayed empty', async () => {
+    actions.update.mockResolvedValue({ ok: true });
+    renderRows([ROW]);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(actions.update).toHaveBeenCalledTimes(1));
+    const [, payload] = actions.update.mock.calls[0]!;
+    for (const key of ['contactName', 'contactEmail', 'contactPhone', 'notes']) {
+      expect(payload[key]).toBeUndefined();
+    }
+  });
+
+  it('New sends an empty optional field as left out', async () => {
+    actions.create.mockResolvedValue({ ok: true, data: { id: 'w9' } });
+    renderRows([ROW]);
+    fireEvent.click(screen.getByRole('button', { name: /New depot/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'South DC' } });
+    fireEvent.change(within(dialog).getByLabelText('Code'), { target: { value: 'SDC' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create depot' }));
+    await waitFor(() => expect(actions.create).toHaveBeenCalledTimes(1));
+    const [payload] = actions.create.mock.calls[0]!;
+    expect(payload).toMatchObject({ name: 'South DC', code: 'SDC', status: 'active' });
+    for (const key of ['contactName', 'contactEmail', 'contactPhone', 'notes']) {
+      expect(payload[key]).toBeUndefined();
+    }
+  });
+});
+
 describe('WarehousesManager', () => {
   it('draws the page header with the terminology title, the view toggle and New', () => {
     renderManager();
@@ -164,7 +244,6 @@ describe('WarehousesManager', () => {
         name: 'North DC',
         code: 'NDC',
         charterIds: ['c2'],
-        status: 'active',
       }),
     );
   });

@@ -131,7 +131,24 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whats-new-delete-account-confirm (2026-11-16; was: '2026-11-15T23:48:00Z'):
     // the delete account release below is dated 2026-11-16T04:03:00Z, so the placeholder is that same
     // minute.
-    publishedAt: '2026-11-16T04:03:00Z',
+    // Moved again by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was:
+    // '2026-11-16T04:03:00Z'): the Integrations and schedule event release below is dated
+    // 2026-11-16T09:39:00Z, so the placeholder is that same minute.
+    // Moved again by docs/whats-new-emptied-fields-and-schedule-completion (2026-11-16; was:
+    // '2026-11-16T09:39:00Z'): the emptied fields and schedule completion release below is dated
+    // 2026-11-16T12:33:00Z, so the placeholder is that same minute.
+    // Moved again by docs/releases-low-critical-pages (2026-11-18; was: '2026-11-16T12:33:00Z'): the Low +
+    // critical pages and list value release below is dated 2026-11-18T10:00:00Z, so the placeholder is that
+    // same minute.
+    // Moved again by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: '2026-11-18T10:00:00Z'): the
+    // receiving release below is dated 2026-11-19T05:20:00Z (the whole minute after its change went live),
+    // so the placeholder is that same minute.
+    // Moved again by docs/whats-new-small-fixes-1119 (2026-11-19; was: '2026-11-19T05:20:00Z'): the export,
+    // receipt and access release below is dated 2026-11-19T16:00:00Z (a stand-in until the integrator sets
+    // the real minute at merge), so the placeholder is that same minute.
+    // Moved again by docs/whats-new-2026-11-19-errors (2026-11-19; was: '2026-11-19T16:00:00Z'): the count
+    // start access check release below is dated 2026-11-19T20:41:00Z, so the placeholder is that same minute.
+    publishedAt: '2026-11-19T20:41:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -216,6 +233,640 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'count-start-access-check-2026-11',
+    revision: 1,
+    // One fix already live on the web server: "API routes answer a service
+    // refusal by its code through serviceErrorResponse" (#624, 6e17cdfed).
+    // publishedAt is the whole minute this release's pull request was opened;
+    // it goes live as soon as it merges. The Liquid Glass draft placeholder
+    // above takes the same minute.
+    // Left out as not visible, each checked at 6e17cdfed:
+    // - Connecting Zendesk now answers a refusal with its own status (400,
+    //   409, 401) where it answered 500, but the words were already the
+    //   service's own: the old catch sent { error, message: e.message } for
+    //   every ServiceError, and an internal_error's message was already the
+    //   generic one (server/services/context.ts ServiceError). Only the web
+    //   card's Server Action (server/actions/zendesk.ts) and the phone's
+    //   Zendesk screen ((drawer)/zendesk.tsx, which shows e.message whatever
+    //   the status) connect, and the route is the phone's only. A fault that
+    //   is not a ServiceError reads "Something went wrong. Please try again."
+    //   where it read "Unexpected error": the words of a failure, not a fix.
+    // - Starting a count: the same for every ServiceError (conflict, signed
+    //   out): the old catch already sent its words, and the phone's alert
+    //   shows them whatever the status (count-select-offers.ts
+    //   countStartFailureMessage). Only the warehouse check below changed.
+    // - The phone's Cycle counts list (GET /api/v1/cycle-counts): its service
+    //   (listPage) throws no warehouse refusal. A failed read of the member's
+    //   warehouses is an internal_error (services/lib/count-read-scope.ts
+    //   readCountScope), answered 500 before and after, and the list already
+    //   kept the counts saved on the phone for any answer but a 403
+    //   forbidden or module_disabled ((tabs)/cycle-counts.tsx, the catch of
+    //   the list load). Nothing a member sees changed there.
+    // - Error reports no longer carry the database's row details, and the
+    //   route guard test: internal.
+    // Who is told: whoever can start a count (count-start-preflight.ts
+    // assertCountStartFloors: a manager or above with cycle_counts:assign
+    // and stock:adjust, Cycle Counts on). An audience names one permission
+    // list, any of which counts, so it names cycle_counts:assign, the
+    // permission the start is named for. No link: the phone's New count
+    // opens from the Cycle counts list and the select bar, not a web page.
+    status: 'published',
+    title: "Starting a count in the mobile app says when your access couldn't be checked",
+    summary:
+      'In the mobile app, when StockPilot can\'t check your warehouse access for a moment as you start a count, the app now says "Your warehouse access couldn\'t be checked just now, so nothing was changed. Try again." It used to say you do not have access to the warehouse, and named it by a long code. No app update is needed.',
+    publishedAt: '2026-11-19T20:41:00Z',
+    entries: [
+      {
+        // platform: phone, through the server (no app update; the web starts
+        // a count through its own Server Action, which #624 did not change).
+        // From: #624. Checked at 6e17cdfed: the phone's New count posts to
+        // POST /api/v1/cycle-counts (apps/mobile/app/cycle-count/new.tsx:100)
+        // and shows the answer's message in the alert "Could not start count"
+        // (:120, src/lib/count-select-offers.ts:66: every message but the old
+        // "Missing permission:" one as sent; src/lib/api.ts:221 reads the
+        // body's message whatever the status). A selection count runs
+        // gateCountItems (server/services/cycle-counts.ts:1361), which asks
+        // assertWarehouseAccess(wh, 'write') for each warehouse
+        // (server/services/lib/count-start-preflight.ts:171). When the
+        // member's own access could not be read, that refusal carries
+        // accessUnreadable (lib/auth/warehouse.ts:302-304 and :313-315). The
+        // route now answers through serviceErrorResponse
+        // (app/api/v1/cycle-counts/route.ts:138), which sends a warehouse
+        // refusal to forbiddenOrInternalResponse: 503 check_failed, Retry-After
+        // 5, with core ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY
+        // (server/lib/api-error-response.ts:161-166;
+        // packages/core/src/guards/db-guard-copy.ts:46-47). Before, the route
+        // answered every ForbiddenError 403 with its own message (route.ts:159
+        // at 6e17cdfed^): "User does not have write access to warehouse
+        // <warehouse id>.". The start writes nothing before the check.
+        // Rare: for a manager both the warehouse list and the one-warehouse
+        // read must fail (warehouse.ts accessWhenUnreadable keeps every
+        // warehouse by role), so the entry says "for a moment", not how often.
+        // Audience: as the release comment above.
+        id: 'count-start-access-could-not-be-checked',
+        category: 'fixed',
+        area: 'Cycle counts',
+        title: "Starting a count says when your access couldn't be checked",
+        whatChanged:
+          'In the mobile app, when StockPilot can\'t check your warehouse access for a moment as you start a count, the "Could not start count" message now says "Your warehouse access couldn\'t be checked just now, so nothing was changed. Try again."',
+        whyItMatters:
+          'Before, the message said you do not have access to the warehouse and named it by a long code, even when you do have access and only the check had failed.',
+        howItAffectsYou:
+          'This is usually temporary. Press Start count again a moment later. Nothing changes when the check works.',
+        whatToDo:
+          'No action needed. No app update is needed. If the message stays, try again later or tell your admin.',
+        audience: {
+          roles: ['owner', 'admin', 'manager'],
+          anyPermission: ['cycle_counts:assign'],
+          modules: ['cycle_counts'],
+        },
+      },
+    ],
+  },
+  {
+    id: 'export-receipt-access-fixes-2026-11',
+    revision: 1,
+    // Three fixes already live on the web, each its own pull request:
+    // "Inventory export, its preview and the bundle list answer a service
+    // refusal by its code" (#619), "A receipt writes its audit row and sends
+    // its webhook, Slack and Teams messages once" (#621) and "A page or Server
+    // Action whose authenticator policy was not read tells the member their
+    // access could not be checked" (#622). SET AT MERGE: publishedAt is a
+    // stand-in, 2026-11-19T16:00:00Z; the integrator sets the whole minute at
+    // or after the last of the three production deployments going live, and
+    // the Liquid Glass draft placeholder above takes the same minute.
+    // Left out as not visible: "Reversing a receipt follows the rule the
+    // database applies" (#620). The web already showed Reverse only to a
+    // manager or above with Adjust on-hand (purchase-orders/[id]/page.tsx
+    // canReverse), and the phone has no Reverse, so only a call made outside
+    // the app meets the new sentence "Only a manager can reverse a receipt.".
+    // The database refusing what the app already refused is not visible to
+    // anyone using the app as intended, so it has no entry (the rule this
+    // registry has followed since the order approvals release). Also left
+    // out: #619's phone kit list (GET /api/v1/bundles), which changes only
+    // the words of a failed read.
+    // Who is told: every member, through access-could-not-be-checked (no
+    // audience); the export entry to whoever can export items
+    // (items:export), and the receipt entry to whoever can receive (core
+    // canPostReceipt: a manager or above with stock:adjust, Receiving on). No
+    // links: the export dialog sits on Items and Books, which items:read
+    // opens, and anyPermission cannot ask for both.
+    status: 'published',
+    title:
+      'Export refusals say why, a receipt sent again is recorded once, and pages say when your access could not be checked',
+    summary:
+      "On the web, the Customize export dialog now says so when you do not have permission to export, instead of offering Try again. A receipt sent again, for example after a slow connection, now shows once in the Audit log and reaches webhooks, Slack and Teams once. When StockPilot can't read your organization's sign-in settings for a moment, the web now says your access could not be checked and offers Try again, instead of asking you to set up an authenticator app.",
+    publishedAt: '2026-11-19T16:00:00Z',
+    entries: [
+      {
+        // platform: web (the phone has no Items export). From: #619. Checked
+        // at f9848e806: both export routes answer through
+        // server/lib/service-error-response.ts (a ServiceError other than
+        // internal_error keeps its code, its words and its status, 403 for
+        // forbidden; anything else goes to internalErrorResponse, reported,
+        // with "Something went wrong. Please try again."). Before, every
+        // ServiceError answered 500 with its own words.
+        // lib/download-export.ts errorFromResponse turns a 403 forbidden into
+        // ExportRefusedError; the dialog's sample (export-builder-dialog.tsx
+        // :235, export-builder-preview.tsx :79-81) then shows that sentence
+        // with no Try again, where a 500 showed "Could not load a sample of
+        // this export. You can still export the file." with Try again
+        // (:82-95). The export itself already showed the server's words
+        // inside the dialog (export-builder-dialog.tsx :413). The route asks
+        // items:export before the service, so a refusal is rare: the entry
+        // says "when", not how often.
+        id: 'export-refusals-say-why',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Export says why when it is refused',
+        whatChanged:
+          'In the Customize export dialog on Items and Books, when the server refuses to show a sample of the export because you do not have permission, the sample area now says so, with no Try again. When an export fails on the server, the dialog says "Something went wrong. Please try again." and the failure is recorded so it can be found and fixed.',
+        whyItMatters:
+          'A refusal looked like a failure: the sample said it could not load and offered Try again, which could not help.',
+        howItAffectsYou:
+          'Nothing changes for an export that works. If an export is refused, the dialog tells you why.',
+        whatToDo: 'No action needed. If the dialog says you do not have permission, ask an admin.',
+        audience: { anyPermission: ['items:export'] },
+      },
+      {
+        // platform: web and phone, through the server (no app update). From:
+        // #621. Checked at f9848e806: server/services/receiving.ts records the
+        // export event first (publishOutboxEvent, key receipt.posted:<receipt
+        // id>, unique per organization: publish_outbox returns the new id to
+        // one call and null to every other one); when the answer is false (the
+        // event was already recorded) it returns the receipt with no audit row
+        // (stock.receipt.posted, the Audit log), no po.received message
+        // (dispatchEvent: webhooks, Slack, Teams) and no auto-unarchive. The
+        // QuickBooks Bill is made from that event, which was already recorded
+        // once. A retry with the same key never moved stock again
+        // (post_receipt_v2 answers the stored receipt).
+        // Audience: whoever can post a receipt (core canPostReceipt: manager or
+        // above with stock:adjust), where Receiving is on.
+        id: 'receipt-sent-again-recorded-once',
+        category: 'fixed',
+        area: 'Receiving',
+        title: 'A receipt sent again is recorded once',
+        whatChanged:
+          'When a receipt on a purchase order is sent again, for example after a slow connection, the Audit log now shows it once, and webhooks, Slack and Teams hear about it once.',
+        whyItMatters:
+          'A receipt sent again only added stock once, but the Audit log could show it twice, and webhooks, Slack and Teams could be told about it twice.',
+        howItAffectsYou:
+          'Nothing changes in how you receive. If you use QuickBooks, its bill for the receipt was already made once.',
+        whatToDo: 'No action needed.',
+        audience: {
+          roles: ['owner', 'admin', 'manager'],
+          anyPermission: ['stock:adjust'],
+          modules: ['receiving'],
+        },
+      },
+      {
+        // platform: web (no API answer changed, so the phone sees nothing
+        // new). From: #622. Checked at f9848e806: app/(dashboard)/layout.tsx
+        // draws AccessUncheckedBanner (components/dashboard/
+        // access-unchecked-banner.tsx: "We couldn't check your access just
+        // now. Some pages may be unavailable. This is usually temporary."
+        // with Try again) when the organization's policy was not read and the
+        // member has no verified authenticator, and no longer the set-up
+        // banner; every page not open before set-up shows the card "This page
+        // couldn't be loaded" / "We couldn't check your access just now. This
+        // is usually temporary." (lib/known-error-states.ts:50-51,
+        // lib/auth/step-up-gate.ts), never the redirect to set-up; an action
+        // answers "Your access could not be checked. Please try again." and
+        // writes nothing. Before, the member was held to the strictest policy
+        // and sent to set up an authenticator, whatever the organization asks.
+        // Audience: none (every member).
+        id: 'access-could-not-be-checked',
+        category: 'fixed',
+        area: 'Account',
+        title: "Pages say when your access couldn't be checked",
+        whatChanged:
+          'If StockPilot can\'t read your organization\'s sign-in settings for a moment and you have not set up an authenticator app, the web now says "We couldn\'t check your access just now." at the top of the page, with Try again, and most pages show "This page couldn\'t be loaded" with the same words. A change made then is not saved and says "Your access could not be checked. Please try again."',
+        whyItMatters:
+          'Before, the web asked you to set up an authenticator app in that moment, even if your organization does not ask for one.',
+        howItAffectsYou:
+          'This is usually temporary. Press Try again a moment later. If your organization does ask for an authenticator app, you are asked to set one up once the settings can be read.',
+        whatToDo: 'No action needed. If the message stays, try again later or tell your admin.',
+      },
+    ],
+  },
+  {
+    id: 'receiving-shown-to-managers-2026-11',
+    revision: 1,
+    // Web change with a phone half (the pull request "Receiving follows the
+    // rule the database applies", #617). SET AT MERGE: publishedAt is the
+    // whole minute after #617's production deployment went live; this
+    // release merges right after it, and the Liquid Glass draft placeholder
+    // above takes the same minute.
+    // Claims checked against #617's code (paths under apps/web/src unless
+    // they start with apps/mobile or packages/):
+    // - Who may post a receipt: packages/core canPostReceipt (manager or
+    //   above with stock:adjust), the rule post_receipt_v2 applies
+    //   (supabase/tests/receipt_post_rule.test.sql). ReceivingService
+    //   refuses anyone else before anything is read, with core
+    //   RECEIVE_MANAGER_ONLY_COPY, "Only a manager can receive purchase
+    //   orders." (server/services/lib/receipt-post-rule.ts).
+    // - The web page (app/(dashboard)/dashboard/purchase-orders/[id]/
+    //   page.tsx): Receive items when canPostReceipt holds; that sentence for
+    //   a member with stock:adjust below manager; without stock:adjust the
+    //   earlier sentence (dbPermissionRefusedCopy('receipt_post')), as the
+    //   receiving-follows-permission entry told.
+    // - The phone after its next update: showReceiveCta and receiveNoticeFor
+    //   (apps/mobile/src/lib/cta-gating.ts) on app/po/[id].tsx. Before that
+    //   update, Post receipt posts to POST /api/v1/po/[id]/receipts, which
+    //   answers 403 with the sentence and no details, and the screen's
+    //   failure arm shows it (receipt-post-error.ts default arm) in place of
+    //   "PO or line not found.", the answer to the database's refusal before.
+    // - The Roles page: Manage purchase orders reads "Create, approve, and
+    //   cancel POs. Receiving a PO needs a manager or above." (core
+    //   PERMISSION_META).
+    // Who is told: whoever can open a purchase order where Receiving is on
+    // (purchase_orders:read, module receiving), as the
+    // receiving-follows-permission entry. No link.
+    status: 'published',
+    title: 'Receive items on a purchase order shows only for people who can receive',
+    summary:
+      'On the web, Receive items on a purchase order now shows only for managers, admins and owners with the Adjust on-hand permission, and staff see "Only a manager can receive purchase orders." in its place. The mobile app does the same after its next update. Until then, Post receipt in the app answers a staff member with that sentence instead of "PO or line not found."',
+    publishedAt: '2026-11-19T05:20:00Z',
+    entries: [
+      {
+        id: 'receive-items-for-people-who-can-receive',
+        category: 'fixed',
+        area: 'Receiving',
+        title: 'Receive items shows only for people who can receive',
+        whatChanged:
+          'On the web, on a purchase order ready to receive, Receive items now shows only for managers, admins and owners with the Adjust on-hand permission. Staff with Adjust on-hand see "Only a manager can receive purchase orders." in its place, and still see what was ordered and received. In the mobile app, Scan, the quantities and Post receipt follow the same rule after the next update. Until then, when a staff member taps Post receipt in the app, it says "Only a manager can receive purchase orders." On the Roles page, Manage purchase orders says that receiving a PO needs a manager or above.',
+        whyItMatters:
+          'Only managers, admins and owners have ever been able to post a receipt. Staff were offered Receive items and Post receipt, and every receipt they posted was refused with "PO or line not found." Nothing was recorded.',
+        howItAffectsYou:
+          'Nothing changes in who can receive. If you are on staff, ask a manager to post the receipt. Without Adjust on-hand, a purchase order says what it said before.',
+        whatToDo:
+          'No action needed. In the mobile app, the next update comes when the app says Update ready: tap Restart now, or close the app completely and open it again.',
+        audience: { anyPermission: ['purchase_orders:read'], modules: ['receiving'] },
+      },
+    ],
+  },
+  {
+    id: 'low-critical-pages-and-list-value-2026-11',
+    revision: 1,
+    // One web change, no phone update:
+    // - #609 (squash 86625dbbf), live in production since 2026-11-18
+    //   09:59:07Z (deployment dpl_4Bu6aVJihnSbh9sd2GdF7vLCTBGn). It uses the
+    //   two database functions of migration 0470 (#614, squash 01782aa99),
+    //   applied before #609 merged.
+    // publishedAt is the whole minute after that deployment went live. It is
+    // the newest published release, so it sits directly below the Liquid
+    // Glass draft, whose placeholder moved to the same minute.
+    // Claims checked against the code at 86625dbbf (paths under apps/web/src
+    // unless they start with supabase/):
+    // - Low + critical is stock=low (components/inventory/inventory-table.tsx
+    //   VIEWS and the chip that sets stock=low), filters.lowStock in
+    //   InventoryService (inventory/page.tsx and books/page.tsx both pass
+    //   lowStock: params.stock === 'low'; both pages are 30 records a page,
+    //   PAGE_SIZE).
+    // - The low rule is the computed field is_low_stock
+    //   (supabase/migrations/0470: no stock, or a reorder point above 0 with
+    //   the quantity at or under it), applied in the request by
+    //   applyContentFilters (server/services/inventory.ts, query.eq
+    //   ('is_low_stock', true)), which list()'s page and its exact count, and
+    //   listPlanRows' scan (filteredScanPage), all go through. So a fixed page
+    //   is the requested 30-record slice of the low or critical records
+    //   (.range on the filtered query), the count is theirs, and listPlanRows'
+    //   2,000 cap (INSTANT_MODE_MAX_ROWS, lib/inventory/instant-mode.ts;
+    //   first.count > INSTANT_MODE_MAX_ROWS returns null) counts them. Before
+    //   (86625dbbf^), the request carried only the pre-filter
+    //   or(reorder_point.gt.0, quantity_on_hand.lte.0) and list() kept the
+    //   low ones among the 30 it read, while the count came from the whole
+    //   low set; the plan's cap counted the pre-filtered records. A list of
+    //   2,000 or fewer is planned (planLivePage in
+    //   server/services/lib/planned-page.ts, for every role, on Items and
+    //   Books: pages that keep a header's records together, which can end
+    //   before 30 records), so the 30-per-page words are said of longer lists
+    //   only.
+    // - The value: list() asks inventory_list_value once, with
+    //   buildItemListValueFilters (the same filters and the caller's
+    //   warehouse and category scope), in parallel with the page, unless the
+    //   page is planned (planned pages bring plannedTotals from listPlanRows,
+    //   unchanged). The function (0470) adds up quantity_on_hand * unit_cost
+    //   in one SELECT, as the caller (SECURITY INVOKER, row level security).
+    //   Before, fetchAllRows read the filtered view 1,000 records at a time
+    //   ordered by id, in parallel with the page, and list() returned once
+    //   both were done; a record added or removed between two reads moves the
+    //   later windows, so one could be read twice or not at all. The figure
+    //   is the "on hand" amount in the count line above the list, beside the
+    //   top pager (inventory-table.tsx). Managers, admins and owners on the
+    //   default view (page 1 of the whole list, no filter, default order) are
+    //   served the stored figure 'inventory-value-v1'
+    //   (server/loaders/inventory-list.ts, loadInventoryValueOnHand: the
+    //   inventory_value_on_hand aggregate of 0227), unchanged, and the words
+    //   say so.
+    // - Measured on a local copy only; no speed is claimed.
+    // Who is told: whoever can read items (items:read), on both entries, as
+    // the release that planned Low + critical pages; no links.
+    status: 'published',
+    title:
+      'Every page of a long Low + critical list is full, and the on hand value is added up in one read',
+    summary:
+      'On the web, a Low + critical list on Items or Books of more than 2,000 low or critical records now shows 30 of them on every page but the last, and its count and pages are those of the low or critical records. The on hand value above a long list is now added up in one read, so a record added or removed while it is being added up can no longer be counted twice or left out.',
+    publishedAt: '2026-11-18T10:00:00Z',
+    entries: [
+      {
+        id: 'low-critical-pages-full',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Every page of a long Low + critical list is full',
+        whatChanged:
+          "On the web, with Low + critical chosen on Items or Books, a list of more than 2,000 low or critical records, cut every 30 records, now shows 30 of them on every page but the last. A list of 2,000 or fewer keeps each header's records together on a page, as other lists of that size do, however many records have a reorder point.",
+        whyItMatters:
+          'A page cut every 30 records used to read 30 records that have a reorder point or no stock and then show only the low or critical ones among them, so it could show a few or none while later pages held more. A list with more than 2,000 such records was cut that way even when far fewer of them were low or critical.',
+        howItAffectsYou:
+          'The count above the list and the number of pages are those of the low or critical records, and no page before the last is short or empty.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        id: 'list-value-added-up-in-one-read',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'The on hand value above a long list is added up in one read',
+        whatChanged:
+          'On the web, the on hand value above Items or Books (quantity on hand times unit cost, over every record the list matches) is now added up in one read when the list has more than 2,000 records. Managers, admins and owners looking at the first page of the whole list in its usual order, with no filter, keep the figure StockPilot already stores for it.',
+        whyItMatters:
+          'It used to be added up by reading every record of the list, 1,000 at a time, before the page was shown. A record added or removed between two of those reads could be counted twice or left out.',
+        howItAffectsYou:
+          'The value covers the same records as before: the filters and rack you chose, Low + critical, and only what you are allowed to see. Lists of 2,000 records or fewer add it up as before.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:read'] },
+      },
+    ],
+  },
+  {
+    id: 'emptied-fields-and-schedule-completion-2026-11',
+    // Revision 2 (bundles/hand-out-follows-the-manager-rule, 2026-11-16; was:
+    // 1): #603 checks the caller's role, against the floor of a kit hand-out
+    // (packages/core roleCanHandOutKits: manager or above), before the stored
+    // kit warehouse when an event with a kit not handed out yet is completed.
+    // Only staff and viewers can lack write access to a warehouse of their
+    // organization (managers and above work in every warehouse), so everyone
+    // revision 1's schedule entry describes reads the role sentence from Mark
+    // complete, and the warehouse sentence it quotes is read by nobody there:
+    // a material change (docs/releases/PUBLISHING.md: bump the revision to
+    // re-announce). The schedule entry and the summary's schedule sentence are
+    // rewritten to the code at #603's head and the release is told again to
+    // whoever read revision 1. Its place and its date stay: the registry is
+    // newest first by first publication. The four field entries are as they were.
+    revision: 2,
+    // Two web changes, no phone update and no migration:
+    // - #595 (squash c05cf8ffa), live in production since 2026-11-16
+    //   12:10:47Z (its GitHub deployment status, Production, success, is
+    //   stamped 12:10:31Z).
+    // - #597 (squash 0a6215d57), live in production since 2026-11-16
+    //   12:32:17Z (its deployment status is stamped 12:32:00Z).
+    // publishedAt is the whole minute after both. #597 went live after #591,
+    // so this release sits above the Integrations and schedule event release
+    // and is the newest published release.
+    // Claims checked against the code at 0a6215d57 (paths under apps/web/src):
+    // - The four field entries: lib/edited-optional-text.ts
+    //   editedOptionalText sends an emptied field whose record had text as
+    //   '', and leaves out an empty field whose record had none; update() in
+    //   server/services/{suppliers,charters,warehouses,locations,categories}.ts
+    //   stores '' as null and keeps a column whose key is left out. The
+    //   fields named are the ones each edit dialog sends through the helper:
+    //   components/suppliers/suppliers-manager.tsx (Contact name, Phone,
+    //   Email, Website, Notes), components/admin/charters-manager.tsx (Code,
+    //   Description, the Contact name, email and phone boxes, Internal
+    //   notes), components/admin/warehouses-manager.tsx (the Contact name,
+    //   email and phone boxes, Notes), components/locations/
+    //   locations-manager.tsx (Notes), components/categories/
+    //   categories-manager.tsx (Description). The charter address and a
+    //   category's colour are not sent through it and are not named. Each
+    //   dialog's edit button reads Save changes.
+    // - Who is told about the fields, one entry per gate, so nobody is told
+    //   of a dialog they cannot open: suppliers/page.tsx checks the suppliers
+    //   module and passes canManage (suppliers:manage) for Edit, and
+    //   SuppliersService.update asserts both; admin/layout.tsx sends anyone
+    //   without organization:update away from admin/charters and
+    //   admin/warehouses, and both services' update() assert it; Edit on
+    //   locations/page.tsx needs locations:manage and on categories/page.tsx
+    //   categories:manage, which LocationsService.update and
+    //   CategoriesService.update assert (neither page nor service checks a
+    //   module).
+    // - The schedule entry (revision 2, checked against the code at #603's
+    //   head): server/services/schedule.ts update(). A save that moves an
+    //   event from in progress to completed, with no hand-out yet, whose kit
+    //   (bundle, quantity and kit warehouse, the patch over the stored row;
+    //   the schema takes the three together) is set, refuses a caller whose
+    //   role is below manager (roleCanHandOutKits) before anything is written,
+    //   with the ServiceError 'forbidden' and SCHEDULE_COMPLETE_KIT_HAND_OUT_
+    //   REFUSED. Only after that does it check write access to a kit warehouse
+    //   the patch does not name (SCHEDULE_COMPLETE_KIT_WAREHOUSE_REFUSED), which
+    //   a manager or above passes for every warehouse of the organization, so
+    //   Mark complete answers that sentence to nobody and the entry does not
+    //   quote it. Mark complete (components/schedule/schedule-status-actions.tsx,
+    //   shown for an in progress event) sends only { status: 'completed' },
+    //   so those are the checks it meets; it shows the result's message as an
+    //   error toast, and the event keeps its status. A change the row policy
+    //   refuses (SCHEDULE_EVENT_UPDATE_REFUSED) is met by any other save; a
+    //   completion of someone else's event with a kit not handed out yet meets
+    //   the role check first, so the entry says "any other change". The event page shows the
+    //   buttons with canManage (schedule:manage) and checks the schedule
+    //   module (schedule/[id]/page.tsx), and its Linked bundle line says how
+    //   many kits will be distributed from which warehouse when the event is
+    //   marked complete. The Edit and New event form
+    //   (components/schedule/schedule-event-form.tsx) sends the event's
+    //   warehouse and, with a bundle, its Distribute from warehouse, so its
+    //   refusals are SCHEDULE_EVENT_WAREHOUSE_REFUSED and
+    //   SCHEDULE_KIT_WAREHOUSE_REFUSED (create() and update() through
+    //   assertWarehouseWrite). An update that comes back with no row is
+    //   SCHEDULE_EVENT_UPDATE_REFUSED. server/actions/schedule.ts answers
+    //   each through actionErrorResult, which keeps a ServiceError's words.
+    //   The entry says only who completes such an event and that anyone else
+    //   is refused before anything is saved: it does not say that completing
+    //   always hands a kit out, nor that a completed event always has its
+    //   hand-out. The phone
+    //   has no Mark complete (apps/mobile/app/(drawer)/schedule.tsx lists
+    //   events; apps/mobile/app/schedule/new.tsx inserts through its own
+    //   path).
+    // - Not told: #595's charter and warehouse edit payloads leave the status
+    //   out (an edit keeps it), and a blank charter code is stored as null on
+    //   create too; #597's four API routes that answer 403 when their module
+    //   is off. None changes what a page shows.
+    status: 'published',
+    title:
+      'Emptying a field and saving clears it, and clearer messages when a schedule event is not saved',
+    summary:
+      "On the website, emptying an optional field when you edit a supplier, charter, warehouse, location or category, and saving, now clears it. Mark complete on a schedule event whose kits have not been handed out yet says, before anything is saved, when the event has to be completed by a manager, and the event stays In progress. The mobile app is unchanged.",
+    // #595 is live in production since 2026-11-16 12:10:47Z, #597 since 12:32:17Z.
+    publishedAt: '2026-11-16T12:33:00Z',
+    entries: [
+      {
+        id: 'schedule-complete-kit-warehouse-refused',
+        category: 'improved',
+        area: 'Schedule',
+        title: 'Mark complete says right away when a schedule event has to be completed by a manager',
+        whatChanged:
+          "On the website, a schedule event whose kits have not been handed out yet is marked complete by a manager, an admin or an owner. When anyone else chooses Mark complete on it, the event is not completed and StockPilot says: You can't complete this event because its kit has to be handed out by a manager. Ask a manager to complete it.",
+        whyItMatters: 'You find out before anything is saved, and the event stays In progress.',
+        howItAffectsYou:
+          "Saving an event on New event or Edit with a warehouse you don't have write access to now says: You don't have write access to the warehouse set for this event, so nothing was saved. Choose a warehouse you work in, or ask a manager. For the Distribute from warehouse, the message says the warehouse this event's kit comes from. Any other change to an event you may not change says: You can't change this event. Ask a manager. Nothing is saved in each case. The mobile app is unchanged.",
+        whatToDo:
+          'If you see one of these messages, choose a warehouse you work in, or ask a manager to complete the event, to make the change or to give you access to that warehouse.',
+        audience: { anyPermission: ['schedule:manage'], modules: ['schedule'] },
+      },
+      {
+        id: 'supplier-emptied-field-cleared',
+        category: 'fixed',
+        area: 'Suppliers',
+        title: 'Emptying a field on a supplier and saving clears it',
+        whatChanged:
+          'On the website, when you edit a supplier, empty its Contact name, Phone, Email, Website or Notes and choose Save changes, that field is now cleared.',
+        whyItMatters:
+          'You can remove a contact detail or a note that is out of date without typing something in its place.',
+        howItAffectsYou:
+          'The fields you leave as they are keep what they hold. The mobile app is unchanged.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/suppliers', label: 'Open Suppliers' },
+        audience: { anyPermission: ['suppliers:manage'], modules: ['suppliers'] },
+      },
+      {
+        id: 'charter-warehouse-emptied-field-cleared',
+        category: 'fixed',
+        area: 'Charters and warehouses',
+        title: 'Emptying a field on a charter or a warehouse and saving clears it',
+        whatChanged:
+          'On the website, when you edit a charter and empty its Code, Description, contact name, email or phone, or Internal notes, or edit a warehouse and empty its contact name, email or phone, or Notes, then choose Save changes, that field is now cleared.',
+        whyItMatters:
+          'You can remove a contact detail or a note that is out of date without typing something in its place.',
+        howItAffectsYou:
+          'The fields you leave as they are keep what they hold. The mobile app is unchanged.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['organization:update'] },
+      },
+      {
+        id: 'location-emptied-notes-cleared',
+        category: 'fixed',
+        area: 'Locations',
+        title: "Emptying a location's notes and saving clears them",
+        whatChanged:
+          'On the website, when you edit a location, empty its Notes and choose Save changes, the notes are now cleared.',
+        whyItMatters:
+          'You can remove a note that is out of date without typing something in its place.',
+        howItAffectsYou: 'The other fields keep what they hold. The mobile app is unchanged.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/locations', label: 'Open Locations' },
+        audience: { anyPermission: ['locations:manage'] },
+      },
+      {
+        id: 'category-emptied-description-cleared',
+        category: 'fixed',
+        area: 'Categories',
+        title: "Emptying a category's description and saving clears it",
+        whatChanged:
+          'On the website, when you edit a category, empty its Description and choose Save changes, the description is now cleared.',
+        whyItMatters:
+          'You can remove a description that is out of date without typing something in its place.',
+        howItAffectsYou: 'The other fields keep what they hold. The mobile app is unchanged.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/categories', label: 'Open Categories' },
+        audience: { anyPermission: ['categories:manage'] },
+      },
+    ],
+  },
+  {
+    id: 'connection-and-schedule-messages-2026-11',
+    revision: 1,
+    // Two web changes, no phone update and no migration:
+    // - #591 (squash 7bbbbd33f), live in production since 2026-11-16
+    //   09:38:20Z (its GitHub deployment status, Production, success).
+    // - #590 (squash 30e1b4c06), live in production since 2026-11-16
+    //   09:11:17Z (the same record).
+    // publishedAt is the whole minute after both. #591 went live after #587,
+    // so this release sits above the delete account release and is the newest
+    // published release.
+    // Claims checked against the code at 7bbbbd33f (paths under apps/web/src):
+    // - Entry 1: app/(dashboard)/dashboard/settings/integrations/page.tsx
+    //   reads ?error=forbidden, which the QuickBooks and Sage Intacct
+    //   callbacks (app/api/integrations/{quickbooks,sage_intacct}/callback)
+    //   return to when the connection is not finished, and shows the status
+    //   line "The connection was not finished because your access could not
+    //   be confirmed. If your organization requires an authenticator, set one
+    //   up in Settings > Security, then connect again." with Settings >
+    //   Security linking to AUTHENTICATOR_SET_UP_PAGE
+    //   (lib/auth/authenticator-set-up.ts, /dashboard/settings/security). It
+    //   shows only with the accounting cards (showQbo: the integrations module
+    //   on and integrations:manage held), so it is told to that audience, the
+    //   one integration-retries-2026-11 uses. Any other ?error= value shows
+    //   nothing, and components/settings/integrations-panel.tsx reads none. The reader text writes
+    //   Settings, Security: the schema refuses > in release text. Connecting
+    //   is web only: apps/mobile/app/(drawer)/settings/integrations.tsx has no
+    //   connect button.
+    // - Entry 2: server/services/schedule.ts create() assertWarehouseWrite
+    //   throws assertWarehouseAccess's ForbiddenError as it is when
+    //   accessUnreadable is set (the caller's own access could not be read),
+    //   and answers a real refusal with the ServiceError 'forbidden' and a
+    //   sentence of its own. server/actions/schedule.ts createScheduleEventAction
+    //   answers through server/lib/action-error-result.ts actionErrorResult,
+    //   which gives ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY (packages/core
+    //   guards/db-guard-copy.ts: "Your warehouse access couldn't be checked
+    //   just now, so nothing was changed. Try again.") as a retryable
+    //   conflict; components/schedule/schedule-event-form.tsx shows the
+    //   result's message as an error toast and keeps the form as it was. A
+    //   real refusal reads SCHEDULE_EVENT_WAREHOUSE_REFUSED or
+    //   SCHEDULE_KIT_WAREHOUSE_REFUSED ("You don't have write access to the
+    //   warehouse set for this event, so nothing was saved. ..." and the kit
+    //   version), which name no warehouse id. (Re-read by
+    //   docs/whats-new-emptied-fields-and-schedule-completion, 2026-11-16,
+    //   against 0a6215d57 (#597), which gave a real refusal these sentences;
+    //   at 7bbbbd33f it kept the words of lib/auth/warehouse.ts. The reader
+    //   text, about the access that could not be checked, holds at both.)
+    //   Told to whoever can
+    //   open New event (schedule/new/page.tsx checks schedule:manage) with the
+    //   schedule module on. The phone's New event (apps/mobile/app/schedule/
+    //   new.tsx) writes through its own path and is unchanged. No link: a
+    //   rare state, not a place to go (as module-check-try-again-2026-11).
+    // - Not told: #591's purchase order and PO imports layouts send a member
+    //   who must set up an authenticator to set-up, which is what
+    //   authenticator-set-up-first-2026-11 already says of every page other
+    //   than Security and Profile. #591's email change API answers and #590's
+    //   API routes are outside this release.
+    status: 'published',
+    title:
+      'Clearer messages when an accounting connection or a new schedule event does not go through',
+    summary:
+      'On the website, Settings, Integrations now says when connecting QuickBooks or Sage Intacct was not finished because your access could not be confirmed, and that you can set up an authenticator in Settings, Security if your organization requires one. A new schedule event that could not be saved because your warehouse access could not be checked now says so, and you can try again. The mobile app is unchanged.',
+    // #591 is live in production since 2026-11-16 09:38:20Z, #590 since 09:11:17Z.
+    publishedAt: '2026-11-16T09:39:00Z',
+    entries: [
+      {
+        id: 'accounting-connection-not-finished',
+        category: 'improved',
+        area: 'Settings',
+        title: 'Integrations says when an accounting connection was not finished',
+        whatChanged:
+          'On the website, when connecting QuickBooks or Sage Intacct does not finish because your access could not be confirmed, Settings, Integrations now says: The connection was not finished because your access could not be confirmed. If your organization requires an authenticator, set one up in Settings, Security, then connect again. Settings, Security in that message is a link to the page.',
+        whyItMatters: 'Before, the page did not say why the connection was not finished.',
+        howItAffectsYou:
+          'The message shows with the QuickBooks and Sage Intacct cards. You connect again from the same page. The mobile app is unchanged.',
+        whatToDo:
+          'If you see this message and your organization requires an authenticator, set one up in Settings, Security, then connect again. Otherwise, no action needed.',
+        link: { href: '/dashboard/settings/integrations', label: 'Open Integrations' },
+        audience: { anyPermission: ['integrations:manage'], modules: ['integrations'] },
+      },
+      {
+        id: 'schedule-event-access-not-checked',
+        category: 'fixed',
+        area: 'Schedule',
+        title: 'A new schedule event says when your warehouse access could not be checked',
+        whatChanged:
+          "On the website, if StockPilot cannot check your access to the event's warehouse for a moment when you choose Create event, the form now says Your warehouse access couldn't be checked just now, so nothing was changed. Try again.",
+        whyItMatters: 'Before, the message read as if you had no access to that warehouse.',
+        howItAffectsYou:
+          'This is rare and usually passes in a moment. The event was not saved, and the form keeps what you entered. The mobile app is unchanged.',
+        whatToDo: 'If you see this, wait a moment and choose Create event again.',
+        audience: { anyPermission: ['schedule:manage'], modules: ['schedule'] },
       },
     ],
   },
@@ -334,13 +985,22 @@ export const RELEASES: Release[] = [
   },
   {
     id: 'api-key-audit-2026-11',
-    revision: 1,
+    // Revision 2 (docs/whats-new-integrations-message-and-api-key-rows,
+    // 2026-11-16; was: 1): #591 (squash 7bbbbd33f, live in production since
+    // 2026-11-16 09:38:20Z) gave the rows their API key labels, the Team chip
+    // and their details. Revision 1's words about the labels, the chip and
+    // the key name describe the rows #580 wrote, not these, a material
+    // change (docs/releases/PUBLISHING.md: bump the revision to re-announce).
+    // The words are rewritten to the code at 7bbbbd33f and the release is
+    // told again to whoever read revision 1. Its place and its date stay:
+    // the registry is newest first by first publication.
+    revision: 2,
     // #580 (squash 4712b6918), web only: no phone update and no migration.
     // Live in production since 2026-11-15 21:18:47Z; publishedAt is the
     // minute this release was committed. It went live after #579, so it
     // sits above the invitation audit release and is the newest published
     // release.
-    // Claims checked against the code at 4712b6918 (paths under apps/web/src):
+    // Claims checked against the code at 7bbbbd33f (paths under apps/web/src):
     // - The rows: server/services/api-keys.ts. Creating a key writes
     //   api_key.created once the key is stored, entity api_key (the key's
     //   id), extra { name, scopes }; revoking writes api_key.revoked once
@@ -350,15 +1010,18 @@ export const RELEASES: Release[] = [
     //   page.tsx, the API keys panel (components/settings/api-keys-panel.tsx),
     //   shown with the api_access module on and an owner or admin role.
     // - The labels: lib/audit/format.ts formatAuditEvent gives
-    //   "Api Key · Created" and "Api Key · Revoked" (no subject override for
-    //   api_key), and formatEntityType gives "Api Key" for the Entity column,
-    //   above the first 8 characters of the key's id (shortId).
-    // - The chip: components/admin/audit-categories.ts has no chip whose
-    //   prefix matches api_key., so the rows are under All events only.
+    //   "API key · Created" and "API key · Revoked" (the api_key subject
+    //   override), and formatEntityType gives "API key" for the Entity
+    //   column, above the first 8 characters of the key's id (shortId).
+    // - The chip: components/admin/audit-categories.ts, slug user, label
+    //   Team, prefixes user. and api_key., so the rows are under Team and
+    //   All events (server/services/audit-log.ts matches the prefixes in one
+    //   filter).
     // - The details: app/(dashboard)/dashboard/audit/page.tsx renders a
-    //   details row only when before/after differ or changed_keys is set;
-    //   these rows have neither (audit() writes before and after as null),
-    //   so no details show and the name and scopes are not on the page.
+    //   details row when recordedDetailFields (lib/audit/format.ts) names a
+    //   field the row holds; components/audit/metadata-diff.tsx shows them
+    //   behind "Show details": Name and Scopes on api_key.created, Name on
+    //   api_key.revoked, and no other stored field.
     // - The Event filter: an exact match on the event (audit-log.ts eq).
     // - The phone: apps/mobile/app/(drawer)/admin/audit.tsx shows row.event
     //   as written, with no details.
@@ -369,7 +1032,7 @@ export const RELEASES: Release[] = [
     status: 'published',
     title: 'Creating and revoking an API key now show in the Audit log',
     summary:
-      'The Audit log now has a row when an API key is created and when one is revoked, with who did it and when. People who can view the audit log see them. No app update is needed.',
+      'The Audit log now has a row when an API key is created and when one is revoked, with who did it and when. On the web, the rows are under the Team chip, and Show details on a row shows the key name, and for a new key its scopes. People who can view the audit log see them. No app update is needed.',
     // #580 is live in production since 2026-11-15 21:18:47Z.
     publishedAt: '2026-11-15T21:37:00Z',
     entries: [
@@ -379,12 +1042,13 @@ export const RELEASES: Release[] = [
         area: 'Audit log',
         title: 'Creating and revoking an API key now show in the Audit log',
         whatChanged:
-          'The Audit log now has an Api Key · Created row each time an API key is created and an Api Key · Revoked row each time one is revoked, under API keys in Settings, Integrations.',
-        whyItMatters: 'The Audit log shows who created or revoked an API key, and when.',
+          'The Audit log now has an API key · Created row each time an API key is created and an API key · Revoked row each time one is revoked, under API keys in Settings, Integrations.',
+        whyItMatters:
+          'The Audit log shows who created or revoked an API key, which key it was, and when.',
         howItAffectsYou:
-          'On the web, both rows are under All events, with Api Key and a short record id in the Entity column. That id is not part of the key, and the page does not show the key name. People who can view the audit log see them: owners, admins and managers by default, and anyone given View audit log. The Audit log in the mobile app lists them among its recent events as api_key.created and api_key.revoked.',
+          'On the web, both rows are under the Team chip and All events, with API key and a short record id in the Entity column. That id is not part of the key. Show details on a row shows the key name, and on an API key · Created row its scopes too. People who can view the audit log see them: owners, admins and managers by default, and anyone given View audit log. The Audit log in the mobile app lists them among its recent events as api_key.created and api_key.revoked, without the details.',
         whatToDo:
-          'No action needed. To see only one kind on the web, open the Audit log, type api_key.created or api_key.revoked in the Event filter and choose Apply.',
+          'No action needed. To see them on the web, open the Audit log and choose the Team chip. To see only one kind, type api_key.created or api_key.revoked in the Event filter and choose Apply.',
         link: { href: '/dashboard/audit', label: 'Open the Audit log' },
         audience: { anyPermission: ['activity_logs:read'] },
       },
@@ -6999,9 +7663,15 @@ export const RELEASES: Release[] = [
     //   fit, and a unit larger than 30 records fills a page of its own;
     // - limits: past INSTANT_MODE_MAX_ROWS (2000) records in the filtered view
     //   listPlanRows answers null and the page keeps fixed 30-record slices
-    //   (so does a failed scan); with stock=low the size it checks is the low
-    //   pre-filter's (a reorder point set, or no stock), counted before the
-    //   low rule, so the words say what the 2,000 counts there; a search in
+    //   (so does a failed scan); with stock=low the size it checked was the
+    //   low pre-filter's (a reorder point set, or no stock), counted before
+    //   the low rule, so the words said what the 2,000 counted there.
+    //   Corrected (wording only, revision kept) when migration 0470 moved
+    //   the whole low rule into the request (the computed field
+    //   is_low_stock, applied by applyContentFilters to the page, its count
+    //   and the plan scan): the 2,000 now counts the low or critical records
+    //   themselves, and the words say so (was: "for Low + critical, the
+    //   2,000 counts every record with a reorder point or no stock"); a search in
     //   the box shows /api/items/search's first pageSize (30) matches with no
     //   pager (the table's planned is null while q is set);
     // - the footer: a planned page prints "N SKUs" (distinctSkus) and, when it
@@ -7052,7 +7722,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           "Pages used to be cut every 30 records in the list's order, so a record that sorted far from the others under its header could sit alone on another page. A shirt's other sizes could show on page 1 while its XS sat alone on page 2, where it was easy to miss when ordering. On a list of more than one page, the header of a SKU or a group with two or more records also showed a * after its on hand figure, as other pages might hold more of it. With Low + critical chosen, a page used to show only the low or critical ones among 30 records, so it could show few or none, and some could be on no page.",
         howItAffectsYou:
-          "A page can end before 30 records so that a header's records are not cut in two, and a header of more than 30 records gets a page of its own. With Low + critical chosen, every low or critical record is now on a page. The count above the list now starts with the number of SKUs, then gives the number of items (rows on Books) when some SKUs have more than one record. Lists of more than 2,000 records are still cut every 30 records, as before (for Low + critical, the 2,000 counts every record with a reorder point or no stock), and a search typed into the search box still shows its first 30 matches.",
+          "A page can end before 30 records so that a header's records are not cut in two, and a header of more than 30 records gets a page of its own. With Low + critical chosen, every low or critical record is now on a page. The count above the list now starts with the number of SKUs, then gives the number of items (rows on Books) when some SKUs have more than one record. Lists of more than 2,000 records are still cut every 30 records, as before (for Low + critical, the 2,000 counts the low or critical records), and a search typed into the search box still shows its first 30 matches.",
         whatToDo: 'No action needed.',
         audience: { anyPermission: ['items:read'] },
       },

@@ -18,6 +18,7 @@ import { unstable_cache } from 'next/cache';
 import type { StorefrontCatalogData } from '@/components/orders/storefront/orders-storefront';
 import type { AisleSummary, CatalogItem, StorefrontCharter } from '@/components/orders/v2/types';
 import { heldMembership, orderCatalogLastHideAtOf } from '@/lib/auth/request-context-bundle';
+import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { encodedInValueLength, IN_FILTER_MAX_ENCODED_CHARS } from '@/lib/supabase/in-filter';
 import { createClient } from '@/lib/supabase/server';
@@ -710,8 +711,10 @@ export async function resolveCatalogScopeKey(
  * organization's tag for this warehouse (ordersCatalogWarehouseTag); a Show
  * or Hide expires, with `{ expire: 0 }`, the warehouse tags of the records it
  * touched (the organization's tag only when its answer did not name them);
- * the global tag stays for every existing 'max' caller. The value carries `readStartedAt` (taken before the
- * first items read) so loadOrderableCatalog can remove what was hidden after
+ * an order write expires the warehouse tag of its order the same way, and a
+ * grouping or category change the organization's (orders-catalog-expiry.ts).
+ * The global tag stays on the entry, but no caller expires it any more.
+ * The value carries `readStartedAt` (taken before the first items read) so loadOrderableCatalog can remove what was hidden after
  * the entry was read: an expired tag alone does not stop a recompute that
  * read before the hide from being stored as fresh. Read requester catalogs
  * through loadOrderableCatalog, never through this directly.
@@ -1116,7 +1119,7 @@ async function loadCatalogItemsUncached(
     charterById.set(c.id, { name: c.name, code: c.code ?? null });
   }
 
-  return items.map((it) => ({
+  const rows: CatalogItem[] = items.map((it) => ({
     id: it.id,
     sku: it.sku,
     name: it.name,
@@ -1144,6 +1147,59 @@ async function loadCatalogItemsUncached(
         : null,
     reorderPoint: Number(it.reorder_point) || 0,
   }));
+  warnIfCatalogEntryNearCacheLimit(rows, organizationId, warehouseId);
+  return rows;
+}
+
+/**
+ * Serialized-size warning for one catalog rows entry. Next 16 does not store
+ * an unstable_cache entry over 2 MB (incremental-cache/index.js: in production
+ * it console.warns and skips the write; `next dev` throws instead), and there
+ * is no custom cache handler (next.config.ts). Past that, every visit to Place
+ * an Order reads the whole catalog again, with nothing said by this loader.
+ *
+ * Measured the way Next measures it: the entry's body is the value JSON-encoded
+ * (unstable-cache.js) and then encoded again with the rest of the entry, so
+ * every quote is escaped. JSON.stringify twice over the rows is that body to a
+ * few dozen bytes (the `readStartedAt` and the entry's own fields). 1.5 MB
+ * warns well before the cliff: a row with its names, a charter and a rack is
+ * ~450-600 bytes so measured, so the line is crossed somewhere around 2,700
+ * to 3,500 rows, and the cliff around 3,600 to 4,600.
+ */
+export const CATALOG_ENTRY_WARN_CHARS = 1.5 * 1024 * 1024;
+
+/** One report per warehouse per server instance per hour: past 2 MB every
+ *  request recomputes the entry, and each would report again. */
+const CATALOG_ENTRY_REPORT_INTERVAL_MS = 60 * 60 * 1000;
+const catalogEntryReportedAt = new Map<string, number>();
+
+/**
+ * NEVER SILENT: warns with the warehouse, the row count and the measured size,
+ * and reports it (a warning, through the same reporter as the row ceilings),
+ * at most once an hour per warehouse. Runs in the uncached body, so it runs on
+ * each recompute; the rows are returned whole either way.
+ */
+function warnIfCatalogEntryNearCacheLimit(
+  rows: CatalogItem[],
+  organizationId: string,
+  warehouseId: string,
+): void {
+  const chars = JSON.stringify(JSON.stringify(rows)).length;
+  if (chars <= CATALOG_ENTRY_WARN_CHARS) return;
+  console.warn(
+    `[orders-new] catalog entry for warehouse ${warehouseId}: ${rows.length} rows, ${chars} chars serialized, past the 1.5 MB warning line; Next does not cache an entry over 2 MB, so past that every visit reads the whole catalog again`,
+  );
+  const key = `${organizationId}:${warehouseId}`;
+  const now = Date.now();
+  const last = catalogEntryReportedAt.get(key);
+  if (last !== undefined && now - last < CATALOG_ENTRY_REPORT_INTERVAL_MS) return;
+  catalogEntryReportedAt.set(key, now);
+  void reportError(new Error('An order catalog entry is near the 2 MB cache limit'), {
+    tag: 'orders_new.catalog_entry_size',
+    level: 'warning',
+    organizationId,
+    extra: { warehouseId, rows: rows.length, chars },
+  });
 }
 
 /**

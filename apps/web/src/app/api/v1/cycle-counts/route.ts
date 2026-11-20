@@ -2,9 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { ForbiddenError } from '@/lib/auth/warehouse';
-import { reportError } from '@/lib/error-reporter';
-import { ServiceError, serviceErrorStatus } from '@/server/services/context';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 
 import { parseCycleCountStatusFilter } from '@stockpilot/core';
@@ -79,17 +77,9 @@ export async function GET(req: NextRequest) {
       { headers: { 'Cache-Control': 'private, no-store' } },
     );
   } catch (e) {
-    if (e instanceof ServiceError) {
-      return NextResponse.json(
-        { error: e.code, message: e.message },
-        { status: serviceErrorStatus(e.code) },
-      );
-    }
-    if (e instanceof ForbiddenError) {
-      return NextResponse.json({ error: 'forbidden', message: e.message }, { status: 403 });
-    }
-    void reportError(e, { tag: 'api.v1.cycle_counts.list' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    // A warehouse refusal is a 403, or the retryable 503 when the caller's
+    // own access could not be read.
+    return serviceErrorResponse(e, 'api.v1.cycle_counts.list');
   }
 }
 
@@ -145,21 +135,6 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json(result, { status: 201 });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      const status =
-        e.code === 'not_found'
-          ? 404
-          : e.code === 'validation_error'
-            ? 400
-            : e.code === 'forbidden' || e.code === 'module_disabled'
-              ? 403
-              : 500;
-      return NextResponse.json({ error: e.code, message: e.message }, { status });
-    }
-    if (e instanceof ForbiddenError) {
-      return NextResponse.json({ error: 'forbidden', message: e.message }, { status: 403 });
-    }
-    void reportError(e, { tag: 'api.v1.cycle_counts.create' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return serviceErrorResponse(e, 'api.v1.cycle_counts.create');
   }
 }
