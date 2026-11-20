@@ -52,7 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v6.1.0
+      - uses: pnpm/action-setup@v6.1.1
 
       # The runner's Node (for pnpm and eas-cli) comes from .nvmrc like every
       # other workflow. The EAS build itself runs on the "node" pinned in the
