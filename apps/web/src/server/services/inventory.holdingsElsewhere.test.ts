@@ -68,7 +68,8 @@ function svcFor(
   results: Parameters<typeof makeSupabaseStub>[0],
   role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer' = 'staff',
 ) {
-  const stub = makeSupabaseStub(results);
+  // list() asks inventory_list_value (0470) for its value total.
+  const stub = makeSupabaseStub({ 'rpc:inventory_list_value': { data: 0, error: null }, ...results });
   return { svc: new InventoryService(makeServiceContext(stub.client, { role }) as never), stub };
 }
 

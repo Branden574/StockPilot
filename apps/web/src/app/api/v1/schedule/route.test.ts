@@ -225,7 +225,11 @@ describe('POST /api/v1/schedule', () => {
     );
     const res = await POST(request());
     expect(res.status).toBe(403);
-    expect((await res.json()).error).toBe('forbidden');
+    expect(await res.json()).toEqual({
+      error: 'forbidden',
+      message:
+        "You don't have write access to the warehouse set for this event, so nothing was saved. Choose a warehouse you work in, or ask a manager.",
+    });
     expect(stub.chainArgs.get('schedule_events.insert')).toBeUndefined();
     expect(audit).not.toHaveBeenCalled();
   });

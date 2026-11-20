@@ -485,7 +485,8 @@ export class CategoriesService {
     if (patch.sizeScaleId) await this.assertSizeScaleUsable(patch.sizeScaleId);
     const updates: Record<string, unknown> = {};
     if (patch.name !== undefined) updates.name = patch.name;
-    if (patch.description !== undefined) updates.description = patch.description ?? null;
+    // Left out keeps the description; emptied ('') stores null.
+    if (patch.description !== undefined) updates.description = patch.description || null;
     if (patch.color !== undefined) updates.color = patch.color ?? null;
     if (patch.parentId !== undefined) updates.parent_id = patch.parentId ?? null;
     if (patch.supportsSizes !== undefined) updates.supports_sizes = patch.supportsSizes;

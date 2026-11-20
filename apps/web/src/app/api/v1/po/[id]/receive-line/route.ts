@@ -3,13 +3,15 @@ import { z } from 'zod';
 
 import { isUuid } from '@stockpilot/core';
 
-import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { ModulesUnavailableError } from '@/lib/modules/module-state';
+import { apiContextGate } from '@/server/lib/api-context-gate';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
+import { refusalReasonDetails } from '@/server/lib/refusal-reason';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { ReceivingService } from '@/server/services/receiving';
-import { ServiceError } from '@/server/services/context';
+import { ServiceError, type ServiceContext } from '@/server/services/context';
+import { assertCanPostReceipt } from '@/server/services/lib/receipt-post-rule';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -33,7 +35,16 @@ const bodySchema = z.object({
  * Idempotency-key is honored end-to-end — same key + same payload
  * returns the same receipt; same key + different payload errors. Mobile
  * uses its local pending_actions row id as the key so retries on flaky
- * network never double-receive.
+ * network never double-receive. A key that already names a receipt of this
+ * purchase order is answered from that receipt: its own line and unit cost
+ * are sent again, with no second line pick and no closed-order check (the
+ * first post may have closed the order), and post_receipt_v2 returns the
+ * stored receipt for the same request or refuses another one.
+ *
+ * `remainingAfter` is read from the line after the receipt (ordered minus
+ * received), so a retry answers what the line holds, never a count taken
+ * before the call less the quantity again. null when that read fails (the
+ * receipt stands).
  *
  * If the item isn't on this PO, returns 404 with `code: 'not_on_po'` so
  * the mobile client can surface the "Add as new line" toast action.
@@ -54,7 +65,12 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const ctx = await withApiContext(req);
+  // First, before anything else: a context that could not be built because
+  // the caller's access could not be checked answers the 503 the phone may
+  // send again (server/lib/api-context-gate.ts).
+  const gate = await apiContextGate(req);
+  if ('response' in gate) return gate.response;
+  const ctx = gate.ctx;
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
@@ -78,6 +94,14 @@ export async function POST(
   }
   const { itemId, qty, idempotencyKey } = parsed.data;
 
+  // The module and the rule the receipt needs (ReceivingService postReceipt
+  // asks the same assertCanPostReceipt), before the order is read.
+  try {
+    assertCanPostReceipt(ctx);
+  } catch (e) {
+    return refusedBeforeTheOrder(e, ctx.organizationId);
+  }
+
   const { data: po, error: poErr } = await ctx.supabase
     .from('purchase_orders')
     .select('id, status, destination_location_id, supplier_id')
@@ -92,6 +116,30 @@ export async function POST(
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
   if (!po) return NextResponse.json({ error: 'po_not_found' }, { status: 404 });
+
+  // A retry: this key already names a receipt of this purchase order, of
+  // this item on one line. A key that names a receipt of other lines is
+  // another request: it takes the path below, and post_receipt_v2 refuses it
+  // as one (the stored request differs), or the order's state answers first.
+  const prior = await receiptForKey(ctx, poId, idempotencyKey);
+  if (prior === 'read_failed') {
+    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+  }
+  const priorLine = prior !== null && prior.lines.length === 1 ? prior.lines[0] : undefined;
+  if (prior !== null && priorLine !== undefined && priorLine.item_id === itemId) {
+    return postLine(ctx, {
+      poId,
+      // An explicit warehouse is part of the request (another one is refused
+      // as another request). A retry that omits the warehouse is the same
+      // request as the first send, so it uses the stored receipt's warehouse.
+      warehouseId: parsed.data.warehouseId ?? prior.warehouse_id,
+      idempotencyKey,
+      qty,
+      poLineId: priorLine.purchase_order_line_id,
+      unitCost: Number(priorLine.unit_cost),
+    });
+  }
+
   if (po.status === 'received' || po.status === 'cancelled') {
     return NextResponse.json(
       { error: 'po_closed', message: `PO is ${po.status}` },
@@ -147,7 +195,6 @@ export async function POST(
   // item is already complete, fall back to the first one so an OVER-receipt
   // still lands somewhere real (see the over-receipt note below).
   const line = lines.find((l) => remainingOf(l) > 0) ?? lines[0]!;
-  const remaining = remainingOf(line);
 
   // WHY there is no `remaining <= 0` / `qty > remaining` refusal here:
   // migration 0285_allow_over_receipt removed the DB's `over_receive_blocked`
@@ -179,19 +226,41 @@ export async function POST(
     );
   }
 
+  return postLine(ctx, {
+    poId,
+    warehouseId,
+    idempotencyKey,
+    qty,
+    poLineId: line.id,
+    unitCost: Number(line.unit_cost),
+  });
+}
+
+/** The single-line receipt, and the answer for it. */
+async function postLine(
+  ctx: ServiceContext,
+  p: {
+    poId: string;
+    warehouseId: string;
+    idempotencyKey: string;
+    qty: number;
+    poLineId: string;
+    unitCost: number;
+  },
+): Promise<NextResponse> {
   try {
     const svc = new ReceivingService(ctx);
     const receipt = await svc.postReceipt({
-      purchaseOrderId: poId,
-      warehouseId,
-      idempotencyKey,
+      purchaseOrderId: p.poId,
+      warehouseId: p.warehouseId,
+      idempotencyKey: p.idempotencyKey,
       lines: [
         {
-          poLineId: line.id as string,
-          qtyReceived: qty,
-          qtyAccepted: qty,
+          poLineId: p.poLineId,
+          qtyReceived: p.qty,
+          qtyAccepted: p.qty,
           qtyRejected: 0,
-          unitCost: Number(line.unit_cost),
+          unitCost: p.unitCost,
         },
       ],
       notes: 'Mobile scan-to-receive',
@@ -200,17 +269,16 @@ export async function POST(
     return NextResponse.json({
       receiptId: receipt.id,
       receiptNumber: receipt.receipt_number,
-      poLineId: line.id,
-      qtyReceived: qty,
-      remainingAfter: remaining - qty,
+      poLineId: p.poLineId,
+      qtyReceived: p.qty,
+      remainingAfter: await remainingOnLine(ctx, p.poLineId),
     });
   } catch (e) {
     if (e instanceof ServiceError) {
-      // validation_error and module_disabled used to fall through to 500:
-      // a lot/serial validation refusal from post_receipt_v2, or receiving
-      // being switched off for the org, read to the caller as "the server is
-      // broken, retry" — and the mobile outbox does exactly that, forever.
-      // Map every code the service can actually raise. (SP-124)
+      // Every code the service can raise is mapped: a lot/serial validation
+      // refusal from post_receipt_v2, or receiving switched off for the org,
+      // answered as a 500 would read to the caller as "the server is broken,
+      // retry", and the mobile outbox would send it again forever.
       const status =
         e.code === 'conflict'
           ? 409
@@ -225,7 +293,16 @@ export async function POST(
                 : e.code === 'unauthenticated'
                   ? 401
                   : 500;
-      return NextResponse.json({ error: e.code, message: e.message }, { status });
+      return NextResponse.json(
+        {
+          error: e.code,
+          message: e.message,
+          // Only a string `details.reason`, and never for an internal_error
+          // (server/lib/refusal-reason.ts).
+          ...refusalReasonDetails(e),
+        },
+        { status },
+      );
     }
     // A module state that could not be read (docket S81): the fixed
     // try-again answer at warning level, which the phone's outbox sends again.
@@ -240,6 +317,97 @@ export async function POST(
     });
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
+}
+
+interface KeyedReceipt {
+  id: string;
+  warehouse_id: string;
+  lines: { purchase_order_line_id: string; item_id: string; unit_cost: number | string | null }[];
+}
+
+/**
+ * The receipt of this purchase order that carries this key, with its lines;
+ * null when there is none, 'read_failed' when either read failed (reported).
+ */
+async function receiptForKey(
+  ctx: ServiceContext,
+  poId: string,
+  idempotencyKey: string,
+): Promise<KeyedReceipt | null | 'read_failed'> {
+  const { data: receipts, error: rErr } = await ctx.supabase
+    .from('receipts')
+    .select('id, warehouse_id')
+    .eq('organization_id', ctx.organizationId)
+    .eq('purchase_order_id', poId)
+    .eq('idempotency_key', idempotencyKey)
+    .order('id', { ascending: true })
+    .limit(2);
+  if (rErr) {
+    void reportError(new Error(rErr.message), {
+      tag: 'po.receive-line.lookup_key',
+      organizationId: ctx.organizationId,
+    });
+    return 'read_failed';
+  }
+  const rows = (receipts ?? []) as { id: string; warehouse_id: string }[];
+  if (rows.length === 0) return null;
+  // More than one receipt under one key is no single request's answer: no
+  // lines, so the caller sends it as another request.
+  if (rows.length > 1) return { id: rows[0]!.id, warehouse_id: rows[0]!.warehouse_id, lines: [] };
+  const receipt = rows[0]!;
+  const { data: lineRows, error: lErr } = await ctx.supabase
+    .from('receipt_lines')
+    .select('purchase_order_line_id, item_id, unit_cost')
+    .eq('receipt_id', receipt.id)
+    .order('id', { ascending: true })
+    .limit(2);
+  if (lErr) {
+    void reportError(new Error(lErr.message), {
+      tag: 'po.receive-line.lookup_key_lines',
+      organizationId: ctx.organizationId,
+    });
+    return 'read_failed';
+  }
+  return { ...receipt, lines: (lineRows ?? []) as KeyedReceipt['lines'] };
+}
+
+/** Ordered minus received on the line, read after the receipt; null when the
+ *  read fails (reported; the receipt stands). Unclamped: negative is "N over". */
+async function remainingOnLine(ctx: ServiceContext, poLineId: string): Promise<number | null> {
+  const { data, error } = await ctx.supabase
+    .from('purchase_order_items')
+    .select('quantity_ordered, quantity_received')
+    .eq('organization_id', ctx.organizationId)
+    .eq('id', poLineId)
+    .maybeSingle();
+  if (error || !data) {
+    void reportError(new Error(error?.message ?? 'line not readable after the receipt'), {
+      tag: 'po.receive-line.remaining_after',
+      organizationId: ctx.organizationId,
+    });
+    return null;
+  }
+  const row = data as { quantity_ordered: number | string | null; quantity_received: number | string | null };
+  return Number(row.quantity_ordered ?? 0) - Number(row.quantity_received ?? 0);
+}
+
+/**
+ * The answer to a refusal of the module or permission check: the same status
+ * and body the receipt's own refusal of that check gives (403 with the
+ * refusal's code, message and reason), and the fixed try-again answer for a
+ * module state that could not be read.
+ */
+function refusedBeforeTheOrder(e: unknown, organizationId: string): NextResponse {
+  if (e instanceof ServiceError) {
+    return NextResponse.json(
+      { error: e.code, message: e.message, ...refusalReasonDetails(e) },
+      { status: 403 },
+    );
+  }
+  if (e instanceof ModulesUnavailableError) {
+    return internalErrorResponse(e, 'po.receive-line.module_state', { organizationId });
+  }
+  throw e;
 }
 
 async function resolveWarehouseFromLocation(

@@ -71,6 +71,15 @@ vi.mock('@/lib/supabase/server', async () => {
             builder.maybeSingle = async () => legacy.orgRow;
             return builder;
           }
+          if (table === 'organization_modules' && !legacy.noBundle) {
+            // The module rows, read on their own when the bundle hides the
+            // organization (withContext's module set): none enabled.
+            f.world.calls.push('from:organization_modules');
+            const builder: Record<string, unknown> = {};
+            for (const m of ['select', 'eq']) builder[m] = () => builder;
+            builder.then = (res: (v: unknown) => unknown) => res({ data: [], error: null });
+            return builder;
+          }
           if (!legacy.noBundle) return client.from(table);
           // The session loader's own reads, for the made-up member of world.
           f.world.calls.push(`from:${table}`);
@@ -123,7 +132,12 @@ vi.mock('@/lib/supabase/server', async () => {
   };
 });
 
-import { withContext } from '@/server/services/context';
+import {
+  assertPermission,
+  mfaGateError,
+  ServiceError,
+  withContext,
+} from '@/server/services/context';
 import {
   countCalls as count,
   ORG,
@@ -305,17 +319,20 @@ describe('what the rule costs', () => {
   });
 });
 
-describe('an organization row the member cannot read: held to the strictest policy, as before', () => {
+describe('an organization row the member cannot read: held to the strictest policy', () => {
   beforeEach(() => {
     legacy.hideOrganization = true;
   });
 
   it.each(ROLES)(
-    'a row that came back empty: a %s with no authenticator is sent to set-up',
+    'a row that came back empty: a %s with no authenticator is told their access could not be checked, not sent to set-up',
     async (role) => {
       as('optional', role);
       legacy.orgRow = { data: null, error: null };
-      expect(await redirectOf(() => requireOrgContext())).toBe(SET_UP);
+      await expect(requireOrgContext()).rejects.toMatchObject({
+        name: 'OrganizationRowUnavailableError',
+      });
+      expect(redirect).not.toHaveBeenCalled();
       expect(count('from:organizations')).toBe(1);
     },
   );
@@ -341,6 +358,193 @@ describe('an organization row the member cannot read: held to the strictest poli
     as('admins_required', 'owner');
     legacy.orgRow = { data: { mfa_policy: 'optional' }, error: null };
     expect((await requireOrgContext()).organizationId).toBe(ORG);
+  });
+});
+
+/**
+ * THE POLICY WAS NOT READ: the organization row came back hidden, or with a
+ * value that is not a policy. The member is held to the strictest policy, so
+ * nothing passes that it would refuse; but whether set-up is owed is not
+ * known, so a member with no verified authenticator is told their access
+ * could not be checked (OrganizationRowUnavailableError: a page's "couldn't
+ * check your access" card, an action's try-again sentence), never sent to
+ * set-up. A policy that was read keeps the set-up redirect; a verified
+ * authenticator at aal2 gets the context in every state.
+ */
+describe('a policy that was not read, on a page load and a Server Action', () => {
+  const UNREAD = {
+    'a hidden row': { data: null, error: null },
+    'a value that is not a policy': { data: { mfa_policy: 'not_a_policy' }, error: null },
+  } as const;
+  const STATES = Object.keys(UNREAD) as Array<keyof typeof UNREAD>;
+  const ROW_CASES = STATES.flatMap((state) => ROLES.map((role) => [state, role] as const));
+
+  function unread(state: keyof typeof UNREAD, role: Role, page = '/dashboard/inventory') {
+    as('optional', role, page);
+    legacy.hideOrganization = true;
+    legacy.orgRow = UNREAD[state];
+  }
+
+  const COULD_NOT_CHECK = { name: 'OrganizationRowUnavailableError' };
+
+  it.each(ROW_CASES)(
+    '%s, a %s with no authenticator: could not check, on every page that is not open before set-up, never a redirect',
+    async (state, role) => {
+      for (const page of [...PAGES, ...NOT_OPEN]) {
+        unread(state, role, page);
+        await expect(requireOrgContext(), page).rejects.toMatchObject(COULD_NOT_CHECK);
+        await expect(withContext(), page).rejects.toMatchObject(COULD_NOT_CHECK);
+      }
+      expect(redirect).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(ROW_CASES)(
+    '%s, a %s whose only factor is not verified: the same as none',
+    async (state, role) => {
+      unread(state, role);
+      world.factors = [{ status: 'unverified' }];
+      await expect(requireOrgContext()).rejects.toMatchObject(COULD_NOT_CHECK);
+      expect(redirect).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(ROW_CASES)(
+    '%s, a %s with a verified authenticator at aal2: the context, on any page',
+    async (state, role) => {
+      for (const page of PAGES) {
+        unread(state, role, page);
+        world.factors = VERIFIED;
+        world.aal = 'aal2';
+        expect((await requireOrgContext()).organizationId, page).toBe(ORG);
+        expect((await withContext()).organizationId, page).toBe(ORG);
+      }
+      expect(redirect).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(ROW_CASES)(
+    '%s, a %s whose token says aal2 with no verified factor left: could not check, on every page that is not open, whatever the page reads',
+    async (state, role) => {
+      for (const factors of [[], [{ status: 'unverified' }]]) {
+        for (const page of [...PAGES, ...NOT_OPEN]) {
+          unread(state, role, page);
+          world.aal = 'aal2';
+          world.factors = factors;
+          await expect(requireOrgContext(), page).rejects.toMatchObject(COULD_NOT_CHECK);
+          await expect(withContext(), page).rejects.toMatchObject(COULD_NOT_CHECK);
+        }
+      }
+      expect(redirect).not.toHaveBeenCalled();
+    },
+  );
+
+  it('a token at aal2 whose factor list is of another account: could not check', async () => {
+    unread('a hidden row', 'staff');
+    world.aal = 'aal2';
+    world.factors = VERIFIED;
+    world.factorsOf = '33333333-3333-4333-8333-333333333333';
+    await expect(requireOrgContext()).rejects.toMatchObject(COULD_NOT_CHECK);
+  });
+
+  it.each(ROLES)(
+    'a policy that was read, a %s whose token says aal2 with no verified factor left: the context, answered from the token with no read',
+    async (role) => {
+      as('all_required', role);
+      world.aal = 'aal2';
+      expect((await requireOrgContext()).organizationId).toBe(ORG);
+      expect(count('auth:getUser')).toBe(0);
+      expect(world.calls.filter((c) => c.startsWith('from:'))).toEqual([]);
+    },
+  );
+
+  it('a token at aal2 when the policy was not read: the organization row and the factor list are read, on that path only', async () => {
+    unread('a hidden row', 'staff');
+    world.aal = 'aal2';
+    world.factors = VERIFIED;
+    expect((await requireOrgContext()).organizationId).toBe(ORG);
+    expect(count('from:organizations')).toBe(1);
+    expect(count('auth:getUser')).toBe(1);
+  });
+
+  it('the layout question at aal2 with no verified factor left, policy not read: the page answer', async () => {
+    unread('a value that is not a policy', 'viewer', '/dashboard/purchase-orders/imports');
+    world.aal = 'aal2';
+    await expect(authenticatorSetUpOwedForLayout()).rejects.toMatchObject(COULD_NOT_CHECK);
+    expect(redirect).not.toHaveBeenCalled();
+  });
+
+  it.each(ROW_CASES)(
+    '%s, a %s with a verified authenticator at aal1: the code page, as in every state',
+    async (state, role) => {
+      unread(state, role);
+      world.factors = VERIFIED;
+      expect(await redirectOf(() => requireOrgContext())).toMatch(/^\/signin\/mfa\?/);
+    },
+  );
+
+  it.each(ROLES)(
+    'a policy that was read and requires an authenticator: a %s with no authenticator is sent to set-up',
+    async (role) => {
+      as('all_required', role);
+      expect(await redirectOf(() => requireOrgContext())).toBe(SET_UP);
+      legacy.hideOrganization = true;
+      legacy.orgRow = { data: { mfa_policy: 'all_required' }, error: null };
+      expect(await redirectOf(() => requireOrgContext())).toBe(SET_UP);
+    },
+  );
+
+  it.each(ROW_CASES)(
+    '%s, a %s with no authenticator on an open page: the context, and the service gate says could not check',
+    async (state, role) => {
+      for (const page of OPEN_PAGES) {
+        unread(state, role, page);
+        expect((await requireOrgContext()).organizationId, page).toBe(ORG);
+        const ctx = await withContext();
+        expect(ctx.mfaRequired && !ctx.mfaSatisfied, page).toBe(true);
+        expect(() => assertPermission(ctx, 'items:read'), page).toThrow(
+          expect.objectContaining(COULD_NOT_CHECK),
+        );
+        expect(() => mfaGateError(ctx), page).toThrow(expect.objectContaining(COULD_NOT_CHECK));
+      }
+      expect(redirect).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(ROLES)(
+    'a policy that was read, on an open page: the service gate keeps the set-up answer for a %s with no authenticator',
+    async (role) => {
+      as('all_required', role, '/dashboard/settings/profile');
+      const ctx = await withContext();
+      let thrown: unknown;
+      try {
+        assertPermission(ctx, 'items:read');
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBeInstanceOf(ServiceError);
+      expect(thrown).toMatchObject({ code: 'forbidden', details: { reason: 'mfa_required' } });
+    },
+  );
+
+  it('the layout question gives the page answer: could not check, with no redirect', async () => {
+    unread('a hidden row', 'staff', '/dashboard/purchase-orders/imports');
+    await expect(authenticatorSetUpOwedForLayout()).rejects.toMatchObject(COULD_NOT_CHECK);
+    expect(redirect).not.toHaveBeenCalled();
+  });
+
+  it('one log line names the cause, never a value from the row', async () => {
+    const warn = vi.mocked(console.warn);
+    unread('a value that is not a policy', 'staff');
+    await expect(requireOrgContext()).rejects.toMatchObject(COULD_NOT_CHECK);
+    const lines = warn.mock.calls.filter((c) => String(c[0]).startsWith('[step-up-gate]'));
+    expect(lines).toEqual([['[step-up-gate] authenticator policy not read:', 'not_a_policy']]);
+    warn.mockClear();
+    unread('a hidden row', 'staff');
+    await expect(requireOrgContext()).rejects.toMatchObject(COULD_NOT_CHECK);
+    expect(warn.mock.calls.filter((c) => String(c[0]).startsWith('[step-up-gate]'))).toEqual([
+      ['[step-up-gate] authenticator policy not read:', 'hidden_row'],
+    ]);
   });
 });
 

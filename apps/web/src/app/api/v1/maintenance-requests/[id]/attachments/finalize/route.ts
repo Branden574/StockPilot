@@ -4,8 +4,7 @@ import { z } from 'zod';
 import { MAINTENANCE_ATTACHMENT_KINDS } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { reportError } from '@/lib/error-reporter';
-import { serviceErrorStatus, ServiceError } from '@/server/services/context';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import { MaintenanceAttachmentsService } from '@/server/services/maintenance-attachments';
 
 export const runtime = 'nodejs';
@@ -75,10 +74,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     });
     return NextResponse.json(res);
   } catch (e) {
-    if (e instanceof ServiceError) {
-      return NextResponse.json({ error: e.code, message: e.message }, { status: serviceErrorStatus(e.code) });
-    }
-    void reportError(e, { tag: 'api.v1.maintenance-requests.attachments.finalize' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return serviceErrorResponse(e, 'api.v1.maintenance-requests.attachments.finalize');
   }
 }

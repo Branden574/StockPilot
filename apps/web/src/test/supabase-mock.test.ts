@@ -98,11 +98,101 @@ describe('servedLikePostgrest', () => {
     expect((all.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['a', 'c', 'b']);
   });
 
+  it('evaluates an .or() logic tree: is, eq, gt, quoted values and a nested and()', async () => {
+    const stub = makeSupabaseStub({ 'items.select': servedLikePostgrest(rows) });
+    const some = await stub.client
+      .from('items')
+      .select('id')
+      .eq('org', 'o1')
+      .or('gone.is.null,id.eq.d')
+      .order('id');
+    expect((some.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['a', 'c', 'd']);
+    // A keyset cursor over uuid ids: after B by id, or B itself only in org o2.
+    const [A, B, C] = ['1', '2', '3'].map((n) => `00000000-0000-4000-8000-00000000000${n}`);
+    const keyed = makeSupabaseStub({
+      'items.select': servedLikePostgrest([
+        { id: A, org: 'o1' },
+        { id: B, org: 'o2' },
+        { id: C, org: 'o1' },
+      ]),
+    });
+    const keyset = await keyed.client
+      .from('items')
+      .select('id')
+      .or(`id.gt."${B}",and(id.eq."${B}",org.eq.o2)`)
+      .order('id');
+    expect((keyset.data as Array<{ id: string }>).map((r) => r.id)).toEqual([B, C]);
+    // Two .or() calls both apply (PostgREST ANDs them).
+    const both = await stub.client
+      .from('items')
+      .select('id')
+      .or('id.eq.a,id.eq.b')
+      .or('org.eq.o2')
+      .order('id');
+    expect((both.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['b']);
+  });
+
+  it('compares in an .or() by type: numbers as numbers, timestamps as times', async () => {
+    const stub = makeSupabaseStub({
+      'q.select': servedLikePostgrest([
+        { id: 'x', qty: 9, at: '2026-08-24T20:00:00+00:00' },
+        { id: 'y', qty: 12, at: '2026-08-24T21:00:00+00:00' },
+      ]),
+    });
+    // '9' > '10' as text; 9 < 10 as the number it is.
+    const gt = await stub.client.from('q').select('id').or('qty.gt.10').order('id');
+    expect((gt.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['y']);
+    const lt = await stub.client.from('q').select('id').or('qty.lt.10').order('id');
+    expect((lt.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['x']);
+    // PostgREST's +00:00 against a toISOString() Z value: the same instant.
+    const at = await stub.client
+      .from('q')
+      .select('id')
+      .or('at.lte."2026-08-24T20:30:00.000Z"')
+      .order('id');
+    expect((at.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['x']);
+    const same = await stub.client.from('q').select('id').or('at.eq."2026-08-24T20:00:00.000Z"');
+    expect((same.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['x']);
+  });
+
+  it('refuses an .or() comparison it cannot make the way the database would', async () => {
+    const stub = makeSupabaseStub({
+      'q.select': servedLikePostgrest([{ id: 'x', qty: 9, name: 'Blue Pen', at: '2026-08-24T20:00:00Z' }]),
+    });
+    const run = (filter: string) =>
+      Promise.resolve().then(() => stub.client.from('q').select('id').or(filter));
+    await expect(run('qty.gt.ten')).rejects.toThrow(/cannot compare/);
+    await expect(run('name.gt.Apple')).rejects.toThrow(/cannot compare/); // collation order
+    await expect(run('at.lt.tomorrow')).rejects.toThrow(/cannot compare/);
+    await expect(run('name.eq."Blue\\ Pen"')).rejects.toThrow(/cannot compare/);
+    // Text is ordered only uuid against uuid: a lower-case word, or other
+    // hyphenated text, may sort differently under the column's collation.
+    const words = makeSupabaseStub({
+      'w.select': servedLikePostgrest([{ id: 'x', code: 'a-c', word: 'b', on: false }]),
+    });
+    const ask = (filter: string) =>
+      Promise.resolve().then(() => words.client.from('w').select('id').or(filter));
+    await expect(ask('code.gt.ab')).rejects.toThrow(/cannot compare/);
+    await expect(ask('word.lt.c')).rejects.toThrow(/cannot compare/);
+    // A boolean: eq and neq only (false < true, which a 0/1 answer cannot say).
+    await expect(ask('on.lt.true')).rejects.toThrow(/cannot compare/);
+    await expect(ask('on.gt.true')).rejects.toThrow(/cannot compare/);
+    const off = await words.client.from('w').select('id').or('on.eq.false');
+    expect((off.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['x']);
+    const notOn = await words.client.from('w').select('id').or('on.neq.true');
+    expect((notOn.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['x']);
+    const word = await words.client.from('w').select('id').or('word.neq.c,code.eq.a-c');
+    expect((word.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['x']);
+    // Equality on text is fine.
+    const eq = await stub.client.from('q').select('id').or('name.eq."Blue Pen"');
+    expect((eq.data as Array<{ id: string }>).map((r) => r.id)).toEqual(['x']);
+  });
+
   it('refuses a filter it cannot evaluate rather than ignoring it', async () => {
     const stub = makeSupabaseStub({ 'items.select': servedLikePostgrest(rows) });
     await expect(
-      Promise.resolve().then(() => stub.client.from('items').select('id').or('a.eq.1,b.eq.2')),
-    ).rejects.toThrow(/cannot evaluate \.or\(\)/);
+      Promise.resolve().then(() => stub.client.from('items').select('id').or('a.like.1*,b.eq.2')),
+    ).rejects.toThrow(/cannot evaluate the \.or\(\) term a\.like\.1\*/);
   });
 
   it('evaluates .not(col, "is", null): keeps only the rows whose col is set (an archived-only list)', async () => {

@@ -4,11 +4,10 @@ import { z } from 'zod';
 import { planAllowsRecurringPos, type OrgBillingState } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { reportError } from '@/lib/error-reporter';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import {
   assertModuleEnabled,
   assertPermission,
-  serviceErrorStatus,
   ServiceError,
   type ServiceContext,
 } from '@/server/services/context';
@@ -55,14 +54,7 @@ function badId() {
 }
 
 function fail(e: unknown, tag: string) {
-  if (e instanceof ServiceError) {
-    return NextResponse.json(
-      { error: e.code, message: e.message },
-      { status: serviceErrorStatus(e.code) },
-    );
-  }
-  void reportError(e, { tag });
-  return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+  return serviceErrorResponse(e, tag);
 }
 
 /**

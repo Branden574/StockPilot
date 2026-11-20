@@ -5,7 +5,8 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { audit } from '@/server/services/audit';
-import { assertPermission, ServiceError, serviceErrorStatus } from '@/server/services/context';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
+import { assertPermission } from '@/server/services/context';
 import { readInActiveOrg } from '@/server/services/lib/in-active-org';
 
 export const runtime = 'nodejs';
@@ -177,13 +178,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
     return NextResponse.json({ ok: true, note: normalized });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      return NextResponse.json(
-        { error: e.code, message: e.message },
-        { status: serviceErrorStatus(e.code) },
-      );
-    }
-    void reportError(e, { tag: 'api.v1.movements.note' });
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 });
+    return serviceErrorResponse(e, 'api.v1.movements.note');
   }
 }

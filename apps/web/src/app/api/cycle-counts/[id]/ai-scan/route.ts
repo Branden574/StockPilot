@@ -20,14 +20,13 @@ import {
 } from '@/lib/image-signature';
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
-  forbiddenOrInternalResponse,
   internalErrorResponse,
   unreadableRequestResponse,
   VISION_FAILED_MESSAGE,
 } from '@/server/lib/api-error-response';
 import { invalidPathIdResponse } from '@/server/lib/path-id';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import { CycleCountsService } from '@/server/services/cycle-counts';
-import { ServiceError } from '@/server/services/context';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -123,7 +122,7 @@ export async function POST(
   try {
     lineSet = await svc.getLineSetForAiScan(cycleCountId);
   } catch (e) {
-    return serviceErrorToResponse(e, ctx.organizationId);
+    return serviceErrorResponse(e, 'cycle_counts.ai_scan', { organizationId: ctx.organizationId });
   }
   if (lineSet.length === 0) {
     return NextResponse.json(
@@ -266,7 +265,7 @@ export async function POST(
     });
     scanId = inserted.id;
   } catch (e) {
-    return serviceErrorToResponse(e, ctx.organizationId);
+    return serviceErrorResponse(e, 'cycle_counts.ai_scan', { organizationId: ctx.organizationId });
   }
 
   return NextResponse.json({
@@ -276,24 +275,6 @@ export async function POST(
   });
 }
 
-function serviceErrorToResponse(e: unknown, organizationId: string): NextResponse {
-  if (e instanceof ServiceError) {
-    const status =
-      e.code === 'not_found'
-        ? 404
-        : e.code === 'forbidden' || e.code === 'module_disabled'
-          ? 403
-          : e.code === 'validation_error'
-            ? 400
-            : 500;
-    return NextResponse.json({ error: e.code, message: e.message }, { status });
-  }
-  // The count's warehouse gate (assertSessionAccess) refuses with a
-  // ForbiddenError: a 403 with its own words, or a 503 to retry when the
-  // caller's own warehouse access could not be read. Not an unexpected error
-  // (S16 review round 1, as distribute).
-  return forbiddenOrInternalResponse(e, 'cycle_counts.ai_scan', { organizationId });
-}
 
 function safeJsonParse(s: string): unknown {
   try {

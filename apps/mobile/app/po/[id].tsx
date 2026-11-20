@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { dbPermissionRefusedCopy, isUuid } from '@stockpilot/core';
+import { isUuid } from '@stockpilot/core';
 
 import { PoAttachments } from '@/components/po-attachments';
 import { Button } from '@/components/ui/button';
@@ -36,7 +36,7 @@ import {
 } from '@/components/ui/glass/screens/po';
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { api, ApiError } from '@/lib/api';
-import { showWriteCtaForRole } from '@/lib/cta-gating';
+import { receiveNoticeFor, showReceiveCta } from '@/lib/cta-gating';
 import { receiverText } from '@/lib/deleted-user-labels';
 import { mapPostReceiptError } from '@/lib/receipt-post-error';
 import { settleIdBatchRead } from '@/lib/id-batches';
@@ -476,16 +476,16 @@ export default function PoReceiveScreen() {
   // A DRAFT is read-only here (po-draft-review.ts): no Scan, no quantities,
   // no Post receipt, and its lines one by one (no receiving runs).
   const reviewOnly = poIsReviewOnly(header?.status);
-  // Receiving follows stock:adjust, the permission the receipt route asserts
-  // (and, since 0395, the database's own receipt function): the screen used
-  // to offer Scan, the quantities and Post receipt to everyone who can read
-  // purchase orders, viewers included, and every post was refused (small
-  // fixes slice 2 review). Without it the PO reads like a draft does, and a
-  // notice says why in the words the server's refusal maps to. Cosmetic: the
-  // route refuses on its own.
+  // Receiving follows the rule the database applies to a receipt (core
+  // canPostReceipt through showReceiveCta: manager or above with
+  // stock:adjust), the rule the receipt route asks. Otherwise the
+  // PO reads like a draft does, and a notice says why: the missing permission
+  // in the words the server's refusal maps to, or who receives. Not offered
+  // while the role is unknown. Cosmetic: the route refuses on its own.
   const { role } = useRole();
   const permissions = useEffectivePermissions();
-  const canReceive = showWriteCtaForRole(role, permissions, 'stock:adjust');
+  const canReceive = showReceiveCta(role, permissions);
+  const receiveNotice = receiveNoticeFor(role, permissions);
   const readOnly = reviewOnly || !canReceive;
   const hasOutstanding = lines.some((l) => l.quantity_ordered - l.quantity_received > 0);
   // A receipt can be posted only while a line has something left to receive:
@@ -827,9 +827,11 @@ export default function PoReceiveScreen() {
               </View>
             ) : null}
             {!reviewOnly && !canReceive && hasOutstanding ? (
-              <View style={styles.partNotice}>
-                <Text style={styles.partNoticeText}>{dbPermissionRefusedCopy('receipt_post')}</Text>
-              </View>
+              receiveNotice === null ? null : (
+                <View style={styles.partNotice}>
+                  <Text style={styles.partNoticeText}>{receiveNotice}</Text>
+                </View>
+              )
             ) : null}
             {groupsDegraded ? (
               <View style={styles.partNotice}>

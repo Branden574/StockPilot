@@ -45,7 +45,7 @@ create temporary table expected_junctions (junction text, a text, b text, a_fk t
 create temporary table expected_pairs (a text, b text, relationships text) on commit drop;
 
 -- BEGIN GENERATED: scripts/gen-postgrest-embed-snapshot.mjs from scripts/postgrest-embeds/relationships.snapshot.json. Do not edit by hand.
--- 404 foreign keys, 9 junctions, 35 ambiguous pairs.
+-- 405 foreign keys, 9 junctions, 35 ambiguous pairs.
 insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('activity_logs', 'activity_logs_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('activity_logs', 'activity_logs_user_id_fkey', 'user_profiles', 'user_id', 'id'),
@@ -87,6 +87,7 @@ insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('connection_sync_log', 'connection_sync_log_connection_id_fkey', 'org_connections', 'connection_id', 'id'),
   ('connection_sync_log', 'connection_sync_log_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('connection_sync_log', 'connection_sync_log_outbox_event_id_fkey', 'outbox_events', 'outbox_event_id', 'id'),
+  ('cron_sweep_attempts', 'cron_sweep_attempts_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('custom_field_definitions', 'custom_field_definitions_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('customer_catalog', 'customer_catalog_customer_id_fkey', 'customers', 'customer_id', 'id'),
   ('customer_catalog', 'customer_catalog_item_id_fkey', 'inventory_items', 'item_id', 'id'),

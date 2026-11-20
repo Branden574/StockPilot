@@ -3,9 +3,8 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { isUuid } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { internalErrorResponse } from '@/server/lib/api-error-response';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import { CycleCountsService } from '@/server/services/cycle-counts';
-import { ServiceError } from '@/server/services/context';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -39,16 +38,7 @@ export async function POST(
     await svc.markAiScanConfirmed(scanId);
     return NextResponse.json({ ok: true });
   } catch (e) {
-    if (e instanceof ServiceError) {
-      const status =
-        e.code === 'forbidden' || e.code === 'module_disabled'
-          ? 403
-          : e.code === 'not_found'
-            ? 404
-            : 500;
-      return NextResponse.json({ error: e.code, message: e.message }, { status });
-    }
-    return internalErrorResponse(e, 'cycle_counts.ai_scan.confirm', {
+    return serviceErrorResponse(e, 'cycle_counts.ai_scan.confirm', {
       organizationId: ctx.organizationId,
     });
   }

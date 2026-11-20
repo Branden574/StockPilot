@@ -55,6 +55,12 @@ beforeEach(() => {
             error: null,
           }
         : { data: [{ module_id: 'inventory' }], error: null },
+    // The organization's settings read again as its turn starts.
+    'organization_modules.select.maybeSingle': (call) => {
+      const orgId = call.args[call.methods.indexOf('eq')]?.[1];
+      const days = orgId === 'o1' ? 90 : 30;
+      return { data: { settings: { autoDeleteArchived: { enabled: true, days } } }, error: null };
+    },
     'organization_members.select': { data: [{ user_id: 'u1', role: 'owner' }], error: null },
   }).client;
 });

@@ -28,6 +28,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { editedOptionalText } from '@/lib/edited-optional-text';
 import { cn } from '@/lib/utils';
 import {
   archiveCategoryAction,
@@ -652,7 +653,7 @@ function CategoryDialog({
 
     const payload = {
       name: values.name,
-      description: values.description || undefined,
+      description: editedOptionalText(values.description, editing?.description),
       color: values.color || undefined,
       supportsSizes: values.supportsSizes,
       parentId,

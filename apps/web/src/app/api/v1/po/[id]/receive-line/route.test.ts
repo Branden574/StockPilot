@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { ServiceError } from '@/server/services/context';
+import { assertModuleEnabled, assertPermission, ServiceError } from '@/server/services/context';
+import { assertCanPostReceipt } from '@/server/services/lib/receipt-post-rule';
 import { ReceivingService } from '@/server/services/receiving';
 
 import { POST } from './route';
@@ -28,6 +29,9 @@ interface TableFixture {
   /** Rows the query resolves to. */
   rows: Row[];
   error?: { code: string; message: string } | null;
+  /** Rows for the second and later reads of the table, in order (the last
+   *  one repeats): the line read after the receipt sees what it recorded. */
+  later?: Row[][];
 }
 
 /**
@@ -70,17 +74,29 @@ function makeBuilder(fixture: TableFixture) {
 
 const postReceipt = vi.fn();
 
+/** The fixture for the nth read (0-based) of a table. */
+function nthRead(fixture: TableFixture, n: number): TableFixture {
+  if (n === 0 || !fixture.later || fixture.later.length === 0) return fixture;
+  const rows = fixture.later[Math.min(n - 1, fixture.later.length - 1)]!;
+  return { rows, error: fixture.error };
+}
+
 function buildCtx(tables: Record<string, TableFixture>) {
+  const reads = new Map<string, number>();
   return {
     organizationId: 'org-1',
     userId: 'u-1',
     role: 'manager' as const,
     mfaRequired: false,
     mfaSatisfied: true,
-    enabledModules: new Set<ModuleId>(),
+    // The module the receipt needs, so the route reaches the order.
+    enabledModules: new Set<ModuleId>(['receiving']),
     supabase: {
-      from: (table: string) =>
-        makeBuilder(tables[table] ?? { rows: [] }),
+      from: (table: string) => {
+        const n = reads.get(table) ?? 0;
+        reads.set(table, n + 1);
+        return makeBuilder(nthRead(tables[table] ?? { rows: [] }, n));
+      },
     } as never,
   };
 }
@@ -180,7 +196,11 @@ describe('receive-line: over-receipt is allowed (0285)', () => {
     const res = await post(
       {
         purchase_orders: openPo(),
-        purchase_order_items: { rows: [poLine(LINE_DONE, 10, 10)] },
+        purchase_order_items: {
+          rows: [poLine(LINE_DONE, 10, 10)],
+          // The line after the receipt: 2 more received.
+          later: [[poLine(LINE_DONE, 10, 12)]],
+        },
       },
       { itemId: ITEM, qty: 2, warehouseId: WH, idempotencyKey: KEY },
     );
@@ -293,5 +313,284 @@ describe('receive-line: ServiceError mapping', () => {
       idempotencyKey: KEY,
     });
     expect(res.status).toBe(409);
+  });
+});
+
+describe('receive-line: the module and the permission are checked before the order is read', () => {
+  const BODY = { itemId: ITEM, qty: 1, warehouseId: WH, idempotencyKey: KEY };
+  const ORDER = () => ({
+    purchase_orders: openPo(),
+    purchase_order_items: { rows: [poLine(LINE_OPEN, 5, 0)] },
+  });
+  const NO_ORDER = () => ({});
+
+  /** The route as a caller with `overrides`, recording every table it reads. */
+  async function sendAs(overrides: Row, tables: Record<string, TableFixture>) {
+    const read: string[] = [];
+    vi.mocked(withApiContext).mockResolvedValue({
+      ...buildCtx(tables),
+      ...overrides,
+      supabase: {
+        from: (table: string) => {
+          read.push(table);
+          return makeBuilder(tables[table] ?? { rows: [] });
+        },
+      },
+    } as never);
+    const res = await POST(buildRequest(BODY), params);
+    return { read, status: res.status, body: (await res.json()) as unknown };
+  }
+
+  const REFUSED: Array<[string, Row, () => void]> = [
+    [
+      'receiving is off',
+      { enabledModules: new Set<ModuleId>() },
+      () =>
+        assertModuleEnabled(
+          { ...buildCtx({}), enabledModules: new Set<ModuleId>() } as never,
+          'receiving',
+        ),
+    ],
+    [
+      'the role cannot adjust stock',
+      { role: 'viewer' },
+      () => assertPermission({ ...buildCtx({}), role: 'viewer' } as never, 'stock:adjust'),
+    ],
+    [
+      'a staff member (below manager)',
+      { role: 'staff' },
+      () => assertCanPostReceipt({ ...buildCtx({}), role: 'staff' } as never),
+    ],
+    [
+      'a staff member granted purchase_orders:manage',
+      {
+        role: 'staff',
+        permissions: new Set(['stock:adjust', 'purchase_orders:read', 'purchase_orders:manage']),
+      },
+      () =>
+        assertCanPostReceipt({
+          ...buildCtx({}),
+          role: 'staff',
+          permissions: new Set(['stock:adjust', 'purchase_orders:read', 'purchase_orders:manage']),
+        } as never),
+    ],
+    [
+      'an authenticator must be set up first',
+      { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false },
+      () =>
+        assertPermission(
+          { ...buildCtx({}), mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false } as never,
+          'stock:adjust',
+        ),
+    ],
+  ];
+
+  it.each(REFUSED)(
+    '%s: refused before any read, with the answer the receipt gives, whether or not the order exists',
+    async (_label, overrides, refusal) => {
+      // The receipt's own answer to the same refusal (the service refusing it).
+      let thrown: unknown;
+      try {
+        refusal();
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBeInstanceOf(ServiceError);
+      postReceipt.mockRejectedValueOnce(thrown);
+      const fromTheReceipt = await sendAs({ enabledModules: new Set<ModuleId>(['receiving']) }, ORDER());
+
+      const withOrder = await sendAs(overrides, ORDER());
+      const withoutOrder = await sendAs(overrides, NO_ORDER());
+
+      expect(withOrder.status).toBe(403);
+      expect(withOrder.read).toEqual([]);
+      expect(withoutOrder.read).toEqual([]);
+      expect(withoutOrder).toEqual(withOrder);
+      expect({ status: withOrder.status, body: withOrder.body }).toEqual({
+        status: fromTheReceipt.status,
+        body: fromTheReceipt.body,
+      });
+      expect(postReceipt).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('a member who passes the checks reads the order, then the receipt runs', async () => {
+    const passed = await sendAs({}, ORDER());
+    expect(passed.status).toBe(200);
+    // The order, the receipt the key may already name, the line to receive
+    // on, and that line again after the receipt.
+    expect(passed.read).toEqual([
+      'purchase_orders',
+      'receipts',
+      'purchase_order_items',
+      'purchase_order_items',
+    ]);
+    const missing = await sendAs({}, NO_ORDER());
+    expect(missing).toMatchObject({ status: 404, body: { error: 'po_not_found' } });
+  });
+});
+
+describe('receive-line: a key that already names a receipt is answered from that receipt', () => {
+  const RECEIPT = { id: 'r1', receipt_number: 'RCV-1' };
+  const stored = (poLineId: string, itemId = ITEM): Record<string, TableFixture> => ({
+    receipts: { rows: [{ id: RECEIPT.id, warehouse_id: WH }] },
+    receipt_lines: { rows: [{ purchase_order_line_id: poLineId, item_id: itemId, unit_cost: 2 }] },
+  });
+  const BODY = { itemId: ITEM, qty: 1, warehouseId: WH, idempotencyKey: KEY };
+
+  beforeEach(() => {
+    postReceipt.mockResolvedValue(RECEIPT);
+  });
+
+  it('the same key twice: the same receipt, the same request, and remainingAfter is what the line holds', async () => {
+    const first = await post(
+      {
+        purchase_orders: openPo(),
+        purchase_order_items: { rows: [poLine(LINE_OPEN, 10, 0)], later: [[poLine(LINE_OPEN, 10, 1)]] },
+      },
+      BODY,
+    );
+    const again = await post(
+      {
+        purchase_orders: openPo(),
+        ...stored(LINE_OPEN),
+        purchase_order_items: { rows: [poLine(LINE_OPEN, 10, 1)] },
+      },
+      BODY,
+    );
+    expect(first.status).toBe(200);
+    expect(again.status).toBe(200);
+    const a = (await first.json()) as Record<string, unknown>;
+    const b = (await again.json()) as Record<string, unknown>;
+    expect(b).toEqual(a);
+    expect(a).toMatchObject({ receiptId: 'r1', poLineId: LINE_OPEN, remainingAfter: 9 });
+    expect(postReceipt).toHaveBeenCalledTimes(2);
+    expect(postReceipt.mock.calls[1]?.[0]).toEqual(postReceipt.mock.calls[0]?.[0]);
+  });
+
+  it('an item on two lines: the retry sends the receipt\'s own line, not the next open one', async () => {
+    const first = await post(
+      {
+        purchase_orders: openPo(),
+        purchase_order_items: {
+          rows: [poLine(LINE_DONE, 1, 0), poLine(LINE_OPEN, 5, 0)],
+          later: [[poLine(LINE_DONE, 1, 1)]],
+        },
+      },
+      BODY,
+    );
+    // The first line is complete after the first post, so a fresh pick would choose LINE_OPEN.
+    const again = await post(
+      {
+        purchase_orders: openPo(),
+        ...stored(LINE_DONE),
+        purchase_order_items: { rows: [poLine(LINE_DONE, 1, 1)] },
+      },
+      BODY,
+    );
+    expect(first.status).toBe(200);
+    expect(again.status).toBe(200);
+    expect(await again.json()).toEqual(await first.json());
+    const sent = postReceipt.mock.calls.map(
+      (c) => (c[0] as { lines: { poLineId: string }[] }).lines[0]?.poLineId,
+    );
+    expect(sent).toEqual([LINE_DONE, LINE_DONE]);
+    expect(postReceipt.mock.calls[1]?.[0]).toEqual(postReceipt.mock.calls[0]?.[0]);
+  });
+
+  it('the first post closed the order: the retry is answered with the receipt, not po_closed', async () => {
+    const first = await post(
+      {
+        purchase_orders: openPo(),
+        purchase_order_items: { rows: [poLine(LINE_OPEN, 1, 0)], later: [[poLine(LINE_OPEN, 1, 1)]] },
+      },
+      BODY,
+    );
+    const again = await post(
+      {
+        purchase_orders: openPo({ status: 'received' }),
+        ...stored(LINE_OPEN),
+        purchase_order_items: { rows: [poLine(LINE_OPEN, 1, 1)] },
+      },
+      BODY,
+    );
+    expect(again.status).toBe(200);
+    expect(await again.json()).toEqual(await first.json());
+    expect(postReceipt.mock.calls[1]?.[0]).toEqual(postReceipt.mock.calls[0]?.[0]);
+  });
+
+  it('without a warehouse in the body, the retry sends the receipt\'s own warehouse', async () => {
+    const res = await post(
+      {
+        purchase_orders: openPo(),
+        ...stored(LINE_OPEN),
+        purchase_order_items: { rows: [poLine(LINE_OPEN, 10, 1)] },
+      },
+      { itemId: ITEM, qty: 1, idempotencyKey: KEY },
+    );
+    expect(res.status).toBe(200);
+    expect((postReceipt.mock.calls[0]?.[0] as { warehouseId: string }).warehouseId).toBe(WH);
+  });
+
+  it('a key that names a receipt of another item is sent as a new request, on the line its item picks', async () => {
+    const res = await post(
+      {
+        purchase_orders: openPo(),
+        ...stored(LINE_DONE, '55555555-5555-4555-8555-555555555555'),
+        purchase_order_items: { rows: [poLine(LINE_OPEN, 10, 1)] },
+      },
+      BODY,
+    );
+    expect(res.status).toBe(200);
+    expect(postReceipt).toHaveBeenCalledTimes(1);
+    expect(
+      (postReceipt.mock.calls[0]?.[0] as { lines: { poLineId: string }[] }).lines[0]?.poLineId,
+    ).toBe(LINE_OPEN);
+  });
+
+  it('a key that names a receipt of two lines is sent as a new request', async () => {
+    const res = await post(
+      {
+        purchase_orders: openPo(),
+        receipts: { rows: [{ id: RECEIPT.id, warehouse_id: WH }] },
+        receipt_lines: {
+          rows: [
+            { purchase_order_line_id: LINE_DONE, item_id: ITEM, unit_cost: 2 },
+            { purchase_order_line_id: LINE_OPEN, item_id: ITEM, unit_cost: 2 },
+          ],
+        },
+        purchase_order_items: { rows: [poLine(LINE_OPEN, 10, 1)] },
+      },
+      BODY,
+    );
+    expect(res.status).toBe(200);
+    expect(
+      (postReceipt.mock.calls[0]?.[0] as { lines: { poLineId: string }[] }).lines[0]?.poLineId,
+    ).toBe(LINE_OPEN);
+  });
+
+  it('a failed read of the key answers 500 with nothing posted', async () => {
+    const res = await post(
+      {
+        purchase_orders: openPo(),
+        receipts: { rows: [], error: { code: '57014', message: 'canceling statement' } },
+        purchase_order_items: { rows: [poLine(LINE_OPEN, 10, 0)] },
+      },
+      BODY,
+    );
+    expect(res.status).toBe(500);
+    expect(postReceipt).not.toHaveBeenCalled();
+  });
+
+  it('a failed read of the line after the receipt answers the receipt with remainingAfter null', async () => {
+    const res = await post(
+      {
+        purchase_orders: openPo(),
+        purchase_order_items: { rows: [poLine(LINE_OPEN, 10, 0)], later: [[]] },
+      },
+      BODY,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ receiptId: 'r1', remainingAfter: null });
   });
 });

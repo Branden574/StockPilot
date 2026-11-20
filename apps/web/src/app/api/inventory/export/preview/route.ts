@@ -10,8 +10,7 @@ import {
   buildInventoryExportSourceRows,
   type InventoryExportFilters,
 } from '@/lib/inventory-export';
-import { internalErrorResponse } from '@/server/lib/api-error-response';
-import { ServiceError } from '@/server/services/context';
+import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import type { ItemListSort } from '@/server/services/inventory';
 
 import { can } from '@stockpilot/core';
@@ -119,9 +118,6 @@ export async function POST(request: NextRequest) {
       { headers: { 'Cache-Control': 'no-store' } },
     );
   } catch (e) {
-    if (e instanceof ServiceError) {
-      return NextResponse.json({ error: e.code, message: e.message }, { status: 500 });
-    }
-    return internalErrorResponse(e, 'inventory.export.preview');
+    return serviceErrorResponse(e, 'inventory.export.preview');
   }
 }

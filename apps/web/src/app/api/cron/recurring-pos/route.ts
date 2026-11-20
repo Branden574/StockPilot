@@ -7,20 +7,20 @@ import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { createNotification } from '@/server/services/notifications';
+import { DAILY_CLAIM_HOLD_MS, sweepOrganizations } from '@/server/services/lib/cron-sweep';
 import { ListReadError, listRows } from '@/server/services/lib/list-rows';
 import { fetchAllRows } from '@/server/services/lib/paginate';
+import { systemContextLoader } from '@/server/services/lib/system-context';
 import { postgrestErrorText } from '@/server/services/lib/postgrest-error';
 import {
   RecurringPoTemplatesService,
   recurringRunNotice,
   type RecurringRunSummary,
 } from '@/server/services/recurring-pos';
-import type { ServiceContext } from '@/server/services/context';
 
 import {
   effectivePermissions,
   planAllowsRecurringPos,
-  type ModuleId,
   type OrgBillingState,
   type PermissionOverride,
   type Role,
@@ -28,7 +28,18 @@ import {
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 60;
+/**
+ * 300, up from 60: the job runs once a day, so an organization a run does not
+ * reach waits a whole day for its purchase orders. 300 is what the other
+ * daily per-organization jobs use (daily-briefing, restore-points), and the
+ * soft deadline below leaves the organization in flight a minute to finish.
+ */
+export const maxDuration = 300;
+
+/** Stop STARTING organizations after this long (see maxDuration). */
+const RUN_DEADLINE_MS = 240_000;
+/** The job's cadence: the slot of the fallback order (rotateByClock). */
+const DAY_MS = 24 * 60 * 60_000;
 
 function secretsEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
@@ -45,6 +56,20 @@ function secretsEqual(a: string, b: string): boolean {
  *
  * CRON_SECRET-gated. FAIL-OPEN per org: one org's error is reported and
  * skipped, never blocking the rest.
+ *
+ * Order: the organizations this job reached longest ago first
+ * (cron_sweep_attempts, job 'recurring_pos'), so a run cut by its deadline
+ * leaves different organizations each day, and those go first the next day.
+ * A template of an organization left for the next day is still due then, and
+ * runDueTemplates advances it past now: one purchase order, not one per day
+ * missed. Each organization is claimed as it starts, so a second delivery of
+ * the tick skips it; the per-template claim on next_run_at stands behind that.
+ *
+ * ONE RUN PER ORGANIZATION PER 20 HOURS (DAILY_CLAIM_HOLD_MS). A manual run
+ * does nothing for an organization another run started in the last 20 hours,
+ * including one whose attempt failed (it waits for the next day's run), and a
+ * manual run late in the day makes the next scheduled run skip the
+ * organizations it started (they are reached the day after).
  */
 export async function GET(req: Request) {
   if (!env.CRON_SECRET) {
@@ -55,6 +80,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
+  const startedAt = Date.now();
   const admin = createAdminClient();
 
   try {
@@ -76,48 +102,101 @@ export async function GET(req: Request) {
     let posHeld = 0;
     let linesLeftOff = 0;
     let failures = 0;
+    let noActor = 0;
+    let contextUnread = 0;
+    const loadContext = systemContextLoader(admin, 'cron.recurring-pos.context');
     let templatesSkipped = 0;
 
-    for (const { organization_id: orgId } of modRows) {
-      try {
-        // Tier gate (Pro+ on the EFFECTIVE plan) — filter here so a downgraded
-        // org stops auto-creating POs immediately on the next cron run.
-        const { data: orgRow } = await admin
-          .from('organizations')
-          .select(
-            'plan, access_tier, billing_arrangement, stripe_subscription_id, trial_ends_at, trial_tier',
-          )
-          .eq('id', orgId)
-          .maybeSingle();
-        if (!orgRow || !planAllowsRecurringPos(orgRow as OrgBillingState)) continue;
+    const sweep = await sweepOrganizations(
+      admin,
+      {
+        job: 'recurring_pos',
+        tag: 'cron.recurring-pos',
+        orgIds: modRows.map((r) => r.organization_id),
+        deadlineAt: startedAt + RUN_DEADLINE_MS,
+        slotMs: DAY_MS,
+        holdMs: DAILY_CLAIM_HOLD_MS,
+      },
+      async (orgId): Promise<{ result: 'success' | 'failure' | 'neither'; value: null }> => {
+        try {
+          // Tier gate (Pro+ on the EFFECTIVE plan) — filter here so a downgraded
+          // org stops auto-creating POs immediately on the next cron run.
+          const { data: orgRow } = await admin
+            .from('organizations')
+            .select(
+              'plan, access_tier, billing_arrangement, stripe_subscription_id, trial_ends_at, trial_tier',
+            )
+            .eq('id', orgId)
+            .maybeSingle();
+          if (!orgRow || !planAllowsRecurringPos(orgRow as OrgBillingState)) {
+            return { result: 'success', value: null };
+          }
 
-        const ctx = await buildSystemContext(admin, orgId);
-        if (!ctx) continue; // no owner/admin to attribute to → skip safely
+          const loaded = await loadContext(orgId);
+          // A failed read of the owner/admin or the module set is a failure
+          // (reported once per run), never "no owner" or "no modules". Only
+          // an organization whose reads answered with no owner/admin to
+          // attribute to is skipped, and that is not a failure: it would count
+          // against the organization every day.
+          if (!loaded.ok) {
+            if (loaded.reason === 'read_failed') {
+              contextUnread++;
+              return { result: 'failure', value: null };
+            }
+            noActor++;
+            return { result: 'neither', value: null };
+          }
+          const ctx = loaded.ctx;
 
-        const summary = await new RecurringPoTemplatesService(ctx).runDueTemplates(new Date());
-        orgsProcessed++;
-        posCreated += summary.created;
-        posSent += summary.sent;
-        posHeld += summary.heldForReview;
-        linesLeftOff += summary.linesLeftOff;
-        failures += summary.failures;
-        templatesSkipped += summary.templatesSkipped.length;
+          const summary = await new RecurringPoTemplatesService(ctx).runDueTemplates(new Date());
+          orgsProcessed++;
+          posCreated += summary.created;
+          posSent += summary.sent;
+          posHeld += summary.heldForReview;
+          linesLeftOff += summary.linesLeftOff;
+          failures += summary.failures;
+          templatesSkipped += summary.templatesSkipped.length;
 
-        // Admins hear about every run that created a PO, about every run
-        // that left template lines off (a deleted item, a kit), including one
-        // that created nothing because no line could be ordered, and about
-        // every template whose purchase order the save refused or could not
-        // make (its destination deleted after it was saved, ...), with why.
-        // A skipped template's creator is told too, while they can still
-        // edit templates: whoever set the template up is the one who fixes
-        // it, and may be a manager.
-        if (recurringRunNotice(summary)) {
-          await notifyAdmins(admin, orgId, summary);
+          // Admins hear about every run that created a PO, about every run
+          // that left template lines off (a deleted item, a kit), including one
+          // that created nothing because no line could be ordered, and about
+          // every template whose purchase order the save refused or could not
+          // make (its destination deleted after it was saved, ...), with why.
+          // A skipped template's creator is told too, while they can still
+          // edit templates: whoever set the template up is the one who fixes
+          // it, and may be a manager.
+          if (recurringRunNotice(summary)) {
+            await notifyAdmins(admin, orgId, summary);
+          }
+          return { result: 'success', value: null };
+        } catch (e) {
+          void reportError(e, { tag: 'cron.recurring-pos.org', extra: { orgId } });
+          return { result: 'failure', value: null };
         }
-      } catch (e) {
-        void reportError(e, { tag: 'cron.recurring-pos.org', extra: { orgId } });
-      }
-    }
+      },
+    );
+
+    // One line per run, counts only (no org ids).
+    console.info(
+      '[cron.recurring-pos]',
+      JSON.stringify({
+        candidates: modRows.length,
+        orgsProcessed,
+        posCreated,
+        posSent,
+        posHeld,
+        failures,
+        noActor,
+        contextUnread,
+        failed: sweep.failed,
+        heldByAnotherRun: sweep.heldByAnotherRun,
+        failingRepeatedly: sweep.failingRepeatedly,
+        orderedBy: sweep.orderedBy,
+        promoted: sweep.promoted,
+        leftForNextRun: sweep.leftForNextRun,
+        ms: Date.now() - startedAt,
+      }),
+    );
 
     return NextResponse.json({
       orgsProcessed,
@@ -128,57 +207,13 @@ export async function GET(req: Request) {
       failures,
       templatesSkipped,
       candidates: modRows.length,
+      heldByAnotherRun: sweep.heldByAnotherRun,
+      leftForNextRun: sweep.leftForNextRun,
     });
   } catch (e) {
     return internalErrorResponse(e, 'cron.recurring-pos');
   }
 }
-
-/**
- * Builds an owner-equivalent system ServiceContext for the cron: service-role
- * client (bypasses RLS, queries stay org-scoped by organization_id), role
- * 'owner', MFA satisfied, and the org's actually-enabled modules. Returns null
- * when the org has no owner/admin to attribute created POs to.
- */
-async function buildSystemContext(
-  admin: ReturnType<typeof createAdminClient>,
-  orgId: string,
-): Promise<ServiceContext | null> {
-  const [{ data: members }, { data: mods }] = await Promise.all([
-    admin
-      .from('organization_members')
-      .select('user_id, role')
-      .eq('organization_id', orgId)
-      .in('role', ['owner', 'admin'])
-      .not('accepted_at', 'is', null)
-      .is('impersonation_expires_at', null)
-      .limit(1),
-    admin
-      .from('organization_modules')
-      .select('module_id')
-      .eq('organization_id', orgId)
-      .eq('enabled', true),
-  ]);
-
-  const actor = (members ?? [])[0] as { user_id: string; role: string } | undefined;
-  if (!actor) return null;
-
-  const enabledModules = new Set(
-    ((mods ?? []) as Array<{ module_id: string }>).map((m) => m.module_id as ModuleId),
-  );
-
-  return {
-    organizationId: orgId,
-    userId: actor.user_id,
-    role: 'owner',
-    supabase: admin as unknown as ServiceContext['supabase'],
-    mfaRequired: false,
-    mfaSatisfied: true,
-    isSystem: true,
-    enabledModules,
-  };
-}
-
 /** The permission every recurring template action and the Recurring page check. */
 const EDITS_TEMPLATES = 'purchase_orders:manage';
 

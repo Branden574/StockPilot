@@ -102,7 +102,10 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // projection was fe0632b2…04ce6f, the pin it had; the difference is that
   // section and its read, nothing else.
   'app/order/[id].tsx': 'f7b165096c9d4fc39093b1d99f19c9c7a53926906bb95ebeaba1a8802bd9cb90',
-  'app/po/[id].tsx': 'ae76a1de33a4ed14e77b401349006835bb401d9c8f8c77f036f384a989496e74',
+  // Re-pinned when receiving began to follow the database's receipt rule (Classic is meant to
+  // change: Scan, the quantities and Post receipt follow showReceiveCta, manager or above with
+  // stock:adjust, and the notice says who receives). Before this the pin was ae76a1de...6e74.
+  'app/po/[id].tsx': '0213c026ac203d5f8ddadc0bac956c91c09a80b9c7f66c81d56cc43991c93b43',
   'src/components/biometric-optin-sheet.tsx':
     '2a1823f24f727ab701e3f4383bd35b5be640ee2076cb8f683d8ea2dcb902b30e',
   'src/components/data-list-screen.tsx':

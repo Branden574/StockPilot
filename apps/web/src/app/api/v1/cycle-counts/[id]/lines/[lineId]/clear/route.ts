@@ -2,9 +2,10 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { isUuid } from '@stockpilot/core';
 
-import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { apiContextGate } from '@/server/lib/api-context-gate';
 import { forbiddenOrInternalResponse } from '@/server/lib/api-error-response';
+import { refusalReasonDetails } from '@/server/lib/refusal-reason';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 
@@ -30,7 +31,12 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; lineId: string }> },
 ) {
-  const ctx = await withApiContext(req);
+  // First, before anything else: a context that could not be built because
+  // the caller's access could not be checked answers the 503 the phone may
+  // send again (server/lib/api-context-gate.ts).
+  const gate = await apiContextGate(req);
+  if ('response' in gate) return gate.response;
+  const ctx = gate.ctx;
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }
@@ -63,7 +69,13 @@ export async function POST(
       // with its code, which the phone's drain treats as final; anything else
       // is a 5xx it sends again. An internal error's message is generic (S13).
       return NextResponse.json(
-        { error: e.code, message: e.message },
+        {
+          error: e.code,
+          message: e.message,
+          // Only a string `details.reason`, and never for an internal_error
+          // (server/lib/refusal-reason.ts).
+          ...refusalReasonDetails(e),
+        },
         { status: serviceErrorStatus(e.code) },
       );
     }

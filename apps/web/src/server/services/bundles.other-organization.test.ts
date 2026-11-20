@@ -170,8 +170,23 @@ describe('assemble and distribute: a kit of another organization is not found', 
   });
 
   it('answers not found before the warehouse check, so the answer does not depend on who asks', async () => {
-    // Staff assigned to no warehouse: the warehouse check alone would refuse
-    // them as forbidden. The kit is not in A, which is the answer for everyone.
+    // Staff granted bundles:manage and assigned to no warehouse: the warehouse
+    // check alone would refuse them as forbidden. The kit is not in A, which
+    // is the answer for everyone.
+    const stub = stubFor();
+    const kitMaker = new Set(['bundles:read', 'bundles:manage']);
+
+    await expect(
+      svc(stub, 'org-A', { role: 'staff', permissions: kitMaker }).assemble(
+        KIT_ID,
+        1,
+        WAREHOUSE_ID,
+      ),
+    ).rejects.toMatchObject({ code: 'not_found', message: 'Bundle not found' });
+    expect(stub.rpcCalls).toHaveLength(0);
+  });
+
+  it('a hand-out by a caller below manager is refused before the kit is read, so that answer says nothing about the kit', async () => {
     const stub = stubFor();
     const distributor = new Set(['bundles:read', 'bundles:distribute']);
 
@@ -180,7 +195,11 @@ describe('assemble and distribute: a kit of another organization is not found', 
         quantity: 1,
         warehouseId: WAREHOUSE_ID,
       }),
-    ).rejects.toMatchObject({ code: 'not_found', message: 'Bundle not found' });
+    ).rejects.toMatchObject({
+      code: 'forbidden',
+      message: 'Only a manager can hand out a kit. Ask a manager to hand this one out.',
+    });
+    expect(stub.fromCalls).toEqual([]);
     expect(stub.rpcCalls).toHaveLength(0);
   });
 

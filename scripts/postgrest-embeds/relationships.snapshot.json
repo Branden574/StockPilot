@@ -1,6 +1,6 @@
 {
   "generatedBy": "scripts/gen-postgrest-embed-snapshot.mjs (do not edit by hand)",
-  "source": "local database catalog (scripts/postgrest-embeds/census.sql), 2026-11-03",
+  "source": "local database catalog (scripts/postgrest-embeds/census.sql), 2026-11-17",
   "foreignKeys": [
     ["activity_logs","activity_logs_organization_id_fkey","organizations",["organization_id"],["id"]],
     ["activity_logs","activity_logs_user_id_fkey","user_profiles",["user_id"],["id"]],
@@ -42,6 +42,7 @@
     ["connection_sync_log","connection_sync_log_connection_id_fkey","org_connections",["connection_id"],["id"]],
     ["connection_sync_log","connection_sync_log_organization_id_fkey","organizations",["organization_id"],["id"]],
     ["connection_sync_log","connection_sync_log_outbox_event_id_fkey","outbox_events",["outbox_event_id"],["id"]],
+    ["cron_sweep_attempts","cron_sweep_attempts_organization_id_fkey","organizations",["organization_id"],["id"]],
     ["custom_field_definitions","custom_field_definitions_organization_id_fkey","organizations",["organization_id"],["id"]],
     ["customer_catalog","customer_catalog_customer_id_fkey","customers",["customer_id"],["id"]],
     ["customer_catalog","customer_catalog_item_id_fkey","inventory_items",["item_id"],["id"]],
@@ -425,6 +426,7 @@
     "charters": ["id"],
     "connection_mappings": ["id"],
     "connection_sync_log": ["id"],
+    "cron_sweep_attempts": ["job","organization_id"],
     "custom_field_definitions": ["id"],
     "customer_catalog": ["customer_id","item_id"],
     "customer_users": ["customer_id","user_id"],

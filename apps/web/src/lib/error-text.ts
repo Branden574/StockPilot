@@ -48,8 +48,11 @@ function clip(text: string, max: number): string {
   return redacted.length > max ? `${redacted.slice(0, max)}…` : redacted;
 }
 
-/** postgrest-js's network-failure details: the first "Caused by:" line only. */
-function causeOf(details: unknown): string | null {
+/**
+ * postgrest-js's network-failure details: the first "Caused by:" line only.
+ * Also postgrestErrorText's rule (server/services/lib/postgrest-error.ts).
+ */
+export function causeOf(details: unknown): string | null {
   if (typeof details !== 'string') return null;
   const line = details.split('\n').find((l) => l.startsWith(CAUSE_PREFIX));
   const cause = line?.slice(CAUSE_PREFIX.length).trim();
