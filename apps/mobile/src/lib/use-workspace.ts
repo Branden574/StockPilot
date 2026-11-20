@@ -81,6 +81,21 @@ let cached: WorkspaceState = {
   activeWarehouseName: null,
 };
 
+/** No workspace: with nobody signed in (not loading), or for an account just
+ *  signed in whose own load is still to run (loading). */
+function noWorkspace(loading: boolean): WorkspaceState {
+  return {
+    loading,
+    orgs: [],
+    activeOrgId: null,
+    activeOrgName: null,
+    activeRole: null,
+    warehouses: [],
+    activeWarehouseId: null,
+    activeWarehouseName: null,
+  };
+}
+
 function publish(next: Partial<WorkspaceState>) {
   cached = { ...cached, ...next };
   // The workspace the holding screen checks (set-up-hold.ts): the one shown.
@@ -245,14 +260,26 @@ let shownEpoch: number | null = null;
 // so, before any screen reacts: a workspace load or switch still running for
 // the previous account then saves and shows nothing. A token refresh keeps the
 // same user id and ends nothing; the first event only records who is signed in.
+//
+// The previous account's workspace leaves memory at the same moment, whether
+// or not a screen is mounted (the set-up holding screen and the sign-in
+// screens mount none): its name, organizations and warehouses are replaced
+// by no workspace, so the next account's first screen starts from nothing of
+// the previous account's. For an account signing in, that state says loading:
+// its own load is still to run (each screen that mounts runs one).
 let epochUserId: string | null | undefined;
 supabase.auth.onAuthStateChange((_event, session) => {
   const id = session?.user?.id ?? null;
-  if (epochUserId !== undefined && id !== epochUserId) {
+  const accountChanged = epochUserId !== undefined && id !== epochUserId;
+  if (accountChanged) {
     endAccountEpoch();
     forgetWorkspacePicks();
   }
   epochUserId = id;
+  if (accountChanged) {
+    shownEpoch = null;
+    publish(noWorkspace(id !== null));
+  }
 });
 
 /**
@@ -808,16 +835,7 @@ export function useWorkspace(): WorkspaceState {
   React.useEffect(() => {
     if (!user) {
       shownEpoch = null;
-      publish({
-        loading: false,
-        orgs: [],
-        activeOrgId: null,
-        activeOrgName: null,
-        activeRole: null,
-        warehouses: [],
-        activeWarehouseId: null,
-        activeWarehouseName: null,
-      });
+      publish(noWorkspace(false));
       return;
     }
     publish({ loading: true });
