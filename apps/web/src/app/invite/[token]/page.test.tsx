@@ -13,6 +13,7 @@ type Invite = {
   role: string;
   expires_at: string;
   accepted_at: string | null;
+  revoked_at: string | null;
 } | null;
 
 let invite: Invite = null;
@@ -21,6 +22,8 @@ let session: { email: string; userId?: string } | null = null;
 let membership: { accepted_at: string | null } | null | 'read-fails' = null;
 /** How many times the page read a membership. */
 let membershipReads = 0;
+/** The columns the page asked of organization_invites. */
+let inviteColumns: unknown = null;
 
 vi.mock('@/lib/env', () => ({ env: { NEXT_PUBLIC_APP_URL: 'https://app.example.test' } }));
 vi.mock('@/lib/auth/session', () => ({ getServerSession: async () => session }));
@@ -29,7 +32,10 @@ vi.mock('@/lib/supabase/admin', () => ({
     from: (table: string) => {
       const filters: Record<string, unknown> = {};
       const chain = {
-        select: () => chain,
+        select: (columns: unknown) => {
+          if (table === 'organization_invites') inviteColumns = columns;
+          return chain;
+        },
         eq: (column: string, value: unknown) => {
           filters[column] = value;
           return chain;
@@ -86,6 +92,7 @@ function makeInvite(extra: Partial<NonNullable<Invite>> = {}): Invite {
     role: 'staff',
     expires_at: FUTURE,
     accepted_at: null,
+    revoked_at: null,
     ...extra,
   };
 }
@@ -99,6 +106,7 @@ beforeEach(() => {
   session = null;
   membership = null;
   membershipReads = 0;
+  inviteColumns = null;
 });
 
 describe('/invite/[token]', () => {
@@ -128,6 +136,19 @@ describe('/invite/[token]', () => {
       screen.getByText('Ask someone at Lab Charter School to invite you again.'),
     ).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Go to sign in' })).toBeInTheDocument();
+  });
+
+  it('revoked, expiry still ahead: shown as expired, with no form and no accept control (S11-A)', async () => {
+    invite = makeInvite({ revoked_at: PAST });
+    session = { email: 'new.person@example.test', userId: 'user-1' };
+    await open();
+    expect(String(inviteColumns)).toContain('revoked_at');
+    expect(screen.getByRole('heading', { level: 1, name: 'Invite expired' })).toBeInTheDocument();
+    expect(screen.getByText(/to invite you again\.$/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Go to sign in' })).toBeInTheDocument();
+    expect(screen.queryByRole('form')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Accept invite' })).toBeNull();
+    expect(membershipReads).toBe(0);
   });
 
   it('valid, signed out: the signup form and the Sign in link that comes back here', async () => {
