@@ -260,7 +260,7 @@ const groupRow = (over: Raw = {}, startMs = H04): Raw => ({
 });
 const totalsRow = (over: Raw = {}, startMs = H04): Raw => ({
   kind: 'password',
-  form: 'plain',
+  forms: 'plain',
   status: '400',
   caller: 'phone',
   network: 'other',
@@ -474,21 +474,22 @@ describe('the mapping from a log line to an event', () => {
 
   it.each([
     ['password', '400', 'phone', 'other', 'password_guessing', 'wrong_password', 'phone'],
-    ['password', '400', 'browser', 'other', 'password_guessing', 'wrong_password', 'api'],
+    // Every caller that is not the phone app or our server is `other`: a
+    // browser, a tool, no client string at all.
     ['password', '400', 'other', 'other', 'password_guessing', 'wrong_password', 'api'],
-    ['password', '400', 'none', 'other', 'password_guessing', 'wrong_password', 'api'],
-    // A hosting network makes only our server's client string ours.
+    // A hosting network makes only our server's client string ours. (The
+    // queries answer `hosting` for that string alone; any other pair is read
+    // as it would be from any network.)
     ['password', '400', 'phone', 'hosting', 'password_guessing', 'wrong_password', 'phone'],
-    ['password', '400', 'browser', 'hosting', 'password_guessing', 'wrong_password', 'api'],
     ['password', '400', 'other', 'hosting', 'password_guessing', 'wrong_password', 'api'],
     // Our server's client string from any other network: dressed up as our server.
     ['password', '400', 'server', 'other', 'password_guessing', 'wrong_password', 'api'],
     ['verify', '422', 'phone', 'other', 'password_guessing', 'wrong_code', 'phone'],
-    ['verify', '422', 'browser', 'other', 'password_guessing', 'wrong_code', 'api'],
+    ['verify', '422', 'other', 'other', 'password_guessing', 'wrong_code', 'api'],
     ['verify', '422', 'server', 'other', 'password_guessing', 'wrong_code', 'api'],
     ['password', '429', 'phone', 'other', 'bots', 'auth_rate_limited', 'phone'],
     ['password', '429', 'server', 'other', 'bots', 'auth_rate_limited', 'api'],
-    ['verify', '429', 'none', 'other', 'bots', 'auth_rate_limited', 'api'],
+    ['verify', '429', 'other', 'other', 'bots', 'auth_rate_limited', 'api'],
   ])(
     '%s %s from %s on a %s network -> %s / %s / %s',
     (kind, st, caller, network, category, reason, source) => {
@@ -502,16 +503,14 @@ describe('the mapping from a log line to an event', () => {
   );
 
   it.each([
-    ['password', '401'],
-    ['password', '403'],
     ['password', '404'],
     ['password', '422'],
-    ['password', '499'],
+    // Every refused status the job does not act on (401, 403, ...) is the class `other`.
+    ['password', 'other'],
     // A wrong code is 422 (measured); a 400 there was not seen, so its meaning is not known.
     ['verify', '400'],
-    ['verify', '401'],
-    ['verify', '403'],
     ['verify', '404'],
+    ['verify', 'other'],
   ])('%s %s is not stored: an unknown meaning is not shown as an attack', (kind, st) => {
     expect(classifyAuthLogLine(line(kind, st, 'phone'))).toEqual({
       store: false,
@@ -522,7 +521,7 @@ describe('the mapping from a log line to an event', () => {
   it.each([
     ['400', 'phone', 'other'],
     ['429', 'phone', 'other'],
-    ['401', 'browser', 'other'],
+    ['other', 'other', 'other'],
     ['400', 'server', 'other'],
   ])(
     'a refresh answered %s from %s is an ordinary expired session: counted, never stored',
@@ -536,8 +535,8 @@ describe('the mapping from a log line to an event', () => {
 
   it.each([
     ['400', 'phone', 'other'],
-    ['429', 'browser', 'other'],
-    ['401', 'server', 'other'],
+    ['429', 'other', 'other'],
+    ['other', 'server', 'other'],
   ])(
     'a known grant that is not a password, answered %s from %s: counted, never stored',
     (st, caller, network) => {
@@ -550,16 +549,16 @@ describe('the mapping from a log line to an event', () => {
 
   it.each([
     ['token_other', '400', 'phone', 'other', 'phone'],
-    ['token_other', '429', 'browser', 'other', 'api'],
-    ['token_other', '401', 'none', 'other', 'api'],
+    ['token_other', '429', 'other', 'other', 'api'],
+    ['token_other', 'other', 'other', 'other', 'api'],
     ['verify_other', '422', 'phone', 'other', 'phone'],
     ['verify_other', '429', 'other', 'other', 'api'],
-    ['emailed_code_other', '403', 'none', 'other', 'api'],
-    ['emailed_code_other', '405', 'phone', 'other', 'phone'],
+    ['emailed_code_other', '422', 'other', 'other', 'api'],
+    ['emailed_code_other', 'other', 'phone', 'other', 'phone'],
     // Never taken for our own server.
     ['token_other', '400', 'server', 'hosting', 'api'],
     ['verify_other', '422', 'server', 'hosting', 'api'],
-    ['emailed_code_other', '403', 'server', 'hosting', 'api'],
+    ['emailed_code_other', 'other', 'server', 'hosting', 'api'],
   ])(
     '%s %s from %s on a %s network is of an unknown form: counted for a flagged count from %s',
     (kind, st, caller, network, source) => {
@@ -573,8 +572,8 @@ describe('the mapping from a log line to an event', () => {
 
   it.each([
     ['token_other', 'phone', 'other'],
-    ['verify_other', 'none', 'other'],
-    ['emailed_code_other', 'browser', 'other'],
+    ['verify_other', 'other', 'other'],
+    ['emailed_code_other', 'other', 'hosting'],
     ['token_other', 'server', 'hosting'],
     ['verify_other', 'server', 'other'],
   ])(
@@ -587,13 +586,15 @@ describe('the mapping from a log line to an event', () => {
     },
   );
 
+  // Measured on 2026-11-21: a wrong emailed code is answered 403, which the
+  // totals answer as the class `other`.
   it.each([
-    ['403', 'none', 'other'],
+    ['other', 'other', 'other'],
     ['400', 'phone', 'other'],
-    ['429', 'browser', 'hosting'],
+    ['429', 'other', 'hosting'],
     ['404', 'other', 'other'],
   ])(
-    'a refused check of an emailed code answered %s from %s: counted, not stored until its statuses are measured',
+    "a refused check of an emailed code answered %s from %s: counted, not stored until our own server's emailed-code refusals are recorded",
     (st, caller, network) => {
       expect(classifyAuthLogLine(line('emailed_code', st, caller, network))).toEqual({
         store: false,
@@ -604,8 +605,8 @@ describe('the mapping from a log line to an event', () => {
 
   it.each([
     ['422', 'phone', 'other'],
-    ['400', 'browser', 'other'],
-    ['404', 'none', 'other'],
+    ['400', 'other', 'other'],
+    ['404', 'other', 'other'],
   ])(
     'a refused request to enrol a factor or to ask for a challenge, answered %s from %s: no secret is checked there, counted only',
     (st, caller, network) => {
@@ -625,7 +626,7 @@ describe('the mapping from a log line to an event', () => {
       'factors_known_other',
       'emailed_code',
     ])
-      for (const st of ['400', '422', '429', '401']) {
+      for (const st of ['400', '422', '429', 'other']) {
         expect(classifyAuthLogLine(line(kind, st, 'server', 'hosting')), `${kind} ${st}`).toEqual({
           store: false,
           why: 'our_server',
@@ -639,8 +640,8 @@ describe('the mapping from a log line to an event', () => {
     const reasons = new Set<string>();
     const sources = new Set<string>();
     for (const kind of ALL_KINDS)
-      for (const st of ['400', '401', '403', '404', '422', '429', '499'])
-        for (const caller of ['phone', 'server', 'browser', 'other', 'none'])
+      for (const st of ['400', '404', '422', '429', 'other'])
+        for (const caller of ['phone', 'server', 'other'])
           for (const network of ['hosting', 'other']) {
             const v = classifyAuthLogLine(line(kind, st, caller, network));
             if (v.store) reasons.add(v.reason);
@@ -731,14 +732,33 @@ describe('every returned field is checked before use', () => {
   });
 
   it.each([
-    ['ambiguous', 'ambiguous'],
-    ['plain', 'plain'],
-    ['Ambiguous', 'plain'],
-    ['', 'plain'],
-    [undefined, 'plain'],
-  ])('a form %j is read as %s (it is counted in the log line only)', (form, read) => {
-    expect(parseTotalsRow(totalsRow({ form }), hour)?.form).toBe(read);
-  });
+    ['ambiguous', true],
+    ['plain', false],
+    ['Ambiguous', false],
+    ['', false],
+    [undefined, false],
+  ])(
+    'a group whose forms come back as %j: held a line of an ambiguous form, %s (counted in the log line only)',
+    (forms, read) => {
+      expect(parseTotalsRow(totalsRow({ forms }), hour)?.ambiguous).toBe(read);
+    },
+  );
+
+  it.each([['400'], ['404'], ['422'], ['429'], ['other']])(
+    'the status class %j is one the queries answer',
+    (status) => {
+      expect(parseGroupRow(groupRow({ status }), hour)?.status).toBe(status);
+      expect(parseTotalsRow(totalsRow({ status }), hour)?.status).toBe(status);
+    },
+  );
+
+  it.each([['phone'], ['server'], ['other']])(
+    'the caller class %j is one the queries answer',
+    (caller) => {
+      expect(parseGroupRow(groupRow({ caller }), hour)?.caller).toBe(caller);
+      expect(parseTotalsRow(totalsRow({ caller }), hour)?.caller).toBe(caller);
+    },
+  );
 
   it.each([
     ['not an object', 'row'],
@@ -758,7 +778,11 @@ describe('every returned field is checked before use', () => {
     ['a four-digit status', groupRow({ status: '4000' })],
     ['a status that is text', groupRow({ status: 'bad' })],
     ['a status as a number', groupRow({ status: 400 })],
+    ['a status that is not one of the five classes', groupRow({ status: '401' })],
+    ['a status class in capitals', groupRow({ status: 'Other' })],
     ['an unknown caller', groupRow({ caller: 'Phone' })],
+    ['a caller class the queries do not answer', groupRow({ caller: 'browser' })],
+    ['no caller class', groupRow({ caller: '' })],
     ['a lower-case country', groupRow({ country: 'nl' })],
     ['a three-letter country', groupRow({ country: 'NLD' })],
     ['a country with a digit', groupRow({ country: 'T1' })],
@@ -775,7 +799,7 @@ describe('every returned field is checked before use', () => {
   it('a totals row: every kind the query answers, first and last inside the hour, or dropped', () => {
     expect(parseTotalsRow(totalsRow(), hour)).toEqual({
       kind: 'password',
-      form: 'plain',
+      ambiguous: false,
       status: '400',
       caller: 'phone',
       network: 'other',
@@ -797,6 +821,8 @@ describe('every returned field is checked before use', () => {
     expect(parseTotalsRow(totalsRow({ first_seen: H04 / 1000 + 10 }), hour)).toBeNull();
     expect(parseTotalsRow(totalsRow({ kind: 'token' }), hour)).toBeNull();
     expect(parseTotalsRow(totalsRow({ status: '4x9' }), hour)).toBeNull();
+    expect(parseTotalsRow(totalsRow({ status: '403' }), hour)).toBeNull();
+    expect(parseTotalsRow(totalsRow({ caller: 'none' }), hour)).toBeNull();
     expect(parseTotalsRow(totalsRow({ n: 0 }), hour)).toBeNull();
   });
 });
@@ -825,7 +851,7 @@ describe("one hour's elements for the writer", () => {
   it('counts, a minute, a country when known; never an organization, a city or a source hash', () => {
     const { elements } = build([
       groupRow({ minute: minuteOf(H04, 7), caller: 'phone', country: 'NL', n: 2 }),
-      groupRow({ minute: minuteOf(H04, 7), caller: 'browser', country: '', n: 5 }),
+      groupRow({ minute: minuteOf(H04, 7), caller: 'other', country: '', n: 5 }),
     ]);
     expect(elements).toEqual([
       {
@@ -857,9 +883,8 @@ describe("one hour's elements for the writer", () => {
 
   it('lines that land on the same row are one element with the counts added', () => {
     const { elements } = build([
-      groupRow({ caller: 'browser', n: 2 }),
-      groupRow({ caller: 'other', n: 3 }),
-      groupRow({ caller: 'none', n: 4 }),
+      groupRow({ caller: 'other', n: 2 }),
+      groupRow({ caller: 'other', country: 'NL', n: 7 }),
       groupRow({ caller: 'server', network: 'other', n: 1 }),
     ]);
     expect(elements).toHaveLength(1);
@@ -877,7 +902,7 @@ describe("one hour's elements for the writer", () => {
         totalsRow({ ...ours, n: 4 }),
         totalsRow({ status: '404', n: 2 }),
         totalsRow({ caller: 'phone', n: 1 }),
-        totalsRow({ kind: 'refresh', caller: 'browser', n: 40 }),
+        totalsRow({ kind: 'refresh', caller: 'other', n: 40 }),
         totalsRow({ kind: 'token_known_other', caller: 'phone', n: 30 }),
         totalsRow({ kind: 'token_known_other', ...ours, n: 6 }),
       ],
@@ -896,7 +921,7 @@ describe("one hour's elements for the writer", () => {
       'password 400 phone other': 1,
       'password 400 server hosting': 4,
       'password 404 phone other': 2,
-      'refresh 400 browser other': 40,
+      'refresh 400 other other': 40,
       'token_known_other 400 phone other': 30,
       'token_known_other 400 server hosting': 6,
     });
@@ -917,13 +942,17 @@ describe("one hour's elements for the writer", () => {
     expect(out.notStored.our_server).toBe(4);
   });
 
-  it('several grant_type values: classed by the first, and counted as of an ambiguous form', () => {
+  it('several grant_type values or a repeated slash: classed as the plain form is, and the groups that held one are counted', () => {
     const out = build(
       [groupRow({ n: 2 })],
-      [totalsRow({ n: 2, form: 'ambiguous' }), totalsRow({ kind: 'refresh', form: 'ambiguous' })],
+      [
+        totalsRow({ n: 2, forms: 'ambiguous' }),
+        totalsRow({ kind: 'refresh', forms: 'ambiguous' }),
+        totalsRow({ kind: 'token_known_other', n: 9 }),
+      ],
     );
     expect(out.elements).toEqual([expect.objectContaining({ reason: 'wrong_password', count: 2 })]);
-    expect(out.ambiguousForm).toBe(5);
+    expect(out.ambiguousFormGroups).toBe(2);
   });
 
   describe('requests of an unknown form: never invisible, one flagged count per source, even for one', () => {
@@ -932,7 +961,7 @@ describe("one hour's elements for the writer", () => {
 
     it('one line stores one flagged element of count 1', () => {
       expect(AUTH_LOGS_UNCLASSIFIED_FLAG_AT).toBe(1);
-      const out = build([], [totalsRow({ kind: 'token_other', caller: 'browser', n: 1 })]);
+      const out = build([], [totalsRow({ kind: 'token_other', caller: 'other', n: 1 })]);
       expect(out.elements).toEqual([
         {
           category: 'password_guessing',
@@ -953,7 +982,7 @@ describe("one hour's elements for the writer", () => {
           totalsRow({ n: 2 }),
           totalsRow({ kind: 'token_other', caller: 'phone', n: 12 }),
           totalsRow({ kind: 'verify_other', status: '422', caller: 'phone', n: 3 }),
-          totalsRow({ kind: 'token_other', caller: 'browser', n: 7 }),
+          totalsRow({ kind: 'token_other', caller: 'other', n: 7 }),
           totalsRow({ kind: 'token_other', ...ours, n: 5 }),
         ],
       );
@@ -972,12 +1001,12 @@ describe("one hour's elements for the writer", () => {
       const out = build(
         [],
         [
-          totalsRow({ kind: 'token_other', status: '404', caller: 'none', n: 30 }),
+          totalsRow({ kind: 'token_other', status: '404', caller: 'other', n: 30 }),
           totalsRow({ kind: 'verify_other', status: '404', caller: 'phone', n: 4 }),
-          totalsRow({ kind: 'token_other', status: '400', caller: 'none', n: 1 }),
-          totalsRow({ kind: 'emailed_code_other', status: '403', caller: 'none', n: 2 }),
-          totalsRow({ kind: 'emailed_code', status: '403', caller: 'none', n: 9 }),
-          totalsRow({ kind: 'factors_known_other', status: '422', caller: 'browser', n: 5 }),
+          totalsRow({ kind: 'token_other', status: '400', caller: 'other', n: 1 }),
+          totalsRow({ kind: 'emailed_code_other', status: 'other', caller: 'other', n: 2 }),
+          totalsRow({ kind: 'emailed_code', status: 'other', caller: 'other', n: 9 }),
+          totalsRow({ kind: 'factors_known_other', status: '422', caller: 'other', n: 5 }),
         ],
       );
       expect(flaggedOf(out)).toEqual([
@@ -988,9 +1017,9 @@ describe("one hour's elements for the writer", () => {
       expect(out.notStored).toMatchObject({ not_routed: 34, emailed_code: 9, known_other: 5 });
       // Each is still in the log line, by kind, status and caller.
       expect(out.seen).toMatchObject({
-        'token_other 404 none other': 30,
-        'emailed_code 403 none other': 9,
-        'factors_known_other 422 browser other': 5,
+        'token_other 404 other other': 30,
+        'emailed_code other other other': 9,
+        'factors_known_other 422 other other': 5,
       });
     });
 
@@ -1159,10 +1188,10 @@ describe("one hour's elements for the writer", () => {
       expect(AUTH_LOGS_MAX_ELEMENTS).toBe(200);
       const out = buildCapped([
         totalsRow({ n: listedSum + 50 }),
-        totalsRow({ status: '429', caller: 'browser', n: 7 }),
+        totalsRow({ status: '429', caller: 'other', n: 7 }),
         // Not stored kinds never reach the remainder.
         totalsRow({ ...ours, status: '429', n: 900 }),
-        totalsRow({ status: '401', n: 300 }),
+        totalsRow({ status: 'other', n: 300 }),
         totalsRow({ kind: 'refresh', n: 80 }),
       ]);
       expect(out.elements.length).toBeLessThanOrEqual(200);
@@ -1204,9 +1233,9 @@ describe("one hour's elements for the writer", () => {
       const out = buildCapped(
         [
           totalsRow({ n: listedSum + 50 }),
-          totalsRow({ status: '429', caller: 'browser', n: 7 }),
+          totalsRow({ status: '429', caller: 'other', n: 7 }),
           totalsRow({ kind: 'token_other', n: 25 }),
-          totalsRow({ kind: 'token_other', caller: 'browser', n: 5 }),
+          totalsRow({ kind: 'token_other', caller: 'other', n: 5 }),
           totalsRow({ ...ours, n: 40 }),
           totalsRow({ kind: 'verify', status: '422', ...ours, n: 30 }),
         ],
@@ -1346,10 +1375,10 @@ describe('the SQL is two constants that return classes and counts only', () => {
     ]);
     expect(aliases(parseReaderQuery(AUTH_LOGS_TOTALS_SQL).selectItems)).toEqual([
       'kind',
-      'form',
       'status',
       'caller',
       'network',
+      'forms',
       'first_seen',
       'last_seen',
       'n',
@@ -1358,6 +1387,107 @@ describe('the SQL is two constants that return classes and counts only', () => {
     expect(AUTH_LOGS_TOTALS_SQL).toContain('timestamp AS ts');
     expect(AUTH_LOGS_TOTALS_SQL).toContain('toString(min(ts)) AS first_seen');
     expect(AUTH_LOGS_TOTALS_SQL).toContain('toString(max(ts)) AS last_seen');
+  });
+
+  // ── The totals answer cannot be filled ──
+
+  /** Every text an expression of one select can answer, when it answers only texts written in the query. */
+  function answersOf(sql: string, alias: string): string[] {
+    const { levels } = parseReaderQuery(sql);
+    type Tree = {
+      k: string;
+      v?: unknown;
+      name?: string;
+      args?: Tree[];
+    };
+    const depth = levels.findIndex(
+      (level, i) =>
+        i > 0 && level.items.some((x) => x.alias === alias && (x.node as Tree).k !== 'ref'),
+    );
+    expect(depth, alias).toBeGreaterThan(0);
+    const out = new Set<string>();
+    const walk = (node: Tree): void => {
+      if (node.k === 'str') out.add(String(node.v));
+      else if (node.k === 'call' && node.name === 'multiIf') {
+        const args = node.args!;
+        for (let i = 1; i < args.length; i += 2) walk(args[i]!);
+        walk(args[args.length - 1]!);
+      } else if (node.k === 'call' && node.name === 'if') {
+        walk(node.args![1]!);
+        walk(node.args![2]!);
+      } else {
+        // A column, or anything worked out from the line: not a fixed list.
+        throw new Error(`${alias} can answer something that is not written in the query`);
+      }
+    };
+    walk(levels[depth]!.items.find((x) => x.alias === alias)!.node as Tree);
+    return [...out].sort();
+  }
+
+  it('the totals are grouped only by classes written in the query: a kind, a status class, a caller class and a network class', () => {
+    const totals = parseReaderQuery(AUTH_LOGS_TOTALS_SQL).levels[0]!;
+    expect(totals.groupBy).toEqual(['kind', 'status', 'caller', 'network']);
+    expect(answersOf(AUTH_LOGS_TOTALS_SQL, 'kind')).toEqual([...ALL_KINDS].sort());
+    // The statuses the job acts on, and one class for every other refused status.
+    expect(answersOf(AUTH_LOGS_TOTALS_SQL, 'status')).toEqual(['400', '404', '422', '429', 'other']);
+    // The callers the job tells apart, and one class for every other client string.
+    expect(answersOf(AUTH_LOGS_TOTALS_SQL, 'caller')).toEqual(['other', 'phone', 'server']);
+    expect(answersOf(AUTH_LOGS_TOTALS_SQL, 'network')).toEqual(['hosting', 'other']);
+    // The form is not a group: one request of another form opens no new row.
+    expect(AUTH_LOGS_TOTALS_SQL).toContain('min(form) AS forms');
+    // The groups query answers the same classes.
+    for (const alias of ['kind', 'status', 'caller', 'network']) {
+      expect(answersOf(AUTH_LOGS_GROUPS_SQL, alias), alias).toEqual(
+        answersOf(AUTH_LOGS_TOTALS_SQL, alias),
+      );
+    }
+  });
+
+  it('whatever a caller sends, the totals answer stays below its limit: it cannot be filled', () => {
+    // A hosting network is answered for our server's client string alone,
+    // so a caller class and a network class make four pairs, not six.
+    const pairs = new Set<string>();
+    for (const client of [SERVER_SSR, SERVER_NODE, 'supabase-js-react-native/2.50.0', 'curl/8.4.0', ''])
+      for (const owner of ['Amazon Example Hosting', 'Example Telecom', '']) {
+        const { values } = runReaderQueryOnLine(AUTH_LOGS_TOTALS_SQL, gatewayLine({ client, owner }), [
+          'caller',
+          'network',
+        ]);
+        pairs.add(`${String(values.caller)} ${String(values.network)}`);
+      }
+    expect([...pairs].sort()).toEqual([
+      'other other',
+      'phone other',
+      'server hosting',
+      'server other',
+    ]);
+    const network = parseReaderQuery(AUTH_LOGS_TOTALS_SQL).levels[1]!.items.find(
+      (x) => x.alias === 'network',
+    )!;
+    expect(AUTH_LOGS_TOTALS_SQL).toContain(
+      "if(caller = 'server' AND startsWith(owner, 'Amazon'), 'hosting', 'other') AS network",
+    );
+    expect(JSON.stringify(network.node)).toContain('"name":"caller"');
+    const rows =
+      answersOf(AUTH_LOGS_TOTALS_SQL, 'kind').length *
+      answersOf(AUTH_LOGS_TOTALS_SQL, 'status').length *
+      pairs.size;
+    expect(rows).toBe(180);
+    expect(rows).toBeLessThan(AUTH_LOGS_ROW_LIMIT);
+  });
+
+  it.each([
+    ['400', '400'],
+    ['404', '404'],
+    ['422', '422'],
+    ['429', '429'],
+    ['401', 'other'],
+    ['403', 'other'],
+    ['405', 'other'],
+    ['415', 'other'],
+    ['499', 'other'],
+  ])('a line answered %s is of the status class %s, in both queries', (st, cls) => {
+    expect(bothOn(gatewayLine({ status: st })).totals.values.status).toBe(cls);
   });
 
   /** The definition of each alias of one select, as its syntax tree. */
@@ -1377,7 +1507,15 @@ describe('the SQL is two constants that return classes and counts only', () => {
       if (depth === 1) expect(shared).toEqual(['kind', 'status', 'caller', 'network']);
       else {
         expect(shared).toEqual(
-          expect.arrayContaining(['raw_search', 'first_grant', 'client', 'status', 'owner']),
+          expect.arrayContaining([
+            'routed_path',
+            'net_path',
+            'raw_search',
+            'first_grant',
+            'caller',
+            'raw_status',
+            'owner',
+          ]),
         );
       }
     }
@@ -1850,6 +1988,12 @@ describe('the SQL is two constants that return classes and counts only', () => {
       [gatewayLine({ path: '/auth/v1/factors' }), 'factors_known_other', false],
       [gatewayLine({ path: '/auth/v1/verify', status: '403' }), 'emailed_code', false],
       [gatewayLine({ path: '/auth/v1/verify/', status: '404' }), 'emailed_code_other', false],
+      // A password or a code answered with a status that is never stored is not listed either.
+      [gatewayLine({ status: '401' }), 'password', false],
+      [gatewayLine({ status: '404' }), 'password', false],
+      [gatewayLine({ status: '429' }), 'password', true],
+      [gatewayLine({ path: `/auth/v1/factors/${UUID}/verify`, status: '403' }), 'verify', false],
+      [gatewayLine({ path: `/auth/v1/factors/${UUID}/verify`, status: '429' }), 'verify', true],
     ];
     for (const [line, kind, listed] of cases) {
       const { groups, totals } = bothOn(line);
@@ -1866,8 +2010,10 @@ describe('the SQL is two constants that return classes and counts only', () => {
     expect(JSON.stringify(groups[2]!.where)).toBe(JSON.stringify(totals[2]!.where));
     // Only the groups query filters again, by the computed kind.
     expect(totals[0]!.where).toBeNull();
+    // Only the statuses that can be stored are listed: a status the job does
+    // not act on takes no row of the groups from one it does.
     expect(AUTH_LOGS_GROUPS_SQL).toContain(
-      "\nWHERE kind IN ('password', 'verify') AND (caller != 'server' OR network != 'hosting')\n",
+      "\nWHERE kind IN ('password', 'verify') AND status IN ('400', '422', '429') AND (caller != 'server' OR network != 'hosting')\n",
     );
     for (const [, sql] of BOTH) {
       expect(sql.trimEnd().endsWith(`LIMIT ${AUTH_LOGS_ROW_LIMIT}`)).toBe(true);
@@ -1902,7 +2048,7 @@ describe('the SQL is two constants that return classes and counts only', () => {
     }
   });
 
-  describe('the network class: hosting only when the owner name starts with the measured prefix', () => {
+  describe("the network class: hosting only for our server's client string, when the owner name starts with the measured prefix", () => {
     it.each([
       ['Amazon', 'hosting'],
       ['Amazon Example Hosting', 'hosting'],
@@ -1913,13 +2059,32 @@ describe('the SQL is two constants that return classes and counts only', () => {
       ['amazon example', 'other'],
       ['AMAZON EXAMPLE', 'other'],
       ['', 'other'],
-    ])('%j -> %s', (owner, network) => {
-      expect(bothOn(gatewayLine({ owner })).totals.values.network).toBe(network);
+    ])("our server's client string from %j -> %s", (owner, network) => {
+      for (const client of [SERVER_SSR, SERVER_NODE]) {
+        expect(bothOn(gatewayLine({ client, owner })).totals.values.network).toBe(network);
+      }
     });
 
     it('a line with no owner name is other', () => {
-      expect(bothOn(gatewayLine({ owner: null })).totals.values.network).toBe('other');
+      expect(
+        bothOn(gatewayLine({ client: SERVER_SSR, owner: null })).totals.values.network,
+      ).toBe('other');
     });
+
+    it.each([
+      ['supabase-js-react-native/2.50.0'],
+      ['supabase-ssr/0.12.7 createBrowserClient'],
+      ['curl/8.4.0'],
+      [`${SERVER_SSR} x`],
+      [''],
+    ])(
+      'any other client string (%j) is of the network class other wherever it comes from: the network opens no row of its own',
+      (client) => {
+        expect(
+          bothOn(gatewayLine({ client, owner: 'Amazon Example Hosting' })).totals.values.network,
+        ).toBe('other');
+      },
+    );
   });
 
   describe('the caller class: our server only for its two exact client strings', () => {
@@ -1932,10 +2097,11 @@ describe('the SQL is two constants that return classes and counts only', () => {
       // The form the newer client library sends from the phone app.
       ['supabase-js/2.116.0; runtime=react-native', 'phone'],
       ['supabase-js/2.130.0; runtime=react-native; runtime-version=0.81.4', 'phone'],
-      ['supabase-ssr/0.12.7 createBrowserClient', 'browser'],
+      // Everything else is one class: the job stores them all as api.
+      ['supabase-ssr/0.12.7 createBrowserClient', 'other'],
       ['supabase-js-web/2.50.0', 'other'],
       ['curl/8.4.0', 'other'],
-      ['', 'none'],
+      ['', 'other'],
     ])('%j -> %s', (client, cls) => {
       expect(bothOn(gatewayLine({ client })).totals.values.caller).toBe(cls);
     });
@@ -2043,8 +2209,8 @@ describe('the SQL is two constants that return classes and counts only', () => {
       });
     });
 
-    it('a line with no client string is none', () => {
-      expect(bothOn(gatewayLine({ client: null })).totals.values.caller).toBe('none');
+    it('a line with no client string is other', () => {
+      expect(bothOn(gatewayLine({ client: null })).totals.values.caller).toBe('other');
     });
   });
 
@@ -2081,9 +2247,9 @@ describe('the SQL is two constants that return classes and counts only', () => {
       expect(JSON.stringify([groups.values, totals.values])).not.toContain(marker);
       expect(ALL_KINDS).toContain(groups.values.kind);
       expect(['plain', 'ambiguous']).toContain(totals.values.form);
-      expect(['phone', 'server', 'browser', 'other', 'none']).toContain(groups.values.caller);
+      expect(['phone', 'server', 'other']).toContain(groups.values.caller);
       expect(['hosting', 'other']).toContain(groups.values.network);
-      expect(groups.values.status).toMatch(/^4[0-9][0-9]$/);
+      expect(['400', '404', '422', '429', 'other']).toContain(groups.values.status);
       expect(groups.values.country).toMatch(/^([A-Z]{2})?$/);
     }
   });
@@ -2373,10 +2539,10 @@ describe('a run: six hours, oldest first, each written once', () => {
     });
 
     it('several grant_type values: classed by the first, counted as ambiguous in the log line', async () => {
-      hourAnswers(H(5), [groupRow({ n: 2 }, H(5))], [totalsRow({ n: 2, form: 'ambiguous' }, H(5))]);
+      hourAnswers(H(5), [groupRow({ n: 2 }, H(5))], [totalsRow({ n: 2, forms: 'ambiguous' }, H(5))]);
       const summary = full(await run());
       expect(written()).toEqual([expect.objectContaining({ reason: 'wrong_password', count: 2 })]);
-      expect(summary.ambiguousForm).toBe(2);
+      expect(summary.ambiguousFormGroups).toBe(1);
     });
   });
 

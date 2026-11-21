@@ -19,10 +19,12 @@ import { createAdminClient } from '@/lib/supabase/admin';
  *
  * WHAT LEAVES SUPABASE. Two constant queries (AUTH_LOGS_GROUPS_SQL and
  * AUTH_LOGS_TOTALS_SQL) answer, for each group of lines: the minute, the kind
- * of request, its form (one grant_type or several), the status, the caller's
- * class (the client string reduced INSIDE the query to phone, server,
- * browser, other or none), the network's class (hosting or other, worked out
- * inside the query from the network owner's name, which never leaves), the
+ * of request, whether any of its lines was of an ambiguous form (several
+ * grant_type values, a repeated slash), the status's class (400, 404, 422,
+ * 429, or `other` for every other refused status), the caller's class (the
+ * client string reduced INSIDE the query to phone, server or other), the
+ * network's class (hosting or other, worked out inside the query from the
+ * network owner's name, which never leaves), the
  * country (two capital letters, or empty) and a count. Never an address, an
  * email, an account, a path, a query string, an id, the client string itself
  * or a raw log line. The hour travels in the two timestamp parameters;
@@ -109,7 +111,8 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * password or code count as recorded; overflow rows cover nothing.
  * Our client strings from any other network, or any string that only
  * contains their words, are not ours, and are stored as api. A network class
- * that is not exactly `hosting` is `other` (fail closed). In the groups
+ * that is not exactly `hosting` is `other` (fail closed), and the queries
+ * answer `hosting` for our server's client string alone. In the groups
  * query our own server's lines are left out, so they take no row of its
  * limit from other callers; the totals query counts them.
  *
@@ -129,11 +132,17 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * is read, and a count below what was sent is reported.
  *
  * TWO QUERIES AN HOUR. The groups query lists the lines that can be stored
- * (kinds password and verify) by minute and country, at most
- * AUTH_LOGS_ROW_LIMIT groups, largest first. The totals query counts every
- * kind by kind, form, status, caller and network only: it gives the log
- * line, the flagged counts, our server's counts and, when the groups query
- * was full, the rest. What the groups did not list is stored on one
+ * (kinds password and verify, answered 400, 422 or 429) by minute and
+ * country, at most AUTH_LOGS_ROW_LIMIT groups, largest first. The totals
+ * query counts every kind by kind, status class, caller class and network
+ * class only: it gives the log line, the flagged counts, our server's counts
+ * and, when the groups query was full, the rest. THE TOTALS CANNOT BE
+ * FILLED BY A CALLER: every class it is grouped by is a short list written
+ * in the query (nine kinds, five status classes, four pairs of caller and
+ * network), so it answers at most 180 rows, below its limit. Nothing a
+ * caller chooses (a status it provokes, a client string, a network, the
+ * form of the request) opens a row beyond those. What the groups did not
+ * list is stored on one
  * auth_log_over_cap element per category and source (a reason no other code
  * writes), at the hour's first minute, with no country; the smallest groups
  * are folded into those elements until the call holds at most
@@ -300,8 +309,12 @@ const KINDS = [
   'emailed_code_other',
 ] as const;
 type AuthLogsKind = (typeof KINDS)[number];
-const CALLERS = ['phone', 'server', 'browser', 'other', 'none'] as const;
+/** The caller classes the queries answer: the phone app, our server's client string, anything else. */
+const CALLERS = ['phone', 'server', 'other'] as const;
 type AuthLogsCaller = (typeof CALLERS)[number];
+/** The status classes the queries answer: the four the job acts on, and every other refused status. */
+const STATUSES = ['400', '404', '422', '429', 'other'] as const;
+type AuthLogsStatus = (typeof STATUSES)[number];
 type AuthLogsNetwork = 'hosting' | 'other';
 
 /**
@@ -326,8 +339,12 @@ type AuthLogsNetwork = 'hosting' | 'other';
  * defines every name it shares with this query the same way (a test compares
  * them), and reads the same lines.
  *
- * The network is `hosting` when the network owner's name starts with the one
- * prefix written in the query (measured: the leading comment says when). The
+ * The status is one of the four the job acts on, or `other`; the caller is
+ * the phone app, our server's client string, or `other` (a browser, a tool,
+ * no client string). The network is `hosting` when the caller is our
+ * server's client string and the network owner's name starts with the one
+ * prefix written in the query (measured: the leading comment says when);
+ * only the statuses that can be stored are listed. The
  * kind is `token_other` when the query string holds an escape that does not
  * decode, an encoded `&` or `=` (which the sign-in service keeps inside a
  * value, so reading the whole decoded string would read it differently), an
@@ -357,17 +374,9 @@ FROM (
       first_grant IN ('pkce', 'id_token', 'web3'), 'token_known_other',
       'token_other'
     ) AS kind,
-    status,
-    multiIf(
-      match(client, '^supabase-ssr/[0-9]+[.][0-9]+[.][0-9]+ createServerClient$'), 'server',
-      match(client, '^supabase-js/[0-9]+[.][0-9]+[.][0-9]+; runtime=node; runtime-version=[0-9]+[.][0-9]+[.][0-9]+$'), 'server',
-      position(client, 'supabase-js-react-native') > 0, 'phone',
-      position(client, '; runtime=react-native') > 0, 'phone',
-      position(client, 'createBrowserClient') > 0, 'browser',
-      client = '', 'none',
-      'other'
-    ) AS caller,
-    if(startsWith(owner, 'Amazon'), 'hosting', 'other') AS network,
+    multiIf(raw_status = '400', '400', raw_status = '404', '404', raw_status = '422', '422', raw_status = '429', '429', 'other') AS status,
+    caller,
+    if(caller = 'server' AND startsWith(owner, 'Amazon'), 'hosting', 'other') AS network,
     if(match(raw_country, '^[A-Z]{2}$') AND raw_country != 'XX', raw_country, '') AS country
   FROM (
     SELECT
@@ -376,8 +385,14 @@ FROM (
       lower(decodeURLComponent(log_attributes['request.path'])) AS net_path,
       log_attributes['request.search'] AS raw_search,
       extract(decodeURLComponent(log_attributes['request.search']), '(?:^[?]?|&)grant_type=([^&]*)(?:&|$)') AS first_grant,
-      log_attributes['request.headers.x_client_info'] AS client,
-      log_attributes['response.status_code'] AS status,
+      multiIf(
+        match(log_attributes['request.headers.x_client_info'], '^supabase-ssr/[0-9]+[.][0-9]+[.][0-9]+ createServerClient$'), 'server',
+        match(log_attributes['request.headers.x_client_info'], '^supabase-js/[0-9]+[.][0-9]+[.][0-9]+; runtime=node; runtime-version=[0-9]+[.][0-9]+[.][0-9]+$'), 'server',
+        position(log_attributes['request.headers.x_client_info'], 'supabase-js-react-native') > 0, 'phone',
+        position(log_attributes['request.headers.x_client_info'], '; runtime=react-native') > 0, 'phone',
+        'other'
+      ) AS caller,
+      log_attributes['response.status_code'] AS raw_status,
       log_attributes['request.cf.asOrganization'] AS owner,
       log_attributes['request.cf.country'] AS raw_country
     FROM logs
@@ -390,21 +405,27 @@ FROM (
            OR position(lower(decodeURLComponent(log_attributes['request.path'])), 'verify') > 0)
   )
 )
-WHERE kind IN ('password', 'verify') AND (caller != 'server' OR network != 'hosting')
+WHERE kind IN ('password', 'verify') AND status IN ('400', '422', '429') AND (caller != 'server' OR network != 'hosting')
 GROUP BY minute, kind, status, caller, network, country
 ORDER BY n DESC, minute, kind, status, caller, network, country
 LIMIT 199`;
 
 /**
- * Every refused line of the same hour, of every kind, by kind, form
- * (`ambiguous` for several grant_type values or a path with a repeated
- * slash), status, caller class and network class only,
- * with the first and last instant of each group: the log line's counts, the
+ * Every refused line of the same hour, of every kind, by kind, status
+ * class, caller class and network class only, with the first and last
+ * instant of each group and whether any of its lines was of an ambiguous
+ * form (`forms`: the least of `ambiguous`, for several grant_type values or
+ * a path with a repeated slash, and `plain`): the log line's counts, the
  * flagged counts, our server's counts for the reconciliation and, when the
  * groups query was full, what it did not list.
+ *
+ * Each class it is grouped by is one of a short list written in the query,
+ * so the answer has at most 9 x 5 x 4 = 180 rows whatever is sent (a test
+ * multiplies the lists out): its limit cannot be reached by a caller. The
+ * form is not one of them, so a request of another form opens no new row.
  */
 export const AUTH_LOGS_TOTALS_SQL = `/* The hosting network owner prefix in this query was measured on 2026-11-21 from 24 hours of gateway lines. */
-SELECT kind, form, status, caller, network, toString(min(ts)) AS first_seen, toString(max(ts)) AS last_seen, count() AS n
+SELECT kind, status, caller, network, min(form) AS forms, toString(min(ts)) AS first_seen, toString(max(ts)) AS last_seen, count() AS n
 FROM (
   SELECT
     ts,
@@ -423,18 +444,10 @@ FROM (
       first_grant IN ('pkce', 'id_token', 'web3'), 'token_known_other',
       'token_other'
     ) AS kind,
-    if(match(decoded_search, '(^[?]?|&)grant_type=.*&grant_type=') OR raw_path != routed_path, 'ambiguous', 'plain') AS form,
-    status,
-    multiIf(
-      match(client, '^supabase-ssr/[0-9]+[.][0-9]+[.][0-9]+ createServerClient$'), 'server',
-      match(client, '^supabase-js/[0-9]+[.][0-9]+[.][0-9]+; runtime=node; runtime-version=[0-9]+[.][0-9]+[.][0-9]+$'), 'server',
-      position(client, 'supabase-js-react-native') > 0, 'phone',
-      position(client, '; runtime=react-native') > 0, 'phone',
-      position(client, 'createBrowserClient') > 0, 'browser',
-      client = '', 'none',
-      'other'
-    ) AS caller,
-    if(startsWith(owner, 'Amazon'), 'hosting', 'other') AS network
+    multiIf(raw_status = '400', '400', raw_status = '404', '404', raw_status = '422', '422', raw_status = '429', '429', 'other') AS status,
+    caller,
+    if(caller = 'server' AND startsWith(owner, 'Amazon'), 'hosting', 'other') AS network,
+    if(match(decoded_search, '(^[?]?|&)grant_type=.*&grant_type=') OR raw_path != routed_path, 'ambiguous', 'plain') AS form
   FROM (
     SELECT
       timestamp AS ts,
@@ -444,8 +457,14 @@ FROM (
       log_attributes['request.search'] AS raw_search,
       decodeURLComponent(log_attributes['request.search']) AS decoded_search,
       extract(decodeURLComponent(log_attributes['request.search']), '(?:^[?]?|&)grant_type=([^&]*)(?:&|$)') AS first_grant,
-      log_attributes['request.headers.x_client_info'] AS client,
-      log_attributes['response.status_code'] AS status,
+      multiIf(
+        match(log_attributes['request.headers.x_client_info'], '^supabase-ssr/[0-9]+[.][0-9]+[.][0-9]+ createServerClient$'), 'server',
+        match(log_attributes['request.headers.x_client_info'], '^supabase-js/[0-9]+[.][0-9]+[.][0-9]+; runtime=node; runtime-version=[0-9]+[.][0-9]+[.][0-9]+$'), 'server',
+        position(log_attributes['request.headers.x_client_info'], 'supabase-js-react-native') > 0, 'phone',
+        position(log_attributes['request.headers.x_client_info'], '; runtime=react-native') > 0, 'phone',
+        'other'
+      ) AS caller,
+      log_attributes['response.status_code'] AS raw_status,
       log_attributes['request.cf.asOrganization'] AS owner
     FROM logs
     WHERE source = 'edge_logs'
@@ -457,8 +476,8 @@ FROM (
            OR position(lower(decodeURLComponent(log_attributes['request.path'])), 'verify') > 0)
   )
 )
-GROUP BY kind, form, status, caller, network
-ORDER BY n DESC, kind, form, status, caller, network
+GROUP BY kind, status, caller, network
+ORDER BY n DESC, kind, status, caller, network
 LIMIT 199`;
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -472,7 +491,7 @@ export interface AuthLogsHour {
 /** What a log line is described by, for the mapping. */
 export interface AuthLogsLine {
   kind: AuthLogsKind;
-  status: string;
+  status: AuthLogsStatus;
   caller: AuthLogsCaller;
   /** `hosting` only when the query said exactly that; anything else is `other`. */
   network: AuthLogsNetwork;
@@ -488,8 +507,11 @@ export interface AuthLogsGroupRow extends AuthLogsLine {
 
 /** One checked row of the totals query. */
 export interface AuthLogsTotalsRow extends AuthLogsLine {
-  /** `ambiguous` for several grant_type values or a repeated slash in the path (log line only). */
-  form: 'plain' | 'ambiguous';
+  /**
+   * At least one line of the group had several grant_type values or a
+   * repeated slash in its path (log line only).
+   */
+  ambiguous: boolean;
   n: number;
 }
 
@@ -614,8 +636,12 @@ export interface AuthLogsRunSummary {
   notStored: Record<AuthLogsNotStored, number>;
   /** Lines of an unknown form (all stored, as flagged counts). */
   unclassified: number;
-  /** Lines with several grant_type values (classed by the first) or a repeated slash in the path. */
-  ambiguousForm: number;
+  /**
+   * Groups of the totals (a kind, a status class, a caller class and a
+   * network class in one hour) that held at least one line with several
+   * grant_type values (classed by the first) or a repeated slash in the path.
+   */
+  ambiguousFormGroups: number;
   /** Flagged elements of refusals of our server's form that our server has no record of. */
   unrecordedFlags: number;
   /** Hours whose own record could not all be read: compared with what was read (fail closed). */
@@ -767,11 +793,11 @@ function wholeNumber(value: unknown, digits: number): number | null {
 function lineOf(raw: Record<string, unknown>): AuthLogsLine | null {
   const { kind, status, caller } = raw;
   if (typeof kind !== 'string' || !(KINDS as readonly string[]).includes(kind)) return null;
-  if (typeof status !== 'string' || !/^[0-9]{3}$/.test(status)) return null;
+  if (typeof status !== 'string' || !(STATUSES as readonly string[]).includes(status)) return null;
   if (typeof caller !== 'string' || !(CALLERS as readonly string[]).includes(caller)) return null;
   return {
     kind: kind as AuthLogsKind,
-    status,
+    status: status as AuthLogsStatus,
     caller: caller as AuthLogsCaller,
     network: raw.network === 'hosting' ? 'hosting' : 'other',
   };
@@ -851,8 +877,8 @@ export function parseTotalsRow(raw: unknown, hour: AuthLogsHour): AuthLogsTotals
   if (first < hour.startMs || last >= hour.endMs || first > last) return null;
   const n = countOf(raw.n);
   if (n === null) return null;
-  // The form only feeds a count of the log line: never a reason to drop a row.
-  return { ...line, form: raw.form === 'ambiguous' ? 'ambiguous' : 'plain', n };
+  // The forms only feed a count of the log line: never a reason to drop a row.
+  return { ...line, ambiguous: raw.forms === 'ambiguous', n };
 }
 
 /** What one hour's rows come to. */
@@ -862,8 +888,8 @@ export interface AuthLogsHourElements {
   notStored: Record<AuthLogsNotStored, number>;
   /** Lines of an unknown form (stored as flagged counts, one per source). */
   unclassified: number;
-  /** Lines with several grant_type values, or a repeated slash in the path. */
-  ambiguousForm: number;
+  /** Groups of the totals that held a line with several grant_type values, or a repeated slash in the path. */
+  ambiguousFormGroups: number;
   /** Our server's form, reconciled with what it recorded. */
   reconcile: AuthLogsReconcile;
   /** `<kind> <status> <caller> <network>` -> lines. */
@@ -966,12 +992,12 @@ export function buildHourElements(input: {
     not_routed: 0,
   };
   const unclassifiedBySource: Record<AuthLogsSource, number> = { phone: 0, api: 0 };
-  let ambiguousForm = 0;
+  let ambiguousFormGroups = 0;
   const seen: Record<string, number> = {};
   for (const row of input.totals) {
     const key = seenKey(row);
     seen[key] = (seen[key] ?? 0) + row.n;
-    if (row.form === 'ambiguous') ambiguousForm += row.n;
+    if (row.ambiguous) ambiguousFormGroups += 1;
     const v = classifyAuthLogLine(row);
     if (v.store) continue;
     if (v.why === 'unclassified') unclassifiedBySource[v.source] += row.n;
@@ -1074,7 +1100,7 @@ export function buildHourElements(input: {
     elements,
     notStored,
     unclassified: unclassifiedBySource.phone + unclassifiedBySource.api,
-    ambiguousForm,
+    ambiguousFormGroups,
     reconcile,
     seen,
     clamped,
@@ -1473,7 +1499,7 @@ function emptySummary(hours: AuthLogsHour[]): AuthLogsRunSummary {
       not_routed: 0,
     },
     unclassified: 0,
-    ambiguousForm: 0,
+    ambiguousFormGroups: 0,
     unrecordedFlags: 0,
     reconcileIncomplete: 0,
     seen: {},
@@ -1552,7 +1578,7 @@ async function runHour(
   });
   report.reconcile = built.reconcile;
   summary.unclassified += built.unclassified;
-  summary.ambiguousForm += built.ambiguousForm;
+  summary.ambiguousFormGroups += built.ambiguousFormGroups;
   summary.unrecordedFlags += built.elements.filter((e) =>
     e.reason.startsWith('unrecorded_server_form_'),
   ).length;

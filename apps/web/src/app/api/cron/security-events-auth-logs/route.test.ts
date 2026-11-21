@@ -175,7 +175,7 @@ describe('the run', () => {
         : totals
           ? lines.map(({ country: _c, ...l }) => ({
               ...l,
-              form: 'plain',
+              forms: 'plain',
               first_seen: '2026-11-21 04:05:00',
               last_seen: '2026-11-21 04:05:00',
             }))
