@@ -48,8 +48,8 @@ const PROJECT_REF = 'madeupprojectref0000';
 
 const h = vi.hoisted(() => ({
   report: vi.fn(async (_err: unknown, _ctx: unknown) => undefined),
-  /** Hour starts (ISO) that already hold rows of this job. */
-  storedHours: new Set<string>(),
+  /** Rows the fake writer stored: the hour start (ISO), the reason and the source. */
+  stored: [] as Array<{ hour: string; reason: string; source: string }>,
   /** Every read of security_events, as the filters it was built with. */
   reads: [] as Array<{ table: string; select?: string; filters: unknown[][]; limit?: number }>,
   readAnswer: null as null | ((q: { filters: unknown[][] }) => { data: unknown; error: unknown }),
@@ -107,7 +107,18 @@ vi.mock('@/lib/supabase/admin', () => ({
           const answer = h.readAnswer
             ? h.readAnswer(q)
             : {
-                data: h.storedHours.has(String(q.filters.find((f) => f[0] === 'gte')?.[2]))
+                // A row matches the way the database would: its hour, and its
+                // reason and source among the ones the read lists.
+                data: h.stored.some((row) => {
+                  const listed = (col: string) =>
+                    (q.filters.find((f) => f[0] === 'in' && f[1] === col)?.[2] as
+                      unknown[] | undefined) ?? [];
+                  return (
+                    row.hour === String(q.filters.find((f) => f[0] === 'gte')?.[2]) &&
+                    listed('reason').includes(row.reason) &&
+                    listed('source').includes(row.source)
+                  );
+                })
                   ? [{ id: '5eed0000-0000-4000-8000-00000000000a' }]
                   : [],
                 error: null,
@@ -247,12 +258,23 @@ const fakeFetch = vi.fn(async (input: string | URL | Request, init: RequestInit 
 const sqlOf = (f: { url: string }) => new URL(f.url).searchParams.get('sql');
 const startOf = (f: { url: string }) => new URL(f.url).searchParams.get('iso_timestamp_start');
 
-/** The writer, faked: stores the hour its elements are in, and answers how many it took. */
+/** The writer, faked: stores each element's hour, reason and source, and answers how many it took. */
 function writerStores() {
-  h.rpc.mockImplementation(async (_name: string, args: { p_events: Array<{ at_ms: number }> }) => {
-    for (const e of args.p_events) h.storedHours.add(iso(Math.floor(e.at_ms / HOUR) * HOUR));
-    return { data: args.p_events.length, error: null };
-  });
+  h.rpc.mockImplementation(
+    async (
+      _name: string,
+      args: { p_events: Array<{ at_ms: number; reason: string; source: string }> },
+    ) => {
+      for (const e of args.p_events) {
+        h.stored.push({
+          hour: iso(Math.floor(e.at_ms / HOUR) * HOUR),
+          reason: e.reason,
+          source: e.source,
+        });
+      }
+      return { data: args.p_events.length, error: null };
+    },
+  );
 }
 const written = (call = 0) =>
   (h.rpc.mock.calls[call]![1] as { p_events: Array<Record<string, unknown>> }).p_events;
@@ -279,7 +301,7 @@ function everythingSaid(summary: unknown): string {
 
 beforeEach(() => {
   h.report.mockClear();
-  h.storedHours.clear();
+  h.stored.length = 0;
   h.reads.length = 0;
   h.readAnswer = null;
   h.rpc.mockReset();
