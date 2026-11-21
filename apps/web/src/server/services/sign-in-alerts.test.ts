@@ -270,7 +270,10 @@ describe('confirm ("This was me")', () => {
     expect(answers[0]).toEqual({ code: 'not_found', message: 'That sign-in alert was not found.' });
     expect(answers[1]).toEqual(answers[0]);
     // The same words as an id that is not a uuid at all.
-    await expect(service(client({ data: null, error: null })).confirm('nope')).rejects.toMatchObject(answers[0]!);
+    await expect(service(client({ data: null, error: null })).confirm('nope')).rejects.toMatchObject({
+      code: 'not_found',
+      message: 'That sign-in alert was not found.',
+    });
   });
 
   it('when the read that tells them apart fails, the answer is an internal error, never "unchanged"', async () => {
