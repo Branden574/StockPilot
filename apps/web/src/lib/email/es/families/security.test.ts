@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import { DELETE_ACCOUNT_NEWEST_CODE_ONLY_COPY } from '@/components/settings/delete-account-copy';
 
+import { NOT_ME_WORDS } from '@/lib/auth/sign-in-alert-words';
+
 import { esEmailById } from '../registry';
 import { ES_MAX_HTML_BYTES } from '../tokens';
 import {
@@ -527,8 +529,13 @@ describe('signin (part 3): the place, which kind it is, and "This was not me"', 
     // In markup the query's & is written &amp; (the browser reads it back as &).
     expect(res.html).toContain(`href="${NOT_ME_URL.replace(/&/g, '&amp;')}"`);
     expect(res.html).toContain('>Secure my account</a>');
-    expect(res.html).toContain('This button works for 7 days. It signs you out on every device.');
-    expect(res.text).toContain(`This was not me (signs you out on every device): ${NOT_ME_URL}`);
+    expect(res.html).toContain('This button works for 7 days. It opens a page where you can end every session of your account.');
+    expect(res.html).toContain('It ends every session of your account. Then reset your password. That is what closes the door.');
+    expect(res.text).toContain(`This was not me (ends every session of your account): ${NOT_ME_URL}`);
+    // It promises no more than happens (review 1, finding 1).
+    for (const part of [res.html, res.text]) {
+      expect(part).not.toMatch(/signs you out|right away|every device/);
+    }
     expect(res.text).toContain(`Secure my account: ${base.securityUrl}`);
     assertWeight(res);
   });
@@ -549,7 +556,7 @@ describe('signin (part 3): the place, which kind it is, and "This was not me"', 
 });
 
 describe('signin-signed-out (renderSigninSignedOutEmail): the member, after "This was not me"', () => {
-  const render = () =>
+  const render = (extra: { adminsTold?: boolean } = {}) =>
     renderSigninSignedOutEmail({
       email: 'member@example.test',
       firstName: 'Robin',
@@ -558,6 +565,7 @@ describe('signin-signed-out (renderSigninSignedOutEmail): the member, after "Thi
       when: 'Nov 20, 2026, 3:30 PM UTC',
       resetUrl: 'https://stockpilotusa.com/reset',
       appUrl: SEED.appUrl,
+      ...extra,
     });
 
   it('says every session ended and asks for a new password, with one button', () => {
@@ -565,15 +573,35 @@ describe('signin-signed-out (renderSigninSignedOutEmail): the member, after "Thi
     assertNoLeakage(res);
     assertWeight(res);
     assertEssentialFooter(res.html);
-    expect(res.subject).toBe('We signed you out of StockPilot everywhere');
-    expect(res.html).toContain('You are signed out on every device.');
+    expect(res.subject).toBe('We ended every session of your StockPilot account');
+    expect(res.html).toContain('Every session of your account has been ended.');
     expect(res.html).toContain('Reset your password now.');
     expect(res.html).toContain('>Reset my password &rarr;</a>');
     expect(res.html).toContain('href="https://stockpilotusa.com/reset"');
     expect(res.html).toContain('StockPilot app on iPhone 15 Pro (iOS 18.1)');
     expect(res.html).toContain('Tijuana, Mexico (approximate)');
     expect(res.text).toContain('Reset my password: https://stockpilotusa.com/reset');
-    expect(res.text).toContain('Anyone who knows your password can still sign in until you change it.');
+  });
+
+  it('promises what happens and no more: an open device has up to about an hour, and the reset closes the door (finding 1)', () => {
+    const res = render();
+    for (const part of [res.html, res.text]) {
+      expect(part).toContain(NOT_ME_WORDS.sessionsEnded);
+      expect(part).toContain(NOT_ME_WORDS.openDevice);
+      expect(part).toContain(NOT_ME_WORDS.resetNow);
+      expect(part).not.toMatch(/signed out (on|of)|signed you out|every device|everywhere|right away/i);
+    }
+    expect(`${res.subject} ${res.preheader}`).not.toMatch(/signed you out|everywhere|every device/i);
+  });
+
+  it('says the owners and admins were told only when one was (finding 8)', () => {
+    const told = render({ adminsTold: true });
+    expect(told.html).toContain(NOT_ME_WORDS.adminsTold);
+    expect(told.text).toContain(NOT_ME_WORDS.adminsTold);
+    for (const res of [render({ adminsTold: false }), render()]) {
+      expect(res.html).not.toMatch(/owners and admins/);
+      expect(res.text).not.toMatch(/owners and admins/);
+    }
   });
 
   it('subject and preheader are byte-equal to the registry', () => {
@@ -599,7 +627,8 @@ describe('signin-signed-out (renderSigninSignedOutEmail): the member, after "Thi
 });
 
 describe('signin-reported (renderSigninReportedEmail): owners and admins', () => {
-  const render = (name = 'Robin Sample') =>
+  const SUBJECT = 'A member reported a sign-in they did not make';
+  const render = (name: string | null = 'Robin Sample') =>
     renderSigninReportedEmail({
       adminEmail: 'admin@example.test',
       adminFirstName: 'Sam',
@@ -613,14 +642,15 @@ describe('signin-reported (renderSigninReportedEmail): owners and admins', () =>
       appUrl: SEED.appUrl,
     });
 
-  it('names the member and the device family, and links to the list', () => {
+  it('names the member in the body and the device family, and links to the list', () => {
     const res = render();
     assertNoLeakage(res);
     assertWeight(res);
     assertEssentialFooter(res.html);
-    expect(res.subject).toBe('Robin Sample reported a sign-in they did not make');
+    expect(res.subject).toBe(SUBJECT);
+    expect(res.html).toContain('Robin Sample</strong> (member@example.test)');
+    expect(res.text).toContain('Robin Sample (member@example.test) told StockPilot');
     expect(res.html).toContain('StockPilot app on iPhone');
-    expect(res.html).toContain('member@example.test');
     expect(res.html).toContain('Mexico (approximate)');
     expect(res.html).toContain('>Review sign-in alerts &rarr;</a>');
     expect(res.html).toContain('href="https://stockpilotusa.com/dashboard/settings/security/sign-ins"');
@@ -631,20 +661,60 @@ describe('signin-reported (renderSigninReportedEmail): owners and admins', () =>
   it('subject and preheader are byte-equal to the registry', () => {
     const def = esEmailById('signin-reported');
     const res = render();
-    expect(res.subject).toBe(def.subject({ name: 'Robin Sample' }));
+    expect(res.subject).toBe(def.subject({}));
     expect(res.preheader).toBe(def.preheader({}));
     expect(res.from).toBe('StockPilot Security <security@stockpilotusa.com>');
   });
 
-  it('escapes the member’s name in the markup and keeps the subject to one plain line', () => {
-    const res = render('<b>Robin</b>\nSample');
-    expect(res.html).not.toContain('<b>Robin');
-    expect(res.html).toContain('&lt;b&gt;Robin&lt;/b&gt;');
-    expect(res.subject).not.toContain('\n');
+  it('the member’s name never leads: the subject, the title, the preheader and the first line are fixed words (finding 7)', () => {
+    const chosen = 'Sign in at sample.example.test to keep your account';
+    const res = render(chosen);
+    expect(res.subject).toBe(SUBJECT);
+    expect(res.preheader).not.toContain('sample.example.test');
+    expect(res.html).toContain(`<title>${SUBJECT}</title>`);
+    expect(res.text.split('\n')[0]).toBe(`${SUBJECT}.`);
+    // In the body, next to the sign-in address.
+    expect(res.html).toContain(`${chosen}</strong> (member@example.test)`);
+    expect(res.text).toContain(`${chosen} (member@example.test)`);
   });
 
-  it('a very long name is cut in the subject', () => {
-    const res = render('R'.repeat(200));
-    expect(res.subject.length).toBeLessThan(120);
+  it('the name in the body is cut to 80 characters and loses control and invisible characters', () => {
+    const res = render(`Ro\u200Bbin\u202E\nSample\u0007 ${'R'.repeat(200)}`);
+    const clean = `Robin Sample ${'R'.repeat(200)}`.slice(0, 80);
+    expect(res.html).toContain(`${clean}</strong> (member@example.test)`);
+    expect(res.text).toContain(`${clean} (member@example.test)`);
+    for (const part of [res.html, res.text]) {
+      expect(part).not.toContain('R'.repeat(81));
+      expect(part).not.toMatch(/[\u0007\u200B\u202E]/);
+    }
+    expect(res.subject).toBe(SUBJECT);
+  });
+
+  it('escapes the member’s name in the markup', () => {
+    const res = render('<b>Robin</b>\nSample');
+    expect(res.html).not.toContain('<b>Robin');
+    expect(res.html).toContain('&lt;b&gt;Robin&lt;/b&gt; Sample');
+    expect(res.subject).toBe(SUBJECT);
+  });
+
+  it('a member with no name is named by the sign-in address alone', () => {
+    for (const none of [null, '', '  \u200B ']) {
+      const res = render(none);
+      expect(res.subject).toBe(SUBJECT);
+      expect(res.html).toContain('member@example.test</strong> told StockPilot');
+      expect(res.text).toContain('member@example.test told StockPilot');
+      expect(res.text).toContain('talk to them');
+    }
+  });
+
+  it('promises what happens and no more (finding 1)', () => {
+    const res = render();
+    for (const part of [res.html, res.text]) {
+      expect(part).toContain(NOT_ME_WORDS.theirSessionsEnded);
+      expect(part).toContain(NOT_ME_WORDS.openDevice);
+      expect(part).toContain('reset their password now');
+      expect(part).not.toMatch(/signed (them )?out|every device|everywhere|right away/i);
+    }
+    expect(res.preheader).not.toMatch(/signed them out|every device/);
   });
 });

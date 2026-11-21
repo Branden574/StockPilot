@@ -332,17 +332,17 @@ const EXPECTED: Expected[] = [
   },
   {
     id: 'signin-signed-out',
-    subject: 'We signed you out of StockPilot everywhere',
+    subject: 'We ended every session of your StockPilot account',
     preheader:
-      'You said a sign-in was not you, so every session of your account has ended. Reset your password now.',
-    badge: 'Signed out',
+      'You said a sign-in was not you, so every session of your account has been ended. Reset your password now.',
+    badge: 'Sessions ended',
   },
   {
+    // Fixed words: the member's own name is never in the subject.
     id: 'signin-reported',
-    subject: 'Robin Sample reported a sign-in they did not make',
-    subjectParams: { name: 'Robin Sample' },
+    subject: 'A member reported a sign-in they did not make',
     preheader:
-      'StockPilot signed them out on every device. See the sign-in alerts of your organization.',
+      'Every session of their account has been ended. See the sign-in alerts of your organization.',
     badge: 'Reported sign-in',
   },
   {
@@ -390,8 +390,8 @@ describe('es registry — shape', () => {
   it('matches the family counts from the design package', () => {
     const by = (fam: string) => ES_EMAILS.filter((e) => e.family === fam).length;
     // 2 design-package rows + 3 email-change rows (2026-08-25) + the
-    // account deletion code (2026-11-15) + the member's "signed out
-    // everywhere" and the admins' "reported a sign-in" (2026-11-21).
+    // account deletion code (2026-11-15) + the member's "every session
+    // ended" and the admins' "reported a sign-in" (2026-11-21).
     expect(by('security')).toBe(8);
     expect(by('invites')).toBe(4);
     expect(by('orders')).toBe(9);

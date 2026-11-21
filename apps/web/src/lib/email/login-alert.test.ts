@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Wire-level: the new-device alert must send the es signin template from
 // the registry's security sender, and must NEVER reintroduce the old
@@ -11,6 +11,7 @@ vi.mock('./resend', () => ({
 }));
 
 import {
+  RATE_REFUSAL_WAIT_MS,
   sendNewDeviceLoginEmail,
   sendSignedOutEverywhereEmail,
   sendSignInReportedEmail,
@@ -147,7 +148,7 @@ describe('sendNewDeviceLoginEmail (part 3): the place, the kind and the link rea
     expect(msg.text).toContain('from a country we haven’t seen on this account before');
     expect(msg.html).toContain('>This was not me &rarr;</a>');
     expect(msg.text).toContain(
-      'This was not me (signs you out on every device): https://app.example.test/sign-in-alert?a=0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d&i=20261120&t=x',
+      'This was not me (ends every session of your account): https://app.example.test/sign-in-alert?a=0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d&i=20261120&t=x',
     );
   });
 
@@ -193,12 +194,106 @@ describe('sendSignedOutEverywhereEmail (part 3)', () => {
     expect(result).toEqual({ ok: true, id: 'test' });
     const msg = sendEmail.mock.calls[0]![0] as { to: string; subject: string; html: string; text: string; from?: string };
     expect(msg.to).toBe('member@example.test');
-    expect(msg.subject).toBe('We signed you out of StockPilot everywhere');
+    expect(msg.subject).toBe('We ended every session of your StockPilot account');
+    // Nobody was said to be told, so the email does not say so.
+    expect(msg.text).not.toMatch(/owners and admins/);
     expect(msg.from).toBe('StockPilot Security <security@stockpilotusa.com>');
     expect(msg.html).toContain('https://app.example.test/reset');
     expect(msg.text).toContain('Tijuana, Mexico');
     expect(msg.text).toContain('Nov 20, 2026');
     expect(msg.text).toContain('Firefox on Windows');
+  });
+});
+
+describe('sendSignedOutEverywhereEmail: the owners and admins were told, only when they were (finding 8)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sendEmail.mockResolvedValue({ ok: true, id: 'test' });
+  });
+
+  it('adminsTold reaches the email', async () => {
+    await sendSignedOutEverywhereEmail({
+      to: 'member@example.test',
+      device: 'Firefox on Windows',
+      place: null,
+      signedInAt: new Date('2026-11-20T15:30:00Z'),
+      adminsTold: true,
+    });
+    const msg = sendEmail.mock.calls[0]![0] as { html: string; text: string };
+    expect(msg.text).toContain('The owners and admins of your organization were told, so they can help.');
+    expect(msg.html).toContain('The owners and admins of your organization were told, so they can help.');
+  });
+});
+
+describe('a refusal for rate is tried once more after a short wait (finding 3)', () => {
+  const send = () =>
+    sendSignInReportedEmail({
+      to: 'admin@example.test',
+      memberName: 'Avery Example',
+      memberEmail: 'member@example.test',
+      organizationName: 'Example School',
+      deviceFamily: 'Chrome on macOS',
+      place: null,
+      signedInAt: new Date('2026-11-20T15:30:00Z'),
+      appUrl: 'https://app.example.test',
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('a 429, then sent: one more try, after the wait and not before', async () => {
+    sendEmail
+      .mockResolvedValueOnce({ ok: false, status: 429, error: 'rate_limit_exceeded' })
+      .mockResolvedValueOnce({ ok: true, id: 'second-try' });
+    const pending = send();
+    await vi.advanceTimersByTimeAsync(RATE_REFUSAL_WAIT_MS - 1);
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toEqual({ ok: true, id: 'second-try' });
+    expect(sendEmail).toHaveBeenCalledTimes(2);
+    // The same message both times.
+    expect(sendEmail.mock.calls[1]![0]).toEqual(sendEmail.mock.calls[0]![0]);
+  });
+
+  it('refused for rate twice: not sent, and no third try', async () => {
+    sendEmail.mockResolvedValue({ ok: false, status: 429, error: 'rate_limit_exceeded' });
+    const pending = send();
+    await vi.advanceTimersByTimeAsync(RATE_REFUSAL_WAIT_MS * 5);
+    await expect(pending).resolves.toMatchObject({ ok: false });
+    expect(sendEmail).toHaveBeenCalledTimes(2);
+  });
+
+  it('any other refusal is not tried again', async () => {
+    sendEmail.mockResolvedValue({ ok: false, status: 422, error: 'invalid' });
+    const pending = send();
+    await vi.advanceTimersByTimeAsync(RATE_REFUSAL_WAIT_MS * 5);
+    await expect(pending).resolves.toMatchObject({ ok: false });
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it('the member’s email is tried again the same way', async () => {
+    sendEmail
+      .mockResolvedValueOnce({ ok: false, status: 429, error: 'rate_limit_exceeded' })
+      .mockResolvedValueOnce({ ok: true, id: 'second-try' });
+    const pending = sendSignedOutEverywhereEmail({
+      to: 'member@example.test',
+      device: 'Firefox on Windows',
+      place: null,
+      signedInAt: new Date('2026-11-20T15:30:00Z'),
+    });
+    await vi.advanceTimersByTimeAsync(RATE_REFUSAL_WAIT_MS);
+    await expect(pending).resolves.toEqual({ ok: true, id: 'second-try' });
+    expect(sendEmail).toHaveBeenCalledTimes(2);
+  });
+
+  it('the wait is short: a second or two', () => {
+    expect(RATE_REFUSAL_WAIT_MS).toBeGreaterThanOrEqual(1000);
+    expect(RATE_REFUSAL_WAIT_MS).toBeLessThanOrEqual(2000);
   });
 });
 
@@ -222,7 +317,8 @@ describe('sendSignInReportedEmail (part 3)', () => {
     });
     const msg = sendEmail.mock.calls[0]![0] as { to: string; subject: string; html: string; text: string };
     expect(msg.to).toBe('admin@example.test');
-    expect(msg.subject).toBe('Avery Example reported a sign-in they did not make');
+    expect(msg.subject).toBe('A member reported a sign-in they did not make');
+    expect(msg.text).toContain('Avery Example (member@example.test)');
     expect(msg.text).toContain('Chrome on macOS');
     expect(msg.text).toContain('Mexico');
     expect(msg.text).toContain('Example School');
