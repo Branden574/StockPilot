@@ -247,6 +247,37 @@ describe('recordSignInBlocked', () => {
   });
 });
 
+describe('a sign-in refused for a reason that is not a wrong password', () => {
+  it('is recorded after the response with NO organization: the email is never looked up', async () => {
+    recordSignInBlocked('sign_in_refused_other', 'ada@example.com', request);
+    expect(h.after).toHaveBeenCalledTimes(1);
+    expect(recordSecurityEvent).not.toHaveBeenCalled();
+
+    await runAfterResponse();
+    // An organization does not see, for instance, that the platform disabled
+    // one of its accounts: nothing about the email is read at all.
+    expect(h.calls).toEqual([]);
+    expect(h.resolve).not.toHaveBeenCalled();
+    expect(recordSecurityEvent).toHaveBeenCalledTimes(1);
+    expect(recordSecurityEvent).toHaveBeenCalledWith(
+      {
+        category: 'password_guessing',
+        outcome: 'blocked',
+        reason: 'sign_in_refused_other',
+        source: 'web',
+        organizationId: null,
+      },
+      request,
+    );
+  });
+
+  it('remembers nothing about the email either', async () => {
+    recordSignInBlocked('sign_in_refused_other', 'ada@example.com', request);
+    await runAfterResponse();
+    expect(accountEvents.__signInOrganizationCacheKeysForTests()).toEqual([]);
+  });
+});
+
 describe('recordSignInBlocked and the memory of the last lookups', () => {
   it('a remembered email is still only used after the response, and still reads nothing before it', async () => {
     recordSignInBlocked('wrong_password', 'ada@example.com', request);
@@ -284,5 +315,48 @@ describe('recordAccountCodeBlocked', () => {
       },
       request,
     );
+  });
+});
+
+describe("a signed-in member's refused current password and refused set-up code", () => {
+  it.each([['wrong_current_password'], ['wrong_setup_code']] as const)(
+    '%s: reads nothing before the response; after it, records in the account’s organization',
+    async (reason) => {
+      recordAccountCodeBlocked(reason, USER, request);
+      expect(h.after).toHaveBeenCalledTimes(1);
+      expect(h.resolve).not.toHaveBeenCalled();
+      expect(h.calls).toEqual([]);
+      expect(recordSecurityEvent).not.toHaveBeenCalled();
+      await runAfterResponse();
+      expect(h.resolve).toHaveBeenCalledWith(USER);
+      expect(recordSecurityEvent).toHaveBeenCalledTimes(1);
+      expect(recordSecurityEvent).toHaveBeenCalledWith(
+        {
+          category: 'password_guessing',
+          outcome: 'blocked',
+          reason,
+          source: 'web',
+          organizationId: ORG,
+        },
+        request,
+      );
+    },
+  );
+
+  it('an account with no organization: recorded with none, never a throw', async () => {
+    h.resolve.mockResolvedValue({ organizationId: null, role: null });
+    recordAccountCodeBlocked('wrong_current_password', USER, null);
+    await runAfterResponse();
+    expect(recordSecurityEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'wrong_current_password', organizationId: null }),
+      null,
+    );
+  });
+
+  it('a lookup that throws drops the event and never reaches the caller', async () => {
+    h.resolve.mockRejectedValue(new Error('down'));
+    expect(() => recordAccountCodeBlocked('wrong_setup_code', USER, request)).not.toThrow();
+    await expect(runAfterResponse()).resolves.toBeUndefined();
+    expect(recordSecurityEvent).not.toHaveBeenCalled();
   });
 });
