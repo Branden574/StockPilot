@@ -290,6 +290,10 @@ const REGISTRY: Record<string, Entry> = {
     'not_org_data',
     "The caller's own passkeys, removed after a recovery code; no organization.",
   ],
+  'server/actions/mfa-recovery.ts::revoke_my_other_sessions': [
+    'not_org_data',
+    "The caller's own sessions, ended after a recovery code is used when the Auth server's sign-out of them answers an error (0213: auth.uid()'s rows only, this session kept).",
+  ],
   'server/actions/movements.ts::edit_movement_note': S39('11 (web movement note)'),
   'server/actions/team.ts::auth_user_exists_by_email': RO(),
   'server/actions/team.ts::transfer_org_ownership': [

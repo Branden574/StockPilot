@@ -299,6 +299,10 @@ const REVIEWED: Record<string, Reviewed> = {
       'rpc:consume_mfa_recovery_code',
       'rpc:consume_recovery_code_with_passkeys',
       'rpc:passkey_remove_all',
+      // Stage 5 (answers Q6): a used code ends the account's other sessions;
+      // when Auth's sign-out of them fails, the database ends them, as the
+      // member, keeping this session.
+      'rpc:revoke_my_other_sessions',
     ],
   },
   'server/actions/mfa-recovery.ts#generateMfaRecoveryCodesAction': {
