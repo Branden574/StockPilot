@@ -12,8 +12,19 @@ export const PASSKEYS_PANEL_WORDS = {
     "The phone app can't use passkeys yet. After you add one, the phone app will stop working for you until its next version, unless you add an authenticator app first. Work saved on the phone waits until you can sign in there again.",
   phoneAppFirst: 'Add an authenticator app first',
   phoneTypeLabel: 'Type I understand to add a passkey anyway',
-  before:
-    "Before you add one: use a passkey only on a device that only you unlock. Adding your first passkey signs you out on your other devices. The StockPilot phone app can't use passkeys yet: to keep using the app, keep or add an authenticator app too. Save your recovery codes: if you lose your passkey, a recovery code gets you back in, and it removes all your sign-in methods.",
+  /** The Add dialog's warnings before the proof (addPasskeyBeforeWords puts them together). */
+  beforeDevice: 'Before you add one: use a passkey only on a device that only you unlock.',
+  beforePhoneAndCodes:
+    "The StockPilot phone app can't use passkeys yet: to keep using the app, keep or add an authenticator app too. Save your recovery codes: if you lose your passkey, a recovery code gets you back in, and it removes all your sign-in methods.",
+  /**
+   * Said only to a member with no other method (no verified factor: the Add's
+   * proof is the password). Their first passkey raises this session, and Auth
+   * then ends the account's other sessions, all of them aal1. A member with
+   * an authenticator app is at aal2 to add one, and their other signed-in
+   * sessions stay: nothing is said to them about other devices (the lab walk
+   * of stage 4, finding 1).
+   */
+  beforeFirstSignsOut: 'Adding your first passkey signs you out on your other devices.',
   password: 'Enter your password',
   code: 'Enter the 6-digit code from your authenticator app',
   usePasskey: 'Use one of your passkeys',
@@ -46,3 +57,14 @@ export const PASSKEYS_PANEL_WORDS = {
   unavailable: 'Passkeys are not available right now.',
 } as const;
 
+/**
+ * The Add dialog's warnings before the proof: the first-passkey sign-out only
+ * for a member with no other method (PASSKEYS_PANEL_WORDS.beforeFirstSignsOut).
+ */
+export function addPasskeyBeforeWords(noOtherMethod: boolean): string {
+  return [
+    PASSKEYS_PANEL_WORDS.beforeDevice,
+    ...(noOtherMethod ? [PASSKEYS_PANEL_WORDS.beforeFirstSignsOut] : []),
+    PASSKEYS_PANEL_WORDS.beforePhoneAndCodes,
+  ].join(' ');
+}

@@ -33,7 +33,7 @@ import {
 
 import type { PasskeysPanel as PanelData } from '@/server/security/passkeys';
 
-import { PASSKEYS_PANEL_WORDS } from './passkeys-copy';
+import { addPasskeyBeforeWords, PASSKEYS_PANEL_WORDS } from './passkeys-copy';
 
 const dateOf = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString('en-US', { dateStyle: 'medium' }) : null;
@@ -372,7 +372,12 @@ function AddPasskeyDialog({ data, onClose }: { data: PanelData; onClose: () => v
           <>
             <DialogHeader>
               <DialogTitle>{PASSKEYS_PANEL_WORDS.add}</DialogTitle>
-              <DialogDescription>{PASSKEYS_PANEL_WORDS.before}</DialogDescription>
+              {/* The proof is the password only when the member has no other
+                  method: only then does the first passkey sign out the other
+                  devices (the lab walk of stage 4, finding 1). */}
+              <DialogDescription>
+                {addPasskeyBeforeWords(data.proof === 'password')}
+              </DialogDescription>
             </DialogHeader>
             <DialogFooter>
               <Button variant="outline" onClick={onClose}>

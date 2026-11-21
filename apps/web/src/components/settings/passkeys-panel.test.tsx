@@ -167,3 +167,42 @@ describe('review 4 finding 4: an unfinished passkey that is the only method', ()
     expect(screen.queryByText(PASSKEYS_PANEL_WORDS.onlyMethodUnfinished)).toBeNull();
   });
 });
+
+describe('the Add dialog’s warnings (the lab walk of stage 4, finding 1)', () => {
+  const FIRST_SIGNS_OUT = 'Adding your first passkey signs you out on your other devices.';
+  const PHONE =
+    "The StockPilot phone app can't use passkeys yet: to keep using the app, keep or add an authenticator app too.";
+
+  function openAdd(data: PanelData) {
+    render(<PasskeysPanel data={data} />);
+    fireEvent.click(screen.getByRole('button', { name: PASSKEYS_PANEL_WORDS.add }));
+    return screen.getByRole('dialog').textContent ?? '';
+  }
+
+  it('a member with no other method is told the first passkey signs them out on their other devices', () => {
+    const words = openAdd(
+      panel({ passkeys: [], hasApp: false, apps: [], proof: 'password', aal2: false }),
+    );
+    expect(words).toContain(FIRST_SIGNS_OUT);
+    expect(words).toContain(PHONE);
+    expect(words).toContain('use a passkey only on a device that only you unlock');
+    expect(words).toContain('Save your recovery codes');
+  });
+
+  it('an authenticator-app holder is told nothing about their other devices (they stay signed in)', () => {
+    const words = openAdd(panel({ passkeys: [], hasApp: true, proof: 'code' }));
+    expect(words).not.toContain(FIRST_SIGNS_OUT);
+    expect(words).not.toMatch(/other devices/);
+    // The phone-app warning stays as decided.
+    expect(words).toContain(PHONE);
+  });
+
+  it.each([
+    ['a passkey holder adding another', { proof: 'passkey' as const, hasApp: false, apps: [] }],
+    ['a holder of both', { proof: 'passkey_or_code' as const }],
+  ])('%s is told nothing about other devices', (_who, extra) => {
+    const words = openAdd(panel(extra));
+    expect(words).not.toMatch(/other devices/);
+    expect(words).toContain(PHONE);
+  });
+});
