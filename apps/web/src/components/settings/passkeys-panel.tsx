@@ -39,8 +39,10 @@ type Step = 'phone' | 'before' | 'proof' | 'name' | 'codes' | 'done';
 
 /**
  * Settings, Security: the Passkeys panel (plan section 4). The page renders
- * it only when the server said the member can use passkeys (every condition
- * of server/security/passkeys.ts passkeyGate); otherwise it is absent.
+ * it only when the server answered (server/security/passkeys.ts
+ * passkeysPanelFor): Add only when the server says a passkey can be added,
+ * Finish only when it says a setup can be finished, and with `listOnly` the
+ * member's passkeys with Remove and one sentence, nothing else (decision A).
  */
 export function PasskeysPanel({ data }: { data: PanelData }) {
   const router = useRouter();
@@ -107,8 +109,15 @@ export function PasskeysPanel({ data }: { data: PanelData }) {
     }
   }
 
+  const full = data.listOnly === null;
+
   return (
     <div className="space-y-3" data-passkeys-panel="">
+      {data.listOnly ? (
+        <p className="text-muted-foreground text-[13px]">
+          {data.listOnly === 'turned_off' ? PASSKEYS_PANEL_WORDS.turnedOff : PASSKEYS_PANEL_WORDS.unavailable}
+        </p>
+      ) : null}
       {data.passkeys.length > 0 ? (
         <ul className="divide-border divide-y rounded-lg border">
           {data.passkeys.map((p) => (
@@ -122,10 +131,12 @@ export function PasskeysPanel({ data }: { data: PanelData }) {
                 </p>
               </div>
               <div className="flex gap-2">
-                {p.unfinished ? (
-                  <Button size="sm" onClick={() => finishSetup(p.id)} disabled={busyId !== null}>
-                    Finish
-                  </Button>
+                {!full ? null : p.unfinished ? (
+                  data.canFinish ? (
+                    <Button size="sm" onClick={() => finishSetup(p.id)} disabled={busyId !== null}>
+                      Finish
+                    </Button>
+                  ) : null
                 ) : (
                   <Button
                     size="sm"
@@ -153,7 +164,7 @@ export function PasskeysPanel({ data }: { data: PanelData }) {
         <p className="text-muted-foreground text-[12px]">{PASSKEYS_PANEL_WORDS.stepUp}</p>
       ) : null}
       <div role="alert">{rowError ? <p className="text-destructive text-[12px]">{rowError}</p> : null}</div>
-      {data.atLimit ? (
+      {!full || !data.canAdd ? null : data.atLimit ? (
         <p className="text-muted-foreground text-[12px]">{PASSKEYS_PANEL_WORDS.atLimit}</p>
       ) : (
         <Button size="sm" onClick={() => setAdding(true)}>

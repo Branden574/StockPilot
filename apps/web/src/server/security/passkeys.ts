@@ -21,7 +21,6 @@ import {
   type BridgeKeys,
 } from '@/lib/auth/bridge-secret';
 import { checkMfaCode } from '@/lib/auth/mfa-code-attempts';
-import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { accountIdHash } from '@/lib/auth/passkey-bridge';
 import { PASSKEY_BRIDGE_NAME_PREFIX } from '@/lib/auth/passkey-bridge-name';
 import { passkeyRelyingParty, type RelyingParty } from '@/lib/auth/passkey-relying-party';
@@ -60,6 +59,7 @@ import {
   type RaisedSession,
 } from './passkey-auth';
 import { sendPasskeyAddedEmail, sendPasskeyRemovedEmail } from './passkey-emails';
+import { LAST_METHOD_WORDS, lastMethodBlocks } from './second-step-methods';
 import {
   compareTimes,
   isReservedTotp,
@@ -81,13 +81,23 @@ import type { ActionErrorCode } from '@stockpilot/core';
  * in server/actions/passkeys.ts call in here, each inside its own exported
  * function (server/security/events.guard.test.ts).
  *
- * THE GATE (stage 4's hard rule). Nothing of this module is offered, and
- * every action refuses, unless ALL of these hold for the member: a site is
- * configured (lib/auth/passkey-relying-party), a bridge key is set
- * (PASSKEY_BRIDGE_KEY_V1/V2), and the database's `passkey_add_allowed` says
- * the kill switch is on, new passkeys are on, and every organization of the
- * member has passkeys on (`ok`, or `too_many` at ten). Read fresh on every
- * start and every finish (rule 13). passkeyGate() below.
+ * THE GATES (stage 4, integrator decision A of 2026-11-21). Three levels,
+ * read fresh on every start and every finish (rule 13); passkeyGate() and
+ * passkeyUseGate() below:
+ *   - ADD (a new passkey, the confirm_add proof, and Finish setup of a
+ *     passkey that never served): a site (lib/auth/passkey-relying-party), a
+ *     bridge key (PASSKEY_BRIDGE_KEY_V1/V2), and the database's
+ *     `passkey_add_allowed` saying the kill switch is on, new passkeys are on
+ *     and every organization of the member has passkeys on (`ok`, or
+ *     `too_many` at ten).
+ *   - USE (the second step, the step-up, and Finish setup that repairs an
+ *     existing holder): the site, the key and the kill switch only. An
+ *     organization switched off later, or new passkeys switched off, never
+ *     locks an existing holder out of their own second step (answers Q1).
+ *   - MANAGE (list, rename, remove one's own passkeys, on an aal2 session):
+ *     a site only, whatever the switches say: removing only takes access
+ *     away. With the kill switch off the panel lists them with Remove and one
+ *     sentence, nothing else.
  *
  * THE RULES (plan 2.1; each is pinned by a test, passkeys.test.ts):
  *   1 no module-level client, token or session; 2 one verified token per
@@ -146,8 +156,8 @@ export const PASSKEY_WORDS = {
   addFailed: 'Could not add your passkey. Try again.',
   addNotFinished: 'Could not finish adding your passkey. Try again.',
   finishFirst: 'Finish setting up your passkey first. Press Finish next to it.',
-  policyBlocksRemoval:
-    'Your organization requires a second step. Add an authenticator app or another passkey before you remove this one.',
+  /** Decision B: the same words as an authenticator app's removal (second-step-methods.ts). */
+  policyBlocksRemoval: LAST_METHOD_WORDS,
   removedFinishing: 'Removed. Finishing in the background.',
   alreadyRemoved: 'This passkey is already removed.',
   nameInvalid: "Use letters, numbers, spaces and ( ) + ' _ - only.",
@@ -237,7 +247,7 @@ function reportPasskeys(
   });
 }
 
-// ── The gate: the four conditions (stage 4's hard rule) ────────────────
+// ── The gates (integrator decision A) ──────────────────────────────────
 
 export type PasskeyGateClosed =
   | 'no_site'
@@ -251,25 +261,35 @@ export type PasskeyGateClosed =
   | 'unreadable';
 
 export type PasskeyGate =
-  | { open: true; rp: RelyingParty; keys: BridgeKeys; atLimit: boolean }
+  | {
+      open: true;
+      rp: RelyingParty;
+      keys: BridgeKeys;
+      atLimit: boolean;
+      /** The ADD level holds too (every condition); false: why not. */
+      addOpen: boolean;
+      addWhy: PasskeyGateClosed | null;
+    }
   | { open: false; why: PasskeyGateClosed };
 
-const CLOSED_WORDS = new Set<PasskeyGateClosed>([
-  'kill_switch_off',
-  'adds_off',
-  'organization_off',
-  'no_membership',
-  'disabled',
-  'no_profile',
-]);
+/**
+ * `passkey_add_allowed`'s words, in its own order (0475): no_profile,
+ * disabled, kill_switch_off, adds_off, no_membership, organization_off,
+ * too_many, ok. Every word after kill_switch_off says the kill switch is on.
+ */
+const USE_CLOSED_WORDS = new Set<PasskeyGateClosed>(['kill_switch_off', 'disabled', 'no_profile']);
+const ADD_CLOSED_WORDS = new Set<PasskeyGateClosed>(['adds_off', 'no_membership', 'organization_off']);
+
+type GateRead =
+  | { open: false; why: PasskeyGateClosed }
+  | { open: true; rp: RelyingParty; keys: BridgeKeys; word: 'ok' | 'too_many' | PasskeyGateClosed };
 
 /**
- * Whether passkeys are open to `userId` now: a site, a key, and the
- * database's word (kill switch on, new passkeys on, every organization of the
- * member on; `passkey_add_allowed`, read fresh). With no site or no key the
- * database is not asked. A failed read is closed.
+ * One read of the gate for `userId`: a site, a key, then the database's word
+ * (read fresh). With no site or no key the database is not asked. A failed
+ * read, or a word this build does not know, is closed at every level.
  */
-export async function passkeyGate(userId: string): Promise<PasskeyGate> {
+async function readGate(userId: string): Promise<GateRead> {
   const rp = passkeyRelyingParty();
   if (!rp) return { open: false, why: 'no_site' };
   const keys = bridgeKeysFromEnv();
@@ -284,12 +304,51 @@ export async function passkeyGate(userId: string): Promise<PasskeyGate> {
   } catch {
     return { open: false, why: 'unreadable' };
   }
-  if (word === 'ok') return { open: true, rp, keys, atLimit: false };
-  if (word === 'too_many') return { open: true, rp, keys, atLimit: true };
-  if (typeof word === 'string' && CLOSED_WORDS.has(word as PasskeyGateClosed)) {
+  if (typeof word !== 'string') return { open: false, why: 'unreadable' };
+  if (USE_CLOSED_WORDS.has(word as PasskeyGateClosed))
     return { open: false, why: word as PasskeyGateClosed };
+  if (word === 'ok' || word === 'too_many' || ADD_CLOSED_WORDS.has(word as PasskeyGateClosed)) {
+    return { open: true, rp, keys, word: word as 'ok' | 'too_many' | PasskeyGateClosed };
   }
   return { open: false, why: 'unreadable' };
+}
+
+function gateForUse(r: GateRead): PasskeyGate {
+  if (!r.open) return r;
+  const addOpen = r.word === 'ok' || r.word === 'too_many';
+  return {
+    open: true,
+    rp: r.rp,
+    keys: r.keys,
+    atLimit: r.word === 'too_many',
+    addOpen,
+    addWhy: addOpen ? null : (r.word as PasskeyGateClosed),
+  };
+}
+
+function gateForAdd(r: GateRead): PasskeyGate {
+  const use = gateForUse(r);
+  if (!use.open) return use;
+  if (!use.addOpen) return { open: false, why: use.addWhy ?? 'unreadable' };
+  return use;
+}
+
+/**
+ * The ADD level for `userId` now: a site, a key, and the database's word
+ * (kill switch on, new passkeys on, every organization of the member on;
+ * `passkey_add_allowed`, read fresh). A failed read is closed.
+ */
+export async function passkeyGate(userId: string): Promise<PasskeyGate> {
+  return gateForAdd(await readGate(userId));
+}
+
+/**
+ * The USE level for `userId` now: a site, a key and the kill switch on. The
+ * organization switches and "new passkeys" do not close it (they stop NEW
+ * passkeys only); `addOpen` says whether the ADD level holds as well.
+ */
+export async function passkeyUseGate(userId: string): Promise<PasskeyGate> {
+  return gateForUse(await readGate(userId));
 }
 
 // ── The session, read once per action (rules 2, 3, 17) ─────────────────
@@ -318,34 +377,34 @@ async function clientIp(): Promise<string> {
 }
 
 type Step = 'start' | 'finish' | 'register' | 'remove' | 'manage';
+type OpenGate = Extract<PasskeyGate, { open: true }>;
 
-/**
- * The common prologue (plan 2.6 P): the verified session, a session id, the
- * account not disabled, the gate, then our limiter. A refusal by the limiter
- * is a security event (passkey_checks_paused).
- */
-async function prologue(
-  step: Step,
-): Promise<Result<{ held: Held; gate: Extract<PasskeyGate, { open: true }> }>> {
+/** A closed gate's refusal: the kill switch has its own words. */
+function gateRefusal(why: PasskeyGateClosed): PasskeyFailure {
+  return fail(
+    'forbidden',
+    why === 'kill_switch_off' ? PASSKEY_WORDS.off : PASSKEY_WORDS.unavailable,
+    `gate_${why}`,
+  );
+}
+
+/** The session part of every prologue: the verified session, a session id, the account not disabled (rule 15). */
+async function heldActive(): Promise<Result<{ held: Held }>> {
   const held = await holdSession();
   if (!held) return fail('unauthenticated', PASSKEY_WORDS.sessionEnded);
-  const userId = held.claims.userId;
   if (!held.claims.sessionId)
     return fail('unauthenticated', PASSKEY_WORDS.sessionEnded, 'no_session_id');
   // Rule 15: a disabled account, before any limiter counts; a status that
   // cannot be read is closed.
-  const status = await loadAccountStatus(held.supabase, userId);
+  const status = await loadAccountStatus(held.supabase, held.claims.userId);
   if (status === 'disabled') return fail('forbidden', PASSKEY_WORDS.disabled, 'disabled');
   if (status !== 'active')
     return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'status_unreadable');
-  const gate = await passkeyGate(userId);
-  if (!gate.open) {
-    return fail(
-      'forbidden',
-      gate.why === 'kill_switch_off' ? PASSKEY_WORDS.off : PASSKEY_WORDS.unavailable,
-      `gate_${gate.why}`,
-    );
-  }
+  return { ok: true, held };
+}
+
+/** Our limiter for one step; a refusal is a security event (passkey_checks_paused). */
+async function limited(step: Step, userId: string): Promise<PasskeyFailure | null> {
   const ip = await clientIp();
   const allowed =
     step === 'start'
@@ -357,11 +416,46 @@ async function prologue(
           : step === 'remove'
             ? await allowRemove(userId)
             : true;
-  if (!allowed) {
-    await recordPasskeyEvent('passkey_checks_paused', userId);
-    return fail('rate_limited', PASSKEY_WORDS.tooMany, 'limited');
-  }
+  if (allowed) return null;
+  await recordPasskeyEvent('passkey_checks_paused', userId);
+  return fail('rate_limited', PASSKEY_WORDS.tooMany, 'limited');
+}
+
+/**
+ * The common prologue (plan 2.6 P): the session (heldActive), the gate at
+ * `level`, then our limiter.
+ */
+async function prologue(
+  step: Step,
+  level: 'add' | 'use',
+): Promise<Result<{ held: Held; gate: OpenGate }>> {
+  const h = await heldActive();
+  if (!h.ok) return h;
+  const { held } = h;
+  const read = await readGate(held.claims.userId);
+  const gate = level === 'add' ? gateForAdd(read) : gateForUse(read);
+  if (!gate.open) return gateRefusal(gate.why);
+  const refused = await limited(step, held.claims.userId);
+  if (refused) return refused;
   return { ok: true, held, gate };
+}
+
+/**
+ * The MANAGE prologue (list, rename, remove one's own passkeys): the session,
+ * a site, our limiter. No key and no switch: removing only takes access away,
+ * so a member whose organization or the platform switched passkeys off can
+ * still remove theirs (decision A).
+ */
+async function managePrologue(
+  step: 'remove' | 'manage',
+): Promise<Result<{ held: Held; rp: RelyingParty }>> {
+  const h = await heldActive();
+  if (!h.ok) return h;
+  const rp = passkeyRelyingParty();
+  if (!rp) return gateRefusal('no_site');
+  const refused = await limited(step, h.held.claims.userId);
+  if (refused) return refused;
+  return { ok: true, held: h.held, rp };
 }
 
 // ── The browser binding cookie (rule 12) ───────────────────────────────
@@ -912,7 +1006,10 @@ export type SecondStepStart =
 async function startCeremony(
   purpose: 'second_step' | 'confirm_add' | 'finish_setup',
 ): Promise<Result<{ start: SecondStepStart }>> {
-  const p = await prologue('start');
+  // Decision A: the confirm_add proof belongs to adding; the second step and
+  // Finish setup start at the USE level (Finish setup of a passkey that never
+  // served asks the ADD level below, once the picture is read).
+  const p = await prologue('start', purpose === 'confirm_add' ? 'add' : 'use');
   if (!p.ok) return p;
   const { held, gate } = p;
   const userId = held.claims.userId;
@@ -936,6 +1033,8 @@ async function startCeremony(
     ) {
       return fail('validation_error', PASSKEY_WORDS.couldNotFinish, 'nothing_to_finish');
     }
+    if (!existingHolder(picture, userId, gate.keys, (r) => r.last_used_at !== null) && !gate.addOpen)
+      return gateRefusal(gate.addWhy ?? 'unreadable');
   } else if (!bridgeServes(picture)) {
     if (setupUnfinished(picture))
       return fail('validation_error', PASSKEY_WORDS.setupNotFinished, 'setup_unfinished');
@@ -960,6 +1059,23 @@ async function startCeremony(
   const issued = await issueChallenge(admin, held, purpose, gate.rp, challenge.text);
   if (!issued.ok) return issued;
   return { ok: true, start: { kind: 'options', challengeId: issued.challengeId, optionsJSON } };
+}
+
+/**
+ * Decision A: Finish setup repairs an EXISTING holder at the USE level; for a
+ * passkey that never served it completes an add and needs the ADD level. An
+ * existing holder: the bridge serves but does not open with our keys (S9, a
+ * repair), or an active passkey of this site was used before this ceremony
+ * (`usedBefore`: a finish reads the row as it was before its own use).
+ */
+function existingHolder(
+  picture: AccountPicture,
+  userId: string,
+  keys: BridgeKeys,
+  usedBefore: (r: PasskeyRow) => boolean,
+): boolean {
+  if (bridgeServes(picture) && !opens(picture, userId, keys)) return true;
+  return picture.active.some(usedBefore);
 }
 
 /** Whether the recorded bridge's secret opens with the keys we hold (not S9). */
@@ -1019,7 +1135,7 @@ async function finishSecondStep(input: {
   challengeId: unknown;
   response: unknown;
 }): Promise<Result<object>> {
-  const p = await prologue('finish');
+  const p = await prologue('finish', 'use');
   if (!p.ok) return p;
   const { held, gate } = p;
   const userId = held.claims.userId;
@@ -1135,7 +1251,7 @@ export async function startAddPasskey(input: {
   proof: unknown;
   phoneConfirmation?: unknown;
 }): Promise<Result<{ challengeId: string; optionsJSON: unknown }>> {
-  const p = await prologue('register');
+  const p = await prologue('register', 'add');
   if (!p.ok) return p;
   const { held, gate } = p;
   const userId = held.claims.userId;
@@ -1255,7 +1371,7 @@ export async function finishAddPasskey(input: {
   response: unknown;
   name: unknown;
 }): Promise<Result<{ passkeyId: string; firstPasskey: boolean }>> {
-  const p = await prologue('finish');
+  const p = await prologue('finish', 'add');
   if (!p.ok) return p;
   const { held, gate } = p;
   const userId = held.claims.userId;
@@ -1422,7 +1538,7 @@ export async function finishPasskeySetup(input: {
   challengeId: unknown;
   response: unknown;
 }): Promise<Result<object>> {
-  const p = await prologue('finish');
+  const p = await prologue('finish', 'use');
   if (!p.ok) return p;
   const { held, gate } = p;
   const userId = held.claims.userId;
@@ -1435,6 +1551,11 @@ export async function finishPasskeySetup(input: {
   const repair = bridgeServes(picture) && !opens(picture, userId, gate.keys);
   if (!setupUnfinished(picture) && !repair)
     return fail('validation_error', PASSKEY_WORDS.couldNotFinish, 'nothing_to_finish');
+  // Decision A: the row this ceremony just used is read as it was before.
+  const usedBefore = (r: PasskeyRow) =>
+    r.id === verified.row.id ? verified.row.last_used_at !== null : r.last_used_at !== null;
+  if (!existingHolder(picture, userId, gate.keys, usedBefore) && !gate.addOpen)
+    return gateRefusal(gate.addWhy ?? 'unreadable');
   const anyVerified = picture.factors.some((f) => f.status === 'verified');
   if (anyVerified && held.claims.aal !== 'aal2')
     return fail('forbidden', PASSKEY_WORDS.stepUpFirst, 'aal2_required');
@@ -1500,54 +1621,35 @@ export async function finishPasskeySetup(input: {
 
 // ── E. F. Remove and rename ────────────────────────────────────────────
 
-/** Whether any organization of the member requires a second step for their role (strictest when unreadable). */
-async function policyRequiresSecondStep(admin: Admin, userId: string): Promise<boolean> {
-  try {
-    const { data: memberships, error } = await admin
-      .from('organization_members')
-      .select('organization_id, role')
-      .eq('user_id', userId)
-      .not('accepted_at', 'is', null)
-      .is('impersonation_expires_at', null);
-    if (error || !Array.isArray(memberships)) return true;
-    for (const m of memberships as Array<{ organization_id: string; role: string }>) {
-      const { data: org, error: orgError } = await admin
-        .from('organizations')
-        .select('mfa_policy')
-        .eq('id', m.organization_id)
-        .maybeSingle();
-      if (orgError) return true;
-      const policy = enforcedMfaPolicy(org);
-      if (policy === 'all_required') return true;
-      if (policy === 'admins_required' && (m.role === 'owner' || m.role === 'admin')) return true;
-    }
-    return false;
-  } catch {
-    return true;
-  }
-}
-
 /** E: remove one of the member's passkeys (aal2), then end the other sessions. */
 export async function removePasskey(input: {
   passkeyId: unknown;
 }): Promise<Result<{ finishing: boolean }>> {
-  const p = await prologue('remove');
+  // Decision A: the MANAGE level (a site; no key, no switch).
+  const p = await managePrologue('remove');
   if (!p.ok) return p;
-  const { held, gate } = p;
+  const { held, rp } = p;
   const userId = held.claims.userId;
   if (held.claims.aal !== 'aal2')
     return fail('forbidden', PASSKEY_WORDS.stepUpFirst, 'aal2_required');
   const id = challengeIdSchema.safeParse(input.passkeyId);
   if (!id.success) return fail('validation_error', PASSKEY_WORDS.alreadyRemoved, 'id');
   const admin = createAdminClient();
-  const read = await readPicture(admin, held, gate.rp);
+  const read = await readPicture(admin, held, rp);
   if (!read.ok) return read;
   const picture = read.picture;
   const target = picture.rows.find((r) => r.id === id.data && r.removed_at === null);
   if (!target) return fail('not_found', PASSKEY_WORDS.alreadyRemoved, 'not_found');
-  // Review 4.8: the account's last method, under a policy that requires one.
-  const lastMethod = picture.apps.length === 0 && picture.active.length === 1;
-  if (lastMethod && (await policyRequiresSecondStep(admin, userId))) {
+  // Decision B: the account's last second-step method (apps and passkeys
+  // counted alike), under a policy of any organization of the member.
+  if (
+    await lastMethodBlocks({
+      userId,
+      removing: { kind: 'passkey', passkeyId: target.id },
+      factors: picture.factors,
+      passkeyIds: picture.active.map((r) => r.id),
+    })
+  ) {
     return fail('forbidden', PASSKEY_WORDS.policyBlocksRemoval, 'policy');
   }
   // The other sessions, listed before anything ends (for the broadcast).
@@ -1598,7 +1700,8 @@ export async function renamePasskey(input: {
   passkeyId: unknown;
   name: unknown;
 }): Promise<Result<object>> {
-  const p = await prologue('manage');
+  // Decision A: the MANAGE level (a site; no key, no switch).
+  const p = await managePrologue('manage');
   if (!p.ok) return p;
   const { held } = p;
   if (held.claims.aal !== 'aal2')
@@ -1634,6 +1737,16 @@ export interface PasskeyListItem {
 
 export interface PasskeysPanel {
   passkeys: PasskeyListItem[];
+  /**
+   * Decision A: null, the whole panel; otherwise the passkeys with Remove and
+   * one sentence, nothing else ('turned_off': the kill switch is off;
+   * 'unavailable': no key, or the switch could not be read).
+   */
+  listOnly: 'turned_off' | 'unavailable' | null;
+  /** Add is offered: the ADD level holds (every condition). */
+  canAdd: boolean;
+  /** Finish is offered for a setup not finished: an existing holder (USE level), or the ADD level. */
+  canFinish: boolean;
   atLimit: boolean;
   hasApp: boolean;
   /** The proof the Add flow asks for. */
@@ -1647,9 +1760,12 @@ export interface PasskeysPanel {
 
 /**
  * The Security page's Passkeys panel for the signed-in member, or null when
- * it must be ABSENT (review finding 10, stage 4's hard rule): any of the four
- * conditions false, a console account, or anything unreadable. With no site
- * or no key, nothing is read at all.
+ * it must be ABSENT (review finding 10; decision A): no site, a disabled
+ * account, a console account, anything unreadable, or a member who cannot
+ * add a passkey and has none. A member who has passkeys of this site always
+ * sees them with Remove, whatever the switches say (listOnly when the kill
+ * switch is off, the key is missing or the switch cannot be read). With no
+ * site nothing is read; with no key the database's word is not asked.
  */
 export async function passkeysPanelFor(userId: string): Promise<PasskeysPanel | null> {
   try {
@@ -1660,12 +1776,21 @@ export async function passkeysPanelFor(userId: string): Promise<PasskeysPanel | 
 }
 
 async function panelOf(userId: string): Promise<PasskeysPanel | null> {
-  const gate = await passkeyGate(userId);
-  if (!gate.open) return null;
+  const rp = passkeyRelyingParty();
+  if (!rp) return null;
+  const gate = gateForUse(await readGate(userId));
+  if (!gate.open && (gate.why === 'disabled' || gate.why === 'no_profile')) return null;
+  const canAdd = gate.open && gate.addOpen;
   const held = await holdSession();
   if (!held || held.claims.userId !== userId) return null;
   const admin = createAdminClient();
-  const read = await readPicture(admin, held, gate.rp);
+  if (!canAdd) {
+    // Only a member who has passkeys of this site sees the panel now.
+    const rows = await readRows(admin, userId);
+    if (rows === null || !rows.some((r) => r.removed_at === null && r.rp_id === rp.rpId))
+      return null;
+  }
+  const read = await readPicture(admin, held, rp);
   if (!read.ok) return null;
   const picture = read.picture;
   if (isPlatformAdmin(picture.email)) return null;
@@ -1681,7 +1806,13 @@ async function panelOf(userId: string): Promise<PasskeysPanel | null> {
       backedUp: r.backed_up,
       unfinished,
     })),
-    atLimit: gate.atLimit,
+    listOnly: gate.open ? null : gate.why === 'kill_switch_off' ? 'turned_off' : 'unavailable',
+    canAdd,
+    canFinish:
+      gate.open &&
+      unfinished &&
+      (canAdd || existingHolder(picture, userId, gate.keys, (r) => r.last_used_at !== null)),
+    atLimit: gate.open && gate.atLimit,
     hasApp,
     proof:
       !hasPasskey && !hasApp
@@ -1694,7 +1825,7 @@ async function panelOf(userId: string): Promise<PasskeysPanel | null> {
             ? 'passkey'
             : 'code',
     apps: picture.apps.map((f) => ({ id: f.id, friendlyName: f.friendly_name })),
-    phoneConfirmation: !hasApp && (await usedPhoneAppRecently(admin, userId)),
+    phoneConfirmation: canAdd && !hasApp && (await usedPhoneAppRecently(admin, userId)),
     aal2: held.claims.aal === 'aal2',
   };
 }
@@ -1726,7 +1857,9 @@ async function stepOf(
       typeof f.friendly_name === 'string' && f.friendly_name.startsWith(PASSKEY_BRIDGE_NAME_PREFIX),
   );
   if (!named) return 'none';
-  const gate = await passkeyGate(userId);
+  // Decision A: the USE level (site, key, kill switch); an organization
+  // switched off never takes an existing holder's second step away.
+  const gate = await passkeyUseGate(userId);
   if (!gate.open) return 'none';
   const held = await holdSession();
   if (!held || held.claims.userId !== userId) return 'none';
@@ -1735,20 +1868,6 @@ async function stepOf(
   const picture = read.picture;
   if (finishesRemoval(picture)) return 'ready';
   return bridgeServes(picture) && opens(picture, userId, gate.keys) ? 'ready' : 'none';
-}
-
-/** Whether an active passkey with a verified, recorded bridge keeps a second step (the "last method" rule, review 13). */
-export async function passkeyKeepsSecondStep(userId: string): Promise<boolean> {
-  try {
-    const gate = await passkeyGate(userId);
-    if (!gate.open) return false;
-    const held = await holdSession();
-    if (!held || held.claims.userId !== userId) return false;
-    const read = await readPicture(createAdminClient(), held, gate.rp);
-    return read.ok && bridgeServes(read.picture);
-  } catch {
-    return false;
-  }
 }
 
 /** The user handle of an account (tests and the registration options agree on it). */

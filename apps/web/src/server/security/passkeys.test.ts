@@ -81,6 +81,7 @@ const { emitAuthAudit } = await import('@/server/services/auth-audit');
 const { recordSecurityEvent } = await import('./events');
 const { sendPasskeyAddedEmail, sendPasskeyRemovedEmail } = await import('./passkey-emails');
 const pk = await import('./passkeys');
+const { LAST_METHOD_WORDS } = await import('./second-step-methods');
 
 const SAMPLE_PASSWORD = 'sample-password-not-real';
 
@@ -191,48 +192,133 @@ describe('the whole path with the real library', () => {
   });
 });
 
-describe('the gate: each of the four conditions alone closes everything (stage 4 hard rule)', () => {
-  const cases: Array<[string, () => void]> = [
+describe('the gates (decision A): ADD needs all four conditions; USE the site, the key and the kill switch; MANAGE a site', () => {
+  const factorsOf = (userId: string) => world.factors.filter((f) => f.user_id === userId);
+
+  // ADD: each of the four conditions alone closes it (and a word this build
+  // does not know, and a member in no organization).
+  const addClosers: Array<[string, () => void]> = [
     ['the kill switch off', () => (world.addAllowed = 'kill_switch_off')],
     ['new passkeys off', () => (world.addAllowed = 'adds_off')],
     ['no bridge key', () => (world.env.PASSKEY_BRIDGE_KEY_V1 = '')],
     ['an organization of the member off', () => (world.addAllowed = 'organization_off')],
-    // Not one of the four: a word this build does not know is read as closed.
+    ['the member in no organization', () => (world.addAllowed = 'no_membership')],
     ['a word the server does not know', () => (world.addAllowed = 'a_new_word')],
   ];
-  for (const [label, close] of cases) {
-    it(`${label}: no panel, no passkey step, every action refuses`, async () => {
+  for (const [label, close] of addClosers) {
+    it(`ADD, ${label}: no Add offered, and every add action refuses, nothing stored`, async () => {
       const { userId } = await memberWithPasskey();
+      world.signIn(userId, 'aal2');
       const key = world.env.PASSKEY_BRIDGE_KEY_V1 ?? '';
       close();
       try {
-        expect(await pk.passkeysPanelFor(userId)).toBeNull();
-        expect(
-          await pk.passkeyStepFor(
-            userId,
-            world.factors.filter((f) => f.user_id === userId),
-          ),
-        ).toBe('none');
-        expect(await pk.passkeyKeepsSecondStep(userId)).toBe(false);
+        const panel = await pk.passkeysPanelFor(userId);
+        expect(panel?.canAdd).toBe(false);
         const refusals = [
-          await pk.startSecondStep(),
           await pk.startConfirmAdd(),
-          await pk.startFinishSetup(),
           await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } }),
-          await pk.completeSecondStep({ challengeId: crypto.randomUUID(), response: {} }),
           await pk.finishAddPasskey({ challengeId: crypto.randomUUID(), response: {}, name: 'x' }),
-          await pk.finishPasskeySetup({ challengeId: crypto.randomUUID(), response: {} }),
-          await pk.removePasskey({ passkeyId: world.passkeys[0]!.id }),
-          await pk.renamePasskey({ passkeyId: world.passkeys[0]!.id, name: 'New name' }),
         ];
         for (const r of refusals) expect(r).toMatchObject({ ok: false, code: 'forbidden' });
-        expect(world.passkeys[0]!.removed_at).toBeNull();
-        expect(world.passkeys[0]!.name).toBe('Work laptop');
+        expect(world.passkeys).toHaveLength(1);
       } finally {
         world.env.PASSKEY_BRIDGE_KEY_V1 = key;
       }
     });
   }
+
+  // USE: an organization switched off, new passkeys off, or no organization
+  // never take an existing holder's second step away (answers Q1).
+  const useStaysOpen: Array<[string, string]> = [
+    ['new passkeys off', 'adds_off'],
+    ['an organization of the member off', 'organization_off'],
+    ['the member in no organization', 'no_membership'],
+  ];
+  for (const [label, word] of useStaysOpen) {
+    it(`USE, ${label}: the holder still passes the second step; the panel lists, renames and removes, with no Add`, async () => {
+      const { soft, userId, passkeyId } = await memberWithPasskey();
+      world.addAllowed = word;
+      expect(await pk.passkeyStepFor(userId, factorsOf(userId))).toBe('ready');
+      expect(await passkeyStep(soft)).toEqual({ ok: true });
+      expect(world.claimsOf(world.cookieToken!)).toMatchObject({ aal: 'aal2' });
+      expect(await pk.passkeysPanelFor(userId)).toMatchObject({
+        listOnly: null,
+        canAdd: false,
+        passkeys: [expect.objectContaining({ id: passkeyId })],
+      });
+      expect(await pk.renamePasskey({ passkeyId, name: 'Desk key' })).toEqual({ ok: true });
+      expect(await pk.removePasskey({ passkeyId })).toEqual({ ok: true, finishing: false });
+      expect(world.passkeys[0]!.removed_at).not.toBeNull();
+    });
+  }
+
+  // USE closes with the kill switch, the key, or a word this build does not
+  // know: no passkey step is offered or accepted. MANAGE stays: the holder
+  // signed in with their app lists, renames and removes their passkeys.
+  const useClosers: Array<[string, () => void, 'turned_off' | 'unavailable']> = [
+    ['the kill switch off', () => (world.addAllowed = 'kill_switch_off'), 'turned_off'],
+    ['no bridge key', () => (world.env.PASSKEY_BRIDGE_KEY_V1 = ''), 'unavailable'],
+    ['a word the server does not know', () => (world.addAllowed = 'a_new_word'), 'unavailable'],
+  ];
+  for (const [label, close, notice] of useClosers) {
+    it(`USE, ${label}: no passkey step; MANAGE: the list with Remove and one sentence, rename and remove still work`, async () => {
+      const { userId, passkeyId } = await memberWithPasskey();
+      const key = world.env.PASSKEY_BRIDGE_KEY_V1 ?? '';
+      close();
+      try {
+        expect(await pk.passkeyStepFor(userId, factorsOf(userId))).toBe('none');
+        const refusals = [
+          await pk.startSecondStep(),
+          await pk.completeSecondStep({ challengeId: crypto.randomUUID(), response: {} }),
+          await pk.startFinishSetup(),
+          await pk.finishPasskeySetup({ challengeId: crypto.randomUUID(), response: {} }),
+        ];
+        for (const r of refusals) expect(r).toMatchObject({ ok: false, code: 'forbidden' });
+        // Signed in with the authenticator app (aal2), the member manages theirs.
+        world.signIn(userId, 'aal2');
+        expect(await pk.passkeysPanelFor(userId)).toMatchObject({
+          listOnly: notice,
+          canAdd: false,
+          canFinish: false,
+          passkeys: [expect.objectContaining({ id: passkeyId })],
+        });
+        const bridge = world.bridges.get(userId)!;
+        expect(await pk.renamePasskey({ passkeyId, name: 'Old key' })).toEqual({ ok: true });
+        expect(await pk.removePasskey({ passkeyId })).toEqual({ ok: true, finishing: false });
+        expect(world.passkeys[0]!.removed_at).not.toBeNull();
+        expect(world.bridges.has(userId)).toBe(false);
+        expect(world.calls.deleteFactor).toContain(bridge.factor_id);
+        // With nothing left to list, the panel is absent again.
+        expect(await pk.passkeysPanelFor(userId)).toBeNull();
+      } finally {
+        world.env.PASSKEY_BRIDGE_KEY_V1 = key;
+      }
+    });
+  }
+
+  it('MANAGE still needs aal2, and a site: without one, rename and remove refuse', async () => {
+    const { userId, passkeyId } = await memberWithPasskey();
+    world.addAllowed = 'kill_switch_off';
+    expect(await pk.removePasskey({ passkeyId })).toMatchObject({ ok: false, reason: 'aal2_required' });
+    world.signIn(userId, 'aal2');
+    process.env.VERCEL = '1';
+    process.env.VERCEL_ENV = 'preview';
+    expect(await pk.removePasskey({ passkeyId })).toMatchObject({ ok: false, reason: 'gate_no_site' });
+    expect(await pk.renamePasskey({ passkeyId, name: 'Other' })).toMatchObject({
+      ok: false,
+      reason: 'gate_no_site',
+    });
+    expect(world.passkeys[0]).toMatchObject({ removed_at: null, name: 'Work laptop' });
+  });
+
+  it('a disabled account or one without a profile sees no panel, even with passkeys', async () => {
+    const { userId } = await memberWithPasskey();
+    world.signIn(userId, 'aal2');
+    for (const word of ['disabled', 'no_profile']) {
+      world.addAllowed = word;
+      expect(await pk.passkeysPanelFor(userId)).toBeNull();
+    }
+  });
 
   it('with no site (a preview deployment) the database is not even asked', async () => {
     const userId = world.addAccount('preview@example.test');
@@ -240,6 +326,7 @@ describe('the gate: each of the four conditions alone closes everything (stage 4
     process.env.VERCEL = '1';
     process.env.VERCEL_ENV = 'preview';
     expect(await pk.passkeyGate(userId)).toEqual({ open: false, why: 'no_site' });
+    expect(await pk.passkeyUseGate(userId)).toEqual({ open: false, why: 'no_site' });
     expect(await pk.passkeysPanelFor(userId)).toBeNull();
     expect(world.calls.fns).toEqual([]);
   });
@@ -248,19 +335,104 @@ describe('the gate: each of the four conditions alone closes everything (stage 4
     const userId = world.addAccount('nokey@example.test');
     world.env.PASSKEY_BRIDGE_KEY_V1 = '';
     expect(await pk.passkeyGate(userId)).toEqual({ open: false, why: 'no_key' });
+    expect(await pk.passkeyUseGate(userId)).toEqual({ open: false, why: 'no_key' });
     expect(world.calls.fns).toEqual([]);
   });
 
-  it('the panel is absent for a member who cannot use passkeys and present when every condition holds', async () => {
+  it('the two levels read one word: USE open and ADD closed for an organization off', async () => {
+    const userId = world.addAccount('levels@example.test');
+    world.addAllowed = 'organization_off';
+    expect(await pk.passkeyGate(userId)).toEqual({ open: false, why: 'organization_off' });
+    expect(await pk.passkeyUseGate(userId)).toMatchObject({
+      open: true,
+      addOpen: false,
+      addWhy: 'organization_off',
+    });
+    world.addAllowed = 'too_many';
+    expect(await pk.passkeyGate(userId)).toMatchObject({ open: true, atLimit: true, addOpen: true });
+  });
+
+  it('the panel is absent for a member who cannot add and has no passkey, and present when every condition holds', async () => {
     const userId = world.addAccount('panel@example.test');
     world.signIn(userId, 'aal1');
     expect(await pk.passkeysPanelFor(userId)).toMatchObject({
       passkeys: [],
       proof: 'password',
       atLimit: false,
+      listOnly: null,
+      canAdd: true,
     });
+    for (const word of ['organization_off', 'adds_off', 'no_membership', 'kill_switch_off']) {
+      world.addAllowed = word;
+      expect(await pk.passkeysPanelFor(userId)).toBeNull();
+    }
+  });
+});
+
+describe('decision A: Finish setup is a repair for an existing holder (USE) and an add for a passkey that never served (ADD)', () => {
+  /** S2: the bridge row and its factor gone; the passkey row stays. */
+  function breakBridge(userId: string) {
+    const old = world.bridges.get(userId)!;
+    world.bridges.delete(userId);
+    world.factors = world.factors.filter((f) => f.id !== old.factor_id);
+  }
+
+  it('a passkey that never served: with an organization off, no Finish and the start refuses; with it on, Finish works', async () => {
+    const { soft, userId } = await memberWithPasskey();
+    breakBridge(userId);
+    world.signIn(userId, 'aal2');
     world.addAllowed = 'organization_off';
-    expect(await pk.passkeysPanelFor(userId)).toBeNull();
+    expect(await pk.passkeysPanelFor(userId)).toMatchObject({
+      canFinish: false,
+      passkeys: [expect.objectContaining({ unfinished: true })],
+    });
+    expect(await pk.startFinishSetup()).toMatchObject({
+      ok: false,
+      code: 'forbidden',
+      reason: 'gate_organization_off',
+    });
+    world.addAllowed = 'ok';
+    expect(await pk.passkeysPanelFor(userId)).toMatchObject({ canFinish: true });
+    const { challengeId, options } = optionsOf(await pk.startFinishSetup());
+    expect(await pk.finishPasskeySetup({ challengeId, response: soft.get(options) })).toEqual({
+      ok: true,
+    });
+  });
+
+  it('the finish reads the row it uses as it was BEFORE its own use: a never-served passkey stays an add', async () => {
+    const { soft, userId } = await memberWithPasskey();
+    breakBridge(userId);
+    world.signIn(userId, 'aal2');
+    const { challengeId, options } = optionsOf(await pk.startFinishSetup());
+    world.addAllowed = 'organization_off';
+    expect(await pk.finishPasskeySetup({ challengeId, response: soft.get(options) })).toMatchObject({
+      ok: false,
+      reason: 'gate_organization_off',
+    });
+    expect(world.bridges.has(userId)).toBe(false);
+  });
+
+  it('an existing holder (the passkey served before): Finish repairs with an organization off, or new passkeys off', async () => {
+    const { soft, userId } = await memberWithPasskey();
+    expect(await passkeyStep(soft)).toEqual({ ok: true });
+    breakBridge(userId);
+    for (const word of ['organization_off', 'adds_off']) {
+      world.addAllowed = word;
+      expect(await pk.passkeysPanelFor(userId)).toMatchObject({ canFinish: true, canAdd: false });
+    }
+    const { challengeId, options } = optionsOf(await pk.startFinishSetup());
+    expect(await pk.finishPasskeySetup({ challengeId, response: soft.get(options) })).toEqual({
+      ok: true,
+    });
+    expect(world.bridges.has(userId)).toBe(true);
+  });
+
+  it('S9 (the secret cannot be opened) is a repair: Finish starts with an organization off', async () => {
+    const { userId } = await memberWithPasskey();
+    world.signIn(userId, 'aal2');
+    world.env.PASSKEY_BRIDGE_KEY_V1 = Buffer.alloc(32, 7).toString('base64');
+    world.addAllowed = 'organization_off';
+    expect(await pk.startFinishSetup()).toMatchObject({ ok: true, start: { kind: 'options' } });
   });
 });
 
@@ -1109,23 +1281,71 @@ describe('E: removal', () => {
     expect(sendPasskeyRemovedEmail).toHaveBeenCalled();
   });
 
-  it('the last method under a policy that requires a second step is refused', async () => {
-    const { userId, passkeyId } = await memberWithPasskey();
-    world.signIn(userId, 'aal2');
+  function requiringOrg(userId: string, policy = 'all_required', role = 'member') {
     const org = crypto.randomUUID();
-    world.organizations.push({ id: org, mfa_policy: 'all_required' });
+    world.organizations.push({ id: org, mfa_policy: policy });
     world.memberships.push({
       user_id: userId,
       organization_id: org,
-      role: 'member',
+      role,
       accepted_at: new Date().toISOString(),
       impersonation_expires_at: null,
     });
+  }
+
+  it('the last method under a policy that requires a second step is refused', async () => {
+    const { userId, passkeyId } = await memberWithPasskey();
+    world.signIn(userId, 'aal2');
+    requiringOrg(userId);
     expect(await pk.removePasskey({ passkeyId })).toMatchObject({
       ok: false,
       message: pk.PASSKEY_WORDS.policyBlocksRemoval,
     });
     expect(world.passkeys[0]!.removed_at).toBeNull();
+  });
+
+  it('decision B: one rule and the same words as an authenticator app\'s removal', () => {
+    expect(pk.PASSKEY_WORDS.policyBlocksRemoval).toBe(LAST_METHOD_WORDS);
+  });
+
+  it('decision B: an authenticator app beside it keeps a second step, so the passkey may go', async () => {
+    const { userId, passkeyId } = await memberWithPasskey();
+    world.addApp(userId);
+    world.signIn(userId, 'aal2');
+    requiringOrg(userId);
+    expect(await pk.removePasskey({ passkeyId })).toEqual({ ok: true, finishing: false });
+  });
+
+  it('decision B: another passkey keeps a second step; the bridge factor is never counted as an app', async () => {
+    const { userId, passkeyId } = await memberWithPasskey();
+    world.signIn(userId, 'aal2');
+    requiringOrg(userId, 'admins_required', 'admin');
+    // The bridge alone (a verified reserved-name factor) is no method.
+    expect(world.factors.filter((f) => f.user_id === userId && f.status === 'verified')).toHaveLength(1);
+    expect(await pk.removePasskey({ passkeyId })).toMatchObject({ ok: false, reason: 'policy' });
+    // A second passkey of this site (the same bridge serves both).
+    world.passkeys.push({
+      ...world.passkeys[0]!,
+      id: crypto.randomUUID(),
+      credential_id: 'sample-second-credential-0001',
+      name: 'Second key',
+    });
+    expect(await pk.removePasskey({ passkeyId })).toEqual({ ok: true, finishing: false });
+    // A passkey of another site is no method here.
+    world.passkeys[1]!.rp_id = 'other.example.test';
+    const third = world.passkeys[1]!;
+    world.passkeys.push({ ...third, id: crypto.randomUUID(), rp_id: 'localhost', removed_at: null });
+    const last = world.passkeys[2]!.id;
+    third.removed_at = null;
+    expect(await pk.removePasskey({ passkeyId: last })).toMatchObject({ ok: false, reason: 'policy' });
+  });
+
+  it('decision B: an admins-only policy does not hold a staff member; any organization of the member counts', async () => {
+    const { userId, passkeyId } = await memberWithPasskey();
+    world.signIn(userId, 'aal2');
+    requiringOrg(userId, 'admins_required', 'staff');
+    requiringOrg(userId, 'optional', 'owner');
+    expect(await pk.removePasskey({ passkeyId })).toEqual({ ok: true, finishing: false });
   });
 
   it('rename keeps the table rule (no dot) and needs aal2', async () => {
@@ -1151,7 +1371,7 @@ describe('the page reads', () => {
     expect(world.calls.auth).toEqual([]);
   });
 
-  it('passkeyStepFor is ready for a healthy passkey; passkeyKeepsSecondStep too', async () => {
+  it('passkeyStepFor is ready for a healthy passkey', async () => {
     const { userId } = await memberWithPasskey();
     expect(
       await pk.passkeyStepFor(
@@ -1159,7 +1379,6 @@ describe('the page reads', () => {
         world.factors.filter((f) => f.user_id === userId),
       ),
     ).toBe('ready');
-    expect(await pk.passkeyKeepsSecondStep(userId)).toBe(true);
   });
 
   it('the origin the library is given is the configured one, never the request', () => {

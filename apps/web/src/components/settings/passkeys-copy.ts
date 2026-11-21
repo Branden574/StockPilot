@@ -32,5 +32,9 @@ export const PASSKEYS_PANEL_WORDS = {
   noSupport: "This browser can't use passkeys. Use another browser.",
   noAnswer: 'Could not reach StockPilot. Check your connection and try again.',
   stepUp: "Confirm it's you first. Sign out and sign in again with your second step.",
+  /** Decision A: the panel with only the list and Remove (the kill switch off). */
+  turnedOff: 'Passkeys are turned off right now.',
+  /** The same panel when the passkeys cannot work here now (no key, or the switch unreadable). */
+  unavailable: 'Passkeys are not available right now.',
 } as const;
 
