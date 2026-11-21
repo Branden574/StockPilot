@@ -137,6 +137,58 @@ const REVIEWED: Record<string, Reviewed> = {
     reason:
       "Counts the caller's own recovery codes (two numbers), for the Security page and the code page.",
   },
+  // Passkeys (stage 4, server/security/passkeys.ts). Each reads the account
+  // from the verified token itself. The gates by level (decision A): ADDING
+  // a passkey needs the site, the bridge key, both passkey switches and every
+  // organization of the member; USING one as the second step (and Finish
+  // setup's repair of an existing holder) needs the site, the key and the
+  // platform switch only; listing, renaming and removing one's own passkeys
+  // need the site and an aal2 session, whatever the switches say.
+  'server/actions/passkeys.ts#startSecondStepAction': {
+    kind: 'before-the-code',
+    reason:
+      "The passkey prompt on the code page and in the step-up modal: a session that has not given its second step yet (the site, the key and the platform switch), limited per account and address. It writes a one-use challenge or, when the account's state is a removal the member started (judged by the database's rule), finishes that removal instead: it deletes the bridge factor at Auth, then its row. It only ever takes a second step away, never adds one.",
+  },
+  'server/actions/passkeys.ts#finishSecondStepAction': {
+    kind: 'before-the-code',
+    reason:
+      'The passkey answer on the code page and in the step-up modal: the step that takes THIS session to aal2, after the one-use challenge, the account, the site, the counter and a required audit row.',
+  },
+  'server/actions/passkeys.ts#startConfirmAddAction': {
+    kind: 'own-rule',
+    reason:
+      "A member who has a passkey proves it before adding another: a one-use challenge, nothing else. This start does not need aal2; the add's own rule (aal2 with a verified factor) applies at the add, where the answer is spent.",
+  },
+  'server/actions/passkeys.ts#startAddPasskeyAction': {
+    kind: 'own-rule',
+    reason:
+      "Starts adding one of the caller's own passkeys: an account with a verified factor must be at aal2 and prove it again (the app code or a passkey); an account with none proves its password.",
+  },
+  'server/actions/passkeys.ts#finishAddPasskeyAction': {
+    kind: 'own-rule',
+    reason:
+      'Stores the passkey its start allowed, on the same session, challenge and browser; nothing about an organization.',
+  },
+  'server/actions/passkeys.ts#startPasskeySetupAction': {
+    kind: 'own-rule',
+    reason:
+      "The prompt for Finish setup of the caller's own passkey whose bridge is missing or does not open: a one-use challenge, nothing else. This start does not need aal2; its finish does, when the account has any verified factor. A repair for an existing holder, an add (every condition) otherwise.",
+  },
+  'server/actions/passkeys.ts#finishPasskeySetupAction': {
+    kind: 'own-rule',
+    reason:
+      "Finish setup of the caller's own passkey: aal2 when the account has any verified factor, the passkey answer first.",
+  },
+  'server/actions/passkeys.ts#removePasskeyAction': {
+    kind: 'own-rule',
+    reason:
+      "Removes one of the caller's own passkeys: needs an aal2 session whatever the switches say, and keeps the last second-step method a policy requires (apps and passkeys that can serve now).",
+  },
+  'server/actions/passkeys.ts#renamePasskeyAction': {
+    kind: 'own-rule',
+    reason:
+      "Renames one of the caller's own passkeys: needs an aal2 session, whatever the switches say.",
+  },
   'server/actions/team.ts#acceptInviteAction': {
     kind: 'before-the-code',
     reason:
