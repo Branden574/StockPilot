@@ -30,7 +30,8 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * or a raw log line. The hour travels in the two timestamp parameters;
  * nothing is ever put into the SQL text. Every field that comes back is
  * checked before use (parseGroupRow, parseTotalsRow); a row that fails is
- * dropped and counted in the run's log line.
+ * dropped and counted in the run's log line, and a dropped row of the totals
+ * also marks the hour as not whole (below).
  *
  * WHICH LINES ARE READ: A LOOSE NET. Every refused POST whose path, decoded
  * and in small letters, HOLDS `auth` and one of `token`, `factors` or
@@ -148,6 +149,20 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * are folded into those elements until the call holds at most
  * AUTH_LOGS_MAX_ELEMENTS.
  *
+ * TOTALS THAT ARE NOT WHOLE ARE NEVER STORED AS IF THEY WERE. If the totals
+ * answer is full all the same, or a row of it fails its checks, the rows
+ * that are missing can be the ones a flagged count is made from. The hour
+ * is then stored with ONE flagged count of its own (too_many_forms_to_count,
+ * source api, the lines that were read), its lines in our server's form are
+ * compared with the part that was read, and the run reports it once.
+ *
+ * THE HOUR'S END. A line stamped on the very instant an hour ends belongs to
+ * the next hour. Whether the logs service answers it for the hour that ends
+ * there is not relied on. If it does: a totals row whose last line is on
+ * that instant is kept, its count as it is (one line more in an hour is the
+ * safe direction; such a line can never take a row away), and a group row
+ * on that minute is left to the next hour's own run, which lists it.
+ *
  * FAILURES. A failed hour is left for the next run, and the hours after it
  * are still tried, so one bad hour does not hold up the newer ones. The run
  * stops only at a failure every hour would meet (a refused token, a query
@@ -235,6 +250,7 @@ export const AUTH_LOGS_REASONS = [
   'unclassified_sign_in_refusals',
   'unrecorded_server_form_password',
   'unrecorded_server_form_code',
+  'too_many_forms_to_count',
 ] as const;
 export type AuthLogsReason = (typeof AUTH_LOGS_REASONS)[number];
 
@@ -603,6 +619,11 @@ export interface AuthLogsHourReport {
   events: number;
   /** Our server's form of the hour, reconciled; present once the hour was read. */
   reconcile?: AuthLogsReconcile;
+  /**
+   * Present (true) when the hour's totals were not whole: `reconcile` and
+   * every count of the hour are then of the part that was read.
+   */
+  totalsIncomplete?: true;
   /** Why the hour failed, when it did: it is read again by the next run. */
   failure?: AuthLogsFailure;
 }
@@ -622,8 +643,17 @@ export interface AuthLogsRunSummary {
   dropped: number;
   /** Hours whose groups query was full (199 rows). */
   capped: number;
-  /** Hours whose totals query was full too: their counts and remainder are undercounts. */
+  /** Hours whose totals answer was full (as many rows as its limit lets through). */
   totalsCapped: number;
+  /** Rows of the totals answers dropped by the checks. */
+  totalsRowsDropped: number;
+  /**
+   * Hours whose totals were not whole (a full answer, or a dropped row):
+   * each is given a flagged count, and its counts are of the part read.
+   */
+  totalsIncomplete: number;
+  /** Group rows on the minute an hour ends: lines of the next hour, left to its own run. */
+  atHourEnd: number;
   /** Full hours given no remainder because a group row was dropped. */
   remainderSkipped: number;
   /** Elements sent to the writer. */
@@ -863,9 +893,29 @@ export function parseGroupRow(raw: unknown, hour: AuthLogsHour): AuthLogsGroupRo
 }
 
 /**
+ * Whether a row of the groups query is, in every other respect, a good row
+ * whose minute is the one the hour ENDS on. A line stamped on the very
+ * instant an hour ends belongs to the next hour. Whether the logs service
+ * answers such a line for the hour that ends there is not relied on: if it
+ * does, the line's group row is left to the next hour (whose own run lists
+ * and stores it at its first minute) and is not a row that failed its
+ * checks. Storing it here would put a row of this job on a minute of the
+ * next hour, and that hour would then be taken as already stored.
+ */
+export function isGroupRowOfNextHour(raw: unknown, hour: AuthLogsHour): boolean {
+  const next = parseGroupRow(raw, { startMs: hour.endMs, endMs: hour.endMs + HOUR_MS });
+  return next !== null && next.minuteMs === hour.endMs;
+}
+
+/**
  * One row of the totals query, checked the same way; its first and last
- * instants inside the hour. Its form is `ambiguous` only when the query said
- * exactly that.
+ * instants are inside the hour, or its last is the instant the hour ends. A
+ * line stamped on that instant belongs to the next hour, and whether the
+ * logs service answers it for this one is not relied on: if it does, the row
+ * is KEPT, with its count as it is, so such a line can never take a whole
+ * row (our server's, for one) out of the totals. One line more in an hour is
+ * the safe direction. The row held a line of an ambiguous form only when the
+ * query said exactly that.
  */
 export function parseTotalsRow(raw: unknown, hour: AuthLogsHour): AuthLogsTotalsRow | null {
   if (!isRecord(raw)) return null;
@@ -874,7 +924,7 @@ export function parseTotalsRow(raw: unknown, hour: AuthLogsHour): AuthLogsTotals
   const first = parseLogsTime(raw.first_seen);
   const last = parseLogsTime(raw.last_seen);
   if (first === null || last === null) return null;
-  if (first < hour.startMs || last >= hour.endMs || first > last) return null;
+  if (first < hour.startMs || last > hour.endMs || first > last) return null;
   const n = countOf(raw.n);
   if (n === null) return null;
   // The forms only feed a count of the log line: never a reason to drop a row.
@@ -948,6 +998,9 @@ export function reconcileServerForm(
  * auth_log_over_cap element per category and source, unless a group row was
  * dropped (`groupsDropped`): its count would come back through the totals.
  * The smallest groups are folded into those elements until the call fits.
+ * When the totals were not whole (`totalsIncomplete`), one flagged
+ * too_many_forms_to_count element is added: the hour's other counts are then
+ * of a part of it only.
  */
 export function buildHourElements(input: {
   hour: AuthLogsHour;
@@ -955,6 +1008,11 @@ export function buildHourElements(input: {
   groupsCapped: boolean;
   groupsDropped: number;
   totals: readonly AuthLogsTotalsRow[];
+  /**
+   * The totals answer was not whole: it was full, or a row of it failed its
+   * checks. What `totals` holds is then only a part of the hour.
+   */
+  totalsIncomplete?: boolean;
   recorded: AuthLogsRecorded | null;
 }): AuthLogsHourElements {
   const listed = new Map<string, AuthLogsElement>();
@@ -1061,6 +1119,15 @@ export function buildHourElements(input: {
       count,
       at_ms: atMs,
     });
+  // Totals that are not whole: every count above is of a part of the hour
+  // only, and rows that were not read could be the very ones a flagged count
+  // is made from (our server's form, an unknown form). The hour is never
+  // stored as if it were clean: one flagged count, of the lines that were
+  // read (at least 1), at the hour's first minute.
+  if (input.totalsIncomplete) {
+    const read = input.totals.reduce((sum, row) => sum + row.n, 0);
+    flag('too_many_forms_to_count', 'api', Math.max(1, read), input.hour.startMs);
+  }
   // Requests of an unknown form, even one: one count per source, at the hour's first minute.
   for (const source of AUTH_LOGS_SOURCES) {
     const n = unclassifiedBySource[source];
@@ -1486,6 +1553,9 @@ function emptySummary(hours: AuthLogsHour[]): AuthLogsRunSummary {
     dropped: 0,
     capped: 0,
     totalsCapped: 0,
+    totalsRowsDropped: 0,
+    totalsIncomplete: 0,
+    atHourEnd: 0,
     remainderSkipped: 0,
     elements: 0,
     eventsStored: 0,
@@ -1530,9 +1600,12 @@ async function runHour(
   if (!groupsAnswer.ok) return groupsAnswer.failure;
   const groups: AuthLogsGroupRow[] = [];
   let dropped = 0;
+  let atHourEnd = 0;
   for (const raw of groupsAnswer.value) {
     const row = parseGroupRow(raw, hour);
     if (row) groups.push(row);
+    // Lines stamped on the instant the hour ends: the next hour's.
+    else if (isGroupRowOfNextHour(raw, hour)) atHourEnd += 1;
     else dropped += 1;
   }
   const groupsDropped = dropped;
@@ -1543,11 +1616,22 @@ async function runHour(
   const totalsAnswer = await queryLogs(ctx, AUTH_LOGS_TOTALS_SQL, hour);
   if (!totalsAnswer.ok) return totalsAnswer.failure;
   const totals: AuthLogsTotalsRow[] = [];
+  let totalsDropped = 0;
   for (const raw of totalsAnswer.value) {
     const row = parseTotalsRow(raw, hour);
     if (row) totals.push(row);
-    else dropped += 1;
+    else totalsDropped += 1;
   }
+  dropped += totalsDropped;
+  // TOTALS THAT ARE NOT WHOLE ARE NEVER STORED AS IF THEY WERE. The query
+  // answers its largest groups first, so a full answer leaves the smallest
+  // out, and those can be the very rows everything below is read from: our
+  // server's form, an unknown form. A row that failed its checks is the same
+  // loss. (The query is written so that a caller cannot fill it: this is the
+  // net under that.) The hour is then given a flagged count and reported;
+  // its lines in our server's form are compared with the part that was read.
+  const totalsFull = totalsAnswer.value.length >= AUTH_LOGS_ROW_LIMIT;
+  const totalsIncomplete = totalsFull || totalsDropped > 0;
 
   // Our server's form, reconciled with what our own server recorded. A read
   // that fails leaves the whole hour for the next run: nothing of it is
@@ -1562,7 +1646,10 @@ async function runHour(
     if (!recorded.complete) summary.reconcileIncomplete += 1;
   }
 
-  if (totalsAnswer.value.length >= AUTH_LOGS_ROW_LIMIT) summary.totalsCapped += 1;
+  if (totalsFull) summary.totalsCapped += 1;
+  summary.totalsRowsDropped += totalsDropped;
+  if (totalsIncomplete) summary.totalsIncomplete += 1;
+  summary.atHourEnd += atHourEnd;
   if (capped) summary.capped += 1;
   summary.hoursRead += 1;
   summary.groups += groups.length;
@@ -1574,9 +1661,11 @@ async function runHour(
     groupsCapped: capped,
     groupsDropped,
     totals,
+    totalsIncomplete,
     recorded,
   });
   report.reconcile = built.reconcile;
+  if (totalsIncomplete) report.totalsIncomplete = true;
   summary.unclassified += built.unclassified;
   summary.ambiguousFormGroups += built.ambiguousFormGroups;
   summary.unrecordedFlags += built.elements.filter((e) =>
@@ -1810,6 +1899,19 @@ export async function readAuthLogs(options: {
         "The refused web sign-ins our server recorded in an hour could not all be read; that hour's lines in our server's form were compared with the part that was read, so a flagged count stored for it can be higher than what our server has no record of",
       level: 'warning',
       extra: { cause: 'reconcile_incomplete', hours: summary.reconcileIncomplete },
+    });
+  }
+  if (summary.totalsIncomplete > 0) {
+    reports.push({
+      message:
+        "The counts of an hour's refused sign-in requests, read from Supabase's logs, were not whole (the answer was full, or a row of it could not be read); the hour is given a flagged count, and its lines in our server's form were compared with the part that was read, so refusals our server has no record of can be missing from that hour",
+      level: 'warning',
+      extra: {
+        cause: 'totals_incomplete',
+        hours: summary.totalsIncomplete,
+        full: summary.totalsCapped,
+        rowsDropped: summary.totalsRowsDropped,
+      },
     });
   }
   if (summary.landedPastMinuteCaps > 0) {

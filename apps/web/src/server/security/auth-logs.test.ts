@@ -42,6 +42,12 @@ import {
  *   - every returned field is checked before use, and a row that fails is
  *     dropped and counted; a network class that is not exactly `hosting` is
  *     `other` (fail closed);
+ *   - a caller cannot fill the totals answer (it is grouped only by short
+ *     lists of classes written in the query); totals that are not whole all
+ *     the same (a full answer, a row that fails its checks) are never stored
+ *     as if they were: the hour carries a flagged count and is reported;
+ *   - a line stamped on the instant an hour ends never takes a row of the
+ *     totals away, and is stored with the next hour's;
  *   - an hour is written once: an hour with rows of this job is not read
  *     again, an hour with nothing to store is read again by the next run, an
  *     hour whose reconciliation could not be read is not written, and the
@@ -211,6 +217,7 @@ const {
   buildHourElements,
   classifyAuthLogLine,
   hoursToRead,
+  isGroupRowOfNextHour,
   parseGroupRow,
   parseLogsTime,
   parseTotalsRow,
@@ -811,7 +818,10 @@ describe('every returned field is checked before use', () => {
       parseTotalsRow(totalsRow({ first_seen: '2026-11-21 04:00:00.000001' }), hour),
     ).not.toBeNull();
     expect(parseTotalsRow(totalsRow({ first_seen: chTime(H04 - 1_000) }), hour)).toBeNull();
-    expect(parseTotalsRow(totalsRow({ last_seen: chTime(H04 + HOUR) }), hour)).toBeNull();
+    expect(parseTotalsRow(totalsRow({ last_seen: chTime(H04 + HOUR + 1_000) }), hour)).toBeNull();
+    expect(
+      parseTotalsRow(totalsRow({ last_seen: '2026-11-21 05:00:00.001000000' }), hour),
+    ).toBeNull();
     expect(
       parseTotalsRow(
         totalsRow({ first_seen: chTime(H04 + 50_000), last_seen: chTime(H04 + 40_000) }),
@@ -828,6 +838,52 @@ describe('every returned field is checked before use', () => {
 });
 
 // ── Building the writer's elements ──────────────────────────────────────────
+
+describe("the hour's end: a line stamped on the instant an hour ends belongs to the next hour", () => {
+  const hour = hourAt(H04);
+  const END = '2026-11-21 05:00:00.000000000';
+
+  it('a totals row whose last line is on that instant is kept whole, its count used as it is', () => {
+    // Whether the logs service answers such a line for this hour or not, it
+    // can never take a whole row of the totals away: one line more in an
+    // hour is the safe direction.
+    expect(parseTotalsRow(totalsRow({ ...ours, n: 41, last_seen: END }), hour)).toEqual({
+      kind: 'password',
+      ambiguous: false,
+      status: '400',
+      caller: 'server',
+      network: 'hosting',
+      n: 41,
+    });
+    expect(parseTotalsRow(totalsRow({ last_seen: chTime(H04 + HOUR) }), hour)?.n).toBe(3);
+    // A group made only of such lines is kept too.
+    expect(parseTotalsRow(totalsRow({ first_seen: END, last_seen: END, n: 1 }), hour)?.n).toBe(1);
+    // Anything later is not of this hour's answer at all.
+    expect(
+      parseTotalsRow(totalsRow({ last_seen: '2026-11-21 05:00:00.001000000' }), hour),
+    ).toBeNull();
+  });
+
+  it('a group row at the minute the hour ends is of the next hour: not a row of this one, and told apart from a row that fails its checks', () => {
+    const atEnd = groupRow({ minute: minuteOf(H04, 60), n: 4 });
+    expect(parseGroupRow(atEnd, hour)).toBeNull();
+    expect(isGroupRowOfNextHour(atEnd, hour)).toBe(true);
+    // Its own hour reads it as an ordinary row of its first minute.
+    expect(parseGroupRow(atEnd, hourAt(H04 + HOUR))).toMatchObject({ minuteMs: H04 + HOUR, n: 4 });
+    for (const other of [
+      groupRow(),
+      groupRow({ minute: minuteOf(H04, 61) }),
+      groupRow({ minute: minuteOf(H04, -1) }),
+      groupRow({ minute: minuteOf(H04, 60), status: 'x' }),
+      groupRow({ minute: minuteOf(H04, 60), n: 0 }),
+      groupRow({ minute: `${minuteOf(H04, 60)}.5` }),
+      'junk',
+      null,
+    ]) {
+      expect(isGroupRowOfNextHour(other, hour), JSON.stringify(other)).toBe(false);
+    }
+  });
+});
 
 describe("one hour's elements for the writer", () => {
   const hour = hourAt(H04);
@@ -1144,6 +1200,71 @@ describe("one hour's elements for the writer", () => {
         recorded: null,
         excess: { password: 0, code: 0 },
       });
+    });
+  });
+
+  describe('totals that are not whole: the hour is never stored as if it were', () => {
+    const notWhole = (totals: Raw[], recorded: logs.AuthLogsRecorded | null = null) =>
+      buildHourElements({
+        hour,
+        groups: [],
+        groupsCapped: false,
+        groupsDropped: 0,
+        totals: totalsOf(totals),
+        totalsIncomplete: true,
+        recorded,
+      });
+    const tooMany = (out: logs.AuthLogsHourElements) =>
+      out.elements.filter((e) => e.reason === 'too_many_forms_to_count');
+
+    it('one flagged element for the hour: its own reason, source api, the total of the rows read, no country', () => {
+      const out = notWhole([
+        totalsRow({ kind: 'refresh', n: 40 }),
+        totalsRow({ kind: 'token_known_other', caller: 'other', n: 25 }),
+        totalsRow({ kind: 'emailed_code', status: 'other', caller: 'other', n: 5 }),
+      ]);
+      expect(out.elements).toEqual([
+        {
+          category: 'password_guessing',
+          outcome: 'flagged',
+          reason: 'too_many_forms_to_count',
+          source: 'api',
+          count: 70,
+          at_ms: H04,
+        },
+      ]);
+    });
+
+    it('it is stored beside everything else the rows read come to', () => {
+      const out = notWhole(
+        [
+          totalsRow({ kind: 'token_other', n: 2 }),
+          totalsRow({ ...ours, n: 9 }),
+          totalsRow({ kind: 'refresh', n: 10 }),
+        ],
+        { password: 1, code: 0, overflow: 0, complete: true },
+      );
+      expect(out.elements.map((e) => [e.reason, e.source, e.count])).toEqual([
+        ['too_many_forms_to_count', 'api', 21],
+        ['unclassified_sign_in_refusals', 'phone', 2],
+        ['unrecorded_server_form_password', 'api', 8],
+      ]);
+      expect(out.elements.every((e) => e.outcome === 'flagged' && e.country === undefined)).toBe(
+        true,
+      );
+    });
+
+    it('with no row read at all it still counts 1: the hour is never clean', () => {
+      expect(tooMany(notWhole([]))).toEqual([expect.objectContaining({ count: 1, at_ms: H04 })]);
+    });
+
+    it('a total past what the writer reads is cut to 999,999', () => {
+      const out = notWhole([totalsRow({ kind: 'refresh', n: 3_000_000 })]);
+      expect(tooMany(out)).toEqual([expect.objectContaining({ count: AUTH_LOGS_MAX_COUNT })]);
+    });
+
+    it('whole totals store no such element', () => {
+      expect(tooMany(build([], [totalsRow({ kind: 'refresh', n: 40 })]))).toEqual([]);
     });
   });
 
@@ -2350,6 +2471,7 @@ describe('a run: six hours, oldest first, each written once', () => {
             'unclassified_sign_in_refusals',
             'unrecorded_server_form_password',
             'unrecorded_server_form_code',
+            'too_many_forms_to_count',
           ],
         ],
         ['gte', 'minute', iso(H(4))],
@@ -2931,6 +3053,210 @@ describe('a run: six hours, oldest first, each written once', () => {
     });
   });
 
+  describe('totals that are not whole are never stored as if they were', () => {
+    /** 199 rows: as many as the query's limit lets through. */
+    const fullTotals = (startMs: number, extra: Raw[] = []) => [
+      ...extra,
+      ...Array.from({ length: AUTH_LOGS_ROW_LIMIT - extra.length }, () =>
+        totalsRow({ kind: 'refresh', caller: 'other', n: 5 }, startMs),
+      ),
+    ];
+    const reportsOf = (cause: string) =>
+      h.report.mock.calls.filter(
+        ([, ctx]) => (ctx as { extra?: { cause?: string } }).extra?.cause === cause,
+      );
+
+    it('a full totals answer: one flagged element for the hour, and one report for the run', async () => {
+      hourAnswers(H(5), [groupRow({ n: 4 }, H(5))], fullTotals(H(5), [totalsRow({ n: 4 }, H(5))]));
+      const summary = full(await run());
+      expect(written()).toEqual([
+        {
+          category: 'password_guessing',
+          outcome: 'flagged',
+          reason: 'too_many_forms_to_count',
+          source: 'api',
+          count: 4 + 198 * 5,
+          at_ms: H(5),
+        },
+        expect.objectContaining({ reason: 'wrong_password', outcome: 'blocked', count: 4 }),
+      ]);
+      expect(summary).toMatchObject({
+        ok: true,
+        hoursStored: 1,
+        totalsCapped: 1,
+        totalsIncomplete: 1,
+        totalsRowsDropped: 0,
+      });
+      expect(summary.hours[1]).toMatchObject({ outcome: 'stored', totalsIncomplete: true });
+      expect(summary.hours[0]!.totalsIncomplete).toBeUndefined();
+      expect(reportsOf('totals_incomplete')).toHaveLength(1);
+      const [err, ctx] = reportsOf('totals_incomplete')[0]!;
+      expect(String(err)).toContain('were not whole');
+      expect(ctx).toMatchObject({
+        tag: 'cron.security-events-auth-logs',
+        level: 'warning',
+        extra: { cause: 'totals_incomplete', hours: 1, full: 1, rowsDropped: 0 },
+      });
+      // The hour is stored: the next run does not read it again.
+      fetches.length = 0;
+      await run();
+      expect(fetches.map(startOf)).not.toContain(iso(H(5)));
+    });
+
+    it("our server's row cut off by a flood of other groups still ends in a flag, not in silence", async () => {
+      // The answer is full and holds no row of our server's form: whatever
+      // that row would have said is not known. Nothing is compared, and the
+      // hour is not clean: it carries the flagged count and is reported.
+      hourAnswers(H(5), [], fullTotals(H(5)));
+      const summary = full(await run());
+      expect(written()).toEqual([
+        expect.objectContaining({
+          outcome: 'flagged',
+          reason: 'too_many_forms_to_count',
+          count: 199 * 5,
+        }),
+      ]);
+      expect(summary.hours[1]).toMatchObject({
+        outcome: 'stored',
+        totalsIncomplete: true,
+        reconcile: { gateway: { password: 0, code: 0 }, recorded: null },
+      });
+      expect(reconcileReads()).toEqual([]);
+      expect(reportsOf('totals_incomplete')).toHaveLength(1);
+    });
+
+    it("a full answer that still holds our server's row is compared with what was read", async () => {
+      hourAnswers(H(5), [], fullTotals(H(5), [totalsRow({ ...ours, n: 9 }, H(5))]));
+      recordWeb(H(5), 'wrong_password', 2);
+      const summary = full(await run());
+      expect(written().map((e) => [e.reason, e.count])).toEqual([
+        ['too_many_forms_to_count', 9 + 198 * 5],
+        ['unrecorded_server_form_password', 7],
+      ]);
+      expect(summary.hours[1]).toMatchObject({
+        totalsIncomplete: true,
+        reconcile: { gateway: { password: 9, code: 0 }, excess: { password: 7, code: 0 } },
+      });
+    });
+
+    it('full answers in several hours are reported once for the run, with how many', async () => {
+      for (const hh of [4, 6, 9]) hourAnswers(H(hh), [], fullTotals(H(hh)));
+      const summary = full(await run());
+      expect(summary).toMatchObject({ totalsCapped: 3, totalsIncomplete: 3, hoursStored: 3 });
+      expect(reportsOf('totals_incomplete')).toHaveLength(1);
+      expect(reportsOf('totals_incomplete')[0]![1]).toMatchObject({
+        extra: { cause: 'totals_incomplete', hours: 3, full: 3, rowsDropped: 0 },
+      });
+    });
+
+    it('a totals row that fails its checks makes the hour incomplete in the same way: flagged and reported, never only counted', async () => {
+      hourAnswers(
+        H(5),
+        [],
+        [
+          totalsRow({ kind: 'refresh', n: 6 }, H(5)),
+          // Our server's row, with an instant outside the hour: not read.
+          totalsRow({ ...ours, n: 50, last_seen: chTime(H(6) + 5_000) }, H(5)),
+          totalsRow({ kind: 'mystery' }, H(5)),
+        ],
+      );
+      const summary = full(await run());
+      expect(written()).toEqual([
+        expect.objectContaining({
+          outcome: 'flagged',
+          reason: 'too_many_forms_to_count',
+          source: 'api',
+          count: 6,
+        }),
+      ]);
+      expect(summary).toMatchObject({
+        totalsCapped: 0,
+        totalsIncomplete: 1,
+        totalsRowsDropped: 2,
+        dropped: 2,
+      });
+      expect(summary.hours[1]).toMatchObject({ outcome: 'stored', totalsIncomplete: true });
+      expect(reportsOf('totals_incomplete')[0]![1]).toMatchObject({
+        level: 'warning',
+        extra: { cause: 'totals_incomplete', hours: 1, full: 0, rowsDropped: 2 },
+      });
+    });
+
+    it('whole totals say nothing', async () => {
+      hourAnswers(H(5), [groupRow({ n: 4 }, H(5))]);
+      const summary = full(await run());
+      expect(summary).toMatchObject({ totalsCapped: 0, totalsIncomplete: 0, totalsRowsDropped: 0 });
+      expect(h.report).not.toHaveBeenCalled();
+      expect(written().map((e) => e.reason)).toEqual(['wrong_password']);
+    });
+  });
+
+  describe("a line on the instant an hour ends takes no row away, and is stored with the next hour's", () => {
+    const END5 = '2026-11-21 06:00:00.000000000';
+
+    it("our server's row whose last line is on that instant is still compared with our own record", async () => {
+      hourAnswers(H(5), [], [totalsRow({ ...ours, n: 9, last_seen: END5 }, H(5))]);
+      recordWeb(H(5), 'wrong_password', 2);
+      const summary = full(await run());
+      expect(written()).toEqual([
+        expect.objectContaining({ reason: 'unrecorded_server_form_password', count: 7 }),
+      ]);
+      expect(summary).toMatchObject({ dropped: 0, totalsIncomplete: 0 });
+      expect(summary.hours[1]).toMatchObject({
+        reconcile: { gateway: { password: 9, code: 0 }, excess: { password: 7, code: 0 } },
+      });
+    });
+
+    it('a group row at the minute the hour ends is left to the next hour: not stored here, not counted as dropped', async () => {
+      hourAnswers(
+        H(5),
+        [groupRow({ n: 2 }, H(5)), groupRow({ minute: minuteOf(H(5), 60), n: 1 }, H(5))],
+        [totalsRow({ n: 3, last_seen: END5 }, H(5))],
+      );
+      const summary = full(await run());
+      expect(written()).toEqual([
+        expect.objectContaining({ reason: 'wrong_password', count: 2, at_ms: H(5) + 5 * MIN }),
+      ]);
+      expect(summary).toMatchObject({
+        dropped: 0,
+        atHourEnd: 1,
+        totalsIncomplete: 0,
+        remainderSkipped: 0,
+      });
+      // Nothing was stored on a minute of the next hour, so that hour is still read and written.
+      expect(h.stored.map((row) => row.hour)).toEqual([iso(H(5))]);
+      expect(h.report).not.toHaveBeenCalled();
+    });
+
+    it('such a row among full groups does not cancel the remainder', async () => {
+      const rows = [
+        ...Array.from({ length: AUTH_LOGS_ROW_LIMIT - 1 }, (_, i) =>
+          groupRow(
+            {
+              minute: minuteOf(H(8), i % 60),
+              country: ['NL', 'US', 'DE', 'FR'][Math.floor(i / 60)]!,
+              n: 2,
+            },
+            H(8),
+          ),
+        ),
+        groupRow({ minute: minuteOf(H(8), 60), n: 1 }, H(8)),
+      ];
+      hourAnswers(H(8), rows, [
+        totalsRow({ n: 198 * 2 + 1 + 30, last_seen: '2026-11-21 09:00:00.000000000' }, H(8)),
+      ]);
+      const summary = full(await run());
+      const elements = written() as Array<{ reason: string; count: number; at_ms: number }>;
+      expect(summary).toMatchObject({ capped: 1, remainderSkipped: 0, atHourEnd: 1, dropped: 0 });
+      // The 30 not listed, and the one line on the last instant (counted here
+      // as well as in its own hour: one line more is the safe direction).
+      expect(elements.filter((e) => e.reason === 'auth_log_over_cap')).toEqual([
+        expect.objectContaining({ count: 31 }),
+      ]);
+      expect(elements.every((e) => e.at_ms < H(9))).toBe(true);
+    });
+  });
+
   it('past the 199 groups the remainder is stored with the hour', async () => {
     const rows = Array.from({ length: AUTH_LOGS_ROW_LIMIT }, (_, i) =>
       groupRow(
@@ -2963,7 +3289,24 @@ describe('a run: six hours, oldest first, each written once', () => {
       [totalsRow({ n: 2 }), totalsRow({ kind: 'mystery' })],
     );
     const summary = await run();
-    expect(summary).toMatchObject({ dropped: 4, groups: 1, eventsStored: 2 });
+    // The wrong passwords (2), and the flagged count of an hour whose totals
+    // were not whole (the 2 that were read).
+    expect(summary).toMatchObject({ dropped: 4, groups: 1, eventsStored: 4, totalsIncomplete: 1 });
+    expect(written().map((e) => [e.reason, e.count])).toEqual([
+      ['too_many_forms_to_count', 2],
+      ['wrong_password', 2],
+    ]);
+  });
+
+  it('a group row that fails validation is dropped and counted; the totals stay whole', async () => {
+    hourAnswers(
+      H(4),
+      [groupRow({ n: 2 }), groupRow({ status: 'x' }), 'junk'],
+      [totalsRow({ n: 2 })],
+    );
+    const summary = await run();
+    expect(summary).toMatchObject({ dropped: 2, groups: 1, eventsStored: 2, totalsIncomplete: 0 });
+    expect(h.report).not.toHaveBeenCalled();
   });
 
   it("our server's client string: ours from a hosting network, stored as api from any other", async () => {
