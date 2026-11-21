@@ -144,6 +144,9 @@ export const LIMITER_NOT_SECURITY_EVENTS: Readonly<Record<string, string>> = {
   // The hourly passkey check's email of a sign-in it ended (one a day per
   // account; server/security/passkey-detector.ts).
   'passkey-detector-email:': ALERT_PACING,
+  // The same check's word that the platform settings row is missing (read as
+  // off): once a day for everyone (`...:all`).
+  'passkey-detector-settings-report:': ALERT_PACING,
   // Reports about the passkey records (lib/auth/passkey-bridge.ts): a
   // reserved-name factor that is not the account's bridge, and the records
   // missing while such a factor is listed: the missing table once an hour

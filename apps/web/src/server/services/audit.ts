@@ -458,6 +458,9 @@ export type AuditEvent =
   | 'passkey.used'
   | 'passkey.bridge_repaired'
   | 'passkey.bridge_raise'
+  // The hourly passkey check's memory of a raise it reported (session id,
+  // raise time): server/security/passkey-detector.ts.
+  | 'passkey.raise_flagged'
   // Ownership transfer — the action doesn't exist yet but the event
   // type lets the fixer agent emit it when the missing flow lands.
   | 'organization.ownership.transferred'

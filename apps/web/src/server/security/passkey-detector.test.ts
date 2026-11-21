@@ -24,7 +24,7 @@ interface Row {
   id: number;
   user_id: string | null;
   event: string;
-  metadata: { session_id?: string; raise_id?: string } | null;
+  metadata: { session_id?: string; raise_id?: string; raised_at?: string } | null;
   created_at: string;
 }
 
@@ -60,6 +60,9 @@ const h = vi.hoisted(() => ({
     error: unknown;
   },
   emails: [] as string[],
+  /** The detector's own memory rows (review 4 finding 9), as written. */
+  memory: [] as Array<Record<string, unknown>>,
+  memoryFails: false,
 }));
 
 vi.mock('@/lib/auth/passkey-relying-party', () => ({ passkeyRelyingParty: () => h.rp }));
@@ -73,6 +76,21 @@ vi.mock('@/lib/error-reporter', () => ({
 }));
 vi.mock('@/server/services/auth-audit', () => ({
   resolveDefaultOrgAndRole: async () => ({ organizationId: null, role: null }),
+}));
+// The memory row goes into the same audit rows the next run reads.
+vi.mock('@/server/services/audit', () => ({
+  insertAuditRowReported: async (r: Record<string, unknown>) => {
+    h.memory.push(r);
+    if (h.memoryFails) return false;
+    h.audit.push({
+      id: 900_000 + h.memory.length,
+      user_id: r.user_id as string | null,
+      event: r.event as string,
+      metadata: r.metadata as Row['metadata'],
+      created_at: new Date().toISOString(),
+    });
+    return true;
+  },
 }));
 vi.mock('./events', () => ({
   recordSecurityEvent: async (e: { reason: string; outcome: string; category: string }) => {
@@ -88,6 +106,7 @@ vi.mock('@/server/services/sessions', () => ({
 vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: async (key: string, limit: number, windowMs: number, mode: string) => {
     h.paceKeys.push(key);
+    // The email and the missing settings row: each at most once a day.
     expect([limit, windowMs, mode]).toEqual([1, 24 * 60 * 60_000, 'closed']);
     if (h.limiterDown || h.paced.has(key)) return { allowed: false };
     h.paced.add(key);
@@ -207,6 +226,8 @@ beforeEach(() => {
   h.limiterDown = false;
   h.address = { data: { user: { email: 'member@example.test' } }, error: null };
   h.emails = [];
+  h.memory = [];
+  h.memoryFails = false;
   vi.spyOn(console, 'info').mockImplementation(() => {});
 });
 afterEach(() => {
@@ -360,6 +381,8 @@ describe('a raise with no row: that one session ended, a report, a security even
     h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
     h.audit = [row('passkey.used', ago(90 * MIN))];
     await runPasskeyDetector();
+    // A second raise of the same session (a new raise time), unexplained too.
+    h.sessions = { data: [session({ raised_at: ago(10 * MIN) })], error: null };
     const again = await runPasskeyDetector();
     expect(again).toMatchObject({ ending: { ended: 1 }, emailed: 0 });
     expect(h.endAsked).toEqual([S, S]);
@@ -375,6 +398,7 @@ describe('a raise with no row: that one session ended, a report, a security even
 
     h.limiterDown = false;
     h.address = { data: { user: null }, error: { status: 404 } };
+    h.sessions = { data: [session({ raised_at: ago(10 * MIN) })], error: null };
     expect(await runPasskeyDetector()).toMatchObject({ emailed: 0 });
     expect(h.emails).toEqual([]);
     expect(tags()).toContain('passkeys.detector_email_no_address');
@@ -404,6 +428,7 @@ describe('a raise with no row: that one session ended, a report, a security even
     expect(flagged()[0]!.extra).toMatchObject({ ending: 'already_gone', ended: false });
     h.reports = [];
     h.endAnswer = { data: null, error: { code: '55P03' } };
+    h.sessions = { data: [session({ raised_at: ago(10 * MIN) })], error: null };
     expect(await runPasskeyDetector()).toMatchObject({ ending: { failed: 1 }, emailed: 0 });
     expect(flagged()[0]!.extra).toMatchObject({ ending: 'failed', ended: false });
     expect(h.broadcasts).toEqual([]);
@@ -435,9 +460,12 @@ describe('a raise with no row: that one session ended, a report, a security even
       '@/lib/error-reporter',
       '@/lib/rate-limit',
       '@/lib/supabase/admin',
+      '@/server/services/audit',
       '@/server/services/auth-audit',
       '@/server/services/sessions',
     ]);
+    // Its one write of its own: the memory row, through the audit writer.
+    expect([...code.matchAll(/insertAuditRowReported\(/g)]).toHaveLength(1);
     const rpcs = [...code.matchAll(/\.rpc\('([^']+)'/g)].map((m) => m[1]);
     expect(rpcs).toEqual(['passkey_end_bridge_session', 'passkey_bridge_sessions']);
     // The one email it can send, and the one Auth admin call (the address).
@@ -556,10 +584,39 @@ describe('it never acts on doubt', () => {
     );
     noAction();
 
-    h.reports = [];
+  });
+
+  it('review 4 finding 7: no platform_settings row reads as off (as the database reads it): the run goes on, report only, and the missing row is said once a day (a warning)', async () => {
     h.settings = { data: null, error: null };
+    h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
+    const s = await runPasskeyDetector();
+    expect(s).toMatchObject({
+      ran: true,
+      switchOn: false,
+      mode: 'report_only',
+      unexplained: 1,
+      ending: { ended: 0, reportOnly: 1 },
+    });
+    expect(h.endAsked).toEqual([]);
+    const missing = h.reports.filter((r) => r.tag === 'passkeys.detector_settings_missing');
+    expect(missing).toEqual([expect.objectContaining({ level: 'warning' })]);
+    expect(tags()).not.toContain('passkeys.detector_settings_unreadable');
+    expect(tags()).not.toContain('passkeys.detector_end_setting_unreadable');
+    // The next run the same day: no second word about the row.
+    h.reports = [];
+    await runPasskeyDetector();
+    expect(tags()).not.toContain('passkeys.detector_settings_missing');
+    expect(h.paceKeys.filter((k) => k.startsWith('passkey-detector-settings-report:'))).toHaveLength(2);
+  });
+
+  it('a row whose switch is not a yes or no settles nothing (error)', async () => {
+    h.settings = { data: { passkeys_on: null }, error: null };
+    h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
     expect((await runPasskeyDetector()).ran).toBe(false);
-    expect(tags()).toContain('passkeys.detector_settings_unreadable');
+    expect(h.reports.find((r) => r.tag === 'passkeys.detector_settings_unreadable')?.level).toBe(
+      'error',
+    );
+    noAction();
   });
 
   it('a switch that is off is a value, not doubt: the check still runs', async () => {
@@ -598,18 +655,6 @@ describe('it never acts on doubt', () => {
     noAction();
   });
 
-  it('an account with no passkey audit row at all since the raise (reported with the hash)', async () => {
-    h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
-    h.audit = [row('passkey.used', ago(30 * MIN), S, 'someone-else')];
-    const s = await runPasskeyDetector();
-    expect(s.notSettled.noRows).toBe(1);
-    const r = h.reports.find((x) => x.tag === 'passkeys.detector_no_passkey_rows');
-    expect(r?.extra).toMatchObject({
-      count: 1,
-      accounts: expect.stringMatching(/^[0-9a-f]{16}$/),
-    });
-    noAction();
-  });
 
   it('a raise in the last two minutes waits for the next run', async () => {
     h.sessions = { data: [session({ raised_at: ago(30_000) })], error: null };
@@ -703,5 +748,131 @@ describe('the other way round (10.4 a)', () => {
     expect(h.reports.find((r) => r.tag === 'passkeys.detector_used_not_listed')?.level).toBe(
       'warning',
     );
+  });
+});
+
+describe('review 4 finding 2: a bridge-raised session with no raise row of ours is never doubt', () => {
+  it('an account with no passkey audit row at all: an error report and a security event, like any unexplained raise', async () => {
+    h.settings = { data: { passkeys_on: true, passkey_check_ends_sessions: false }, error: null };
+    h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
+    h.audit = [];
+    const s = await runPasskeyDetector();
+    expect(s).toMatchObject({ unexplained: 1, ending: { reportOnly: 1, ended: 0 } });
+    expect(s.notSettled).toEqual({ times: 0, auditRead: 0 });
+    expect(flagged()).toEqual([
+      expect.objectContaining({
+        level: 'error',
+        extra: expect.objectContaining({ userIdHash: expect.stringMatching(/^[0-9a-f]{16}$/) }),
+      }),
+    ]);
+    expect(h.events).toEqual([
+      expect.objectContaining({ reason: 'passkey_unexplained_sign_in', outcome: 'flagged' }),
+    ]);
+    // Ending stays behind the setting: none here.
+    expect(h.endAsked).toEqual([]);
+    expect(tags()).not.toContain('passkeys.detector_no_passkey_rows');
+  });
+
+  it('with ending on, that session is ended like any other unexplained raise', async () => {
+    h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
+    h.audit = [];
+    expect(await runPasskeyDetector()).toMatchObject({ unexplained: 1, ending: { ended: 1 } });
+    expect(h.endAsked).toEqual([S]);
+  });
+});
+
+describe('review 4 finding 9: the detector remembers what it reported', () => {
+  it('a raise reported once (session id and raise time) is not reported, counted, recorded or ended again', async () => {
+    const raisedAt = ago(20 * MIN);
+    h.sessions = { data: [session({ raised_at: raisedAt })], error: null };
+    const first = await runPasskeyDetector();
+    expect(first).toMatchObject({ unexplained: 1, alreadyReported: 0 });
+    expect(h.memory).toEqual([
+      expect.objectContaining({
+        event: 'passkey.raise_flagged',
+        user_id: U,
+        organization_id: null,
+        ip: null,
+        user_agent: null,
+        metadata: expect.objectContaining({ session_id: S, raised_at: raisedAt, ending: 'ended' }),
+      }),
+    ]);
+    h.reports = [];
+    h.events = [];
+    const again = await runPasskeyDetector();
+    expect(again).toMatchObject({ unexplained: 0, alreadyReported: 1, examined: 1 });
+    expect(flagged()).toEqual([]);
+    expect(h.events).toEqual([]);
+    expect(h.endAsked).toEqual([S]);
+    expect(h.memory).toHaveLength(1);
+  });
+
+  it('a new raise of the same session is a new finding', async () => {
+    h.sessions = { data: [session({ raised_at: ago(30 * MIN) })], error: null };
+    await runPasskeyDetector();
+    h.sessions = { data: [session({ raised_at: ago(10 * MIN) })], error: null };
+    expect(await runPasskeyDetector()).toMatchObject({ unexplained: 1, alreadyReported: 0 });
+    expect(h.memory).toHaveLength(2);
+  });
+
+  it(`standing findings cannot stop a run: ${MAX_FINDINGS} remembered raises and a new one, the new one is flagged`, async () => {
+    const old = Array.from({ length: MAX_FINDINGS }, (_, i) => ({
+      ...session({ raised_at: ago(40 * MIN) }),
+      session_id: `standing-${i}`,
+      user_id: `user-${i}`,
+    }));
+    h.sessions = { data: old, error: null };
+    expect(await runPasskeyDetector()).toMatchObject({ unexplained: MAX_FINDINGS });
+    h.reports = [];
+    h.sessions = {
+      data: [...old, { ...session({ raised_at: ago(10 * MIN) }), session_id: 'new-one' }],
+      error: null,
+    };
+    const s = await runPasskeyDetector();
+    expect(s).toMatchObject({ alreadyReported: MAX_FINDINGS, unexplained: 1, stop: null });
+    expect(flagged()).toHaveLength(1);
+  });
+
+  it(`the ${MAX_SESSIONS} cap takes the newest raises`, async () => {
+    const old = Array.from({ length: MAX_SESSIONS }, (_, i) => ({
+      ...session({ raised_at: ago(60 * MIN) }),
+      session_id: `old-${i}`,
+    }));
+    for (const o of old) h.audit.push(raiseRow(ago(60 * MIN + 1000), o.session_id));
+    const newest = Array.from({ length: 3 }, (_, i) => ({
+      ...session({ raised_at: ago(10 * MIN) }),
+      session_id: `newest-${i}`,
+    }));
+    h.sessions = { data: [...old, ...newest], error: null };
+    const s = await runPasskeyDetector();
+    expect(s).toMatchObject({ examined: MAX_SESSIONS, unexplained: 3, stop: 'session_cap' });
+    expect(flagged()).toHaveLength(3);
+  });
+
+  it('a memory row that cannot be written is reported (a warning); the finding stands', async () => {
+    h.memoryFails = true;
+    h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
+    expect(await runPasskeyDetector()).toMatchObject({ unexplained: 1 });
+    expect(h.reports.find((r) => r.tag === 'passkeys.detector_memory_unwritten')?.level).toBe(
+      'warning',
+    );
+  });
+
+  it('the memory is read with the passkey rows, in the same bounds', () => {
+    const source = readFileSync(path.join(__dirname, 'passkey-detector.ts'), 'utf8');
+    expect(source).toMatch(/const FLAGGED_EVENT = 'passkey\.raise_flagged';/);
+    expect(source).toMatch(/PASSKEY_EVENTS = \[[^\]]*FLAGGED_EVENT/);
+  });
+});
+
+describe('review 4 finding 11: the file header states the rule', () => {
+  it('no "never acts on doubt" in the header; the header says what is reported and what cannot be read', () => {
+    const source = readFileSync(path.join(__dirname, 'passkey-detector.ts'), 'utf8');
+    const header = source
+      .slice(0, source.indexOf('type Admin'))
+      .replace(/\n \* ?/g, ' ')
+      .replace(/\s+/g, ' ');
+    expect(header).not.toMatch(/NEVER ACTS ON DOUBT/i);
+    expect(header).toMatch(/signed out before the hourly run is never seen/i);
   });
 });
