@@ -322,6 +322,25 @@ describe('sign-in alerts (part 3): the same run, the same rule', () => {
     });
   });
 
+  it('a security events purge that stops on its call limit is still reported when the sign-in alerts purge fails; both reports, and 500', async () => {
+    h.rpc.mockResolvedValue(counts(5000, 5000));
+    h.alerts.mockResolvedValueOnce({ data: null, error: { code: '57014', message: 'canceling statement' } });
+    expect(await run()).toEqual({ status: 500, body: { error: 'internal_error' } });
+    expect(h.report).toHaveBeenCalledTimes(2);
+    expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'cron.security-events-retention',
+      level: 'warning',
+      extra: { calls: 40, deleted: 200000, hashesCleared: 200000, stop: 'call_limit' },
+    });
+    expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'cron.security-events-retention',
+      extra: { table: 'sign_in_alerts', calls: 1, deleted: 0 },
+    });
+    // The events purge's report comes first, as its loop ends.
+    const first = h.report.mock.calls[0] as unknown as [Error, { extra: Record<string, unknown> }];
+    expect(first[1].extra).not.toHaveProperty('table');
+  });
+
   it('a security events loop that fails still lets the sign-in alerts be purged, and the run answers 500', async () => {
     h.rpc.mockRejectedValueOnce(new Error('fetch failed'));
     h.alerts.mockResolvedValueOnce(alertsCount(4));

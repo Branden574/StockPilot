@@ -72,8 +72,11 @@ const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * call removes 5,000, at most MAX_CALLS calls, a busy call (55P03) tried again
  * BUSY_RETRY_MS later and BUSY_STOP_AFTER in a row ending it, and no call
  * after SIGN_IN_ALERTS_BUDGET_MS of its own. It runs whether or not the first
- * loop failed: the two tables are apart. Its early stop and its errors are
- * reported the same way, marked with the table; an error answers 500.
+ * loop failed: the two tables are apart. The first loop's early stop and
+ * summary line are given as soon as that loop ends, before this one starts,
+ * so a failure here never hides them. This loop's early stop and its errors
+ * are reported the same way, once, marked with the table; an error in either
+ * loop answers 500.
  *
  * Auth: Bearer ${CRON_SECRET}, compared in constant time, FAIL-CLOSED when
  * CRON_SECRET is unset (as purge-ai-chat-history): an unauthenticated GET must
@@ -140,41 +143,42 @@ export async function GET(req: Request) {
     failed = true;
   }
 
-  // Part 3: the sign-in alerts, whether or not the first loop failed.
+  // The security events purge is reported and summed up as soon as its loop
+  // ends, before the sign-in alerts purge runs, so a stopped or failed
+  // sign-in alerts purge never hides what this one did.
+  const events = { deleted, hashesCleared, calls, stoppedEarly: stop !== null, stop };
+  if (!failed) {
+    if (stop !== null) {
+      // The run ended with work left: the table stayed busy, or there was more
+      // to purge than one run takes (a sustained flood can write faster than
+      // this job removes). Said once per run, with counts only, so a purge
+      // that is being outrun is seen before the 24-hour rule stops holding.
+      const why =
+        stop === 'busy'
+          ? 'the table stayed busy'
+          : stop === 'call_limit'
+            ? 'more was left than one run takes'
+            : 'the run reached its time limit';
+      await reportError(new Error(`Security events retention stopped: ${why}`), {
+        tag: TAG,
+        level: 'warning',
+        extra: { calls, deleted, hashesCleared, stop },
+      });
+    }
+    console.info(`[${TAG}]`, JSON.stringify(events));
+  }
+
+  // Part 3: the sign-in alerts, whether or not the first loop failed. Its own
+  // failure or early stop is reported inside, once, marked with its table.
   const signInAlerts = await purgeSignInAlerts();
+  if (signInAlerts !== null) {
+    console.info(`[${TAG}]`, JSON.stringify({ table: 'sign_in_alerts', ...signInAlerts }));
+  }
   if (failed || signInAlerts === null) {
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
 
-  if (stop !== null) {
-    // The run ended with work left: the table stayed busy, or there was more
-    // to purge than one run takes (a sustained flood can write faster than
-    // this job removes). Said once per run, with counts only, so a purge
-    // that is being outrun is seen before the 24-hour rule stops holding.
-    const why =
-      stop === 'busy'
-        ? 'the table stayed busy'
-        : stop === 'call_limit'
-          ? 'more was left than one run takes'
-          : 'the run reached its time limit';
-    await reportError(new Error(`Security events retention stopped: ${why}`), {
-      tag: TAG,
-      level: 'warning',
-      extra: { calls, deleted, hashesCleared, stop },
-    });
-  }
-
-  const result = {
-    ok: true,
-    deleted,
-    hashesCleared,
-    calls,
-    stoppedEarly: stop !== null,
-    stop,
-    signInAlerts,
-  };
-  console.info(`[${TAG}]`, JSON.stringify(result));
-  return NextResponse.json(result);
+  return NextResponse.json({ ok: true, ...events, signInAlerts });
 }
 
 /** The sign-in alerts loop's answer, for the run's own answer. */
