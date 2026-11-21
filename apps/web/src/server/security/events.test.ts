@@ -569,9 +569,10 @@ describe('a full slice or budget flushes early', () => {
     expect(h.rpc).toHaveBeenCalledTimes(1);
     expect(sent()).toHaveLength(8);
     expect(events.__pendingSecurityEventsForTests()).toEqual([]);
-    // One kept-alive promise for the window, settled by the early flush.
-    expect(h.keepAlive).toHaveBeenCalledTimes(1);
+    // The window's kept-alive promise, settled by the early flush, and the flush itself.
+    expect(h.keepAlive).toHaveBeenCalledTimes(2);
     await expect(h.keepAlive.mock.calls[0]![0]).resolves.toBeUndefined();
+    await expect(h.keepAlive.mock.calls[1]![0]).resolves.toBeUndefined();
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -715,9 +716,12 @@ describe('the flush', () => {
     await events.recordSecurityEvent(wrongPassword, requestFrom());
     await vi.advanceTimersByTimeAsync(2_000);
     await events.recordSecurityEvent(wrongPassword, requestFrom());
-    expect(h.keepAlive).toHaveBeenCalledTimes(2);
+    // Kept alive so far: the first window, the flush its timer started, the second window.
+    expect(h.keepAlive).toHaveBeenCalledTimes(3);
     await vi.advanceTimersByTimeAsync(2_000);
     expect(h.rpc).toHaveBeenCalledTimes(2);
+    expect(h.keepAlive).toHaveBeenCalledTimes(4);
+    for (const [kept] of h.keepAlive.mock.calls) await expect(kept).resolves.toBeUndefined();
   });
 
   it('the delay can be injected (tests)', async () => {
@@ -766,7 +770,8 @@ describe('one flush call at a time, with a time limit', () => {
 
     // New events while the first call is out: their flush comes due and sends nothing.
     await events.recordSecurityEvent(paused, requestFrom());
-    const kept = settledFlag(h.keepAlive.mock.calls[1]![0] as Promise<unknown>);
+    // Kept alive: [0] the first window, [1] the flush its timer started, [2] these events' window.
+    const kept = settledFlag(h.keepAlive.mock.calls[2]![0] as Promise<unknown>);
     await vi.advanceTimersByTimeAsync(2_000);
     expect(h.rpc).toHaveBeenCalledTimes(1);
     expect(events.__pendingSecurityEventsForTests()).toEqual([
@@ -950,5 +955,8 @@ describe('a failed flush', () => {
     const kept = h.keepAlive.mock.calls[0]![0] as Promise<unknown>;
     await vi.advanceTimersByTimeAsync(2_000);
     await expect(kept).resolves.toBeUndefined();
+    // The flush the timer started is handed to keepAlive too, and never rejects either.
+    expect(h.keepAlive).toHaveBeenCalledTimes(2);
+    await expect(h.keepAlive.mock.calls[1]![0]).resolves.toBeUndefined();
   });
 });

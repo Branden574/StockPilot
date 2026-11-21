@@ -389,7 +389,11 @@ function armFlushTimer(delayMs: number): void {
   flushTimer = setTimeout(() => {
     flushTimer = null;
     flushDueAt = null;
-    void flushSecurityEvents();
+    // The flush is handed to keepAlive where it starts, as well as being
+    // answered for by the promise handed over when it was scheduled
+    // (server/fire-and-forget.guard.test.ts: nothing is left running with
+    // `void`). flushSecurityEvents never rejects.
+    keepAlive(flushSecurityEvents());
   }, delayMs);
   // A script is not held open for a flush; a request is, through keepAlive.
   (flushTimer as { unref?: () => void }).unref?.();
