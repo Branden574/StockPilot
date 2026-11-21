@@ -15,6 +15,12 @@ import { recordSecurityEvent, type SecurityEventHeaders } from './events';
  *   - sign_in_not_me: the member said a sign-in was not them
  *     (server/services/sign-in-alert-report.ts).
  * Both are phishing / flagged: the sign-in happened; the alert is a question.
+ *   - sign_in_alerts_held: a sign-in that owed an alert was turned away by
+ *     the account's daily ceiling on alert rows, so nothing was written for
+ *     it (lib/auth/login-device.ts). password_guessing / flagged: that many
+ *     sign-ins from new devices or countries in a day reads as someone
+ *     working with the password. One event per sign-in turned away; the
+ *     recorder adds them up by minute, so they cannot flood.
  *
  * THE ORGANIZATIONS COME FROM THE SERVER: the account's own memberships, read
  * here with the service role from the account id (an accepted membership that
@@ -74,25 +80,28 @@ async function organizationsOf(userId: string): Promise<string[] | null> {
   }
 }
 
-/** Records the event in each organization of the account. Never throws. */
-export async function recordSignInAlertEvent(args: {
-  reason: SignInAlertEventReason;
-  userId: string;
-  source: 'web' | 'phone';
-  place: { country: string | null; city: string | null };
-}): Promise<void> {
+/** One flagged event in each organization of the account, or one with none. Never throws. */
+async function recordInOrganizations(
+  event: {
+    category: 'phishing' | 'password_guessing';
+    reason: SignInAlertEventReason | 'sign_in_alerts_held';
+    source: 'web' | 'phone';
+  },
+  userId: string,
+  place: { country: string | null; city: string | null },
+): Promise<void> {
   try {
-    const headers = placeHeaders(args.place);
-    const organizations = await organizationsOf(args.userId);
+    const headers = placeHeaders(place);
+    const organizations = await organizationsOf(userId);
     const targets: Array<string | null> =
       organizations && organizations.length > 0 ? organizations : [null];
     for (const organizationId of targets) {
       await recordSecurityEvent(
         {
-          category: 'phishing',
+          category: event.category,
           outcome: 'flagged',
-          reason: args.reason,
-          source: args.source,
+          reason: event.reason,
+          source: event.source,
           organizationId,
         },
         headers,
@@ -101,4 +110,36 @@ export async function recordSignInAlertEvent(args: {
   } catch {
     // Never the caller's problem: these are counts for admins to read.
   }
+}
+
+/** Records the event in each organization of the account. Never throws. */
+export async function recordSignInAlertEvent(args: {
+  reason: SignInAlertEventReason;
+  userId: string;
+  source: 'web' | 'phone';
+  place: { country: string | null; city: string | null };
+}): Promise<void> {
+  await recordInOrganizations(
+    { category: 'phishing', reason: args.reason, source: args.source },
+    args.userId,
+    args.place,
+  );
+}
+
+/**
+ * A sign-in that owed an alert was turned away by the account's daily ceiling
+ * on alert rows: password_guessing / flagged / sign_in_alerts_held, in each
+ * organization of the account (the same read and the same rule as above).
+ * Never throws.
+ */
+export async function recordSignInAlertsHeldEvent(args: {
+  userId: string;
+  source: 'web' | 'phone';
+  place: { country: string | null; city: string | null };
+}): Promise<void> {
+  await recordInOrganizations(
+    { category: 'password_guessing', reason: 'sign_in_alerts_held', source: args.source },
+    args.userId,
+    args.place,
+  );
 }

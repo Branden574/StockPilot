@@ -54,6 +54,7 @@ describe('security events: the lists the database checks', () => {
       'unknown_api_key',
       'sign_in_new_country',
       'sign_in_not_me',
+      'sign_in_alerts_held',
       'over_minute_cap',
       'over_buffer_cap',
       ...SECURITY_PROBE_KINDS,
@@ -93,6 +94,12 @@ describe('security events: the lists the database checks', () => {
     expect(securityEventReasonLabel('sign_in_new_country')).toBe('Sign-in from a new country');
     expect(securityEventReasonLabel('sign_in_not_me')).toBe(
       'A member said a sign-in was not them',
+    );
+  });
+
+  it('names the plain words of sign-in alerts held past the daily ceiling', () => {
+    expect(securityEventReasonLabel('sign_in_alerts_held')).toBe(
+      'Sign-in alerts held after too many in one day',
     );
   });
 

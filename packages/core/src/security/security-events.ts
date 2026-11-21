@@ -118,6 +118,10 @@ export const SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, string>> = {
   wrong_recovery_code: 'Wrong recovery code',
   recovery_code_checks_paused: 'Recovery code checks paused after too many attempts',
   unknown_api_key: 'Unknown API key',
+  // One account met its daily ceiling on sign-in alerts: so many sign-ins from
+  // new devices or countries in a day that further ones are turned away
+  // unrecorded (flagged, not blocked: the sign-in itself still happened).
+  sign_in_alerts_held: 'Sign-in alerts held after too many in one day',
   // Phishing: what a sign-in alert flags (part 3). Not refusals: the sign-in
   // happened, and the alert asks the member whether it was them.
   sign_in_new_country: 'Sign-in from a new country',

@@ -40,7 +40,7 @@ vi.mock('@/lib/error-reporter', () => ({ reportError }));
 import { recordSecurityEvent } from '@/server/security/events';
 import { clientPlaceFromHeaders, clientSourceHash } from '@/lib/client-ip';
 
-import { recordSignInAlertEvent } from './sign-in-alert-events';
+import { recordSignInAlertEvent, recordSignInAlertsHeldEvent } from './sign-in-alert-events';
 
 const USER = '11111111-1111-4111-8111-111111111111';
 const ORG_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -178,5 +178,54 @@ describe('recordSignInAlertEvent', () => {
       place: { country: 'MX', city: 'Tijuana' },
     });
     expect(clientPlaceFromHeaders(recorded.mock.calls[0]![1]!)).toEqual({ country: null, city: null });
+  });
+});
+
+describe('recordSignInAlertsHeldEvent: a sign-in turned away by the daily ceiling on alert rows', () => {
+  it('password_guessing / flagged / sign_in_alerts_held in each organization of the account', async () => {
+    h.members.data = [{ organization_id: ORG_A }, { organization_id: ORG_B }];
+    await recordSignInAlertsHeldEvent({
+      userId: USER,
+      source: 'phone',
+      place: { country: 'MX', city: 'Tijuana' },
+    });
+    expect(recorded.mock.calls.map((c) => c[0])).toEqual([
+      { category: 'password_guessing', outcome: 'flagged', reason: 'sign_in_alerts_held', source: 'phone', organizationId: ORG_A },
+      { category: 'password_guessing', outcome: 'flagged', reason: 'sign_in_alerts_held', source: 'phone', organizationId: ORG_B },
+    ]);
+  });
+
+  it('the organizations are read the same way: the account’s own, accepted, not act-as, at most 5', async () => {
+    h.members.data = Array.from({ length: 9 }, (_, i) => ({
+      organization_id: `0000000${i}-0000-4000-8000-000000000000`,
+    }));
+    await recordSignInAlertsHeldEvent({ userId: USER, source: 'web', place: { country: null, city: null } });
+    expect(recorded).toHaveBeenCalledTimes(5);
+    expect(h.calls).toContainEqual(['from', 'organization_members']);
+    expect(h.calls).toContainEqual(['eq', 'user_id', USER]);
+    expect(h.calls).toContainEqual(['not', 'accepted_at', 'is', null]);
+    expect(h.calls).toContainEqual(['is', 'impersonation_expires_at', null]);
+    expect(h.calls).toContainEqual(['limit', 5]);
+  });
+
+  it('an account in no organization, or whose memberships cannot be read: one event with no organization', async () => {
+    await recordSignInAlertsHeldEvent({ userId: USER, source: 'web', place: { country: 'MX', city: null } });
+    h.members = { data: null, error: { code: '57014', message: 'timeout' } };
+    await recordSignInAlertsHeldEvent({ userId: USER, source: 'web', place: { country: 'MX', city: null } });
+    expect(recorded.mock.calls.map((c) => c[0].organizationId)).toEqual([null, null]);
+  });
+
+  it('carries the sign-in’s place and no address', async () => {
+    await recordSignInAlertsHeldEvent({ userId: USER, source: 'web', place: { country: 'MX', city: 'Tijuana' } });
+    const headers = recorded.mock.calls[0]![1]!;
+    expect(clientPlaceFromHeaders(headers)).toEqual({ country: 'MX', city: 'Tijuana' });
+    expect(clientSourceHash(headers)).toBeNull();
+  });
+
+  it('never throws', async () => {
+    h.throwOnFrom = true;
+    await expect(
+      recordSignInAlertsHeldEvent({ userId: USER, source: 'web', place: { country: 'MX', city: null } }),
+    ).resolves.toBeUndefined();
   });
 });
