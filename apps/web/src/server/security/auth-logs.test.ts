@@ -847,6 +847,63 @@ describe('the SQL is two constants that return counts and codes only', () => {
     }
   });
 
+  /** The caller class as the query works it out, run here on a made-up client string. */
+  function callerClassOf(sql: string, client: string): string {
+    const caller = selectList(sql).find(([, alias]) => alias === 'caller')![0];
+    expect(caller).toContain("log_attributes['request.headers.x_client_info'] = '', 'none',");
+    expect(caller.trimEnd()).toMatch(/'other'\s*\)$/);
+    const rules = [
+      ...caller.matchAll(
+        /position\(log_attributes\['request\.headers\.x_client_info'\], '([^']+)'\) > 0, '([a-z]+)'/g,
+      ),
+    ].map((m) => [m[1]!, m[2]!] as const);
+    expect(rules.length).toBe(4);
+    for (const [needle, cls] of rules) if (client.includes(needle)) return cls;
+    return client === '' ? 'none' : 'other';
+  }
+
+  it.each([
+    ['supabase-js-react-native/2.50.0', 'phone'],
+    ['supabase-ssr/0.6.1 createServerClient', 'server'],
+    ['supabase-js/2.50.0; runtime=node', 'server'],
+    ['supabase-ssr/0.6.1 createBrowserClient', 'browser'],
+    ['supabase-js-web/2.50.0', 'other'],
+    ['curl/8.4.0', 'other'],
+    ['', 'none'],
+  ])('the query classes the client string %j as %s, the same in both', (client, cls) => {
+    expect(callerClassOf(AUTH_LOGS_GROUPS_SQL, client)).toBe(cls);
+    expect(callerClassOf(AUTH_LOGS_TOTALS_SQL, client)).toBe(cls);
+  });
+
+  it('the paths and the grant it reads: a password sign-in and a code check, nothing else', () => {
+    const pathRe = new RegExp(
+      AUTH_LOGS_GROUPS_SQL.match(/match\(log_attributes\['request\.path'\], '([^']+)'\)/)![1]!,
+    );
+    const id = '5eed0000-0000-4000-8000-000000000001';
+    expect(pathRe.test(`/auth/v1/factors/${id}/verify`)).toBe(true);
+    expect(pathRe.test(`/auth/v1/factors/${id}/challenge`)).toBe(false);
+    expect(pathRe.test('/auth/v1/factors/not-an-id/verify')).toBe(false);
+    expect(pathRe.test(`/auth/v1/factors/${id}/verify/more`)).toBe(false);
+    const grantRe = new RegExp(
+      AUTH_LOGS_GROUPS_SQL.match(/match\(log_attributes\['request\.search'\], '([^']+)'\)/)![1]!,
+    );
+    for (const search of [
+      '?grant_type=password',
+      'grant_type=password',
+      '?a=1&grant_type=password',
+    ]) {
+      expect(grantRe.test(search), search).toBe(true);
+    }
+    for (const search of [
+      '?grant_type=refresh_token',
+      '?grant_type=password_x',
+      '?grant_type=pkce',
+      '',
+    ]) {
+      expect(grantRe.test(search), search).toBe(false);
+    }
+  });
+
   it('the module reads no setting itself: the token comes in from the route, which reads the env module', () => {
     expect(source).not.toMatch(/process\.env/);
   });
