@@ -163,13 +163,27 @@ export class SoftAuthenticator {
       }),
     );
     const kind = knobs.attestation ?? 'none';
-    const selfSig = () => sign('sha256', Buffer.concat([authData, sha256(clientDataJSON)]), privateKey);
+    const selfSig = () =>
+      sign('sha256', Buffer.concat([authData, sha256(clientDataJSON)]), privateKey);
     const madeUpCert = Buffer.from('sample-made-up-certificate-bytes', 'utf8');
     const [fmt, attStmt]: [string, Map<Cbor, Cbor>] =
       kind === 'packed-self'
-        ? ['packed', new Map<Cbor, Cbor>([['alg', -7], ['sig', selfSig()]])]
+        ? [
+            'packed',
+            new Map<Cbor, Cbor>([
+              ['alg', -7],
+              ['sig', selfSig()],
+            ]),
+          ]
         : kind === 'packed-x5c'
-          ? ['packed', new Map<Cbor, Cbor>([['alg', -7], ['sig', selfSig()], ['x5c', [madeUpCert]]])]
+          ? [
+              'packed',
+              new Map<Cbor, Cbor>([
+                ['alg', -7],
+                ['sig', selfSig()],
+                ['x5c', [madeUpCert]],
+              ]),
+            ]
           : kind === 'apple'
             ? ['apple', new Map<Cbor, Cbor>([['x5c', [madeUpCert]]])]
             : ['none', new Map<Cbor, Cbor>()];

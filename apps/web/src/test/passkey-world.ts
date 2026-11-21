@@ -594,7 +594,8 @@ export function makeWorld() {
         mfa: {
           deleteFactor: async ({ id, userId }: { id: string; userId: string }) => {
             w.calls.deleteFactor.push(id);
-            if (w.knobs.deleteFails) return { data: null, error: { status: 500, code: 'unexpected_failure' } };
+            if (w.knobs.deleteFails)
+              return { data: null, error: { status: 500, code: 'unexpected_failure' } };
             w.factors = w.factors.filter((f) => !(f.id === id && f.user_id === userId));
             return { data: { id }, error: null };
           },
@@ -673,7 +674,7 @@ export function makeWorld() {
     w.calls.cookieSignOut.length = 0;
     w.calls.reads.length = 0;
     w.calls.sessionReads = 0;
-    w.requestHeaders.delete('x-real-ip');
+    requestHeaders.delete('x-real-ip');
     w.knobs = {
       useWriteFails: false,
       verifyAnswersOtherSession: false,

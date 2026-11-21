@@ -160,7 +160,9 @@ describe('review 4 finding 4: an unfinished passkey that is the only method', ()
   });
 
   it('a member with another second step keeps the old hint', () => {
-    render(<PasskeysPanel data={panel({ aal2: false, passkeys: [{ ...KEY, unfinished: true }] })} />);
+    render(
+      <PasskeysPanel data={panel({ aal2: false, passkeys: [{ ...KEY, unfinished: true }] })} />,
+    );
     expect(screen.getByText(PASSKEYS_PANEL_WORDS.stepUp)).toBeTruthy();
     expect(screen.queryByText(PASSKEYS_PANEL_WORDS.onlyMethodUnfinished)).toBeNull();
   });

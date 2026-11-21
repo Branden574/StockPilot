@@ -294,7 +294,9 @@ describe('review 4 finding 10: the upkeep has a time budget and a stop report', 
     const rows = Array.from({ length: 3 }, (_, i) =>
       stateRow('reserved_factor_without_row', {
         user_id: `user-${i}`,
-        reserved_factors: [{ factor_id: `old-${i}`, status: 'unverified', created_at: ago(60 * MIN) }],
+        reserved_factors: [
+          { factor_id: `old-${i}`, status: 'unverified', created_at: ago(60 * MIN) },
+        ],
       }),
     );
     h.rpc.passkey_account_states = { data: rows, error: null };

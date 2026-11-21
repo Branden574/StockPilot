@@ -252,12 +252,7 @@ async function endBridgeSession(admin: Admin, s: BridgeSession): Promise<Ending>
 /** At most one email a day per account; true when one was sent. Closed when the pace cannot be counted. */
 async function emailOnceADay(admin: Admin, userId: string): Promise<boolean> {
   try {
-    const paced = await checkRateLimit(
-      `passkey-detector-email:${userId}`,
-      1,
-      DAY_MS,
-      'closed',
-    );
+    const paced = await checkRateLimit(`passkey-detector-email:${userId}`, 1, DAY_MS, 'closed');
     if (!paced.allowed) return false;
     const { data, error } = await admin.auth.admin.getUserById(userId);
     const to = data?.user?.email;
@@ -299,7 +294,8 @@ async function rememberFinding(s: BridgeSession, ending: Ending): Promise<void> 
       ending,
     },
   });
-  if (!written) report('detector_memory_unwritten', 'warning', { userIdHash: accountIdHash(s.user_id) });
+  if (!written)
+    report('detector_memory_unwritten', 'warning', { userIdHash: accountIdHash(s.user_id) });
 }
 
 const memoryKey = (sessionId: string, raised: bigint) => `${sessionId}|${raised}`;

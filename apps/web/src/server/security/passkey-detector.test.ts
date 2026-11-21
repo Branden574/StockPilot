@@ -583,7 +583,6 @@ describe('what cannot be read decides nothing', () => {
       'error',
     );
     noAction();
-
   });
 
   it('review 4 finding 7: no platform_settings row reads as off (as the database reads it): the run goes on, report only, and the missing row is said once a day (a warning)', async () => {
@@ -606,7 +605,9 @@ describe('what cannot be read decides nothing', () => {
     h.reports = [];
     await runPasskeyDetector();
     expect(tags()).not.toContain('passkeys.detector_settings_missing');
-    expect(h.paceKeys.filter((k) => k.startsWith('passkey-detector-settings-report:'))).toHaveLength(2);
+    expect(
+      h.paceKeys.filter((k) => k.startsWith('passkey-detector-settings-report:')),
+    ).toHaveLength(2);
   });
 
   it('a row whose switch is not a yes or no settles nothing (error)', async () => {
@@ -654,7 +655,6 @@ describe('what cannot be read decides nothing', () => {
     );
     noAction();
   });
-
 
   it('a raise in the last two minutes waits for the next run', async () => {
     h.sessions = { data: [session({ raised_at: ago(30_000) })], error: null };

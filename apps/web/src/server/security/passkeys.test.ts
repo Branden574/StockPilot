@@ -1682,7 +1682,7 @@ describe('review 4 finding 1: a fail-closed state or a key fault met by the page
     const first = await memberWithPasskey('first-s9@example.test');
     const second = await memberWithPasskey('second-s9@example.test');
     countingLimiter();
-    const key = world.env.PASSKEY_BRIDGE_KEY_V1;
+    const key = world.env.PASSKEY_BRIDGE_KEY_V1 ?? '';
     world.env.PASSKEY_BRIDGE_KEY_V1 = Buffer.alloc(32, 7).toString('base64');
     try {
       expect(await pk.passkeyStepFor(second.userId, factorsOfAccount(second.userId))).toBe('none');
@@ -1715,7 +1715,7 @@ describe('review 4 finding 1: a fail-closed state or a key fault met by the page
   it('no key: a holder (a reserved-name factor listed) gets an error report and a key fault; an account without one costs nothing', async () => {
     const { userId } = await memberWithPasskey();
     countingLimiter();
-    const key = world.env.PASSKEY_BRIDGE_KEY_V1;
+    const key = world.env.PASSKEY_BRIDGE_KEY_V1 ?? '';
     world.env.PASSKEY_BRIDGE_KEY_V1 = '';
     try {
       expect(await pk.passkeyStepFor(userId, factorsOfAccount(userId))).toBe('none');
@@ -1777,7 +1777,10 @@ describe('review 4 finding 1: a fail-closed state or a key fault met by the page
       vi
         .mocked(checkRateLimit)
         .mock.calls.filter(([k]) => String(k).startsWith('passkeys-step-report:'))
-        .every(([, limit, windowMs, mode]) => limit === 1 && windowMs === 60 * 60_000 && mode === 'closed'),
+        .every(
+          ([, limit, windowMs, mode]) =>
+            limit === 1 && windowMs === 60 * 60_000 && mode === 'closed',
+        ),
     ).toBe(true);
   });
 
@@ -1917,7 +1920,11 @@ describe('review 4 finding 5: active rows are read on their own, never cut off b
     const { userId, passkeyId } = await memberWithPasskey();
     const active = world.passkeys.find((p) => p.id === passkeyId)!;
     for (let i = 0; i < 24; i += 1) {
-      world.passkeys.push({ ...active, id: crypto.randomUUID(), credential_id: `sample-active-${i}` });
+      world.passkeys.push({
+        ...active,
+        id: crypto.randomUUID(),
+        credential_id: `sample-active-${i}`,
+      });
     }
     expect(await pk.passkeyStepFor(userId, factorsOfAccount(userId))).toBe('none');
     expect(await pk.startSecondStep()).toMatchObject({ ok: false, reason: 'records_unreadable' });
@@ -1936,7 +1943,7 @@ describe('review 4 finding 6: truly dark (no site, no key, or the kill switch of
     const userId = world.addAccount('dark@example.test');
     world.signIn(userId, 'aal1');
     world.addApp(userId);
-    const key = world.env.PASSKEY_BRIDGE_KEY_V1;
+    const key = world.env.PASSKEY_BRIDGE_KEY_V1 ?? '';
     world.env.PASSKEY_BRIDGE_KEY_V1 = '';
     try {
       quiet();
@@ -1979,7 +1986,7 @@ describe('review 4 finding 6: truly dark (no site, no key, or the kill switch of
   it('a holder (a reserved-name factor listed) still gets the list with Remove while dark', async () => {
     const { userId, passkeyId } = await memberWithPasskey();
     world.signIn(userId, 'aal2');
-    const key = world.env.PASSKEY_BRIDGE_KEY_V1;
+    const key = world.env.PASSKEY_BRIDGE_KEY_V1 ?? '';
     world.env.PASSKEY_BRIDGE_KEY_V1 = '';
     try {
       expect(await panelFor(userId)).toMatchObject({
@@ -2031,7 +2038,11 @@ describe('review 4 finding 8: a failed Add leaves nothing that blocks the next o
     world.signIn(userId, 'aal2');
     const confirm = optionsOf(await pk.startConfirmAdd());
     const start = await pk.startAddPasskey({
-      proof: { kind: 'passkey', challengeId: confirm.challengeId, response: soft.get(confirm.options) },
+      proof: {
+        kind: 'passkey',
+        challengeId: confirm.challengeId,
+        response: soft.get(confirm.options),
+      },
     });
     expect(start.ok).toBe(true);
     expect(world.calls.deleteFactor).toEqual([leftover.id]);
@@ -2043,7 +2054,9 @@ describe('review 4 finding 8: a failed Add leaves nothing that blocks the next o
     const userId = world.addAccount('late-leftover@example.test');
     world.signIn(userId, 'aal1');
     const soft = new SoftAuthenticator();
-    const start = await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } });
+    const start = await pk.startAddPasskey({
+      proof: { kind: 'password', password: SAMPLE_PASSWORD },
+    });
     if (!start.ok) throw new Error(start.reason);
     const leftover = leftoverFactor(userId);
     const done = await pk.finishAddPasskey({
@@ -2061,7 +2074,11 @@ describe('review 4 finding 8: a failed Add leaves nothing that blocks the next o
     leftoverFactor(userId);
     world.knobs.deleteFails = true;
     const r = await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } });
-    expect(r).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.addFailed, reason: 'leftover_left' });
+    expect(r).toMatchObject({
+      ok: false,
+      message: pk.PASSKEY_WORDS.addFailed,
+      reason: 'leftover_left',
+    });
     expect(reportsTagged('passkeys.add_leftover_left')).toEqual([
       expect.objectContaining({ level: 'error', extra: hashed }),
     ]);
@@ -2072,7 +2089,9 @@ describe('review 4 finding 8: a failed Add leaves nothing that blocks the next o
     const userId = world.addAccount('store-fails@example.test');
     world.signIn(userId, 'aal1');
     const soft = new SoftAuthenticator();
-    const start = await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } });
+    const start = await pk.startAddPasskey({
+      proof: { kind: 'password', password: SAMPLE_PASSWORD },
+    });
     if (!start.ok) throw new Error(start.reason);
     world.knobs.failFns.push('passkey_register');
     world.knobs.deleteFails = true;
@@ -2092,7 +2111,9 @@ describe('review 4 finding 8: a failed Add leaves nothing that blocks the next o
     const userId = world.addAccount('no-secret@example.test');
     world.signIn(userId, 'aal1');
     const soft = new SoftAuthenticator();
-    const start = await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } });
+    const start = await pk.startAddPasskey({
+      proof: { kind: 'password', password: SAMPLE_PASSWORD },
+    });
     if (!start.ok) throw new Error(start.reason);
     world.knobs.enrolNoSecret = true;
     const r = await pk.finishAddPasskey({
@@ -2107,7 +2128,7 @@ describe('review 4 finding 8: a failed Add leaves nothing that blocks the next o
 });
 
 describe('review 4 finding 11: notes', () => {
-  it('junk finishes from another address cannot pause the member\'s own passkey step (the limit is per account and address)', async () => {
+  it("junk finishes from another address cannot pause the member's own passkey step (the limit is per account and address)", async () => {
     const { soft } = await memberWithPasskey();
     countingLimiter();
     world.requestHeaders.set('x-real-ip', '198.51.100.9');
@@ -2133,7 +2154,9 @@ describe('review 4 finding 11: notes', () => {
       const userId = world.addAccount(`${attestation}@example.test`);
       world.signIn(userId, 'aal1');
       const soft = new SoftAuthenticator();
-      const start = await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } });
+      const start = await pk.startAddPasskey({
+        proof: { kind: 'password', password: SAMPLE_PASSWORD },
+      });
       if (!start.ok) throw new Error(start.reason);
       const r = await pk.finishAddPasskey({
         challengeId: start.challengeId,
@@ -2150,7 +2173,9 @@ describe('review 4 finding 11: notes', () => {
     const userId = world.addAccount('packed-self@example.test');
     world.signIn(userId, 'aal1');
     const soft = new SoftAuthenticator();
-    const start = await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } });
+    const start = await pk.startAddPasskey({
+      proof: { kind: 'password', password: SAMPLE_PASSWORD },
+    });
     if (!start.ok) throw new Error(start.reason);
     expect(
       await pk.finishAddPasskey({

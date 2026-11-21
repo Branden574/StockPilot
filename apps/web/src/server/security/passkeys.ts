@@ -552,11 +552,7 @@ const ACTIVE_ROWS_READ = 25;
  * removal). Removed rows live 90 days and nothing caps their number. null
  * when any read fails, or when the active page is full.
  */
-async function readRows(
-  admin: Admin,
-  userId: string,
-  rpId: string,
-): Promise<PasskeyRow[] | null> {
+async function readRows(admin: Admin, userId: string, rpId: string): Promise<PasskeyRow[] | null> {
   try {
     const [active, otherSite, newestRemoved] = await Promise.all([
       admin
@@ -1464,7 +1460,9 @@ export async function startAddPasskey(input: {
   if (setupUnfinished(picture)) {
     return fail(
       'validation_error',
-      onlyMethodUnfinished(picture) ? PASSKEY_WORDS.finishFirstOnlyMethod : PASSKEY_WORDS.finishFirst,
+      onlyMethodUnfinished(picture)
+        ? PASSKEY_WORDS.finishFirstOnlyMethod
+        : PASSKEY_WORDS.finishFirst,
       'setup_unfinished',
     );
   }
