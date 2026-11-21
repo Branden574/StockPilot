@@ -167,7 +167,9 @@ function tableClient(name: TableName) {
           return { data: null, error: { code: '23505', message: 'duplicate key value' } };
         }
         const at = new Date(Date.UTC(2026, 10, 20) + db.clock++ * 1000).toISOString();
-        db.countries.push({ first_seen_at: at, last_seen_at: at, ...p });
+        // The table's defaults fill the two times the insert leaves out.
+        const sent = p as Partial<CountryRow> & Pick<CountryRow, 'user_id' | 'country'>;
+        db.countries.push({ ...sent, first_seen_at: sent.first_seen_at ?? at, last_seen_at: sent.last_seen_at ?? at });
         return { data: null, error: null };
       }
       if (name === 'sign_in_alerts') {
