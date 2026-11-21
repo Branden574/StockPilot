@@ -54,6 +54,7 @@ describe('security events: the lists the database checks', () => {
       'unknown_api_key',
       'auth_rate_limited',
       'auth_log_over_cap',
+      'unclassified_sign_in_refusals',
       'over_minute_cap',
       'over_buffer_cap',
       ...SECURITY_PROBE_KINDS,
@@ -95,6 +96,9 @@ describe('security events: the lists the database checks', () => {
     );
     expect(securityEventReasonLabel('auth_log_over_cap')).toBe(
       'More refused sign-ins than could be listed',
+    );
+    expect(securityEventReasonLabel('unclassified_sign_in_refusals')).toBe(
+      'Refused sign-in requests of an unusual form',
     );
   });
 });
