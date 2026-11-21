@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { createHash } from 'node:crypto';
+
 import {
   NOT_ME_WORDS,
   SIGN_IN_REPORTED_TITLE,
@@ -27,8 +29,10 @@ import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
  *
  * ONE ALERT, ONE SIGN-OUT. THE STEPS, in order (review 1, finding 2):
  *   0. An alert that is ALREADY not_me when the call starts answers
- *      'already_reported' and does nothing: no session is ended again and
- *      nobody is told again. Step (a) always runs before step (b), so a
+ *      'already_reported': no session is ended again and nobody is told
+ *      again. It does forget the alert's device or country row again (see
+ *      forgetRows: harmless to repeat, and it completes a forgetting that
+ *      failed the first time). Step (a) always runs before step (b), so a
  *      marked alert means its sign-out already worked, and nothing is lost by
  *      returning here. Without this, the link in an email would let whoever
  *      holds that email end the account's sessions again and again for the
@@ -46,12 +50,13 @@ import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
  *      fails is 'failed' (the sessions have ended; the retry runs everything
  *      again). An update that changes no row means a press at the same
  *      moment got there first: 'already_reported', and that press does the
- *      telling. (This one's sign-out ran too; two at once is the only way.)
+ *      telling. (This one's sign-out ran too; two at once is the only way.
+ *      It forgets the rows as well, without waiting on the other press.)
  *   c. Only when (b) changed the row, so each of these happens once per alert:
  *        - the device row of the alert is forgotten (by its hash) only when
  *          the alert was about a new device, and the country row only when it
  *          was about a new country, so the next sign-in from either alerts
- *          again;
+ *          again (each delete tried once more, then reported as an error);
  *        - the owners and admins of each organization the member belongs to
  *          (an accepted membership that is not a support act-as seat, at most
  *          5 organizations) get an in-app notice in each organization and one
@@ -233,12 +238,34 @@ async function signOutEverywhere(userId: string): Promise<boolean> {
   }
 }
 
-/** Step (c), first: the rows that made this sign-in "known", so the next one alerts again. */
+/**
+ * How long a forgetting waits before its one more try. An object so a test
+ * can set the wait to nothing; nothing else writes it.
+ */
+export const FORGET_RETRY = { waitMs: 300 };
+
+/**
+ * The rows that made this sign-in "known", so the next one from that device
+ * or country alerts again: the device row (by its hash) only when the alert
+ * was about a new device, the country row only when it was about a new
+ * country.
+ *
+ * ONE ALERT, ONE SIGN-OUT leans on this (review 2, finding 2): a reported
+ * alert ends no session again, so what tells the member that whoever signed
+ * in came back is the NEW alert that sign-in raises, and it raises one only
+ * if the row is gone. So each delete is tried once more after a short wait (a
+ * passing fault clears itself); one that fails twice is reported at ERROR
+ * level, with a hash of the account id, which row, and the refusal's code
+ * only; and every later press on the alert runs this again (it is harmless to
+ * repeat), so a second press completes what the first could not. Each delete
+ * is on its own: one that fails or throws stops neither the other nor
+ * anything after. Never throws.
+ */
 async function forgetRows(admin: Admin, alert: SignInAlertRecord): Promise<void> {
   const deletes: Array<Promise<void>> = [];
   if (alert.newDevice && alert.deviceHash) {
     deletes.push(
-      forget('device', () =>
+      forget('device', alert.userId, () =>
         admin
           .from('user_login_devices')
           .delete()
@@ -249,7 +276,7 @@ async function forgetRows(admin: Admin, alert: SignInAlertRecord): Promise<void>
   }
   if (alert.newCountry && alert.country) {
     deletes.push(
-      forget('country', () =>
+      forget('country', alert.userId, () =>
         admin
           .from('user_sign_in_countries')
           .delete()
@@ -261,16 +288,36 @@ async function forgetRows(admin: Admin, alert: SignInAlertRecord): Promise<void>
   await Promise.all(deletes);
 }
 
-async function forget(
-  row: 'device' | 'country',
+/** One try of a delete: whether it worked, and the refusal's code when it did not. */
+async function tryDelete(
   run: () => PromiseLike<{ error: unknown }>,
-): Promise<void> {
+): Promise<{ done: boolean; code: string | null }> {
   try {
     const { error } = await run();
-    if (error) reportFailure('security.sign_in_report_forget_failed', { row, code: codeOf(error) });
+    return error ? { done: false, code: codeOf(error) } : { done: true, code: null };
   } catch {
-    reportFailure('security.sign_in_report_forget_failed', { row, code: null });
+    // No code: the failure's own text is never carried.
+    return { done: false, code: null };
   }
+}
+
+/** One row's forgetting: tried, tried once more after a short wait, then reported as an error. */
+async function forget(
+  row: 'device' | 'country',
+  userId: string,
+  run: () => PromiseLike<{ error: unknown }>,
+): Promise<void> {
+  const first = await tryDelete(run);
+  if (first.done) return;
+  await new Promise((resolve) => setTimeout(resolve, FORGET_RETRY.waitMs));
+  const second = await tryDelete(run);
+  if (second.done) return;
+  void reportError(new Error('A row a reported sign-in made known could not be forgotten'), {
+    tag: 'security.sign_in_report_forget_failed',
+    level: 'error',
+    userIdHash: createHash('sha256').update(userId).digest('hex').slice(0, 16),
+    extra: { row, code: second.code },
+  });
 }
 
 interface Person {
@@ -579,8 +626,17 @@ export async function reportSignInAlertNotMe(args: {
   auditFrom: { ip: string | null; userAgent: string | null };
 }): Promise<SignInAlertReportAnswer> {
   const { alert } = args;
-  // One alert, one sign-out: a reported alert ends nothing again.
-  if (alert.status === 'not_me') return { outcome: 'already_reported' };
+  // One alert, one sign-out: a reported alert ends nothing again and tells
+  // nobody again. It forgets its rows again, which a first press may not
+  // have managed.
+  if (alert.status === 'not_me') {
+    try {
+      await forgetRows(createAdminClient(), alert);
+    } catch {
+      // No client: nothing to repair with. The answer is the same.
+    }
+    return { outcome: 'already_reported' };
+  }
 
   let admin: Admin;
   try {
@@ -595,7 +651,10 @@ export async function reportSignInAlertNotMe(args: {
   // (b) The mark. Only the press that changes the row goes on.
   const marked = await markNotMe(admin, alert);
   if (!marked.answered) return { outcome: 'failed' };
-  if (!marked.changed) return { outcome: 'already_reported' };
+  if (!marked.changed) {
+    await forgetRows(admin, alert);
+    return { outcome: 'already_reported' };
+  }
 
   // (c) Once per alert.
   await forgetRows(admin, alert);

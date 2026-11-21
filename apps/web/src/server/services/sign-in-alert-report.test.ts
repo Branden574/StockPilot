@@ -9,7 +9,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *   - an alert already not_me when the call starts does nothing more: no
  *     sign-out, no telling. (The sign-out below always comes before the mark,
  *     so a marked alert has had its sessions ended.) A link in an email can
- *     therefore not be used to end the account's sessions again and again;
+ *     therefore not be used to end the account's sessions again and again.
+ *     It does forget the alert's device or country row again (harmless to
+ *     repeat), so a forgetting that failed the first time is completed by a
+ *     later press (review 2, finding 2);
  *   a. every session of the account is ended first. If that fails the answer
  *      is "try again", nothing else changes and nobody is told, so the retry
  *      is a full first report;
@@ -21,7 +24,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *      member belongs to (accepted, not a support act-as seat, at most 5) get
  *      an in-app notice and an email naming the device FAMILY; the member is
  *      emailed; one audit row per organization; one security event. Managers
- *      and staff are never told; nor is the member twice.
+ *      and staff are never told; nor is the member twice. Each forgetting
+ *      is tried once more after a short wait, and reported as an error when
+ *      it fails twice: a row left behind would let that device or country
+ *      sign in again with no alert.
  * The emails go one after another, the member's first (finding 3). The
  * member's name never leads a title or a subject (finding 7). The answer says
  * whether an owner or admin was told, so the words claim it only then
@@ -37,7 +43,16 @@ type Filter = [string, string, unknown];
 const h = vi.hoisted(() => ({
   tables: {} as Record<string, Row[]>,
   calls: [] as Array<{ table: string; op: string; filters: Filter[]; patch?: Row; limit?: number }>,
-  failures: {} as Record<string, Partial<Record<'select' | 'update' | 'delete', { code: string; message: string }>>>,
+  /** A table's calls of one kind are refused with this, or throw ('throw'), until cleared. */
+  failures: {} as Record<
+    string,
+    Partial<Record<'select' | 'update' | 'delete', { code: string; message: string } | 'throw'>>
+  >,
+  /** The same, for the NEXT call of that kind on the table only; 'throw' throws instead of refusing. */
+  failuresOnce: {} as Record<
+    string,
+    Partial<Record<'select' | 'update' | 'delete', { code: string; message: string } | 'throw'>>
+  >,
   /** Tables whose reads answer something that is not a list (an empty body). */
   notList: new Set<string>(),
   /** What happened, in order: `revoke`, `<op>:<table>`, `notify`, `email:member`, `email:admin`. */
@@ -77,7 +92,14 @@ function builder(table: string) {
   const run = () => {
     h.calls.push({ table, op: state.op, filters: state.filters, patch: state.patch, limit: state.limit });
     h.order.push(`${state.op}:${table}`);
+    const once = h.failuresOnce[table]?.[state.op];
+    if (once) {
+      delete h.failuresOnce[table]![state.op];
+      if (once === 'throw') throw new Error(`${state.op} on ${table} threw for member@example.test`);
+      return { data: null, error: once };
+    }
     const failure = h.failures[table]?.[state.op];
+    if (failure === 'throw') throw new Error(`${state.op} on ${table} threw for member@example.test`);
     if (failure) return { data: null, error: failure };
     const rows = (h.tables[table] ??= []);
     const matched = rows.filter((r) => state.tests.every((t) => t(r)));
@@ -194,7 +216,14 @@ vi.mock('@/server/security/sign-in-alert-events', () => ({
 }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: h.reportError }));
 
-import { readSignInAlert, reportSignInAlertNotMe, type SignInAlertRecord } from './sign-in-alert-report';
+import { createHash } from 'node:crypto';
+
+import {
+  FORGET_RETRY,
+  readSignInAlert,
+  reportSignInAlertNotMe,
+  type SignInAlertRecord,
+} from './sign-in-alert-report';
 
 const MEMBER = '11111111-1111-4111-8111-111111111111';
 const OWNER_A = '22222222-2222-4222-8222-222222222222';
@@ -208,6 +237,8 @@ const ORG_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const ORG_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const ALERT = 'a1e27000-0000-4000-8000-000000000001';
 const HASH = 'ab'.repeat(20);
+/** How a report names the account: the first 16 hex characters of the SHA-256 of its id. */
+const MEMBER_HASH = createHash('sha256').update('11111111-1111-4111-8111-111111111111').digest('hex').slice(0, 16);
 const AUDIT_FROM = { ip: '203.0.113.9', userAgent: 'Mozilla/5.0 (Macintosh) Safari/605.1.15' };
 
 function member(user_id: string, organization_id: string, role: string, extra: Row = {}): Row {
@@ -295,6 +326,9 @@ beforeEach(() => {
   h.sending = 0;
   h.mostSendingAtOnce = 0;
   h.failures = {};
+  h.failuresOnce = {};
+  // The wait before a forget's one more try: none here, so no test waits.
+  FORGET_RETRY.waitMs = 0;
   h.notList = new Set();
   h.revoke.mockResolvedValue({ ok: true, sessionIds: ['s1', 's2'] });
   h.memberEmail.mockResolvedValue({ ok: true, id: 'dryrun' });
@@ -701,8 +735,9 @@ describe('reportSignInAlertNotMe: again, and half-finished (finding 2)', () => {
     const again = await report(await readAlert());
     expect(again).toEqual({ outcome: 'already_reported' });
     expect(h.revoke).not.toHaveBeenCalled();
-    // The read, and nothing else: no sign-out, no update, no delete.
-    expect(h.order).toEqual(['select:sign_in_alerts']);
+    // The read, and the forgetting again (nothing is left to forget): no
+    // sign-out and no update.
+    expect(h.order).toEqual(['select:sign_in_alerts', 'delete:user_login_devices']);
     expect(h.tables.user_login_devices).toHaveLength(devices);
     nobodyWasTold();
   });
@@ -748,7 +783,9 @@ describe('reportSignInAlertNotMe: again, and half-finished (finding 2)', () => {
     const answer = await report(alert);
     expect(answer).toEqual({ outcome: 'already_reported' });
     expect(h.revoke).toHaveBeenCalledTimes(1);
-    expect(h.tables.user_login_devices).toHaveLength(2);
+    // It forgets the alert's row too: harmless twice, and it does not wait
+    // on the other press to have done it.
+    expect(h.tables.user_login_devices).toHaveLength(1);
     nobodyWasTold();
   });
 
@@ -805,12 +842,24 @@ describe('reportSignInAlertNotMe: again, and half-finished (finding 2)', () => {
     expect(h.memberEmail).toHaveBeenCalledTimes(1);
   });
 
-  it('a failed forget is reported with a code only, and the answer is still done', async () => {
+  it('a forget that fails twice is reported ONCE, at error level, with a hash of the account id, which row and the code only; the answer is still done', async () => {
     h.failures.user_login_devices = { delete: { code: '42501', message: 'refused for member@example.test' } };
     const answer = await report(await readAlert());
     expect(answer).toEqual({ outcome: 'done', adminsTold: true });
-    expect(tags()).toContain('security.sign_in_report_forget_failed');
-    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain('example.test');
+    expect(h.order.filter((step) => step === 'delete:user_login_devices')).toHaveLength(2);
+    const reports = h.reportError.mock.calls.filter(
+      (c) => (c[1] as { tag: string }).tag === 'security.sign_in_report_forget_failed',
+    );
+    expect(reports).toHaveLength(1);
+    expect(reports[0]![1]).toEqual({
+      tag: 'security.sign_in_report_forget_failed',
+      level: 'error',
+      userIdHash: MEMBER_HASH,
+      extra: { row: 'device', code: '42501' },
+    });
+    const text = JSON.stringify(h.reportError.mock.calls);
+    expect(text).not.toContain('example.test');
+    expect(text).not.toContain(MEMBER);
   });
 
   it('a profile page that is not a list is a failed read, reported with its detail: nobody is emailed as if that were everyone', async () => {
@@ -853,5 +902,113 @@ describe('reportSignInAlertNotMe: again, and half-finished (finding 2)', () => {
     expect(h.adminEmail).not.toHaveBeenCalled();
     expect(h.audit).toHaveBeenCalledTimes(1);
     expect(h.audit.mock.calls[0]![0]).toMatchObject({ organization_id: null });
+  });
+});
+
+describe('reportSignInAlertNotMe: the forgetting is tried again, and a later press completes it (review 2, finding 2)', () => {
+  const forgetReports = () =>
+    h.reportError.mock.calls.filter(
+      (c) => (c[1] as { tag: string }).tag === 'security.sign_in_report_forget_failed',
+    );
+
+  it('the first delete is refused and the second works: the row is gone, and nothing is reported', async () => {
+    seed(alertRow({ new_device: true, new_country: true }));
+    h.failuresOnce.user_login_devices = { delete: { code: '57014', message: 'timeout' } };
+    h.failuresOnce.user_sign_in_countries = { delete: { code: '57014', message: 'timeout' } };
+    const answer = await report(await readAlert());
+    expect(answer).toEqual({ outcome: 'done', adminsTold: true });
+    expect(h.tables.user_login_devices).toEqual([{ user_id: MEMBER, device_hash: 'cd'.repeat(20) }]);
+    expect(h.tables.user_sign_in_countries).toEqual([{ user_id: MEMBER, country: 'US' }]);
+    expect(h.order.filter((step) => step === 'delete:user_login_devices')).toHaveLength(2);
+    expect(h.order.filter((step) => step === 'delete:user_sign_in_countries')).toHaveLength(2);
+    expect(forgetReports()).toEqual([]);
+  });
+
+  it('the first delete throws and the second works: the row is gone, and nothing is reported', async () => {
+    h.failuresOnce.user_login_devices = { delete: 'throw' };
+    await report(await readAlert());
+    expect(h.tables.user_login_devices).toHaveLength(1);
+    expect(forgetReports()).toEqual([]);
+  });
+
+  it('both tries throw: one error-level report with no code, and no text of the failure', async () => {
+    h.failures.user_login_devices = { delete: 'throw' };
+    const answer = await report(await readAlert());
+    expect(answer).toEqual({ outcome: 'done', adminsTold: true });
+    expect(forgetReports()).toHaveLength(1);
+    expect(forgetReports()[0]![1]).toEqual({
+      tag: 'security.sign_in_report_forget_failed',
+      level: 'error',
+      userIdHash: MEMBER_HASH,
+      extra: { row: 'device', code: null },
+    });
+    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain('example.test');
+  });
+
+  it('one row cannot be forgotten: the other still is, and only the one is reported', async () => {
+    seed(alertRow({ new_device: true, new_country: true }));
+    h.failures.user_login_devices = { delete: { code: '42501', message: 'refused' } };
+    await report(await readAlert());
+    expect(h.tables.user_sign_in_countries).toEqual([{ user_id: MEMBER, country: 'US' }]);
+    expect(forgetReports().map((c) => (c[1] as { extra: unknown }).extra)).toEqual([
+      { row: 'device', code: '42501' },
+    ]);
+  });
+
+  it('the one more try waits a short while first', async () => {
+    FORGET_RETRY.waitMs = 300;
+    vi.useFakeTimers();
+    try {
+      h.failuresOnce.user_login_devices = { delete: { code: '57014', message: 'timeout' } };
+      const alert = await readAlert();
+      const pending = report(alert);
+      await vi.advanceTimersByTimeAsync(299);
+      expect(h.order.filter((step) => step === 'delete:user_login_devices')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.runAllTimersAsync();
+      await pending;
+      expect(h.order.filter((step) => step === 'delete:user_login_devices')).toHaveLength(2);
+      expect(h.tables.user_login_devices).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a press on an alert ALREADY reported forgets the row the first press could not: it ends nothing and tells nobody', async () => {
+    // The first press: the sessions end, the alert is marked, the device row stays.
+    h.failures.user_login_devices = { delete: { code: '57014', message: 'timeout' } };
+    expect(await report(await readAlert())).toEqual({ outcome: 'done', adminsTold: true });
+    expect(h.tables.user_login_devices).toHaveLength(2);
+
+    // The fault has passed. The member presses again.
+    h.failures = {};
+    vi.clearAllMocks();
+    h.order = [];
+    const again = await report(await readAlert());
+    expect(again).toEqual({ outcome: 'already_reported' });
+    expect(h.tables.user_login_devices).toEqual([{ user_id: MEMBER, device_hash: 'cd'.repeat(20) }]);
+    // One alert, one sign-out: the repeat ended nothing and told nobody.
+    expect(h.revoke).not.toHaveBeenCalled();
+    expect(h.order).toEqual(['select:sign_in_alerts', 'delete:user_login_devices']);
+    nobodyWasTold();
+    expect(forgetReports()).toEqual([]);
+  });
+
+  it('a repeat press on a new-country alert forgets the country row again, and only the rows its alert names', async () => {
+    seed(alertRow({ new_device: false, new_country: true, status: 'not_me', resolved_at: '2026-11-20T15:40:00Z' }));
+    const again = await report(await readAlert());
+    expect(again).toEqual({ outcome: 'already_reported' });
+    expect(h.tables.user_sign_in_countries).toEqual([{ user_id: MEMBER, country: 'US' }]);
+    expect(h.tables.user_login_devices).toHaveLength(2);
+    expect(h.revoke).not.toHaveBeenCalled();
+    nobodyWasTold();
+  });
+
+  it('a repeat press whose forgetting fails twice is reported as an error too, and still answers already reported', async () => {
+    seed(alertRow({ status: 'not_me', resolved_at: '2026-11-20T15:40:00Z' }));
+    h.failures.user_login_devices = { delete: { code: '42501', message: 'refused' } };
+    expect(await report(await readAlert())).toEqual({ outcome: 'already_reported' });
+    expect(forgetReports()).toHaveLength(1);
+    expect(forgetReports()[0]![1]).toMatchObject({ level: 'error', userIdHash: MEMBER_HASH });
   });
 });
