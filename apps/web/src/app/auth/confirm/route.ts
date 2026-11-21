@@ -647,7 +647,13 @@ export async function POST(request: NextRequest) {
 
     if (!error) {
       if (data?.session && SIGN_IN_LINK_TYPES.has(type)) {
-        noteEmailedLinkSignIn(request, supabase, data.session);
+        // Nothing the note does, not even preparing it, may reach the
+        // redirect: the token is spent, and the person must land.
+        try {
+          noteEmailedLinkSignIn(request, supabase, data.session);
+        } catch {
+          // Never the answer's problem. The sign-in goes un-noted.
+        }
       }
       return NextResponse.redirect(`${origin}${landingFor(type, next)}`, 303);
     }
@@ -657,21 +663,30 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * The emailed links that sign an existing account in (part 3, sign-in alerts):
- * a magic link and a password-reset link. Each makes a session without the
- * password step, so it is a sign-in the account's owner should hear about from
- * a new device or a new country, the same as a password sign-in. An invite
- * makes the account (its first device is the silent baseline anyway) and an
- * email change is not a sign-in, so neither is noted.
+ * The emailed link that is a member's sign-in (part 3, sign-in alerts): a
+ * password-reset (recovery) link. It makes a session without the password
+ * step, so it is a sign-in the account's owner should hear about from a new
+ * device or a new country, the same as a password sign-in.
+ *
+ * ONLY recovery (review 1, finding 4). A magic link is NOT noted: in this app
+ * it is not a member's way in. The portal invitation of an account that
+ * already exists travels as one (server/services/customers.ts), and the only
+ * others are minted by the app's own tools; noting them wrote device and
+ * country rows for portal accounts and tool runs, and could send them an
+ * alert whose words and buttons are a member's. An invite makes the account
+ * (its first device is the silent baseline anyway), an email change is not a
+ * sign-in, and a sign-up is not a type this route takes. The type compared
+ * here passed ALLOWED_TYPES above; nothing else from the request decides it.
  */
-const SIGN_IN_LINK_TYPES: ReadonlySet<string> = new Set(['magiclink', 'recovery']);
+const SIGN_IN_LINK_TYPES: ReadonlySet<string> = new Set(['recovery']);
 
 /**
  * Notes the device, the place and the session of a sign-in by emailed link,
  * AFTER the response (defer): the redirect and its timing are the same as
  * before. The request's headers are read now, since they are the sign-in's;
  * the session id is read from the new session's own token, verified, inside
- * the deferred work. The note never throws (lib/auth/login-device.ts).
+ * the deferred work. The note never throws (lib/auth/login-device.ts), and
+ * the caller holds everything here in a try/catch of its own.
  */
 function noteEmailedLinkSignIn(
   request: NextRequest,
