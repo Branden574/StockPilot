@@ -197,6 +197,17 @@ export default async function SecuritySettingsPage({
           <MfaPolicyEditor current={policy} />
         </SettingsPanel>
       )}
+
+      {isAdmin && (
+        <SettingsPanel
+          title="Blocked activity"
+          description="Wrong passwords and codes the app refused for the accounts in your organization."
+        >
+          <Button asChild size="sm" variant="outline">
+            <Link href="/dashboard/settings/security/activity">View blocked activity</Link>
+          </Button>
+        </SettingsPanel>
+      )}
     </SettingsPage>
   );
 }
