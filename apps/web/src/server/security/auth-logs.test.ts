@@ -390,6 +390,15 @@ const run = (over: Partial<Parameters<typeof readAuthLogs>[0]> = {}) =>
     ...over,
   });
 
+/** The reports of a run that carry this cause. */
+const reportsOf = (cause: string) =>
+  h.report.mock.calls.filter(
+    ([, ctx]) => (ctx as { extra?: { cause?: string } }).extra?.cause === cause,
+  );
+/** The causes of every report of a run, in the order they were sent. */
+const reportCauses = () =>
+  h.report.mock.calls.map(([, ctx]) => (ctx as { extra?: { cause?: string } }).extra?.cause);
+
 /** A run's answer when it ran (not skipped). */
 const full = (s: unknown) => s as logs.AuthLogsRunSummary;
 
@@ -2877,7 +2886,8 @@ describe('a run: six hours, oldest first, each written once', () => {
           expect.objectContaining({ reason: 'unrecorded_server_form_password', count: 19 }),
         ]);
         expect(summary.reconcileIncomplete).toBe(0);
-        expect(h.report).not.toHaveBeenCalled();
+        // Nothing is said about the read; the stored flag has its own report.
+        expect(reportCauses()).toEqual(['flagged_stored']);
       });
 
       it('1,001 recorded rows that cover the gateway count: no flag', async () => {
@@ -2979,8 +2989,8 @@ describe('a run: six hours, oldest first, each written once', () => {
             excess: { password: 497, code: 0 },
           },
         });
-        expect(h.report).toHaveBeenCalledTimes(1);
-        expect(String(h.report.mock.calls[0]![0])).toContain('could not all be read');
+        expect(reportCauses().sort()).toEqual(['flagged_stored', 'reconcile_incomplete']);
+        expect(String(reportsOf('reconcile_incomplete')[0]![0])).toContain('could not all be read');
       });
 
       it('a page that fails part way: a failed read, nothing of the hour is written', async () => {
@@ -3061,11 +3071,6 @@ describe('a run: six hours, oldest first, each written once', () => {
         totalsRow({ kind: 'refresh', caller: 'other', n: 5 }, startMs),
       ),
     ];
-    const reportsOf = (cause: string) =>
-      h.report.mock.calls.filter(
-        ([, ctx]) => (ctx as { extra?: { cause?: string } }).extra?.cause === cause,
-      );
-
     it('a full totals answer: one flagged element for the hour, and one report for the run', async () => {
       hourAnswers(H(5), [groupRow({ n: 4 }, H(5))], fullTotals(H(5), [totalsRow({ n: 4 }, H(5))]));
       const summary = full(await run());
@@ -3254,6 +3259,119 @@ describe('a run: six hours, oldest first, each written once', () => {
         expect.objectContaining({ count: 31 }),
       ]);
       expect(elements.every((e) => e.at_ms < H(9))).toBe(true);
+    });
+  });
+
+  describe('a flagged count that is stored is also reported: it has no organization, so no page of an organization shows it', () => {
+    it('one unknown form: one warning for the run, with the count by reason', async () => {
+      hourAnswers(H(5), [], [totalsRow({ kind: 'token_other', n: 4 }, H(5))]);
+      const summary = full(await run());
+      expect(summary).toMatchObject({
+        ok: true,
+        flaggedHours: 1,
+        flaggedStored: { unclassified_sign_in_refusals: 4 },
+      });
+      expect(h.report).toHaveBeenCalledTimes(1);
+      const [err, ctx] = h.report.mock.calls[0]!;
+      expect(String(err)).toContain('Flagged counts of refused sign-ins were stored');
+      expect(String(err)).toContain('no organization');
+      expect(ctx).toEqual({
+        tag: 'cron.security-events-auth-logs',
+        level: 'warning',
+        extra: { cause: 'flagged_stored', hours: 1, unclassified_sign_in_refusals: 4 },
+      });
+    });
+
+    it('every kind of flag, over several hours: still one report, the counts added up by reason', async () => {
+      // Hour 04: unknown forms from two sources, and our server's form with no record.
+      hourAnswers(
+        H(4),
+        [groupRow({ n: 2 }, H(4))],
+        [
+          totalsRow({ n: 2 }, H(4)),
+          totalsRow({ kind: 'token_other', n: 3 }, H(4)),
+          totalsRow({ kind: 'verify_other', status: '422', caller: 'other', n: 2 }, H(4)),
+          totalsRow({ ...ours, n: 6 }, H(4)),
+          totalsRow({ kind: 'verify', status: '422', ...ours, n: 4 }, H(4)),
+        ],
+      );
+      // Hour 07: an unknown form again, and totals that were not whole.
+      hourAnswers(
+        H(7),
+        [],
+        [totalsRow({ kind: 'token_other', n: 1 }, H(7)), totalsRow({ kind: 'mystery' }, H(7))],
+      );
+      // Hour 08: an ordinary hour.
+      hourAnswers(H(8), [groupRow({ n: 9 }, H(8))]);
+      const summary = full(await run());
+      expect(summary).toMatchObject({
+        hoursStored: 3,
+        flaggedHours: 2,
+        flaggedStored: {
+          unclassified_sign_in_refusals: 6,
+          unrecorded_server_form_password: 6,
+          unrecorded_server_form_code: 4,
+          too_many_forms_to_count: 1,
+        },
+      });
+      expect(reportCauses().sort()).toEqual(['flagged_stored', 'totals_incomplete']);
+      expect(reportsOf('flagged_stored')[0]![1]).toEqual({
+        tag: 'cron.security-events-auth-logs',
+        level: 'warning',
+        extra: {
+          cause: 'flagged_stored',
+          hours: 2,
+          unclassified_sign_in_refusals: 6,
+          unrecorded_server_form_password: 6,
+          unrecorded_server_form_code: 4,
+          too_many_forms_to_count: 1,
+        },
+      });
+    });
+
+    it('an ordinary run, with wrong passwords and codes stored and no flag, reports nothing', async () => {
+      hourAnswers(H(5), [
+        groupRow({ n: 40 }, H(5)),
+        groupRow({ kind: 'verify', status: '422', caller: 'other', n: 7 }, H(5)),
+        groupRow({ status: '429', n: 3 }, H(5)),
+      ]);
+      hourAnswers(
+        H(6),
+        [],
+        [
+          totalsRow({ kind: 'refresh', n: 500 }, H(6)),
+          totalsRow({ kind: 'token_other', status: '404', n: 30 }, H(6)),
+          totalsRow({ ...ours, n: 2 }, H(6)),
+        ],
+      );
+      const summary = full(await run());
+      expect(summary).toMatchObject({
+        ok: true,
+        hoursStored: 1,
+        eventsStored: 50,
+        flaggedHours: 0,
+        flaggedStored: {},
+      });
+      expect(h.report).not.toHaveBeenCalled();
+    });
+
+    it('a flagged count that was not stored is not reported as stored', async () => {
+      hourAnswers(H(5), [], [totalsRow({ kind: 'token_other', n: 4 }, H(5))]);
+      h.rpc.mockResolvedValueOnce({ data: null, error: { code: '55P03', message: 'lock' } });
+      const summary = full(await run());
+      expect(summary).toMatchObject({ hoursStored: 0, flaggedHours: 0, flaggedStored: {} });
+      expect(reportCauses()).toEqual(['writer_failed']);
+    });
+
+    it('the report holds counts and reason codes only', async () => {
+      hourAnswers(H(5), [], [totalsRow({ kind: 'token_other', n: 4 }, H(5))]);
+      await run();
+      const [err, ctx] = reportsOf('flagged_stored')[0]!;
+      expect(String(err)).not.toMatch(/[0-9]/);
+      for (const [key, value] of Object.entries((ctx as { extra: object }).extra)) {
+        expect(key).toMatch(/^[a-z_]+$/);
+        expect(typeof value === 'number' || value === 'flagged_stored').toBe(true);
+      }
     });
   });
 

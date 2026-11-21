@@ -156,6 +156,13 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * source api, the lines that were read), its lines in our server's form are
  * compared with the part that was read, and the run reports it once.
  *
+ * A FLAGGED COUNT IS REPORTED AS WELL AS STORED. The rows this job stores
+ * have no organization, so they are on no organization's Blocked activity
+ * page. Whenever a run stores a flagged element (requests of an unknown
+ * form, refusals in our server's form that our server has no record of,
+ * totals that were not whole) it sends one warning with the events by
+ * reason. A run that stores only ordinary counts reports nothing.
+ *
  * THE HOUR'S END. A line stamped on the very instant an hour ends belongs to
  * the next hour. Whether the logs service answers it for the hour that ends
  * there is not relied on. If it does: a totals row whose last line is on
@@ -674,6 +681,10 @@ export interface AuthLogsRunSummary {
   ambiguousFormGroups: number;
   /** Flagged elements of refusals of our server's form that our server has no record of. */
   unrecordedFlags: number;
+  /** Hours for which this run stored at least one flagged element. */
+  flaggedHours: number;
+  /** Reason -> events on the flagged elements this run stored. */
+  flaggedStored: Partial<Record<AuthLogsReason, number>>;
   /** Hours whose own record could not all be read: compared with what was read (fail closed). */
   reconcileIncomplete: number;
   /** `<kind> <status> <caller> <network>` -> lines, for the hours read. */
@@ -1571,6 +1582,8 @@ function emptySummary(hours: AuthLogsHour[]): AuthLogsRunSummary {
     unclassified: 0,
     ambiguousFormGroups: 0,
     unrecordedFlags: 0,
+    flaggedHours: 0,
+    flaggedStored: {},
     reconcileIncomplete: 0,
     seen: {},
     seenOther: 0,
@@ -1717,6 +1730,12 @@ async function runHour(
   summary.hoursStored += 1;
   summary.elements += built.elements.length;
   summary.eventsStored += events;
+  // What was stored as flagged, by reason: the run reports it (readAuthLogs).
+  const flagged = built.elements.filter((e) => e.outcome === 'flagged');
+  if (flagged.length > 0) summary.flaggedHours += 1;
+  for (const e of flagged) {
+    summary.flaggedStored[e.reason] = (summary.flaggedStored[e.reason] ?? 0) + e.count;
+  }
 
   // The check must find the hour from now on. It cannot when every element
   // landed past the writer's minute caps (stored as over_minute_cap rows);
@@ -1912,6 +1931,19 @@ export async function readAuthLogs(options: {
         full: summary.totalsCapped,
         rowsDropped: summary.totalsRowsDropped,
       },
+    });
+  }
+  // A FLAGGED COUNT IS TOLD, NOT ONLY STORED. Every row this job stores has
+  // no organization, so no organization's Blocked activity page shows it. A
+  // flagged count is what the job could not account for, and the comparison
+  // with our own record only protects anyone if someone hears of it: one
+  // warning for the run, with the events stored by reason.
+  if (summary.flaggedHours > 0) {
+    reports.push({
+      message:
+        "Flagged counts of refused sign-ins were stored. They have no organization, so they are on no organization's Blocked activity page; the counts by reason are in this report",
+      level: 'warning',
+      extra: { cause: 'flagged_stored', hours: summary.flaggedHours, ...summary.flaggedStored },
     });
   }
   if (summary.landedPastMinuteCaps > 0) {
