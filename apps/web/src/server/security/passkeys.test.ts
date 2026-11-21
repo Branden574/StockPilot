@@ -979,6 +979,129 @@ describe('rule 19 and the proof to add', () => {
   });
 });
 
+describe('a reserved-name factor that no bridge row records is no authenticator app of the member', () => {
+  /** A verified factor that carries the bridge's reserved name and that no row records. */
+  function strayFactor(userId: string) {
+    const f = world.addApp(userId);
+    f.friendly_name = 'sp-passkey-bridge-0123456789ab';
+    return f;
+  }
+  function phoneUsed(userId: string) {
+    world.auditLogs.push({
+      id: crypto.randomUUID(),
+      user_id: userId,
+      event: 'user.signed_in',
+      metadata: { client: 'mobile', app_version: '1.4.0' },
+      created_at: new Date().toISOString(),
+    });
+  }
+  /** S15 (a second reserved-name factor beside the bridge) and S12 (the bridge row gone). */
+  const STATES: Array<[string, (userId: string) => { id: string }]> = [
+    ['S15', (userId) => strayFactor(userId)],
+    [
+      'S12',
+      (userId) => {
+        const factorId = world.bridges.get(userId)!.factor_id;
+        world.bridges.delete(userId);
+        return { id: factorId };
+      },
+    ],
+  ];
+
+  it.each(STATES)(
+    '%s: the Add dialog’s code proof never takes that factor, and no code for it reaches Auth',
+    async (_state, make) => {
+      const { userId } = await memberWithPasskey();
+      const stray = make(userId);
+      world.signIn(userId, 'aal2');
+      vi.mocked(checkMfaCode).mockResolvedValue({ kind: 'verified' } as never);
+      const issued = world.challenges.length;
+      expect(
+        await pk.startAddPasskey({ proof: { kind: 'code', factorId: stray.id, code: '123456' } }),
+      ).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.codeWrong, reason: 'code' });
+      expect(checkMfaCode).not.toHaveBeenCalled();
+      // No registration challenge is issued on a refused proof.
+      expect(world.challenges).toHaveLength(issued);
+    },
+  );
+
+  it.each(STATES)(
+    '%s: the panel counts no app: no code proof is offered, no app is listed, and the phone screen is shown',
+    async (_state, make) => {
+      const { userId } = await memberWithPasskey();
+      make(userId);
+      phoneUsed(userId);
+      world.signIn(userId, 'aal2');
+      const panel = await panelFor(userId);
+      expect(panel).toMatchObject({
+        hasApp: false,
+        proof: 'passkey',
+        apps: [],
+        phoneConfirmation: true,
+      });
+      expect(JSON.stringify(panel)).not.toContain('sp-passkey-bridge');
+    },
+  );
+
+  it.each(STATES)(
+    '%s with an authenticator app of the member’s own: the app alone is listed and proves; the other factor still does not',
+    async (_state, make) => {
+      const { userId } = await memberWithPasskey();
+      const app = world.addApp(userId);
+      const stray = make(userId);
+      world.signIn(userId, 'aal2');
+      expect(await panelFor(userId)).toMatchObject({
+        hasApp: true,
+        proof: 'passkey_or_code',
+        apps: [{ id: app.id, friendlyName: 'StockPilot app' }],
+      });
+      vi.mocked(checkMfaCode).mockResolvedValue({ kind: 'verified' } as never);
+      expect(
+        await pk.startAddPasskey({ proof: { kind: 'code', factorId: stray.id, code: '123456' } }),
+      ).toMatchObject({ ok: false, reason: 'code' });
+      expect(checkMfaCode).not.toHaveBeenCalled();
+      const ok = await pk.startAddPasskey({
+        proof: { kind: 'code', factorId: app.id, code: '123456' },
+      });
+      expect(checkMfaCode).toHaveBeenCalledTimes(1);
+      expect(checkMfaCode).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ factorId: app.id, path: 'add_passkey' }),
+      );
+      // S12 is a fail-closed state for a passkey; what is pinned here is the proof alone.
+      expect(ok.ok || ok.reason !== 'code').toBe(true);
+    },
+  );
+
+  it('S15: adding with the passkey as proof asks for the phone confirmation when that factor is the only other one', async () => {
+    const { soft, userId } = await memberWithPasskey();
+    strayFactor(userId);
+    phoneUsed(userId);
+    world.signIn(userId, 'aal2');
+    const confirm = optionsOf(await pk.startConfirmAdd());
+    expect(
+      await pk.startAddPasskey({
+        proof: {
+          kind: 'passkey',
+          challengeId: confirm.challengeId,
+          response: soft.get(confirm.options),
+        },
+      }),
+    ).toMatchObject({ ok: false, reason: 'phone_confirmation' });
+  });
+
+  it('a healthy account is unchanged: the bridge is no app, the member’s app is', async () => {
+    const { userId } = await memberWithPasskey();
+    const app = world.addApp(userId);
+    world.signIn(userId, 'aal2');
+    expect(await panelFor(userId)).toMatchObject({
+      hasApp: true,
+      proof: 'passkey_or_code',
+      apps: [{ id: app.id, friendlyName: 'StockPilot app' }],
+    });
+  });
+});
+
 describe('rule 20: each action spends only its own purpose', () => {
   it('second_step refuses a challenge of every other purpose', async () => {
     const { soft } = await memberWithPasskey();

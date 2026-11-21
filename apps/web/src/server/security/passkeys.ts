@@ -644,7 +644,14 @@ export interface AccountPicture {
   facts: ReturnType<typeof passkeyFactsOf>;
   /** Active rows of this site. */
   active: PasskeyRow[];
-  /** Verified TOTP factors that are not the recorded bridge (the member's apps). */
+  /**
+   * The member's authenticator apps: verified TOTP factors that are not the
+   * recorded bridge and do not carry the bridge's reserved name. A
+   * reserved-name factor that no row records (S12, S13, S14, S17 with no row;
+   * S15's second one) is no app: its code is one no member has, since our
+   * pages never give an app that name. So the Add dialog's code proof, the
+   * panel's app list and the phone confirmation never count it.
+   */
   apps: AuthFactor[];
 }
 
@@ -666,7 +673,11 @@ async function readPicture(
   if (rows === null || bridge === 'unreadable')
     return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'records_unreadable');
   const apps = account.factors.filter(
-    (f) => f.factor_type === 'totp' && f.status === 'verified' && f.id !== bridge?.factor_id,
+    (f) =>
+      f.factor_type === 'totp' &&
+      f.status === 'verified' &&
+      f.id !== bridge?.factor_id &&
+      !isReservedTotp(f),
   );
   return {
     ok: true,
@@ -1548,7 +1559,8 @@ export async function startAddPasskey(input: {
         : fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'password_unchecked');
     }
   } else if (proof.kind === 'code') {
-    // An authenticator app (never the bridge, by id).
+    // An authenticator app: never the bridge, nor any other factor that
+    // carries its reserved name (picture.apps).
     const app = picture.apps.find((f) => f.id === proof.factorId);
     if (!app || typeof proof.code !== 'string' || !/^\d{6}$/.test(proof.code)) {
       return fail('validation_error', PASSKEY_WORDS.codeWrong, 'code');
