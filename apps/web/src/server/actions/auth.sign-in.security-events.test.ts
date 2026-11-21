@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
+ * Security invariant: a refused sign-in is recorded after the response, so
+ * its timing tells nothing about the email, and a refusal that is not a
+ * wrong password is recorded with no organization.
+ *
  * signInAction's security events (part 1 of the security tools): a refusal by
  * the email or the address limiter is sign_in_paused, credentials GoTrue
  * judged wrong are wrong_password, the Auth server's own limit is

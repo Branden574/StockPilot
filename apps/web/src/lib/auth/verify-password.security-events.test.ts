@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
+ * Security invariant: recording a refused current password never changes
+ * the member's answer, never throws, and waits for nothing but the request's
+ * headers; a refusal that is not a wrong password is recorded with no
+ * organization.
+ *
  * The current-password check's security events (part 1 of the security
  * tools). verifyPasswordSideChannel sends a signed-in member's password to
  * the sign-in service for six features (changing the password or the email,

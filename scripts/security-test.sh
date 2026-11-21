@@ -2333,6 +2333,17 @@ WEB_TESTS=(
   src/server/security/auth-logs.test.ts
   src/server/security/auth-logs.guard.test.ts
   src/app/api/cron/security-events-auth-logs/route.test.ts
+  # The refusals our own server records on its live sign-in paths (the
+  # reader above compares their count with the sign-in service's log): a
+  # refused sign-in, a refused current password and a refused set-up code are
+  # recorded after the response, never change the member's answer and never
+  # throw; the organization is found on the server, and a refusal that is not
+  # a wrong password is recorded with none. Each file carries the "Security
+  # invariant" marker.
+  src/server/security/account-events.test.ts
+  src/server/actions/auth.sign-in.security-events.test.ts
+  src/lib/auth/verify-password.security-events.test.ts
+  src/server/actions/mfa.set-up.security-events.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

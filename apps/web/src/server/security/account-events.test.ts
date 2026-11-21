@@ -2,6 +2,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
+ * Security invariant: the organization of a refused sign-in or code is
+ * found on the server, after the response, and nothing about a typed email
+ * is read before it.
+ *
  * The password-guessing detector helpers (server/security/account-events.ts):
  *
  *   - the organization of a typed sign-in email: an exact match on the

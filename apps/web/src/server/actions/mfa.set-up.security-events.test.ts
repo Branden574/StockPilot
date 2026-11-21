@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
+ * Security invariant: recording a refused set-up code never changes the
+ * member's answer and never throws, and only a code the sign-in service
+ * judged wrong is recorded.
+ *
  * The authenticator set-up's security event (part 1 of the security tools).
  * verifyEnrollmentAction sends the first code of a new authenticator to the
  * sign-in service. A code the service judged wrong is wrong_setup_code, in
