@@ -202,7 +202,11 @@ describe('an account with no verified authenticator', () => {
     await confirmDeletionCredential({ ...base, input: { password: PASSWORD }, source: 'phone' });
     await confirmDeletionCredential({ ...base, input: { password: PASSWORD }, source: 'web' });
     await confirmDeletionCredential({ ...base, input: { password: PASSWORD } });
-    expect(verifyPassword.mock.calls.map((call) => call[3])).toEqual(['phone', 'web', 'web']);
+    expect(verifyPassword.mock.calls.map((call) => (call as unknown[])[3])).toEqual([
+      'phone',
+      'web',
+      'web',
+    ]);
   });
 
   it('the right password: confirmed, checked against the current address, one try counted first', async () => {
