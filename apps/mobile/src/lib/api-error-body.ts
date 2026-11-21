@@ -50,6 +50,14 @@ export function readErrorBody(raw: string): ErrorBody {
   return { message, code, details };
 }
 
+/**
+ * A 401, in words that claim no cause: the API answers 401 for no session or
+ * an ended one, a code not entered, no membership in the workspace asked for,
+ * and a disabled account. The account probe api() asks for decides whether
+ * the app signs out. The same words as core's ACCOUNT_DELETE_SIGN_IN_AGAIN_COPY.
+ */
+export const SIGN_IN_AGAIN_COPY = 'Sign in again to continue.';
+
 /** What to say when the body said nothing a person can act on. */
 export function statusSentence(status: number): string {
   return status === 401 || status === 403

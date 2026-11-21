@@ -1,7 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { cycleCountSync } from './cycle-count-sync';
 import { OutboxSessionChangedError, REPLACED_BY_LATER_COUNT } from './outbox-scope';
+import {
+  beginSetUpRead,
+  keptRefusalCountForTests,
+  noteServerReadUser,
+  recordMembershipInputs,
+  resetSetUpInputsForTests,
+} from './set-up-inputs';
 
 /**
  * The cycle-count drain (engine 2), EXECUTED — the twin of sync.drain.test.ts.
@@ -601,5 +608,137 @@ describe('Restart now pauses the count drain (B44)', () => {
       `api:${recordPath('l3')}`,
       'outboxAck:3',
     ]);
+  });
+});
+
+/**
+ * Authenticator set-up (set-up-inputs.ts, drain-failure.ts): a count the
+ * server refuses while its workspace requires an authenticator the account
+ * has not set up is kept for another try, never parked, and held while its
+ * own workspace owes set-up: not sent, and not settled.
+ */
+describe('a queued count waits while an authenticator is being set up', () => {
+  const refusal = () =>
+    Object.assign(
+      new Error('Multi-factor authentication required. Enroll in MFA before performing this action.'),
+      { status: 403, code: 'forbidden', details: { reason: 'mfa_required' } },
+    );
+
+  beforeEach(() => resetSetUpInputsForTests());
+  afterEach(() => resetSetUpInputsForTests());
+
+  it('a refused count is kept for another try (backoff), never parked', async () => {
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      throw refusal();
+    });
+    cacheMock.rows = [countRow(1, 'l1', { org: 'org-a', user: 'u1' })];
+
+    await cycleCountSync.forceSync();
+
+    expect(calls.log).toEqual(['outboxMarkSending:1', `api:${recordPath('l1')}`, 'outboxBumpFailure:1']);
+    expect(cacheMock.outboxReject).not.toHaveBeenCalled();
+  });
+
+  it('held while its own workspace owes set-up: not sent, and a superseded one is not settled', async () => {
+    recordMembershipInputs(
+      'u1',
+      [{ organizationId: 'org-a', role: 'staff', organization: { name: 'A', mfa_policy: 'all_required' } }],
+      beginSetUpRead(),
+    );
+    noteServerReadUser({ id: 'u1', factors: [] });
+    live.orgId = 'org-b';
+    cacheMock.rows = [
+      countRow(1, 'l1', { org: 'org-a', user: 'u1' }),
+      countRow(2, 'l1', { org: 'org-a', user: 'u1' }),
+    ];
+
+    await cycleCountSync.forceSync();
+    expect(apiMock.api).not.toHaveBeenCalled();
+    expect(calls.log).toEqual([]);
+
+    // An authenticator is set up: the same drain settles and sends, once.
+    noteServerReadUser({ id: 'u1', factors: [{ status: 'verified' }] });
+    await cycleCountSync.forceSync();
+    expect(calls.log).toEqual([
+      'outboxAck:1',
+      'outboxMarkSending:2',
+      `api:${recordPath('l1')}`,
+      'outboxAck:2',
+    ]);
+  });
+});
+
+describe('a count line refused with module_disabled, and the mark of a row that leaves', () => {
+  beforeEach(() => resetSetUpInputsForTests());
+  afterEach(() => resetSetUpInputsForTests());
+
+  it('403 module_disabled with no details.reason is final at once: parked, no check', async () => {
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      throw Object.assign(new Error('Module not enabled for this organization: cycle_counts'), {
+        status: 403,
+        code: 'module_disabled',
+      });
+    });
+    cacheMock.rows = [countRow(1, 'l1', { org: 'org-a', user: 'u1' })];
+    await cycleCountSync.forceSync();
+    expect(calls.log).toEqual(['outboxMarkSending:1', `api:${recordPath('l1')}`, 'outboxReject:1']);
+    expect(keptRefusalCountForTests()).toBe(0);
+  });
+
+  it('a kept count that then lands, or is parked, takes its mark with it', async () => {
+    let refuse = true;
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      if (refuse) {
+        throw Object.assign(new Error('Missing permission: cycle_counts:count'), { status: 403, code: 'forbidden' });
+      }
+    });
+    cacheMock.rows = [countRow(1, 'l1', { org: 'org-a', user: 'u1' })];
+    await cycleCountSync.forceSync();
+    expect(keptRefusalCountForTests()).toBe(1);
+    refuse = false;
+    await cycleCountSync.forceSync();
+    expect(cacheMock.outboxAck).toHaveBeenCalledWith(1);
+    expect(keptRefusalCountForTests()).toBe(0);
+
+    // Kept, then superseded by a newer count of the line: settled, and its mark goes.
+    refuse = true;
+    cacheMock.rows = [countRow(2, 'l2', { org: 'org-a', user: 'u1' })];
+    await cycleCountSync.forceSync();
+    expect(keptRefusalCountForTests()).toBe(1);
+    refuse = false;
+    cacheMock.rows = [countRow(2, 'l2', { org: 'org-a', user: 'u1' }), countRow(3, 'l2', { org: 'org-a', user: 'u1' })];
+    await cycleCountSync.forceSync();
+    expect(cacheMock.outboxAck).toHaveBeenCalledWith(2);
+    expect(keptRefusalCountForTests()).toBe(0);
+  });
+});
+
+describe('another account’s superseded count is parked with the replaced sentence while this account owes set-up', () => {
+  beforeEach(() => resetSetUpInputsForTests());
+  afterEach(() => resetSetUpInputsForTests());
+
+  it('parked with the replaced sentence; this account’s own superseded count is held', async () => {
+    recordMembershipInputs(
+      'u1',
+      [{ organizationId: 'org-a', role: 'staff', organization: { name: 'A', mfa_policy: 'all_required' } }],
+      beginSetUpRead(),
+    );
+    noteServerReadUser({ id: 'u1', factors: [] });
+    cacheMock.rows = [
+      countRow(1, 'l1', { org: 'org-a', user: 'u1' }), // own, superseded by 3
+      countRow(2, 'l2', { org: 'org-a', user: 'u9' }), // another account's, superseded by 4
+      countRow(3, 'l1', { org: 'org-a', user: 'u1' }),
+      countRow(4, 'l2', { org: 'org-a', user: 'u1' }),
+    ];
+
+    await cycleCountSync.forceSync();
+
+    expect(cacheMock.outboxReject).toHaveBeenCalledWith(2, REPLACED_BY_LATER_COUNT);
+    expect(cacheMock.outboxAck).not.toHaveBeenCalled();
+    expect(apiMock.api).not.toHaveBeenCalled();
+    expect(calls.log).toEqual(['outboxReject:2']);
   });
 });

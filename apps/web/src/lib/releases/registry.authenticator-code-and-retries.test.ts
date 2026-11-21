@@ -445,14 +445,32 @@ describe('the authenticator code release (S43a, release 1)', () => {
     expect(repoFile('packages/core/src/auth/step-up.ts')).toContain(
       "return enrolled && aal !== 'aal2';",
     );
-    // The installed phone: a 401 on a live account is tried again; a 403 went
-    // to Unsent work. A queued stock adjustment answered 401 is tried again too.
+    // The phone: a 401 on a live account is tried again. A 403 is decided in
+    // one place, its own branch, and goes to Unsent work only on evidence
+    // that it is not about the authenticator; 400, 409 and 422 go there at
+    // once. A queued stock adjustment answered 401 is tried again too.
     const drain = phone('src/lib/drain-failure.ts');
     expect(drain).toContain(
       "if (status === 401) return opts.accountDisabled ? 'rejected' : 'failed';",
     );
+    // Re-pinned by mobile/outbox-holds-for-authenticator-set-up (2026-11-16; was: the set with 403 in it): a 403 is decided in its own branch. This published line keeps what the phone builds it was written for did, which stays true of them until their next phone update.
+    // The whole 403 branch, in order: the authenticator answer (in
+    // details.reason or as the code) keeps the row; another named reason, or
+    // a module that is off, parks it; no reason parks it only on a check that
+    // found nothing owed.
     expect(drain).toContain(
-      'const DEFINITIVE_REFUSALS: ReadonlySet<number> = new Set([400, 403, 409, 422]);',
+      [
+        '  if (status === 403) {',
+        '    const reason = detailsReason(e?.details);',
+        "    if (reason !== null && AUTHENTICATOR_REASONS.has(reason)) return 'failed';",
+        "    if (typeof e?.code === 'string' && AUTHENTICATOR_REASONS.has(e.code)) return 'failed';",
+        "    if (reason !== null || e?.code === 'module_disabled') return 'rejected';",
+        "    return opts.setUp === 'clear' ? 'rejected' : 'failed';",
+        '  }',
+      ].join('\n'),
+    );
+    expect(drain).toContain(
+      'const DEFINITIVE_REFUSALS: ReadonlySet<number> = new Set([400, 409, 422]);',
     );
     expect(phone('src/lib/adjust-outbox.ts')).toContain(
       "if (status === 401 || status === 429 || status === 404) return 'failed';",

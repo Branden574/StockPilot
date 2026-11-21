@@ -84,12 +84,25 @@ vi.mock('./supabase', () => {
     eq: () => members,
     not: async () => {
       if (gate.holdMemberships) await gate.holdMemberships;
+      // Each organization embedded as the real read selects it (name,
+      // mfa_policy). 'optional' asks nothing of staff, so the authenticator
+      // set-up hold (set-up-hold.ts) never holds these loads; a row whose
+      // policy cannot be read is its could-not-check, which reads no
+      // warehouses and pulls nothing.
       return gate.failMemberships
         ? offline
         : {
             data: [
-              { role: 'staff', organization_id: 'org-a', organizations: { name: 'A' } },
-              { role: 'staff', organization_id: 'org-b', organizations: { name: 'B' } },
+              {
+                role: 'staff',
+                organization_id: 'org-a',
+                organizations: { name: 'A', mfa_policy: 'optional' },
+              },
+              {
+                role: 'staff',
+                organization_id: 'org-b',
+                organizations: { name: 'B', mfa_policy: 'optional' },
+              },
             ],
             error: null,
           };

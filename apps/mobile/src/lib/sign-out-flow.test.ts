@@ -420,9 +420,11 @@ describe('auth-context wiring', () => {
     // The SQLite cache, then the photos this account saw, whether or not the
     // SQLite wipe succeeded (photo-cache-wipe.ts).
     expect(body).toMatch(/wipeCache: \(\) => wipeWithPhotoCaches\(wipeForSignOut\),/);
-    // The keys an eviction removes (account-eviction.ts accountScopedStorageKeys).
+    // The keys an eviction removes (account-eviction.ts accountScopedStorageKeys),
+    // after the authenticator policy inputs held this run are forgotten, so
+    // nothing saves them back (set-up-inputs.ts).
     expect(body).toMatch(
-      /clearAccountStorage: async \(\) => \{\s*const keys = accountScopedStorageKeys\(await AsyncStorage\.getAllKeys\(\)\);\s*if \(keys\.length > 0\) await AsyncStorage\.multiRemove\(keys\);\s*\},/,
+      /clearAccountStorage: async \(\) => \{\s*await forgetSetUpInputs\(\);\s*const keys = accountScopedStorageKeys\(await AsyncStorage\.getAllKeys\(\)\);\s*if \(keys\.length > 0\) await AsyncStorage\.multiRemove\(keys\);\s*\},/,
     );
     expect(body).toContain('countUnsynced: () => totalPendingCount()');
     expect(body).toContain('await cycleCountSync.forceSync()');

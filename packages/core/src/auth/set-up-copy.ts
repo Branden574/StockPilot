@@ -48,12 +48,32 @@ export function authenticatorSetUpHoldBody(
   return `${name} asks ${who} to use an authenticator app. Set one up on the website, then come back to this app.`;
 }
 
+/**
+ * The phone's holding screen when a check answered and could not tell whether
+ * an authenticator is owed (the organization's row could not be read, or its
+ * policy is not one the app knows). Claims nothing about the member.
+ */
+export const AUTHENTICATOR_CHECK_UNAVAILABLE_COPY = {
+  title: 'Your access could not be checked',
+  body: 'Your access could not be checked just now. Try again in a moment.',
+} as const;
+
+/** The line under the holding screen's body after Check again. */
+export const AUTHENTICATOR_CHECK_RESULT_COPY = {
+  /** An answer came and the screen stays. */
+  checked: 'Checked just now.',
+  /** No answer came (no connection, no answer in time, or an error). */
+  noAnswer: 'Could not check. Try again.',
+} as const;
+
 /** The phone's holding screen: its actions, and the hint on the one that leaves the app. */
 export const AUTHENTICATOR_SET_UP_HOLD_COPY = {
   setUpOnWebsite: 'Set up on the website',
   setUpOnWebsiteHint: 'Opens the website',
   checkAgain: 'Check again',
   switchWorkspace: 'Switch workspace',
+  /** An organization in the holding screen's list whose name could not be read. */
+  unnamedWorkspace: 'Workspace',
   signOut: 'Sign out',
   deleteAccount: 'Delete my account',
 } as const;

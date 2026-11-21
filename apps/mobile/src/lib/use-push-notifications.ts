@@ -7,6 +7,7 @@ import { Linking, Platform } from 'react-native';
 
 import { stepUpNoteHolds } from './mfa-level';
 import { stepUpForcedFor } from './mfa-reconcile';
+import { setUpHoldIn } from './set-up-hold';
 import { rewriteWebPath } from './web-path-rewrite';
 import { supabase } from './supabase';
 
@@ -170,6 +171,10 @@ export async function registerThisDevice(
     if (!token || cancelled()) return;
 
     if (await owesAuthenticatorCode(user.id)) return;
+    // The authenticator set-up hold is up for this account (set-up-hold.ts):
+    // no registration, whoever asks (a sign-out the session survived too).
+    // The push hook registers again once it is released.
+    if (setUpHoldIn(user.id)) return;
     if (holds.size > 0 || cancelled()) return;
 
     // ═══ REBIND GOES THROUGH THE RPC, NOT A RAW UPSERT (0348) ═══

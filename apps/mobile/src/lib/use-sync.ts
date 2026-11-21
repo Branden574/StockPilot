@@ -4,10 +4,15 @@ import { AppState, type AppStateStatus } from 'react-native';
 
 import { isOfflineState } from './exceptions-api';
 import { foregroundTick } from './foreground-tick';
+import { connectSetUpInputs } from './set-up-inputs-source';
 import { isOnline, syncNow } from './sync';
 import { retryWorkspace } from './use-workspace';
 
 import type { User } from '@supabase/supabase-js';
+
+// The saved authenticator policy inputs and the read the outbox's set-up
+// hold asks for (set-up-inputs.ts), connected at app start.
+connectSetUpInputs();
 
 const FOREGROUND_INTERVAL_MS = 60_000;
 

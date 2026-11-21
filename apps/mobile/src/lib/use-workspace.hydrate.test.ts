@@ -66,11 +66,28 @@ vi.mock('./supabase', () => {
       if (gate.failMemberships) {
         return { data: null, error: { message: 'TypeError: Network request failed' }, status: 0 };
       }
+      // Each organization embedded as the real read selects it (name,
+      // mfa_policy). 'optional' asks nothing of staff, so the authenticator
+      // set-up hold (set-up-hold.ts) never holds these loads; a row whose
+      // policy cannot be read is its could-not-check, which reads no
+      // warehouses and pulls nothing.
       return {
         data: [
-          { role: 'staff', organization_id: 'org-a', organizations: { name: 'A' } },
-          { role: 'staff', organization_id: 'org-b', organizations: { name: 'B' } },
-          { role: 'staff', organization_id: 'org-c', organizations: { name: 'C' } },
+          {
+            role: 'staff',
+            organization_id: 'org-a',
+            organizations: { name: 'A', mfa_policy: 'optional' },
+          },
+          {
+            role: 'staff',
+            organization_id: 'org-b',
+            organizations: { name: 'B', mfa_policy: 'optional' },
+          },
+          {
+            role: 'staff',
+            organization_id: 'org-c',
+            organizations: { name: 'C', mfa_policy: 'optional' },
+          },
         ],
         error: null,
       };

@@ -2381,6 +2381,39 @@ MOBILE_TESTS=(
   src/lib/mfa-reconcile.test.ts
   src/lib/code-gate-wiring.test.ts
 
+  # Queued work while an organization requires an authenticator the account
+  # has not set up: no queued change is parked for that answer. A 403 on a
+  # queued send is final at once when it names another reason; with no
+  # reason, only when a read that started after that row's own kept refusal
+  # returned the row's workspace and finds no set-up owed there. Until then
+  # the row is kept (sent again after a backoff), and while its workspace
+  # owes set-up it is held (per row and per workspace, from the policy as
+  # read, the role and the server's factor list; an organization row that
+  # cannot be read is never read as a policy) and sent once, with its own
+  # key, after set-up. The inputs are saved, never the answer, under an
+  # account-scoped key. A row in Unsent work whose stored message is the
+  # server's sentence for that answer is not sent and reads a plain sentence.
+  # (The drains themselves: sync.drain.test.ts and
+  # cycle-count-sync.drain.test.ts, listed under the outbox above.)
+  src/lib/set-up-inputs.test.ts
+  src/lib/set-up-inputs.wiring.test.ts
+  src/lib/drain-failure.test.ts
+  src/lib/parked-set-up-words.test.ts
+
+  # The authenticator set-up screen takes the app's place while the
+  # workspace's policy, as read, asks this account for an authenticator it
+  # has not set up, or while a check that answered could not tell; the code
+  # screen and the Face ID lock come first, and with no connection and
+  # nothing saved the app opens. While it holds, the data hooks are handed
+  # nobody and this phone's push token row is deleted once; the push hook
+  # registers again on release. The stored session's factor list decides
+  # only the screen, never the queue's answers; the screen's reads write to
+  # the same store the queue asks and never set a refusal mark; any route's
+  # 403 with details.reason mfa_required only asks for a read.
+  src/lib/set-up-hold.test.ts
+  src/lib/set-up-hold.reads.test.ts
+  src/lib/authenticator-set-up-screen-structure.test.ts
+
   # Deleting your own account from the phone: an account with no authenticator
   # confirms with its current password or a six-digit code emailed to it, and
   # one with an authenticator with the typed word, as the website's dialog
@@ -2477,6 +2510,16 @@ MOBILE_TESTS=(
   # shown; the select bar offers a size family only with sports:manage and
   # the sports module on.
   src/lib/ungroup-selected.test.ts
+  # Accounts: archive and restore a customer account go through PATCH
+  # /api/v1/customers/[id]/status with the bearer and the workspace on
+  # screen, only under the account the list was read for, one change per
+  # row at a time (the server checks the module, customers:manage and the
+  # authenticator rule, and records the change); the screen writes no
+  # customer row itself; every answer is plain words, never a permission,
+  # module id or code word; the row keeps its status after a refusal and the
+  # list is read again where the answer leaves it unknown.
+  src/lib/customer-status.test.ts
+  src/lib/customer-status.wire.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
