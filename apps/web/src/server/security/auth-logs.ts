@@ -83,12 +83,16 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * one: part 1 recorded those refusals already, with the member's real place.
  * Since both marks can be presented by someone else, its refused passwords
  * (400) and codes (422) of the hour are RECONCILED with what our own server
- * recorded for that hour (source web; reconcile reads it): when the gateway
- * holds AUTH_LOGS_UNRECORDED_FLAG_AT or more that our server did not record,
- * the excess is stored as a flagged count (unrecorded_server_form_password or
- * _code). Our client strings from any other network, or any string that only
+ * recorded for that hour (source web; readRecorded reads it, however many
+ * rows it is): when the gateway holds AUTH_LOGS_UNRECORDED_FLAG_AT or more
+ * that our server has no record of, the excess is stored as a flagged count
+ * (unrecorded_server_form_password or _code). Only rows whose reason names
+ * a refused password or code count as recorded; overflow rows cover nothing.
+ * Our client strings from any other network, or any string that only
  * contains their words, are not ours, and are stored as api. A network class
- * that is not exactly `hosting` is `other` (fail closed).
+ * that is not exactly `hosting` is `other` (fail closed). In the groups
+ * query our own server's lines are left out, so they take no row of its
+ * limit from other callers; the totals query counts them.
  *
  * AN HOUR IS WRITTEN ONCE (the writer ADDS on a repeat). Each run handles the
  * last six complete UTC hours, oldest first, so a missed run heals. An hour
@@ -99,10 +103,11 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * nothing to store is read again by the next run, and so is an hour whose
  * reconciliation could not be read. The check is made a second time right
  * before the write, so a run that overlaps another leaves alone an hour the
- * other has just stored (runHour says what gap remains). If every element of an hour lands past
- * the writer's per-minute caps (it then stores them as over_minute_cap rows,
- * which the check does not read), the check cannot see the hour, and that is
- * reported.
+ * other has just stored (runHour says what gap remains). If every element
+ * of an hour lands past the writer's per-minute caps (it then stores them as
+ * over_minute_cap rows, which the check does not read), the check cannot see
+ * the hour, and that is reported. The writer's own count of what it stored
+ * is read, and a count below what was sent is reported.
  *
  * TWO QUERIES AN HOUR. The groups query lists the lines that can be stored
  * (kinds password and verify) by minute and country, at most
@@ -115,20 +120,27 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * are folded into those elements until the call holds at most
  * AUTH_LOGS_MAX_ELEMENTS.
  *
- * FAILURES. The run stops at its first failure and reports it once, in plain
- * words with a status or a code: a refused token (401 or 403: the owner makes
- * a new one), a query the logs service did not run (it answers 200 with an
- * error), a logs answer that is late (20 s), refused (another status) or not
- * readable, a read or a write of the record that failed. The hour is left for
- * the next run. The run has a deadline (AUTH_LOGS_RUN_DEADLINE_MS) inside the
- * route's 60 s limit; a run that reaches it stops and says so once.
+ * FAILURES. A failed hour is left for the next run, and the hours after it
+ * are still tried, so one bad hour does not hold up the newer ones. The run
+ * stops only at a failure every hour would meet (a refused token, a query
+ * the logs service did not run, a service that cannot be reached) or at its
+ * deadline. Each distinct failure is reported once per run, in plain words
+ * with a status or a code and the number of hours it stopped: a refused
+ * token (401 or 403: the owner makes a new one), a query the logs service
+ * did not run (it answers 200 with an error), a logs answer that is late
+ * (20 s), refused (another status), too large or not readable, a read or a
+ * write of the record that failed. The run has a deadline
+ * (AUTH_LOGS_RUN_DEADLINE_MS) inside the route's 60 s limit; a run that
+ * reaches it stops and says so once. The reports are sent together and
+ * waited for AUTH_LOGS_REPORTS_MAX_MS at most.
  *
  * THE TOKEN (SUPABASE_LOGS_READ_TOKEN, which the route reads through the env
  * module and hands in) is sent only as the Authorization header of a GET to
  * AUTH_LOGS_API_ORIGIN, with redirects refused. It is never logged, never put
  * in a report and never returned. An answer that is not a success is never
- * read, and no error's own text is ever passed on: a failure is described by
- * this module's words, a status and a code.
+ * read, a successful one is read up to a size limit, and no error's own text
+ * is ever passed on: a failure is described by this module's words, a status
+ * and a code.
  *
  * Server code only (server/security/events.guard.test.ts).
  */
@@ -166,12 +178,17 @@ export const AUTH_LOGS_CALL_TIMEOUT_MS = 20_000;
 export const AUTH_LOGS_DB_TIMEOUT_MS = 5_000;
 /** A run starts no call after this long, and cuts any call at it (the route allows 60 s). */
 export const AUTH_LOGS_RUN_DEADLINE_MS = 50_000;
+/**
+ * How long a run waits for its reports, all sent at once, before it answers
+ * anyway. With the deadline above, a run ends inside 54 s of the route's 60.
+ */
+export const AUTH_LOGS_REPORTS_MAX_MS = 4_000;
 /** A call is not started with less time than this left. */
 const MIN_CALL_MS = 1_000;
 /** Distinct (kind, status, caller, network) counts the log line lists; the rest are summed. */
 export const AUTH_LOGS_SEEN_LIMIT = 40;
-/** A logs answer longer than this is not read. */
-const MAX_ANSWER_CHARS = 2_000_000;
+/** A logs answer longer than this many bytes is not read (199 small rows are a few tens of thousands). */
+const MAX_ANSWER_BYTES = 2_000_000;
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
@@ -547,7 +564,7 @@ export interface AuthLogsRunSummary {
   unclassified: number;
   /** Lines with several grant_type values (classed by the first) or a repeated slash in the path. */
   ambiguousForm: number;
-  /** Flagged elements of refusals of our server's form that our server did not record. */
+  /** Flagged elements of refusals of our server's form that our server has no record of. */
   unrecordedFlags: number;
   /** Hours whose own record could not all be read: compared with what was read (fail closed). */
   reconcileIncomplete: number;
@@ -559,6 +576,9 @@ export interface AuthLogsRunSummary {
   landedPastMinuteCaps: number;
   /** Hours found stored by the check made again right before the write: another run wrote them meanwhile. */
   storedByAnotherRun: number;
+  /** Stored hours for which the writer answered a count below the elements sent, or none. */
+  storedFewer: number;
+  /** The first failure of the run (each failed hour carries its own). */
   failure: (AuthLogsFailure & { hour?: string }) | null;
 }
 
@@ -969,7 +989,7 @@ export function buildHourElements(input: {
     if (n >= AUTH_LOGS_UNCLASSIFIED_FLAG_AT)
       flag('unclassified_sign_in_refusals', source, n, input.hour.startMs);
   }
-  // Refusals of our server's form that our server did not record: from
+  // Refusals of our server's form that our server has no record of: from
   // AUTH_LOGS_UNRECORDED_FLAG_AT in an hour, one count per kind, at the hour's last minute.
   const reconcile = reconcileServerForm(serverFormRefusals(input.totals), input.recorded);
   const lastMinute = input.hour.endMs - MINUTE_MS;
@@ -1092,7 +1112,6 @@ const timedOut = (cut: boolean, own: AuthLogsFailure): AuthLogsFailure =>
  * result list is null. The error's own text is never read.
  */
 function rowsOf(text: string): unknown[] | 'query_error' | null {
-  if (text.length > MAX_ANSWER_CHARS) return null;
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -1103,6 +1122,54 @@ function rowsOf(text: string): unknown[] | 'query_error' | null {
   if (parsed.error !== undefined && parsed.error !== null) return 'query_error';
   if (!Array.isArray(parsed.result) || parsed.result.length > AUTH_LOGS_ROW_LIMIT) return null;
   return parsed.result;
+}
+
+/**
+ * The body of a successful answer as text, or null when it is larger than
+ * MAX_ANSWER_BYTES. A length the answer declares above the limit is refused
+ * before a byte is read; with no usable declared length (or a wrong one) the
+ * body is read a piece at a time and given up, and cancelled, as soon as it
+ * passes the limit. So an answer of any size costs this function a bounded
+ * amount of memory. A body that cannot be read throws, as fetch does.
+ */
+async function readCapped(res: Response): Promise<string | null> {
+  const giveUp = async () => {
+    try {
+      await res.body?.cancel();
+    } catch {
+      // Nothing to do: the body is not read either way.
+    }
+    return null;
+  };
+  const declared = res.headers.get('content-length');
+  if (declared !== null && /^[0-9]{1,15}$/.test(declared) && Number(declared) > MAX_ANSWER_BYTES) {
+    return giveUp();
+  }
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const pieces: Uint8Array[] = [];
+  let bytes = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    bytes += value.byteLength;
+    if (bytes > MAX_ANSWER_BYTES) {
+      try {
+        await reader.cancel();
+      } catch {
+        // Nothing to do: the rest is not read either way.
+      }
+      return null;
+    }
+    pieces.push(value);
+  }
+  const whole = new Uint8Array(bytes);
+  let at = 0;
+  for (const piece of pieces) {
+    whole.set(piece, at);
+    at += piece.byteLength;
+  }
+  return new TextDecoder().decode(whole);
 }
 
 /**
@@ -1145,7 +1212,9 @@ async function queryLogs(
           failure: { cause: refused ? 'token_refused' : 'logs_unavailable', status: res.status },
         };
       }
-      const rows = rowsOf(await res.text());
+      const text = await readCapped(res);
+      if (text === null) return { ok: false, failure: { cause: 'logs_bad_answer' } };
+      const rows = rowsOf(text);
       if (rows === 'query_error') return { ok: false, failure: { cause: 'logs_query_error' } };
       return rows
         ? { ok: true, value: rows }
@@ -1198,18 +1267,29 @@ async function alreadyStored(ctx: RunContext, hour: AuthLogsHour): Promise<Outco
   }
 }
 
-/** One writer call with every element of the hour: stored whole or not at all. */
-async function writeHour(ctx: RunContext, elements: AuthLogsElement[]): Promise<Outcome<null>> {
+/**
+ * One writer call with every element of the hour: stored whole or not at
+ * all. Answers the writer's own count of the elements it stored (it skips an
+ * element it cannot read), or null when it gave none.
+ */
+async function writeHour(
+  ctx: RunContext,
+  elements: AuthLogsElement[],
+): Promise<Outcome<number | null>> {
   const limit = callLimit(ctx, AUTH_LOGS_DB_TIMEOUT_MS);
   if (!limit) return { ok: false, failure: { cause: 'out_of_time' } };
   try {
-    const { error } = await within(limit.ms, (signal) =>
+    const { data, error } = await within(limit.ms, (signal) =>
       Promise.resolve(
         ctx.admin().rpc('record_security_events', { p_events: elements }).abortSignal(signal),
       ),
     );
     if (error) return { ok: false, failure: { cause: 'writer_failed', code: codeOf(error) } };
-    return { ok: true, value: null };
+    const stored: unknown = data;
+    return {
+      ok: true,
+      value: typeof stored === 'number' && Number.isSafeInteger(stored) ? stored : null,
+    };
   } catch (e) {
     if (e instanceof CallTimeout) {
       return {
@@ -1348,6 +1428,7 @@ function emptySummary(hours: AuthLogsHour[]): AuthLogsRunSummary {
     seenOther: 0,
     landedPastMinuteCaps: 0,
     storedByAnotherRun: 0,
+    storedFewer: 0,
     failure: null,
   };
 }
@@ -1461,6 +1542,8 @@ async function runHour(
 
   const written = await writeHour(ctx, built.elements);
   if (!written.ok) return written.failure;
+  // The writer skips an element it cannot read and says how many it stored.
+  if (written.value === null || written.value < built.elements.length) summary.storedFewer += 1;
   const events = built.elements.reduce((s, e) => s + e.count, 0);
   report.outcome = 'stored';
   report.events = events;
@@ -1501,14 +1584,48 @@ const FAILURE_WORDS: Record<AuthLogsFailureCause, (f: AuthLogsFailure) => string
     "Reading refused sign-ins from Supabase's logs failed unexpectedly; the next run tries again",
 };
 
-async function report(
-  message: string,
-  level: 'error' | 'warning',
-  extra: Record<string, string | number>,
-) {
-  // reportError never throws; awaited so the report is sent before the answer.
-  await reportError(new Error(message), { tag: AUTH_LOGS_TAG, level, extra });
+interface Report {
+  message: string;
+  level: 'error' | 'warning';
+  extra: Record<string, string | number>;
 }
+
+/**
+ * Sends a run's reports, all at once, and waits for them
+ * AUTH_LOGS_REPORTS_MAX_MS at most: a report that hangs cannot carry the run
+ * past the limit of its route. reportError never throws.
+ */
+async function sendReports(reports: readonly Report[]): Promise<void> {
+  if (reports.length === 0) return;
+  const sent = Promise.all(
+    reports.map(({ message, level, extra }) =>
+      Promise.resolve(reportError(new Error(message), { tag: AUTH_LOGS_TAG, level, extra })).catch(
+        () => undefined,
+      ),
+    ),
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, AUTH_LOGS_REPORTS_MAX_MS);
+  });
+  try {
+    await Promise.race([sent, limit]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Failures that would repeat for every hour of the run, or leave no time for
+ * one: the run stops at them. Any other failure is one hour's: the hours
+ * after it are still tried.
+ */
+const RUN_STOPPING_CAUSES: readonly AuthLogsFailureCause[] = [
+  'token_refused',
+  'logs_query_error',
+  'logs_unreachable',
+  'out_of_time',
+];
 
 /** A token that can be sent as a header value: visible ASCII, no space. */
 const HEADER_SAFE_RE = /^[\x21-\x7e]{1,1024}$/;
@@ -1526,19 +1643,25 @@ export async function readAuthLogs(options: {
 }): Promise<AuthLogsRunSummary | AuthLogsSkipped> {
   const projectRef = supabaseProjectRef(options.supabaseUrl);
   if (!projectRef) {
-    await report(
-      "The Supabase URL setting names no project, so refused sign-ins are not read from Supabase's logs",
-      'warning',
-      { cause: 'no_project' },
-    );
+    await sendReports([
+      {
+        message:
+          "The Supabase URL setting names no project, so refused sign-ins are not read from Supabase's logs",
+        level: 'warning',
+        extra: { cause: 'no_project' },
+      },
+    ]);
     return { skipped: 'no_project' };
   }
   if (typeof options.token !== 'string' || !HEADER_SAFE_RE.test(options.token)) {
-    await report(
-      'The Supabase logs token setting cannot be sent (it holds a space or a control character), so refused sign-ins are not read',
-      'warning',
-      { cause: 'token_unusable' },
-    );
+    await sendReports([
+      {
+        message:
+          'The Supabase logs token setting cannot be sent (it holds a space or a control character), so refused sign-ins are not read',
+        level: 'warning',
+        extra: { cause: 'token_unusable' },
+      },
+    ]);
     return { skipped: 'token_unusable' };
   }
 
@@ -1554,6 +1677,9 @@ export async function readAuthLogs(options: {
     admin: () => (admin ??= createAdminClient()),
   };
 
+  // Each distinct failure of the run (its cause, status and code), with the
+  // first hour it stopped and how many hours it stopped.
+  const failures = new Map<string, { failure: AuthLogsFailure; hour: string; hours: number }>();
   for (const [i, hour] of hours.entries()) {
     const hourReport = summary.hours[i]!;
     let failure: AuthLogsFailure | null;
@@ -1565,43 +1691,63 @@ export async function readAuthLogs(options: {
         code: e instanceof Error ? codeOf({ code: e.name }) : 'no_code',
       };
     }
-    if (failure) {
-      hourReport.outcome = 'failed';
-      hourReport.failure = failure;
-      summary.ok = false;
-      summary.failure = { ...failure, hour: hourLabel(hour) };
-      break;
-    }
+    if (!failure) continue;
+    // The failed hour is left as it is and read again by the next run. One
+    // bad hour does not hold up the newer ones: the run goes on, unless the
+    // failure is one every hour would meet.
+    hourReport.outcome = 'failed';
+    hourReport.failure = failure;
+    summary.ok = false;
+    summary.failure ??= { ...failure, hour: hourLabel(hour) };
+    const key = [failure.cause, failure.status ?? '', failure.code ?? ''].join(' ');
+    const same = failures.get(key);
+    if (same) same.hours += 1;
+    else failures.set(key, { failure, hour: hourLabel(hour), hours: 1 });
+    if (RUN_STOPPING_CAUSES.includes(failure.cause)) break;
   }
 
-  if (summary.failure) {
-    const { cause, status, code, hour } = summary.failure;
-    await report(
-      FAILURE_WORDS[cause](summary.failure),
+  // One report for each distinct failure, never one per hour.
+  const reports: Report[] = [];
+  for (const { failure, hour, hours: stopped } of failures.values()) {
+    const { cause, status, code } = failure;
+    reports.push({
+      message: FAILURE_WORDS[cause](failure),
       // Both need someone to act: a new token, or a fix to the query.
-      cause === 'token_refused' || cause === 'logs_query_error' ? 'error' : 'warning',
-      {
+      level: cause === 'token_refused' || cause === 'logs_query_error' ? 'error' : 'warning',
+      extra: {
         cause,
         ...(status !== undefined ? { status } : {}),
         ...(code !== undefined ? { code } : {}),
-        ...(hour !== undefined ? { hour } : {}),
+        hour,
+        hours: stopped,
         hoursStored: summary.hoursStored,
       },
-    );
+    });
   }
   if (summary.reconcileIncomplete > 0) {
-    await report(
-      "The refused web sign-ins our server recorded in an hour could not all be read; that hour's lines in our server's form were compared with the part that was read, so a flagged count stored for it can be higher than what our server has no record of",
-      'warning',
-      { cause: 'reconcile_incomplete', hours: summary.reconcileIncomplete },
-    );
+    reports.push({
+      message:
+        "The refused web sign-ins our server recorded in an hour could not all be read; that hour's lines in our server's form were compared with the part that was read, so a flagged count stored for it can be higher than what our server has no record of",
+      level: 'warning',
+      extra: { cause: 'reconcile_incomplete', hours: summary.reconcileIncomplete },
+    });
   }
   if (summary.landedPastMinuteCaps > 0) {
-    await report(
-      'The refused sign-ins of an hour landed past the minute caps of the security events record; later runs may store that hour again',
-      'warning',
-      { cause: 'landed_past_minute_caps', hours: summary.landedPastMinuteCaps },
-    );
+    reports.push({
+      message:
+        'The refused sign-ins of an hour landed past the minute caps of the security events record; later runs may store that hour again',
+      level: 'warning',
+      extra: { cause: 'landed_past_minute_caps', hours: summary.landedPastMinuteCaps },
+    });
   }
+  if (summary.storedFewer > 0) {
+    reports.push({
+      message:
+        'The security events record stored fewer of the refused sign-in counts of an hour than were sent to it (or did not say how many)',
+      level: 'warning',
+      extra: { cause: 'stored_fewer', hours: summary.storedFewer },
+    });
+  }
+  await sendReports(reports);
   return summary;
 }

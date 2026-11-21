@@ -30,15 +30,19 @@ import {
  *     flagged count, even one, and never taken for our own server;
  *   - our own server is its exact client string AND a hosting network; its
  *     lines are not stored one by one, but their count is reconciled with
- *     what our own server recorded, and 10 or more refusals it did not make
- *     in an hour are stored as a flagged count;
+ *     what our own server recorded (every row of it, however many; overflow
+ *     rows cover nothing), and 10 or more refusals it has no record of in an
+ *     hour are stored as a flagged count;
  *   - every returned field is checked before use, and a row that fails is
  *     dropped and counted; a network class that is not exactly `hosting` is
  *     `other` (fail closed);
  *   - an hour is written once: an hour with rows of this job is not read
- *     again, an hour with nothing to store is read again by the next run, and
- *     an hour whose reconciliation could not be read is not written;
- *   - each failure is reported once, in plain words and codes.
+ *     again, an hour with nothing to store is read again by the next run, an
+ *     hour whose reconciliation could not be read is not written, and the
+ *     check is made again right before the write;
+ *   - a failed hour does not hold up the newer ones; each distinct failure is
+ *     reported once, in plain words and codes; an answer is read up to a size
+ *     limit, and the reports cannot carry the run past its route's limit.
  *
  * Every value here is made up: the project ref, the token, the network owner
  * names (but the one prefix the query compares with), the ids and the counts.
@@ -196,6 +200,8 @@ const {
   AUTH_LOGS_UNRECORDED_FLAG_AT,
   AUTH_LOGS_RECONCILE_PAGE_ROWS,
   AUTH_LOGS_RECONCILE_MAX_PAGES,
+  AUTH_LOGS_RUN_DEADLINE_MS,
+  AUTH_LOGS_REPORTS_MAX_MS,
   buildHourElements,
   classifyAuthLogLine,
   hoursToRead,
@@ -2090,6 +2096,48 @@ describe('a run: six hours, oldest first, each written once', () => {
     });
   });
 
+  describe("the writer's own count of what it stored is read", () => {
+    it('as many as were sent: nothing is said', async () => {
+      hourAnswers(H(6), [groupRow({ n: 2 }, H(6)), groupRow({ status: '429', n: 1 }, H(6))]);
+      const summary = full(await run());
+      expect(summary).toMatchObject({ ok: true, hoursStored: 1, storedFewer: 0 });
+      expect(h.report).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['fewer than were sent', 1],
+      ['none', 0],
+      ['no count at all', null],
+      ['a count that is not a number', 'two'],
+    ])('%s: the hour is stored, and the difference is reported once', async (_what, data) => {
+      hourAnswers(H(6), [groupRow({ n: 2 }, H(6)), groupRow({ status: '429', n: 1 }, H(6))]);
+      h.rpc.mockImplementation(
+        async (
+          _name: string,
+          args: { p_events: Array<{ at_ms: number; reason: string; source: string }> },
+        ) => {
+          for (const e of args.p_events) {
+            h.stored.push({
+              hour: iso(Math.floor(e.at_ms / HOUR) * HOUR),
+              reason: e.reason,
+              source: e.source,
+            });
+          }
+          return { data, error: null };
+        },
+      );
+      const summary = full(await run());
+      expect(summary).toMatchObject({ ok: true, hoursStored: 1, elements: 2, storedFewer: 1 });
+      expect(h.report).toHaveBeenCalledTimes(1);
+      const [err, ctx] = h.report.mock.calls[0]!;
+      expect(String(err)).toContain('stored fewer');
+      expect(ctx).toMatchObject({
+        level: 'warning',
+        extra: { cause: 'stored_fewer', hours: 1 },
+      });
+    });
+  });
+
   describe('requests of an unknown form and known grants through a run', () => {
     it('a single refusal of an unknown form stores one flagged element; the hour is then already stored', async () => {
       hourAnswers(H(5), [], [totalsRow({ kind: 'token_other', n: 1 }, H(5))]);
@@ -2574,9 +2622,18 @@ describe('failures: reported once, in plain words and codes, never the token', (
         status: code,
         hour: '2026-11-21T05:00Z',
       });
-      expect(fetches).toHaveLength(3);
+      // The hours after it are still read: 5 hours of two calls, and the one refused call.
+      expect(fetches).toHaveLength(11);
       expect(h.rpc).not.toHaveBeenCalled();
-      expect(summary).toMatchObject({ ok: false, hoursRead: 1 });
+      expect(summary).toMatchObject({ ok: false, hoursRead: 5 });
+      expect(full(summary).hours.map((x) => x.outcome)).toEqual([
+        'nothing_to_store',
+        'failed',
+        'nothing_to_store',
+        'nothing_to_store',
+        'nothing_to_store',
+        'nothing_to_store',
+      ]);
       expect(everythingSaid(summary)).not.toContain(MADE_UP_LOGS_VALUE);
       // The next run reads that hour again.
       answers.delete(`groups@${iso(H(5))}`);
@@ -2592,7 +2649,128 @@ describe('failures: reported once, in plain words and codes, never the token', (
     const summary = await run();
     expectOneReport('status 503', { cause: 'logs_unavailable', hour: '2026-11-21T04:00Z' });
     expect(h.rpc).not.toHaveBeenCalled();
-    expect(summary).toMatchObject({ ok: false, hoursRead: 0, hoursStored: 0 });
+    expect(summary).toMatchObject({ ok: false, hoursRead: 5, hoursStored: 0 });
+    expect(full(summary).hours[0]).toMatchObject({
+      outcome: 'failed',
+      failure: { cause: 'logs_unavailable', status: 503 },
+    });
+  });
+
+  describe('a failing hour does not hold up the newer ones', () => {
+    it('later hours are still read and stored; the failed hour is read again by the next run', async () => {
+      answers.set(`groups@${iso(H(5))}`, () => new Response('not json', { status: 200 }));
+      hourAnswers(H(6), [groupRow({ n: 4 }, H(6))]);
+      hourAnswers(H(9), [groupRow({ n: 1 }, H(9))]);
+      const summary = full(await run());
+      expect(summary).toMatchObject({ ok: false, hoursStored: 2, eventsStored: 5, hoursRead: 5 });
+      expect(summary.hours.map((x) => x.outcome)).toEqual([
+        'nothing_to_store',
+        'failed',
+        'stored',
+        'nothing_to_store',
+        'nothing_to_store',
+        'stored',
+      ]);
+      expect(summary.hours[1]).toMatchObject({ failure: { cause: 'logs_bad_answer' } });
+      expect(summary.failure).toMatchObject({
+        cause: 'logs_bad_answer',
+        hour: '2026-11-21T05:00Z',
+      });
+      expectOneReport('answered in a shape this job does not read', {
+        cause: 'logs_bad_answer',
+        hour: '2026-11-21T05:00Z',
+        hours: 1,
+      });
+      // Next run: the stored hours are skipped; the failed hour is read, and stored.
+      hourAnswers(H(5), [groupRow({ n: 7 }, H(5))]);
+      fetches.length = 0;
+      const next = full(await run());
+      expect([...new Set(fetches.map(startOf))]).toEqual([4, 5, 7, 8].map((hh) => iso(H(hh))));
+      expect(next).toMatchObject({ ok: true, hoursStored: 1, eventsStored: 7, hoursSkipped: 2 });
+    });
+
+    it('each distinct failure is reported once per run, with the hours it held up', async () => {
+      // The same failure in two hours, another in a third.
+      answers.set(`groups@${iso(H(4))}`, status(503));
+      answers.set(`totals@${iso(H(6))}`, status(503));
+      answers.set(`groups@${iso(H(7))}`, status(429));
+      hourAnswers(H(8), [groupRow({}, H(8))]);
+      h.rpc.mockResolvedValueOnce({ data: null, error: { code: '55P03', message: 'lock' } });
+      const summary = full(await run());
+      expect(summary.hours.map((x) => x.outcome)).toEqual([
+        'failed',
+        'nothing_to_store',
+        'failed',
+        'failed',
+        'failed',
+        'nothing_to_store',
+      ]);
+      expect(h.report).toHaveBeenCalledTimes(3);
+      expect(h.report.mock.calls.map(([, ctx]) => (ctx as { extra: unknown }).extra)).toEqual([
+        {
+          cause: 'logs_unavailable',
+          status: 503,
+          hour: '2026-11-21T04:00Z',
+          hours: 2,
+          hoursStored: 0,
+        },
+        {
+          cause: 'logs_unavailable',
+          status: 429,
+          hour: '2026-11-21T07:00Z',
+          hours: 1,
+          hoursStored: 0,
+        },
+        {
+          cause: 'writer_failed',
+          code: '55P03',
+          hour: '2026-11-21T08:00Z',
+          hours: 1,
+          hoursStored: 0,
+        },
+      ]);
+      // The first failure is the run's.
+      expect(summary.failure).toEqual({
+        cause: 'logs_unavailable',
+        status: 503,
+        hour: '2026-11-21T04:00Z',
+      });
+      expect(everythingSaid(summary)).not.toContain(MADE_UP_LOGS_VALUE);
+    });
+
+    it.each([
+      ['a refused token', status(401), 'token_refused'],
+      ['a query the service did not run', ok([]), 'logs_query_error'],
+      [
+        'a service that cannot be reached',
+        () => {
+          throw new TypeError('fetch failed');
+        },
+        'logs_unreachable',
+      ],
+    ] as Array<[string, Answer, string]>)(
+      '%s would fail every hour the same way: the run stops there',
+      async (_what, answer, cause) => {
+        answers.set(
+          `groups@${iso(H(5))}`,
+          cause === 'logs_query_error'
+            ? () => new Response(JSON.stringify({ error: 'refused' }), { status: 200 })
+            : answer,
+        );
+        const summary = full(await run());
+        expect(summary.failure).toMatchObject({ cause, hour: '2026-11-21T05:00Z' });
+        expect(fetches).toHaveLength(3);
+        expect(summary.hours.map((x) => x.outcome)).toEqual([
+          'nothing_to_store',
+          'failed',
+          'not_tried',
+          'not_tried',
+          'not_tried',
+          'not_tried',
+        ]);
+        expect(h.report).toHaveBeenCalledTimes(1);
+      },
+    );
   });
 
   it('a call that does not answer in 20 seconds is given up, reported once', async () => {
@@ -2655,6 +2833,139 @@ describe('failures: reported once, in plain words and codes, never the token', (
     expect(everythingSaid(summary)).not.toContain(MADE_UP_LOGS_VALUE);
   });
 
+  describe('an answer is never read past its size limit', () => {
+    /** A body that counts what is pulled from it and whether it was cancelled. */
+    function countingBody(chunks: number, chunkBytes: number) {
+      const state = { pulled: 0, cancelled: false };
+      const stream = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            if (state.pulled >= chunks) {
+              controller.close();
+              return;
+            }
+            state.pulled += 1;
+            controller.enqueue(new Uint8Array(chunkBytes).fill(0x20));
+          },
+          cancel() {
+            state.cancelled = true;
+          },
+        },
+        { highWaterMark: 0 },
+      );
+      return { state, stream };
+    }
+
+    it('a declared length above the limit: refused before a byte of it is read', async () => {
+      const { state, stream } = countingBody(10, 1024);
+      answers.set(
+        `groups@${iso(H(4))}`,
+        () => new Response(stream, { status: 200, headers: { 'content-length': '2000001' } }),
+      );
+      const summary = await run();
+      expect(summary).toMatchObject({ failure: { cause: 'logs_bad_answer' } });
+      expect(state.pulled).toBe(0);
+      expect(state.cancelled).toBe(true);
+      expect(h.rpc).not.toHaveBeenCalled();
+    });
+
+    it.each([['12abc'], ['-5'], ['1e3'], ['']])(
+      'a declared length that is not a whole number (%j) is not trusted: the body is read with the cap',
+      async (declared) => {
+        answers.set(
+          `groups@${iso(H(4))}`,
+          () =>
+            new Response(JSON.stringify({ result: [groupRow()], error: null }), {
+              status: 200,
+              headers: { 'content-length': declared },
+            }),
+        );
+        answers.set(`totals@${iso(H(4))}`, ok([totalsRow()]));
+        const summary = await run();
+        expect(summary).toMatchObject({ ok: true, eventsStored: 3 });
+      },
+    );
+
+    it('no declared length and a body that goes on: the read stops at the limit and the rest is cancelled', async () => {
+      // 64 KB a chunk, far more of them than the limit allows.
+      const { state, stream } = countingBody(1_000, 64 * 1024);
+      answers.set(`groups@${iso(H(4))}`, () => new Response(stream, { status: 200 }));
+      const summary = await run();
+      expect(summary).toMatchObject({ failure: { cause: 'logs_bad_answer' } });
+      // 2,000,000 bytes is 31 chunks; one more may be in hand when it stops.
+      expect(state.pulled).toBeLessThanOrEqual(32);
+      expect(state.cancelled).toBe(true);
+    });
+
+    it('an answer in several pieces under the limit is read whole', async () => {
+      const text = JSON.stringify({ result: [groupRow()], error: null });
+      const bytes = new TextEncoder().encode(text);
+      const pieces = [bytes.slice(0, 7), bytes.slice(7, 40), bytes.slice(40)];
+      answers.set(
+        `groups@${iso(H(4))}`,
+        () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              pull(controller) {
+                const next = pieces.shift();
+                if (next) controller.enqueue(next);
+                else controller.close();
+              },
+            }),
+            { status: 200 },
+          ),
+      );
+      answers.set(`totals@${iso(H(4))}`, ok([totalsRow()]));
+      const summary = await run();
+      expect(summary).toMatchObject({ ok: true, eventsStored: 3 });
+    });
+  });
+
+  describe('the reports cannot carry the run past the limit of its route', () => {
+    it('the deadline and the time the reports may take leave room inside 60 seconds', () => {
+      expect(AUTH_LOGS_RUN_DEADLINE_MS).toBe(50_000);
+      expect(AUTH_LOGS_REPORTS_MAX_MS).toBeLessThanOrEqual(4_000);
+      expect(AUTH_LOGS_RUN_DEADLINE_MS + AUTH_LOGS_REPORTS_MAX_MS).toBeLessThanOrEqual(55_000);
+    });
+
+    it('reports that never finish are all sent at once and waited for no longer than their limit', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW);
+      h.report.mockImplementation(() => new Promise<undefined>(() => undefined));
+      // Three distinct failures: three reports.
+      answers.set(`groups@${iso(H(4))}`, status(503));
+      answers.set(`groups@${iso(H(5))}`, status(429));
+      answers.set(`groups@${iso(H(6))}`, () => new Response('not json', { status: 200 }));
+      let done = false;
+      const pending = run({ nowMs: undefined }).then((s) => {
+        done = true;
+        return s;
+      });
+      await vi.advanceTimersByTimeAsync(AUTH_LOGS_REPORTS_MAX_MS - 1);
+      expect(done).toBe(false);
+      // Every report was started, none waited for the one before it.
+      expect(h.report).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(done).toBe(true);
+      expect(full(await pending).ok).toBe(false);
+    });
+
+    it('a skipped run waits for its one report no longer either', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW);
+      h.report.mockImplementation(() => new Promise<undefined>(() => undefined));
+      let done = false;
+      const pending = run({ supabaseUrl: 'http://127.0.0.1:54321' }).then((s) => {
+        done = true;
+        return s;
+      });
+      await vi.advanceTimersByTimeAsync(AUTH_LOGS_REPORTS_MAX_MS - 1);
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toEqual({ skipped: 'no_project' });
+    });
+  });
+
   it('a result list with no error field is read', async () => {
     answers.set(
       `groups@${iso(H(4))}`,
@@ -2681,7 +2992,8 @@ describe('failures: reported once, in plain words and codes, never the token', (
       hour: '2026-11-21T04:00Z',
     });
     expect(summary).toMatchObject({ ok: false, hoursStored: 0, eventsStored: 0 });
-    expect(fetches).toHaveLength(2);
+    // The other five hours are still read.
+    expect(fetches).toHaveLength(12);
     // Next run: the hour holds nothing, so it is read and written.
     writerStores();
     const next = await run();

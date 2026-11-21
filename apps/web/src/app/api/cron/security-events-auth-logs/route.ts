@@ -8,7 +8,8 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 /**
  * The hard limit, explicit. The run cuts every call at its own 50 s deadline
- * (server/security/auth-logs.ts, AUTH_LOGS_RUN_DEADLINE_MS), so it ends inside
+ * (server/security/auth-logs.ts, AUTH_LOGS_RUN_DEADLINE_MS) and then waits
+ * for its reports 4 s at most (AUTH_LOGS_REPORTS_MAX_MS), so it ends inside
  * 60 s.
  */
 export const maxDuration = 60;
