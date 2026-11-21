@@ -20,6 +20,7 @@ import { AuthProvider, useAuth } from '@/lib/auth-context';
 import { ColdLaunchGateProvider } from '@/lib/cold-launch-gate';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { initDb } from '@/lib/db';
+import type { SessionLike } from '@/lib/mfa-level';
 import { pruneRejected } from '@/lib/queue';
 import { useHeldOrderSubmissions } from '@/lib/order-storefront/runtime';
 import { initSentry, Sentry } from '@/lib/sentry';
@@ -222,6 +223,17 @@ function AppearanceRoot() {
 // the root. It is a transparent pass-through when Sentry has no DSN.
 export default Sentry.wrap(AppearanceRoot);
 
+/**
+ * Whether a session that owes its second step owes it as a passkey only
+ * (mfa-level.ts passkeyOnlySession). Required when asked, like the set-up
+ * screen in RootGate: asked only for a session that owes its second step.
+ */
+function passkeyOnly(session: SessionLike): boolean {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports -- asked only for a session that owes its second step
+  const { passkeyOnlySession } = require('@/lib/mfa-level') as typeof import('@/lib/mfa-level');
+  return passkeyOnlySession(session);
+}
+
 function RootGate() {
   const { session, loading, locked, mfaRequired, setUpHold } = useAuth();
   const segments = useSegments();
@@ -343,6 +355,17 @@ function RootGate() {
   // code is never handed the navigator, at any point of a launch or a
   // sign-in. The code screen replaces the Stack from the render the session
   // arrives in, under the splash on a cold launch.
+  //
+  // An account whose only second step is a passkey (every verified factor a
+  // bridge, mfa-level.ts bridgeOnlyAccount) owes the same step, and the phone
+  // cannot take it yet: a plain screen stands in for the code box, which no
+  // code could pass. The gate is the same one. Required here, not imported
+  // at the top: loaded only for such an account, never on the launch path.
+  if (session && mfaRequired && passkeyOnly(session)) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- loaded only for a bridge-only account, off the launch path
+    const { PasskeyOnlyNotice } = require('@/components/passkey-only-notice') as typeof import('@/components/passkey-only-notice');
+    return <PasskeyOnlyNotice />;
+  }
   if (session && mfaRequired) {
     return <MfaChallengeScreen />;
   }

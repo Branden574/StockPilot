@@ -33,11 +33,13 @@ import { stepUpOwed } from '@stockpilot/core';
  * through.
  */
 
-/** A factor as GoTrue lists it on a user. Only these three fields are read. */
+/** A factor as GoTrue lists it on a user. Only these four fields are read. */
 export interface FactorLike {
   readonly id?: string | null;
   readonly status?: string | null;
   readonly factor_type?: string | null;
+  /** The name it was enrolled under: a passkey's bridge carries a reserved one. */
+  readonly friendly_name?: string | null;
 }
 
 /** The user of a session, or the one getUser() answers. */
@@ -131,13 +133,63 @@ export function codeGateUp(
   return stepUpNoteHolds(forcedFor, session.user?.id, tokenAal(session.access_token));
 }
 
-/** The id of the user's verified authenticator-app (TOTP) factor, or null. */
+/**
+ * The reserved name of a passkey's bridge factor (the website's
+ * lib/auth/passkey-bridge-name.ts; the database records a bridge only under
+ * it, 0475). A passkey takes the session to aal2 through a hidden TOTP factor
+ * whose secret only the server holds; no app shows its code. The phone's only
+ * offline source is the session's factor list, and the name travels in the
+ * same factor object, so the phone knows the bridge by it (plan section 5).
+ * Nothing is loosened by it: the server never relies on the name, and a
+ * factor someone named so at Auth directly only hides itself from its own
+ * account's phone.
+ */
+export const PASSKEY_BRIDGE_NAME_PREFIX = 'sp-passkey-bridge-';
+
+/** Whether a factor is a passkey's bridge: a TOTP factor under the reserved name, exactly. */
+export function isBridgeFactor(factor: FactorLike | null | undefined): boolean {
+  return (
+    factor?.factor_type === 'totp' &&
+    typeof factor.friendly_name === 'string' &&
+    factor.friendly_name.startsWith(PASSKEY_BRIDGE_NAME_PREFIX)
+  );
+}
+
+/**
+ * The id of the user's verified authenticator-app (TOTP) factor, or null.
+ * Never a passkey's bridge (isBridgeFactor), whatever the order: Supabase
+ * lists the factor used last first, so after a passkey sign-in the bridge
+ * would come first, and no app shows its code.
+ */
 export function verifiedTotpFactorId(user: UserLike | null | undefined): string | null {
   for (const factor of user?.factors ?? []) {
     if (factor?.status !== 'verified' || factor.factor_type !== 'totp') continue;
+    if (isBridgeFactor(factor)) continue;
     if (typeof factor.id === 'string' && factor.id.length > 0) return factor.id;
   }
   return null;
+}
+
+/**
+ * Whether the account's second step is a passkey only: it has a verified
+ * factor and every verified factor is a bridge. The phone cannot take a
+ * passkey yet, so RootGate shows a plain screen in place of the code box.
+ * The gate is NOT changed by it: a bridge is a verified factor, so such a
+ * session still owes aal2 (stepUpOwedFor), and every hold stays closed.
+ */
+export function bridgeOnlyAccount(user: UserLike | null | undefined): boolean {
+  let verified = 0;
+  for (const factor of user?.factors ?? []) {
+    if (factor?.status !== 'verified') continue;
+    if (!isBridgeFactor(factor)) return false;
+    verified += 1;
+  }
+  return verified > 0;
+}
+
+/** bridgeOnlyAccount for a session's own user: RootGate's question, asked like stepUpOwedFor. */
+export function passkeyOnlySession(session: SessionLike | null | undefined): boolean {
+  return bridgeOnlyAccount(session?.user);
 }
 
 /** What the stored session says about the code: whether it is owed, and the level it reached. */
