@@ -1489,6 +1489,31 @@ describe('the SQL is two constants that return classes and counts only', () => {
       expect(ofSearch(search)).toBe('token_other');
     });
 
+    it.each([
+      ['a byte that is not text after the value', '?grant_type=password%FF'],
+      ['the same after a refresh grant', '?grant_type=refresh_token%FF'],
+      ['such a byte, then another pair', '?grant_type=password%FF&scope=x'],
+      ['such a byte inside the value', '?grant_type=pass%FFword'],
+      ['a letter that is not ASCII after the value', '?grant_type=password%C3%A9'],
+    ])(
+      '%s (%j): the service checks no password for it, so it is token_other, never password',
+      (_what, search) => {
+        // Measured on 2026-11-21: the service answered `?grant_type=password%FF`
+        // with "unsupported grant type" (no password was checked).
+        expect(ofSearch(search)).toBe('token_other');
+      },
+    );
+
+    it('a byte that is not text in a later pair leaves the grant as it is', () => {
+      expect(ofSearch('?grant_type=password&scope=%FF')).toBe('password');
+    });
+
+    it('the first grant is taken whole: its capture ends at the next pair or at the end', () => {
+      for (const [name, sql] of BOTH) {
+        expect(sql, name).toContain("'(?:^[?]?|&)grant_type=([^&]*)(?:&|$)'");
+      }
+    });
+
     it('a line with no query string at all is read, as token_other', () => {
       expect(kindOf(gatewayLine({ search: null }))).toBe('token_other');
     });

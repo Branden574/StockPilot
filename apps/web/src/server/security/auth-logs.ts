@@ -293,7 +293,7 @@ FROM (
       replaceRegexpAll(log_attributes['request.path'], '/+', '/') AS routed_path,
       replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/') AS net_path,
       log_attributes['request.search'] AS raw_search,
-      extract(decodeURLComponent(log_attributes['request.search']), '(?:^[?]?|&)grant_type=([^&]*)') AS first_grant,
+      extract(decodeURLComponent(log_attributes['request.search']), '(?:^[?]?|&)grant_type=([^&]*)(?:&|$)') AS first_grant,
       log_attributes['request.headers.x_client_info'] AS client,
       log_attributes['response.status_code'] AS status,
       log_attributes['request.cf.asOrganization'] AS owner,
@@ -359,7 +359,7 @@ FROM (
       replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/') AS net_path,
       log_attributes['request.search'] AS raw_search,
       decodeURLComponent(log_attributes['request.search']) AS decoded_search,
-      extract(decodeURLComponent(log_attributes['request.search']), '(?:^[?]?|&)grant_type=([^&]*)') AS first_grant,
+      extract(decodeURLComponent(log_attributes['request.search']), '(?:^[?]?|&)grant_type=([^&]*)(?:&|$)') AS first_grant,
       log_attributes['request.headers.x_client_info'] AS client,
       log_attributes['response.status_code'] AS status,
       log_attributes['request.cf.asOrganization'] AS owner
