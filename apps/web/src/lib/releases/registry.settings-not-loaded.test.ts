@@ -99,6 +99,15 @@ const countStartAccessRead = {
   opened_at: '2026-11-19T20:42:00Z',
   read_at: '2026-11-19T20:42:00Z',
 };
+// Added by docs/whats-new-2026-11-21-phone (2026-11-21): the phone authenticator set-up release (every member: three of its five entries have no audience), published later, at the top, below the Liquid Glass draft.
+const PHONE_SET_UP_ID = 'phone-authenticator-set-up-2026-11';
+const phoneSetUpRead = {
+  release_id: PHONE_SET_UP_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-21T02:01:00Z',
+  read_at: '2026-11-21T02:01:00Z',
+};
 const emptiedFieldsRead = {
   release_id: EMPTIED_FIELDS_ID,
   // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: revision 1): the emptied fields and schedule completion release is re-announced as revision 2, so a read of it is recorded at revision 2.
@@ -206,8 +215,11 @@ describe('the settings release: order, status and date', () => {
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(0, 12)): the receiving release is published at the top, below the Liquid Glass draft, so the list takes one more.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(0, 13)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so the list takes one more.
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(0, 14)): the count start access check release is published at the top, below the Liquid Glass draft, so the list takes one more.
-    expect(RELEASES.slice(0, 15).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES.slice(0, 15)): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    expect(RELEASES.slice(0, 16).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, directly below the Liquid Glass draft.
+      [PHONE_SET_UP_ID, 'published'],
       // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, directly below the Liquid Glass draft.
       [COUNT_START_ACCESS_ID, 'published'],
       // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, directly below the Liquid Glass draft.
@@ -255,7 +267,8 @@ describe('the settings release: order, status and date', () => {
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(10)): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(11)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(12)): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(13)) {
+    // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES.slice(13)): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(14)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -440,7 +453,8 @@ describe('the settings release: who is told', () => {
           // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: without it): the receiving release is published later, at the top, and reaches whoever can open a purchase order where Receiving is on (owners, admins, managers, staff and viewers by default), so it is read or seen first, and the notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, and reaches a manager or above who can assign counts where Cycle Counts is on (an owner with every permission and module among them), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
-          [countStartAccessRead, exportReceiptAccessRead, receivingRead, lowCriticalRead, emptiedFieldsRead, connectionScheduleRead, deleteConfirmRead, authSetUpRead, apiKeyAuditRead, invitationAuditRead, navigationRead],
+          // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          [phoneSetUpRead, countStartAccessRead, exportReceiptAccessRead, receivingRead, lowCriticalRead, emptiedFieldsRead, connectionScheduleRead, deleteConfirmRead, authSetUpRead, apiKeyAuditRead, invitationAuditRead, navigationRead],
           null,
         ).latestUnread?.id,
         v.role,
@@ -467,7 +481,8 @@ describe('the settings release: who is told', () => {
           // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: without it): the receiving release is published later, at the top, and reaches whoever can open a purchase order where Receiving is on (owners, admins, managers, staff and viewers by default), so it is read or seen first, and the notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, and reaches a manager or above who can assign counts where Cycle Counts is on (an owner with every permission and module among them), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
-          [countStartAccessRead, exportReceiptAccessRead, receivingRead, lowCriticalRead, emptiedFieldsRead, connectionScheduleRead, deleteConfirmRead, authSetUpRead, apiKeyAuditRead, invitationAuditRead, navigationRead, read],
+          // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          [phoneSetUpRead, countStartAccessRead, exportReceiptAccessRead, receivingRead, lowCriticalRead, emptiedFieldsRead, connectionScheduleRead, deleteConfirmRead, authSetUpRead, apiKeyAuditRead, invitationAuditRead, navigationRead, read],
           null,
         ).latestUnread?.id,
         v.role,
@@ -479,7 +494,8 @@ describe('the settings release: who is told', () => {
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (every role by default), so it is read or seen first, and the notice this test checks is the one it checked before.
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: without it): the receiving release is published later, at the top, and reaches whoever can open a purchase order where Receiving is on (owners, admins, managers, staff and viewers by default), so it is read or seen first, and the notice this test checks is the one it checked before.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
-    expect(legacyAnnouncementsFor(RELEASES, staff, { [EXPORT_RECEIPT_ACCESS_ID]: true, [RECEIVING_ID]: true, [LOW_CRITICAL_ID]: true, [DELETE_CONFIRM_ID]: true, [AUTH_SET_UP_ID]: true })[0]).toEqual({
+    // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+    expect(legacyAnnouncementsFor(RELEASES, staff, { [PHONE_SET_UP_ID]: true, [EXPORT_RECEIPT_ACCESS_ID]: true, [RECEIVING_ID]: true, [LOW_CRITICAL_ID]: true, [DELETE_CONFIRM_ID]: true, [AUTH_SET_UP_ID]: true })[0]).toEqual({
       id: ID,
       date: '2026-11-15',
       title: release().title,

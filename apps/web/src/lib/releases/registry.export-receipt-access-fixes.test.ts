@@ -39,13 +39,21 @@ const RECEIVING_ID = 'receiving-shown-to-managers-2026-11';
 const RECEIVING_AT = '2026-11-19T05:20:00Z';
 // Added by docs/whats-new-2026-11-19-errors (2026-11-19): the count start access check release (a manager or above who can assign counts, where Cycle Counts is on), published later, at the top, below the Liquid Glass draft.
 const COUNT_START_ACCESS_ID = 'count-start-access-check-2026-11';
-const COUNT_START_ACCESS_AT = '2026-11-19T20:41:00Z';
 const countStartAccessRead = {
   release_id: COUNT_START_ACCESS_ID,
   revision: 1,
   dismissed_at: null,
   opened_at: '2026-11-19T20:42:00Z',
   read_at: '2026-11-19T20:42:00Z',
+};
+// Added by docs/whats-new-2026-11-21-phone (2026-11-21): the phone authenticator set-up release (every member: three of its five entries have no audience), published later, at the top, below the Liquid Glass draft.
+const PHONE_SET_UP_ID = 'phone-authenticator-set-up-2026-11';
+const phoneSetUpRead = {
+  release_id: PHONE_SET_UP_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-21T02:01:00Z',
+  read_at: '2026-11-21T02:01:00Z',
 };
 /** #622 merged at this instant; its deployment went live after it. */
 const MERGED_622 = '2026-11-19T15:13:43Z';
@@ -102,21 +110,26 @@ function readerText(r: Release): string[] {
 
 describe('the export, receipt and access release: order, status and date', () => {
   // Renamed by docs/whats-new-2026-11-19-errors (2026-11-19; was: "directly below the Liquid Glass draft and above the receiving release, the newest published release"): the count start access check release is published later, at the top, directly below the Liquid Glass draft.
-  it('is published once, as revision 1, directly below the count start access check release (published later, below the Liquid Glass draft at the top) and above the receiving release', () => {
+  // Renamed by docs/whats-new-2026-11-21-phone (2026-11-21; was: "(published later, below the Liquid Glass draft at the top)"): the phone authenticator set-up release is published later still, directly below the Liquid Glass draft.
+  it('is published once, as revision 1, directly below the count start access check release (published later, below the phone authenticator set-up release and the Liquid Glass draft at the top) and above the receiving release', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(0, 3)): the count start access check release is published at the top, below the Liquid Glass draft, so the list takes one more.
-    expect(RELEASES.slice(0, 4).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES.slice(0, 4)): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    expect(RELEASES.slice(0, 5).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, directly below the Liquid Glass draft.
+      [PHONE_SET_UP_ID, 'published'],
       // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, directly below the Liquid Glass draft.
       [COUNT_START_ACCESS_ID, 'published'],
       [ID, 'published'],
       [RECEIVING_ID, 'published'],
     ]);
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: ID): the count start access check release is published after it, at the top, the newest published release.
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(COUNT_START_ACCESS_ID);
+    // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: COUNT_START_ACCESS_ID): the phone authenticator set-up release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(PHONE_SET_UP_ID);
   });
 
   // Renamed by docs/whats-new-2026-11-19-errors (2026-11-19; was: "with the draft placeholder at the same minute"): the placeholder moved to the minute of the count start access check release, published later, above this one.
@@ -127,10 +140,14 @@ describe('the export, receipt and access release: order, status and date', () =>
     expect(at).toBeGreaterThan(Date.parse(RECEIVING_AT));
     expect(at).toBeLessThanOrEqual(Date.now());
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES[0].publishedAt equal to this release's): the placeholder is the minute of the count start access check release, published later, above this one.
-    expect(RELEASES[0]!.publishedAt).toBe(COUNT_START_ACCESS_AT);
+    // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: COUNT_START_ACCESS_AT): the placeholder is the minute of the phone authenticator set-up release, published later, above this one (a stand-in until the integrator sets it at merge, so it is read from the registry).
+    expect(RELEASES[0]!.publishedAt).toBe(
+      RELEASES.find((r) => r.id === PHONE_SET_UP_ID)!.publishedAt,
+    );
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(2)): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(3)) {
+    // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES.slice(3)): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(4)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -255,7 +272,8 @@ describe('the export, receipt and access release: who is told', () => {
   });
 
   // Renamed by docs/whats-new-2026-11-19-errors (2026-11-19; was: "is the first notice for every member"): the count start access check release, published later, is the first notice for whoever it reaches.
-  it('is the first notice for every member the count start access check release does not reach, and for the rest once that is read, the receiving release is next for whoever that reaches, and an old phone build lists it first with its title and summary alone', () => {
+  // Renamed by docs/whats-new-2026-11-21-phone (2026-11-21; was: "is the first notice for every member the count start access check release does not reach"): the phone authenticator set-up release, published later, reaches every member and is read first.
+  it('is the first notice, once the phone authenticator set-up release is read, for every member the count start access check release does not reach, and for the rest once that is read, the receiving release is next for whoever that reaches, and an old phone build lists it first with its title and summary alone', () => {
     const read = {
       release_id: ID,
       revision: 1,
@@ -265,30 +283,43 @@ describe('the export, receipt and access release: who is told', () => {
     };
     // Added by docs/whats-new-2026-11-19-errors (2026-11-19): these readers have Cycle Counts off, so the count start access check release does not reach them and this release is still their first notice with nothing read.
     for (const v of [admin, manager, staff, member, managerReceivingOff]) {
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
+      // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: nothing read): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), so it is read first, and the notice this test checks is the one it checked before.
+      expect(buildReleaseList(RELEASES, v, [phoneSetUpRead], null).latestUnread?.id, v.role).toBe(
+        ID,
+      );
     }
     for (const v of [owner, admin, manager, staff, member, managerReceivingOff]) {
       // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, and reaches a manager or above who can assign counts where Cycle Counts is on (an owner with every permission and module among them), so it is read or seen first, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
       expect(
-        buildReleaseList(RELEASES, v, [countStartAccessRead], null).latestUnread?.id,
+        // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        buildReleaseList(RELEASES, v, [phoneSetUpRead, countStartAccessRead], null).latestUnread
+          ?.id,
         v.role,
       ).toBe(ID);
       expect(
-        buildReleaseList(RELEASES, v, [countStartAccessRead, read], null).latestUnread?.id,
+        // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        buildReleaseList(RELEASES, v, [phoneSetUpRead, countStartAccessRead, read], null)
+          .latestUnread?.id,
         v.role,
       ).not.toBe(ID);
     }
     for (const v of [owner, manager, staff]) {
       // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, and reaches a manager or above who can assign counts where Cycle Counts is on (an owner with every permission and module among them), so it is read or seen first, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
       expect(
-        buildReleaseList(RELEASES, v, [countStartAccessRead, read], null).latestUnread?.id,
+        // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        buildReleaseList(RELEASES, v, [phoneSetUpRead, countStartAccessRead, read], null)
+          .latestUnread?.id,
         v.role,
       ).toBe(RECEIVING_ID);
     }
     for (const v of [owner, staff, member]) {
       // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, and reaches a manager or above who can assign counts where Cycle Counts is on (an owner with every permission and module among them), so it is read or seen first, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
       expect(
-        legacyAnnouncementsFor(RELEASES, v, { [COUNT_START_ACCESS_ID]: true })[0],
+        // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+        legacyAnnouncementsFor(RELEASES, v, {
+          [PHONE_SET_UP_ID]: true,
+          [COUNT_START_ACCESS_ID]: true,
+        })[0],
         v.role,
       ).toEqual({
         id: ID,
