@@ -739,30 +739,33 @@ const KEY_FAULTS = new Set(['no_key', 'bridge_unopenable']);
 /**
  * Review 4 finding 1: a fail-closed state or a key fault the second-step page
  * meets is reported from the page's own read (stepOf), since the page then
- * offers no passkey and no button press can report it. Error level, the
- * account as a hash of its id, at most once an hour per account and fault; a
- * key fault also once an hour for everyone (a wrong or missing key is one
- * fault, not one per member). The limiter is closed: one that cannot count
- * reports nothing (lib/rate-limit logs it). The member's answer and words do
- * not change. Never throws.
+ * offers no passkey and no button press can report it; a start reports what
+ * it meets the same way (review B6). Error level, the account as a hash of
+ * its id. A state: at most once an hour per account and state, the page and
+ * the start sharing that pace. A key fault (no key, or a secret the keys do
+ * not open) is one fault, not one per member: at most once an hour for
+ * everyone, `passkeys.key_fault` with the fault's word. The limiter is
+ * closed: one that cannot count reports nothing (lib/rate-limit logs it).
+ * The member's answer and words do not change. Never throws.
  */
-async function reportStepFault(userId: string, fault: string): Promise<void> {
+async function reportStepFault(
+  userId: string,
+  fault: string,
+  site: 'second_step' | 'start' = 'second_step',
+): Promise<void> {
   try {
+    if (KEY_FAULTS.has(fault)) {
+      const all = await checkRateLimit(`passkeys-key-report:${fault}`, 1, 60 * MIN, 'closed');
+      if (all.allowed) reportPasskeys('key_fault', 'error', userId, { fault, site });
+      return;
+    }
     const one = await checkRateLimit(
       `passkeys-step-report:${userId}:${fault}`,
       1,
       60 * MIN,
       'closed',
     );
-    if (one.allowed) reportPasskeys(fault, 'error', userId, { site: 'second_step' });
-    if (!KEY_FAULTS.has(fault)) return;
-    const all = await checkRateLimit('passkeys-key-report:all', 1, 60 * MIN, 'closed');
-    if (!all.allowed) return;
-    void reportError(new Error('Passkeys: the bridge key is missing or does not open a secret'), {
-      tag: 'passkeys.key_fault',
-      level: 'error',
-      extra: { fault },
-    });
+    if (one.allowed) reportPasskeys(fault, 'error', userId, { site });
   } catch {
     // A report never changes the page.
   }
@@ -1184,10 +1187,11 @@ async function startCeremony(
   const { held, gate, admin, picture } = started;
   const userId = held.claims.userId;
   // Review 4 finding 1: a state that fails closed (or S9) is reported before
-  // any answer, the "no passkey" one included (S8, S17 have no active row).
-  // A Finish setup start is the repair itself and reports nothing here.
+  // any answer, the "no passkey" one included (S8, S17 have no active row),
+  // at the page's pace (review B6). A Finish setup start is the repair
+  // itself and reports nothing here.
   const fault = purpose === 'finish_setup' ? null : failClosedFault(picture, userId, gate.keys);
-  if (fault) reportPasskeys(fault, 'error', userId);
+  if (fault) await reportStepFault(userId, fault, 'start');
   if (picture.active.length === 0)
     return fail('validation_error', PASSKEY_WORDS.noPasskey, 'no_passkey');
   if (purpose === 'finish_setup') {
@@ -1202,7 +1206,7 @@ async function startCeremony(
   } else if (!bridgeServes(picture)) {
     if (setupUnfinished(picture))
       return fail('validation_error', PASSKEY_WORDS.setupNotFinished, 'setup_unfinished');
-    if (!fault) reportPasskeys(picture.state, 'error', userId);
+    if (!fault) await reportStepFault(userId, picture.state, 'start');
     return fail('forbidden', PASSKEY_WORDS.cantUse, picture.state);
   } else if (!opens(picture, userId, gate.keys)) {
     return fail('forbidden', PASSKEY_WORDS.cantUse, 'bridge_unopenable');

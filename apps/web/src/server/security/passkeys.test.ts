@@ -1678,7 +1678,7 @@ function leftoverFactor(userId: string) {
 }
 
 describe('review 4 finding 1: a fail-closed state or a key fault met by the page is reported from its own read', () => {
-  it('S9 (the secret does not open): no passkey offered, an error report with the hash, and a key fault for all, each at most once an hour', async () => {
+  it('S9 (the secret does not open): no passkey offered; ONE key-fault report an hour for everyone (review B6), none per holder', async () => {
     const first = await memberWithPasskey('first-s9@example.test');
     const second = await memberWithPasskey('second-s9@example.test');
     countingLimiter();
@@ -1686,43 +1686,50 @@ describe('review 4 finding 1: a fail-closed state or a key fault met by the page
     world.env.PASSKEY_BRIDGE_KEY_V1 = Buffer.alloc(32, 7).toString('base64');
     try {
       expect(await pk.passkeyStepFor(second.userId, factorsOfAccount(second.userId))).toBe('none');
-      expect(reportsTagged('passkeys.bridge_unopenable')).toEqual([
-        expect.objectContaining({ level: 'error', extra: hashed }),
-      ]);
       expect(reportsTagged('passkeys.key_fault')).toEqual([
-        expect.objectContaining({ level: 'error' }),
+        expect.objectContaining({
+          level: 'error',
+          extra: expect.objectContaining({
+            fault: 'bridge_unopenable',
+            userIdHash: expect.stringMatching(/^[0-9a-f]{16}$/),
+          }),
+        }),
       ]);
+      // A key fault is one fault: no report per holder.
+      expect(reportsTagged('passkeys.bridge_unopenable')).toEqual([]);
       // The same account again within the hour: nothing more.
       expect(await pk.passkeyStepFor(second.userId, factorsOfAccount(second.userId))).toBe('none');
-      expect(reportsTagged('passkeys.bridge_unopenable')).toHaveLength(1);
-      // Another account in the same fault: its own report; the key fault is said once for all.
+      // Another holder in the same fault within the hour: nothing more either.
       world.signIn(first.userId, 'aal1');
       expect(await pk.passkeyStepFor(first.userId, factorsOfAccount(first.userId))).toBe('none');
-      expect(reportsTagged('passkeys.bridge_unopenable')).toHaveLength(2);
-      expect(reportsTagged('passkeys.key_fault')).toHaveLength(1);
-      // The member's words are unchanged.
+      // The member's words are unchanged, and the start reports nothing more.
       expect(await pk.startSecondStep()).toMatchObject({
         ok: false,
         message: pk.PASSKEY_WORDS.cantUse,
         reason: 'bridge_unopenable',
       });
+      expect(reportsTagged('passkeys.key_fault')).toHaveLength(1);
+      expect(reportsTagged('passkeys.bridge_unopenable')).toEqual([]);
       expect(JSON.stringify(vi.mocked(reportError).mock.calls)).not.toContain(first.userId);
     } finally {
       world.env.PASSKEY_BRIDGE_KEY_V1 = key;
     }
   });
 
-  it('no key: a holder (a reserved-name factor listed) gets an error report and a key fault; an account without one costs nothing', async () => {
+  it('no key: a holder (a reserved-name factor listed) gets the one key-fault report; an account without one costs nothing', async () => {
     const { userId } = await memberWithPasskey();
     countingLimiter();
     const key = world.env.PASSKEY_BRIDGE_KEY_V1 ?? '';
     world.env.PASSKEY_BRIDGE_KEY_V1 = '';
     try {
       expect(await pk.passkeyStepFor(userId, factorsOfAccount(userId))).toBe('none');
-      expect(reportsTagged('passkeys.no_key')).toEqual([
-        expect.objectContaining({ level: 'error', extra: hashed }),
+      expect(reportsTagged('passkeys.no_key')).toEqual([]);
+      expect(reportsTagged('passkeys.key_fault')).toEqual([
+        expect.objectContaining({
+          level: 'error',
+          extra: expect.objectContaining({ fault: 'no_key', userIdHash: expect.any(String) }),
+        }),
       ]);
-      expect(reportsTagged('passkeys.key_fault')).toHaveLength(1);
       const plain = world.addAccount('plain@example.test');
       world.signIn(plain, 'aal1');
       vi.mocked(checkRateLimit).mockClear();
@@ -1772,6 +1779,8 @@ describe('review 4 finding 1: a fail-closed state or a key fault met by the page
       expect(await pk.passkeyStepFor(userId, factorsOfAccount(userId)), state).toBe('none');
       expect(reportsTagged(tag), state).toHaveLength(1);
       expect(await pk.startSecondStep(), state).toMatchObject({ ok: false, message: words });
+      // Review B6: the start's own report shares the page's pace (account and fault).
+      expect(reportsTagged(tag), state).toHaveLength(1);
     }
     expect(
       vi
@@ -2213,5 +2222,31 @@ describe('review 4 finding 11: notes', () => {
     );
     const supabase = String(world.env.NEXT_PUBLIC_SUPABASE_URL);
     expect(seen.every((u) => u.startsWith(supabase))).toBe(true);
+  });
+});
+
+// ── Review B (REVIEW-STAGE-4-B.md), the integrator's decisions of 2026-11-21 ──
+
+describe("review B6: the start reports a fault at the page's pace", () => {
+  it('a start called again and again on an account in a fail-closed state reports once (per account and fault, an hour)', async () => {
+    const { userId } = await memberWithPasskey('s8-starts@example.test');
+    world.passkeys.length = 0;
+    countingLimiter();
+    for (let i = 0; i < 6; i += 1) {
+      expect(await pk.startSecondStep()).toMatchObject({
+        ok: false,
+        message: pk.PASSKEY_WORDS.noPasskey,
+      });
+    }
+    expect(reportsTagged('passkeys.bridge_without_passkey')).toEqual([
+      expect.objectContaining({ level: 'error', extra: hashed }),
+    ]);
+    const keys = vi
+      .mocked(checkRateLimit)
+      .mock.calls.map(([k]) => String(k))
+      .filter((k) => k.startsWith('passkeys-step-report:'));
+    expect(new Set(keys)).toEqual(
+      new Set([`passkeys-step-report:${userId}:bridge_without_passkey`]),
+    );
   });
 });
