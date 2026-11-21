@@ -62,8 +62,16 @@ vi.mock('@/lib/auth/verify-password', () => ({
   verifyPasswordSideChannel: vi.fn(async () => ({ ok: true })),
 }));
 vi.mock('@/lib/auth/platform-admin', async () => {
-  const { CONSOLE_EMAIL: consoleEmail } = await import('@/test/passkey-world');
-  return { isPlatformAdmin: (e: string | null | undefined) => e === consoleEmail };
+  const { world: w } = await import('@/test/passkey-world');
+  // The allowlist as the world's settings hold it now (a test may change it).
+  return {
+    isPlatformAdmin: (e: string | null | undefined) =>
+      typeof e === 'string' &&
+      (w.env.STOCKPILOT_PLATFORM_ADMIN_EMAILS ?? '')
+        .split(',')
+        .map((x) => x.trim())
+        .includes(e),
+  };
 });
 
 const { checkMfaCode } = await import('@/lib/auth/mfa-code-attempts');
@@ -189,6 +197,8 @@ describe('the gate: each of the four conditions alone closes everything (stage 4
     ['new passkeys off', () => (world.addAllowed = 'adds_off')],
     ['no bridge key', () => (world.env.PASSKEY_BRIDGE_KEY_V1 = '')],
     ['an organization of the member off', () => (world.addAllowed = 'organization_off')],
+    // Not one of the four: a word this build does not know is read as closed.
+    ['a word the server does not know', () => (world.addAllowed = 'a_new_word')],
   ];
   for (const [label, close] of cases) {
     it(`${label}: no panel, no passkey step, every action refuses`, async () => {
@@ -626,6 +636,31 @@ describe('rules 13 to 18', () => {
       message: pk.PASSKEY_WORDS.console,
     });
     expect(await pk.passkeysPanelFor(userId)).toBeNull();
+  });
+
+  it('rule 14 at the finish: an account on the console list by then is refused, nothing stored', async () => {
+    const userId = world.addAccount('later-console@example.test');
+    world.signIn(userId);
+    const start = await pk.startAddPasskey({
+      proof: { kind: 'password', password: SAMPLE_PASSWORD },
+    });
+    if (!start.ok) throw new Error(`start add refused: ${start.reason}`);
+    const created = new SoftAuthenticator().create(start.optionsJSON as never);
+    const list = world.env.STOCKPILOT_PLATFORM_ADMIN_EMAILS;
+    world.env.STOCKPILOT_PLATFORM_ADMIN_EMAILS = `${list},later-console@example.test`;
+    try {
+      expect(
+        await pk.finishAddPasskey({
+          challengeId: start.challengeId,
+          response: created,
+          name: 'Desk',
+        }),
+      ).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.console });
+    } finally {
+      world.env.STOCKPILOT_PLATFORM_ADMIN_EMAILS = list;
+    }
+    expect(world.passkeys).toEqual([]);
+    expect(world.bridges.has(userId)).toBe(false);
   });
 
   it('rule 15: a disabled account is refused before any limiter counts', async () => {
