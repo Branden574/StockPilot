@@ -547,6 +547,32 @@ describe('the reset, state by state (2.7): only a passkey that serves now is off
     ok: false,
     error: { code: 'forbidden', message: RESET_CODE_ASK, details: { reason: 'aal2_required' } },
   };
+  /** The states whose verified reserved-name factor no bridge row records. */
+  const UNRECORDED: Array<[string, (u: string) => void]> = [
+    ['S12, a verified reserved-name factor with no bridge row', (u) => world.bridges.delete(u)],
+    [
+      'S13, a removal the member started, its factor left and its row gone',
+      (u) => {
+        rowsOf(u)[0]!.removed_at = later();
+        rowsOf(u)[0]!.removed_reason = 'member';
+        world.bridges.delete(u);
+      },
+    ],
+    [
+      'S14, a bridge row whose factor is gone, beside a verified reserved-name factor',
+      (u) => {
+        world.bridges.get(u)!.factor_id = '00000000-0000-4000-8000-0000000000e4';
+      },
+    ],
+    [
+      'S17 with no bridge row, a verified reserved-name factor newer than the newest removal',
+      (u) => {
+        rowsOf(u)[0]!.removed_at = earlier();
+        rowsOf(u)[0]!.removed_reason = 'member';
+        world.bridges.delete(u);
+      },
+    ],
+  ];
   const STATES: Array<[string, (u: string) => void, unknown]> = [
     [
       'S7, a removal the member started (its bridge row and factor no newer)',
@@ -563,13 +589,13 @@ describe('the reset, state by state (2.7): only a passkey that serves now is off
       },
       BRIDGE_ONLY,
     ],
-    // Stage 2 treats a verified reserved-name factor that no record names like
-    // an app, by id only (review finding 5): it asks for a code.
-    [
-      'S12, a verified reserved-name factor with no bridge row',
-      (u) => world.bridges.delete(u),
-      CODE_ASK,
-    ],
+    // A verified reserved-name factor that no record names is not an app the
+    // member has a code for (the stage 5 fix): the plain words, no code box.
+    ...UNRECORDED.map(([name, make]): [string, (u: string) => void, unknown] => [
+      name,
+      make,
+      BRIDGE_ONLY,
+    ]),
     [
       'S16, passkeys only for another site',
       (u) => {
@@ -606,8 +632,33 @@ describe('the reset, state by state (2.7): only a passkey that serves now is off
     },
   );
 
-  it('S15, a second verified reserved-name factor beside a serving bridge: offered with the code (that factor is treated like an app, by id)', async () => {
-    const { userId } = await passkeyOnlyMember();
+  it.each(UNRECORDED)(
+    '%s, with an authenticator app too: the code box, for the app, whatever the order',
+    async (_s, make) => {
+      const { userId } = await passkeyOnlyMember();
+      make(userId);
+      const app = world.addApp(userId);
+      for (const appFirst of [true, false]) {
+        const appRow = world.factors.find((f) => f.id === app.id)!;
+        const rest = world.factors.filter((f) => f.id !== app.id);
+        world.factors.splice(
+          0,
+          world.factors.length,
+          ...(appFirst ? [appRow, ...rest] : [...rest, appRow]),
+        );
+        openLink(userId);
+        expect(await completePasswordResetAction(PASSWORDS)).toEqual(CODE_ASK);
+        vi.mocked(checkMfaCode).mockReset();
+        vi.mocked(checkMfaCode).mockResolvedValue({ kind: 'refused', outcome: 'refused' } as never);
+        await completePasswordResetAction({ ...PASSWORDS, totpCode: '123456' });
+        expect(vi.mocked(checkMfaCode).mock.calls.map((c) => c[1].factorId)).toEqual([app.id]);
+      }
+      expect(world.calls.passwordSets).toEqual([]);
+    },
+  );
+
+  /** A second verified reserved-name factor that the bridge row does not record (S15's). */
+  function secondReservedFactor(userId: string) {
     world.factors.push({
       id: '00000000-0000-4000-8000-0000000000f5',
       user_id: userId,
@@ -617,8 +668,32 @@ describe('the reset, state by state (2.7): only a passkey that serves now is off
       created_at: new Date().toISOString(),
       secret: 'AAAAAAAAAAAAAAAA',
     });
+  }
+
+  it('S15, a second verified reserved-name factor beside a serving bridge: the passkey alone (no code box for that factor)', async () => {
+    const { userId } = await passkeyOnlyMember();
+    secondReservedFactor(userId);
+    openLink(userId);
+    expect(await completePasswordResetAction(PASSWORDS)).toEqual({
+      ok: false,
+      error: {
+        code: 'forbidden',
+        message: PASSKEY_ASK,
+        details: { reason: 'aal2_required', method: 'passkey' },
+      },
+    });
+  });
+
+  it('S15 with an authenticator app too: the passkey, or the code of the app', async () => {
+    const { userId } = await passkeyOnlyMember();
+    secondReservedFactor(userId);
+    const app = world.addApp(userId);
     openLink(userId);
     expect(await completePasswordResetAction(PASSWORDS)).toEqual(BOTH_ASK);
+    vi.mocked(checkMfaCode).mockReset();
+    vi.mocked(checkMfaCode).mockResolvedValue({ kind: 'refused', outcome: 'refused' } as never);
+    await completePasswordResetAction({ ...PASSWORDS, totpCode: '123456' });
+    expect(vi.mocked(checkMfaCode).mock.calls.map((c) => c[1].factorId)).toEqual([app.id]);
   });
 
   it('a picture that cannot be read: not offered; stage 2’s words', async () => {
@@ -702,13 +777,10 @@ describe('the reset never finishes a removal and never repairs a bridge', () => 
     world.bridges.delete(userId);
     openLink(userId);
     const res = await completePasswordResetAction(PASSWORDS);
-    // Stage 2 treats a reserved-name factor that no record names like an app
-    // (by id only, review finding 5), so it asks for a code; the passkey is
-    // not offered (the reset never finishes a removal: the code page does).
-    expect(res).toEqual({
-      ok: false,
-      error: { code: 'forbidden', message: RESET_CODE_ASK, details: { reason: 'aal2_required' } },
-    });
+    // The passkey is not offered (the reset never finishes a removal: the code
+    // page does), and the factor left is no app the member has a code for: the
+    // plain words, no code box (the stage 5 fix).
+    expect(res).toEqual({ ok: false, error: { code: 'forbidden', message: RESET_BRIDGE_ONLY } });
     const start = await startPasswordResetPasskeyAction();
     expect(start).toEqual({
       ok: false,
