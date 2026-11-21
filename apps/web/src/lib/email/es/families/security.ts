@@ -1287,3 +1287,103 @@ export function renderPasskeySignInEndedEmail(params: PasskeySignInEndedEmailPar
 
   return { id: def.id, subject, preheader, html, text, from: def.from };
 }
+
+// ── recovery-code-used ──────────────────────────────────────────────
+
+export interface RecoveryCodeUsedEmailParams {
+  /** Recipient: the account's current sign-in address. */
+  email: string;
+  /** Preformatted time the code was used, e.g. "Nov 21, 2026, 9:41 AM UTC". */
+  usedAt: string;
+  /** The account had a passkey (one was removed, or its bridge factor was). */
+  passkeys: boolean;
+  /** Every other session of the account was ended. */
+  othersSignedOut: boolean;
+  firstName?: string | null;
+  appUrl?: string;
+}
+
+/**
+ * A recovery code was used (answers Q6 and Q7 of the passkey plan): every
+ * authenticator app, and every passkey when the account had one, was removed,
+ * and the other devices were signed out when that could be done. Only true
+ * sentences: an account with no passkey never reads the word, and devices that
+ * could not be signed out are said not to be. The subject is fixed. The one
+ * action is the password reset page; no link signs in.
+ */
+export function renderRecoveryCodeUsedEmail(params: RecoveryCodeUsedEmailParams): RenderedEsEmail {
+  const def = esEmailById('recovery-code-used');
+  const appUrl = params.appUrl ?? DEFAULT_APP_URL;
+  const urls = marketingUrls(appUrl);
+  const email = escapeHtml(params.email);
+  const usedAt = escapeHtml(params.usedAt);
+  const resetUrl = `${appUrl.replace(/\/$/, '')}/reset`;
+
+  const removed = params.passkeys
+    ? 'Every authenticator app and passkey was removed'
+    : 'Every authenticator app was removed';
+  const outcome = params.othersSignedOut
+    ? `${removed}, and your other devices were signed out.`
+    : `${removed}. We could not sign out your other devices.`;
+  const used = `a recovery code was used on your StockPilot account on ${params.usedAt}.`;
+
+  const subject = def.subject({});
+  const preheader = def.preheader({});
+
+  const styles = { darkPills: ['sec' as const] };
+  const html = emailShell({
+    title: escapeHtml(subject),
+    preheader,
+    preheaderPad: 6,
+    styles,
+    rows: [
+      brandStrip({ tag: def.tag }),
+      section(
+        '36px 36px 24px',
+        [
+          statusPill({ variant: 'sec', label: 'Security &middot; Sign-in methods removed' }),
+          headline({ lead: 'A recovery code was used.', turn: 'This is the record of it.' }),
+          bodyText(
+            `${greeting(params.firstName)}— a recovery code was used on your StockPilot account on ${usedAt}. ${outcome}`,
+          ),
+        ].join('\n      '),
+      ),
+      section(
+        '0 36px 20px',
+        banner({
+          tone: 'err',
+          titleHtml: 'Was this not you?',
+          bodyHtml:
+            'If this was not you, reset your password now. Then set up your sign-in methods again in Settings, Security, and tell your administrator.',
+        }),
+      ),
+      section(
+        '0 36px 30px',
+        [
+          ctaRow({
+            primary: { label: def.cta, href: escapeHtml(resetUrl) },
+          }),
+          linkFallback(escapeHtml(resetUrl), { marginTop: 12 }),
+        ].join('\n      '),
+      ),
+      footer({
+        kind: 'ess',
+        reasonHtml: `Sent to <span class="ink2" style="color:${L.ink2};text-decoration:underline">${email}</span> because a recovery code was used on this StockPilot account — a core account-safety notice.`,
+        urls,
+      }),
+    ].join('\n    '),
+  });
+  assertEmailWeight(html);
+
+  const text = [
+    'Your StockPilot sign-in methods were removed.',
+    '',
+    `${greetingText(params.firstName)}— ${used} ${outcome}`,
+    '',
+    `If this was not you, reset your password now: ${resetUrl}`,
+    '',
+    'Then set up your sign-in methods again in Settings, Security, and tell your administrator.',
+  ].join('\n');
+
+  return { id: def.id, subject, preheader, html, text, from: def.from };
+}
