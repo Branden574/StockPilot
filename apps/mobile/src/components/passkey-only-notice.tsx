@@ -6,7 +6,6 @@ import { AuthShell } from '@/components/auth/auth-shell';
 import { Button } from '@/components/ui/button';
 import { Body, Display } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
-import { readSetUpInputsForHold, setUpCheckAnswered } from '@/lib/set-up-hold';
 import { useTheme } from '@/lib/use-theme';
 import { webLink } from '@/lib/web-links';
 
@@ -24,14 +23,16 @@ import {
  * website's security page (where an authenticator app is added, and where
  * recovery codes are used), Check again, and the way out to another account.
  *
- * Check again (review 2-3 finding 10) makes the set-up screen's own read
- * (readSetUpInputsForHold: the user and the memberships from the server). The
- * user it reads goes to the code gate's reconcile (mfa-reconcile.ts): when the
- * server lists an authenticator app now, the session is refreshed and RootGate
- * shows the code screen in this one's place; a session the server ended (Auth
- * ends a waiting aal1 session when the member passes a second step elsewhere)
- * goes back to sign-in. Still here, a line says whether an answer came, and
- * VoiceOver says it too. The way out stays usable while a check runs.
+ * Check again (review 2-3 finding 10) reads the user only, the read the gate
+ * makes when it comes up (the provider's recheckCodeGate: readLiveUser, then
+ * the code gate's reconcile, mfa-reconcile.ts). Never the workspace or the
+ * memberships (review B finding 2): the session still owes its second step,
+ * so it is a password and nothing more. When the server lists an
+ * authenticator app now, the session is refreshed and RootGate shows the code
+ * screen in this one's place; a session the server ended (Auth ends a waiting
+ * aal1 session when the member passes a second step elsewhere) goes back to
+ * sign-in. Still here, a line says whether the server answered, and VoiceOver
+ * says it too. The way out stays usable while a check runs.
  *
  * It reads no gate state and checks no code: RootGate decided, and the gate
  * itself is unchanged (the data hooks are still handed nobody). Every word is
@@ -41,9 +42,8 @@ import {
  * block button, an outline one and the borderless one.
  */
 export function PasskeyOnlyNotice() {
-  const { session, signOutToFallback } = useAuth();
+  const { recheckCodeGate, signOutToFallback } = useAuth();
   const { c } = useTheme();
-  const userId = session?.user?.id ?? null;
 
   const [checking, setChecking] = React.useState(false);
   const [result, setResult] = React.useState<string | null>(null);
@@ -60,16 +60,20 @@ export function PasskeyOnlyNotice() {
     if (checking) return;
     setChecking(true);
     setResult(null);
+    let answer: 'answered' | 'no_answer' = 'no_answer';
     try {
-      await readSetUpInputsForHold(userId);
+      answer = await recheckCodeGate();
+    } catch {
+      answer = 'no_answer';
     } finally {
       if (mounted.current) setChecking(false);
     }
-    // Still here: the screen did not change. Say what the check found.
+    // Still here: the screen did not change. Say whether the server answered.
     if (!mounted.current) return;
-    const line = setUpCheckAnswered(session?.user)
-      ? AUTHENTICATOR_CHECK_RESULT_COPY.checked
-      : AUTHENTICATOR_CHECK_RESULT_COPY.noAnswer;
+    const line =
+      answer === 'answered'
+        ? AUTHENTICATOR_CHECK_RESULT_COPY.checked
+        : AUTHENTICATOR_CHECK_RESULT_COPY.noAnswer;
     setResult(line);
     AccessibilityInfo.announceForAccessibility(line);
   }

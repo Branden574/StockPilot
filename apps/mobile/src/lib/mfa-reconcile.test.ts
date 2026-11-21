@@ -125,7 +125,9 @@ describe('reconcile: the session and the server agree', () => {
 
   it('a session that entered its code is left alone when a second factor is added', async () => {
     const { state, reconcile } = harness(session('aal2', [TOTP]));
-    expect(await reconcile(liveUser([TOTP, { id: 'f2', factor_type: 'totp', status: 'verified' }]))).toBe('none');
+    expect(
+      await reconcile(liveUser([TOTP, { id: 'f2', factor_type: 'totp', status: 'verified' }])),
+    ).toBe('none');
     expect(state.refreshes).toBe(0);
     expect(stepUpForcedFor()).toBeNull();
   });
@@ -369,6 +371,67 @@ describe('reconcile: the note is never kept for a session that entered its code'
   });
 });
 
+// Review 2-3 B finding 8: what the reconciler does with the new cause
+// (mfa-level.ts reconcileStepUp: both sides owe the code, and the stored copy
+// and the server's answer differ in "every verified factor is a passkey's
+// bridge"). One refresh; the gate stays up through it (the code is still
+// owed); a failed refresh keeps the gate up; a later hand-over of the same
+// answer makes no second refresh.
+describe("reconcile: a passkey's bridge-only state changed on the server", () => {
+  const BRIDGE = {
+    id: 'factor-bridge',
+    factor_type: 'totp',
+    status: 'verified',
+    friendly_name: 'sp-passkey-bridge-0a1b2c3d4e5f',
+  };
+  const APP = { id: 'factor-app', factor_type: 'totp', status: 'verified', friendly_name: 'Phone' };
+
+  it('an app added on the website: one refresh, the gate stays up, no note', async () => {
+    const { state, reconcile } = harness(session('aal1', [BRIDGE]));
+    expect(level.reconcileStepUp(state.current!, liveUser([BRIDGE, APP]))).toBe('refresh');
+    state.refreshTo = session('aal1', [BRIDGE, APP]);
+    expect(await reconcile(liveUser([BRIDGE, APP]))).toBe('refreshed');
+    expect(state.refreshes).toBe(1);
+    expect(stepUpForcedFor()).toBeNull();
+    expect(codeGateUp(state.current, stepUpForcedFor())).toBe(true);
+    expect(level.bridgeOnlyAccount(state.current!.user)).toBe(false);
+  });
+
+  it('the other way (the app removed, the bridge left): one refresh, the gate stays up', async () => {
+    const { state, reconcile } = harness(session('aal1', [BRIDGE, APP]));
+    state.refreshTo = session('aal1', [BRIDGE]);
+    expect(await reconcile(liveUser([BRIDGE]))).toBe('refreshed');
+    expect(state.refreshes).toBe(1);
+    expect(codeGateUp(state.current, stepUpForcedFor())).toBe(true);
+    expect(level.bridgeOnlyAccount(state.current!.user)).toBe(true);
+  });
+
+  it('a failed refresh keeps the gate up (the note is raised; nothing is lowered)', async () => {
+    const { state, reconcile } = harness(session('aal1', [BRIDGE]));
+    expect(await reconcile(liveUser([BRIDGE, APP]))).toBe('forced');
+    expect(state.refreshes).toBe(1);
+    expect(stepUpForcedFor()).toBe('u1');
+    expect(codeGateUp(state.current, stepUpForcedFor())).toBe(true);
+  });
+
+  it('after a good refresh, the same answer handed over again makes no second refresh', async () => {
+    const { state, reconcile } = harness(session('aal1', [BRIDGE]));
+    state.refreshTo = session('aal1', [BRIDGE, APP]);
+    await reconcile(liveUser([BRIDGE, APP]));
+    expect(state.refreshes).toBe(1);
+    expect(await reconcile(liveUser([BRIDGE, APP]))).toBe('none');
+    expect(await reconcile(liveUser([BRIDGE, APP]))).toBe('none');
+    expect(state.refreshes).toBe(1);
+    expect(codeGateUp(state.current, stepUpForcedFor())).toBe(true);
+  });
+
+  it('an account with no reserved-name factor never refreshes for this cause', async () => {
+    const { state, reconcile } = harness(session('aal1', [APP]));
+    expect(await reconcile(liveUser([APP]))).toBe('none');
+    expect(state.refreshes).toBe(0);
+  });
+});
+
 describe('reconcile: whether to refresh is the comparison in mfa-level.ts, not a second copy', () => {
   it('asks reconcileStepUp with the session it read and the answer it was handed', async () => {
     const asked = vi.spyOn(level, 'reconcileStepUp');
@@ -414,7 +477,11 @@ describe('reconcile: one run at a time, and never a throw', () => {
         return pending;
       },
     });
-    const runs = [reconcile(liveUser([TOTP])), reconcile(liveUser([TOTP])), reconcile(liveUser([TOTP]))];
+    const runs = [
+      reconcile(liveUser([TOTP])),
+      reconcile(liveUser([TOTP])),
+      reconcile(liveUser([TOTP])),
+    ];
     release(session('aal1', [TOTP]));
     expect(await Promise.all(runs)).toEqual(['refreshed', 'refreshed', 'refreshed']);
     expect(refreshes).toBe(1);

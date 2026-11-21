@@ -21,11 +21,13 @@ import { PASSKEY_ONLY_NOTICE_COPY } from '@stockpilot/core';
  * handed nobody. The notice checks no code, reads no gate state, opens the
  * website's security page through webLink, and signs out through
  * signOutToFallback; every word is core's. Its Check again (review 2-3
- * finding 10) re-reads the user and the memberships through the same call the
- * set-up screen's Check again makes (readSetUpInputsForHold), whose user read
- * goes to the code gate's reconcile: an app added on the website refreshes
- * the session and the code screen takes the notice's place. Still here, a
- * line says whether an answer came (core's AUTHENTICATOR_CHECK_RESULT_COPY).
+ * finding 10) reads the user only, through the provider's recheckCodeGate:
+ * the read the gate makes when it comes up (readLiveUser, then the code
+ * gate's reconcile), so an app added on the website refreshes the session and
+ * the code screen takes the notice's place. Never the set-up read, the
+ * workspace or the memberships (review B finding 2): the session still owes
+ * its second step. Still here, a line says whether the server answered
+ * (core's AUTHENTICATOR_CHECK_RESULT_COPY).
  */
 
 const MOBILE_ROOT = path.resolve(__dirname, '../..');
@@ -112,16 +114,25 @@ describe('PasskeyOnlyNotice', () => {
     expect(src).not.toMatch(/verifyMfa|\.mfa\.|mfaRequired|stepUpOwed|codeGateUp|listFactors/);
   });
 
-  it("Check again re-reads through the set-up screen's own call, and says what it found", () => {
+  it("Check again reads the user only, through the gate's own read, and says whether the server answered", () => {
+    expect(src).toContain('const { recheckCodeGate, signOutToFallback } = useAuth();');
+    expect(src).toContain('answer = await recheckCodeGate();');
     expect(src).toContain(
-      "import { readSetUpInputsForHold, setUpCheckAnswered } from '@/lib/set-up-hold';",
+      "answer === 'answered' ? AUTHENTICATOR_CHECK_RESULT_COPY.checked : AUTHENTICATOR_CHECK_RESULT_COPY.noAnswer;",
     );
-    expect(src).toContain('await readSetUpInputsForHold(userId);');
-    expect(src).toContain('AUTHENTICATOR_CHECK_RESULT_COPY.checked');
-    expect(src).toContain('AUTHENTICATOR_CHECK_RESULT_COPY.noAnswer');
-    // The same read as the set-up screen's Check again.
-    const setUp = flat(codeOnly(read('src/components/authenticator-set-up-screen.tsx')));
-    expect(setUp).toContain('await readSetUpInputsForHold(userId);');
+    // Never the set-up read, the workspace or the memberships: the session
+    // still owes its second step (review B finding 2). Nor the session itself.
+    const whole = read('src/components/passkey-only-notice.tsx');
+    expect(whole).not.toMatch(
+      /readSetUpInputsForHold|readSetUpInputsNow|setUpCheckAnswered|loadOrgs|useWorkspace|organization_members|set-up-hold|use-workspace/,
+    );
+    expect(src).not.toMatch(/\bsession\b/);
+    // The provider's recheck is the gate's own user read and reconcile, and
+    // nothing else.
+    const recheck = flat(codeOnly(read('src/lib/auth-context.tsx')));
+    expect(recheck).toContain(
+      "const recheckCodeGate: AuthState['recheckCodeGate'] = async () => { const live = await readLiveUser(); if (!live) return 'no_answer'; await reconcileCodeGate(live); return 'answered'; };",
+    );
   });
 
   it('Check again sits next to the way out, and both stay usable while a check runs', () => {
