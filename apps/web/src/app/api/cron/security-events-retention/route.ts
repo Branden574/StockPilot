@@ -8,10 +8,11 @@ import { secretsEqual } from '@/server/services/lib/system-context';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 /**
- * The hard limit, explicit. The loop starts no call after RUN_BUDGET_MS
- * (45 s); the call in flight then waits at most 2 s for its turn (the
- * function's lock_timeout) and removes at most 5,000 rows and clears at most
- * 5,000 hashes, so a run ends well inside 120 s.
+ * The hard limit, explicit. The first loop starts no call after RUN_BUDGET_MS
+ * (45 s) and the sign-in alerts loop none after SIGN_IN_ALERTS_BUDGET_MS
+ * (30 s) of its own; the call in flight then waits at most 2 s for its turn
+ * (each function's lock_timeout) and removes at most 5,000 rows (and clears at
+ * most 5,000 hashes), so a run ends well inside 120 s.
  */
 export const maxDuration = 120;
 
@@ -27,6 +28,9 @@ const RUN_BUDGET_MS = 45_000;
 const BUSY_RETRY_MS = 500;
 /** Busy calls in a row that end the run, reported. */
 const BUSY_STOP_AFTER = 3;
+
+/** No sign-in alerts call starts after this long into that loop (part 3). */
+const SIGN_IN_ALERTS_BUDGET_MS = 30_000;
 
 const TAG = 'cron.security-events-retention';
 
@@ -62,6 +66,15 @@ const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * The answer: the summed counts, the number of calls, and whether the run
  * stopped before the work was done, and why. Never a row.
  *
+ * SIGN-IN ALERTS (part 3 of the security tools): the same run then calls
+ * purge_sign_in_alerts() (migration sign_in_alerts), which deletes alerts
+ * older than 90 days, at most 5,000 a call, by the same rule: again while a
+ * call removes 5,000, at most MAX_CALLS calls, a busy call (55P03) tried again
+ * BUSY_RETRY_MS later and BUSY_STOP_AFTER in a row ending it, and no call
+ * after SIGN_IN_ALERTS_BUDGET_MS of its own. It runs whether or not the first
+ * loop failed: the two tables are apart. Its early stop and its errors are
+ * reported the same way, marked with the table; an error answers 500.
+ *
  * Auth: Bearer ${CRON_SECRET}, compared in constant time, FAIL-CLOSED when
  * CRON_SECRET is unset (as purge-ai-chat-history): an unauthenticated GET must
  * never reach the service-role client.
@@ -81,6 +94,7 @@ export async function GET(req: Request) {
   let calls = 0;
   let busyInARow = 0;
   let stop: StopReason | null = null;
+  let failed = false;
 
   try {
     const admin = createAdminClient();
@@ -123,6 +137,12 @@ export async function GET(req: Request) {
     // Awaited: an answer sent first could leave the report's POST in flight
     // on a suspended instance. reportError never throws.
     await reportError(err, { tag: TAG, extra: { calls, deleted, hashesCleared } });
+    failed = true;
+  }
+
+  // Part 3: the sign-in alerts, whether or not the first loop failed.
+  const signInAlerts = await purgeSignInAlerts();
+  if (failed || signInAlerts === null) {
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
 
@@ -144,7 +164,86 @@ export async function GET(req: Request) {
     });
   }
 
-  const result = { ok: true, deleted, hashesCleared, calls, stoppedEarly: stop !== null, stop };
+  const result = {
+    ok: true,
+    deleted,
+    hashesCleared,
+    calls,
+    stoppedEarly: stop !== null,
+    stop,
+    signInAlerts,
+  };
   console.info(`[${TAG}]`, JSON.stringify(result));
   return NextResponse.json(result);
+}
+
+/** The sign-in alerts loop's answer, for the run's own answer. */
+interface SignInAlertsPurge {
+  deleted: number;
+  calls: number;
+  stoppedEarly: boolean;
+  stop: StopReason | null;
+}
+
+/**
+ * purge_sign_in_alerts() until a call removes fewer than PURGE_BATCH, by the
+ * first loop's rule (see GET). Null when it failed (reported, counts only).
+ * Never throws.
+ */
+async function purgeSignInAlerts(): Promise<SignInAlertsPurge | null> {
+  const started = Date.now();
+  let deleted = 0;
+  let calls = 0;
+  let busyInARow = 0;
+  let stop: StopReason | null = null;
+  try {
+    const admin = createAdminClient();
+    for (;;) {
+      if (calls >= MAX_CALLS) {
+        stop = 'call_limit';
+        break;
+      }
+      if (Date.now() - started >= SIGN_IN_ALERTS_BUDGET_MS) {
+        stop = 'time_limit';
+        break;
+      }
+      calls += 1;
+      const { data, error } = await admin.rpc('purge_sign_in_alerts');
+      if (error) {
+        if ((error as { code?: unknown }).code === '55P03') {
+          busyInARow += 1;
+          if (busyInARow >= BUSY_STOP_AFTER) {
+            stop = 'busy';
+            break;
+          }
+          await pause(BUSY_RETRY_MS);
+          continue;
+        }
+        const code = String((error as { code?: unknown }).code ?? 'no code');
+        throw new Error(`purge_sign_in_alerts failed (${code})`);
+      }
+      busyInARow = 0;
+      const removed = countOf(data);
+      if (removed === null) throw new Error('purge_sign_in_alerts answered without its count');
+      deleted += removed;
+      if (removed < PURGE_BATCH) break;
+    }
+  } catch (err) {
+    await reportError(err, { tag: TAG, extra: { table: 'sign_in_alerts', calls, deleted } });
+    return null;
+  }
+  if (stop !== null) {
+    const why =
+      stop === 'busy'
+        ? 'the table stayed busy'
+        : stop === 'call_limit'
+          ? 'more was left than one run takes'
+          : 'the run reached its time limit';
+    await reportError(new Error(`Sign-in alerts retention stopped: ${why}`), {
+      tag: TAG,
+      level: 'warning',
+      extra: { table: 'sign_in_alerts', calls, deleted, stop },
+    });
+  }
+  return { deleted, calls, stoppedEarly: stop !== null, stop };
 }
