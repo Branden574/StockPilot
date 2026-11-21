@@ -33,11 +33,23 @@ import {
  *
  * THE BUFFER is keyed like the row (category, outcome, reason, source,
  * organization, country, city, source hash, and the UTC minute), with a count.
- * At most MAX_WAITING_KEYS distinct keys wait. Past that, a new key is counted
- * on an over_buffer_cap entry for its category, outcome and source, with no
- * place, organization or hash; an event whose key already waits still adds to
- * it. With 5 categories, 3 outcomes and 5 sources there are at most 75 such
- * entries, so a flush is at most 175 elements, under the writer's 200.
+ * Events ABOUT AN ORGANIZATION and events about none wait in two separate
+ * budgets of distinct keys (MAX_WAITING_KEYS_WITH_ORGANIZATION and
+ * MAX_WAITING_KEYS_WITHOUT_ORGANIZATION), so traffic that is about no
+ * organization (scanner paths, bots) can never push an organization's events
+ * out of the list its admins read. The database's writer keeps the same
+ * promise one step later (its two minute caps). An event whose key already
+ * waits always adds to it. Past a budget, a new key is counted, not listed, on
+ * an over_buffer_cap entry with no place and no hash:
+ *   - with no organization: one entry per category, outcome and source;
+ *   - about an organization: one entry per category, outcome, source AND
+ *     organization, so the count stays on that organization's page. At most
+ *     MAX_ORGANIZATION_OVERFLOW_ENTRIES of those wait; past that ceiling, and
+ *     only then, the event is counted on the entry with no organization.
+ * With 5 categories, 3 outcomes and 5 sources there are at most 75 entries
+ * with no organization, so a flush is at most 50 + 50 + 25 + 75 = 200
+ * elements: exactly what the writer reads of one call (MAX_FLUSH_ELEMENTS).
+ * Events about an organization are sent first.
  *
  * A FAILED FLUSH drops its batch: these are counts for admins to read, not
  * records anything depends on, and a retry would hold a growing buffer during
@@ -70,8 +82,18 @@ export type SecurityEventHeaders = { get(name: string): string | null };
 
 /** Delay between the first event into an empty buffer and its flush. */
 export const SECURITY_EVENT_FLUSH_DELAY_MS = 2_000;
-/** Distinct keys that may wait for a flush; the rest are counted, not listed. */
-export const MAX_WAITING_KEYS = 100;
+/** Distinct keys about an organization that may wait for a flush. */
+export const MAX_WAITING_KEYS_WITH_ORGANIZATION = 50;
+/** Distinct keys about no organization that may wait for a flush. */
+export const MAX_WAITING_KEYS_WITHOUT_ORGANIZATION = 50;
+/** Entries that count an organization's events past its budget, and keep the organization. */
+export const MAX_ORGANIZATION_OVERFLOW_ENTRIES = 25;
+/**
+ * What record_security_events reads of one call (`limit 200` on its array); a
+ * longer array would lose its tail without a word. The three numbers above
+ * and the 75 possible entries with no organization add up to it.
+ */
+export const MAX_FLUSH_ELEMENTS = 200;
 /** A failed flush is reported at most this often per instance. */
 export const FAILURE_REPORT_INTERVAL_MS = 10 * 60_000;
 /** The writer reads a count of at most six digits. */
@@ -94,7 +116,13 @@ interface PendingEvent {
   at_ms: number;
 }
 
-let waiting = new Map<string, PendingEvent>();
+/** Listed events about an organization, by row key. */
+let waitingWithOrganization = new Map<string, PendingEvent>();
+/** Listed events about no organization, by row key. */
+let waitingWithoutOrganization = new Map<string, PendingEvent>();
+/** Counted events about an organization: category, outcome, source, organization. */
+let organizationOverflow = new Map<string, PendingEvent>();
+/** Counted events with no organization (and the last resort): category, outcome, source. */
 let overflow = new Map<string, PendingEvent>();
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let flushDelayMs = SECURITY_EVENT_FLUSH_DELAY_MS;
@@ -175,34 +203,80 @@ function foldInto(into: PendingEvent, e: PendingEvent): void {
   into.at_ms = Math.max(into.at_ms, e.at_ms);
 }
 
+/** A new entry that counts events past a budget: no place and no hash. */
+function overflowEntryFor(e: PendingEvent, organizationId: string | null): PendingEvent {
+  return {
+    category: e.category,
+    outcome: e.outcome,
+    reason: 'over_buffer_cap',
+    source: e.source,
+    organization_id: organizationId,
+    country: null,
+    city: null,
+    source_hash: null,
+    count: e.count,
+    at_ms: e.at_ms,
+  };
+}
+
 function add(e: PendingEvent): void {
+  const aboutAnOrganization = e.organization_id !== null;
+  const waiting = aboutAnOrganization ? waitingWithOrganization : waitingWithoutOrganization;
+  const budget = aboutAnOrganization
+    ? MAX_WAITING_KEYS_WITH_ORGANIZATION
+    : MAX_WAITING_KEYS_WITHOUT_ORGANIZATION;
   const key = keyOf(e);
   const same = waiting.get(key);
   if (same) {
     foldInto(same, e);
-  } else if (waiting.size < MAX_WAITING_KEYS) {
+  } else if (waiting.size < budget) {
     waiting.set(key, e);
   } else {
-    const overflowKey = [e.category, e.outcome, e.source].join('\u001f');
-    const counted = overflow.get(overflowKey);
-    if (counted) {
-      foldInto(counted, e);
-    } else {
-      overflow.set(overflowKey, {
-        category: e.category,
-        outcome: e.outcome,
-        reason: 'over_buffer_cap',
-        source: e.source,
-        organization_id: null,
-        country: null,
-        city: null,
-        source_hash: null,
-        count: e.count,
-        at_ms: e.at_ms,
-      });
-    }
+    countPastBudget(e);
   }
   scheduleFlush();
+}
+
+/**
+ * An event whose budget is full. About an organization, it is counted on that
+ * organization's own entry while there is room for one; otherwise, and for an
+ * event about no organization, on the entry of its category, outcome and
+ * source with no organization.
+ */
+function countPastBudget(e: PendingEvent): void {
+  const kind = [e.category, e.outcome, e.source].join('\u001f');
+  if (e.organization_id !== null) {
+    const ownKey = `${kind}\u001f${e.organization_id}`;
+    const own = organizationOverflow.get(ownKey);
+    if (own) {
+      foldInto(own, e);
+      return;
+    }
+    if (organizationOverflow.size < MAX_ORGANIZATION_OVERFLOW_ENTRIES) {
+      organizationOverflow.set(ownKey, overflowEntryFor(e, e.organization_id));
+      return;
+    }
+  }
+  const counted = overflow.get(kind);
+  if (counted) foldInto(counted, e);
+  else overflow.set(kind, overflowEntryFor(e, null));
+}
+
+/** Everything waiting, in the order it is sent: events about an organization first. */
+function pendingEvents(): PendingEvent[] {
+  return [
+    ...waitingWithOrganization.values(),
+    ...organizationOverflow.values(),
+    ...waitingWithoutOrganization.values(),
+    ...overflow.values(),
+  ];
+}
+
+function emptyBuffer(): void {
+  waitingWithOrganization = new Map();
+  waitingWithoutOrganization = new Map();
+  organizationOverflow = new Map();
+  overflow = new Map();
 }
 
 /**
@@ -235,9 +309,9 @@ export async function flushSecurityEvents(): Promise<void> {
     clearTimeout(flushTimer);
     flushTimer = null;
   }
-  const batch = [...waiting.values(), ...overflow.values()];
-  waiting = new Map();
-  overflow = new Map();
+  // Never more than the writer reads; the budgets already add up to that.
+  const batch = pendingEvents().slice(0, MAX_FLUSH_ELEMENTS);
+  emptyBuffer();
   if (batch.length === 0) return;
   try {
     const admin = createAdminClient();
@@ -272,8 +346,7 @@ function reportFlushFailure(failure: unknown, rows: number): void {
 export function __resetSecurityEventsForTests(): void {
   if (flushTimer !== null) clearTimeout(flushTimer);
   flushTimer = null;
-  waiting = new Map();
-  overflow = new Map();
+  emptyBuffer();
   lastFailureReportAt = null;
   flushDelayMs = SECURITY_EVENT_FLUSH_DELAY_MS;
 }
@@ -285,5 +358,5 @@ export function __setSecurityEventFlushDelayForTests(ms: number): void {
 
 /** Test only: what is waiting, as it would be sent. */
 export function __pendingSecurityEventsForTests(): PendingEvent[] {
-  return [...waiting.values(), ...overflow.values()].map((e) => ({ ...e }));
+  return pendingEvents().map((e) => ({ ...e }));
 }

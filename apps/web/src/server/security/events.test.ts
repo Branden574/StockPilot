@@ -10,9 +10,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  *   - the buffer is keyed like the row, with a count; the first event
  *     schedules ONE flush, kept alive with keepAlive; the flush is ONE
  *     record_security_events call with every waiting element;
- *   - at most 100 distinct keys wait; the rest are counted per category,
- *     outcome and source on an over_buffer_cap entry with no place,
- *     organization or hash;
+ *   - events about an organization and events about none wait in separate
+ *     budgets of distinct keys, so noise that is about no organization can
+ *     never push an organization's events out; past a budget, events are
+ *     counted on an over_buffer_cap entry with no place or hash, which keeps
+ *     the organization up to a ceiling of such entries;
  *   - a failed flush drops its batch and is reported at most once per 10
  *     minutes, with no event content;
  *   - the place and the source hash come from the request's headers
@@ -53,6 +55,26 @@ const requestFrom = (address = ADDRESS, city = 'Utrecht') =>
     'x-vercel-ip-country': 'NL',
     'x-vercel-ip-city': city,
   });
+
+/** The i-th made-up address (RFC 5737 documentation ranges), each a different source. */
+const address = (i: number) =>
+  `${['203.0.113', '198.51.100', '192.0.2'][Math.floor(i / 250) % 3]}.${(i % 250) + 1}`;
+
+/** The n-th made-up organization id. */
+const organization = (n: number) => `5eed0000-0009-4000-8000-${String(n).padStart(12, '0')}`;
+
+/** An entry that counts events past a budget: no place and no hash. */
+const overflowEntry = (category: string, organizationId: string | null) => ({
+  category,
+  outcome: 'blocked',
+  reason: 'over_buffer_cap',
+  source: 'web',
+  organization_id: organizationId,
+  country: null,
+  city: null,
+  source_hash: null,
+  at_ms: expect.any(Number),
+});
 
 const wrongPassword = {
   category: 'password_guessing',
@@ -175,53 +197,162 @@ describe('the buffer', () => {
     expect(events.__pendingSecurityEventsForTests()[0]!.organization_id).toBeNull();
   });
 
-  it('at most 100 distinct keys wait; the rest are counted per category, outcome and source', async () => {
-    for (let i = 0; i < 100; i++) {
-      await events.recordSecurityEvent(wrongPassword, requestFrom(`203.0.113.${i + 1}`));
+  it('a key that already waits still adds to its own count when its budget is full', async () => {
+    for (let i = 0; i < 150; i++) await events.recordSecurityEvent(wrongPassword, requestFrom(address(i)));
+    await events.recordSecurityEvent(wrongPassword, requestFrom(address(0)));
+    const first = events.__pendingSecurityEventsForTests()[0]!;
+    expect(first).toMatchObject({ reason: 'wrong_password', count: 2 });
+  });
+});
+
+describe('the two budgets: events about an organization, and events about none', () => {
+  it('a full buffer of events with no organization does not touch an organization’s event', async () => {
+    // Scanner noise: far more distinct sources than any budget, none about an organization.
+    for (let i = 0; i < 150; i++) {
+      await events.recordSecurityEvent(
+        { category: 'exploit', outcome: 'blocked', reason: 'env_file', source: 'web' },
+        requestFrom(address(i)),
+      );
     }
-    // Past the cap: three new keys of one category/outcome/source, one of another.
-    await events.recordSecurityEvent(wrongPassword, requestFrom('198.51.100.1'));
-    await events.recordSecurityEvent({ ...wrongPassword, organizationId: ORG }, requestFrom('198.51.100.2'));
+    for (let i = 0; i < 150; i++) await events.recordSecurityEvent(wrongPassword, requestFrom(address(i)));
+
+    await events.recordSecurityEvent({ ...wrongPassword, organizationId: ORG }, requestFrom());
+
+    const about = events.__pendingSecurityEventsForTests().filter((e) => e.organization_id === ORG);
+    expect(about).toEqual([
+      {
+        ...wrongPassword,
+        organization_id: ORG,
+        country: 'NL',
+        city: 'Utrecht',
+        source_hash: expect.stringMatching(/^[0-9a-f]{32}$/),
+        count: 1,
+        at_ms: expect.any(Number),
+      },
+    ]);
+  });
+
+  it('events with no organization past their budget are counted per category, outcome and source', async () => {
+    for (let i = 0; i < 150; i++) await events.recordSecurityEvent(wrongPassword, requestFrom(address(i)));
     await events.recordSecurityEvent({ ...wrongPassword, reason: 'sign_in_paused' }, requestFrom());
     await events.recordSecurityEvent(
       { category: 'exploit', outcome: 'blocked', reason: 'env_file', source: 'web' },
       requestFrom(),
     );
-    // A key that already waits still adds to its own count.
-    await events.recordSecurityEvent(wrongPassword, requestFrom('203.0.113.1'));
+    const pending = events.__pendingSecurityEventsForTests();
+    const listed = pending.filter((e) => e.reason !== 'over_buffer_cap');
+    expect(listed).toHaveLength(50);
+    expect(pending.filter((e) => e.reason === 'over_buffer_cap')).toEqual([
+      { ...overflowEntry('password_guessing', null), count: 101 },
+      { ...overflowEntry('exploit', null), count: 1 },
+    ]);
+  });
+
+  it('a full organization budget overflows per organization and keeps the organization', async () => {
+    // One organization under attack from many sources fills the budget.
+    for (let i = 0; i < 150; i++) {
+      await events.recordSecurityEvent({ ...wrongPassword, organizationId: ORG }, requestFrom(address(i)));
+    }
+    // Another organization's event, and another kind for the first, arrive after.
+    await events.recordSecurityEvent({ ...wrongPassword, organizationId: ORG_2 }, requestFrom());
+    await events.recordSecurityEvent({ ...wrongPassword, organizationId: ORG_2 }, requestFrom(address(1)));
+    await events.recordSecurityEvent(
+      { category: 'bots', outcome: 'blocked', reason: 'support_paused', source: 'web', organizationId: ORG },
+      requestFrom(),
+    );
+    // An event with no organization still has its own budget.
+    await events.recordSecurityEvent(wrongPassword, requestFrom());
 
     const pending = events.__pendingSecurityEventsForTests();
-    expect(pending).toHaveLength(102);
-    const listed = pending.filter((e) => e.reason !== 'over_buffer_cap');
-    expect(listed).toHaveLength(100);
-    expect(listed.find((e) => e.count === 2)).toBeDefined();
-    const capped = pending.filter((e) => e.reason === 'over_buffer_cap');
-    expect(capped).toEqual([
-      {
-        category: 'password_guessing',
-        outcome: 'blocked',
-        reason: 'over_buffer_cap',
-        source: 'web',
-        organization_id: null,
-        country: null,
-        city: null,
-        source_hash: null,
-        count: 3,
-        at_ms: expect.any(Number),
-      },
-      {
-        category: 'exploit',
-        outcome: 'blocked',
-        reason: 'over_buffer_cap',
-        source: 'web',
-        organization_id: null,
-        country: null,
-        city: null,
-        source_hash: null,
-        count: 1,
-        at_ms: expect.any(Number),
-      },
+    expect(pending.filter((e) => e.organization_id === ORG && e.reason === 'wrong_password')).toHaveLength(50);
+    expect(pending.filter((e) => e.reason === 'over_buffer_cap')).toEqual([
+      { ...overflowEntry('password_guessing', ORG), count: 100 },
+      { ...overflowEntry('password_guessing', ORG_2), count: 2 },
+      { ...overflowEntry('bots', ORG), count: 1 },
     ]);
+    expect(pending.filter((e) => e.organization_id === null)).toEqual([
+      expect.objectContaining({ reason: 'wrong_password', country: 'NL', count: 1 }),
+    ]);
+  });
+
+  it('the ceiling on organization overflow entries holds; past it, the entry with no organization', async () => {
+    for (let i = 0; i < 50; i++) {
+      await events.recordSecurityEvent({ ...wrongPassword, organizationId: ORG }, requestFrom(address(i)));
+    }
+    // 25 other organizations each get their own overflow entry.
+    for (let n = 0; n < 25; n++) {
+      await events.recordSecurityEvent({ ...wrongPassword, organizationId: organization(n) }, requestFrom());
+    }
+    let capped = events.__pendingSecurityEventsForTests().filter((e) => e.reason === 'over_buffer_cap');
+    expect(capped).toHaveLength(25);
+    expect(capped.map((e) => e.organization_id)).toEqual(
+      Array.from({ length: 25 }, (_, n) => organization(n)),
+    );
+
+    // Three more organizations: the last resort, one entry with no organization.
+    for (let n = 25; n < 28; n++) {
+      await events.recordSecurityEvent({ ...wrongPassword, organizationId: organization(n) }, requestFrom());
+    }
+    // An organization that already has its overflow entry still adds to it.
+    await events.recordSecurityEvent({ ...wrongPassword, organizationId: organization(0) }, requestFrom());
+
+    capped = events.__pendingSecurityEventsForTests().filter((e) => e.reason === 'over_buffer_cap');
+    expect(capped).toHaveLength(26);
+    expect(capped.filter((e) => e.organization_id !== null)).toHaveLength(25);
+    expect(capped.find((e) => e.organization_id === organization(0))!.count).toBe(2);
+    expect(capped.filter((e) => e.organization_id === null)).toEqual([
+      { ...overflowEntry('password_guessing', null), count: 3 },
+    ]);
+  });
+
+  it('the budgets add up to no more than the writer reads in one call (200 elements)', () => {
+    expect(events.MAX_WAITING_KEYS_WITH_ORGANIZATION).toBe(50);
+    expect(events.MAX_WAITING_KEYS_WITHOUT_ORGANIZATION).toBe(50);
+    expect(events.MAX_ORGANIZATION_OVERFLOW_ENTRIES).toBe(25);
+    const lastResort = 5 * 3 * 5; // one per category, outcome and source
+    expect(
+      events.MAX_WAITING_KEYS_WITH_ORGANIZATION +
+        events.MAX_WAITING_KEYS_WITHOUT_ORGANIZATION +
+        events.MAX_ORGANIZATION_OVERFLOW_ENTRIES +
+        lastResort,
+    ).toBeLessThanOrEqual(events.MAX_FLUSH_ELEMENTS);
+    // record_security_events reads `limit 200` of its array (migration security_events).
+    expect(events.MAX_FLUSH_ELEMENTS).toBe(200);
+  });
+
+  it('memory stays bounded under a flood of every kind, and the flood is still one call', async () => {
+    const categories = ['password_guessing', 'exploit', 'bots', 'phishing', 'malware'] as const;
+    const outcomes = ['blocked', 'allowed', 'flagged'] as const;
+    const sources = ['web', 'phone', 'api', 'email', 'edge'] as const;
+    let i = 0;
+    for (let round = 0; round < 8; round++) {
+      for (const category of categories)
+        for (const outcome of outcomes)
+          for (const source of sources) {
+            i += 1;
+            // With no organization, and with one of 400 organizations, each from a new source.
+            await events.recordSecurityEvent({ category, outcome, reason: 'x_new', source }, requestFrom(address(i)));
+            await events.recordSecurityEvent(
+              { category, outcome, reason: 'x_new', source, organizationId: organization(i % 400) },
+              requestFrom(address(i)),
+            );
+          }
+    }
+    const pending = events.__pendingSecurityEventsForTests();
+    expect(pending.length).toBe(200);
+    expect(pending.filter((e) => e.reason !== 'over_buffer_cap' && e.organization_id !== null)).toHaveLength(50);
+    expect(pending.filter((e) => e.reason !== 'over_buffer_cap' && e.organization_id === null)).toHaveLength(50);
+    expect(pending.filter((e) => e.reason === 'over_buffer_cap' && e.organization_id !== null)).toHaveLength(25);
+    expect(pending.filter((e) => e.reason === 'over_buffer_cap' && e.organization_id === null)).toHaveLength(75);
+    // Nothing was lost from the count.
+    expect(pending.reduce((sum, e) => sum + e.count, 0)).toBe(2 * 8 * 75);
+
+    await events.flushSecurityEvents();
+    expect(h.rpc).toHaveBeenCalledTimes(1);
+    expect(sent()).toHaveLength(200);
+    // Events about an organization go first in the call.
+    expect(sent().slice(0, 75).every((e) => e.organization_id !== null)).toBe(true);
+    expect(events.__pendingSecurityEventsForTests()).toEqual([]);
   });
 });
 
@@ -296,22 +427,6 @@ describe('the flush', () => {
     await events.recordSecurityEvent(wrongPassword, requestFrom());
     await vi.advanceTimersByTimeAsync(10);
     expect(h.rpc).toHaveBeenCalledTimes(1);
-  });
-
-  it('a full buffer is one call, under the writer’s 200 elements', async () => {
-    for (let i = 0; i < 100; i++) {
-      await events.recordSecurityEvent(wrongPassword, requestFrom(`203.0.113.${i + 1}`));
-    }
-    const categories = ['password_guessing', 'exploit', 'bots', 'phishing', 'malware'] as const;
-    const outcomes = ['blocked', 'allowed', 'flagged'] as const;
-    const sources = ['web', 'phone', 'api', 'email', 'edge'] as const;
-    for (const category of categories)
-      for (const outcome of outcomes)
-        for (const source of sources)
-          await events.recordSecurityEvent({ category, outcome, reason: 'x_new', source }, requestFrom());
-    await events.flushSecurityEvents();
-    expect(h.rpc).toHaveBeenCalledTimes(1);
-    expect(sent().length).toBe(175);
   });
 });
 
