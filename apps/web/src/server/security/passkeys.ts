@@ -737,20 +737,28 @@ function failClosedFault(picture: Judged, userId: string, keys: BridgeKeys): str
   return FAIL_CLOSED_STATES.has(picture.state) ? picture.state : null;
 }
 
-/** A key fault: no key at all, or one that does not open a secret. */
-const KEY_FAULTS = new Set(['no_key', 'bridge_unopenable']);
+/** Reported once an hour for everyone as `passkeys.key_fault` (review B6, corrected). */
+async function reportKeyFault(userId: string, fault: string, site: string): Promise<void> {
+  const all = await checkRateLimit(`passkeys-key-report:${fault}`, 1, 60 * MIN, 'closed');
+  if (all.allowed) reportPasskeys('key_fault', 'error', userId, { fault, site });
+}
 
 /**
  * Review 4 finding 1: a fail-closed state or a key fault the second-step page
  * meets is reported from the page's own read (stepOf), since the page then
  * offers no passkey and no button press can report it; a start reports what
  * it meets the same way (review B6). Error level, the account as a hash of
- * its id. A state: at most once an hour per account and state, the page and
- * the start sharing that pace. A key fault (no key, or a secret the keys do
- * not open) is one fault, not one per member: at most once an hour for
- * everyone, `passkeys.key_fault` with the fault's word. The limiter is
- * closed: one that cannot count reports nothing (lib/rate-limit logs it).
- * The member's answer and words do not change. Never throws.
+ * its id. The limiter is closed: one that cannot count reports nothing
+ * (lib/rate-limit logs it). The member's answer and words do not change.
+ * Never throws.
+ *   - A state, and a secret the keys do not open (S9, which can be one
+ *     account's row: swapped, damaged, or sealed with a key version we do
+ *     not hold): at most once an hour per account and fault, the page and
+ *     the start sharing that pace.
+ *   - The key MISSING is one fault for everyone: `passkeys.key_fault`, once
+ *     an hour, and no report per account.
+ *   - A secret that does not open also counts toward that roll-up, once an
+ *     hour for everyone, asked after the account's own limiter.
  */
 async function reportStepFault(
   userId: string,
@@ -758,9 +766,8 @@ async function reportStepFault(
   site: 'second_step' | 'start' = 'second_step',
 ): Promise<void> {
   try {
-    if (KEY_FAULTS.has(fault)) {
-      const all = await checkRateLimit(`passkeys-key-report:${fault}`, 1, 60 * MIN, 'closed');
-      if (all.allowed) reportPasskeys('key_fault', 'error', userId, { fault, site });
+    if (fault === 'no_key') {
+      await reportKeyFault(userId, fault, site);
       return;
     }
     const one = await checkRateLimit(
@@ -770,6 +777,7 @@ async function reportStepFault(
       'closed',
     );
     if (one.allowed) reportPasskeys(fault, 'error', userId, { site });
+    if (fault === 'bridge_unopenable') await reportKeyFault(userId, fault, site);
   } catch {
     // A report never changes the page.
   }

@@ -1682,58 +1682,82 @@ function leftoverFactor(userId: string, ageMs = 3 * 60_000) {
 }
 
 describe('review 4 finding 1: a fail-closed state or a key fault met by the page is reported from its own read', () => {
-  it('S9 (the secret does not open): no passkey offered; ONE key-fault report an hour for everyone (review B6), none per holder', async () => {
+  it('S9 (a secret that does not open): no passkey offered; a report per account (once an hour per account), then the roll-up for everyone (once an hour)', async () => {
     const first = await memberWithPasskey('first-s9@example.test');
     const second = await memberWithPasskey('second-s9@example.test');
     countingLimiter();
     const key = world.env.PASSKEY_BRIDGE_KEY_V1 ?? '';
     world.env.PASSKEY_BRIDGE_KEY_V1 = Buffer.alloc(32, 7).toString('base64');
+    const unopenable = () => reportsTagged('passkeys.bridge_unopenable');
+    const rollUp = () => reportsTagged('passkeys.key_fault');
     try {
       expect(await pk.passkeyStepFor(second.userId, factorsOfAccount(second.userId))).toBe('none');
-      expect(reportsTagged('passkeys.key_fault')).toEqual([
+      expect(unopenable()).toEqual([expect.objectContaining({ level: 'error', extra: hashed })]);
+      expect(rollUp()).toEqual([
         expect.objectContaining({
           level: 'error',
-          extra: expect.objectContaining({
-            fault: 'bridge_unopenable',
-            userIdHash: expect.stringMatching(/^[0-9a-f]{16}$/),
-          }),
+          extra: expect.objectContaining({ fault: 'bridge_unopenable' }),
         }),
       ]);
-      // A key fault is one fault: no report per holder.
-      expect(reportsTagged('passkeys.bridge_unopenable')).toEqual([]);
+      // The per-account limiter is asked first, then the roll-up's.
+      const asked = vi
+        .mocked(checkRateLimit)
+        .mock.calls.map(([k]) => String(k))
+        .filter(
+          (k) => k.startsWith('passkeys-step-report:') || k.startsWith('passkeys-key-report:'),
+        );
+      expect(asked.slice(0, 2)).toEqual([
+        `passkeys-step-report:${second.userId}:bridge_unopenable`,
+        'passkeys-key-report:bridge_unopenable',
+      ]);
       // The same account again within the hour: nothing more.
       expect(await pk.passkeyStepFor(second.userId, factorsOfAccount(second.userId))).toBe('none');
-      // Another holder in the same fault within the hour: nothing more either.
+      expect(unopenable()).toHaveLength(1);
+      // A second account whose secret does not open, in the same hour: its
+      // own report (it can be that one row); the roll-up is said once.
       world.signIn(first.userId, 'aal1');
       expect(await pk.passkeyStepFor(first.userId, factorsOfAccount(first.userId))).toBe('none');
-      // The member's words are unchanged, and the start reports nothing more.
+      expect(unopenable()).toHaveLength(2);
+      expect(new Set(unopenable().map((r) => r.extra?.userIdHash)).size).toBe(2);
+      expect(rollUp()).toHaveLength(1);
+      // The member's words are unchanged; the start shares the page's pace.
       expect(await pk.startSecondStep()).toMatchObject({
         ok: false,
         message: pk.PASSKEY_WORDS.cantUse,
         reason: 'bridge_unopenable',
       });
-      expect(reportsTagged('passkeys.key_fault')).toHaveLength(1);
-      expect(reportsTagged('passkeys.bridge_unopenable')).toEqual([]);
+      expect(unopenable()).toHaveLength(2);
+      expect(rollUp()).toHaveLength(1);
       expect(JSON.stringify(vi.mocked(reportError).mock.calls)).not.toContain(first.userId);
     } finally {
       world.env.PASSKEY_BRIDGE_KEY_V1 = key;
     }
   });
 
-  it('no key: a holder (a reserved-name factor listed) gets the one key-fault report; an account without one costs nothing', async () => {
+  it('no key: one report in the hour however many holders meet it, none per account; an account without a reserved-name factor costs nothing', async () => {
+    const other = await memberWithPasskey('other-holder@example.test');
     const { userId } = await memberWithPasskey();
     countingLimiter();
     const key = world.env.PASSKEY_BRIDGE_KEY_V1 ?? '';
     world.env.PASSKEY_BRIDGE_KEY_V1 = '';
     try {
       expect(await pk.passkeyStepFor(userId, factorsOfAccount(userId))).toBe('none');
+      world.signIn(other.userId, 'aal1');
+      expect(await pk.passkeyStepFor(other.userId, factorsOfAccount(other.userId))).toBe('none');
+      expect(await pk.passkeyStepFor(other.userId, factorsOfAccount(other.userId))).toBe('none');
       expect(reportsTagged('passkeys.no_key')).toEqual([]);
       expect(reportsTagged('passkeys.key_fault')).toEqual([
         expect.objectContaining({
           level: 'error',
-          extra: expect.objectContaining({ fault: 'no_key', userIdHash: expect.any(String) }),
+          extra: expect.objectContaining({ fault: 'no_key' }),
         }),
       ]);
+      expect(
+        vi
+          .mocked(checkRateLimit)
+          .mock.calls.map(([k]) => String(k))
+          .filter((k) => k.startsWith('passkeys-step-report:')),
+      ).toEqual([]);
       const plain = world.addAccount('plain@example.test');
       world.signIn(plain, 'aal1');
       vi.mocked(checkRateLimit).mockClear();
