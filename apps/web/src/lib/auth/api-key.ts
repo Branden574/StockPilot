@@ -8,6 +8,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { orgMayUseModule } from '@/lib/modules/org-may-use-module';
+import { recordSecurityEvent } from '@/server/security/events';
 import { keepAlive } from '@/server/services/lib/defer';
 
 /**
@@ -93,7 +94,18 @@ export async function withApiKey(req: Request): Promise<ApiKeyResult> {
     .select('id, organization_id, scopes, revoked_at, expires_at')
     .eq('key_hash', hashApiKey(m[1]))
     .maybeSingle();
-  if (error || !data) return { ok: false, status: 401, error: 'Invalid API key.' };
+  if (error || !data) {
+    // A well-formed key that matches no key is a security event (an unknown
+    // key: a guess, or a revoked key's hash long gone); a read that failed is
+    // not one. No organization: the key names none.
+    if (!error) {
+      await recordSecurityEvent(
+        { category: 'password_guessing', outcome: 'blocked', reason: 'unknown_api_key', source: 'api' },
+        req.headers,
+      );
+    }
+    return { ok: false, status: 401, error: 'Invalid API key.' };
+  }
 
   const row = data as {
     id: string;

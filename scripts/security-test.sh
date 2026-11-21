@@ -2303,6 +2303,17 @@ WEB_TESTS=(
   # (its key is unique) writes the rest; a retry with the same key writes
   # nothing again, and the same key with other lines is the conflict.
   src/server/services/receiving.replay-writes-once.test.ts
+  # Security events: the recorder and its helpers are server-only and are
+  # never exported from a server action file; an event's organization is
+  # passed to the recorder only from inside server/security; every limiter
+  # key that is recorded is on a reviewed list. The recorder never throws,
+  # never waits on the database, sends no address, keeps one buffer per
+  # server instance however many copies of the module a build makes, gives
+  # each organization its own slice of it, and makes one call at a time.
+  src/server/security/events.guard.test.ts
+  src/server/security/limiter-events.guard.test.ts
+  src/server/security/events.test.ts
+  src/server/security/events.one-buffer.test.ts
   # Membership rows are added by the server (0473): no later migration grants
   # INSERT or ALL on organization_members, or on a column of it, to anon,
   # authenticated or PUBLIC, and none drops, disables or restates the trigger
