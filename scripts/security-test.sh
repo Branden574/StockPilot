@@ -951,6 +951,19 @@ PGTAP_TESTS=(
   # purge against a write, an organization being deleted) are
   # scripts/db-concurrency/0472_security_events_writer_race.sh.
   supabase/tests/0472_security_events.test.sql
+  # Membership rows are added by the server (0473), in two layers: anon and
+  # authenticated hold no INSERT on organization_members or on any column of
+  # it, and a BEFORE INSERT trigger refuses a row inserted as either role
+  # (shown with the privilege out of the way). An owner, an admin, a manager,
+  # a staff member, a viewer, a live act-as seat, an invitation not accepted,
+  # an account with no membership, a token with no account and a signed-out
+  # caller add no row in any statement shape; no API caller writes a row's
+  # account, organization or acceptance (the 0393 guard, each column); the
+  # service role's writes (workspace creation, invitation acceptance, act-as
+  # seats, ownership transfer), SECURITY DEFINER code, an admin's role, driver
+  # and warehouse changes and removals, a member's own removal and account
+  # deletion work.
+  supabase/tests/0473_membership_rows_added_by_the_server.test.sql
   # The request context reads the caller's own rows by index (0471): the same
   # answer as 0413's body for every kind of caller (several organizations, an
   # invitation not accepted, a disabled account, live and expired Act-as
@@ -2301,6 +2314,12 @@ WEB_TESTS=(
   src/server/security/limiter-events.guard.test.ts
   src/server/security/events.test.ts
   src/server/security/events.one-buffer.test.ts
+  # Membership rows are added by the server (0473): no later migration grants
+  # INSERT or ALL on organization_members, or on a column of it, to anon,
+  # authenticated or PUBLIC, and none drops, disables or restates the trigger
+  # that refuses a row inserted as either role, or its function. The file
+  # carries the "Security invariant" marker.
+  src/test/membership-insert-stays-revoked.guard.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -1013,8 +1013,8 @@ select is(
   pg_temp.attempt('authenticated', :mgr,
                   format($q$insert into public.organization_members (organization_id, user_id, role, accepted_at)
                             values (%L, %L, 'staff', now())$q$, :orgA, :xinv), :'promote_mgr'),
-  'ok:1 | ok:1 | ok:1 | 42501:-:cannot create an Act as seat via direct insert | ok:1',
-  'G3: what the app writes still works (team.ts: role, is_delivery_driver, all_warehouses, on any row an admin may edit; the owner too), an admin may still add a member (0217/0220), but no API caller may insert an "Act as" seat');
+  'ok:1 | ok:1 | ok:1 | 42501:-:permission denied for table organization_members | 42501:-:permission denied for table organization_members',
+  'G3: what the app writes still works (team.ts: role, is_delivery_driver, all_warehouses, on any row an admin may edit; the owner too); membership rows are added by the server (0473), so no API caller inserts one, an "Act as" seat or any other (the privilege refuses; the guard''s own refusal of a seat is shown in the 0473 test)');
 select is(
   pg_temp.attempt('service_role', null, format('select public.transfer_org_ownership(%L, %L, %L)', :orgA, :own, :mgr),
                   format('%s; select pg_temp.call_as(%L, %L, %L)', :'promote_mgr', 'authenticated', :mgr,
