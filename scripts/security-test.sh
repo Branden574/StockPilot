@@ -2544,7 +2544,9 @@ MOBILE_TESTS=(
   # in; an account whose only verified factors are bridges sees a plain
   # screen in place of the code box, right before the code screen in
   # RootGate; the gate itself is unchanged (it still owes aal2, the data
-  # hooks are still handed nobody).
+  # hooks are still handed nobody). A session copy and a server answer that
+  # disagree on the kind of step are refreshed like any stale copy, and the
+  # screen's Check again makes the set-up screen's own read.
   src/lib/mfa-level.passkey-bridge.test.ts
   src/lib/passkey-only-notice-structure.test.ts
 )
@@ -2635,8 +2637,8 @@ CORE_TESTS=(
   src/appearance/reconcile.test.ts
   # The phone's screen for an account whose only second step it cannot take
   # yet: the words claim nothing about a passkey (a factor with the reserved
-  # name may not be one the server made) and send the member to the
-  # website's security page.
+  # name may not be one the server made), promise nothing about a later
+  # version, and send the member to the website's security page.
   src/auth/passkey-copy.test.ts
 )
 

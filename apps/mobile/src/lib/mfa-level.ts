@@ -158,8 +158,8 @@ export function isBridgeFactor(factor: FactorLike | null | undefined): boolean {
 /**
  * The id of the user's verified authenticator-app (TOTP) factor, or null.
  * Never a passkey's bridge (isBridgeFactor), whatever the order: Supabase
- * lists the factor used last first, so after a passkey sign-in the bridge
- * would come first, and no app shows its code.
+ * puts the factor used last at the END of its list, so after each use of the
+ * member's app the bridge comes first (proof B7), and no app shows its code.
  */
 export function verifiedTotpFactorId(user: UserLike | null | undefined): string | null {
   for (const factor of user?.factors ?? []) {
@@ -240,6 +240,13 @@ export function readStoredStepUp(raw: string | null | undefined): StoredStepUp {
  * the server. 'none' when they agree, when either is missing, and when the
  * answer is about another account. A session at aal2 never disagrees: it owes
  * nothing whatever factors are added.
+ *
+ * Also 'refresh' when both owe the code and only its KIND changed: the copy
+ * says every verified factor is a passkey's bridge and the server lists an
+ * authenticator app now, or the other way (bridgeOnlyAccount). RootGate shows
+ * the notice for the one and the code screen for the other, so the copy is
+ * brought up to date the same way (review 2-3 finding 10). An account with no
+ * bridge is never bridge-only on either side, so nothing changes for it.
  */
 export function reconcileStepUp(
   session: SessionLike | null | undefined,
@@ -250,5 +257,7 @@ export function reconcileStepUp(
   if (!sessionUserId || liveUser.id !== sessionUserId) return 'none';
   const stored = stepUpOwedFor(session);
   const live = stepUpOwed(liveUser.factors, tokenAal(session.access_token));
-  return stored === live ? 'none' : 'refresh';
+  if (stored !== live) return 'refresh';
+  if (stored && bridgeOnlyAccount(session.user) !== bridgeOnlyAccount(liveUser)) return 'refresh';
+  return 'none';
 }

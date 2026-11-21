@@ -6,6 +6,7 @@ import {
   isBridgeFactor,
   PASSKEY_BRIDGE_NAME_PREFIX,
   passkeyOnlySession,
+  reconcileStepUp,
   stepUpOwedFor,
   verifiedTotpFactorId,
 } from './mfa-level';
@@ -18,11 +19,15 @@ import {
  * the reserved prefix sp-passkey-bridge-. The phone's only offline source is
  * the session's factor list, so it knows the bridge by that name: the code
  * screen answers for the first verified authenticator app that does not carry
- * it, whatever the order (Supabase lists the factor used last first: proof
- * B7). An account whose only verified factors are bridges gets a plain screen
- * instead of the code box (bridgeOnlyAccount). The gate itself is unchanged: a
- * bridge is a verified factor, so the session still owes aal2, and the outbox,
- * push and appearance holds stay closed.
+ * it, whatever the order (Supabase puts the factor used last at the END of
+ * the list, so the bridge comes first after the app is used: proof B7). An
+ * account whose only verified factors are bridges gets a plain screen instead
+ * of the code box (bridgeOnlyAccount). The gate itself is unchanged: a bridge
+ * is a verified factor, so the session still owes aal2, and the outbox, push
+ * and appearance holds stay closed. When the server's copy of the user and the
+ * session's disagree on that (an app added or removed on the website), the
+ * session is refreshed like any stale copy (reconcileStepUp), so a re-read
+ * brings the right screen up (review 2-3 finding 10).
  */
 
 function jwt(claims: Record<string, unknown>): string {
@@ -110,5 +115,27 @@ describe('the gate is unchanged for a bridge', () => {
 
   it('an unverified bridge alone owes nothing, as any unverified factor', () => {
     expect(stepUpOwedFor(session('aal1', BRIDGE_UNVERIFIED))).toBe(false);
+  });
+});
+
+describe('reconcileStepUp: the session copy and the server disagree on a bridge-only account', () => {
+  const live = (...factors: unknown[]) => user(...factors);
+
+  it('an app added on the website to a bridge-only account: refresh (the notice gives way to the code screen)', () => {
+    expect(reconcileStepUp(session('aal1', BRIDGE), live(BRIDGE, APP))).toBe('refresh');
+    expect(reconcileStepUp(session('aal1', BRIDGE), live(APP, BRIDGE))).toBe('refresh');
+  });
+
+  it('the app removed, the bridge left: refresh (the code screen gives way to the notice)', () => {
+    expect(reconcileStepUp(session('aal1', BRIDGE, APP), live(BRIDGE))).toBe('refresh');
+  });
+
+  it('they agree, whatever the order: nothing to do', () => {
+    expect(reconcileStepUp(session('aal1', BRIDGE), live(BRIDGE))).toBe('none');
+    expect(reconcileStepUp(session('aal1', BRIDGE, APP), live(APP, BRIDGE))).toBe('none');
+  });
+
+  it('a session that entered its second step owes nothing: no refresh for the kind of step', () => {
+    expect(reconcileStepUp(session('aal2', BRIDGE), live(BRIDGE, APP))).toBe('none');
   });
 });

@@ -20,7 +20,12 @@ import { PASSKEY_ONLY_NOTICE_COPY } from '@stockpilot/core';
  * (code-gate-wiring.test.ts sections 1 and 2), so the data hooks are still
  * handed nobody. The notice checks no code, reads no gate state, opens the
  * website's security page through webLink, and signs out through
- * signOutToFallback; every word is core's.
+ * signOutToFallback; every word is core's. Its Check again (review 2-3
+ * finding 10) re-reads the user and the memberships through the same call the
+ * set-up screen's Check again makes (readSetUpInputsForHold), whose user read
+ * goes to the code gate's reconcile: an app added on the website refreshes
+ * the session and the code screen takes the notice's place. Still here, a
+ * line says whether an answer came (core's AUTHENTICATOR_CHECK_RESULT_COPY).
  */
 
 const MOBILE_ROOT = path.resolve(__dirname, '../..');
@@ -105,5 +110,26 @@ describe('PasskeyOnlyNotice', () => {
 
   it('checks no code and reads no gate state', () => {
     expect(src).not.toMatch(/verifyMfa|\.mfa\.|mfaRequired|stepUpOwed|codeGateUp|listFactors/);
+  });
+
+  it("Check again re-reads through the set-up screen's own call, and says what it found", () => {
+    expect(src).toContain(
+      "import { readSetUpInputsForHold, setUpCheckAnswered } from '@/lib/set-up-hold';",
+    );
+    expect(src).toContain('await readSetUpInputsForHold(userId);');
+    expect(src).toContain('AUTHENTICATOR_CHECK_RESULT_COPY.checked');
+    expect(src).toContain('AUTHENTICATOR_CHECK_RESULT_COPY.noAnswer');
+    // The same read as the set-up screen's Check again.
+    const setUp = flat(codeOnly(read('src/components/authenticator-set-up-screen.tsx')));
+    expect(setUp).toContain('await readSetUpInputsForHold(userId);');
+  });
+
+  it('Check again sits next to the way out, and both stay usable while a check runs', () => {
+    const check = src.indexOf('{PASSKEY_ONLY_NOTICE_COPY.checkAgain}');
+    const out = src.indexOf('{PASSKEY_ONLY_NOTICE_COPY.differentAccount}');
+    expect(check).toBeGreaterThan(src.indexOf('{PASSKEY_ONLY_NOTICE_COPY.openWebsite}'));
+    expect(out).toBeGreaterThan(check);
+    // Only Check again waits for its own read; the way out never does.
+    expect(src.match(/disabled=\{[^}]*\}/g)).toEqual(['disabled={checking}']);
   });
 });
