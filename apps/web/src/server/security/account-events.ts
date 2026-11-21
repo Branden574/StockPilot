@@ -85,8 +85,11 @@ async function lookUpOrganization(address: string): Promise<{ organizationId: st
  * refused request. The answer for an email (an organization, or none) is kept
  * in this instance's memory for SIGN_IN_ORGANIZATION_MEMORY_MS, and refusals
  * that arrive together share the one lookup. At most
- * SIGN_IN_ORGANIZATION_MEMORY_MAX emails, the oldest dropped first. A read
- * that failed is not remembered. The memory is read only here, and this
+ * SIGN_IN_ORGANIZATION_MEMORY_MAX emails, the oldest dropped first. A
+ * profile read that failed is not remembered. (A membership read that fails
+ * inside resolveDefaultOrgAndRole answers "no organization" like any account
+ * without one, and that answer is remembered for the minute.) The memory is
+ * read only here, and this
  * function runs only after the response (the callers below), so what it
  * holds can change no answer's timing. For up to a minute an event can be
  * filed under the organization an account has just left.
