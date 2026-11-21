@@ -147,7 +147,7 @@ const REVIEWED: Record<string, Reviewed> = {
   'server/actions/passkeys.ts#startSecondStepAction': {
     kind: 'before-the-code',
     reason:
-      "The passkey prompt on the code page and in the step-up modal: a session that has not given its second step yet (the site, the key and the platform switch), limited per account and address. It writes a one-use challenge or, when the account's state is a removal the member started (judged by the database's rule), finishes that removal instead: it deletes the bridge factor at Auth, then its row. It only ever takes a second step away, never adds one.",
+      "The passkey prompt on the code page and in the step-up modal: a session that has not given its second step yet (the site, the key and the platform switch), limited per account and address. It writes a one-use challenge or, when the account's state is a removal the member started (judged by the database's rule) and the session signed in with the password (never one an emailed link opened), finishes that removal instead: it deletes the bridge factor at Auth, then its row. It only ever takes a second step away, never adds one.",
   },
   'server/actions/passkeys.ts#finishSecondStepAction': {
     kind: 'before-the-code',

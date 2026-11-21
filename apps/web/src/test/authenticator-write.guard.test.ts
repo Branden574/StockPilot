@@ -317,7 +317,7 @@ const REVIEWED: Record<string, Reviewed> = {
   'server/actions/passkeys.ts#startSecondStepAction': {
     kind: 'sign-in',
     reason:
-      "The passkey prompt: a one-use challenge for this account and session. When the account's state is a removal the member started, it finishes it instead (the bridge factor at Auth, then its row); the only start that can.",
+      "The passkey prompt: a one-use challenge for this account and session. When the account's state is a removal the member started and the session signed in with the password (never one an emailed link opened), it finishes it instead (the bridge factor at Auth, then its row); the only start that can.",
     writes: [
       'auth.admin.mfa.deleteFactor',
       'rpc:issue_passkey_challenge',
