@@ -151,7 +151,9 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whats-new-2026-11-21-phone (2026-11-21; was: '2026-11-19T20:41:00Z'): the phone
     // authenticator set-up release below is dated 2026-11-21T02:31:00Z (a whole minute after its phone
     // update was launched on a phone), so the placeholder is that same minute.
-    publishedAt: '2026-11-21T02:31:00Z',
+    // Moved again by docs/whats-new-blocked-activity (2026-11-21; was: '2026-11-21T02:31:00Z'): the Blocked
+    // activity release below is dated 2026-11-21T18:19:00Z, so the placeholder is that same minute.
+    publishedAt: '2026-11-21T18:19:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -236,6 +238,62 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  // Blocked activity (security tools part 1): published once the security_events
+  // migration (0472, #628) was live and the page (#629) was merged. publishedAt is
+  // the whole minute after #629 merged (2026-11-21T10:18:46-08:00). The Liquid
+  // Glass draft placeholder above takes the same minute.
+  {
+    id: 'blocked-activity-2026-11',
+    revision: 1,
+    // Claims checked against feat/security-events-web (apps/web/src, core
+    // under packages/core/src):
+    // - The page and who may open it: app/(dashboard)/dashboard/settings/
+    //   security/activity/page.tsx (title "Blocked activity"; a member who is
+    //   not an owner or admin is sent to Settings) and server/services/
+    //   security-events.ts (core isAdminRole: owner and admin, "Super Admin"
+    //   in the app, core constants/terminology.ts). The link from Settings,
+    //   Security shows for the same two roles (settings/security/page.tsx).
+    // - What it counts: the events recorded with the organization, which are
+    //   the refusals of a member's sign-in (wrong password, sign-in paused),
+    //   authenticator code and recovery code (server/security/account-events
+    //   .ts; actions/auth.ts, lib/auth/mfa-code-attempts.ts, actions/mfa-
+    //   recovery.ts). Requests with no organization (scanner paths, public
+    //   forms, unknown API keys) are not shown to an organization.
+    // - "last 7 days, by kind": security_event_totals_for_organization with
+    //   no dates (its 7-day default), summed per category, a kind with none
+    //   left out. "newest entries": the newest 100 rows.
+    // - Where: core securityEventPlaceLabel ("City, CC", the country, or
+    //   Unknown place), from the request's network location headers
+    //   (lib/client-ip.ts clientPlaceFromHeaders).
+    // - 90 days: purge_security_events deletes rows older than 90 days, run
+    //   daily (app/api/cron/security-events-retention, vercel.json 30 4 * * *).
+    // No thresholds, caps or matched paths are told (nothing a guesser could
+    // tune to). Who is told: owners and admins, the roles the page checks; no
+    // module gates it.
+    status: 'published',
+    title: 'See the sign-in attempts StockPilot blocked for your organization',
+    summary:
+      'Owners and Super Admins can open Settings, Security, Blocked activity to see the wrong passwords and authenticator codes StockPilot refused for the accounts in your organization, and where they came from.',
+    publishedAt: '2026-11-21T18:19:00Z',
+    entries: [
+      {
+        id: 'settings-blocked-activity',
+        category: 'new',
+        area: 'Settings',
+        title: 'Blocked activity in Settings, Security',
+        whatChanged:
+          'Settings, Security has a new Blocked activity page for owners and Super Admins. It counts what StockPilot refused for the accounts in your organization in the last 7 days, by kind, and lists the newest entries with when, what, where (a city and country when known) and how many.',
+        whyItMatters:
+          'Wrong passwords and authenticator codes were already refused, but nobody in your organization could see them. Now you can tell when someone keeps trying to get into your accounts.',
+        howItAffectsYou:
+          'Nothing changes in how you or your team sign in. Entries are kept for 90 days. A place comes from the network a sign-in attempt came from, so it can be approximate or missing.',
+        whatToDo:
+          'No action needed. If you see repeated attempts, ask your team to use strong passwords and to set up an authenticator app in Settings, Security.',
+        link: { href: '/dashboard/settings/security/activity', label: 'Open Blocked activity' },
+        audience: { roles: ['owner', 'admin'] },
       },
     ],
   },
