@@ -169,6 +169,8 @@ export function makeWorld() {
       deleteFails: false,
       /** Auth's enrol answers an id with no secret (the factor is made all the same). */
       enrolNoSecret: false,
+      /** Auth's GET /user answers an error (from the moment a test sets it). */
+      userReadFails: false,
     },
   };
 
@@ -262,6 +264,7 @@ export function makeWorld() {
     const mine = () => w.factors.filter((f) => f.user_id === session.userId);
 
     if (method === 'GET' && path === '/user') {
+      if (w.knobs.userReadFails) return json(500, { error_code: 'unexpected_failure' });
       const id = w.knobs.authUserOtherAccount ? randomUUID() : session.userId;
       return json(200, {
         id,
@@ -688,6 +691,7 @@ export function makeWorld() {
       addAllowedNext: [],
       deleteFails: false,
       enrolNoSecret: false,
+      userReadFails: false,
     };
   }
 

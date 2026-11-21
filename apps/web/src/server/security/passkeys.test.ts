@@ -1662,15 +1662,19 @@ function dropBridgeAndFactor(userId: string) {
   world.bridges.delete(userId);
   world.factors = world.factors.filter((f) => f.id !== old.factor_id);
 }
-/** An unverified factor with the reserved name and no row: the leftover of a failed Add (S3). */
-function leftoverFactor(userId: string) {
+/**
+ * An unverified factor with the reserved name and no row: the leftover of a
+ * failed Add (S3), made `ageMs` ago (by default three minutes: past the two
+ * minutes an Add in flight is given, review B2).
+ */
+function leftoverFactor(userId: string, ageMs = 3 * 60_000) {
   const f = {
     id: crypto.randomUUID(),
     user_id: userId,
     friendly_name: 'sp-passkey-bridge-0123456789ab',
     factor_type: 'totp' as const,
     status: 'unverified' as const,
-    created_at: new Date().toISOString(),
+    created_at: new Date(Date.now() - ageMs).toISOString(),
     secret: 'JBSWY3DPEHPK3PXP',
   };
   world.factors.push(f);
@@ -2059,7 +2063,7 @@ describe('review 4 finding 8: a failed Add leaves nothing that blocks the next o
     expect(world.calls.deleteFactor).not.toContain(verifiedOther.id);
   });
 
-  it('the finish clears a leftover made after the start, before it enrols', async () => {
+  it('the finish clears an old leftover (over two minutes) it finds, before it enrols', async () => {
     const userId = world.addAccount('late-leftover@example.test');
     world.signIn(userId, 'aal1');
     const soft = new SoftAuthenticator();
@@ -2302,5 +2306,110 @@ describe('review B3: the Security page is dark for a member who cannot add and h
       listOnly: null,
       passkeys: [expect.objectContaining({ id: passkeyId })],
     });
+  });
+});
+
+describe('review B2: the leftover clean-up deletes only an unverified factor older than two minutes, checked right before the delete', () => {
+  const userReads = () =>
+    world.calls.auth.filter((c) => c.method === 'GET' && c.path === '/user').length;
+
+  it('a leftover younger than two minutes (an Add in flight elsewhere) is left alone, and this Add goes on beside it', async () => {
+    const userId = world.addAccount('young-leftover@example.test');
+    world.signIn(userId, 'aal1');
+    const young = leftoverFactor(userId, 30_000);
+    const added = await addFirstPasskey(new SoftAuthenticator());
+    expect(added).toMatchObject({ ok: true, firstPasskey: true });
+    expect(world.calls.deleteFactor).not.toContain(young.id);
+    expect(world.factors.some((f) => f.id === young.id)).toBe(true);
+    expect(world.bridges.get(userId)?.factor_id).not.toBe(young.id);
+    expect(passkeyErrorReports()).toEqual([]);
+  });
+
+  it('a young leftover made after the start: the finish leaves it and enrols beside it', async () => {
+    const userId = world.addAccount('young-late@example.test');
+    world.signIn(userId, 'aal1');
+    const soft = new SoftAuthenticator();
+    const start = await pk.startAddPasskey({
+      proof: { kind: 'password', password: SAMPLE_PASSWORD },
+    });
+    if (!start.ok) throw new Error(start.reason);
+    const young = leftoverFactor(userId, 1_000);
+    const done = await pk.finishAddPasskey({
+      challengeId: start.challengeId,
+      response: soft.create(start.optionsJSON as never),
+      name: 'Work laptop',
+    });
+    expect(done).toMatchObject({ ok: true, firstPasskey: true });
+    expect(world.calls.deleteFactor).toEqual([]);
+    expect(world.bridges.get(userId)?.factor_id).not.toBe(young.id);
+  });
+
+  it('"unverified" is checked on a read taken right before the delete: a leftover verified during the proof is not deleted', async () => {
+    const userId = world.addAccount('verified-meanwhile@example.test');
+    world.signIn(userId, 'aal1');
+    const leftover = leftoverFactor(userId);
+    const { verifyPasswordSideChannel } = await import('@/lib/auth/verify-password');
+    vi.mocked(verifyPasswordSideChannel).mockImplementationOnce(async () => {
+      world.factors = world.factors.map((f) =>
+        f.id === leftover.id ? { ...f, status: 'verified' as const } : f,
+      );
+      return { ok: true } as never;
+    });
+    await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } });
+    expect(world.calls.deleteFactor).not.toContain(leftover.id);
+    expect(world.factors.find((f) => f.id === leftover.id)?.status).toBe('verified');
+  });
+
+  it("a clean-up read that fails deletes nothing, is reported, and the member gets the Add's own words", async () => {
+    const userId = world.addAccount('reread-fails@example.test');
+    world.signIn(userId, 'aal1');
+    const leftover = leftoverFactor(userId);
+    const { verifyPasswordSideChannel } = await import('@/lib/auth/verify-password');
+    vi.mocked(verifyPasswordSideChannel).mockImplementationOnce(async () => {
+      world.knobs.userReadFails = true;
+      return { ok: true } as never;
+    });
+    const r = await pk.startAddPasskey({
+      proof: { kind: 'password', password: SAMPLE_PASSWORD },
+    });
+    expect(r).toMatchObject({
+      ok: false,
+      message: pk.PASSKEY_WORDS.addFailed,
+      reason: 'leftover_left',
+    });
+    expect(world.calls.deleteFactor).toEqual([]);
+    expect(world.factors.some((f) => f.id === leftover.id)).toBe(true);
+    expect(reportsTagged('passkeys.add_leftover_left')).toEqual([
+      expect.objectContaining({ level: 'error', extra: expect.objectContaining({ step: 'read' }) }),
+    ]);
+  });
+
+  it('with no old leftover in the picture there is no second read of the account', async () => {
+    const userId = world.addAccount('no-old-leftover@example.test');
+    world.signIn(userId, 'aal1');
+    leftoverFactor(userId, 10_000);
+    world.calls.auth.length = 0;
+    const r = await pk.startAddPasskey({
+      proof: { kind: 'password', password: SAMPLE_PASSWORD },
+    });
+    expect(r.ok).toBe(true);
+    expect(userReads()).toBe(1);
+  });
+
+  it('the two minutes are the rule enrollFactorAction uses: one shared function', () => {
+    const read = (rel: string) =>
+      readFileSync(path.join(__dirname, rel), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/.*$/gm, '');
+    const name = read('../../lib/auth/passkey-bridge-name.ts');
+    expect(name).toMatch(/export const RESERVED_FACTOR_IN_FLIGHT_MS = 2 \* 60_000;/);
+    expect(name).toMatch(/export function reservedFactorInFlight\(/);
+    for (const rel of ['passkeys.ts', '../actions/mfa.ts']) {
+      const src = read(rel);
+      expect(src, rel).toMatch(
+        /import \{[^}]*\breservedFactorInFlight\b[^}]*\} from '@\/lib\/auth\/passkey-bridge-name';/,
+      );
+      expect(src, rel).not.toMatch(/function reservedFactorInFlight|IN_FLIGHT_MS =/);
+    }
   });
 });

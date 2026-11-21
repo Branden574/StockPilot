@@ -22,7 +22,11 @@ import {
 } from '@/lib/auth/bridge-secret';
 import { checkMfaCode } from '@/lib/auth/mfa-code-attempts';
 import { accountIdHash } from '@/lib/auth/passkey-bridge';
-import { carriesBridgeName, PASSKEY_BRIDGE_NAME_PREFIX } from '@/lib/auth/passkey-bridge-name';
+import {
+  carriesBridgeName,
+  PASSKEY_BRIDGE_NAME_PREFIX,
+  reservedFactorInFlight,
+} from '@/lib/auth/passkey-bridge-name';
 import { passkeyRelyingParty, type RelyingParty } from '@/lib/auth/passkey-relying-party';
 import {
   authenticationResponseSchema,
@@ -1530,8 +1534,9 @@ export async function startAddPasskey(input: {
     }
   }
 
-  // Review 4 finding 8: a failed Add's leftover goes now, never a verified factor.
-  if ((await clearAddLeftovers(admin, userId, picture)) === null)
+  // Review 4 finding 8, review B2: an old leftover of a failed Add goes now
+  // (judged on a fresh read); never a verified one, never one in flight.
+  if ((await clearAddLeftovers(admin, held, picture)) === null)
     return fail('internal_error', PASSKEY_WORDS.addFailed, 'leftover_left');
 
   const challenge = newChallenge();
@@ -1578,27 +1583,48 @@ async function deleteOwnFactor(
 }
 
 /**
- * Review 4 finding 8: the leftover of a failed Add is an UNVERIFIED factor
- * with the reserved name that is not the recorded bridge's (S3). It goes
- * before an Add enrols, so it never blocks the next one; a verified factor
- * is never deleted here. The ids deleted, or null when one could not be
- * deleted (reported at error level; the member gets the Add's own words).
+ * Review 4 finding 8, review B2: the leftover of a failed Add is an
+ * UNVERIFIED factor with the reserved name that is not the recorded
+ * bridge's, made more than two minutes ago (reservedFactorInFlight, the rule
+ * enrollFactorAction uses): only the request that enrolled a factor holds
+ * its secret, so one that old can never become verified. It goes before an
+ * Add enrols. A younger one is an Add in flight elsewhere: left alone, and
+ * this Add goes on beside it. Both the "unverified" and the age are judged on
+ * Auth's answer read right before the delete, never on the picture the
+ * action started from (a proof comes between). That read is made only when
+ * the picture shows such a factor. The factors left (the fresh list without
+ * the ones deleted), or null when the read or a delete failed (reported at
+ * error level; the member gets the Add's own words).
  */
 async function clearAddLeftovers(
   admin: Admin,
-  userId: string,
+  held: Held,
   picture: AccountPicture,
-): Promise<string[] | null> {
-  const leftovers = picture.factors.filter(
-    (f) => isReservedTotp(f) && f.status !== 'verified' && f.id !== picture.bridge?.factor_id,
-  );
-  for (const f of leftovers) {
+): Promise<AuthFactor[] | null> {
+  const userId = held.claims.userId;
+  const stale = (factors: AuthFactor[]) =>
+    factors.filter(
+      (f) =>
+        isReservedTotp(f) &&
+        f.status !== 'verified' &&
+        f.id !== picture.bridge?.factor_id &&
+        !reservedFactorInFlight(f.created_at),
+    );
+  if (stale(picture.factors).length === 0) return picture.factors;
+  const now = await readAccountAs(held.token);
+  if (!now || now.id !== userId) {
+    reportPasskeys('add_leftover_left', 'error', userId, { step: 'read' });
+    return null;
+  }
+  const deleted = new Set<string>();
+  for (const f of stale(now.factors)) {
     if (!(await deleteFactor(admin, userId, f.id))) {
-      reportPasskeys('add_leftover_left', 'error', userId);
+      reportPasskeys('add_leftover_left', 'error', userId, { step: 'delete' });
       return null;
     }
+    deleted.add(f.id);
   }
-  return leftovers.map((f) => f.id);
+  return now.factors.filter((f) => !deleted.has(f.id));
 }
 
 /**
@@ -1686,14 +1712,17 @@ export async function finishAddPasskey(input: {
   if (!picture.bridge) {
     let state = picture.state;
     if (state === 'unverified_reserved_factor') {
-      // Review 4 finding 8: a leftover made since the start goes before this
-      // Add enrols; the state is judged again without it.
-      const cleared = await clearAddLeftovers(admin, userId, picture);
-      if (cleared === null) return fail('internal_error', PASSKEY_WORDS.addFailed, 'leftover_left');
-      const left = picture.factors.filter((f) => !cleared.includes(f.id));
+      // Review 4 finding 8: an old leftover goes before this Add enrols; the
+      // state is judged again on the factors left.
+      const left = await clearAddLeftovers(admin, held, picture);
+      if (left === null) return fail('internal_error', PASSKEY_WORDS.addFailed, 'leftover_left');
       state = judged(picture.rows, null, left, gate.rp).state;
     }
-    if (state !== 'nothing' && state !== 'healthy') {
+    // Review B2: an unverified reserved-name factor still there is one in
+    // flight elsewhere (under two minutes old): this Add enrols beside it
+    // (Auth drops an unverified TOTP factor once another is answered; the
+    // upkeep takes what is left).
+    if (state !== 'nothing' && state !== 'healthy' && state !== 'unverified_reserved_factor') {
       reportPasskeys(state, 'error', userId);
       return fail('forbidden', PASSKEY_WORDS.cantUse, state);
     }

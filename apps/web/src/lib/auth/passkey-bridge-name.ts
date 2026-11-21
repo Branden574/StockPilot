@@ -20,3 +20,18 @@ export function carriesBridgeName(factor: { friendly_name?: unknown }): boolean 
     factor.friendly_name.startsWith(PASSKEY_BRIDGE_NAME_PREFIX)
   );
 }
+
+/**
+ * How long an unverified reserved-name factor is a passkey registration in
+ * flight (plan review 12): enrolled, not yet stored or answered. Only the
+ * request that enrolled it holds its secret, so one older than this and still
+ * unverified can never become verified.
+ */
+export const RESERVED_FACTOR_IN_FLIGHT_MS = 2 * 60_000;
+
+/** Whether a factor made at `createdAt` is younger than two minutes (a time that cannot be read: yes). */
+export function reservedFactorInFlight(createdAt: unknown): boolean {
+  const made = typeof createdAt === 'string' ? Date.parse(createdAt) : Number.NaN;
+  if (!Number.isFinite(made)) return true;
+  return Date.now() - made < RESERVED_FACTOR_IN_FLIGHT_MS;
+}

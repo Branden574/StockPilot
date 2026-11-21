@@ -29,7 +29,7 @@ import {
   signOutThisSession,
 } from '@/lib/auth/mfa-code-attempts';
 import { contextFactorsOf } from '@/lib/auth/context-factor-list';
-import { carriesBridgeName } from '@/lib/auth/passkey-bridge-name';
+import { carriesBridgeName, reservedFactorInFlight } from '@/lib/auth/passkey-bridge-name';
 import { factorsOf, readMfaFactorList, type MfaFactorList } from '@/lib/auth/mfa-factors';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import {
@@ -56,16 +56,6 @@ import { err, ok, type ActionResult } from '@stockpilot/core';
 type GoTrueError = { code?: unknown; name?: unknown; status?: unknown; message?: unknown };
 
 /** GoTrue's structured code for a report, never its message. */
-/** How long a reserved-name factor is a registration in flight (plan review 12). */
-const RESERVED_FACTOR_IN_FLIGHT_MS = 2 * 60_000;
-
-/** Whether an unverified reserved-name factor made at `createdAt` is younger than two minutes (unreadable: yes). */
-function reservedFactorInFlight(createdAt: unknown): boolean {
-  const made = typeof createdAt === 'string' ? Date.parse(createdAt) : Number.NaN;
-  if (!Number.isFinite(made)) return true;
-  return Date.now() - made < RESERVED_FACTOR_IN_FLIGHT_MS;
-}
-
 function goTrueCode(error: GoTrueError | null | undefined): { code?: string } {
   return typeof error?.code === 'string' ? { code: error.code } : {};
 }
