@@ -17,6 +17,7 @@ import type { MySignInAlert } from '@/server/services/sign-in-alerts';
 const h = vi.hoisted(() => ({
   confirm: vi.fn(),
   report: vi.fn(),
+  revokeOthers: vi.fn(),
   refresh: vi.fn(),
   assign: vi.fn(),
   toastSuccess: vi.fn(),
@@ -31,7 +32,7 @@ vi.mock('@/server/actions/sign-in-alerts', () => ({
 }));
 vi.mock('@/server/actions/sessions', () => ({
   renameSessionAction: vi.fn(),
-  revokeOtherSessionsAction: vi.fn(),
+  revokeOtherSessionsAction: () => h.revokeOthers(),
   revokeSessionAction: vi.fn(),
 }));
 
@@ -82,6 +83,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.confirm.mockResolvedValue({ ok: true, data: { answer: 'confirmed' } });
   h.report.mockResolvedValue({ ok: true, data: { signedOut: true } });
+  h.revokeOthers.mockResolvedValue({ ok: true, data: undefined });
   leaveAfterReport.go = h.assign;
 });
 
@@ -131,6 +133,20 @@ describe('a session with an open alert', () => {
     expect(words).not.toMatch(/owners and admins/);
   });
 
+  it('an alert already reported elsewhere: says so, stays on the page and reloads the list', async () => {
+    h.report.mockResolvedValue({
+      ok: false,
+      error: { code: 'conflict', message: 'You already reported this sign-in. Every session of your account was ended then.' },
+    });
+    render(<ActiveSessions sessions={SESSIONS as never} alerts={[alert()]} />);
+    fireEvent.click(screen.getByRole('button', { name: 'This was not me' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'End every session' }));
+    expect(await within(dialog).findByText(/You already reported this sign-in/)).toBeTruthy();
+    expect(h.assign).not.toHaveBeenCalled();
+    await waitFor(() => expect(h.refresh).toHaveBeenCalled());
+  });
+
   it('a report that could not finish stays on the page and says why', async () => {
     h.report.mockResolvedValue({
       ok: false,
@@ -171,8 +187,41 @@ describe('Recent sign-in alerts', () => {
     expect(within(items[0]!).getByText(/Mexico \(approximate\)/)).toBeTruthy();
     expect(within(items[0]!).getByRole('button', { name: 'This was not me' })).toBeTruthy();
     expect(within(items[1]!).getByText('StockPilot app on iPhone')).toBeTruthy();
-    expect(within(items[1]!).getByText('You reported this sign-in.')).toBeTruthy();
-    expect(within(items[1]!).queryByRole('button')).toBeNull();
+    expect(within(items[1]!).getByText(/^You reported this sign-in\./)).toBeTruthy();
+    // A reported alert cannot be reported again: neither answer is offered.
+    expect(within(items[1]!).queryByRole('button', { name: 'This was not me' })).toBeNull();
+    expect(within(items[1]!).queryByRole('button', { name: 'This was me' })).toBeNull();
+  });
+
+  it('a reported alert says the sessions were ended then, and has the existing "Sign out all other devices" control next to it', async () => {
+    render(
+      <ActiveSessions
+        sessions={SESSIONS as never}
+        alerts={[alert({ sessionId: null, status: 'not_me' })]}
+      />,
+    );
+    const recent = screen.getByRole('region', { name: 'Recent sign-in alerts' });
+    const item = within(recent).getByRole('listitem');
+    expect(item.textContent).toContain(
+      'You reported this sign-in. Every session of your account was ended then. If someone is using your account again, sign out all other devices and reset your password.',
+    );
+    expect(item.textContent).not.toMatch(/signed out|everywhere|right away/i);
+    fireEvent.click(within(item).getByRole('button', { name: 'Sign out all other devices' }));
+    await waitFor(() => expect(h.revokeOthers).toHaveBeenCalledTimes(1));
+    expect(h.report).not.toHaveBeenCalled();
+    await waitFor(() => expect(h.refresh).toHaveBeenCalled());
+  });
+
+  it('with no other device signed in, a reported alert shows its state and no control', () => {
+    render(
+      <ActiveSessions
+        sessions={SESSIONS.filter((s) => s.isCurrent) as never}
+        alerts={[alert({ sessionId: null, status: 'not_me' })]}
+      />,
+    );
+    const item = within(screen.getByRole('region', { name: 'Recent sign-in alerts' })).getByRole('listitem');
+    expect(within(item).getByText(/^You reported this sign-in\./)).toBeTruthy();
+    expect(within(item).queryByRole('button')).toBeNull();
   });
 
   it('no alerts, or alerts that could not be read: no list (and a plain line for the second)', () => {

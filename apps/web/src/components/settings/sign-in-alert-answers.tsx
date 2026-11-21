@@ -36,7 +36,22 @@ import type { MySignInAlert } from '@/server/services/sign-in-alerts';
  * happens and no more (a device already open keeps its pass until it
  * expires), and they say nothing about who is told, which is not known
  * before the press (review 1, findings 1 and 8).
+ *
+ * ONE ALERT, ONE SIGN-OUT: a reported alert cannot be reported again. It
+ * shows that it was reported and that the sessions were ended then, with
+ * Active sessions' own "Sign out all other devices" control next to it for a
+ * member who sees the account in use again.
  */
+
+/** Active sessions' own "sign out all other devices", handed down; null when no other device is signed in. */
+export interface SignOutOthersControl {
+  run: () => void;
+  busy: boolean;
+}
+
+const REPORTED_WORDS =
+  'You reported this sign-in. Every session of your account was ended then. If someone is using your account again, sign out all other devices and reset your password.';
+const REPORTED_WORDS_ALONE = 'You reported this sign-in. Every session of your account was ended then.';
 
 /** Where the page goes after a report. A seam for tests; a full load in the browser. */
 export const leaveAfterReport: { go: (path: string) => void } = {
@@ -85,6 +100,8 @@ function AnswerButtons({ alert }: { alert: MySignInAlert }) {
     if (!res.ok) {
       setReporting(false);
       setError(res.error.message);
+      // Reported already, from the email's link or another tab: show it so.
+      if (res.error.code === 'conflict') router.refresh();
       return;
     }
     leaveAfterReport.go('/reset');
@@ -143,7 +160,13 @@ export function SignInAlertOnSession({ alert }: { alert: MySignInAlert }) {
 }
 
 /** Alerts whose session has ended (or was never known), last 30 days, newest first. */
-export function RecentSignInAlerts({ alerts }: { alerts: MySignInAlert[] }) {
+export function RecentSignInAlerts({
+  alerts,
+  signOutOthers = null,
+}: {
+  alerts: MySignInAlert[];
+  signOutOthers?: SignOutOthersControl | null;
+}) {
   if (alerts.length === 0) return null;
   return (
     <section aria-labelledby="recent-sign-in-alerts-heading" className="space-y-2 pt-2">
@@ -167,7 +190,22 @@ export function RecentSignInAlerts({ alerts }: { alerts: MySignInAlert[] }) {
                 <LocalDateTime iso={alert.createdAt} />
               </div>
               {alert.status === 'not_me' ? (
-                <p className="text-muted-foreground text-[12.5px]">You reported this sign-in.</p>
+                <div className="flex flex-col items-start gap-2">
+                  <p className="text-muted-foreground text-[12.5px]">
+                    {signOutOthers ? REPORTED_WORDS : REPORTED_WORDS_ALONE}
+                  </p>
+                  {signOutOthers && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={signOutOthers.busy}
+                      onClick={signOutOthers.run}
+                    >
+                      {signOutOthers.busy ? <Loader2 aria-hidden className="animate-spin" /> : null}
+                      Sign out all other devices
+                    </Button>
+                  )}
+                </div>
               ) : (
                 <>
                   {alert.status === 'was_me' && (

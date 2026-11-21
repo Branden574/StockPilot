@@ -120,6 +120,7 @@ export const LIMITER_NOT_SECURITY_EVENTS: Readonly<Record<string, string>> = {
   'auth-note:in:': SIGNED_IN,
   'auth-note:out:': SIGNED_IN,
   'auth-note:user:': SIGNED_IN,
+  'sign-in-alert-report:user:': SIGNED_IN,
   // Alerts this server sends.
   'new-device-alert:user:': ALERT_PACING,
   'new-device-alert-held:user:': ALERT_PACING,

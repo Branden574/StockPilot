@@ -264,7 +264,14 @@ export function ActiveSessions({
           Your sign-in alerts could not be loaded just now.
         </p>
       )}
-      <RecentSignInAlerts alerts={recentAlerts} />
+      <RecentSignInAlerts
+        alerts={recentAlerts}
+        signOutOthers={
+          others.length > 0
+            ? { run: () => void signOutOthers(), busy: busyId === 'others' }
+            : null
+        }
+      />
     </div>
   );
 }

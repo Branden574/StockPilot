@@ -102,6 +102,15 @@ export const NOT_ME_WORDS = {
   /** To the owners and admins of the member's organization. */
   theirSessionsEnded: 'Every session of their account has been ended.',
   askThemToReset: 'Ask them to reset their password now. That is what closes the door.',
+  /**
+   * An alert already reported (one alert, one sign-out: a reported alert
+   * ends no session again). Completing a password reset ends every session of
+   * the account (completePasswordResetAction in server/actions/auth.ts), so
+   * that is how to end them again.
+   */
+  endedThen: 'Every session of your account was ended when you reported it.',
+  endAgain:
+    'To end them again now, reset your password. Completing the reset ends every session of your account, and it is what closes the door.',
   /** Said only when at least one owner or admin was told (finding 8). */
   adminsTold: 'The owners and admins of your organization were told, so they can help.',
 } as const;

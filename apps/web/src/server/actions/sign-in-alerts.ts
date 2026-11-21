@@ -6,6 +6,7 @@ import { z } from 'zod';
 
 import { signOutThisSession } from '@/lib/auth/mfa-code-attempts';
 import { clientIpForRecord } from '@/lib/client-ip';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { actionErrorResult } from '@/server/lib/action-error-result';
 import { withContext } from '@/server/services/context';
 import { readSignInAlert, reportSignInAlertNotMe } from '@/server/services/sign-in-alert-report';
@@ -30,15 +31,23 @@ import { err, ok, type ActionResult } from '@stockpilot/core';
  * report ends the account's own sessions and tells the owners and admins once
  * per alert, which is what the real owner wants when the password is known
  * to someone else. A report that could not finish says so, and this browser
- * stays signed in so the member can press again. An alert that was already
- * reported behaves the same way: the report ends every session again (and
- * tells nobody again), so this browser signs out too.
+ * stays signed in so the member can press again.
+ *
+ * ONE ALERT, ONE SIGN-OUT: an alert that was already reported is not reported
+ * again. Nothing is ended and nobody is told; the answer says so and names
+ * the control that ends the other sessions (Active sessions shows it next to
+ * the reported alert). The action is counted per account, 10 an hour, failing
+ * closed, before the alert is read, as the emailed link is counted.
  */
 
 const SECURITY_PAGE = '/dashboard/settings/security';
 const alertSchema = z.object({ alertId: z.string().uuid() });
 
 const NOT_FOUND = 'That sign-in alert was not found.';
+
+/** "This was not me" presses per account per hour (the link's per-alert count is the same). */
+const REPORTS_PER_ACCOUNT_PER_HOUR = 10;
+const ONE_HOUR_MS = 60 * 60 * 1000;
 
 export async function confirmSignInAlertAction(input: {
   alertId: string;
@@ -62,6 +71,18 @@ export async function reportSignInAlertAction(input: {
   if (!parsed.success) return err('validation_error', 'Invalid sign-in alert');
   try {
     const ctx = await withContext();
+    const counted = await checkRateLimit(
+      `sign-in-alert-report:user:${ctx.userId}`,
+      REPORTS_PER_ACCOUNT_PER_HOUR,
+      ONE_HOUR_MS,
+      'closed',
+    );
+    // A count that could not be read is not "too many": the member did
+    // nothing wrong, and nothing is read or done.
+    if (counted.failed) return err('internal_error', 'Please try again in a moment.');
+    if (!counted.allowed) {
+      return err('rate_limited', 'Too many tries. Wait a few minutes, then press the button again.');
+    }
     const read = await readSignInAlert(parsed.data.alertId);
     if (read.kind === 'failed') {
       return err('internal_error', 'Your sign-in alert could not be read. Try again in a minute.');
@@ -78,11 +99,19 @@ export async function reportSignInAlertAction(input: {
         userAgent: requestHeaders.get('user-agent'),
       },
     });
-    if (answer.outcome === 'failed') {
+    if (answer.outcome === 'already_reported') {
+      // Reported from the email's link or another tab: nothing was ended or
+      // told again, and the list on the page is stale.
+      revalidatePath(SECURITY_PAGE);
+      return err(
+        'conflict',
+        'You already reported this sign-in. Every session of your account was ended then. To end them again, use Sign out all other devices, then reset your password.',
+      );
+    }
+    if (answer.outcome !== 'done') {
       return err('internal_error', 'We could not finish this just now. Press the button again in a minute.');
     }
-    // Every session of the account has been ended, by a first report and by a
-    // repeat press alike ('already_reported'); this browser's cookies go too
+    // Every session of the account has been ended; this browser's cookies go too
     // (scope 'local': auth-js removes them even when GoTrue does not answer,
     // and the helper never throws).
     await signOutThisSession(ctx.supabase);

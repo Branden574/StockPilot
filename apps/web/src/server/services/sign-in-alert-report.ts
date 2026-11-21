@@ -25,21 +25,28 @@ import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
  * (server/actions/sign-in-alerts.ts). Each caller has already decided the
  * alert is the member's own; this only acts on it.
  *
- * THE STEPS, in order (review 1, finding 2):
- *   a. Every session of the account ends (revokeAllSessionsForUser), on EVERY
- *      press, also of an alert that is already not_me: the member may press
- *      the same button again because whoever signed in came back before the
- *      password was reset, and "nothing happens" would be the wrong answer.
- *      It is safe to repeat. If it fails the answer is 'failed': nothing else
- *      changes and nobody is told, so the member's next press is a full first
- *      report and no sentence anywhere says a sign-out happened that did not.
+ * ONE ALERT, ONE SIGN-OUT. THE STEPS, in order (review 1, finding 2):
+ *   0. An alert that is ALREADY not_me when the call starts answers
+ *      'already_reported' and does nothing: no session is ended again and
+ *      nobody is told again. Step (a) always runs before step (b), so a
+ *      marked alert means its sign-out already worked, and nothing is lost by
+ *      returning here. Without this, the link in an email would let whoever
+ *      holds that email end the account's sessions again and again for the
+ *      link's seven days. If whoever signed in comes back, step (c) has
+ *      forgotten the device and country rows, so that sign-in raises a NEW
+ *      alert with a link of its own; and the pages push the password reset,
+ *      which ends every session again.
+ *   a. Every session of the account ends (revokeAllSessionsForUser). If it
+ *      fails the answer is 'failed': nothing is marked and nobody is told,
+ *      so the member's next press is a full first report and no sentence
+ *      anywhere says a sign-out happened that did not.
  *   b. The alert is marked not_me, with its resolved_at, in ONE update that
  *      changes only an alert not already not_me (the table requires the two
  *      together). "This was me" earlier does not stop it. An update that
  *      fails is 'failed' (the sessions have ended; the retry runs everything
- *      again). An update that changes no row means the alert was reported
- *      before, or by a press at the same moment: 'already_reported', with
- *      the sessions ended again, and the telling is the first press's.
+ *      again). An update that changes no row means a press at the same
+ *      moment got there first: 'already_reported', and that press does the
+ *      telling. (This one's sign-out ran too; two at once is the only way.)
  *   c. Only when (b) changed the row, so each of these happens once per alert:
  *        - the device row of the alert is forgotten (by its hash) only when
  *          the alert was about a new device, and the country row only when it
@@ -83,8 +90,7 @@ import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
  *
  * NOT COVERED: a function that stops between (b) and (c) has marked the alert
  * and told nobody, and the retry is 'already_reported'. It is rare, the
- * sessions have ended (and end again on the retry), and the member still
- * sees the reset button.
+ * sessions have ended, and the member still sees the reset button.
  */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -120,11 +126,11 @@ export type SignInAlertReportAnswer =
   /** This press was the report. `adminsTold`: at least one owner or admin was told. */
   | { outcome: 'done'; adminsTold: boolean }
   /**
-   * The alert was reported before (or by a press at the same moment). Every
-   * session of the account was ended again by this press; nobody was told
-   * again.
+   * The alert was reported before (or by a press at the same moment). Its
+   * sessions were ended when it was reported; this call ended nothing more
+   * and told nobody.
    */
-  | { outcome: 'already_reported'; sessionsEnded: true }
+  | { outcome: 'already_reported' }
   /** The sessions could not be ended, or the alert could not be marked: press again. */
   | { outcome: 'failed' };
 
@@ -569,6 +575,9 @@ export async function reportSignInAlertNotMe(args: {
   auditFrom: { ip: string | null; userAgent: string | null };
 }): Promise<SignInAlertReportAnswer> {
   const { alert } = args;
+  // One alert, one sign-out: a reported alert ends nothing again.
+  if (alert.status === 'not_me') return { outcome: 'already_reported' };
+
   let admin: Admin;
   try {
     admin = createAdminClient();
@@ -576,14 +585,13 @@ export async function reportSignInAlertNotMe(args: {
     return { outcome: 'failed' };
   }
 
-  // (a) The sign-out first, whatever the alert's status. Nothing below runs
-  // unless it worked.
+  // (a) The sign-out first. Nothing below runs unless it worked.
   if (!(await signOutEverywhere(alert.userId))) return { outcome: 'failed' };
 
   // (b) The mark. Only the press that changes the row goes on.
   const marked = await markNotMe(admin, alert);
   if (!marked.answered) return { outcome: 'failed' };
-  if (!marked.changed) return { outcome: 'already_reported', sessionsEnded: true };
+  if (!marked.changed) return { outcome: 'already_reported' };
 
   // (c) Once per alert.
   await forgetRows(admin, alert);

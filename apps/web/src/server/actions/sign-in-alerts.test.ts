@@ -11,8 +11,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *     refused alike), runs the same report the emailed link runs, and then
  *     signs this browser out too. A report that could not finish is said so,
  *     and this browser stays signed in to try again. An alert already
- *     reported behaves the same way: its report ends every session again, so
- *     this browser signs out too.
+ *     reported is said so and ends nothing (one alert, one sign-out). The
+ *     action is counted per account, closed, as the link is counted.
  */
 
 const h = vi.hoisted(() => ({
@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   report: vi.fn(),
   signOut: vi.fn(async (_o: unknown) => ({ error: null })),
   revalidate: vi.fn(),
+  limit: vi.fn(),
 }));
 
 vi.mock('next/cache', () => ({ revalidatePath: (p: string) => h.revalidate(p) }));
@@ -44,6 +45,7 @@ vi.mock('@/server/services/sign-in-alert-report', () => ({
   readSignInAlert: (id: string) => h.read(id),
   reportSignInAlertNotMe: (a: unknown) => h.report(a),
 }));
+vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: (...a: unknown[]) => h.limit(...a) }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 
 import { ServiceError } from '@/server/services/context';
@@ -85,6 +87,7 @@ beforeEach(() => {
   h.confirm.mockResolvedValue('confirmed');
   h.read.mockResolvedValue({ kind: 'found', alert: alert() });
   h.report.mockResolvedValue({ outcome: 'done', adminsTold: true });
+  h.limit.mockResolvedValue({ allowed: true, count: 1, resetAt: Date.now() + 60_000 });
 });
 
 describe('confirmSignInAlertAction', () => {
@@ -155,15 +158,48 @@ describe('reportSignInAlertAction', () => {
     }
   });
 
-  it('an alert already reported: the report runs again (it ends every session again), and this browser signs out too', async () => {
+  it('an alert already reported: said so, nothing is ended or told again, and this browser stays signed in', async () => {
     const reported = { ...alert(), status: 'not_me' };
     h.read.mockResolvedValue({ kind: 'found', alert: reported });
-    h.report.mockResolvedValue({ outcome: 'already_reported', sessionsEnded: true });
+    // The report itself ends nothing for a reported alert (its own tests).
+    h.report.mockResolvedValue({ outcome: 'already_reported' });
     const res = await reportSignInAlertAction({ alertId: ALERT });
-    expect(res).toEqual({ ok: true, data: { signedOut: true } });
-    expect(h.report).toHaveBeenCalledWith(expect.objectContaining({ alert: reported, via: 'signed_in' }));
-    expect(h.signOut).toHaveBeenCalledWith({ scope: 'local' });
-    expect(h.report.mock.invocationCallOrder[0]!).toBeLessThan(h.signOut.mock.invocationCallOrder[0]!);
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message:
+          'You already reported this sign-in. Every session of your account was ended then. To end them again, use Sign out all other devices, then reset your password.',
+      },
+    });
+    expect(h.signOut).not.toHaveBeenCalled();
+    expect(h.revalidate).toHaveBeenCalledWith('/dashboard/settings/security');
+  });
+
+  it('is counted per account, 10 an hour, closed, before the alert is read', async () => {
+    await reportSignInAlertAction({ alertId: ALERT });
+    expect(h.limit.mock.calls).toEqual([[`sign-in-alert-report:user:${ME}`, 10, 60 * 60 * 1000, 'closed']]);
+    expect(h.limit.mock.invocationCallOrder[0]!).toBeLessThan(h.read.mock.invocationCallOrder[0]!);
+  });
+
+  it('past its count the action is refused, and nothing is read, ended or told', async () => {
+    h.limit.mockResolvedValue({ allowed: false, count: 10, resetAt: Date.now() + 60_000 });
+    const res = await reportSignInAlertAction({ alertId: ALERT });
+    expect(res).toMatchObject({ ok: false, error: { code: 'rate_limited' } });
+    expect(h.read).not.toHaveBeenCalled();
+    expect(h.report).not.toHaveBeenCalled();
+    expect(h.signOut).not.toHaveBeenCalled();
+  });
+
+  it('a count that cannot be read refuses too (closed), as "try again in a moment", not "too many"', async () => {
+    h.limit.mockResolvedValue({ allowed: false, count: 10, resetAt: Date.now() + 60_000, failed: true });
+    const res = await reportSignInAlertAction({ alertId: ALERT });
+    expect(res).toEqual({
+      ok: false,
+      error: { code: 'internal_error', message: 'Please try again in a moment.' },
+    });
+    expect(h.read).not.toHaveBeenCalled();
+    expect(h.report).not.toHaveBeenCalled();
   });
 
   it('an id that is not a uuid is refused before any read', async () => {

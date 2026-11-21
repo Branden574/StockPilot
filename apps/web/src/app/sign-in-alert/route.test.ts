@@ -12,10 +12,11 @@ import { NextRequest } from 'next/server';
  *     finding 9), so a well-shaped link cannot be used to make reads without
  *     end.
  *   - POST (the page's own form) refuses a post from another site first, is
- *     limited by address and then by alert, and runs the report, also for
- *     an alert already reported: every session is ended again on every
- *     press (the member may press again because whoever signed in came
- *     back), and the limiters bound the repeats.
+ *     limited by address and then by alert, and runs the report.
+ *   - ONE ALERT, ONE SIGN-OUT: an alert already reported gets the plain
+ *     "already reported" page on GET and on POST, with no button and no
+ *     form, and no session is ended again; the page says how to end them
+ *     again (the password reset does). The POST limiters stay in front.
  *   - Every link that does not check out (malformed, past its 7 days, a
  *     changed tag, a tag for another account, an alert that does not exist)
  *     gets ONE plain page, the same bytes each time, so the page never tells
@@ -109,6 +110,9 @@ const DAY = 24 * 60 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
 const VIEW_KEY = 'sign-in-alert:view:203.0.113.9';
 const SESSIONS_ENDED = 'Every session of your account has been ended.';
+const ENDED_THEN = 'Every session of your account was ended when you reported it.';
+const END_AGAIN =
+  'To end them again now, reset your password. Completing the reset ends every session of your account, and it is what closes the door.';
 const OPEN_DEVICE =
   'A device that is already open can keep working for a short while, until its current pass expires. That is about an hour at most.';
 /** What a limiter that could not count answers in closed mode (lib/rate-limit.ts). */
@@ -200,19 +204,18 @@ describe('GET /sign-in-alert', () => {
     expect(h.limit).not.toHaveBeenCalled();
   });
 
-  it('an alert already reported shows that it was, with the reset button, and KEEPS the button: a second press is possible', async () => {
+  it('an alert already reported shows that it was, with the reset button, and NO form: the link ends no session again', async () => {
     h.read.mockResolvedValue({ kind: 'found', alert: alert({ status: 'not_me' }) });
-    const q = linkQuery();
-    const res = await GET(get(q));
+    const res = await GET(get(linkQuery()));
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('You already reported this sign-in');
+    expect(html).toContain(ENDED_THEN);
+    expect(html).toContain(END_AGAIN);
     expect(html).toContain('href="/reset"');
-    expect(html).toContain('<form method="post" action="/sign-in-alert">');
-    expect(html).toContain(`name="a" value="${ALERT}"`);
-    expect(html).toContain(`name="t" value="${q.get('t')}"`);
-    expect(html).toContain('End every session again');
-    expect(html).not.toMatch(/signed out|every device|everywhere|right away/i);
+    expect(html).not.toContain('<form');
+    expect(html).not.toContain('<button');
+    expect(html).not.toMatch(/signed out|every device|everywhere|right away|ended again/i);
     expect(h.report).not.toHaveBeenCalled();
   });
 
@@ -300,30 +303,32 @@ describe('POST /sign-in-alert', () => {
     expect(told).toContain('The owners and admins of your organization were told, so they can help.');
   });
 
-  it('a press on an alert already reported runs the report again, behind both limiters, and says the sessions were ended again', async () => {
+  it('a press on an alert already reported: behind both limiters, the same plain page as GET, with no form, and nothing is said to have ended again', async () => {
     const reported = alert({ status: 'not_me' });
     h.read.mockResolvedValue({ kind: 'found', alert: reported });
-    h.report.mockResolvedValue({ outcome: 'already_reported', sessionsEnded: true });
+    h.report.mockResolvedValue({ outcome: 'already_reported' });
+    const viewed = await (await GET(get(linkQuery()))).text();
+    h.limit.mockClear();
+
     const res = await POST(post(linkQuery()));
     expect(res.status).toBe(200);
     expect(h.limit.mock.calls.map((c) => [c[0], c[1], c[3]])).toEqual([
       ['sign-in-alert:ip:203.0.113.9', 30, 'closed'],
       [`sign-in-alert:alert:${ALERT}`, 10, 'closed'],
     ]);
-    expect(h.report).toHaveBeenCalledTimes(1);
-    expect(h.report).toHaveBeenCalledWith(expect.objectContaining({ alert: reported, via: 'link' }));
     const html = await res.text();
+    expect(html).toBe(viewed);
     expect(html).toContain('You already reported this sign-in');
-    expect(html).toContain('Every session of your account has been ended again.');
-    expect(html).toContain(OPEN_DEVICE);
-    expect(html).toContain('Reset your password now.');
-    expect(html).toContain('href="/reset"');
-    expect(html).not.toMatch(/signed out|every device|everywhere|right away|owners and admins/i);
+    expect(html).not.toContain('<form');
+    expect(html).not.toContain(SESSIONS_ENDED);
+    // The report decides: for a reported alert it ends nothing
+    // (server/services/sign-in-alert-report.test.ts).
+    expect(h.report).toHaveBeenCalledWith(expect.objectContaining({ alert: reported, via: 'link' }));
   });
 
   it('the limiters still bound repeat presses on a reported alert: over either count, a 429 and no report', async () => {
     h.read.mockResolvedValue({ kind: 'found', alert: alert({ status: 'not_me' }) });
-    h.report.mockResolvedValue({ outcome: 'already_reported', sessionsEnded: true });
+    h.report.mockResolvedValue({ outcome: 'already_reported' });
     // Over the alert's own count.
     h.limit
       .mockResolvedValueOnce({ allowed: true, remaining: 5, resetAt: Date.now() + 60_000 })
@@ -342,12 +347,13 @@ describe('POST /sign-in-alert', () => {
     expect(h.report).not.toHaveBeenCalled();
   });
 
-  it('a repeat press whose sign-out failed gets the try-again page, not "ended again"', async () => {
-    h.read.mockResolvedValue({ kind: 'found', alert: alert({ status: 'not_me' }) });
-    h.report.mockResolvedValue({ outcome: 'failed' });
+  it('two presses at once: the one the report calls already reported gets that page too', async () => {
+    h.report.mockResolvedValue({ outcome: 'already_reported' });
     const res = await POST(post(linkQuery()));
-    expect(res.status).toBe(503);
-    expect(await res.text()).not.toContain('ended again');
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('You already reported this sign-in');
+    expect(html).not.toContain('<form');
   });
 
   it('a report that could not finish: a try-again page, and the same link works again', async () => {
