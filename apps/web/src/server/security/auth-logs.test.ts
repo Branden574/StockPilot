@@ -191,11 +191,11 @@ vi.mock('@/lib/supabase/admin', () => ({
                 (row) =>
                   minuteOfRow(row) >= windowFrom &&
                   minuteOfRow(row) < windowTo &&
-                  row.source === filter('eq', 'source')?.[2] &&
+                  listed('source').includes(row.source) &&
                   row.category === filter('eq', 'category')?.[2] &&
                   listed('reason').includes(row.reason),
               )
-              .map((row) => ({ reason: row.reason, event_count: row.n }));
+              .map((row) => ({ source: row.source, reason: row.reason, event_count: row.n }));
             // One page, as the database would cut it: the range asked for,
             // and never more rows than the server's own cap. The count of
             // every matching row comes only when it was asked for.
@@ -2809,12 +2809,12 @@ describe('a run: six hours, oldest first, each written once', () => {
       expect(reconcileReads()).toEqual([
         {
           table: 'security_events',
-          select: 'reason, event_count',
+          select: 'source, reason, event_count',
           count: 'exact',
           order: ['id', { ascending: true }],
           range: [0, AUTH_LOGS_RECONCILE_PAGE_ROWS - 1],
           filters: [
-            ['eq', 'source', 'web'],
+            ['in', 'source', ['web', 'phone']],
             ['eq', 'category', 'password_guessing'],
             [
               'in',
@@ -2913,6 +2913,64 @@ describe('a run: six hours, oldest first, each written once', () => {
           recorded: { password: 20, code: 9, overflow: 0, complete: true },
           excess: { password: 0, code: 0 },
         },
+      });
+    });
+
+    describe('a current-password check the phone app asked for through our API is our server sending a password too', () => {
+      it('its refusals are recorded with the phone as their source, and are counted as recorded', async () => {
+        serverHour(H(5), 9);
+        recordWeb(H(5), 'wrong_password', 2);
+        recordWeb(H(5), 'wrong_current_password', 4, { source: 'phone' });
+        recordWeb(H(5), 'sign_in_refused_other', 3, { source: 'phone' });
+        const summary = full(await run());
+        expect(h.rpc).not.toHaveBeenCalled();
+        expect(summary.hours[1]).toMatchObject({
+          reconcile: {
+            gateway: { password: 9, code: 0 },
+            recorded: { password: 9, code: 0, overflow: 0, complete: true },
+            excess: { password: 0, code: 0 },
+          },
+        });
+      });
+
+      it('no other row with the phone as its source counts: not the wrong passwords and codes this job stores, not an overflow row', async () => {
+        // The phone app's own sign-ins go straight to the sign-in service;
+        // this job stores their refusals with the phone as their source and
+        // no organization. Anyone can make those, so counted as "recorded by
+        // our server" they would hide refusals in our server's form.
+        serverHour(H(5), 9, 6);
+        recordWeb(H(5), 'wrong_password', 500, { source: 'phone' });
+        recordWeb(H(5), 'repeated_wrong_password', 500, { source: 'phone' });
+        recordWeb(H(5), 'wrong_code', 500, { source: 'phone' });
+        recordWeb(H(5), 'wrong_setup_code', 500, { source: 'phone' });
+        recordWeb(H(5), 'over_minute_cap', 500, { source: 'phone' });
+        recordWeb(H(5), 'over_buffer_cap', 500, { source: 'phone' });
+        // Nor a row of another source.
+        recordWeb(H(5), 'wrong_current_password', 500, { source: 'api' });
+        const summary = full(await run());
+        expect(summary.hours[1]).toMatchObject({
+          reconcile: {
+            gateway: { password: 9, code: 6 },
+            recorded: { password: 0, code: 0, overflow: 0, complete: true },
+            excess: { password: 9, code: 6 },
+          },
+        });
+        expect(written().map((e) => [e.reason, e.count])).toEqual([
+          ['unrecorded_server_form_code', 6],
+          ['unrecorded_server_form_password', 9],
+        ]);
+      });
+
+      it('a row of a source that was not asked for fails the read', async () => {
+        serverHour(H(5), 9);
+        h.recordedAnswer = () => ({
+          data: [{ source: 'api', reason: 'wrong_password', event_count: 9 }],
+          error: null,
+          count: 1,
+        });
+        const summary = full(await run());
+        expect(h.rpc).not.toHaveBeenCalled();
+        expect(summary.failure).toMatchObject({ cause: 'reconcile_read_failed', code: 'bad_row' });
       });
     });
 
@@ -3285,7 +3343,11 @@ describe('a run: six hours, oldest first, each written once', () => {
         );
         h.recordedAnswer = (q) =>
           q.range?.[0] === 0 && q.filters.some((f) => f[0] === 'gte' && f[2] === iso(H(5)))
-            ? { data: [{ reason: 'wrong_password', event_count: 3 }], error: null, count: 5000 }
+            ? {
+                data: [{ source: 'web', reason: 'wrong_password', event_count: 3 }],
+                error: null,
+                count: 5000,
+              }
             : { data: [], error: null, count: q.count === 'exact' ? 0 : null };
         const summary = full(await run());
         expect(written()).toEqual([
@@ -3310,6 +3372,7 @@ describe('a run: six hours, oldest first, each written once', () => {
           q.range?.[0] === 0
             ? {
                 data: Array.from({ length: 1000 }, () => ({
+                  source: 'web',
                   reason: 'wrong_password',
                   event_count: 1,
                 })),
@@ -3358,11 +3421,23 @@ describe('a run: six hours, oldest first, each written once', () => {
       ['no count of rows', () => ({ data: [], error: null, count: null })],
       [
         'a row of another reason',
-        () => ({ data: [{ reason: 'sign_in_paused', event_count: 1 }], error: null, count: 1 }),
+        () => ({
+          data: [{ source: 'web', reason: 'sign_in_paused', event_count: 1 }],
+          error: null,
+          count: 1,
+        }),
       ],
       [
         'a row with no whole count',
-        () => ({ data: [{ reason: 'wrong_password', event_count: 'x' }], error: null, count: 1 }),
+        () => ({
+          data: [{ source: 'web', reason: 'wrong_password', event_count: 'x' }],
+          error: null,
+          count: 1,
+        }),
+      ],
+      [
+        'a row with no source',
+        () => ({ data: [{ reason: 'wrong_password', event_count: 1 }], error: null, count: 1 }),
       ],
       ['no rows list', () => ({ data: null, error: null, count: 0 })],
     ])('%s: a failed reconciliation read', async (_what, answer) => {

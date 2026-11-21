@@ -318,6 +318,83 @@ describe('recordAccountCodeBlocked', () => {
   });
 });
 
+describe('a refusal that came through the phone API is recorded with the source it came from', () => {
+  it("a wrong current password asked by the phone app: source phone, in the account's organization", async () => {
+    recordAccountCodeBlocked('wrong_current_password', USER, request, 'phone');
+    expect(recordSecurityEvent).not.toHaveBeenCalled();
+    await runAfterResponse();
+    expect(h.resolve).toHaveBeenCalledWith(USER);
+    expect(recordSecurityEvent).toHaveBeenCalledTimes(1);
+    expect(recordSecurityEvent).toHaveBeenCalledWith(
+      {
+        category: 'password_guessing',
+        outcome: 'blocked',
+        reason: 'wrong_current_password',
+        source: 'phone',
+        organizationId: ORG,
+      },
+      request,
+    );
+  });
+
+  it('the same check refused for another reason, asked by the phone app: source phone, still no organization and no lookup', async () => {
+    recordSignInBlocked('sign_in_refused_other', 'ada@example.com', request, 'phone');
+    await runAfterResponse();
+    expect(h.calls).toEqual([]);
+    expect(h.resolve).not.toHaveBeenCalled();
+    expect(recordSecurityEvent).toHaveBeenCalledTimes(1);
+    expect(recordSecurityEvent).toHaveBeenCalledWith(
+      {
+        category: 'password_guessing',
+        outcome: 'blocked',
+        reason: 'sign_in_refused_other',
+        source: 'phone',
+        organizationId: null,
+      },
+      request,
+    );
+  });
+
+  it('said to be the website, or not said: source web, as before', async () => {
+    recordAccountCodeBlocked('wrong_current_password', USER, request, 'web');
+    recordSignInBlocked('sign_in_refused_other', 'ada@example.com', request, 'web');
+    recordAccountCodeBlocked('wrong_current_password', USER, request);
+    await runAfterResponse();
+    expect(vi.mocked(recordSecurityEvent).mock.calls.map(([event]) => event.source)).toEqual([
+      'web',
+      'web',
+      'web',
+    ]);
+  });
+
+  it('only those two reasons can carry the phone as their source: any other reason is the website\'s', async () => {
+    // The phone app sends its own sign-in and its own codes straight to the
+    // sign-in service, so no other refusal reaches our server from it. The
+    // types refuse these calls; this is what happens if one is forced.
+    const anyReason = recordAccountCodeBlocked as (
+      reason: string,
+      userId: string,
+      headers: unknown,
+      source: string,
+    ) => void;
+    anyReason('wrong_code', USER, request, 'phone');
+    anyReason('wrong_setup_code', USER, request, 'phone');
+    const anySignIn = recordSignInBlocked as (
+      reason: string,
+      email: string,
+      headers: unknown,
+      source: string,
+    ) => void;
+    anySignIn('wrong_password', 'ada@example.com', request, 'phone');
+    await runAfterResponse();
+    expect(vi.mocked(recordSecurityEvent).mock.calls.map(([event]) => event.source)).toEqual([
+      'web',
+      'web',
+      'web',
+    ]);
+  });
+});
+
 describe("a signed-in member's refused current password and refused set-up code", () => {
   it.each([['wrong_current_password'], ['wrong_setup_code']] as const)(
     "%s: reads nothing before the response; after it, records in the account's organization",

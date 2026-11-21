@@ -5,7 +5,11 @@ import { headers } from 'next/headers';
 
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
-import { recordAccountCodeBlocked, recordSignInBlocked } from '@/server/security/account-events';
+import {
+  type PasswordCheckSource,
+  recordAccountCodeBlocked,
+  recordSignInBlocked,
+} from '@/server/security/account-events';
 
 import type { Database } from '@stockpilot/core';
 
@@ -35,6 +39,8 @@ async function requestHeadersOrNull(): Promise<Awaited<ReturnType<typeof headers
  *     nothing.
  * It is also worth an admin's eye: a wrong current password is what someone
  * holding another person's open session meets before a sensitive change.
+ * Both are recorded with the source the check came from: the website, or
+ * the phone app through our API (the caller says which).
  *
  * Never the caller's problem: it never throws, waits only for the request's
  * headers (already in memory), and changes nothing the member is answered.
@@ -43,16 +49,27 @@ async function recordRefusedPassword(
   error: { status?: unknown; code?: unknown },
   email: string,
   userId: string,
+  source: PasswordCheckSource,
 ): Promise<void> {
   try {
     const code = typeof error.code === 'string' ? error.code : null;
     if (code === 'invalid_credentials') {
       if (typeof userId !== 'string' || userId.length === 0) return;
-      recordAccountCodeBlocked('wrong_current_password', userId, await requestHeadersOrNull());
+      recordAccountCodeBlocked(
+        'wrong_current_password',
+        userId,
+        await requestHeadersOrNull(),
+        source,
+      );
       return;
     }
+    // A 400 with no code is recorded too. The client library builds such an
+    // error itself only when neither an email nor a phone number is given,
+    // which no caller here does; so every row recorded here has a line in
+    // the sign-in service's log, which is what the reader of that log
+    // relies on when it counts these rows as refusals our server made.
     if (error.status === 400 && !(code !== null && /rate.?limit/i.test(code))) {
-      recordSignInBlocked('sign_in_refused_other', email, await requestHeadersOrNull());
+      recordSignInBlocked('sign_in_refused_other', email, await requestHeadersOrNull(), source);
     }
   } catch {
     // An event that could not be recorded is dropped.
@@ -77,12 +94,15 @@ async function recordRefusedPassword(
  *
  * `userId` is the signed-in account whose password this is (the account the
  * email belongs to): a refused password is recorded as a security event for
- * it (recordRefusedPassword above).
+ * it (recordRefusedPassword above). `source` is where the request came
+ * from: `phone` when the phone app asked through our API, the website
+ * otherwise.
  */
 export async function verifyPasswordSideChannel(
   email: string,
   password: string,
   userId: string,
+  source: PasswordCheckSource = 'web',
 ): Promise<{ ok: true } | { ok: false; reason: 'invalid_password' | 'internal_error'; message: string }> {
   try {
     const client = createSupabaseClient<Database>(
@@ -98,7 +118,7 @@ export async function verifyPasswordSideChannel(
     );
     const { error } = await client.auth.signInWithPassword({ email, password });
     if (error) {
-      await recordRefusedPassword(error, email, userId);
+      await recordRefusedPassword(error, email, userId, source === 'phone' ? 'phone' : 'web');
       return { ok: false, reason: 'invalid_password', message: 'Password is incorrect.' };
     }
 

@@ -51,6 +51,14 @@ export type AccountCodeBlockedReason =
   | 'wrong_setup_code'
   | 'wrong_current_password';
 
+/**
+ * Where a refused current-password check came from: the website, or the
+ * phone app through our own API (account deletion, changing the sign-in
+ * email). Only that check has both: the phone app sends its own sign-in and
+ * its own authenticator codes straight to the sign-in service.
+ */
+export type PasswordCheckSource = 'web' | 'phone';
+
 /** How long the organization found for an email is remembered. */
 export const SIGN_IN_ORGANIZATION_MEMORY_MS = 60_000;
 /** How many emails are remembered at once; the oldest is dropped first. */
@@ -167,13 +175,45 @@ export function __signInOrganizationCacheKeysForTests(): string[] {
  * that, for instance, the platform disabled one of its accounts. The event
  * exists so that every password our server sends and the sign-in service
  * refuses has a record (server/security/auth-logs.ts compares the counts).
+ * It is also the one reason here that can come from the phone app (the
+ * current-password check, lib/auth/verify-password.ts): `source` says so,
+ * and the event then carries the phone as its source. Every other reason is
+ * the website's, whatever is passed.
  */
+export function recordSignInBlocked(
+  reason: 'sign_in_refused_other',
+  email: string,
+  headers: SecurityEventHeaders | null,
+  source?: PasswordCheckSource,
+): void;
 export function recordSignInBlocked(
   reason: SignInBlockedReason,
   email: string,
   headers: SecurityEventHeaders | null,
+  source?: 'web',
+): void;
+export function recordSignInBlocked(
+  reason: SignInBlockedReason,
+  email: string,
+  headers: SecurityEventHeaders | null,
+  source: PasswordCheckSource = 'web',
 ): void {
   defer(async () => {
+    if (reason === 'sign_in_refused_other' && source === 'phone') {
+      // Written out, source and reason both, so that what can be stored
+      // with the phone as its source is read here and nowhere else.
+      await recordSecurityEvent(
+        {
+          category: 'password_guessing',
+          outcome: 'blocked',
+          reason: 'sign_in_refused_other',
+          source: 'phone',
+          organizationId: null,
+        },
+        headers,
+      );
+      return;
+    }
     const organizationId =
       reason === 'sign_in_refused_other' ? null : await organizationForSignInEmail(email);
     await recordSecurityEvent(
@@ -188,14 +228,46 @@ export function recordSignInBlocked(
  * authenticator being set up, or a refused current password, of a signed-in
  * account. The organization is the account's (resolveDefaultOrgAndRole),
  * after the response. Returns at once.
+ *
+ * A refused current password can come from the phone app through our API:
+ * `source` says so, and the event then carries the phone as its source, so
+ * the organization's page shows where it really came from. Every other
+ * reason is the website's, whatever is passed.
  */
+export function recordAccountCodeBlocked(
+  reason: 'wrong_current_password',
+  userId: string,
+  headers: SecurityEventHeaders | null,
+  source?: PasswordCheckSource,
+): void;
 export function recordAccountCodeBlocked(
   reason: AccountCodeBlockedReason,
   userId: string,
   headers: SecurityEventHeaders | null,
+  source?: 'web',
+): void;
+export function recordAccountCodeBlocked(
+  reason: AccountCodeBlockedReason,
+  userId: string,
+  headers: SecurityEventHeaders | null,
+  source: PasswordCheckSource = 'web',
 ): void {
   defer(async () => {
     const { organizationId } = await resolveDefaultOrgAndRole(userId);
+    if (reason === 'wrong_current_password' && source === 'phone') {
+      // Written out, source and reason both (see recordSignInBlocked).
+      await recordSecurityEvent(
+        {
+          category: 'password_guessing',
+          outcome: 'blocked',
+          reason: 'wrong_current_password',
+          source: 'phone',
+          organizationId,
+        },
+        headers,
+      );
+      return;
+    }
     await recordSecurityEvent(
       { category: 'password_guessing', outcome: 'blocked', reason, source: 'web', organizationId },
       headers,

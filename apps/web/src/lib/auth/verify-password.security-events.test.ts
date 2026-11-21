@@ -78,9 +78,26 @@ describe('a refused current password is recorded', () => {
     answers({ status: 400, code: 'invalid_credentials', message: 'Invalid login credentials' });
     await expect(verifyPasswordSideChannel(EMAIL, TYPED_VALUE, USER)).resolves.toEqual(REFUSED);
     expect(h.recordAccountCodeBlocked.mock.calls).toEqual([
-      ['wrong_current_password', USER, h.requestHeaders],
+      ['wrong_current_password', USER, h.requestHeaders, 'web'],
     ]);
     expect(h.recordSignInBlocked).not.toHaveBeenCalled();
+  });
+
+  it('asked by the phone app through our API: the same two records, with the phone as their source', async () => {
+    answers({ status: 400, code: 'invalid_credentials', message: 'Invalid login credentials' });
+    await expect(verifyPasswordSideChannel(EMAIL, TYPED_VALUE, USER, 'phone')).resolves.toEqual(
+      REFUSED,
+    );
+    expect(h.recordAccountCodeBlocked.mock.calls).toEqual([
+      ['wrong_current_password', USER, h.requestHeaders, 'phone'],
+    ]);
+    answers({ status: 400, code: 'user_banned', message: 'refused' });
+    await expect(verifyPasswordSideChannel(EMAIL, TYPED_VALUE, USER, 'phone')).resolves.toEqual(
+      REFUSED,
+    );
+    expect(h.recordSignInBlocked.mock.calls).toEqual([
+      ['sign_in_refused_other', EMAIL, h.requestHeaders, 'phone'],
+    ]);
   });
 
   it.each([
@@ -94,7 +111,7 @@ describe('a refused current password is recorded', () => {
       answers({ status: 400, code, message: 'refused' });
       await expect(verifyPasswordSideChannel(EMAIL, TYPED_VALUE, USER)).resolves.toEqual(REFUSED);
       expect(h.recordSignInBlocked.mock.calls).toEqual([
-        ['sign_in_refused_other', EMAIL, h.requestHeaders],
+        ['sign_in_refused_other', EMAIL, h.requestHeaders, 'web'],
       ]);
       expect(h.recordAccountCodeBlocked).not.toHaveBeenCalled();
     },
@@ -138,7 +155,9 @@ describe('recording changes nothing the member sees', () => {
     h.requestHeaders = null;
     answers({ status: 400, code: 'invalid_credentials' });
     await expect(verifyPasswordSideChannel(EMAIL, TYPED_VALUE, USER)).resolves.toEqual(REFUSED);
-    expect(h.recordAccountCodeBlocked.mock.calls).toEqual([['wrong_current_password', USER, null]]);
+    expect(h.recordAccountCodeBlocked.mock.calls).toEqual([
+      ['wrong_current_password', USER, null, 'web'],
+    ]);
   });
 
   it.each([

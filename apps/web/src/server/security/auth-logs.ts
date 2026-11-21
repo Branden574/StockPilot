@@ -109,7 +109,10 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * (unrecorded_server_form_password or _code). Our server records a refusal
  * for every password and every code it sends there, so the expected excess
  * is zero and the threshold is small. Only rows whose reason names a refused
- * password or code count as recorded; overflow rows cover nothing.
+ * password or code count as recorded; overflow rows cover nothing. A
+ * current-password check the phone app asks for through our API is our
+ * server's too: its refusals are recorded with the phone as their source,
+ * and those rows, and no other phone row, are counted.
  * AT AN HOUR'S EDGE the gateway stamps a refusal in one hour and our server
  * records it in the next. Before an hour is flagged, its excess is reduced
  * by a carry: at most what our server recorded in the first minute of the
@@ -316,6 +319,23 @@ const RECORDED_CODE_REASONS: readonly string[] = [
   'wrong_setup_code',
 ];
 const RECORDED_OVERFLOW_REASONS: readonly string[] = ['over_minute_cap', 'over_buffer_cap'];
+/**
+ * The sources of our own record the reconciliation reads. `web` is our
+ * server's. `phone` is read for ONE thing: a current-password check the
+ * phone app asked for through our API (deleting the account, changing the
+ * sign-in email) is our server sending a password, in our server's form,
+ * and its refusal is recorded with the phone as its source
+ * (server/security/account-events.ts). Only the two reasons that check
+ * records are counted from a phone row. Every other phone row is not our
+ * server's: this job itself stores the phone app's own refused sign-ins
+ * and codes with that source, anyone can cause those, and counted as
+ * recorded they would hide refusals in our server's form.
+ */
+export const AUTH_LOGS_RECONCILE_SOURCES = ['web', 'phone'] as const;
+const RECORDED_PHONE_API_REASONS: readonly string[] = [
+  'wrong_current_password',
+  'sign_in_refused_other',
+];
 /** Every reason the reconciliation reads (the three lists above). */
 export const AUTH_LOGS_RECONCILE_REASONS = [
   'wrong_password',
@@ -1545,7 +1565,9 @@ async function writeHour(
 
 /**
  * What our own server recorded for the hour: service-role reads of the
- * record's rows with source web, category password_guessing and a reason of
+ * record's rows with a source of AUTH_LOGS_RECONCILE_SOURCES (a phone row
+ * counts only for a current-password check asked through our API), category
+ * password_guessing and a reason of
  * AUTH_LOGS_RECONCILE_REASONS, in the hour (every organization), a page of
  * AUTH_LOGS_RECONCILE_PAGE_ROWS at a time in the order of their ids, the
  * first with the count of rows. Their event counts are added up per kind.
@@ -1588,8 +1610,8 @@ async function readRecorded(
           ctx
             .admin()
             .from('security_events')
-            .select('reason, event_count', first ? { count: 'exact' } : undefined)
-            .eq('source', 'web')
+            .select('source, reason, event_count', first ? { count: 'exact' } : undefined)
+            .in('source', AUTH_LOGS_RECONCILE_SOURCES)
             .eq('category', 'password_guessing')
             .in('reason', AUTH_LOGS_RECONCILE_REASONS)
             .gte('minute', iso(hour.startMs))
@@ -1621,6 +1643,15 @@ async function readRecorded(
       if (!isRecord(row) || typeof row.reason !== 'string') return failed('bad_row');
       const n = row.event_count;
       if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 1) return failed('bad_row');
+      if (row.source === 'phone') {
+        // Only a current-password check asked through our API; any other
+        // phone row is not our server's and covers nothing.
+        if (RECORDED_PHONE_API_REASONS.includes(row.reason)) recorded.password += n;
+        else if (!(AUTH_LOGS_RECONCILE_REASONS as readonly string[]).includes(row.reason))
+          return failed('bad_row');
+        continue;
+      }
+      if (row.source !== 'web') return failed('bad_row');
       if (RECORDED_PASSWORD_REASONS.includes(row.reason)) recorded.password += n;
       else if (RECORDED_CODE_REASONS.includes(row.reason)) recorded.code += n;
       else if (RECORDED_OVERFLOW_REASONS.includes(row.reason)) recorded.overflow += n;

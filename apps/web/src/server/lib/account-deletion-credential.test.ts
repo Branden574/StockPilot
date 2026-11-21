@@ -197,9 +197,17 @@ describe('an account with no verified authenticator', () => {
     ).toHaveBeenCalledWith({ userId: USER });
   });
 
+  it('the password check is told where the request came from: the phone API says phone, anything else is the website', async () => {
+    const base = { admin, userId: USER, email: EMAIL, readLevel: async () => 'aal1' };
+    await confirmDeletionCredential({ ...base, input: { password: PASSWORD }, source: 'phone' });
+    await confirmDeletionCredential({ ...base, input: { password: PASSWORD }, source: 'web' });
+    await confirmDeletionCredential({ ...base, input: { password: PASSWORD } });
+    expect(verifyPassword.mock.calls.map((call) => call[3])).toEqual(['phone', 'web', 'web']);
+  });
+
   it('the right password: confirmed, checked against the current address, one try counted first', async () => {
     expect(await confirm({ password: PASSWORD })).toEqual({ ok: true, by: 'password' });
-    expect(verifyPassword).toHaveBeenCalledWith(EMAIL, PASSWORD, USER);
+    expect(verifyPassword).toHaveBeenCalledWith(EMAIL, PASSWORD, USER, 'web');
     expect(checkRateLimit).toHaveBeenCalledWith(
       `account-delete-password:${USER}`,
       ACCOUNT_DELETE_CREDENTIAL_LIMIT,

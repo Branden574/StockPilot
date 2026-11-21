@@ -480,7 +480,12 @@ export async function requestEmailChange(args: RequestEmailChangeArgs): Promise<
     });
   }
 
-  const pw = await verifyPasswordSideChannel(currentEmail, args.currentPassword, args.userId);
+  const pw = await verifyPasswordSideChannel(
+    currentEmail,
+    args.currentPassword,
+    args.userId,
+    args.source === 'mobile' ? 'phone' : 'web',
+  );
   if (!pw.ok) {
     throw new ServiceError(
       'forbidden',
