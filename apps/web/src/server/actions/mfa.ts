@@ -24,6 +24,12 @@ import {
 } from '@/lib/auth/mfa-code-attempts';
 import { factorsOf, readMfaFactorList, type MfaFactorList } from '@/lib/auth/mfa-factors';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
+import {
+  isPasskeyBridge,
+  isRecordedPasskeyBridgeOf,
+  readPasskeyBridge,
+  withoutPasskeyBridge,
+} from '@/lib/auth/passkey-bridge';
 import { requireOrgContext, requireSession } from '@/lib/auth/session';
 import { isSessionEndedError } from '@/lib/auth/session-ended';
 import { sessionAccountNow, type SessionAccountNow } from '@/lib/auth/session-account';
@@ -115,15 +121,18 @@ export async function enrollFactorAction(): Promise<
   ActionResult<{ factorId: string; qrCode: string; secret: string; uri: string }>
 > {
   try {
-    await requireSession();
+    const session = await requireSession();
     const supabase = await createClient();
 
-    // Clean up any prior unverified factors so listFactors stays tidy.
+    // Clean up any prior unverified factors so listFactors stays tidy. Never
+    // the account's recorded passkey bridge (lib/auth/passkey-bridge), which
+    // is not the member's set-up; a reserved-name factor that is not the
+    // recorded one goes like any unfinished set-up.
     const { data: existing } = await supabase.auth.mfa.listFactors();
-    for (const f of existing?.all ?? []) {
-      if (f.status !== 'verified') {
-        await supabase.auth.mfa.unenroll({ factorId: f.id });
-      }
+    const unfinished = (existing?.all ?? []).filter((f) => f.status !== 'verified');
+    const bridge = await readPasskeyBridge(session.userId, unfinished, 'enroll_cleanup');
+    for (const f of withoutPasskeyBridge(unfinished, bridge)) {
+      await supabase.auth.mfa.unenroll({ factorId: f.id });
     }
 
     const { data, error } = await supabase.auth.mfa.enroll({
@@ -239,6 +248,14 @@ export async function verifyEnrollmentAction(input: {
     if (!openSetUp) {
       return err('validation_error', MFA_SETUP_NOT_OPEN);
     }
+    // Never the account's recorded passkey bridge (lib/auth/passkey-bridge):
+    // Auth would confirm it like a set-up while it is unverified (proof B4).
+    // Read only when the factor named carries the reserved name.
+    const named = (factors.all ?? []).filter((f) => f.id === parsed.data.factorId);
+    const bridge = await readPasskeyBridge(session.userId, named, 'verify_enrollment');
+    if (isPasskeyBridge(bridge, parsed.data.factorId)) {
+      return err('validation_error', MFA_SETUP_NOT_OPEN);
+    }
     // Only for the account whose password was just checked: the factor list
     // loads the cookie session, and a load can refresh it into another
     // account's (lib/auth/verified-claims). Read against that account here
@@ -348,6 +365,15 @@ export async function unenrollFactorAction(input: {
       );
     }
 
+    // Never the account's recorded passkey bridge (lib/auth/passkey-bridge):
+    // Auth would remove it like any factor (proof B6) and the passkey would
+    // stop working. A list or record that cannot be read hides nothing.
+    if (
+      await isRecordedPasskeyBridgeOf(supabase, session.userId, parsed.data.factorId, 'unenroll')
+    ) {
+      return err('validation_error', 'Invalid factor');
+    }
+
     const { error } = await supabase.auth.mfa.unenroll({ factorId: parsed.data.factorId });
     if (error) {
       return unexpectedActionError(error, 'actions.mfa.unenroll', {
@@ -449,7 +475,19 @@ export async function challengeFactorAction(input: {
       return err('unauthenticated', MFA_SESSION_ENDED);
     }
     const factor = factors.find((f) => f.id === parsed.data.factorId);
-    if (factor?.status !== 'verified') {
+    // The account's recorded passkey bridge is no authenticator of the
+    // member's (lib/auth/passkey-bridge): Auth would check a code for it like
+    // any app. Read only when the factor named carries the reserved name; a
+    // record that cannot be read hides nothing.
+    let refused: 'not_listed' | 'not_verified' | 'passkey_bridge' | null = null;
+    if (!factor) refused = 'not_listed';
+    else if (factor.status !== 'verified') refused = 'not_verified';
+    else if (
+      isPasskeyBridge(await readPasskeyBridge(claims.userId, [factor], 'challenge'), factor.id)
+    ) {
+      refused = 'passkey_bridge';
+    }
+    if (refused) {
       // The same words as a challenge that could not start, and no code
       // attempt spent. Reported with what the id named (never the id or the
       // code), at most REFUSED_FACTOR_REPORTS times per account in a window:
@@ -467,7 +505,7 @@ export async function challengeFactorAction(input: {
         {
           message: MFA_CHALLENGE_NOT_STARTED,
           level: 'warning',
-          extra: { factor: factor ? 'not_verified' : 'not_listed' },
+          extra: { factor: refused },
         },
       );
     }
@@ -500,6 +538,60 @@ export async function challengeFactorAction(input: {
     // A check of the caller's access that could not be read: its own sentence.
     const unchecked = uncheckedAccessResult(e, 'mfa.action');
     if (unchecked) return unchecked;
+    if (e instanceof ServiceError) return err(e.code, e.message);
+    // Don't console.error raw exception — Supabase auth errors can
+    // include factor IDs and challenge tokens. Funnel through the
+    // error reporter (which scrubs) and return a generic error.
+    void reportError(e, { tag: 'mfa.action' });
+    return err('internal_error', 'MFA action failed');
+  }
+}
+
+/**
+ * The authenticator apps the step-up modal (components/auth/step-up-modal.tsx)
+ * offers, when the browser's factor list shows a factor with the reserved
+ * passkey bridge name (lib/auth/passkey-bridge-name): the browser cannot tell
+ * the bridge from an app, so it asks here, once. The answer is the account's
+ * verified TOTP factors without its RECORDED bridge (lib/auth/passkey-bridge),
+ * in Auth's order; a record that cannot be read hides nothing.
+ *
+ * Reads only: the account from this session's verified token, that account's
+ * own factor list (GoTrue's user answer, which says whose list it is) and its
+ * own record. It runs at aal1 or aal2, like the code check it serves.
+ */
+export async function stepUpMethodsAction(): Promise<
+  ActionResult<{ apps: Array<{ id: string; friendlyName: string | null }> }>
+> {
+  try {
+    const supabase = await createClient();
+    const claims = await readVerifiedSessionClaims(supabase);
+    if (!claims) return err('unauthenticated', MFA_SESSION_ENDED);
+    // A list that cannot be read throws to the catch below; the modal then
+    // keeps the browser's own list.
+    const factors = factorsOf(await readMfaFactorList(supabase), claims.userId);
+    if (!factors) {
+      // The session now holds another account than the one it verified as:
+      // it does not stay signed in here.
+      await signOutThisSession(supabase);
+      return err('unauthenticated', MFA_SESSION_ENDED);
+    }
+    const verified = factors.filter(
+      (f): f is typeof f & { id: string } =>
+        f.status === 'verified' && f.factor_type === 'totp' && typeof f.id === 'string',
+    );
+    const bridge = await readPasskeyBridge(claims.userId, verified, 'step_up_methods');
+    return ok({
+      apps: withoutPasskeyBridge(verified, bridge).map((f) => ({
+        id: f.id,
+        friendlyName: f.friendly_name ?? null,
+      })),
+    });
+  } catch (e) {
+    rethrowControlFlow(e);
+    // A check of the caller's access that could not be read: its own sentence.
+    const unchecked = uncheckedAccessResult(e, 'mfa.action');
+    if (unchecked) return unchecked;
+    if (isSessionEndedError(e)) return err('unauthenticated', MFA_SESSION_ENDED);
     if (e instanceof ServiceError) return err(e.code, e.message);
     // Don't console.error raw exception — Supabase auth errors can
     // include factor IDs and challenge tokens. Funnel through the

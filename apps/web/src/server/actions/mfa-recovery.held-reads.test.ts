@@ -84,6 +84,19 @@ vi.mock('@/lib/auth/verify-password', () => ({
 }));
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => ({
+    // 0475 is not live in this file's world: the recovery code's new function
+    // does not exist yet (PostgREST's answer, as in test/passkey-records.ts),
+    // so today's path runs; mfa-recovery.passkeys.test.ts covers the function.
+    rpc: async (fn: string) => ({
+      data: null,
+      error:
+        fn === 'consume_recovery_code_with_passkeys'
+          ? {
+              code: 'PGRST202',
+              message: `Could not find the function public.${fn}(p_code, p_user_id) in the schema cache`,
+            }
+          : { message: `no fake for ${fn}` },
+    }),
     auth: {
       admin: {
         mfa: {

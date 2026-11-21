@@ -147,12 +147,77 @@ async function allowRecoveryPress(
   return answer.allowed;
 }
 
+/** The recovery code's function in 0475; its absence means today's path. */
+const RECOVERY_WITH_PASSKEYS_FN = 'consume_recovery_code_with_passkeys';
+
+type RecoveryAnswer =
+  /** 0475 answered: whether the code was spent, and how many passkeys went. */
+  | { kind: 'answered'; consumed: boolean; passkeysRemoved: number }
+  /** The function does not exist yet (0475 not pushed): today's path, unchanged. */
+  | { kind: 'not_yet' }
+  /** Any other failure, or an answer in a shape this does not know. */
+  | { kind: 'failed'; code: string };
+
+/**
+ * What consume_recovery_code_with_passkeys answered. The function does not
+ * exist yet when PostgREST's schema cache answers PGRST202, or Postgres
+ * 42883, naming it (the house rule: exception-occurrences.ts). Its answer is
+ * one row; anything else is a failure, never a code read as spent or not.
+ */
+function recoveryAnswer(res: {
+  data: unknown;
+  error: { code?: unknown; message?: unknown } | null;
+}): RecoveryAnswer {
+  if (res.error) {
+    const code = typeof res.error.code === 'string' ? res.error.code : 'none';
+    const message = typeof res.error.message === 'string' ? res.error.message : '';
+    if ((code === 'PGRST202' || code === '42883') && message.includes(RECOVERY_WITH_PASSKEYS_FN)) {
+      return { kind: 'not_yet' };
+    }
+    return { kind: 'failed', code };
+  }
+  const row = Array.isArray(res.data) && res.data.length === 1 ? res.data[0] : null;
+  if (
+    row &&
+    typeof row === 'object' &&
+    typeof (row as { consumed?: unknown }).consumed === 'boolean' &&
+    Number.isInteger((row as { passkeys_removed?: unknown }).passkeys_removed)
+  ) {
+    const r = row as { consumed: boolean; passkeys_removed: number };
+    return { kind: 'answered', consumed: r.consumed, passkeysRemoved: r.passkeys_removed };
+  }
+  return { kind: 'failed', code: 'shape' };
+}
+
+/** How many passkeys passkey_remove_all removed, or null when it did not answer with its row. */
+function removedCount(res: { data: unknown; error: unknown }): number | null {
+  if (res.error) return null;
+  const row = Array.isArray(res.data) && res.data.length === 1 ? res.data[0] : null;
+  const removed =
+    row && typeof row === 'object' ? (row as { removed?: unknown }).removed : undefined;
+  return Number.isInteger(removed) ? (removed as number) : null;
+}
+
+/**
+ * The one report of a recovery code whose passkey call failed: the failure's
+ * code and whether passkey records may be left (false: the second removal
+ * answered; 'unknown': it did not, or the code was not spent here). Never the
+ * code, the account's passkeys or the bridge's id.
+ */
+function reportPasskeyRemoval(failure: string, recordsLeft: false | 'unknown'): void {
+  void reportError(new Error('A recovery code could not remove the passkey records in one call'), {
+    tag: 'actions.mfa_recovery.passkey_removal',
+    level: 'error',
+    extra: { failure, records_left: recordsLeft },
+  });
+}
+
 /**
  * Used by /signin/mfa when the user can't reach their TOTP device.
- * Verifies one of their unused recovery codes, and on success unenrolls
- * every TOTP factor on the account using the admin client (RLS on
- * auth.mfa requires service-role for this). The user can then sign in
- * normally and re-enroll a fresh device.
+ * Verifies one of their unused recovery codes, and on success removes their
+ * passkeys (0475) and unenrolls every TOTP factor on the account using the
+ * admin client (RLS on auth.mfa requires service-role for this). The user can
+ * then sign in normally and re-enroll a fresh device.
  */
 export async function consumeMfaRecoveryCodeAction(input: {
   code: string;
@@ -238,12 +303,12 @@ export async function consumeMfaRecoveryCodeAction(input: {
       );
     }
 
-    // The code is checked against auth.uid()'s own set, so the RPC runs as
-    // the account requireSession() validated and only as that account (docket
-    // S50a): with that account's verified access token, on a client that acts
-    // as that token alone and never loads or renews the cookie session. A
-    // cookie session that no longer verifies as that account is refused before
-    // any code is checked; the factors removed below are that account's.
+    // Today's consume runs as the account requireSession() validated, and
+    // only as that account (docket S50a): with that account's verified access
+    // token, on a client that acts as that token alone and never loads or
+    // renews the cookie session. A cookie session that no longer verifies as
+    // that account is refused before any code is checked; the factors removed
+    // below are that account's.
     const supabase = await createClient();
     const held = await readVerifiedSessionTokenOf(supabase, session.userId);
     if (!held) return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
@@ -259,12 +324,53 @@ export async function consumeMfaRecoveryCodeAction(input: {
       return err('validation_error', RECOVERY_PAUSED);
     }
 
-    const { data: ok_, error } = await createAccessTokenClient(held.token).rpc(
-      'consume_mfa_recovery_code',
-      { p_code: input.code },
-    );
-    if (error) throw new ServiceError('internal_error', error.message);
-    if (!ok_) {
+    // The service client spends the code with the passkey records and removes
+    // the factors, so it is made before any code is checked.
+    let admin;
+    try {
+      admin = createAdminClient();
+    } catch (e) {
+      // Only a server without the service-role key throws here. On such a
+      // server the closed limiter above (it needs the same client) refuses
+      // before any code is checked, so no code is spent. Never the setting's
+      // name to the person (S31).
+      return unexpectedActionError(e, 'actions.mfa_recovery.consume', {
+        message: NOT_SET_UP_MESSAGE,
+        level: 'warning',
+      });
+    }
+
+    // A recovery code removes every sign-in method of the account, passkeys
+    // included (plan 2.6 G, review U3): ONE call, with the service role,
+    // keyed on the validated account, spends the code and, only when it was
+    // the account's and unspent, marks every passkey removed and deletes the
+    // bridge record, in one transaction (0475). Before 0475 is live the
+    // function does not exist and today's consume runs, unchanged. Any other
+    // failure: today's consume spends the code, the factors are still removed
+    // (the person must get in), the passkey removal is tried once more, and
+    // one report at error level says whether records may be left.
+    const withPasskeys = await admin.rpc('consume_recovery_code_with_passkeys', {
+      p_user_id: session.userId,
+      p_code: input.code,
+    });
+    const spent = recoveryAnswer(withPasskeys);
+    let consumed: boolean;
+    let passkeysRemoved: number | null = null;
+    if (spent.kind === 'answered') {
+      consumed = spent.consumed;
+      passkeysRemoved = spent.passkeysRemoved;
+    } else {
+      const { data: ok_, error } = await createAccessTokenClient(held.token).rpc(
+        'consume_mfa_recovery_code',
+        { p_code: input.code },
+      );
+      if (error) throw new ServiceError('internal_error', error.message);
+      consumed = Boolean(ok_);
+      if (spent.kind === 'failed' && !consumed) {
+        reportPasskeyRemoval(spent.code, 'unknown');
+      }
+    }
+    if (!consumed) {
       // No organization, like a refused authenticator code (mfa.code_refused):
       // not shown to the organization's admins, never the person's own last
       // action. Never the code.
@@ -280,21 +386,8 @@ export async function consumeMfaRecoveryCodeAction(input: {
       return err('validation_error', 'That recovery code is invalid or already used.');
     }
 
-    // Unenroll every TOTP factor for this user via the admin client.
-    let admin;
-    try {
-      admin = createAdminClient();
-    } catch (e) {
-      // Only a server without the service-role key throws here. On such a
-      // server the closed limiter above (it needs the same client) refuses
-      // before any code is checked, so no code is spent. Never the setting's
-      // name to the person (S31).
-      return unexpectedActionError(e, 'actions.mfa_recovery.consume', {
-        message: NOT_SET_UP_MESSAGE,
-        level: 'warning',
-      });
-    }
-
+    // Unenroll every TOTP factor for this user via the admin client: the
+    // passkey bridge among them.
     const { data: factors } = await admin.auth.admin.mfa.listFactors({
       userId: session.userId,
     });
@@ -310,6 +403,18 @@ export async function consumeMfaRecoveryCodeAction(input: {
       if (!r.error) unenrolled += 1;
     }
 
+    if (spent.kind === 'failed') {
+      // The code is spent and the factors are gone; the passkey records may
+      // not be. One more try, then one report either way.
+      const retry = await admin.rpc('passkey_remove_all', {
+        p_user_id: session.userId,
+        p_reason: 'recovery_code',
+      });
+      const removed = removedCount(retry);
+      if (removed !== null) passkeysRemoved = removed;
+      reportPasskeyRemoval(spent.code, removed === null ? 'unknown' : false);
+    }
+
     // A used code removes every authenticator of the account: the person's
     // own act, recorded in their default organization. Never the code.
     const { organizationId } = await resolveDefaultOrgAndRole(session.userId);
@@ -317,7 +422,10 @@ export async function consumeMfaRecoveryCodeAction(input: {
       event: 'mfa.recovery.consumed',
       userId: session.userId,
       organizationId,
-      extra: { unenrolled },
+      extra:
+        passkeysRemoved === null
+          ? { unenrolled }
+          : { unenrolled, passkeys_removed: passkeysRemoved },
     });
     revalidatePath('/dashboard', 'layout');
     return ok({ unenrolled });

@@ -2301,6 +2301,22 @@ WEB_TESTS=(
   src/server/security/limiter-events.guard.test.ts
   src/server/security/events.test.ts
   src/server/security/events.one-buffer.test.ts
+  # A passkey's bridge factor (a TOTP factor whose secret only the server
+  # holds) is hidden and refused BY ITS RECORDED ID ONLY: the code check, the
+  # set-up, the removal, the set-up clean-up, the step-up list, the reset's
+  # pick, the code page and the Security page each leave out the account's
+  # recorded bridge, read only when a factor carries the reserved name; a
+  # reserved-name factor that is not recorded is treated as an app and
+  # reported; before 0475 nothing changes; an unreadable record hides
+  # nothing. A recovery code spends the code and removes the passkeys in one
+  # service-role call, with today's path when the function does not exist.
+  src/lib/auth/passkey-bridge.test.ts
+  src/server/actions/mfa.passkey-bridge.test.ts
+  src/server/actions/auth.reset-bridge.test.ts
+  src/server/actions/mfa-recovery.passkeys.test.ts
+  'src/app/(auth)/signin/mfa/page.passkey-bridge.test.tsx'
+  'src/app/(dashboard)/dashboard/settings/security/page.passkey-bridge.test.tsx'
+  src/components/auth/step-up-modal.passkey-bridge.test.tsx
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

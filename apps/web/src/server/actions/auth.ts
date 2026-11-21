@@ -15,6 +15,7 @@ import {
   MFA_CODE_REFUSED,
   signOutThisSession,
 } from '@/lib/auth/mfa-code-attempts';
+import { readPasskeyBridge, withoutPasskeyBridge } from '@/lib/auth/passkey-bridge';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
 import { openedFromResetLink } from '@/lib/auth/reset-link-session';
 import { sessionAccountNow, type SessionAccountNow } from '@/lib/auth/session-account';
@@ -576,8 +577,15 @@ export async function completePasswordResetAction(
     // one step below — this branch only decides whether we can ask for a code.
     console.warn('[completePasswordResetAction] listFactors failed:', factorsError.message);
   }
-  const totpFactorId =
-    (factorsData?.totp ?? []).find((f) => f.status === 'verified')?.id ?? null;
+  // The first verified authenticator that is not the account's recorded
+  // passkey bridge (lib/auth/passkey-bridge): Auth lists the bridge first
+  // after each passkey sign-in (proof B7), and no app shows its code. An
+  // account whose only factor is the bridge is asked for no code here (GoTrue
+  // still refuses the new password at aal1 below). The record is read for the
+  // account this press is for, only when a factor carries the reserved name.
+  const verifiedTotp = (factorsData?.totp ?? []).filter((f) => f.status === 'verified');
+  const bridge = await readPasskeyBridge(accountId, verifiedTotp, 'password_reset');
+  const totpFactorId = withoutPasskeyBridge(verifiedTotp, bridge)[0]?.id ?? null;
   if (totpFactorId) {
     // The session as it verifies AFTER the factor list (a read that can
     // refresh the session into another account's), against the account this

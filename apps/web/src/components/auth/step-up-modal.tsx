@@ -14,9 +14,10 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { carriesBridgeName } from '@/lib/auth/passkey-bridge-name';
 import { isControlFlow } from '@/lib/control-flow';
 import { createClient } from '@/lib/supabase/client';
-import { challengeFactorAction } from '@/server/actions/mfa';
+import { challengeFactorAction, stepUpMethodsAction } from '@/server/actions/mfa';
 
 interface Factor {
   id: string;
@@ -107,15 +108,34 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
           setError(FACTORS_UNREADABLE_COPY);
           return;
         }
-        const totp = (data?.totp ?? [])
-          .filter((f) => f.status === 'verified')
-          .map((f) => ({ id: f.id, friendlyName: f.friendly_name ?? null }));
+        const verified = (data?.totp ?? []).filter((f) => f.status === 'verified');
+        let totp: Factor[] = verified.map((f) => ({
+          id: f.id,
+          friendlyName: f.friendly_name ?? null,
+        }));
+        // A factor with the passkey bridge's reserved name: only the server
+        // knows whether it is the account's bridge, whose code no app shows,
+        // so it is asked once for the account's apps. Without an answer the
+        // list stays as it is (the code check refuses the bridge itself).
+        if (verified.some(carriesBridgeName)) {
+          let methods: Awaited<ReturnType<typeof stepUpMethodsAction>> | null = null;
+          try {
+            methods = await stepUpMethodsAction();
+          } catch (e) {
+            // A redirect: the router is already on its way.
+            if (isControlFlow(e)) return;
+          }
+          if (cancelled) return;
+          if (methods?.ok) totp = methods.data.apps;
+        }
         setFactors(totp);
         setFactorId(totp[0]?.id ?? '');
         if (totp.length === 0) {
           setError('No authenticator is enrolled. Add one in Settings → Security first.');
         }
-      } catch {
+      } catch (e) {
+        // A redirect from the server call above: the router is on its way.
+        if (isControlFlow(e)) return;
         if (!cancelled) setError(FACTORS_UNREADABLE_COPY);
       }
     })();
