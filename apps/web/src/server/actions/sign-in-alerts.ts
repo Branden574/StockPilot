@@ -9,7 +9,11 @@ import { clientIpForRecord } from '@/lib/client-ip';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { actionErrorResult } from '@/server/lib/action-error-result';
 import { withContext } from '@/server/services/context';
-import { readSignInAlert, reportSignInAlertNotMe } from '@/server/services/sign-in-alert-report';
+import {
+  alertReportedMeanwhile,
+  readSignInAlert,
+  reportSignInAlertNotMe,
+} from '@/server/services/sign-in-alert-report';
 import { SignInAlertsService } from '@/server/services/sign-in-alerts';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
@@ -37,13 +41,19 @@ import { err, ok, type ActionResult } from '@stockpilot/core';
  * again. Nothing is ended and nobody is told; the answer says so and names
  * the control that ends the other sessions (Active sessions shows it next to
  * the reported alert). The action is counted per account, 10 an hour, failing
- * closed, before the alert is read, as the emailed link is counted.
+ * closed, before the alert is read, as the emailed link is counted. A count
+ * that could not be read looks once more at the caller's own alert first
+ * (two presses at the same instant can make the limiter fail for one of
+ * them): reported by then, the answer is "already reported", which is true;
+ * otherwise "try again in a moment". The press itself does nothing either way.
  */
 
 const SECURITY_PAGE = '/dashboard/settings/security';
 const alertSchema = z.object({ alertId: z.string().uuid() });
 
 const NOT_FOUND = 'That sign-in alert was not found.';
+const ALREADY_REPORTED =
+  'You already reported this sign-in. Every session of your account was ended then. To end them again, use Sign out all other devices, then reset your password.';
 
 /** "This was not me" presses per account per hour (the link's per-alert count is the same). */
 const REPORTS_PER_ACCOUNT_PER_HOUR = 10;
@@ -78,8 +88,15 @@ export async function reportSignInAlertAction(input: {
       'closed',
     );
     // A count that could not be read is not "too many": the member did
-    // nothing wrong, and nothing is read or done.
-    if (counted.failed) return err('internal_error', 'Please try again in a moment.');
+    // nothing wrong, and nothing is done. If their own alert is reported by
+    // now (the other of two presses at once), that is the true answer.
+    if (counted.failed) {
+      if (await alertReportedMeanwhile(parsed.data.alertId, ctx.userId)) {
+        revalidatePath(SECURITY_PAGE);
+        return err('conflict', ALREADY_REPORTED);
+      }
+      return err('internal_error', 'Please try again in a moment.');
+    }
     if (!counted.allowed) {
       return err('rate_limited', 'Too many tries. Wait a few minutes, then press the button again.');
     }
@@ -103,10 +120,7 @@ export async function reportSignInAlertAction(input: {
       // Reported from the email's link or another tab: nothing was ended or
       // told again, and the list on the page is stale.
       revalidatePath(SECURITY_PAGE);
-      return err(
-        'conflict',
-        'You already reported this sign-in. Every session of your account was ended then. To end them again, use Sign out all other devices, then reset your password.',
-      );
+      return err('conflict', ALREADY_REPORTED);
     }
     if (answer.outcome !== 'done') {
       return err('internal_error', 'We could not finish this just now. Press the button again in a minute.');

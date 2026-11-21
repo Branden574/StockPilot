@@ -24,7 +24,10 @@ import { NextRequest } from 'next/server';
  *     gets ONE plain page, the same bytes each time, so the page never tells
  *     a real alert id from a made-up one.
  *   - A limiter that cannot count is "try again in a moment", never "too many
- *     tries" with an hour's wait.
+ *     tries" with an hour's wait. On a press it first looks once more at the
+ *     alert: two tabs pressed at the same instant can make the limiter fail
+ *     for one of them, and if the other has reported the alert by then, the
+ *     true answer is "already reported" (lab walk 3, L9c).
  *   - The words promise what happens and no more (finding 1), and say the
  *     owners and admins were told only when one was (finding 8).
  *
@@ -38,6 +41,8 @@ const h = vi.hoisted(() => ({
   read: vi.fn(),
   report: vi.fn(),
   limit: vi.fn(),
+  /** The one more read after a press the limiter could not count: is the alert reported by now? */
+  reportedMeanwhile: vi.fn(),
 }));
 
 vi.mock('@/lib/env', () => ({
@@ -49,6 +54,7 @@ vi.mock('@/lib/env', () => ({
 vi.mock('@/server/services/sign-in-alert-report', () => ({
   readSignInAlert: (id: string) => h.read(id),
   reportSignInAlertNotMe: (a: unknown) => h.report(a),
+  alertReportedMeanwhile: (...a: unknown[]) => h.reportedMeanwhile(...a),
 }));
 vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: (...a: unknown[]) => h.limit(...a),
@@ -125,6 +131,7 @@ beforeEach(() => {
   h.read.mockResolvedValue({ kind: 'found', alert: alert() });
   h.report.mockResolvedValue({ outcome: 'done', adminsTold: false });
   h.limit.mockResolvedValue({ allowed: true, remaining: 1, resetAt: Date.now() + 60_000 });
+  h.reportedMeanwhile.mockResolvedValue(false);
 });
 
 async function badPageOf(res: Response): Promise<string> {
@@ -407,7 +414,7 @@ describe('POST /sign-in-alert', () => {
     expect(h.report).not.toHaveBeenCalled();
   });
 
-  it('the address count cannot be read: "try again in a moment", no hour to wait, nothing read', async () => {
+  it('the address count cannot be read and the alert is still open: "try again in a moment", no hour to wait, nothing done', async () => {
     h.limit.mockResolvedValueOnce(COULD_NOT_COUNT);
     const res = await POST(post(linkQuery()));
     expect(res.status).toBe(503);
@@ -415,8 +422,8 @@ describe('POST /sign-in-alert', () => {
     const html = await res.text();
     expect(html).toContain('Please try again in a moment');
     expect(html).not.toContain('Too many tries');
-    expect(h.read).not.toHaveBeenCalled();
     expect(h.report).not.toHaveBeenCalled();
+    expect(h.limit).toHaveBeenCalledTimes(1);
   });
 
   it('the alert count cannot be read: "try again in a moment", and no report', async () => {
@@ -427,6 +434,79 @@ describe('POST /sign-in-alert', () => {
     expect(res.status).toBe(503);
     expect(res.headers.get('retry-after')).toBeNull();
     expect(await res.text()).toContain('Please try again in a moment');
+    expect(h.report).not.toHaveBeenCalled();
+  });
+
+  it('two tabs at once, the alert count cannot be read for one: the alert is looked at once more, and reported by then is "already reported"', async () => {
+    h.limit
+      .mockResolvedValueOnce({ allowed: true, remaining: 5, resetAt: Date.now() + 60_000 })
+      .mockResolvedValueOnce(COULD_NOT_COUNT);
+    h.reportedMeanwhile.mockResolvedValue(true);
+    const res = await POST(post(linkQuery()));
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('You already reported this sign-in');
+    expect(html).toContain('href="/reset"');
+    expect(html).not.toContain('<form');
+    expect(html).not.toContain('Please try again in a moment');
+    expect(h.reportedMeanwhile).toHaveBeenCalledTimes(1);
+    expect(h.reportedMeanwhile).toHaveBeenCalledWith(ALERT);
+    // Closed all the same: the press itself does nothing.
+    expect(h.report).not.toHaveBeenCalled();
+  });
+
+  it('the alert count cannot be read and the alert is still open: "try again in a moment", as before', async () => {
+    h.limit
+      .mockResolvedValueOnce({ allowed: true, remaining: 5, resetAt: Date.now() + 60_000 })
+      .mockResolvedValueOnce(COULD_NOT_COUNT);
+    const res = await POST(post(linkQuery()));
+    expect(res.status).toBe(503);
+    expect(await res.text()).toContain('Please try again in a moment');
+    expect(h.reportedMeanwhile).toHaveBeenCalledTimes(1);
+    expect(h.report).not.toHaveBeenCalled();
+  });
+
+  it('the address count cannot be read: the link is checked, and an alert reported by then is "already reported"', async () => {
+    h.limit.mockResolvedValueOnce(COULD_NOT_COUNT);
+    h.reportedMeanwhile.mockResolvedValue(true);
+    const res = await POST(post(linkQuery()));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('You already reported this sign-in');
+    expect(h.reportedMeanwhile).toHaveBeenCalledWith(ALERT);
+    expect(h.report).not.toHaveBeenCalled();
+    // Nothing more is counted on a press that could not be counted.
+    expect(h.limit).toHaveBeenCalledTimes(1);
+  });
+
+  it('the address count cannot be read and the alert already reads reported: "already reported" with no second read', async () => {
+    h.limit.mockResolvedValueOnce(COULD_NOT_COUNT);
+    h.read.mockResolvedValue({ kind: 'found', alert: alert({ status: 'not_me' }) });
+    const res = await POST(post(linkQuery()));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('You already reported this sign-in');
+    expect(h.reportedMeanwhile).not.toHaveBeenCalled();
+  });
+
+  it('a count that cannot be read never opens a bad link: "try again in a moment" for each, the alert never looked at again, nothing said about the link', async () => {
+    const pages: string[] = [];
+    const press = async (query: URLSearchParams) => {
+      h.limit.mockResolvedValueOnce(COULD_NOT_COUNT);
+      const res = await POST(post(query));
+      expect(res.status).toBe(503);
+      pages.push(await res.text());
+    };
+    await press(linkQuery(MEMBER, new Date(Date.now() - 9 * DAY)));
+    const forged = linkQuery();
+    const t = forged.get('t')!;
+    forged.set('t', (t[0] === 'A' ? 'B' : 'A') + t.slice(1));
+    await press(forged);
+    await press(linkQuery(OTHER));
+    h.read.mockResolvedValue({ kind: 'missing' });
+    await press(linkQuery());
+    expect(new Set(pages).size).toBe(1);
+    expect(pages[0]).toContain('Please try again in a moment');
+    expect(pages[0]).not.toContain('This link has expired');
+    expect(h.reportedMeanwhile).not.toHaveBeenCalled();
     expect(h.report).not.toHaveBeenCalled();
   });
 

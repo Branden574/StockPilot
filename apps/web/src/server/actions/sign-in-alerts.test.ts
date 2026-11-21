@@ -23,6 +23,7 @@ const h = vi.hoisted(() => ({
   signOut: vi.fn(async (_o: unknown) => ({ error: null })),
   revalidate: vi.fn(),
   limit: vi.fn(),
+  reportedMeanwhile: vi.fn(),
 }));
 
 vi.mock('next/cache', () => ({ revalidatePath: (p: string) => h.revalidate(p) }));
@@ -44,6 +45,7 @@ vi.mock('@/server/services/sign-in-alerts', () => ({
 vi.mock('@/server/services/sign-in-alert-report', () => ({
   readSignInAlert: (id: string) => h.read(id),
   reportSignInAlertNotMe: (a: unknown) => h.report(a),
+  alertReportedMeanwhile: (...a: unknown[]) => h.reportedMeanwhile(...a),
 }));
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: (...a: unknown[]) => h.limit(...a) }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
@@ -88,6 +90,7 @@ beforeEach(() => {
   h.read.mockResolvedValue({ kind: 'found', alert: alert() });
   h.report.mockResolvedValue({ outcome: 'done', adminsTold: true });
   h.limit.mockResolvedValue({ allowed: true, count: 1, resetAt: Date.now() + 60_000 });
+  h.reportedMeanwhile.mockResolvedValue(false);
 });
 
 describe('confirmSignInAlertAction', () => {
@@ -102,6 +105,14 @@ describe('confirmSignInAlertAction', () => {
     const res = await confirmSignInAlertAction({ alertId: 'nope' });
     expect(res.ok).toBe(false);
     expect(h.confirm).not.toHaveBeenCalled();
+  });
+
+  it('another member’s alert and a made-up id: the service’s "not found" is the answer, the same for both', async () => {
+    h.confirm.mockRejectedValue(new ServiceError('not_found', 'That sign-in alert was not found.'));
+    const other = await confirmSignInAlertAction({ alertId: ALERT });
+    const madeUp = await confirmSignInAlertAction({ alertId: 'a1e27000-0000-4000-8000-00000000ffff' });
+    expect(other).toMatchObject({ ok: false, error: { code: 'not_found', message: 'That sign-in alert was not found.' } });
+    expect(madeUp).toEqual(other);
   });
 
   it('the service’s refusal (the authenticator step owed) is the answer', async () => {
@@ -198,8 +209,23 @@ describe('reportSignInAlertAction', () => {
       ok: false,
       error: { code: 'internal_error', message: 'Please try again in a moment.' },
     });
-    expect(h.read).not.toHaveBeenCalled();
     expect(h.report).not.toHaveBeenCalled();
+    expect(h.signOut).not.toHaveBeenCalled();
+  });
+
+  it('a count that cannot be read, and the member’s own alert is reported by then (two presses at once): the "already reported" answer', async () => {
+    h.limit.mockResolvedValue({ allowed: false, count: 10, resetAt: Date.now() + 60_000, failed: true });
+    h.reportedMeanwhile.mockResolvedValue(true);
+    const res = await reportSignInAlertAction({ alertId: ALERT });
+    expect(res).toMatchObject({ ok: false, error: { code: 'conflict' } });
+    if (!res.ok) expect(res.error.message).toMatch(/^You already reported this sign-in\./);
+    // The one more look names the caller: another account's alert can never answer it.
+    expect(h.reportedMeanwhile).toHaveBeenCalledTimes(1);
+    expect(h.reportedMeanwhile).toHaveBeenCalledWith(ALERT, ME);
+    // Closed all the same: nothing is reported, ended or told.
+    expect(h.report).not.toHaveBeenCalled();
+    expect(h.signOut).not.toHaveBeenCalled();
+    expect(h.revalidate).toHaveBeenCalledWith('/dashboard/settings/security');
   });
 
   it('an id that is not a uuid is refused before any read', async () => {
