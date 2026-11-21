@@ -8,6 +8,9 @@ import { Button } from '@/components/ui/button';
 import { isControlFlow } from '@/lib/control-flow';
 import { finishSecondStepAction, startSecondStepAction } from '@/server/actions/passkeys';
 
+import type { ActionResult } from '@stockpilot/core';
+import type { SecondStepStart } from '@/server/security/passkeys';
+
 /** The words of section 4 the browser says itself (the server's come in its answers). */
 export const PASSKEY_BUTTON_WORDS = {
   label: 'Use your passkey',
@@ -24,15 +27,29 @@ export const PASSKEY_BUTTON_WORDS = {
  * the button. `onPassed` runs once the server has raised this session;
  * `onRemovalFinished` when the server finished a removal the member started
  * instead (nothing is owed any more: the page refreshes).
+ *
+ * The password reset (stage 5) brings its own `start` (purpose
+ * password_reset) and `finish` (the reset itself, which carries the answer and
+ * the new password, and answers the words to show here, or null when it
+ * showed its own), `ready` (the form's own check before the device prompt)
+ * and its words for a browser with no passkeys.
  */
 export function PasskeyButton({
   onPassed,
   onRemovalFinished,
   showHint = true,
+  start = startSecondStepAction,
+  finish,
+  ready,
+  noSupportWords = PASSKEY_BUTTON_WORDS.noSupport,
 }: {
   onPassed: () => void;
   onRemovalFinished?: () => void;
   showHint?: boolean;
+  start?: () => Promise<ActionResult<SecondStepStart>>;
+  finish?: (challengeId: string, response: unknown) => Promise<string | null>;
+  ready?: () => Promise<boolean>;
+  noSupportWords?: string;
 }) {
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -46,32 +63,41 @@ export function PasskeyButton({
 
   async function press() {
     if (!supported) {
-      setError(PASSKEY_BUTTON_WORDS.noSupport);
+      setError(noSupportWords);
       return;
     }
-    setPending(true);
     setError(null);
+    if (ready && !(await ready())) return;
+    setPending(true);
     try {
-      const start = await startSecondStepAction();
-      if (!start.ok) {
-        setError(start.error.message);
+      const started = await start();
+      if (!started.ok) {
+        setError(started.error.message);
         return;
       }
-      if (start.data.kind === 'removal_finished') {
+      if (started.data.kind === 'removal_finished') {
         onRemovalFinished?.();
         return;
       }
       let response: unknown;
       try {
-        response = await startAuthentication({ optionsJSON: start.data.optionsJSON as never });
+        response = await startAuthentication({ optionsJSON: started.data.optionsJSON as never });
       } catch {
         // The member closed the prompt, or the device had no passkey for us.
         setError(PASSKEY_BUTTON_WORDS.cancelled);
         return;
       }
-      const finish = await finishSecondStepAction({ challengeId: start.data.challengeId, response });
-      if (!finish.ok) {
-        setError(finish.error.message);
+      if (finish) {
+        const words = await finish(started.data.challengeId, response);
+        if (words) setError(words);
+        return;
+      }
+      const finished = await finishSecondStepAction({
+        challengeId: started.data.challengeId,
+        response,
+      });
+      if (!finished.ok) {
+        setError(finished.error.message);
         return;
       }
       onPassed();

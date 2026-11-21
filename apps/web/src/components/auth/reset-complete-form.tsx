@@ -8,6 +8,7 @@ import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
+import { PasskeyButton } from '@/components/auth/passkey-button';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -15,12 +16,29 @@ import { PasswordInput } from '@/components/ui/password-input';
 import { isControlFlow } from '@/lib/control-flow';
 import { purgeInterruptedRuns } from '@/lib/interrupted-run';
 import { completePasswordResetAction } from '@/server/actions/auth';
+import { startPasswordResetPasskeyAction } from '@/server/actions/passkeys';
 
 import { completePasswordResetSchema, type CompletePasswordResetInput } from '@stockpilot/core';
 
 /** The step-up modal's words when the request itself never got an answer. */
 const NO_ANSWER_COPY = 'Could not reach the server. Try again.';
 const CODE_SHAPE_COPY = 'Enter the 6-digit code from your authenticator app.';
+
+/** The reset's passkey words that only the browser says (stage 5; plan section 4). */
+export const RESET_PASSKEY_WORDS = {
+  orCode: 'Or enter the 6-digit code from your authenticator app.',
+  noSupport:
+    "This browser can't use passkeys. Use another browser: choose Forgot? on the sign-in page there to get a new link.",
+  /** With an authenticator app too, the code box is right there. */
+  noSupportWithApp:
+    "This browser can't use passkeys. Enter the 6-digit code from your authenticator app instead.",
+} as const;
+
+type ResetPasskeyMethod = 'passkey' | 'both';
+const passkeyMethodOf = (
+  details: Record<string, unknown> | undefined,
+): ResetPasskeyMethod | null =>
+  details?.method === 'passkey' || details?.method === 'both' ? details.method : null;
 
 export function ResetCompleteForm() {
   const router = useRouter();
@@ -42,6 +60,14 @@ export function ResetCompleteForm() {
   // Each request to put the focus in the code box, once it is on screen: when
   // it first appears, and when a new code is needed.
   const [focusCode, setFocusCode] = React.useState(0);
+  /**
+   * Stage 5: the server offers the account's passkey ('passkey': the only way;
+   * 'both': the passkey, or the code of an authenticator app). Kept once
+   * offered. Only the server sets it: with passkeys not usable it never
+   * does, and the form is the one of before.
+   */
+  const [passkeyMethod, setPasskeyMethod] = React.useState<ResetPasskeyMethod | null>(null);
+  const [passkeyAsk, setPasskeyAsk] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (focusCode > 0) codeRef.current?.focus();
@@ -50,6 +76,8 @@ export function ResetCompleteForm() {
   const {
     register,
     handleSubmit,
+    getValues,
+    trigger,
     formState: { errors, isSubmitting },
   } = useForm<CompletePasswordResetInput>({
     resolver: zodResolver(completePasswordResetSchema),
@@ -58,32 +86,52 @@ export function ResetCompleteForm() {
     defaultValues: { password: '', confirmPassword: '' },
   });
 
-  const onSubmit = handleSubmit(async (values) => {
-    if (needsCode && !/^\d{6}$/.test(code)) {
-      setError(CODE_SHAPE_COPY);
-      setFocusCode((n) => n + 1);
-      return;
-    }
+  /**
+   * One press of the reset: the passwords, with the code when the box is up,
+   * or with the passkey's answer (stage 5). Answers the words to show next to
+   * the passkey button, or null when the form showed its own (or moved on).
+   */
+  async function send(
+    values: CompletePasswordResetInput,
+    passkeyAnswer: { challengeId: string; response: unknown } | null,
+  ): Promise<string | null> {
     // Setting the new password signs the account out everywhere, this tab
     // included: a sign-out on purpose, so what an interrupted run kept in this
     // tab (lib/interrupted-run) goes before the request does, the press that
-    // carries the code included.
+    // carries the code (or the passkey's answer) included.
     purgeInterruptedRuns();
     setError(null);
-    const codeSent = needsCode;
+    const codeSent = needsCode && !passkeyAnswer;
     let res: Awaited<ReturnType<typeof completePasswordResetAction>>;
     try {
-      res = await completePasswordResetAction(codeSent ? { ...values, totpCode: code } : values);
+      res = await completePasswordResetAction(
+        passkeyAnswer
+          ? { ...values, passkeyAnswer }
+          : codeSent
+            ? { ...values, totpCode: code }
+            : values,
+      );
     } catch (e) {
       // A redirect: the router is already on its way, so nothing is shown.
-      if (isControlFlow(e)) return;
+      if (isControlFlow(e)) return null;
       // The request itself failed (a dropped connection, a deploy that no
       // longer has the action). Nothing changed, so the same press can be
       // made again.
       setError(NO_ANSWER_COPY);
-      return;
+      return null;
     }
     if (!res.ok) {
+      const method = passkeyMethodOf(res.error.details);
+      if (method) {
+        // The passkey is offered (stage 5): its button, and with an app the
+        // code box too. A refused passkey answer is shown by the button.
+        setPasskeyMethod(method);
+        if (passkeyAnswer) return res.error.message;
+        if (method === 'passkey') {
+          setPasskeyAsk(res.error.message);
+          return null;
+        }
+      }
       if (res.error.details?.reason === 'aal2_required') {
         // The account has an authenticator. Both passwords stay as typed.
         if (codeSent) {
@@ -97,7 +145,7 @@ export function ResetCompleteForm() {
           setCodeAsk(res.error.message);
         }
         setFocusCode((n) => n + 1);
-        return;
+        return null;
       }
       // Anything else (a refused password, too many presses from this
       // address, an expired link) keeps the box and its code: once a code is
@@ -105,11 +153,21 @@ export function ResetCompleteForm() {
       // next press.
       toast.error(res.error.message);
       setError(res.error.message);
-      return;
+      return null;
     }
     toast.success('Password updated.');
     router.replace(res.data.next);
     router.refresh();
+    return null;
+  }
+
+  const onSubmit = handleSubmit(async (values) => {
+    if (needsCode && !/^\d{6}$/.test(code)) {
+      setError(CODE_SHAPE_COPY);
+      setFocusCode((n) => n + 1);
+      return;
+    }
+    await send(values, null);
   });
 
   return (
@@ -139,6 +197,32 @@ export function ResetCompleteForm() {
           <p className="text-destructive text-xs">{errors.confirmPassword.message}</p>
         )}
       </div>
+
+      {passkeyMethod && (
+        <div className="space-y-2" data-reset-passkey={passkeyMethod}>
+          {passkeyMethod === 'passkey' && passkeyAsk ? (
+            <p className="text-muted-foreground text-xs">{passkeyAsk}</p>
+          ) : null}
+          <PasskeyButton
+            onPassed={() => {}}
+            start={startPasswordResetPasskeyAction}
+            // The passwords are checked before the device prompt, then sent
+            // with the passkey's answer in one press.
+            ready={() => trigger()}
+            finish={(challengeId, response) => send(getValues(), { challengeId, response })}
+            noSupportWords={
+              passkeyMethod === 'both'
+                ? RESET_PASSKEY_WORDS.noSupportWithApp
+                : RESET_PASSKEY_WORDS.noSupport
+            }
+          />
+          {passkeyMethod === 'both' ? (
+            <p className="text-muted-foreground text-center text-xs">
+              {RESET_PASSKEY_WORDS.orCode}
+            </p>
+          ) : null}
+        </div>
+      )}
 
       {needsCode && (
         <div className="space-y-2">
@@ -179,15 +263,17 @@ export function ResetCompleteForm() {
         </p>
       )}
 
-      <Button
-        type="submit"
-        className="h-11 w-full text-[14px]"
-        variant="gradient"
-        size="lg"
-        disabled={isSubmitting}
-      >
-        {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Update password'}
-      </Button>
+      {passkeyMethod === 'passkey' ? null : (
+        <Button
+          type="submit"
+          className="h-11 w-full text-[14px]"
+          variant="gradient"
+          size="lg"
+          disabled={isSubmitting}
+        >
+          {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Update password'}
+        </Button>
+      )}
     </form>
   );
 }
