@@ -657,7 +657,7 @@ describe('rules 13 to 18', () => {
         }),
       ).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.console });
     } finally {
-      world.env.STOCKPILOT_PLATFORM_ADMIN_EMAILS = list;
+      world.env.STOCKPILOT_PLATFORM_ADMIN_EMAILS = list ?? '';
     }
     expect(world.passkeys).toEqual([]);
     expect(world.bridges.has(userId)).toBe(false);

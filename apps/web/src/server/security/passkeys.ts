@@ -875,9 +875,11 @@ async function auditPasskey(
  */
 async function recordRaise(
   userId: string,
-  sessionId: string,
+  sessionId: string | null,
   purpose: 'second_step' | 'add' | 'finish_setup',
 ): Promise<Result<{ raiseId: string }>> {
+  // Rule 17 refuses a session without an id before here; the row needs one.
+  if (!sessionId) return fail('unauthenticated', PASSKEY_WORDS.sessionEnded, 'no_session_id');
   const raiseId = randomUUID();
   let written = false;
   try {

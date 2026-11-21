@@ -303,7 +303,7 @@ describe('it never acts on doubt', () => {
     const r = h.reports.find((x) => x.tag === 'passkeys.detector_no_passkey_rows');
     expect(r?.extra).toMatchObject({
       count: 1,
-      accounts: [expect.stringMatching(/^[0-9a-f]{16}$/)],
+      accounts: expect.stringMatching(/^[0-9a-f]{16}$/),
     });
     noAction();
   });

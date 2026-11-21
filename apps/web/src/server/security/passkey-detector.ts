@@ -139,7 +139,9 @@ function push(map: Map<string, bigint[]>, key: string, at: bigint) {
   else map.set(key, [at]);
 }
 
-function report(tag: string, level: 'warning' | 'error', extra: Record<string, unknown>) {
+type ReportExtra = Record<string, string | number | boolean | null | undefined>;
+
+function report(tag: string, level: 'warning' | 'error', extra: ReportExtra) {
   void reportError(new Error(`Passkeys: ${tag}`), { tag: `passkeys.${tag}`, level, extra });
 }
 
@@ -299,7 +301,7 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
       if (summary.notSettled.noRows > 0) {
         report('detector_no_passkey_rows', 'warning', {
           count: summary.notSettled.noRows,
-          accounts: noRowsAccounts,
+          accounts: noRowsAccounts.join(','),
         });
       }
 

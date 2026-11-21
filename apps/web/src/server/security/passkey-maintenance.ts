@@ -230,6 +230,8 @@ async function checkAuthVersion(admin: Admin): Promise<PasskeyMaintenanceSummary
   return 'unproven';
 }
 
-function report(tag: string, level: 'warning' | 'error', extra: Record<string, unknown>) {
+type ReportExtra = Record<string, string | number | boolean | null | undefined>;
+
+function report(tag: string, level: 'warning' | 'error', extra: ReportExtra) {
   void reportError(new Error(`Passkeys: ${tag}`), { tag: `passkeys.${tag}`, level, extra });
 }
