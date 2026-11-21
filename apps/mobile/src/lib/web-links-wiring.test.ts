@@ -21,6 +21,10 @@ const LINKS: [string, string][] = [
   ['src/screens/procedures.tsx', 'Linking.openURL(webLink(`/dashboard/procedures/${proc.id}`))'],
   ['app/(drawer)/schedule.tsx', "Linking.openURL(webLink('/dashboard/schedule'))"],
   ['src/screens/reports.tsx', "Linking.openURL(webLink('/dashboard/reports'))"],
+  [
+    'src/components/authenticator-set-up-screen.tsx',
+    'Linking.openURL(webLink(AUTHENTICATOR_SET_UP_URL))',
+  ],
 ];
 
 describe('each link is built by webLink', () => {

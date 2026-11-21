@@ -249,11 +249,16 @@ vi.mock('./supabase', () => {
           device.dropAfterMemberships = false;
           device.online = false;
         }
+        // Each organization embedded as the real read selects it (name,
+        // mfa_policy). 'optional' asks nothing of staff, so the authenticator
+        // set-up hold (set-up-hold.ts) never holds these accounts; a row
+        // whose policy cannot be read is its could-not-check, which pulls
+        // nothing while it is up.
         return {
           data: ids.map((id) => ({
             role: 'staff',
             organization_id: id,
-            organizations: { name: id },
+            organizations: { name: id, mfa_policy: 'optional' },
           })),
           error: null,
         };

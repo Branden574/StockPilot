@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  AUTHENTICATOR_CHECK_RESULT_COPY,
+  AUTHENTICATOR_CHECK_UNAVAILABLE_COPY,
   AUTHENTICATOR_SET_UP_HOLD_COPY,
   AUTHENTICATOR_SET_UP_OWED_COPY,
   AUTHENTICATOR_SET_UP_PAGE,
@@ -51,13 +53,33 @@ describe('the set-up words', () => {
       setUpOnWebsiteHint: 'Opens the website',
       checkAgain: 'Check again',
       switchWorkspace: 'Switch workspace',
+      unnamedWorkspace: 'Workspace',
       signOut: 'Sign out',
       deleteAccount: 'Delete my account',
     });
   });
 
+  it('the could-not-check screen: its own heading and a body that claims nothing about the member', () => {
+    expect(AUTHENTICATOR_CHECK_UNAVAILABLE_COPY).toEqual({
+      title: 'Your access could not be checked',
+      body: 'Your access could not be checked just now. Try again in a moment.',
+    });
+    for (const s of Object.values(AUTHENTICATOR_CHECK_UNAVAILABLE_COPY)) {
+      expect(s).not.toMatch(/set up|authenticator|changed/i);
+    }
+  });
+
+  it('the line after Check again', () => {
+    expect(AUTHENTICATOR_CHECK_RESULT_COPY).toEqual({
+      checked: 'Checked just now.',
+      noAnswer: 'Could not check. Try again.',
+    });
+  });
+
   it('say "authenticator", never MFA, 2FA, two-factor or multi-factor; no exclamation mark or emoji', () => {
     const all = [
+      ...Object.values(AUTHENTICATOR_CHECK_UNAVAILABLE_COPY),
+      ...Object.values(AUTHENTICATOR_CHECK_RESULT_COPY),
       AUTHENTICATOR_SET_UP_TITLE,
       AUTHENTICATOR_SET_UP_OWED_COPY,
       authenticatorSetUpHoldBody('Example Org', 'all_required'),
