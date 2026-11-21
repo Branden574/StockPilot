@@ -320,7 +320,7 @@ describe('recordAccountCodeBlocked', () => {
 
 describe("a signed-in member's refused current password and refused set-up code", () => {
   it.each([['wrong_current_password'], ['wrong_setup_code']] as const)(
-    '%s: reads nothing before the response; after it, records in the account’s organization',
+    "%s: reads nothing before the response; after it, records in the account's organization",
     async (reason) => {
       recordAccountCodeBlocked(reason, USER, request);
       expect(h.after).toHaveBeenCalledTimes(1);

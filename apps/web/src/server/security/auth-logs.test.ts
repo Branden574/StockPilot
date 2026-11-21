@@ -24,10 +24,16 @@ import {
  *     status, a caller class, a network class, a country and a count, never
  *     an address, a raw log line, a path, a query string, a network owner's
  *     name or the raw client string;
- *   - the kind is read the way the sign-in service reads the request: the
- *     path decoded, the FIRST decoded grant_type; known grants that are not a
- *     password are counted only; anything of an unknown form is stored as a
- *     flagged count, even one, and never taken for our own server;
+ *   - the lines are read through a loose net (every refused POST whose
+ *     decoded path, in small letters with repeated slashes as one, starts
+ *     with the token, factors or verify path), so no spelling of those paths
+ *     that the gateway might route is left unread;
+ *   - the kind is read the way the request is routed and the way the sign-in
+ *     service reads it: the path as sent with repeated slashes as one, the
+ *     FIRST decoded grant_type; known requests that check no password and no
+ *     code are counted only; anything of an unknown form is stored as a
+ *     flagged count, even one, and never taken for our own server, unless it
+ *     was answered 404 (routed nowhere: counted only);
  *   - our own server is its exact client string AND a hosting network; its
  *     lines are not stored one by one, but their count is reconciled with
  *     what our own server recorded (every row of it, however many; overflow
