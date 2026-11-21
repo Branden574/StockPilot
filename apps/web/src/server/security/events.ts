@@ -41,7 +41,10 @@ import {
  *
  * A FAILED FLUSH drops its batch: these are counts for admins to read, not
  * records anything depends on, and a retry would hold a growing buffer during
- * an outage. It is reported at most once per FAILURE_REPORT_INTERVAL_MS per
+ * an outage. The writer runs one call at a time across every instance (and
+ * the retention cron); a call that waits 2 s for its turn ends with 55P03,
+ * which is an ordinary failure here: dropped, and reported by the same rule
+ * as any other. It is reported at most once per FAILURE_REPORT_INTERVAL_MS per
  * instance (tag security.events_flush_failed, warning), with the database's
  * error code and the number of rows only: never an event's content.
  *

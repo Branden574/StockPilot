@@ -342,6 +342,25 @@ describe('a failed flush', () => {
     expect(h.reportError).toHaveBeenCalledTimes(2);
   });
 
+  it('a busy writer (55P03, its 2 s turn wait) is an ordinary failed flush: dropped, same 10-minute window', async () => {
+    h.rpc.mockResolvedValue({ data: null, error: { code: '55P03', message: 'lock timeout' } });
+    await events.recordSecurityEvent(wrongPassword, requestFrom());
+    await events.flushSecurityEvents();
+    expect(events.__pendingSecurityEventsForTests()).toEqual([]);
+    expect(h.reportError).toHaveBeenCalledTimes(1);
+    expect((h.reportError.mock.calls[0] as unknown[])[1]).toEqual({
+      tag: 'security.events_flush_failed',
+      level: 'warning',
+      extra: { code: '55P03', rows: 1 },
+    });
+    // Another failure inside the window, of any code, is not reported again.
+    h.rpc.mockResolvedValue({ data: null, error: { code: '57014' } });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await events.recordSecurityEvent(wrongPassword, requestFrom());
+    await events.flushSecurityEvents();
+    expect(h.reportError).toHaveBeenCalledTimes(1);
+  });
+
   it('a client that cannot be made, or a call that throws, is a failed flush too', async () => {
     h.createAdminClient.mockImplementation(() => {
       throw new Error('SUPABASE_SERVICE_ROLE_KEY is not configured');

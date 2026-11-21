@@ -88,6 +88,10 @@
     {
       "path": "/api/cron/embeddings-sweep",
       "schedule": "37 * * * *"
+    },
+    {
+      "path": "/api/cron/security-events-retention",
+      "schedule": "30 4 * * *"
     }
   ],
   "functions": {
