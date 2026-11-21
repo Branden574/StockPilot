@@ -105,7 +105,7 @@ const REVIEWED: Record<string, Reviewed> = {
   'server/actions/auth.ts#completePasswordResetAction': {
     kind: 'before-the-code',
     reason:
-      'Sets the new password on the recovery session the emailed link created; it asks an enrolled account for its code itself.',
+      'Sets the new password on the recovery session the emailed link created; it asks an enrolled account for its code, or its passkey (stage 5), itself.',
   },
   'server/actions/mfa.ts#stepUpMethodsAction': {
     kind: 'before-the-code',
@@ -153,6 +153,12 @@ const REVIEWED: Record<string, Reviewed> = {
     kind: 'before-the-code',
     reason:
       'The passkey answer on the code page and in the step-up modal: the step that takes THIS session to aal2, after the one-use challenge, the account, the site, the counter and a required audit row.',
+  },
+  // Stage 5: the password reset's passkey prompt.
+  'server/actions/passkeys.ts#startPasswordResetPasskeyAction': {
+    kind: 'before-the-code',
+    reason:
+      'The passkey prompt on the password reset page: only on a session an emailed link opened within the hour (its amr), for an account whose passkey serves now (the site, the key and the platform switch), limited per account and address. It writes a one-use challenge for this account, this session and the reset, nothing else; its answer is read only inside completePasswordResetAction.',
   },
   'server/actions/passkeys.ts#startConfirmAddAction': {
     kind: 'own-rule',
