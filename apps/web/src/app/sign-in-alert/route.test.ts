@@ -10,7 +10,9 @@ import { NextRequest } from 'next/server';
  *     the alert or the account (mail scanners open links): no report, no
  *     write. It is counted per address before the alert is read (review 1,
  *     finding 9), so a well-shaped link cannot be used to make reads without
- *     end.
+ *     end. Over the count it answers "Too many tries", never "this link has
+ *     expired": anyone behind the same address can spend the count, and the
+ *     member's real link has not expired (review 2, finding 1).
  *   - POST (the page's own form) refuses a post from another site first, is
  *     limited by address and then by alert, and runs the report.
  *   - ONE ALERT, ONE SIGN-OUT: an alert already reported gets the plain
@@ -113,8 +115,7 @@ const SESSIONS_ENDED = 'Every session of your account has been ended.';
 const ENDED_THEN = 'Every session of your account was ended when you reported it.';
 const END_AGAIN =
   'To end them again now, reset your password. Completing the reset ends every session of your account, and it is what closes the door.';
-const OPEN_DEVICE =
-  'A device that is already open can keep working for a short while, until its current pass expires. That is about an hour at most.';
+const OPEN_DEVICE = 'A device that is already open can keep working for a short while (until its current pass expires).';
 /** What a limiter that could not count answers in closed mode (lib/rate-limit.ts). */
 const COULD_NOT_COUNT = { allowed: false, count: 60, resetAt: Date.now() + HOUR, failed: true as const };
 
@@ -170,13 +171,27 @@ describe('GET /sign-in-alert', () => {
     expect(h.limit.mock.invocationCallOrder[0]!).toBeLessThan(h.read.mock.invocationCallOrder[0]!);
   });
 
-  it('over the count: the same plain page as a bad link, with a 429, and the alert is not read', async () => {
-    const bad = await (await GET(get('a=nope&i=2026&t=x'))).text();
+  it('over the count: "Too many tries" with a 429, never "this link has expired", and the alert is not read', async () => {
     h.limit.mockResolvedValue({ allowed: false, count: 60, resetAt: Date.now() + 120_000 });
     const res = await GET(get(linkQuery()));
     expect(res.status).toBe(429);
     expect(Number(res.headers.get('retry-after'))).toBeGreaterThan(0);
-    expect(await res.text()).toBe(bad);
+    const html = await res.text();
+    expect(html).toContain('Too many tries');
+    // The other way in, which this count does not hold.
+    expect(html).toContain('href="/dashboard/settings/security"');
+    // The count is spent by anyone behind the same address: the link is not said to be bad.
+    expect(html).not.toContain('This link has expired');
+    expect(h.read).not.toHaveBeenCalled();
+  });
+
+  it('over the count the page is the same for a real link and a made-up one: it says nothing about the link', async () => {
+    h.limit.mockResolvedValue({ allowed: false, count: 60, resetAt: Date.now() + 120_000 });
+    const real = await (await GET(get(linkQuery()))).text();
+    const madeUp = linkQuery(OTHER);
+    madeUp.set('a', 'a1e27000-0000-4000-8000-00000000ffff');
+    const other = await (await GET(get(madeUp))).text();
+    expect(other).toBe(real);
     expect(h.read).not.toHaveBeenCalled();
   });
 
@@ -287,7 +302,7 @@ describe('POST /sign-in-alert', () => {
     });
   });
 
-  it('the done page promises what happens and no more: an open device has up to about an hour, the reset closes the door (finding 1)', async () => {
+  it('the done page promises what happens and no more: an open device keeps its pass for a short while, the reset closes the door (finding 1)', async () => {
     const html = await (await POST(post(linkQuery()))).text();
     expect(html).toContain(SESSIONS_ENDED);
     expect(html).toContain(OPEN_DEVICE);

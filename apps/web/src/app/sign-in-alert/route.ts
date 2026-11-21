@@ -33,8 +33,13 @@ export const dynamic = 'force-dynamic';
  * and one button. It is counted per address (60 an hour) after the link's
  * shape and window check out and BEFORE the alert is read with the service
  * role, so a well-shaped link cannot be used to make reads without end
- * (review 1, finding 9). Over the count it answers the bad-link page with a
- * 429. POST, from that page's own form, does the report
+ * (review 1, finding 9). Over the count it answers "Too many tries" with a
+ * 429, the page that names Settings > Security as the other way in. Never
+ * "this link has expired": the count needs no valid link, so anyone behind
+ * the member's address (a whole school can share one) can spend it, and the
+ * member's real link has not expired (review 2, finding 1). The count is
+ * taken before the alert is read, so that page says nothing about whether
+ * the link is good. POST, from that page's own form, does the report
  * (server/services/sign-in-alert-report.ts): every session of the account is
  * ended, the alert is marked, and the owners and admins are told.
  *
@@ -161,13 +166,12 @@ function htmlPage(
 }
 
 /** The one page for every link that does not check out. */
-function badLinkPage(status = 400, extraHeaders: Record<string, string> = {}): NextResponse {
+function badLinkPage(): NextResponse {
   return htmlPage(
     'This link has expired',
     `<p>Open Settings &gt; Security to review your sessions.</p>
     <a class="link" href="/dashboard/settings/security">Go to Settings &gt; Security</a>`,
-    status,
-    extraHeaders,
+    400,
   );
 }
 
@@ -201,9 +205,10 @@ function retryAfterOf(resetAt: number): string {
   return String(Math.max(1, Math.ceil((resetAt - Date.now()) / 1000)));
 }
 
+/** Over a count, on GET (views per address) and on POST (presses per address or per alert). */
 function tooManyPage(resetAt: number): NextResponse {
-  // The count is by address, and a whole school can share one: name the
-  // other way in, which that count does not hold.
+  // The counts by address are shared by everyone behind it, and a whole
+  // school can share one: name the other way in, which they do not hold.
   return htmlPage(
     'Too many tries',
     `<p>Wait a few minutes, then use the link again. You can also sign in and answer the alert in Settings &gt; Security.</p>
@@ -211,11 +216,6 @@ function tooManyPage(resetAt: number): NextResponse {
     429,
     { 'retry-after': retryAfterOf(resetAt) },
   );
-}
-
-/** Too many views from one address: the bad-link page, byte for byte, with a 429. */
-function tooManyViewsPage(resetAt: number): NextResponse {
-  return badLinkPage(429, { 'retry-after': retryAfterOf(resetAt) });
 }
 
 const RESET_BUTTON = `<a class="btn" href="/reset">Reset my password</a>`;
@@ -335,7 +335,7 @@ export async function GET(request: NextRequest) {
         'closed',
       );
       if (views.failed) return busyPage();
-      return views.allowed ? null : tooManyViewsPage(views.resetAt);
+      return views.allowed ? null : tooManyPage(views.resetAt);
     },
   );
   if (checked instanceof NextResponse) return checked;
