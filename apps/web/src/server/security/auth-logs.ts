@@ -97,7 +97,9 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * that no other code writes one) is skipped; an hour's elements go in ONE
  * writer call, so an hour is stored whole or not at all; an hour with
  * nothing to store is read again by the next run, and so is an hour whose
- * reconciliation could not be read. If every element of an hour lands past
+ * reconciliation could not be read. The check is made a second time right
+ * before the write, so a run that overlaps another leaves alone an hour the
+ * other has just stored (runHour says what gap remains). If every element of an hour lands past
  * the writer's per-minute caps (it then stores them as over_minute_cap rows,
  * which the check does not read), the check cannot see the hour, and that is
  * reported.
@@ -510,6 +512,8 @@ export interface AuthLogsHourReport {
   events: number;
   /** Our server's form of the hour, reconciled; present once the hour was read. */
   reconcile?: AuthLogsReconcile;
+  /** Why the hour failed, when it did: it is read again by the next run. */
+  failure?: AuthLogsFailure;
 }
 
 /** What a run did, in counts and codes only: the route's answer and its one log line. */
@@ -553,6 +557,8 @@ export interface AuthLogsRunSummary {
   seenOther: number;
   /** Stored hours the check could not find afterwards (past the writer's minute caps). */
   landedPastMinuteCaps: number;
+  /** Hours found stored by the check made again right before the write: another run wrote them meanwhile. */
+  storedByAnotherRun: number;
   failure: (AuthLogsFailure & { hour?: string }) | null;
 }
 
@@ -1341,6 +1347,7 @@ function emptySummary(hours: AuthLogsHour[]): AuthLogsRunSummary {
     seen: {},
     seenOther: 0,
     landedPastMinuteCaps: 0,
+    storedByAnotherRun: 0,
     failure: null,
   };
 }
@@ -1431,6 +1438,24 @@ async function runHour(
 
   if (built.elements.length === 0) {
     report.outcome = 'nothing_to_store';
+    return null;
+  }
+
+  // THE CHECK AGAIN, RIGHT BEFORE THE WRITE. The writer adds on a repeat, so
+  // an hour written twice shows every count doubled. Two runs can overlap (a
+  // cron delivered twice, a call by hand during the scheduled run): both
+  // find the hour unstored at the top, and the logs calls above take
+  // seconds. Asking again here, with the same read, lets the later run see
+  // the earlier one's rows and leave the hour alone. It narrows the gap to
+  // the moment between this read and the write; it does not close it: two
+  // runs that both pass this read before either writes still double the
+  // hour. Closing that needs the check and the write in one database
+  // function under the writer's lock (a later migration).
+  const again = await alreadyStored(ctx, hour);
+  if (!again.ok) return again.failure;
+  if (again.value) {
+    report.outcome = 'already_stored';
+    summary.storedByAnotherRun += 1;
     return null;
   }
 
@@ -1542,6 +1567,7 @@ export async function readAuthLogs(options: {
     }
     if (failure) {
       hourReport.outcome = 'failed';
+      hourReport.failure = failure;
       summary.ok = false;
       summary.failure = { ...failure, hour: hourLabel(hour) };
       break;

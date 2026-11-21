@@ -383,7 +383,8 @@ function everythingSaid(summary: unknown): string {
 }
 
 beforeEach(() => {
-  h.report.mockClear();
+  h.report.mockReset();
+  h.report.mockImplementation(async () => undefined);
   h.stored.length = 0;
   h.recorded.length = 0;
   h.reads.length = 0;
@@ -2003,6 +2004,89 @@ describe('a run: six hours, oldest first, each written once', () => {
       hour: '2026-11-21T07:00Z',
       outcome: 'already_stored',
       events: 0,
+    });
+  });
+
+  describe('the check is made again right before the write', () => {
+    /** The reads of the "already stored" check for the hour starting at `startMs`. */
+    const checksOf = (startMs: number) =>
+      h.reads.filter(
+        (q) => q.select === 'id' && q.filters.some((f) => f[0] === 'gte' && f[2] === iso(startMs)),
+      );
+
+    it('rows of the hour that appear between the first check and the write: the hour is not written a second time', async () => {
+      hourAnswers(H(7), [groupRow({ n: 4 }, H(7))]);
+      // Another run stores the hour while this one is reading the logs: the
+      // first check finds nothing, the one before the write finds its rows.
+      let asked = 0;
+      h.readAnswer = (q) => {
+        const forHour7 = q.filters.some((f) => f[0] === 'gte' && f[2] === iso(H(7)));
+        if (!forHour7) return { data: [], error: null };
+        asked += 1;
+        return {
+          data: asked === 1 ? [] : [{ id: '5eed0000-0000-4000-8000-00000000000a' }],
+          error: null,
+        };
+      };
+      const summary = full(await run());
+      expect(h.rpc).not.toHaveBeenCalled();
+      expect(summary).toMatchObject({
+        ok: true,
+        hoursStored: 0,
+        eventsStored: 0,
+        storedByAnotherRun: 1,
+      });
+      expect(summary.hours[3]).toMatchObject({ outcome: 'already_stored', events: 0 });
+      expect(h.report).not.toHaveBeenCalled();
+      // Two reads for that hour, and the second is the same read as the first.
+      const checks = checksOf(H(7));
+      expect(checks).toHaveLength(2);
+      expect(checks[1]).toEqual(checks[0]);
+    });
+
+    it('it is the last thing before the writer call, and only for an hour with something to store', async () => {
+      const order: string[] = [];
+      const logged =
+        (answer: Answer): Answer =>
+        (init) => {
+          order.push('logs');
+          return answer(init);
+        };
+      const rows = [groupRow({ n: 4 }, H(7))];
+      answers.set(`groups@${iso(H(7))}`, logged(ok(rows)));
+      answers.set(`totals@${iso(H(7))}`, logged(ok(totalsFrom(rows, H(7)))));
+      h.readAnswer = (q) => {
+        if (q.filters.some((f) => f[0] === 'gte' && f[2] === iso(H(7)))) order.push('check');
+        return { data: [], error: null };
+      };
+      h.rpc.mockImplementation(async (_name: string, args: { p_events: unknown[] }) => {
+        order.push('write');
+        return { data: args.p_events.length, error: null };
+      });
+      await run();
+      // check, the two logs calls, the check again, the write, then the read that finds it.
+      expect(order).toEqual(['check', 'logs', 'logs', 'check', 'write', 'check']);
+      // An hour with nothing to store is checked once.
+      expect(checksOf(H(4))).toHaveLength(1);
+    });
+
+    it('a second check that fails leaves the hour unwritten, for the next run', async () => {
+      hourAnswers(H(7), [groupRow({ n: 4 }, H(7))]);
+      let asked = 0;
+      h.readAnswer = (q) => {
+        const forHour7 = q.filters.some((f) => f[0] === 'gte' && f[2] === iso(H(7)));
+        if (!forHour7) return { data: [], error: null };
+        asked += 1;
+        return asked === 1
+          ? { data: [], error: null }
+          : { data: null, error: { code: '57014', message: 'canceling statement' } };
+      };
+      const summary = full(await run());
+      expect(h.rpc).not.toHaveBeenCalled();
+      expect(summary.hours[3]).toMatchObject({
+        outcome: 'failed',
+        failure: { cause: 'db_read_failed', code: '57014' },
+      });
     });
   });
 
