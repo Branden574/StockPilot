@@ -137,6 +137,16 @@ describe('recordSecurityEvent: never on the caller path', () => {
     expect(row).toMatchObject({ country: 'NL', city: 'Utrecht' });
     expect(row!.source_hash).toMatch(/^[0-9a-f]{32}$/);
   });
+
+  it('Vercel’s percent-encoded city reaches the writer decoded; a bad encoding sends no city', async () => {
+    await events.recordSecurityEvent(wrongPassword, requestFrom(ADDRESS, 'New%20York'));
+    await events.recordSecurityEvent(wrongPassword, requestFrom(ADDRESS, 'S%C3%A3o%20Paulo'));
+    await events.recordSecurityEvent(wrongPassword, requestFrom(ADDRESS, 'Bad%E0%A4%A'));
+    await events.flushSecurityEvents();
+    const [, args] = h.rpc.mock.calls[0] as unknown as [string, { p_events: Array<{ city: unknown }> }];
+    expect(args.p_events.map((e) => e.city)).toEqual(['New York', 'São Paulo', null]);
+    expect(JSON.stringify(args.p_events)).not.toContain('%');
+  });
 });
 
 describe('the buffer', () => {

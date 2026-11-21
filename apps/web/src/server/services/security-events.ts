@@ -22,15 +22,17 @@ import { mfaGateError, ServiceError, type ServiceContext } from './context';
  * security_events_for_organization and security_event_totals_for_organization.
  * Each checks the caller with has_org_role(organization, 'admin') before it
  * reads and refuses with 42501 otherwise. Neither returns the source hash or
- * the row key.
+ * the row key. They also apply the authenticator rule themselves (42501 with
+ * the hint mfa_required or aal2_required).
  *
  * The gate here comes first, in the order assertPermission uses: the MFA
  * step-up (mfaGateError: a member who owes an authenticator, or whose policy
  * could not be read, is refused before anything is read), then the role
  * (owners and admins, core isAdminRole). Only then the functions, with the
  * context's own organization and nothing from the request. A 42501 from them
- * is the same forbidden answer; any other error is reported (its code only)
- * and answered as an internal error.
+ * (whatever its hint) is the same forbidden answer; a statement timeout of
+ * the totals alone leaves the totals out and keeps the rows; any other error
+ * is reported (its code only) and answered as an internal error.
  *
  * This page sits under /dashboard/settings/security, which is open to a
  * member who still owes an authenticator (lib/auth/authenticator-set-up.ts):
@@ -64,8 +66,13 @@ export interface SecurityActivityTotal {
 }
 
 export interface SecurityActivity {
-  /** Events per category over the last 7 days; a category with none is left out. */
-  totals: SecurityActivityTotal[];
+  /**
+   * Events per category over the last 7 days; a category with none is left
+   * out. null when they could not be added up in time (a statement timeout:
+   * an organization held at its cap for days has many rows), reported once;
+   * the rows are still shown.
+   */
+  totals: SecurityActivityTotal[] | null;
   /** The newest rows, at most SECURITY_ACTIVITY_ROW_LIMIT. */
   rows: SecurityActivityRow[];
 }
@@ -154,18 +161,28 @@ export class SecurityEventsService {
     if (rowsRes.error) {
       throw refusal(rowsRes.error as RpcError, 'security_events_for_organization', organizationId);
     }
+    let totalsUnavailable = false;
     if (totalsRes.error) {
-      throw refusal(
-        totalsRes.error as RpcError,
-        'security_event_totals_for_organization',
+      const totalsError = totalsRes.error as RpcError;
+      if (totalsError.code !== '57014') {
+        throw refusal(totalsError, 'security_event_totals_for_organization', organizationId);
+      }
+      // Too many rows to add up in time: the page shows the rows without
+      // the totals. Reported once, by its code.
+      totalsUnavailable = true;
+      void reportError(new Error('security_event_totals_for_organization timed out (57014)'), {
+        tag: 'security-events.read',
         organizationId,
-      );
+        extra: { code: '57014' },
+      });
     }
 
     const rows = ((rowsRes.data ?? []) as Array<Record<string, unknown>>)
       .map(rowOf)
       .filter((r): r is SecurityActivityRow => r !== null)
       .slice(0, SECURITY_ACTIVITY_ROW_LIMIT);
+
+    if (totalsUnavailable) return { totals: null, rows };
 
     const sums = new Map<SecurityEventCategory, number>();
     for (const raw of (totalsRes.data ?? []) as Array<Record<string, unknown>>) {

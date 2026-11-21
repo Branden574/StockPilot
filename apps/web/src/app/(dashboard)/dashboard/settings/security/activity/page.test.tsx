@@ -179,6 +179,18 @@ describe('what an owner or admin sees', () => {
     ]);
   });
 
+  it('totals that could not be added up: one plain line in their place, and the table still shown', async () => {
+    h.role = 'admin';
+    h.activity.mockResolvedValueOnce({ ...ACTIVITY, totals: null });
+    await renderPage();
+    const totals = screen.getByRole('region', { name: 'Last 7 days' });
+    expect(totals.textContent).toContain(
+      'Totals are not available right now: there are too many events to add up.',
+    );
+    expect(within(totals).queryByText('Password guessing')).toBeNull();
+    expect(screen.getAllByRole('row').slice(1)).toHaveLength(4);
+  });
+
   it('nothing recorded: says so, with no table', async () => {
     h.role = 'owner';
     h.activity.mockResolvedValueOnce({ totals: [], rows: [] });

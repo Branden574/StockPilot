@@ -88,7 +88,11 @@ export default async function BlockedActivityPage() {
         title={`Last ${SECURITY_ACTIVITY_TOTALS_DAYS} days`}
         description="Blocked events by kind."
       >
-        {totals.length === 0 ? (
+        {totals === null ? (
+          <p className="text-muted-foreground text-[13px]">
+            Totals are not available right now: there are too many events to add up.
+          </p>
+        ) : totals.length === 0 ? (
           <p className="text-muted-foreground text-[13px]">
             Nothing was blocked in the last {SECURITY_ACTIVITY_TOTALS_DAYS} days.
           </p>

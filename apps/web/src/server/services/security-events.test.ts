@@ -135,6 +135,44 @@ describe('the database’s answers', () => {
     expect(h.report).not.toHaveBeenCalled();
   });
 
+  it.each(['mfa_required', 'aal2_required'])(
+    'a 42501 with the database’s own authenticator answer (hint %s) is the same forbidden answer, never reported',
+    async (hint) => {
+      const refused = { data: null, error: { code: '42501', message: hint, hint } };
+      for (const db of [client(refused), client(undefined, refused), client(refused, refused)]) {
+        const e = await service(db).activity().catch((x: unknown) => x);
+        expect(e).toBeInstanceOf(ServiceError);
+        expect(e).toMatchObject({ code: 'forbidden', message: 'Only owners and admins can see blocked activity.' });
+      }
+      expect(h.report).not.toHaveBeenCalled();
+    },
+  );
+
+  it('totals that time out (57014) leave the totals out and keep the rows, reported once', async () => {
+    const db = client(undefined, { data: null, error: { code: '57014', message: `canceling statement for ${ORG}` } });
+    const activity = await service(db).activity();
+    expect(activity.totals).toBeNull();
+    expect(activity.rows.map((r) => r.id)).toEqual([ROW.id]);
+    expect(h.report).toHaveBeenCalledTimes(1);
+    expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'security-events.read',
+      organizationId: ORG,
+      extra: { code: '57014' },
+    });
+    expect((h.report.mock.calls[0] as unknown as [Error])[0].message).not.toContain('canceling');
+  });
+
+  it('any other totals error is still an internal error, reported', async () => {
+    const db = client(undefined, { data: null, error: { code: 'XX000', message: 'internal' } });
+    await expect(service(db).activity()).rejects.toMatchObject({ code: 'internal_error' });
+    expect(h.report).toHaveBeenCalledTimes(1);
+    expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'security-events.read',
+      organizationId: ORG,
+      extra: { code: 'XX000' },
+    });
+  });
+
   it('any other error is reported by its code only and answered as an internal error', async () => {
     const db = client({ data: null, error: { code: '57014', message: `timeout for ${ORG}` } });
     const e = (await service(db).activity().catch((x: unknown) => x)) as ServiceError;
