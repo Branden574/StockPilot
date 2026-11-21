@@ -81,13 +81,19 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * OUR OWN SERVER is one of its two exact client strings (matched whole,
  * inside the query) AND a hosting network. Its lines are not stored one by
  * one: part 1 recorded those refusals already, with the member's real place.
- * Since both marks can be presented by someone else, its refused passwords
- * (400) and codes (422) of the hour are RECONCILED with what our own server
+ * THAT PAIR IS NOT PROOF OF ORIGIN. The client string is a header anyone can
+ * send, and the hosting network is one anyone can rent a machine on. The
+ * pair only decides WHICH lines are compared with our own record instead of
+ * being stored one by one; it never makes a line trusted. What makes that
+ * safe is the comparison: the refused passwords (400) and codes (422) of
+ * the hour in that form are RECONCILED with what our own server
  * recorded for that hour (source web; readRecorded reads it, however many
  * rows it is): when the gateway holds AUTH_LOGS_UNRECORDED_FLAG_AT or more
  * that our server has no record of, the excess is stored as a flagged count
- * (unrecorded_server_form_password or _code). Only rows whose reason names
- * a refused password or code count as recorded; overflow rows cover nothing.
+ * (unrecorded_server_form_password or _code). Our server records a refusal
+ * for every password and every code it sends there, so the expected excess
+ * is zero and the threshold is small. Only rows whose reason names a refused
+ * password or code count as recorded; overflow rows cover nothing.
  * Our client strings from any other network, or any string that only
  * contains their words, are not ours, and are stored as api. A network class
  * that is not exactly `hosting` is `other` (fail closed). In the groups
@@ -159,12 +165,17 @@ export const AUTH_LOGS_MAX_COUNT = 999_999;
 /** Requests of an unknown form in one hour (per source) from which a flagged count is stored: any. */
 export const AUTH_LOGS_UNCLASSIFIED_FLAG_AT = 1;
 /**
- * Refusals of our server's form in one hour (per kind) that our server did
- * not record, from which a flagged count is stored. Fewer can come from a
- * server instance that stopped before its record was saved, or a refusal on
- * one side of an hour's edge and recorded on the other.
+ * Refusals of our server's form in one hour (per kind) that our server has
+ * no record of, from which a flagged count is stored. Our own server records
+ * a refusal for every password and every code it sends to the sign-in
+ * service (the reasons listed at RECORDED_PASSWORD_REASONS below), so the
+ * expected number is zero. One or two can still be missing with nobody at
+ * fault: a server instance that stopped before its record was saved, a
+ * refusal on one side of an hour's edge and recorded on the other, or a
+ * code check the service answered 422 without judging the code (a challenge
+ * that had expired). Those must not raise a flag; three do.
  */
-export const AUTH_LOGS_UNRECORDED_FLAG_AT = 10;
+export const AUTH_LOGS_UNRECORDED_FLAG_AT = 3;
 /** Rows of our own record one page of the reconciliation read asks for. */
 export const AUTH_LOGS_RECONCILE_PAGE_ROWS = 1000;
 /**
@@ -210,14 +221,25 @@ export const AUTH_LOGS_SOURCES = ['phone', 'api'] as const;
 export type AuthLogsSource = (typeof AUTH_LOGS_SOURCES)[number];
 
 /**
- * What our own server's recorder (server/security/account-events.ts, through
- * the writer's repeats rule) stores for a refusal that reached Supabase: a
- * password Supabase judged wrong (its 400) is wrong_password, or
- * repeated_wrong_password once the same source has five in ten minutes; a
- * refused code (its 422) is wrong_code or repeated_wrong_code. Its other
- * reasons are not such refusals (sign_in_paused and code_checks_paused never
- * reach Supabase, auth_server_paused is Supabase's 429, recovery codes are
- * checked here).
+ * What our own server records for a refusal that reached Supabase from it
+ * (server/security/account-events.ts and its callers, through the writer's
+ * repeats rule). Every password or code our server sends there and Supabase
+ * refuses has one of these reasons:
+ *   - a sign-in password Supabase judged wrong (its 400): wrong_password,
+ *     or repeated_wrong_password once the same source has five in ten
+ *     minutes;
+ *   - a signed-in member's current password judged wrong, asked again
+ *     before a sensitive change (lib/auth/verify-password.ts):
+ *     wrong_current_password;
+ *   - a password sign-in refused with the same status for another reason (a
+ *     disabled account, an unconfirmed email): sign_in_refused_other;
+ *   - a refused authenticator code (its 422): wrong_code or
+ *     repeated_wrong_code;
+ *   - a refused first code while an authenticator is being set up
+ *     (server/actions/mfa.ts): wrong_setup_code.
+ * Its other reasons are not such refusals (sign_in_paused and
+ * code_checks_paused never reach Supabase, auth_server_paused is Supabase's
+ * 429, recovery codes are checked here).
  *
  * THE TWO OVERFLOW REASONS ARE READ AND COVER NOTHING. An overflow row counts
  * events of ANY password_guessing reason past the recorder's listed keys or
@@ -228,15 +250,27 @@ export type AuthLogsSource = (typeof AUTH_LOGS_SOURCES)[number];
  * line only. An hour that truly overflowed is a busy hour already: a flagged
  * count there is true of what it says (our server has no record of them).
  */
-const RECORDED_PASSWORD_REASONS: readonly string[] = ['wrong_password', 'repeated_wrong_password'];
-const RECORDED_CODE_REASONS: readonly string[] = ['wrong_code', 'repeated_wrong_code'];
+const RECORDED_PASSWORD_REASONS: readonly string[] = [
+  'wrong_password',
+  'repeated_wrong_password',
+  'wrong_current_password',
+  'sign_in_refused_other',
+];
+const RECORDED_CODE_REASONS: readonly string[] = [
+  'wrong_code',
+  'repeated_wrong_code',
+  'wrong_setup_code',
+];
 const RECORDED_OVERFLOW_REASONS: readonly string[] = ['over_minute_cap', 'over_buffer_cap'];
 /** Every reason the reconciliation reads (the three lists above). */
 export const AUTH_LOGS_RECONCILE_REASONS = [
   'wrong_password',
   'repeated_wrong_password',
+  'wrong_current_password',
+  'sign_in_refused_other',
   'wrong_code',
   'repeated_wrong_code',
+  'wrong_setup_code',
   'over_minute_cap',
   'over_buffer_cap',
 ] as const;

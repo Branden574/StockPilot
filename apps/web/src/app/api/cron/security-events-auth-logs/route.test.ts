@@ -162,7 +162,7 @@ describe('the run', () => {
         caller: 'server',
         network: 'hosting',
         country: 'US',
-        n: 9,
+        n: 2,
       },
       // Its client string from another network: stored as api.
       { kind: 'password', status: '400', caller: 'server', network: 'other', country: 'US', n: 2 },
@@ -192,20 +192,20 @@ describe('the run', () => {
     const logged = JSON.parse(line.slice(line.indexOf(' ') + 1)) as Record<string, unknown>;
     expect(logged).toEqual(body);
     expect(logged).toMatchObject({
-      notStored: { our_server: 9, other_status: 0, refresh: 0, known_other: 0 },
+      notStored: { our_server: 2, other_status: 0, refresh: 0, known_other: 0 },
       seen: {
         'password 400 phone other': 3,
-        'password 400 server hosting': 9,
+        'password 400 server hosting': 2,
         'password 400 server other': 2,
       },
     });
-    // Our server's 9 are reconciled with what it recorded (nothing here): an
-    // excess of 9 is in the log line, and below 10 nothing is stored for it.
+    // Our server's 2 are reconciled with what it recorded (nothing here): an
+    // excess of 2 is in the log line, and below 3 nothing is stored for it.
     expect((logged.hours as unknown[])[0]).toMatchObject({
       reconcile: {
-        gateway: { password: 9, code: 0 },
+        gateway: { password: 2, code: 0 },
         recorded: { password: 0, code: 0, overflow: 0 },
-        excess: { password: 9, code: 0 },
+        excess: { password: 2, code: 0 },
       },
     });
     // Counts and codes only: every text in it is a code, a status or an hour.

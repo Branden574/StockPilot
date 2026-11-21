@@ -1023,30 +1023,40 @@ describe("one hour's elements for the writer", () => {
       ).toEqual({ password: 7, code: 3 });
     });
 
-    it('an excess of 9 stores nothing, and is in the log line', () => {
-      expect(AUTH_LOGS_UNRECORDED_FLAG_AT).toBe(10);
-      const out = build([], hourOf(21, 0), { password: 12, code: 0, overflow: 0, complete: true });
+    it('an excess of 2 stores nothing, and is in the log line', () => {
+      // Our server records every refusal it causes at the sign-in service, so
+      // the excess is expected to be zero. One or two can be lost when a
+      // server instance stops before its record is saved; three are flagged.
+      expect(AUTH_LOGS_UNRECORDED_FLAG_AT).toBe(3);
+      const out = build([], hourOf(14, 0), { password: 12, code: 0, overflow: 0, complete: true });
       expect(unrecordedOf(out)).toEqual([]);
       expect(out.reconcile).toEqual({
-        gateway: { password: 21, code: 0 },
+        gateway: { password: 14, code: 0 },
         recorded: { password: 12, code: 0, overflow: 0, complete: true },
-        excess: { password: 9, code: 0 },
+        excess: { password: 2, code: 0 },
       });
     });
 
-    it('an excess of 10 stores one flagged element of count 10, source api, at the hour last minute', () => {
-      const out = build([], hourOf(22, 0), { password: 12, code: 0, overflow: 0, complete: true });
+    it('an excess of 3 stores one flagged element of count 3, source api, at the hour last minute', () => {
+      const out = build([], hourOf(15, 0), { password: 12, code: 0, overflow: 0, complete: true });
       expect(unrecordedOf(out)).toEqual([
         {
           category: 'password_guessing',
           outcome: 'flagged',
           reason: 'unrecorded_server_form_password',
           source: 'api',
-          count: 10,
+          count: 3,
           at_ms: H04 + 59 * MIN,
         },
       ]);
-      expect(out.reconcile.excess).toEqual({ password: 10, code: 0 });
+      expect(out.reconcile.excess).toEqual({ password: 3, code: 0 });
+      // The same for codes, on their own count.
+      const codes = build([], hourOf(0, 5), { password: 0, code: 2, overflow: 0, complete: true });
+      expect(unrecordedOf(codes)).toEqual([
+        expect.objectContaining({ reason: 'unrecorded_server_form_code', count: 3 }),
+      ]);
+      const two = build([], hourOf(0, 4), { password: 0, code: 2, overflow: 0, complete: true });
+      expect(unrecordedOf(two)).toEqual([]);
     });
 
     it('recorded at or above the gateway count stores nothing; the excess is never below zero', () => {
@@ -2211,8 +2221,11 @@ describe('a run: six hours, oldest first, each written once', () => {
               [
                 'wrong_password',
                 'repeated_wrong_password',
+                'wrong_current_password',
+                'sign_in_refused_other',
                 'wrong_code',
                 'repeated_wrong_code',
+                'wrong_setup_code',
                 'over_minute_cap',
                 'over_buffer_cap',
               ],
@@ -2232,8 +2245,8 @@ describe('a run: six hours, oldest first, each written once', () => {
       expect(reconcileReads()).toEqual([]);
     });
 
-    it('an excess of 10 stores one flagged element; the next run skips the hour', async () => {
-      serverHour(H(5), 25, 2);
+    it('an excess of 3 stores one flagged element; the next run skips the hour', async () => {
+      serverHour(H(5), 18, 2);
       recordWeb(H(5), 'wrong_password', 12);
       recordWeb(H(5), 'repeated_wrong_password', 3);
       recordWeb(H(5), 'wrong_code', 2);
@@ -2248,16 +2261,16 @@ describe('a run: six hours, oldest first, each written once', () => {
           outcome: 'flagged',
           reason: 'unrecorded_server_form_password',
           source: 'api',
-          count: 10,
+          count: 3,
           at_ms: H(5) + 59 * MIN,
         },
       ]);
       expect(summary.hours[1]).toMatchObject({
         outcome: 'stored',
         reconcile: {
-          gateway: { password: 25, code: 2 },
+          gateway: { password: 18, code: 2 },
           recorded: { password: 15, code: 2, overflow: 0, complete: true },
-          excess: { password: 10, code: 0 },
+          excess: { password: 3, code: 0 },
         },
       });
       expect(summary.unrecordedFlags).toBe(1);
@@ -2267,13 +2280,59 @@ describe('a run: six hours, oldest first, each written once', () => {
       expect(fetches.map(startOf)).not.toContain(iso(H(5)));
     });
 
-    it('an excess of 9 stores nothing and is in the log line', async () => {
-      serverHour(H(5), 21);
+    it('an excess of 2 stores nothing and is in the log line', async () => {
+      serverHour(H(5), 14);
       recordWeb(H(5), 'wrong_password', 12);
-      const nine = full(await run());
+      const two = full(await run());
       expect(h.rpc).not.toHaveBeenCalled();
-      expect(nine.hours[1]).toMatchObject({ reconcile: { excess: { password: 9, code: 0 } } });
+      expect(two.hours[1]).toMatchObject({ reconcile: { excess: { password: 2, code: 0 } } });
     });
+
+    it('every refusal our own server records for a password or a code it sent is counted: ordinary use leaves no excess', async () => {
+      // An hour in which an organization turns on a required authenticator:
+      // mistyped sign-ins, current passwords and first codes, and one account
+      // that is disabled.
+      serverHour(H(5), 20, 9);
+      recordWeb(H(5), 'wrong_password', 4);
+      recordWeb(H(5), 'repeated_wrong_password', 1);
+      recordWeb(H(5), 'wrong_current_password', 10);
+      recordWeb(H(5), 'sign_in_refused_other', 5);
+      recordWeb(H(5), 'wrong_code', 2);
+      recordWeb(H(5), 'repeated_wrong_code', 1);
+      recordWeb(H(5), 'wrong_setup_code', 6);
+      // Refusals that never reach the sign-in service cover nothing.
+      recordWeb(H(5), 'sign_in_paused', 40);
+      recordWeb(H(5), 'code_checks_paused', 40);
+      recordWeb(H(5), 'wrong_recovery_code', 40);
+      const summary = full(await run());
+      expect(h.rpc).not.toHaveBeenCalled();
+      expect(summary.hours[1]).toMatchObject({
+        reconcile: {
+          gateway: { password: 20, code: 9 },
+          recorded: { password: 20, code: 9, overflow: 0, complete: true },
+          excess: { password: 0, code: 0 },
+        },
+      });
+    });
+
+    it.each([
+      ['wrong_current_password', 'unrecorded_server_form_password'],
+      ['sign_in_refused_other', 'unrecorded_server_form_password'],
+      ['wrong_setup_code', 'unrecorded_server_form_code'],
+    ])(
+      '%s is one of the reasons compared: without its rows the hour is flagged',
+      async (reason, flag) => {
+        serverHour(H(5), 12, 8);
+        for (const r of ['wrong_current_password', 'sign_in_refused_other', 'wrong_setup_code']) {
+          if (r !== reason) recordWeb(H(5), r, 4);
+        }
+        recordWeb(H(5), 'wrong_password', 4);
+        recordWeb(H(5), 'wrong_code', 4);
+        const summary = full(await run());
+        expect(written()).toEqual([expect.objectContaining({ reason: flag, count: 4 })]);
+        expect(summary.unrecordedFlags).toBe(1);
+      },
+    );
 
     it('nine sources filling overflow rows do not hide an excess: the flag is stored, the overflow is only in the log line', async () => {
       serverHour(H(5), 30, 14);
@@ -2340,11 +2399,11 @@ describe('a run: six hours, oldest first, each written once', () => {
       });
 
       it('1,001 recorded rows that cover the gateway count: no flag', async () => {
-        serverHour(H(5), 1_005);
+        serverHour(H(5), 1_003);
         manyRows(H(5), 1_001);
         const summary = full(await run());
         expect(h.rpc).not.toHaveBeenCalled();
-        expect(summary.hours[1]!.reconcile?.excess).toEqual({ password: 4, code: 0 });
+        expect(summary.hours[1]!.reconcile?.excess).toEqual({ password: 2, code: 0 });
       });
 
       it('10,001 recorded rows: the read stops at ten pages and FAILS CLOSED, compared with what it read, and says so', async () => {
