@@ -505,7 +505,7 @@ const OUTSIDE_ROUTES: Record<string, { kind: OutsideKind; reason: string }> = {
   'app/sign-in-alert/route.ts': {
     kind: 'token-link',
     reason:
-      "A sign-in alert email's signed link, limited per address and per alert on POST; no member session is read.",
+      "A sign-in alert email's signed link: GET is counted per address before the alert is read, POST is limited per address and per alert; no member session is read.",
   },
   'app/unsubscribe/route.ts': {
     kind: 'token-link',

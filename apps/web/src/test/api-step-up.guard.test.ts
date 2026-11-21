@@ -327,7 +327,7 @@ const NON_SESSION: Record<string, NonSession> = {
     methods: ['GET', 'POST'],
     auth: 'public token',
     reason:
-      "A sign-in alert email's signed seven-day link (an HMAC over the alert, the account and the day; the account is read from the alert's own row). GET shows the alert and writes nothing; POST, limited per address and per alert, runs the not-me report with the service client. It reads no session.",
+      "A sign-in alert email's signed seven-day link (an HMAC over the alert, the account and the day; the account is read from the alert's own row). GET, counted per address before the alert is read, shows the alert and writes nothing; POST, limited per address and per alert, runs the not-me report with the service client, once per alert. It reads no session.",
   },
   'unsubscribe/route.ts': {
     methods: ['GET', 'POST'],
