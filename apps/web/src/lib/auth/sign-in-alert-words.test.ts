@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  NOT_ME_WORDS,
+  REPORTED_MEMBER_NAME_MAX,
   countryName,
+  reportedMemberName,
   signInAlertAnswerWords,
   signInAlertBadges,
   signInAlertKindWords,
@@ -79,5 +82,58 @@ describe('signInAlertAnswerWords', () => {
     expect(signInAlertAnswerWords('not_me')).toBe('Reported: not them');
     expect(signInAlertAnswerWords('later')).toBe('Unknown');
     expect(signInAlertAnswerWords(null)).toBe('Unknown');
+  });
+});
+
+describe('reportedMemberName: a member-chosen name, made safe for the body of a notice or an email', () => {
+  it('an ordinary name is kept as it is', () => {
+    expect(reportedMemberName('Avery Example')).toBe('Avery Example');
+    expect(reportedMemberName('  María-José   O’Neil ')).toBe('María-José O’Neil');
+  });
+
+  it('is cut to 80 characters', () => {
+    expect(REPORTED_MEMBER_NAME_MAX).toBe(80);
+    expect(reportedMemberName('x'.repeat(200))).toBe('x'.repeat(80));
+    // Counted in characters, not in halves of one.
+    expect([...reportedMemberName('𝒳'.repeat(200))!]).toHaveLength(80);
+  });
+
+  it('loses control characters; a line break or a tab becomes one space', () => {
+    expect(reportedMemberName('Robin\nSample')).toBe('Robin Sample');
+    expect(reportedMemberName('Robin\r\n\tSample')).toBe('Robin Sample');
+    expect(reportedMemberName('Ro\u0000bin\u0007 \u001BSample\u007F\u0085')).toBe('Robin Sample');
+  });
+
+  it('loses invisible characters: zero-width, direction marks and overrides, fillers', () => {
+    expect(reportedMemberName('Ro\u200Bbin\u200D \u200E\u202ESample\u2066\u2069\uFEFF\u00AD')).toBe('Robin Sample');
+    expect(reportedMemberName('Robin\u3164\u115F\u1160\uFFA0\u2800Sample')).toBe('RobinSample');
+    expect(reportedMemberName('Robin\u2028Sample\u2029')).toBe('Robin Sample');
+  });
+
+  it('nothing left, or not a string: null', () => {
+    for (const nothing of [null, undefined, '', '   ', '\u200B\u202E', '\n\t', 7, {}]) {
+      expect(reportedMemberName(nothing as never)).toBeNull();
+    }
+  });
+
+  it('never throws on half of a character', () => {
+    expect(reportedMemberName('Robin\uD83D')).toBe('Robin');
+  });
+});
+
+describe('the words of a "This was not me" (review 1, finding 1)', () => {
+  it('say what happens and no more: the sessions ended, an open device has up to about an hour, the reset closes the door', () => {
+    expect(NOT_ME_WORDS.sessionsEnded).toBe('Every session of your account has been ended.');
+    expect(NOT_ME_WORDS.openDevice).toBe(
+      'A device that is already open can keep working for a short while, until its current pass expires. That is about an hour at most.',
+    );
+    expect(NOT_ME_WORDS.resetNow).toBe(
+      'Reset your password now. That is what closes the door: until you do, anyone who knows it can sign in again.',
+    );
+    for (const words of Object.values(NOT_ME_WORDS)) {
+      expect(words).not.toMatch(/signed out (on|of) every|everywhere|right away|at once|immediately/i);
+      // Plain text that needs no escaping in a page or an email.
+      expect(words).not.toMatch(/[<>&"'’]/);
+    }
   });
 });
