@@ -59,14 +59,15 @@
 --      public.security_events_for_organization(uuid, integer), the newest
 --      rows, and public.security_event_totals_for_organization(uuid,
 --      timestamptz, timestamptz), counts by category, outcome, reason, source
---      and country. Each calls public.security_events_reader_check(uuid)
---      before it reads anything. That check refuses with 42501 unless the
---      caller is an admin or owner of the organization (has_org_role), and
---      then applies the app's authenticator rule for a call made straight
---      to the API (0413's block): where the organization's policy asks
---      admins for an authenticator, or the caller has one, the session must
---      hold the second step. Neither function returns source_hash or the
---      row key. No API role may call the check itself.
+--      and country. Before it reads anything, each refuses with 42501
+--      unless the caller is an admin or owner of the organization
+--      (has_org_role) and then calls
+--      public.security_events_reader_check(uuid), which makes the same role
+--      check and applies the app's authenticator rule for a call made
+--      straight to the API (0413's block): where the organization's policy
+--      asks admins for an authenticator, or the caller has one, the session
+--      must hold the second step. Neither function returns source_hash or
+--      the row key. No API role may call the check itself.
 --
 -- WHO CAN READ AND WRITE
 --   - RLS is on with NO policy, and anon and authenticated have no privilege
@@ -447,7 +448,8 @@ comment on function public.purge_security_events() is
   'Deletes security_events rows older than 90 days and clears source_hash (and the row key made from it) on rows older than 24 hours, at most 5,000 of each a call. Returns {deleted, hashes_cleared}; the scheduled job calls it until both are under 5,000. service_role only.';
 
 -- ── Reading, for an organization's admins and owners ─────────────────────────
--- Each read function calls this check before it reads. has_org_role answers
+-- Each read function makes the role check in its own body and then calls
+-- this check, before it reads. has_org_role answers
 -- for the signed-in account (auth.uid()): false for nobody signed in, for a
 -- disabled account, for an invitation not accepted, for an act-as seat that
 -- has expired and for a null organization. (A live act-as seat is an owner
@@ -517,6 +519,12 @@ security definer
 set search_path = ''
 as $$
 begin
+  -- The role gate, in this body (security_invariants INV-25 reads it here);
+  -- the check below repeats it and adds the authenticator rule.
+  if p_organization_id is null
+     or not coalesce(public.has_org_role(p_organization_id, 'admin'), false) then
+    raise exception 'security_events_not_allowed' using errcode = '42501';
+  end if;
   perform public.security_events_reader_check(p_organization_id);
 
   return query
@@ -557,6 +565,12 @@ declare
   v_to   timestamptz;
   v_from timestamptz;
 begin
+  -- The role gate, in this body (INV-25); the check below repeats it and
+  -- adds the authenticator rule.
+  if p_organization_id is null
+     or not coalesce(public.has_org_role(p_organization_id, 'admin'), false) then
+    raise exception 'security_events_not_allowed' using errcode = '42501';
+  end if;
   perform public.security_events_reader_check(p_organization_id);
 
   -- From p_from (default: 7 days before the end) up to, not including, p_to
