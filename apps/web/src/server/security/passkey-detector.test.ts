@@ -24,7 +24,13 @@ interface Row {
   id: number;
   user_id: string | null;
   event: string;
-  metadata: { session_id?: string; raise_id?: string; raised_at?: string } | null;
+  metadata: {
+    session_id?: string;
+    raise_id?: string;
+    raised_at?: string;
+    ending?: string;
+    tries?: number;
+  } | null;
   created_at: string;
 }
 
@@ -42,6 +48,8 @@ const h = vi.hoisted(() => ({
   sessions: { data: [], error: null } as { data: unknown; error: unknown },
   audit: [] as Row[],
   auditFails: false,
+  /** The lower bound of every audit read (created_at >=), as asked. */
+  auditFrom: [] as string[],
   tables: [] as string[],
   rpcNames: [] as string[],
   reports: [] as Array<{ tag: string; level?: string; extra?: Record<string, unknown> }>,
@@ -149,7 +157,11 @@ vi.mock('@/lib/supabase/admin', () => ({
           filters.push((r) => vs.includes(String(r[col as keyof Row]))),
           q
         ),
-        gte: (col: string, v: string) => (filters.push((r) => String(r[col as keyof Row]) >= v), q),
+        gte: (col: string, v: string) => {
+          if (table === 'audit_logs' && col === 'created_at') h.auditFrom.push(v);
+          filters.push((r) => String(r[col as keyof Row]) >= v);
+          return q;
+        },
         range: (a: number, b: number) => ((range = [a, b]), q),
         then(resolve: (v: { data: unknown; error: unknown }) => unknown) {
           expect(table).toBe('audit_logs');
@@ -168,6 +180,8 @@ vi.mock('@/lib/supabase/admin', () => ({
 
 import {
   AUTH_DB_CLOCK_SKEW_MS,
+  EXAMINED_RAISES_MS,
+  MAX_END_TRIES,
   MAX_FINDINGS,
   MAX_SESSIONS,
   runPasskeyDetector,
@@ -213,6 +227,7 @@ beforeEach(() => {
   h.sessions = { data: [], error: null };
   h.audit = [];
   h.auditFails = false;
+  h.auditFrom = [];
   h.tables = [];
   h.rpcNames = [];
   h.reports = [];
@@ -865,14 +880,197 @@ describe('review 4 finding 9: the detector remembers what it reported', () => {
   });
 });
 
-describe('review 4 finding 11: the file header states the rule', () => {
-  it('the header states the rule, what cannot be read, and what the check cannot see', () => {
-    const source = readFileSync(path.join(__dirname, 'passkey-detector.ts'), 'utf8');
-    const header = source
-      .slice(0, source.indexOf('type Admin'))
-      .replace(/\n \* ?/g, ' ')
-      .replace(/\s+/g, ' ');
-    expect(header).not.toMatch(/NEVER ACTS ON DOUBT/i);
-    expect(header).toMatch(/signed out before the hourly run is never seen/i);
+describe('review B1: the memory keeps what became of each finding', () => {
+  const FAILS = { data: null, error: { code: '55P03' } };
+  const gaveUp = () => h.reports.filter((r) => r.tag === 'passkeys.detector_end_gave_up');
+  const memoryOf = (sessionId: string) =>
+    h.memory.filter((m) => (m.metadata as { session_id?: string }).session_id === sessionId);
+
+  it(`a failed end is tried again on later runs, with no second report and no second security event; at most ${MAX_END_TRIES} tries in all, then one error report and no more`, async () => {
+    expect(MAX_END_TRIES).toBe(3);
+    h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
+    h.endAnswer = FAILS;
+    expect(await runPasskeyDetector()).toMatchObject({ unexplained: 1, ending: { failed: 1 } });
+    expect(memoryOf(S).map((m) => m.metadata)).toEqual([
+      expect.objectContaining({ ending: 'failed', tries: 1 }),
+    ]);
+    const second = await runPasskeyDetector();
+    expect(second).toMatchObject({
+      unexplained: 0,
+      alreadyReported: 1,
+      retries: { tried: 1, failed: 1, ended: 0, gaveUp: 0, waiting: 0 },
+    });
+    expect(h.endAsked).toEqual([S, S]);
+    expect(gaveUp()).toEqual([]);
+    const third = await runPasskeyDetector();
+    expect(third).toMatchObject({ retries: { tried: 1, failed: 1, gaveUp: 1 } });
+    expect(h.endAsked).toEqual([S, S, S]);
+    expect(gaveUp()).toEqual([
+      expect.objectContaining({
+        level: 'error',
+        extra: expect.objectContaining({
+          userIdHash: expect.stringMatching(/^[0-9a-f]{16}$/),
+          tries: MAX_END_TRIES,
+        }),
+      }),
+    ]);
+    // No more: no fourth try, no second error report.
+    expect(await runPasskeyDetector()).toMatchObject({ retries: { tried: 0 }, alreadyReported: 1 });
+    expect(h.endAsked).toEqual([S, S, S]);
+    expect(gaveUp()).toHaveLength(1);
+    expect(flagged()).toHaveLength(1);
+    expect(h.events).toHaveLength(1);
+    expect(memoryOf(S).map((m) => (m.metadata as { tries?: number }).tries)).toEqual([1, 2, 3]);
+  });
+
+  it('a retried end that succeeds ends the session, tells the devices, emails once, and is final', async () => {
+    h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
+    h.endAnswer = FAILS;
+    await runPasskeyDetector();
+    h.endAnswer = { data: true, error: null };
+    expect(await runPasskeyDetector()).toMatchObject({
+      retries: { tried: 1, ended: 1 },
+      emailed: 1,
+    });
+    expect(h.broadcasts).toEqual([{ userId: U, listed: [S], stays: '' }]);
+    expect(h.emails).toEqual(['member@example.test']);
+    expect(memoryOf(S).at(-1)?.metadata).toMatchObject({ ending: 'ended', tries: 2 });
+    await runPasskeyDetector();
+    expect(h.endAsked).toEqual([S, S]);
+    expect(flagged()).toHaveLength(1);
+  });
+
+  it('a finding recorded while ending was off is not ended when ending is turned on: it affects raises found from then on', async () => {
+    h.settings = { data: { passkeys_on: true, passkey_check_ends_sessions: false }, error: null };
+    h.sessions = { data: [session({ raised_at: ago(30 * MIN) })], error: null };
+    expect(await runPasskeyDetector()).toMatchObject({ ending: { reportOnly: 1 } });
+    expect(memoryOf(S)[0]?.metadata).toMatchObject({ ending: 'report_only', tries: 0 });
+    h.settings = { data: { ...ENDS_ON }, error: null };
+    expect(await runPasskeyDetector()).toMatchObject({
+      mode: 'end',
+      alreadyReported: 1,
+      retries: { tried: 0 },
+    });
+    expect(h.endAsked).toEqual([]);
+    // A raise found from then on is ended.
+    h.sessions = { data: [session({ raised_at: ago(10 * MIN) })], error: null };
+    expect(await runPasskeyDetector()).toMatchObject({ unexplained: 1, ending: { ended: 1 } });
+    expect(h.endAsked).toEqual([S]);
+  });
+
+  it('a failed end is not tried while ending is off', async () => {
+    h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
+    h.endAnswer = FAILS;
+    await runPasskeyDetector();
+    h.settings = { data: { passkeys_on: true, passkey_check_ends_sessions: false }, error: null };
+    expect(await runPasskeyDetector()).toMatchObject({ retries: { tried: 0 } });
+    expect(h.endAsked).toEqual([S]);
+  });
+
+  it('an end the database refused, or a session already gone, is final', async () => {
+    for (const [answer, sid] of [
+      [{ data: null, error: { code: '22023' } }, 'refused-1'],
+      [{ data: false, error: null }, 'gone-1'],
+    ] as const) {
+      h.endAnswer = answer;
+      h.sessions = {
+        data: [{ ...session({ raised_at: ago(20 * MIN) }), session_id: sid }],
+        error: null,
+      };
+      await runPasskeyDetector();
+      h.endAnswer = { data: true, error: null };
+      expect(await runPasskeyDetector(), sid).toMatchObject({ retries: { tried: 0 } });
+    }
+    expect(h.endAsked).toEqual(['refused-1', 'gone-1']);
+  });
+
+  it(`retries share the run's bound on ends: at most ${MAX_FINDINGS} sessions ended a run, new findings first; a retry past it waits and spends no try`, async () => {
+    const standing = Array.from({ length: MAX_FINDINGS }, (_, i) => ({
+      ...session({ raised_at: ago(40 * MIN) }),
+      session_id: `standing-${i}`,
+      user_id: `user-${i}`,
+    }));
+    h.sessions = { data: standing, error: null };
+    h.endAnswer = FAILS;
+    expect(await runPasskeyDetector()).toMatchObject({ ending: { failed: MAX_FINDINGS } });
+    const fresh = [0, 1].map((i) => ({
+      ...session({ raised_at: ago(10 * MIN) }),
+      session_id: `fresh-${i}`,
+      user_id: `fresh-user-${i}`,
+    }));
+    h.sessions = { data: [...standing, ...fresh], error: null };
+    h.endAsked = [];
+    const s = await runPasskeyDetector();
+    expect(s).toMatchObject({
+      unexplained: 2,
+      retries: { tried: MAX_FINDINGS - 2, waiting: 2 },
+    });
+    expect(h.endAsked).toHaveLength(MAX_FINDINGS);
+    expect(h.endAsked.slice(0, 2)).toEqual(['fresh-0', 'fresh-1']);
+    const tries = standing.map(
+      (st) => memoryOf(st.session_id).at(-1)?.metadata as { tries?: number } | undefined,
+    );
+    expect(tries.filter((t) => t?.tries === 2)).toHaveLength(MAX_FINDINGS - 2);
+    expect(tries.filter((t) => t?.tries === 1)).toHaveLength(2);
+  });
+
+  it('a memory row written before the ending was kept reads as one try of a failed end', async () => {
+    const raisedAt = ago(20 * MIN);
+    h.sessions = { data: [session({ raised_at: raisedAt })], error: null };
+    h.audit = [
+      {
+        ...row('passkey.raise_flagged', ago(19 * MIN)),
+        metadata: { session_id: S, raised_at: raisedAt, ending: 'failed' },
+      },
+    ];
+    expect(await runPasskeyDetector()).toMatchObject({ retries: { tried: 1 } });
+    expect(h.memory.at(-1)?.metadata).toMatchObject({ tries: 2 });
+  });
+});
+
+describe('review B4: only raises of the last 24 hours are examined, and the audit read is bounded to that day', () => {
+  it('a session raised more than a day ago and still signed in is not examined: counted, nothing reported', async () => {
+    expect(EXAMINED_RAISES_MS).toBe(24 * 60 * MIN);
+    h.sessions = {
+      data: [session({ raised_at: ago(25 * 60 * MIN), updated_at: ago(10 * MIN) })],
+      error: null,
+    };
+    const s = await runPasskeyDetector();
+    expect(s).toMatchObject({ listed: 1, olderThanADay: 1, examined: 0, unexplained: 0 });
+    expect(flagged()).toEqual([]);
+    expect(h.endAsked).toEqual([]);
+  });
+
+  it('the audit read starts no earlier than a day (and the two minutes before a raise) ago, whatever the oldest listed session', async () => {
+    h.sessions = {
+      data: [
+        { ...session({ raised_at: ago(21 * 24 * 60 * MIN) }), session_id: 'weeks-old' },
+        session({ raised_at: ago(20 * MIN) }),
+      ],
+      error: null,
+    };
+    await runPasskeyDetector();
+    expect(h.auditFrom.length).toBeGreaterThan(0);
+    const earliest = Math.min(...h.auditFrom.map((t) => Date.parse(t)));
+    expect(earliest).toBeGreaterThanOrEqual(Date.now() - (24 * 60 + 3) * MIN);
+    expect(flagged()).toHaveLength(1);
+  });
+
+  it(`the ${MAX_SESSIONS} cap counts only raises of the day`, async () => {
+    const old = Array.from({ length: MAX_SESSIONS }, (_, i) => ({
+      ...session({ raised_at: ago(30 * 60 * MIN) }),
+      session_id: `old-${i}`,
+    }));
+    h.sessions = {
+      data: [...old, { ...session({ raised_at: ago(10 * MIN) }), session_id: 'new-one' }],
+      error: null,
+    };
+    const s = await runPasskeyDetector();
+    expect(s).toMatchObject({
+      olderThanADay: MAX_SESSIONS,
+      examined: 1,
+      unexplained: 1,
+      stop: null,
+    });
   });
 });

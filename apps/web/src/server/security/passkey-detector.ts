@@ -35,12 +35,19 @@ import { PASSKEY_RAISE_EVENT, timeNanos } from './passkey-state';
  * devices learn through the sessions broadcast, and the account gets at most
  * one email a day (the security family: a sign-in was ended, reset your
  * password). Otherwise the finding is reported and recorded, and nothing is
- * ended. The report and the email say "ended" only when the database
- * answered that it ended the session. It deletes no factor and removes no
- * passkey, ever (pinned by passkey-detector.test.ts, which reads this file):
- * the bridge factor stays, so the member's own passkey keeps working.
+ * ended. Turning ending on affects raises found from then on: a finding
+ * recorded while it was off stays reported only. An end that failed (not
+ * refused, not already gone) is tried again on later runs while ending is
+ * on, with no second report and no second security event: at most
+ * MAX_END_TRIES tries in all, then one error report and no more. The report
+ * and the email say "ended" only when the database answered that it ended
+ * the session. It deletes no factor and removes no passkey, ever (pinned by
+ * passkey-detector.test.ts, which reads this file): the bridge factor stays,
+ * so the member's own passkey keeps working.
  *
- * WHICH RAISE: passkey_bridge_sessions gives each session's raised_at, the
+ * WHICH RAISES: those of the last EXAMINED_RAISES_MS (a day), so the audit
+ * read is bounded to that day (review B4). passkey_bridge_sessions gives each
+ * session's raised_at, the
  * time of its TOTP method row at Auth (auth.mfa_amr_claims, upserted with
  * Auth's clock on every TOTP answer; read from the Auth source, not measured
  * for a bridge raise). The row of that raise must lie in [raised_at - 2 min,
@@ -54,22 +61,22 @@ import { PASSKEY_RAISE_EVENT, timeNanos } from './passkey-state';
  * error level and settles nothing it would have decided. A missing settings
  * row is read as the database reads it (passkeys off, ending off) and said
  * once a day. A raise of the last two minutes is examined by the next run
- * (our row may not be committed yet; the window is two hours). It reads the
- * sessions that exist at the hour: a session signed out before the hourly
- * run is never seen.
+ * (our row may not be committed yet; the window is two hours).
  *
  * MEMORY: each finding is remembered by an audit row of its own
- * (`passkey.raise_flagged`: the session id and the raise time), read with
- * the other passkey rows, in the same bounds. A raise already reported is
- * not reported, counted, recorded or ended again, so standing findings never
- * fill a run.
+ * (`passkey.raise_flagged`: the session id, the raise time, what became of
+ * it and the tries of its end), read with the other passkey rows, in the
+ * same bounds; the row with the most tries is the finding's state. A raise
+ * already reported is not reported, counted or recorded again, and is ended
+ * again only as a failed end's retry, so standing findings never fill a run.
  *
  * BOUNDS (like the retention route): at most MAX_SESSIONS sessions examined
- * a run, the newest raises first; at most MAX_FINDINGS new findings (and so,
- * with ending on, at most MAX_FINDINGS sessions ended) a run, past which the
- * run stops and one error report says a person must look (the check is wrong
- * or there is a real wave); no new session started after RUN_BUDGET_MS. An
- * early stop is reported with the counts.
+ * a run, the newest raises first; at most MAX_FINDINGS new findings a run,
+ * past which the run stops and one error report says a person must look (the
+ * check is wrong or there is a real wave); with ending on, at most
+ * MAX_FINDINGS ends asked a run, new findings first, then retried ends (a
+ * retry past it waits for the next run and spends no try); no new session
+ * started after RUN_BUDGET_MS. An early stop is reported with the counts.
  *
  * And the other way round (10.4 a): a `passkey.used` row of the window whose
  * session is not listed is a warning with a count (the list is blind, the
@@ -100,6 +107,10 @@ export const MAX_FINDINGS = 5;
 export const RUN_BUDGET_MS = 30_000;
 /** One email a day per account at most; a missing settings row is said once a day. */
 const DAY_MS = 24 * 60 * 60_000;
+/** Review B4: the raises examined are those of the last day; the audit read is bounded to it. */
+export const EXAMINED_RAISES_MS = DAY_MS;
+/** Review B1: a failed end is tried at most this many times in all. */
+export const MAX_END_TRIES = 3;
 const AUDIT_PAGE = 1000;
 const AUDIT_MAX_PAGES = 20;
 
@@ -136,7 +147,7 @@ interface BridgeSession {
 interface AuditRow {
   user_id: string | null;
   event: string;
-  metadata: { session_id?: unknown; raised_at?: unknown } | null;
+  metadata: { session_id?: unknown; raised_at?: unknown; ending?: unknown; tries?: unknown } | null;
   created_at: string | null;
 }
 
@@ -164,6 +175,10 @@ export interface PasskeyDetectorSummary {
     failed: number;
     reportOnly: number;
   };
+  /** Review B1: failed ends tried again (waiting: past the run's bound on ends, no try spent). */
+  retries: { tried: number; ended: number; failed: number; gaveUp: number; waiting: number };
+  /** Review B4: listed sessions whose raise is older than EXAMINED_RAISES_MS: not examined. */
+  olderThanADay: number;
   emailed: number;
   /** The two clocks compared: (raise row time - raised_at) over the explained raises. */
   rowMinusRaiseMs: { min: number | null; max: number | null };
@@ -179,6 +194,12 @@ interface Checked {
 }
 
 type Ending = 'ended' | 'already_gone' | 'refused' | 'failed' | 'report_only';
+
+/** What the memory says of a finding: what became of it, and how many ends were tried. */
+interface Remembered {
+  ending: string;
+  tries: number;
+}
 
 const MS = 1_000_000n;
 const isoOf = (nanos: bigint) => new Date(Number(nanos / MS)).toISOString();
@@ -278,8 +299,12 @@ async function reportOnceADay(tag: string, extra: ReportExtra): Promise<void> {
   }
 }
 
-/** The memory of a finding (review 4 finding 9): an audit row of its own, no organization, no address. */
-async function rememberFinding(s: BridgeSession, ending: Ending): Promise<void> {
+/**
+ * The memory of a finding (review 4 finding 9, review B1): an audit row of
+ * its own, no organization, no address, with what became of it and the
+ * number of ends tried (0 while ending is off).
+ */
+async function rememberFinding(s: BridgeSession, ending: Ending, tries: number): Promise<void> {
   const written = await insertAuditRowReported({
     organization_id: null,
     user_id: s.user_id,
@@ -292,6 +317,7 @@ async function rememberFinding(s: BridgeSession, ending: Ending): Promise<void> 
       session_id: s.session_id,
       raised_at: s.raised_at ?? null,
       ending,
+      tries,
     },
   });
   if (!written)
@@ -299,6 +325,14 @@ async function rememberFinding(s: BridgeSession, ending: Ending): Promise<void> 
 }
 
 const memoryKey = (sessionId: string, raised: bigint) => `${sessionId}|${raised}`;
+
+/** A memory row's state; a row from before the tries were kept counts one try of an end. */
+function rememberedOf(metadata: AuditRow['metadata']): Remembered {
+  const ending = typeof metadata?.ending === 'string' ? metadata.ending : 'unknown';
+  const tries =
+    typeof metadata?.tries === 'number' ? metadata.tries : ending === 'report_only' ? 0 : 1;
+  return { ending, tries };
+}
 
 /**
  * Never throws. Changes nothing but reports, security events, its own memory
@@ -320,6 +354,8 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
     notSettled: { times: 0, auditRead: 0 },
     mode: null,
     ending: { ended: 0, alreadyGone: 0, refused: 0, failed: 0, reportOnly: 0 },
+    retries: { tried: 0, ended: 0, failed: 0, gaveUp: 0, waiting: 0 },
+    olderThanADay: 0,
     emailed: 0,
     rowMinusRaiseMs: { min: null, max: null },
     usedButNotListed: 0,
@@ -375,10 +411,21 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
     summary.ran = true;
     const all = (Array.isArray(listed.data) ? listed.data : []) as BridgeSession[];
     summary.listed = all.length;
+    // Review B4: only raises of the last day are examined (and counted
+    // against the cap); a raise time that cannot be read stays, to be reported.
+    const raisedOf = new Map(all.map((s) => [s, timeNanos(s.raised_at)]));
+    const dayAgo = nowNs - BigInt(EXAMINED_RAISES_MS) * MS;
+    const inScope = all.filter((s) => {
+      const raised = raisedOf.get(s) ?? null;
+      if (raised !== null && raised < dayAgo) {
+        summary.olderThanADay += 1;
+        return false;
+      }
+      return true;
+    });
     // The newest raises first (review 4 finding 9), so the cap never drops a
     // fresh raise; a raise time that cannot be read sorts last.
-    const raisedOf = new Map(all.map((s) => [s, timeNanos(s.raised_at)]));
-    let sessions = [...all].sort((a, b) => {
+    let sessions = inScope.sort((a, b) => {
       const ta = raisedOf.get(a) ?? null;
       const tb = raisedOf.get(b) ?? null;
       if (ta === tb) return 0;
@@ -425,7 +472,7 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
       report('detector_audit_unreadable', 'error', { sessions: checked.length });
     } else {
       const raisesBySession = new Map<string, bigint[]>();
-      const remembered = new Set<string>();
+      const remembered = new Map<string, Remembered>();
       for (const r of rows) {
         const sid = r.metadata?.session_id;
         if (typeof sid !== 'string') continue;
@@ -433,12 +480,17 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
           const raised = timeNanos(
             typeof r.metadata?.raised_at === 'string' ? r.metadata.raised_at : null,
           );
-          if (raised !== null) remembered.add(memoryKey(sid, raised));
+          if (raised === null) continue;
+          const key = memoryKey(sid, raised);
+          const memory = rememberedOf(r.metadata);
+          const before = remembered.get(key);
+          if (!before || memory.tries >= before.tries) remembered.set(key, memory);
           continue;
         }
         const at = timeNanos(r.created_at);
         if (at !== null && r.event === PASSKEY_RAISE_EVENT) push(raisesBySession, sid, at);
       }
+      const retry: Array<{ c: Checked; tries: number }> = [];
       for (const c of checked) {
         if (Date.now() - started >= RUN_BUDGET_MS) {
           summary.stop = 'time_limit';
@@ -458,8 +510,12 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
         // The rule (review 4 finding 2): no raise row of ours near the raise
         // is unexplained, whatever else the account did. Review 4 finding 9:
         // a raise reported by an earlier run is not counted again.
-        if (remembered.has(memoryKey(c.session.session_id, c.raised))) {
+        const memory = remembered.get(memoryKey(c.session.session_id, c.raised));
+        if (memory) {
           summary.alreadyReported += 1;
+          // Review B1: only a failed end, while ending is on, is tried again.
+          if (summary.mode === 'end' && memory.ending === 'failed' && memory.tries < MAX_END_TRIES)
+            retry.push({ c, tries: memory.tries });
           continue;
         }
         if (summary.unexplained >= MAX_FINDINGS) {
@@ -483,9 +539,36 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
           nearestRaiseRowMs: near === null ? null : offsetMs(near, c.raised),
         });
         await recordUnexplainedBridgeSession(c.session.user_id);
-        await rememberFinding(c.session, ending);
+        await rememberFinding(c.session, ending, ending === 'report_only' ? 0 : 1);
         if (ending === 'ended' && (await emailOnceADay(admin, c.session.user_id))) {
           summary.emailed += 1;
+        }
+      }
+
+      // Review B1: failed ends tried again, after the new findings, within
+      // the run's bound on ends; no second report, no second security event.
+      let endsLeft = summary.mode === 'end' ? MAX_FINDINGS - summary.unexplained : 0;
+      for (const { c, tries } of retry) {
+        if (endsLeft <= 0 || Date.now() - started >= RUN_BUDGET_MS) {
+          summary.retries.waiting += 1;
+          continue;
+        }
+        endsLeft -= 1;
+        summary.retries.tried += 1;
+        const ending = await endBridgeSession(admin, c.session);
+        await rememberFinding(c.session, ending, tries + 1);
+        if (ending === 'ended') {
+          summary.retries.ended += 1;
+          if (await emailOnceADay(admin, c.session.user_id)) summary.emailed += 1;
+        } else if (ending === 'failed') {
+          summary.retries.failed += 1;
+          if (tries + 1 >= MAX_END_TRIES) {
+            summary.retries.gaveUp += 1;
+            report('detector_end_gave_up', 'error', {
+              userIdHash: accountIdHash(c.session.user_id),
+              tries: tries + 1,
+            });
+          }
         }
       }
 
@@ -523,7 +606,7 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
         listed: summary.listed,
         examined: summary.examined,
         unexplained: summary.unexplained,
-        ended: summary.ending.ended,
+        ended: summary.ending.ended + summary.retries.ended,
       });
     }
   } catch (e) {

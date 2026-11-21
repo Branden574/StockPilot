@@ -79,8 +79,9 @@ function secretsEqual(a: string, b: string): boolean {
  * raised by a passkey bridge with no raise row of ours; it reports and
  * records a security event, and only while
  * platform_settings.passkey_check_ends_sessions is on (off by default) ends
- * that one session) runs alongside, started after the secret check. It never
- * throws and never changes this answer.
+ * that one session; turning it on affects raises found from then on) runs
+ * alongside, started after the secret check. It never throws and never
+ * changes this answer.
  *
  * Schedule: "0 *\/1 * * *" (hourly) — see apps/web/vercel.json.
  * Auth: Bearer ${CRON_SECRET} — fail-closed.
