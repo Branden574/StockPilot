@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { createAdminClient } from '@/lib/supabase/admin';
+import { recordLimiterRefusal } from '@/server/security/limiter-events';
 
 /**
  * Persistent rate-limit helper backed by the Supabase
@@ -49,6 +50,22 @@ export async function checkRateLimit(
   limit: number,
   windowMs: number,
   mode: 'open' | 'closed' = 'open',
+): Promise<RateLimitResult> {
+  const result = await countRequest(key, limit, windowMs, mode);
+  // A REFUSAL (over the count, never a limiter that could not count) of an
+  // anonymous public endpoint is a security event: the one map in
+  // server/security/limiter-events.ts decides which keys those are. Never
+  // throws and never waits on the database.
+  if (!result.allowed && !result.failed) await recordLimiterRefusal(key);
+  return result;
+}
+
+/** One count in the bucket of `key`, as checkRateLimit has always answered it. */
+async function countRequest(
+  key: string,
+  limit: number,
+  windowMs: number,
+  mode: 'open' | 'closed',
 ): Promise<RateLimitResult> {
   try {
     const admin = createAdminClient();
