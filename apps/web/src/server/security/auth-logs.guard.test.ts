@@ -246,6 +246,7 @@ describe("only the auth-logs job writes the rows its 'already stored' check read
       'unclassified_sign_in_refusals',
       'unrecorded_server_form_password',
       'unrecorded_server_form_code',
+      'too_many_forms_to_count',
     ]);
     expect([...AUTH_LOGS_SOURCES]).toEqual(['phone', 'api']);
     // And every element the job can build carries one of them: its element

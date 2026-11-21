@@ -49,6 +49,7 @@ const RECORDER_NAMES = [
   'flushSecurityEvents',
   'recordSignInBlocked',
   'recordAccountCodeBlocked',
+  'recordRefusedSetUpCode',
   'organizationForSignInEmail',
   'recordLimiterRefusal',
 ];
