@@ -2278,6 +2278,43 @@ WEB_TESTS=(
   # (its key is unique) writes the rest; a retry with the same key writes
   # nothing again, and the same key with other lines is the conflict.
   src/server/services/receiving.replay-writes-once.test.ts
+  # Sign-in alerts, the "This was not me" link: a tag for one alert and one
+  # account opens no other, compared in constant time, good for 7 days, and
+  # nothing is signed without the key. Its page outside the login wall reads
+  # the account from the alert's own row, gives every bad link one page, byte
+  # for byte, changes nothing on GET (counted per address before the alert is
+  # read), refuses a post from another site first, and counts each press per
+  # address and per alert, all closed.
+  src/lib/auth/sign-in-alert-link.test.ts
+  src/lib/auth/sign-in-alert-url.test.ts
+  src/app/sign-in-alert/route.test.ts
+  # Sign-in alerts, the report: every press ends every session of the alert's
+  # own account first and changes nothing else when that fails; only the
+  # press that marks the alert forgets its device or country row and tells
+  # the member, the owners and admins (accepted, not act-as, at most 5
+  # organizations; never managers or staff), the audit log and the security
+  # events, once. The signed-in action acts only on the caller's own alert,
+  # and another account's alert and a made-up id are refused alike.
+  src/server/services/sign-in-alert-report.test.ts
+  src/server/actions/sign-in-alerts.test.ts
+  # Sign-in alerts, the reads: a member's own alerts and "This was me" (one
+  # update of the caller's own open alert, refused while the authenticator
+  # step is owed), and the organization's list for owners and admins only,
+  # asked in the order authenticator step, role, read, with the active
+  # organization, naming the device family and never the member's label.
+  src/server/services/sign-in-alerts.test.ts
+  'src/app/(dashboard)/dashboard/settings/security/sign-ins/page.test.tsx'
+  # Sign-in alerts, what a notice or an email to other people may carry of a
+  # member's own name (cut to 80 characters, no control or invisible
+  # character, never in a title or a subject), the city a row may hold, and
+  # the security event of an alert (the member's organizations only).
+  src/lib/auth/sign-in-alert-words.test.ts
+  src/lib/place-name.test.ts
+  src/server/security/sign-in-alert-events.test.ts
+  # A sign-in by a password-reset link is noted after the answer, which does
+  # not change and cannot be reached by anything the note does; a magic link,
+  # an invite, an email change and a sign-up note nothing.
+  src/app/auth/confirm/route.sign-in-alert.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

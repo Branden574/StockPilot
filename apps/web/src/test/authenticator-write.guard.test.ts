@@ -321,7 +321,7 @@ const REVIEWED: Record<string, Reviewed> = {
   'server/actions/sign-in-alerts.ts#reportSignInAlertAction': {
     kind: 'own-account',
     reason:
-      "The member's own sign-in alert, reported as not theirs: it marks the alert, ends every session of their account and forgets that account's device or country row. It can only sign the account out, so a session that still owes the authenticator step may do it.",
+      "The member's own sign-in alert, reported as not theirs: it ends every session of their account, marks the alert and forgets that account's device or country row. It also tells the owners and admins of the member's organizations once per alert (an in-app notice, which their phones are pushed, and an email, in fixed words) and writes an audit row in each of those organizations. It changes nothing else of any organization, and the worst it does to the account is end its sessions, so a session that still owes the authenticator step may do it.",
     writes: [
       'audit_logs.insert',
       'audit_logs.upsert',
@@ -335,7 +335,7 @@ const REVIEWED: Record<string, Reviewed> = {
   'server/services/sign-in-alert-report.ts#reportSignInAlertNotMe': {
     kind: 'own-account',
     reason:
-      "The not-me report itself, reached from the signed-in action above and from the alert email's signed link: the same writes, about the alert's own account only.",
+      "The not-me report itself, reached from the signed-in action above and from the alert email's signed link: the same writes, about the alert's own account, and the same telling of the owners and admins of that account's organizations once per alert (a notice, an email, an audit row in each organization).",
     writes: [
       'audit_logs.insert',
       'audit_logs.upsert',
