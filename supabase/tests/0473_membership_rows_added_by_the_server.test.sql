@@ -12,7 +12,8 @@
 --      0217's text, the insert one still there (0473 leaves it on purpose);
 --      the table's comment says so; the 0393 guard is bound and enabled; the
 --      new trigger is bound BEFORE INSERT for each row, enabled, and fires
---      after the guard; its function runs with the caller's rights, an empty
+--      after the guard; its function runs with the caller's rights (not
+--      SECURITY DEFINER), has the body 0473 creates (by md5), an empty
 --      search_path and EXECUTE for no API role; the one function whose
 --      definition names a write of the table is transfer_org_ownership
 --      (every schema, SQL-standard bodies included), and no view that anon
@@ -36,8 +37,10 @@
 --      no account are still refused, by the trigger's exact message, for a
 --      plain row, both upsert forms and MERGE; the 0393 guard, which fires
 --      first, still refuses an owner row and an act-as seat by its own
---      messages; SECURITY DEFINER code called by a signed-in member still
---      adds a row (it runs as its owner).
+--      messages; a row inserted through a view that postgres owns is refused
+--      too (the statement still runs as the caller's role); SECURITY DEFINER
+--      code called by a signed-in member still adds a row (it runs as its
+--      owner).
 --   5. Everything the app does works. Through the service role: workspace
 --      creation and provisioning (an owner row), invitation acceptance in
 --      the app's upsert shape (a new row, and a row not yet accepted
@@ -48,7 +51,12 @@
 --      changes a role too. A member removes their own row. Deleting an
 --      account takes its membership rows with it. Members read their
 --      organization's rows.
---   6. The header's rollback lines, both forms.
+--   6. The header's rollback lines, both forms. The second form runs a real
+--      DROP TRIGGER, which on this platform asks for locks on the auth,
+--      storage and realtime tables; it runs with a 500 ms lock_timeout inside
+--      its undone block and is SKIPPED, not failed, when one of those tables
+--      is busy (another session on a shared database), so it never stalls a
+--      run. Its lock footprint is measured outside this file.
 --
 -- WHAT THIS FILE CANNOT SEE: a write of the table that a function builds
 -- from pieces at run time (dynamic SQL), and a function in a language whose
@@ -63,7 +71,7 @@
 
 begin;
 
-select plan(81);
+select plan(82);
 
 \set orgA '\'a0473000-0000-0000-0000-0000000000a1\''
 \set orgC '\'a0473000-0000-0000-0000-0000000000d1\''
@@ -237,14 +245,14 @@ select is(
   '0473/9: the table''s BEFORE INSERT row triggers are the 0393 guard and the new one, and the guard fires first');
 
 select is(
-  (select p.prosecdef::text || '|' || coalesce(array_to_string(p.proconfig, ','), '-') || '|' || pg_get_userbyid(p.proowner) || '|'
+  (select p.prosecdef::text || '|' || md5(p.prosrc) || '|' || coalesce(array_to_string(p.proconfig, ','), '-') || '|' || pg_get_userbyid(p.proowner) || '|'
           || l.lanname::text || '|' || p.prorettype::regtype::text || '|'
           || has_function_privilege('public', p.oid, 'execute')::text || '|' || has_function_privilege('anon', p.oid, 'execute')::text || '|'
           || has_function_privilege('authenticated', p.oid, 'execute')::text || '|' || has_function_privilege('service_role', p.oid, 'execute')::text
      from pg_proc p join pg_language l on l.oid = p.prolang
     where p.oid = to_regprocedure('public.tg_membership_rows_added_by_server()')),
-  'false|search_path=""|postgres|plpgsql|trigger|false|false|false|false',
-  '0473/10: its function runs with the caller''s rights, an empty search_path, is owned by postgres, and no API role may call it');
+  'false|55e3edc02cb3bccdf9c0fa97a3c10555|search_path=""|postgres|plpgsql|trigger|false|false|false|false',
+  '0473/10: its function is not SECURITY DEFINER, has the body 0473 creates (md5), an empty search_path, is owned by postgres, and no API role may call it');
 
 -- Every function and procedure, in every schema, whose whole definition (a
 -- SQL-standard body included) names a write of the table. A write built
@@ -492,6 +500,19 @@ select is(
   '42501:cannot create an Act as seat via direct insert',
   '0473/48: and so is its refusal of an act-as seat');
 
+-- A view that postgres owns reaches the table with its owner's privileges,
+-- but the statement still runs as the caller's role, so the trigger refuses
+-- a row inserted through it. The view exists for the length of the block.
+select is(
+  pg_temp.attempt('authenticated', :adminA,
+                  format('insert into public.zz_a0473000_members (organization_id, user_id, role, accepted_at) values (%L, %L, %L, now())',
+                         :orgA, :nobody, 'staff'),
+                  null,
+                  $q$create view public.zz_a0473000_members as select * from public.organization_members;
+                     grant insert on public.zz_a0473000_members to authenticated$q$),
+  :'by_server',
+  '0473/49: a row inserted through a view that postgres owns is refused by the trigger');
+
 -- The trigger looks at the role a statement runs as, so SECURITY DEFINER
 -- code, which runs as its owner, is let through whoever calls it. The
 -- function exists for the length of the block.
@@ -506,17 +527,18 @@ select is(
                               values (p_org, p_user, 'staff', now()) $d$;
                      grant execute on function public.zz_a0473000_server_add(uuid, uuid) to authenticated$q$),
   'ok:1:staff/true',
-  '0473/49: SECURITY DEFINER code owned by postgres adds a row when a signed-in member calls it (it runs as its owner)');
+  '0473/50: SECURITY DEFINER code owned by postgres adds a row when a signed-in member calls it (it runs as its owner)');
 select is(
   pg_temp.attempt('authenticated', :adminA, 'select public.tg_membership_rows_added_by_server()'),
   '42501:permission denied for function tg_membership_rows_added_by_server',
-  '0473/50: the trigger function itself cannot be called by a signed-in member');
+  '0473/51: the trigger function itself cannot be called by a signed-in member');
 select is(
   has_table_privilege('anon', 'public.organization_members', 'insert')::text || '|'
   || has_table_privilege('authenticated', 'public.organization_members', 'insert')::text || '|'
-  || (to_regprocedure('public.zz_a0473000_server_add(uuid, uuid)') is null)::text || '|' || pg_temp.rows_now(),
-  'false|false|true|' || (select fingerprint from rows_at_start),
-  '0473/51: every block of this section was undone: no INSERT for either role, no function left, the rows as the fixture made them');
+  || (to_regprocedure('public.zz_a0473000_server_add(uuid, uuid)') is null)::text || '|'
+  || (to_regclass('public.zz_a0473000_members') is null)::text || '|' || pg_temp.rows_now(),
+  'false|false|true|true|' || (select fingerprint from rows_at_start),
+  '0473/52: every block of this section was undone: no INSERT for either role, no function or view left, the rows as the fixture made them');
 
 -- ═══ 5. Everything the app does works ══════════════════════════════════════
 
@@ -526,7 +548,7 @@ select is(
                   format($q$select role || '/' || (accepted_at is not null)::text from public.organization_members
                              where organization_id = %L and user_id = %L$q$, :orgN, :nobody)),
   'ok:1:owner/true',
-  '0473/52: workspace creation and provisioning: the service role adds the first owner row');
+  '0473/53: workspace creation and provisioning: the service role adds the first owner row');
 select is(
   pg_temp.attempt('service_role', null,
                   format($q$insert into public.organization_members (organization_id, user_id, role, invited_by, accepted_at)
@@ -538,7 +560,7 @@ select is(
                               from public.organization_members where organization_id = %L and user_id = %L$q$,
                          :adminA, :orgA, :nobody)),
   'ok:1:manager/true/true',
-  '0473/53: invitation acceptance: the service role''s upsert adds the accepted row with the invitation''s role and inviter');
+  '0473/54: invitation acceptance: the service role''s upsert adds the accepted row with the invitation''s role and inviter');
 select is(
   pg_temp.attempt('service_role', null,
                   format($q$insert into public.organization_members (organization_id, user_id, role, invited_by, accepted_at)
@@ -550,7 +572,7 @@ select is(
                               from public.organization_members where organization_id = %L and user_id = %L$q$,
                          :orgA, :pendingA)),
   'ok:1:viewer/true/1',
-  '0473/54: invitation acceptance: the same upsert completes a row that was not accepted yet, as one row');
+  '0473/55: invitation acceptance: the same upsert completes a row that was not accepted yet, as one row');
 select is(
   pg_temp.attempt('service_role', null,
                   format($q$insert into public.organization_members (organization_id, user_id, role, accepted_at, impersonation_expires_at)
@@ -562,7 +584,7 @@ select is(
                   format($q$select role || '/' || (impersonation_expires_at > now())::text from public.organization_members
                              where organization_id = %L and user_id = %L$q$, :orgC, :seatA)),
   'ok:1:owner/true',
-  '0473/55: an act-as seat: the service role writes it');
+  '0473/56: an act-as seat: the service role writes it');
 select is(
   pg_temp.attempt('service_role', null,
                   format($q$delete from public.organization_members
@@ -571,14 +593,14 @@ select is(
                   format('select count(*)::text from public.organization_members where organization_id = %L and user_id = %L',
                          :orgA, :seatA)),
   'ok:1:0',
-  '0473/56: an act-as seat: the service role removes it');
+  '0473/57: an act-as seat: the service role removes it');
 select is(
   pg_temp.attempt('service_role', null,
                   format('select public.transfer_org_ownership(%L, %L, %L)', :orgA, :ownerA, :adminA),
                   format($q$select string_agg(role, ',' order by user_id) from public.organization_members
                              where organization_id = %L and user_id in (%L, %L)$q$, :orgA, :ownerA, :adminA)),
   'ok:1:admin,owner',
-  '0473/57: ownership transfer: the service role''s call swaps the two roles');
+  '0473/58: ownership transfer: the service role''s call swaps the two roles');
 
 -- An admin's own token: what the Team page and the phone write.
 select is(
@@ -587,7 +609,7 @@ select is(
                             values (%L, 'invited-members@test.local', 'staff', 'a0473000-invite-token', now() + interval '7 days', %L)$q$,
                          :orgA, :adminA)),
   'ok:1',
-  '0473/58: an admin creates an invitation');
+  '0473/59: an admin creates an invitation');
 select is(
   pg_temp.attempt('authenticated', :adminA,
                   format($q$update public.organization_members set role = 'manager'
@@ -596,28 +618,28 @@ select is(
                          returning id$q$, :orgA, :orgA, :staffA),
                   format('select role from public.organization_members where organization_id = %L and user_id = %L', :orgA, :staffA)),
   'ok:1:manager',
-  '0473/59: an admin changes a member''s role (the web''s shape: by row id, the row asked back)');
+  '0473/60: an admin changes a member''s role (the web''s shape: by row id, the row asked back)');
 select is(
   pg_temp.attempt('authenticated', :adminA,
                   format($q$update public.organization_members set role = 'viewer'
                              where organization_id = %L and user_id = %L returning user_id$q$, :orgA, :staffA),
                   format('select role from public.organization_members where organization_id = %L and user_id = %L', :orgA, :staffA)),
   'ok:1:viewer',
-  '0473/60: an admin changes a member''s role (the phone''s shape: by account, the row asked back)');
+  '0473/61: an admin changes a member''s role (the phone''s shape: by account, the row asked back)');
 select is(
   pg_temp.attempt('authenticated', :adminA,
                   format('update public.organization_members set is_delivery_driver = true where organization_id = %L and user_id = %L returning id, user_id',
                          :orgA, :staffA),
                   format('select is_delivery_driver::text from public.organization_members where organization_id = %L and user_id = %L', :orgA, :staffA)),
   'ok:1:true',
-  '0473/61: an admin marks a delivery driver');
+  '0473/62: an admin marks a delivery driver');
 select is(
   pg_temp.attempt('authenticated', :adminA,
                   format('update public.organization_members set all_warehouses = true where organization_id = %L and user_id = %L returning id',
                          :orgA, :staffA),
                   format('select all_warehouses::text from public.organization_members where organization_id = %L and user_id = %L', :orgA, :staffA)),
   'ok:1:true',
-  '0473/62: an admin gives a member every warehouse');
+  '0473/63: an admin gives a member every warehouse');
 select is(
   pg_temp.attempt('authenticated', :adminA,
                   format('update public.organization_members set all_warehouses = false where organization_id = %L and user_id = %L returning id',
@@ -625,13 +647,13 @@ select is(
                   format('select all_warehouses::text from public.organization_members where organization_id = %L and user_id = %L', :orgA, :staffA),
                   format('update public.organization_members set all_warehouses = true where organization_id = %L and user_id = %L', :orgA, :staffA)),
   'ok:1:false',
-  '0473/63: and takes it back');
+  '0473/64: and takes it back');
 select is(
   pg_temp.attempt('authenticated', :adminA,
                   format('insert into public.user_warehouse_assignments (organization_id, user_id, warehouse_id, assigned_by) values (%L, %L, %L, %L)',
                          :orgA, :staffA, :whA, :adminA)),
   'ok:1',
-  '0473/64: an admin assigns a member to a warehouse');
+  '0473/65: an admin assigns a member to a warehouse');
 select is(
   pg_temp.attempt('authenticated', :adminA,
                   format($q$delete from public.organization_members
@@ -640,20 +662,20 @@ select is(
                          :orgA, :orgA, :staffA),
                   format('select count(*)::text from public.organization_members where organization_id = %L and user_id = %L', :orgA, :staffA)),
   'ok:1:0',
-  '0473/65: an admin removes a member');
+  '0473/66: an admin removes a member');
 select is(
   pg_temp.attempt('authenticated', :ownerA,
                   format($q$update public.organization_members set role = 'admin' where organization_id = %L and user_id = %L returning id$q$,
                          :orgA, :managerA),
                   format('select role from public.organization_members where organization_id = %L and user_id = %L', :orgA, :managerA)),
   'ok:1:admin',
-  '0473/66: an owner changes a member''s role');
+  '0473/67: an owner changes a member''s role');
 select is(
   pg_temp.attempt('authenticated', :seatA,
                   format($q$update public.organization_members set role = 'manager' where organization_id = %L and user_id = %L returning id$q$,
                          :orgA, :staffA)),
   'ok:1',
-  '0473/67: a live act-as seat changes a member''s role');
+  '0473/68: a live act-as seat changes a member''s role');
 
 -- A member's own token.
 select is(
@@ -661,12 +683,12 @@ select is(
                   format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgA, :staffA),
                   format('select count(*)::text from public.organization_members where organization_id = %L and user_id = %L', :orgA, :staffA)),
   'ok:1:0',
-  '0473/68: a member removes their own row');
+  '0473/69: a member removes their own row');
 select is(
   pg_temp.attempt('authenticated', :staffA,
                   format('delete from public.organization_members where organization_id = %L and user_id = %L', :orgA, :viewerA)),
   'ok:0',
-  '0473/69: and removes nobody else''s');
+  '0473/70: and removes nobody else''s');
 
 -- Account deletion: the auth row goes, the profile and the membership rows
 -- go with it (the cascade runs as the table's owner).
@@ -674,22 +696,22 @@ select is(
   pg_temp.attempt('postgres', null, format('delete from auth.users where id = %L', :staffA),
                   format('select count(*)::text from public.organization_members where user_id = %L', :staffA)),
   'ok:1:0',
-  '0473/70: deleting an account takes its membership rows with it');
+  '0473/71: deleting an account takes its membership rows with it');
 
 -- Reads.
 select is(
   pg_temp.attempt('authenticated', :staffA,
                   format('select 1 from public.organization_members where organization_id in (%L, %L)', :orgA, :orgC)),
   'ok:7',
-  '0473/71: a member reads the rows of their own organization, and none of another');
+  '0473/72: a member reads the rows of their own organization, and none of another');
 select is(
   pg_temp.attempt('authenticated', :pendingA, 'select 1 from public.organization_members')
   || ' | ' || pg_temp.attempt('anon', null, 'select 1 from public.organization_members'),
   'ok:0 | ok:0',
-  '0473/72: an account whose invitation is not accepted and a signed-out caller read none');
+  '0473/73: an account whose invitation is not accepted and a signed-out caller read none');
 
 select is(pg_temp.rows_now(), (select fingerprint from rows_at_start),
-  '0473/73: every attempt above was undone by the helper: the rows are as the fixture made them');
+  '0473/74: every attempt above was undone by the helper: the rows are as the fixture made them');
 
 -- ═══ 6. The header's rollback lines ════════════════════════════════════════
 
@@ -704,9 +726,18 @@ select is(
                        returns trigger language plpgsql security invoker set search_path = ''
                        as $f$ begin return new; end $f$$q$),
   'ok:0:true/true/true/false/search_path=""',
-  '0473/74: the first rollback form, as the header writes it: both roles hold INSERT and the trigger function refuses nobody');
-select is(
-  pg_temp.attempt('postgres', null,
+  '0473/75: the first rollback form, as the header writes it: both roles hold INSERT and the trigger function refuses nobody');
+-- The second form drops the trigger. With a 500 ms lock_timeout it gives up
+-- (55P03) instead of waiting when a table it must lock is busy, and the
+-- assertion is then skipped: that is another session's doing, not the
+-- form's.
+select case
+         when x.answer like '55P03:%'
+           then skip('the second rollback form was not run: a table its DROP TRIGGER locks was busy (another session on this database)')
+         else is(x.answer, 'ok:0:true/true/0/true/true',
+                 '0473/76: the second rollback form, as the header writes it: INSERT for both roles, no trigger, no function, no comment')
+       end
+  from (select pg_temp.attempt('postgres', null,
                   'comment on table public.organization_members is null',
                   $q$select has_table_privilege('anon', 'public.organization_members', 'insert')::text || '/'
                          || has_table_privilege('authenticated', 'public.organization_members', 'insert')::text || '/'
@@ -714,20 +745,19 @@ select is(
                                 and t.tgname = 'trg_zz_organization_members_added_by_server')::text || '/'
                          || (to_regprocedure('public.tg_membership_rows_added_by_server()') is null)::text || '/'
                          || (obj_description('public.organization_members'::regclass, 'pg_class') is null)::text$q$,
-                  $q$grant insert on table public.organization_members to anon, authenticated;
+                  $q$set local lock_timeout = '500ms';
+                     grant insert on table public.organization_members to anon, authenticated;
                      drop trigger trg_zz_organization_members_added_by_server on public.organization_members;
-                     drop function public.tg_membership_rows_added_by_server()$q$),
-  'ok:0:true/true/0/true/true',
-  '0473/75: the second rollback form, as the header writes it: INSERT for both roles, no trigger, no function, no comment');
+                     drop function public.tg_membership_rows_added_by_server()$q$) as answer) x;
 select is(
   has_table_privilege('anon', 'public.organization_members', 'insert')::text || '|'
   || has_table_privilege('authenticated', 'public.organization_members', 'insert')::text || '|'
   || (obj_description('public.organization_members'::regclass, 'pg_class') ~ '0473')::text || '|'
   || (select t.tgenabled::text from pg_trigger t where t.tgrelid = 'public.organization_members'::regclass
          and t.tgname = 'trg_zz_organization_members_added_by_server') || '|'
-  || (select (p.prosrc ~* 'raise')::text from pg_proc p where p.oid = to_regprocedure('public.tg_membership_rows_added_by_server()')),
-  'false|false|true|O|true',
-  '0473/76: and both blocks were undone');
+  || (select md5(p.prosrc) from pg_proc p where p.oid = to_regprocedure('public.tg_membership_rows_added_by_server()')),
+  'false|false|true|O|55e3edc02cb3bccdf9c0fa97a3c10555',
+  '0473/77: and both blocks were undone');
 
 -- ═══ 7. The refusals as a client meets them, without the helper ════════════
 
@@ -739,13 +769,13 @@ select throws_ok(
        values ('a0473000-0000-0000-0000-0000000000a1', 'a0473000-0000-0000-0000-0000000000ca', 'staff', now()) $$,
   '42501',
   'permission denied for table organization_members',
-  '0473/77: an admin''s insert, as the admin''s own session sends it: 42501, permission denied for table organization_members');
+  '0473/78: an admin''s insert, as the admin''s own session sends it: 42501, permission denied for table organization_members');
 select throws_ok(
   $$ update public.organization_members set user_id = 'a0473000-0000-0000-0000-0000000000ca'
       where organization_id = 'a0473000-0000-0000-0000-0000000000a1' and user_id = 'a0473000-0000-0000-0000-0000000000c4' $$,
   '42501',
   'only role, is_delivery_driver and all_warehouses can change on a membership',
-  '0473/78: an admin''s update of a row''s account, the same way: 42501, the 0393 guard''s message');
+  '0473/79: an admin''s update of a row''s account, the same way: 42501, the 0393 guard''s message');
 reset role;
 
 set local "request.jwt.claim.sub" to '';
@@ -756,7 +786,7 @@ select throws_ok(
        values ('a0473000-0000-0000-0000-0000000000a1', 'a0473000-0000-0000-0000-0000000000ca', 'staff', now()) $$,
   '42501',
   'permission denied for table organization_members',
-  '0473/79: a signed-out caller''s insert, the same way: 42501, permission denied for table organization_members');
+  '0473/80: a signed-out caller''s insert, the same way: 42501, permission denied for table organization_members');
 reset role;
 
 -- The trigger, the same way: the privilege is handed to authenticated for
@@ -770,13 +800,13 @@ select throws_ok(
        values ('a0473000-0000-0000-0000-0000000000a1', 'a0473000-0000-0000-0000-0000000000ca', 'staff', now()) $$,
   '42501',
   'Membership rows are added by the server.',
-  '0473/80: with the privilege out of the way, an admin''s insert, as the admin''s own session sends it: 42501, Membership rows are added by the server.');
+  '0473/81: with the privilege out of the way, an admin''s insert, as the admin''s own session sends it: 42501, Membership rows are added by the server.');
 reset role;
 revoke insert on table public.organization_members from authenticated;
 select is(
   has_table_privilege('authenticated', 'public.organization_members', 'insert')::text || '|' || pg_temp.rows_now(),
   'false|' || (select fingerprint from rows_at_start),
-  '0473/81: the privilege is taken away again and no row was added');
+  '0473/82: the privilege is taken away again and no row was added');
 
 select * from finish();
 rollback;

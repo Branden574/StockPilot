@@ -20,7 +20,9 @@
 --      added by the server.", when current_user is anon or authenticated, and
 --      returns the row untouched for every other role: service_role, the
 --      table's owner, and SECURITY DEFINER code, which runs as its owner. It
---      reads nothing of the row.
+--      reads nothing of the row. md5 of its body, as this file creates it:
+--      55e3edc02cb3bccdf9c0fa97a3c10555 (the post-condition and the test pin
+--      it, as the preflight pins the 0393 guard's).
 --   2. trg_zz_organization_members_added_by_server: BEFORE INSERT FOR EACH
 --      ROW on public.organization_members, bound to that function. A BEFORE
 --      INSERT row trigger fires for every row a statement proposes, so an
@@ -41,7 +43,7 @@
 --   nothing of it, and each refuses on its own. It only decides whose message
 --   is seen when both refuse (the guard's, for an owner row or an act-as
 --   seat). trg_zz_ is the prefix this schema gives a trigger that is meant
---   to fire late (the table's other two triggers carry it).
+--   to fire late (two of the table's three other triggers carry it).
 --
 -- WHAT IT DOES NOT CHANGE
 --   - An existing row's account, organization and acceptance are not written
@@ -76,10 +78,22 @@
 --   - supabase/tests/0473_membership_rows_added_by_the_server.test.sql fails
 --     if either role holds INSERT on the table or a column, or if the trigger
 --     is not bound and enabled, on a database built from the migrations.
---   - Neither looks at a live database. A check of one is one read: both
---     has_table_privilege('anon', 'public.organization_members', 'insert')
---     and the same for authenticated are false, and pg_trigger.tgenabled of
---     the trigger is 'O'.
+--   - Neither looks at a live database. A check of one is these reads:
+--       select has_table_privilege('anon', 'public.organization_members', 'insert'),
+--              has_table_privilege('authenticated', 'public.organization_members', 'insert'),
+--              has_any_column_privilege('anon', 'public.organization_members', 'insert'),
+--              has_any_column_privilege('authenticated', 'public.organization_members', 'insert');
+--       select t.tgtype, t.tgenabled, t.tgqual is null, t.tgfoid::regprocedure,
+--              p.prosecdef, md5(p.prosrc), array_to_string(p.proconfig, ',')
+--         from pg_trigger t join pg_proc p on p.oid = t.tgfoid
+--        where t.tgrelid = 'public.organization_members'::regclass
+--          and t.tgname = 'trg_zz_organization_members_added_by_server';
+--     The first answers false four times. The second answers one row: 7
+--     (BEFORE INSERT for each row), O (enabled), true (no WHEN clause),
+--     tg_membership_rows_added_by_server(), false (not SECURITY DEFINER: as
+--     definer it would always see its owner and refuse nobody), the md5
+--     above, and search_path="". An enabled trigger alone says little: the
+--     function behind it is what refuses.
 --
 -- WHO IS AFFECTED
 --   Refused (42501) for the roles a person's token can carry, anon and
@@ -125,6 +139,15 @@
 --       as $f$ begin return new; end $f$;
 --     grant insert on table public.organization_members to anon, authenticated;
 --     commit;
+--   This first form leaves three catalog comments stale: the function's, the
+--   trigger's and the table's still say a row inserted as anon or
+--   authenticated is refused (the function's comment could be rewritten with
+--   no table lock; the other two take a lock on the table each). The trigger
+--   stays bound and enabled, so only the function's body and md5 show that
+--   the rule is off (the reads under KEEPING IT SO). Switching the rule back
+--   on then takes a NEW migration that restates the function and revokes the
+--   privilege; the guard test fails on that file until it is listed in its
+--   REVIEWED list with the reason.
 --   To remove the objects as well, in one transaction:
 --     begin;
 --     set local lock_timeout = '900ms';
@@ -144,6 +167,16 @@
 --   ALTER TABLE ... DISABLE TRIGGER (SHARE ROW EXCLUSIVE on this table only)
 --   is the other. The guard test above fails on a later migration that does
 --   any of these, until that file is listed there with its reason.
+--
+-- THIS FILE REFUSES A SECOND RUN. It creates its function and its trigger
+-- with plain CREATE (a CREATE OR REPLACE would let a later run quietly
+-- restate them, and a DROP ... IF EXISTS first would cost the DROP TRIGGER
+-- locks), and the preflight stops with 55000, nothing applied, when either
+-- name exists. So a database that had this file and is to have it applied
+-- again (a lab revert before a new walk, a scratch database) must first lose
+-- both objects, with the second rollback form above: the trigger, then the
+-- function. A revert that only grants INSERT, or only replaces the function's
+-- body, leaves the next apply refused.
 --
 -- ERRORS
 --   55000 hint membership_rows_preflight: the table, its owner, row security
@@ -172,7 +205,8 @@
 --     nor while the file is still waiting for it.
 --   - What waits: an insert, update or delete of a membership row (ROW
 --     EXCLUSIVE: an accepted invitation, a role, driver or warehouse-access
---     change, a removal, an account deletion's cascade, an act-as seat), and
+--     change, an ownership transfer, a removal, an account deletion's
+--     cascade, an act-as seat), and
 --     a VACUUM, ANALYZE or schema change of this table. Such a write waits
 --     from the lock to the commit (milliseconds), or, when the file is itself
 --     queued behind an open write of the table, for as long as the file
@@ -318,7 +352,9 @@ begin
   end loop;
 
   -- The trigger: this function, BEFORE INSERT for each row (tgtype 7),
-  -- enabled, with no WHEN clause; the function as created.
+  -- enabled, with no WHEN clause; the function as created: not SECURITY
+  -- DEFINER, the body above by md5, an empty search_path, owned by postgres,
+  -- EXECUTE for no API role.
   if v_fn is null then
     v_bad := v_bad || ' public.tg_membership_rows_added_by_server() missing;';
   else
@@ -330,7 +366,8 @@ begin
     ) then
       v_bad := v_bad || ' trg_zz_organization_members_added_by_server is not bound BEFORE INSERT for each row, or is not enabled;';
     end if;
-    select p.prosecdef, pg_get_userbyid(p.proowner) as owner,
+    -- md5(prosrc) of the body created above, written in two halves.
+    select p.prosecdef, pg_get_userbyid(p.proowner) as owner, md5(p.prosrc) as got,
            coalesce(array_to_string(p.proconfig, ','), '-') as cfg,
            has_function_privilege('public', p.oid, 'execute') as public_x,
            has_function_privilege('anon', p.oid, 'execute') as anon_x,
@@ -339,9 +376,10 @@ begin
       into r
       from pg_proc p where p.oid = v_fn;
     if r.prosecdef or r.owner <> 'postgres' or r.cfg <> 'search_path=""'
+       or r.got <> ('55e3edc02cb3bccd' || 'f9c0fa97a3c10555')
        or r.public_x or r.anon_x or r.auth_x or r.svc_x then
-      v_bad := v_bad || format(' public.tg_membership_rows_added_by_server() is not as created (definer %s, owner %s, config %s, public %s, anon %s, authenticated %s, service_role %s);',
-                               r.prosecdef, r.owner, r.cfg, r.public_x, r.anon_x, r.auth_x, r.svc_x);
+      v_bad := v_bad || format(' public.tg_membership_rows_added_by_server() is not as created (definer %s, owner %s, config %s, md5 %s, public %s, anon %s, authenticated %s, service_role %s);',
+                               r.prosecdef, r.owner, r.cfg, r.got, r.public_x, r.anon_x, r.auth_x, r.svc_x);
     end if;
   end if;
 
