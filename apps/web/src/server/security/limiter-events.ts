@@ -158,6 +158,9 @@ export const LIMITER_NOT_SECURITY_EVENTS: Readonly<Record<string, string>> = {
   // that does not open) once an hour for everyone, per fault.
   'passkeys-step-report:': ALERT_PACING,
   'passkeys-key-report:': ALERT_PACING,
+  // A refused attestation format of a new passkey (server/security/passkeys.ts):
+  // once an hour per format, the format a word from a fixed list.
+  'passkey-format-report:': ALERT_PACING,
   'passkeys-records-missing-report:': ALERT_PACING,
   'passkeys-records-missing-report:function:': ALERT_PACING,
   // The platform console.

@@ -2223,7 +2223,7 @@ describe('review 4 finding 11: notes', () => {
       });
       expect(r, attestation).toMatchObject({
         ok: false,
-        message: pk.PASSKEY_WORDS.refused,
+        message: pk.PASSKEY_WORDS.formatRefused,
         reason: 'attestation_format',
       });
       expect(world.passkeys.filter((p) => p.user_id === userId)).toEqual([]);
@@ -2435,5 +2435,66 @@ describe('review B2: the leftover clean-up deletes only an unverified factor old
       );
       expect(src, rel).not.toMatch(/function reservedFactorInFlight|IN_FLIGHT_MS =/);
     }
+  });
+});
+
+describe('review B5: a refused attestation format is seen, named from a fixed list', () => {
+  async function addWith(
+    attestation: 'none' | 'packed-self' | 'packed-x5c' | 'apple' | 'tpm' | 'made-up-format',
+    email: string,
+  ) {
+    const userId = world.addAccount(email);
+    world.signIn(userId, 'aal1');
+    const soft = new SoftAuthenticator();
+    const start = await pk.startAddPasskey({
+      proof: { kind: 'password', password: SAMPLE_PASSWORD },
+    });
+    if (!start.ok) throw new Error(start.reason);
+    return pk.finishAddPasskey({
+      challengeId: start.challengeId,
+      response: soft.create(start.optionsJSON as never, { attestation }),
+      name: 'Work laptop',
+    });
+  }
+  const refusals = () => reportsTagged('passkeys.attestation_refused');
+
+  it("each refused format: the member's plain words, and one warning an hour per format with the account's hash", async () => {
+    countingLimiter();
+    const cases = [
+      ['packed-x5c', 'packed-x5c'],
+      ['apple', 'apple'],
+      ['tpm', 'tpm'],
+      ['made-up-format', 'other'],
+    ] as const;
+    for (const [attestation] of cases) {
+      for (const n of [1, 2]) {
+        expect(await addWith(attestation, `${attestation}-${n}@example.test`)).toMatchObject({
+          ok: false,
+          message: pk.PASSKEY_WORDS.formatRefused,
+          reason: 'attestation_format',
+        });
+      }
+    }
+    // A second refusal of the same format in the hour (another account) says nothing more.
+    expect(refusals().map((r) => r.extra?.format)).toEqual(cases.map(([, word]) => word));
+    for (const r of refusals()) expect(r).toMatchObject({ level: 'warning', extra: hashed });
+    // Never the caller's own text.
+    expect(JSON.stringify(refusals())).not.toContain('sample-made-up-format');
+    const paces = vi
+      .mocked(checkRateLimit)
+      .mock.calls.filter(([k]) => String(k).startsWith('passkey-format-report:'));
+    expect(new Set(paces.map(([k]) => String(k)))).toEqual(
+      new Set(cases.map(([, word]) => `passkey-format-report:${word}`)),
+    );
+    for (const [, limit, windowMs, mode] of paces) {
+      expect([limit, windowMs, mode]).toEqual([1, 60 * 60_000, 'closed']);
+    }
+    expect(pk.PASSKEY_WORDS.formatRefused).toMatch(/^This passkey was not accepted\./);
+  });
+
+  it('the formats that are accepted report nothing', async () => {
+    expect(await addWith('none', 'none-format@example.test')).toMatchObject({ ok: true });
+    expect(await addWith('packed-self', 'self-format@example.test')).toMatchObject({ ok: true });
+    expect(refusals()).toEqual([]);
   });
 });

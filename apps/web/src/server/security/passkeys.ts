@@ -141,6 +141,7 @@ export const PASSKEY_WORDS = {
     'Your device did not check it was you. Try again and use your face, fingerprint or device PIN.',
   counterWentBack: "This passkey can't be used. Remove it in Settings and add it again.",
   refused: 'That passkey answer was not accepted. Try again.',
+  formatRefused: 'This passkey was not accepted. Try a different passkey or device.',
   tryAgain: 'Try again.',
   tooMany: 'Too many tries. Wait a few minutes and try again.',
   busy: 'Busy right now. Wait a minute and try again.',
@@ -916,18 +917,44 @@ function crossOriginOf(clientDataJSON: string): boolean | null {
  * refused here, before the library, so no registration can make the server
  * fetch anything. A browser asked for 'none' sends 'none' (it may keep a
  * packed self-attestation, which carries nothing identifying).
+ *
+ * null when the answer is one of those two; otherwise the refused format as
+ * a word from a fixed list (review B5), never the caller's own text.
  */
-function attestationWithoutCertificates(attestationObject: string): boolean {
+function refusedAttestationFormat(attestationObject: string): RefusedFormat | null {
   try {
     const decoded = decodeAttestationObject(ownBytes(Buffer.from(attestationObject, 'base64url')));
     const fmt = decoded.get('fmt');
     const statement = decoded.get('attStmt');
-    if (!(statement instanceof Map)) return false;
-    if (fmt === 'none') return statement.size === 0;
-    if (fmt === 'packed') return !statement.has('x5c') && !statement.has('ecdaaKeyId');
-    return false;
+    if (!(statement instanceof Map)) return 'other';
+    if (fmt === 'none') return statement.size === 0 ? null : 'other';
+    if (fmt === 'packed') {
+      if (statement.has('x5c')) return 'packed-x5c';
+      return statement.has('ecdaaKeyId') ? 'other' : null;
+    }
+    const named = REFUSED_FORMATS.find((f) => f === fmt);
+    return named ?? 'other';
   } catch {
-    return false;
+    return 'other';
+  }
+}
+
+/** The formats a refusal report may name (review B5); anything else is 'other'. */
+const REFUSED_FORMATS = ['fido-u2f', 'tpm', 'android-key', 'android-safetynet', 'apple'] as const;
+type RefusedFormat = (typeof REFUSED_FORMATS)[number] | 'packed-x5c' | 'other';
+
+/**
+ * Review B5: a refused format is seen, so a device or password manager that
+ * sends one is found: a warning with the format's word and the account as a
+ * hash of its id, at most once an hour per format (closed limiter). Never
+ * throws.
+ */
+async function reportRefusedFormat(userId: string, format: RefusedFormat): Promise<void> {
+  try {
+    const paced = await checkRateLimit(`passkey-format-report:${format}`, 1, 60 * MIN, 'closed');
+    if (paced.allowed) reportPasskeys('attestation_refused', 'warning', userId, { format });
+  } catch {
+    // A report never changes the answer.
   }
 }
 
@@ -1665,9 +1692,11 @@ export async function finishAddPasskey(input: {
   const crossOrigin = crossOriginOf(answer.response.clientDataJSON);
   if (crossOrigin === null) return refuseByVerdict('refused', userId);
   if (crossOrigin) return refuseByVerdict('wrong_site', userId);
-  if (!attestationWithoutCertificates(answer.response.attestationObject)) {
+  const refusedFormat = refusedAttestationFormat(answer.response.attestationObject);
+  if (refusedFormat !== null) {
     await recordPasskeyEvent('passkey_refused', userId);
-    return fail('validation_error', PASSKEY_WORDS.refused, 'attestation_format');
+    await reportRefusedFormat(userId, refusedFormat);
+    return fail('validation_error', PASSKEY_WORDS.formatRefused, 'attestation_format');
   }
   let verification: Awaited<ReturnType<typeof verifyRegistrationResponse>>;
   try {

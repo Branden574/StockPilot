@@ -70,9 +70,10 @@ export interface CreateKnobs {
    * The attestation statement: 'none' (the default, what a browser sends when
    * asked for none), 'packed-self' (packed self-attestation, signed by the new
    * key, no certificate), or a statement that carries a certificate chain
-   * ('packed-x5c', 'apple'; made-up bytes, never a real chain).
+   * ('packed-x5c', 'apple', 'tpm'; made-up bytes, never a real chain), or a
+   * format no one defined ('made-up-format': fmt 'sample-made-up-format').
    */
-  attestation?: 'none' | 'packed-self' | 'packed-x5c' | 'apple';
+  attestation?: 'none' | 'packed-self' | 'packed-x5c' | 'apple' | 'tpm' | 'made-up-format';
 }
 
 export interface GetKnobs {
@@ -186,7 +187,17 @@ export class SoftAuthenticator {
             ]
           : kind === 'apple'
             ? ['apple', new Map<Cbor, Cbor>([['x5c', [madeUpCert]]])]
-            : ['none', new Map<Cbor, Cbor>()];
+            : kind === 'tpm'
+              ? [
+                  'tpm',
+                  new Map<Cbor, Cbor>([
+                    ['ver', '2.0'],
+                    ['x5c', [madeUpCert]],
+                  ]),
+                ]
+              : kind === 'made-up-format'
+                ? ['sample-made-up-format', new Map<Cbor, Cbor>()]
+                : ['none', new Map<Cbor, Cbor>()];
     const attestationObject = cborEncode(
       new Map<Cbor, Cbor>([
         ['fmt', fmt],
