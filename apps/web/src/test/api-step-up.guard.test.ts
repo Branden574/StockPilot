@@ -323,6 +323,12 @@ const NON_SESSION: Record<string, NonSession> = {
     reason:
       "Confirms a public order request with the confirmation email's single-use token, checked by confirm_public_order_request with the service client.",
   },
+  'sign-in-alert/route.ts': {
+    methods: ['GET', 'POST'],
+    auth: 'public token',
+    reason:
+      "A sign-in alert email's signed seven-day link (an HMAC over the alert, the account and the day; the account is read from the alert's own row). GET shows the alert and writes nothing; POST, limited per address and per alert, runs the not-me report with the service client. It reads no session.",
+  },
   'unsubscribe/route.ts': {
     methods: ['GET', 'POST'],
     auth: 'public token',

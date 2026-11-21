@@ -205,7 +205,10 @@ const read = (id: string) => ({
   release_id: id,
   // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: revision 1): the API key audit release is re-announced as revision 2, so a read of it is recorded at revision 2.
   // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: id === 'api-key-audit-2026-11' ? 2 : 1): the emptied fields and schedule completion release is re-announced as revision 2, so a read of it is recorded at revision 2.
-  revision: id === 'api-key-audit-2026-11' || id === 'emptied-fields-and-schedule-completion-2026-11' ? 2 : 1,
+  revision:
+    id === 'api-key-audit-2026-11' || id === 'emptied-fields-and-schedule-completion-2026-11'
+      ? 2
+      : 1,
   dismissed_at: null,
   opened_at: '2026-11-03T00:00:00Z',
   read_at: '2026-11-03T00:00:00Z',
@@ -658,7 +661,19 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
     // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: without it): the delete account release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), so it is read first, and the notice this test checks is the one it checked before.
-    expect(buildReleaseList(RELEASES, member, [read('phone-authenticator-set-up-2026-11'), read('export-receipt-access-fixes-2026-11'), deleteConfirmRead, authSetUpRead], null).latestUnread?.id).toBe(
+    expect(
+      buildReleaseList(
+        RELEASES,
+        member,
+        [
+          read('phone-authenticator-set-up-2026-11'),
+          read('export-receipt-access-fixes-2026-11'),
+          deleteConfirmRead,
+          authSetUpRead,
+        ],
+        null,
+      ).latestUnread?.id,
+    ).toBe(
       // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: the emailed links release): the phone authenticator code release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: the phone authenticator code release): the phone screens by access release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: the phone screens by access release): the email change release is published after it and reaches every member, so a member is told it first (the count read rule release, the newest published, does not reach this member).
@@ -885,7 +900,14 @@ describe('the phone update release (B42, B23, B65, B75 and S5a)', () => {
       "ctx.supabase.rpc('revoke_my_other_sessions'",
     );
     expect(source('app/api/v1/auth/signed-in/route.ts')).toContain("event: 'user.signed_in',");
-    expect(source('lib/auth/login-device.ts')).toContain('if (hadKnownDevices && args.email) {');
+    // A first device (and a first country) is recorded without an alert, and
+    // an alert needs an address to go to.
+    expect(source('lib/auth/login-device.ts')).toContain(
+      'return { insertedNow: true, alerts: hadKnownDevices };',
+    );
+    expect(source('lib/auth/login-device.ts')).toContain(
+      'if (!(newDevice || newCountry) || !args.email) return;',
+    );
     expect(entry(PHONE_ID, 'app-sign-ins-in-audit-log').whatChanged).toContain(
       'StockPilot app on iPhone 15 Pro (iOS 18.1)',
     );

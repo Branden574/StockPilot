@@ -502,6 +502,11 @@ const OUTSIDE_ROUTES: Record<string, { kind: OutsideKind; reason: string }> = {
     reason:
       "A requester confirms their order request with the request's own hashed token; no member session is read.",
   },
+  'app/sign-in-alert/route.ts': {
+    kind: 'token-link',
+    reason:
+      "A sign-in alert email's signed link, limited per address and per alert on POST; no member session is read.",
+  },
   'app/unsubscribe/route.ts': {
     kind: 'token-link',
     reason:
@@ -582,7 +587,12 @@ function tableCallLines(file: string, src: string): number[] {
     if (
       ts.isCallExpression(n) &&
       ts.isPropertyAccessExpression(n.expression) &&
-      (n.expression.name.text === 'from' || n.expression.name.text === 'rpc')
+      (n.expression.name.text === 'from' || n.expression.name.text === 'rpc') &&
+      // Buffer.from(...) and Array.from(...) build a value; they read no table.
+      !(
+        ts.isIdentifier(n.expression.expression) &&
+        (n.expression.expression.text === 'Buffer' || n.expression.expression.text === 'Array')
+      )
     ) {
       lines.push(lineOf(sf, n));
     }
