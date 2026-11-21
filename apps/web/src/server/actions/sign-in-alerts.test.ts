@@ -10,7 +10,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *     server; another account's alert, a made-up id and a failed read are all
  *     refused alike), runs the same report the emailed link runs, and then
  *     signs this browser out too. A report that could not finish is said so,
- *     and this browser stays signed in to try again.
+ *     and this browser stays signed in to try again. An alert already
+ *     reported is said so, and nothing more happens (review 1, finding 2).
  */
 
 const h = vi.hoisted(() => ({
@@ -82,7 +83,7 @@ beforeEach(() => {
   };
   h.confirm.mockResolvedValue('confirmed');
   h.read.mockResolvedValue({ kind: 'found', alert: alert() });
-  h.report.mockResolvedValue({ outcome: 'done', firstReport: true });
+  h.report.mockResolvedValue({ outcome: 'done', adminsTold: true });
 });
 
 describe('confirmSignInAlertAction', () => {
@@ -142,6 +143,30 @@ describe('reportSignInAlertAction', () => {
     const res = await reportSignInAlertAction({ alertId: ALERT });
     expect(res).toMatchObject({ ok: false, error: { code: 'internal_error' } });
     expect(h.signOut).not.toHaveBeenCalled();
+  });
+
+  it('the words of a report that could not finish promise nothing that did not happen', async () => {
+    h.report.mockResolvedValue({ outcome: 'failed' });
+    const res = await reportSignInAlertAction({ alertId: ALERT });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.message).toBe('We could not finish this just now. Press the button again in a minute.');
+    }
+  });
+
+  it('an alert already reported: said so, nothing more happens, and this browser stays signed in', async () => {
+    h.report.mockResolvedValue({ outcome: 'already_reported' });
+    const res = await reportSignInAlertAction({ alertId: ALERT });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message:
+          'You already reported this sign-in. If you have not reset your password yet, reset it now.',
+      },
+    });
+    expect(h.signOut).not.toHaveBeenCalled();
+    expect(h.revalidate).toHaveBeenCalledWith('/dashboard/settings/security');
   });
 
   it('an id that is not a uuid is refused before any read', async () => {

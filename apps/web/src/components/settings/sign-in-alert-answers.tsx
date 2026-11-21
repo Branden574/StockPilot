@@ -9,7 +9,11 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { LocalDateTime } from '@/components/ui/local-datetime';
-import { signInAlertBadges, signInAlertPlaceWords } from '@/lib/auth/sign-in-alert-words';
+import {
+  NOT_ME_WORDS,
+  signInAlertBadges,
+  signInAlertPlaceWords,
+} from '@/lib/auth/sign-in-alert-words';
 import {
   confirmSignInAlertAction,
   reportSignInAlertAction,
@@ -24,9 +28,14 @@ import type { MySignInAlert } from '@/server/services/sign-in-alerts';
  *
  * While an alert is open the member can say "This was me" or "This was not
  * me". After "This was me" the alert can still be reported. "This was not me"
- * asks once more, because it signs out every session of the account, this
- * one too; then the browser goes to reset the password (a full page load:
- * this session's cookies are gone).
+ * asks once more, because it ends every session of the account, this one
+ * too; then the browser goes to reset the password (a full page load: this
+ * session's cookies are gone).
+ *
+ * The question's words are the shared ones (NOT_ME_WORDS): they promise what
+ * happens and no more (a device already open keeps its pass until it
+ * expires), and they say nothing about who is told, which is not known
+ * before the press (review 1, findings 1 and 8).
  */
 
 /** Where the page goes after a report. A seam for tests; a full load in the browser. */
@@ -76,6 +85,8 @@ function AnswerButtons({ alert }: { alert: MySignInAlert }) {
     if (!res.ok) {
       setReporting(false);
       setError(res.error.message);
+      // Reported already, from the email's link or another tab: show it so.
+      if (res.error.code === 'conflict') router.refresh();
       return;
     }
     leaveAfterReport.go('/reset');
@@ -106,9 +117,9 @@ function AnswerButtons({ alert }: { alert: MySignInAlert }) {
         onOpenChange={(open) => {
           if (!reporting) setAsking(open);
         }}
-        title="Sign out everywhere?"
-        description="This signs you out on every device, this one too. Then reset your password, so whoever signed in cannot sign in again. The owners and admins of your organization are told."
-        confirmLabel="Sign me out everywhere"
+        title="End every session?"
+        description={`This ends every session of your account, this one too. ${NOT_ME_WORDS.openDevice} ${NOT_ME_WORDS.thenReset}`}
+        confirmLabel="End every session"
         pending={reporting}
         error={error}
         onConfirm={() => void notMe()}

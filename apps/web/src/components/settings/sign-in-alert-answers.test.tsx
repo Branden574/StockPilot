@@ -8,8 +8,10 @@ import type { MySignInAlert } from '@/server/services/sign-in-alerts';
  * shows what was new ("New device", "New country: Mexico"), and while the
  * alert is open, "This was me" and "This was not me". Alerts whose session
  * has ended show under the list in "Recent sign-in alerts". "This was not me"
- * asks once more (it signs this device out too), then sends the member to
- * reset their password.
+ * asks once more (it ends this device's session too), then sends the member
+ * to reset their password. The words promise what happens and no more (review
+ * 1, finding 1), and say nothing about who is told before it is known
+ * (finding 8).
  */
 
 const h = vi.hoisted(() => ({
@@ -108,22 +110,51 @@ describe('a session with an open alert', () => {
     fireEvent.click(screen.getByRole('button', { name: 'This was not me' }));
     expect(h.report).not.toHaveBeenCalled();
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText(/signs you out on every device, this one too/)).toBeTruthy();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Sign me out everywhere' }));
+    expect(within(dialog).getByText(/ends every session of your account, this one too/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'End every session' }));
     await waitFor(() => expect(h.report).toHaveBeenCalledWith({ alertId: alert().id }));
     await waitFor(() => expect(h.assign).toHaveBeenCalledWith('/reset'));
+  });
+
+  it('the question says what happens and no more: an open device has up to about an hour, the reset closes the door', async () => {
+    render(<ActiveSessions sessions={SESSIONS as never} alerts={[alert()]} />);
+    fireEvent.click(screen.getByRole('button', { name: 'This was not me' }));
+    const dialog = await screen.findByRole('dialog');
+    const words = dialog.textContent ?? '';
+    expect(words).toContain('End every session?');
+    expect(words).toContain(
+      'A device that is already open can keep working for a short while, until its current pass expires. That is about an hour at most.',
+    );
+    expect(words).toContain('Then reset your password. That is what closes the door.');
+    expect(words).not.toMatch(/signs you out|sign me out|every device|everywhere|right away/i);
+    // Whether anyone is told is not known before the press.
+    expect(words).not.toMatch(/owners and admins/);
+  });
+
+  it('an alert already reported elsewhere: says so, stays on the page and reloads the list', async () => {
+    h.report.mockResolvedValue({
+      ok: false,
+      error: { code: 'conflict', message: 'You already reported this sign-in. If you have not reset your password yet, reset it now.' },
+    });
+    render(<ActiveSessions sessions={SESSIONS as never} alerts={[alert()]} />);
+    fireEvent.click(screen.getByRole('button', { name: 'This was not me' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'End every session' }));
+    expect(await within(dialog).findByText(/You already reported this sign-in/)).toBeTruthy();
+    expect(h.assign).not.toHaveBeenCalled();
+    await waitFor(() => expect(h.refresh).toHaveBeenCalled());
   });
 
   it('a report that could not finish stays on the page and says why', async () => {
     h.report.mockResolvedValue({
       ok: false,
-      error: { code: 'internal_error', message: 'We could not sign you out everywhere just now. Press the button again in a minute.' },
+      error: { code: 'internal_error', message: 'We could not finish this just now. Press the button again in a minute.' },
     });
     render(<ActiveSessions sessions={SESSIONS as never} alerts={[alert()]} />);
     fireEvent.click(screen.getByRole('button', { name: 'This was not me' }));
     const dialog = await screen.findByRole('dialog');
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Sign me out everywhere' }));
-    expect(await within(dialog).findByText(/could not sign you out everywhere/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'End every session' }));
+    expect(await within(dialog).findByText(/could not finish this just now/)).toBeTruthy();
     expect(h.assign).not.toHaveBeenCalled();
   });
 

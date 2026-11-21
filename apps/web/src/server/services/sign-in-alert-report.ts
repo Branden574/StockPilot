@@ -1,6 +1,11 @@
 import 'server-only';
 
 import {
+  NOT_ME_WORDS,
+  SIGN_IN_REPORTED_TITLE,
+  reportedMemberName,
+} from '@/lib/auth/sign-in-alert-words';
+import {
   SIGN_IN_ALERTS_LIST_PATH,
   sendSignedOutEverywhereEmail,
   sendSignInReportedEmail,
@@ -20,20 +25,26 @@ import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
  * (server/actions/sign-in-alerts.ts). Each caller has already decided the
  * alert is the member's own; this only acts on it.
  *
- * THE STEPS, in order:
- *   1. The alert is marked not_me, with its resolved_at, in ONE update that
+ * THE STEPS, in order (review 1, finding 2):
+ *   0. An alert that is already not_me does nothing more: no sign-out, no
+ *      telling. The answer is 'already_reported'. The sign-out below comes
+ *      before the mark, so an alert that reads not_me has had its sessions
+ *      ended at least once.
+ *   a. Every session of the account ends (revokeAllSessionsForUser). It is
+ *      safe to repeat. If it fails the answer is 'failed': nothing else
+ *      changes and nobody is told, so the member's next press is a full first
+ *      report and no sentence anywhere says a sign-out happened that did not.
+ *   b. The alert is marked not_me, with its resolved_at, in ONE update that
  *      changes only an alert not already not_me (the table requires the two
- *      together). "This was me" earlier does not stop it.
- *   2. Every session of the account ends (revokeAllSessionsForUser), whether
- *      or not step 1 changed a row: a retry after a report that stopped half
- *      way must still sign out.
- *   3. The device row of the alert is forgotten (by its hash) only when the
- *      alert was about a new device, and the country row only when it was
- *      about a new country, so the next sign-in from either alerts again.
- *   4. Only when step 1 changed the row (the first report), so a second press
- *      tells nobody again:
- *        - the member is emailed "signed out everywhere", only when step 2
- *          worked in this same call (the email would not be true otherwise);
+ *      together). "This was me" earlier does not stop it. An update that
+ *      fails is 'failed' (the sessions have ended; the retry runs everything
+ *      again). An update that changes no row means another press got there
+ *      first: 'already_reported', and that press does the telling.
+ *   c. Only when (b) changed the row, so each of these happens once per alert:
+ *        - the device row of the alert is forgotten (by its hash) only when
+ *          the alert was about a new device, and the country row only when it
+ *          was about a new country, so the next sign-in from either alerts
+ *          again;
  *        - the owners and admins of each organization the member belongs to
  *          (an accepted membership that is not a support act-as seat, at most
  *          5 organizations) get an in-app notice in each organization and one
@@ -41,15 +52,38 @@ import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
  *          Managers and staff are never told, and a member who is an admin is
  *          not told a second time as one; a disabled account gets no email
  *          (createNotification skips it too);
+ *        - the member is emailed that every session ended, with the reset
+ *          button;
  *        - one audit row per organization (security.sign_in_reported), or one
  *          with no organization when there is none or they could not be read;
  *        - one security event (phishing / flagged / sign_in_not_me), with the
  *          sign-in's place, not the reader's.
  *
- * Steps 1 and 2 decide the answer: 'done' only when the update answered and
- * every session ended. Everything after them is best effort; a failure is
- * reported with a code or a fixed word only (never an address or a name), and
- * never changes the answer. Never throws.
+ * THE EMAILS GO ONE AFTER ANOTHER (finding 3): the member's first, then each
+ * owner and admin, so several recipients never meet the mail provider's
+ * requests-per-second limit together (each send tries once more after a
+ * refusal for rate, lib/email/login-alert.ts). Emails that were not sent are
+ * reported ONCE, with how many, never an address.
+ *
+ * THE MEMBER'S NAME NEVER LEADS (finding 7). The member chooses it, and these
+ * messages reach other people from the security sender. A notice's title (the
+ * phone push's too) and the email's subject are fixed words; the name is in
+ * the body only, cut and cleaned (reportedMemberName), next to the member's
+ * sign-in address, which the member cannot edit.
+ *
+ * "THE OWNERS AND ADMINS WERE TOLD" IS SAID ONLY WHEN ONE WAS (finding 8).
+ * The answer carries adminsTold: at least one in-app notice was made or one
+ * email was sent. The member's email is sent before the admins' emails, so it
+ * goes by the notices alone. A sole owner, an account in no organization and
+ * a failed read all answer false, and the words then say nothing about it.
+ *
+ * (a) and (b) decide the answer. Everything in (c) is best effort; a failure
+ * is reported with a code, a count or a fixed word only (never an address or
+ * a name), and never changes the answer. Never throws.
+ *
+ * NOT COVERED: a function that stops between (b) and (c) has marked the alert
+ * and told nobody, and the retry is 'already_reported'. It is rare, the
+ * sessions have ended, and the member still sees the reset button.
  */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -82,7 +116,11 @@ export type SignInAlertRead =
   | { kind: 'failed' };
 
 export type SignInAlertReportAnswer =
-  | { outcome: 'done'; firstReport: boolean }
+  /** This press was the report. `adminsTold`: at least one owner or admin was told. */
+  | { outcome: 'done'; adminsTold: boolean }
+  /** The alert was reported before (or by a press at the same moment): nothing more was done. */
+  | { outcome: 'already_reported' }
+  /** The sessions could not be ended, or the alert could not be marked: press again. */
   | { outcome: 'failed' };
 
 const ALERT_COLUMNS =
@@ -143,7 +181,7 @@ export async function readSignInAlert(alertId: string): Promise<SignInAlertRead>
 
 type Admin = ReturnType<typeof createAdminClient>;
 
-function reportFailure(tag: string, extra: Record<string, string | null>): void {
+function reportFailure(tag: string, extra: Record<string, string | number | null>): void {
   void reportError(new Error('A sign-in alert report step failed'), {
     tag,
     level: 'warning',
@@ -151,7 +189,7 @@ function reportFailure(tag: string, extra: Record<string, string | null>): void 
   });
 }
 
-/** Step 1. Whether the update answered, and whether it changed the row. */
+/** Step (b). Whether the update answered, and whether it changed the row. */
 async function markNotMe(
   admin: Admin,
   alert: SignInAlertRecord,
@@ -175,7 +213,7 @@ async function markNotMe(
   }
 }
 
-/** Step 2. Never throws; revokeAllSessionsForUser reports its own failure. */
+/** Step (a). Never throws; revokeAllSessionsForUser reports its own failure. */
 async function signOutEverywhere(userId: string): Promise<boolean> {
   try {
     return (await revokeAllSessionsForUser(userId)).ok;
@@ -184,7 +222,7 @@ async function signOutEverywhere(userId: string): Promise<boolean> {
   }
 }
 
-/** Step 3: the rows that made this sign-in "known", so the next one alerts again. */
+/** Step (c), first: the rows that made this sign-in "known", so the next one alerts again. */
 async function forgetRows(admin: Admin, alert: SignInAlertRecord): Promise<void> {
   const deletes: Array<Promise<void>> = [];
   if (alert.newDevice && alert.deviceHash) {
@@ -358,16 +396,32 @@ function firstNameOf(fullName: string | null): string | null {
   return fullName?.split(/\s+/)[0] || null;
 }
 
-/** Step 4: tell the member, the owners and admins, the audit log and the security events. */
+/** One email's answer: sent or not. A send that throws was not sent. Never throws. */
+async function wasSent(send: () => Promise<{ ok: boolean }>): Promise<boolean> {
+  try {
+    return (await send()).ok === true;
+  } catch {
+    return false;
+  }
+}
+
+/** What the owners and admins read in the app (and on a phone's lock screen) under the fixed title. */
+function noticeBody(who: string, deviceFamily: string): string {
+  return `${who} said a sign-in from ${deviceFamily} was not them. ${NOT_ME_WORDS.theirSessionsEnded} ${NOT_ME_WORDS.openDevice} ${NOT_ME_WORDS.askThemToReset}`;
+}
+
+/**
+ * Step (c), the telling: the owners and admins, the member, the audit log and
+ * the security events. Answers whether at least one owner or admin was told.
+ */
 async function tellEveryone(
   admin: Admin,
   alert: SignInAlertRecord,
   args: {
-    signedOut: boolean;
     via: 'link' | 'signed_in';
     auditFrom: { ip: string | null; userAgent: string | null };
   },
-): Promise<void> {
+): Promise<boolean> {
   const place = { country: alert.country, city: alert.city };
   const signedInAt = new Date(alert.createdAt);
   const organizations = await organizationsOf(admin, alert.userId);
@@ -379,66 +433,18 @@ async function tellEveryone(
   ]);
   const memberPerson = people.get(alert.userId);
   const memberEmail = memberPerson?.email ?? null;
-  const memberName = memberPerson?.fullName || memberEmail || 'A member';
+  // The member's own name, for a BODY only: cut and cleaned, and always next
+  // to the sign-in address when there is one.
+  const memberName = reportedMemberName(memberPerson?.fullName);
+  const who =
+    memberName && memberEmail ? `${memberName} (${memberEmail})` : (memberName ?? memberEmail ?? 'A member');
 
-  const work: Array<Promise<unknown>> = [];
-
-  if (args.signedOut && memberEmail) {
-    work.push(
-      sendSignedOutEverywhereEmail({
-        to: memberEmail,
-        firstName: firstNameOf(memberPerson?.fullName ?? null),
-        device: alert.deviceLabel,
-        place,
-        signedInAt,
-      }).then((sent) => {
-        if (!sent.ok) reportFailure('security.sign_in_report_email_failed', { to: 'member' });
-      }),
-    );
-  }
-
-  const title = `${memberName} reported a sign-in they did not make`;
-  const body = `StockPilot signed them out on every device. The sign-in was from ${alert.deviceFamily}.`;
-  for (const t of told) {
-    work.push(
-      createNotification({
-        organizationId: t.organizationId,
-        userId: t.userId,
-        type: 'security.sign_in_reported',
-        title,
-        body,
-        link: SIGN_IN_ALERTS_LIST_PATH,
-        metadata: { alert_id: alert.id, member_id: alert.userId },
-      }),
-    );
-  }
-
-  // One email per person, naming the first of their organizations here.
-  const emailed = new Set<string>();
-  for (const t of told) {
-    if (emailed.has(t.userId)) continue;
-    emailed.add(t.userId);
-    const person = people.get(t.userId);
-    if (!person?.email || person.disabled) continue;
-    work.push(
-      sendSignInReportedEmail({
-        to: person.email,
-        adminFirstName: firstNameOf(person.fullName),
-        memberName,
-        memberEmail: memberEmail ?? '',
-        organizationName: names.get(t.organizationId) ?? 'your organization',
-        deviceFamily: alert.deviceFamily,
-        place,
-        signedInAt,
-      }).then((sent) => {
-        if (!sent.ok) reportFailure('security.sign_in_report_email_failed', { to: 'admin' });
-      }),
-    );
-  }
-
+  // The audit rows and the security event wait on nothing here; they are
+  // started now and collected at the end.
+  const records: Array<Promise<unknown>> = [];
   const auditTargets: Array<string | null> = reached.length > 0 ? reached : [null];
   for (const organizationId of auditTargets) {
-    work.push(
+    records.push(
       insertAuditRowReported({
         organization_id: organizationId,
         user_id: alert.userId,
@@ -452,13 +458,14 @@ async function tellEveryone(
           new_country: alert.newCountry,
           client: alert.client,
           via: args.via,
-          signed_out: args.signedOut,
+          // Always true since the sign-out comes first; kept so the rows read
+          // as they did.
+          signed_out: true,
         },
       }),
     );
   }
-
-  work.push(
+  records.push(
     recordSignInAlertEvent({
       reason: 'sign_in_not_me',
       userId: alert.userId,
@@ -466,8 +473,80 @@ async function tellEveryone(
       place,
     }),
   );
+  const recorded = Promise.allSettled(records);
 
-  await Promise.allSettled(work);
+  // The in-app notices first: they are quick, and the member's email below
+  // says "the owners and admins were told" only when one was made.
+  const body = noticeBody(who, alert.deviceFamily);
+  const notices = await Promise.allSettled(
+    told.map((t) =>
+      createNotification({
+        organizationId: t.organizationId,
+        userId: t.userId,
+        type: 'security.sign_in_reported',
+        title: SIGN_IN_REPORTED_TITLE,
+        body,
+        link: SIGN_IN_ALERTS_LIST_PATH,
+        metadata: { alert_id: alert.id, member_id: alert.userId },
+      }),
+    ),
+  );
+  const noticed = notices.some((n) => n.status === 'fulfilled' && typeof n.value === 'string');
+
+  // The emails, one after another: the member's, then one per owner or admin
+  // (naming the first of their organizations here).
+  let memberNotSent = 0;
+  if (memberEmail) {
+    const sent = await wasSent(() =>
+      sendSignedOutEverywhereEmail({
+        to: memberEmail,
+        firstName: firstNameOf(memberPerson?.fullName ?? null),
+        device: alert.deviceLabel,
+        place,
+        signedInAt,
+        adminsTold: noticed,
+      }),
+    );
+    if (!sent) memberNotSent = 1;
+  }
+
+  const recipients: Array<{ person: Person & { email: string }; organizationId: string }> = [];
+  const seen = new Set<string>();
+  for (const t of told) {
+    if (seen.has(t.userId)) continue;
+    seen.add(t.userId);
+    const person = people.get(t.userId);
+    if (!person?.email || person.disabled) continue;
+    recipients.push({ person: { ...person, email: person.email }, organizationId: t.organizationId });
+  }
+  let adminsSent = 0;
+  for (const { person, organizationId } of recipients) {
+    const sent = await wasSent(() =>
+      sendSignInReportedEmail({
+        to: person.email,
+        adminFirstName: firstNameOf(person.fullName),
+        memberName,
+        memberEmail: memberEmail ?? '',
+        organizationName: names.get(organizationId) ?? 'your organization',
+        deviceFamily: alert.deviceFamily,
+        place,
+        signedInAt,
+      }),
+    );
+    if (sent) adminsSent += 1;
+  }
+  const adminsNotSent = recipients.length - adminsSent;
+  if (memberNotSent + adminsNotSent > 0) {
+    // Once, with how many: never an address.
+    reportFailure('security.sign_in_report_email_failed', {
+      member_not_sent: memberNotSent,
+      admins_not_sent: adminsNotSent,
+      admins: recipients.length,
+    });
+  }
+
+  await recorded;
+  return noticed || adminsSent > 0;
 }
 
 /**
@@ -485,6 +564,8 @@ export async function reportSignInAlertNotMe(args: {
   auditFrom: { ip: string | null; userAgent: string | null };
 }): Promise<SignInAlertReportAnswer> {
   const { alert } = args;
+  if (alert.status === 'not_me') return { outcome: 'already_reported' };
+
   let admin: Admin;
   try {
     admin = createAdminClient();
@@ -492,18 +573,21 @@ export async function reportSignInAlertNotMe(args: {
     return { outcome: 'failed' };
   }
 
+  // (a) The sign-out first. Nothing below runs unless it worked.
+  if (!(await signOutEverywhere(alert.userId))) return { outcome: 'failed' };
+
+  // (b) The mark. Only the press that changes the row goes on.
   const marked = await markNotMe(admin, alert);
-  const signedOut = await signOutEverywhere(alert.userId);
+  if (!marked.answered) return { outcome: 'failed' };
+  if (!marked.changed) return { outcome: 'already_reported' };
+
+  // (c) Once per alert.
   await forgetRows(admin, alert);
-
-  if (marked.changed) {
-    try {
-      await tellEveryone(admin, alert, { signedOut, via: args.via, auditFrom: args.auditFrom });
-    } catch {
-      reportFailure('security.sign_in_report_tell_failed', { code: null });
-    }
+  let adminsTold = false;
+  try {
+    adminsTold = await tellEveryone(admin, alert, { via: args.via, auditFrom: args.auditFrom });
+  } catch {
+    reportFailure('security.sign_in_report_tell_failed', { code: null });
   }
-
-  if (!marked.answered || !signedOut) return { outcome: 'failed' };
-  return { outcome: 'done', firstReport: marked.changed };
+  return { outcome: 'done', adminsTold };
 }

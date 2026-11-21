@@ -25,11 +25,14 @@ import { err, ok, type ActionResult } from '@stockpilot/core';
  * and must be the member's own; another account's alert, a made-up id and an
  * alert that could not be read are all refused, and the first two alike. Then
  * the same report the emailed link runs (server/services/sign-in-alert-report.ts):
- * every session of the account ends, so this browser is signed out here too.
- * It is NOT refused for a session that owes the authenticator step: the
- * report can only sign the account out, which is what the real owner wants
- * when the password is known to someone else. A report that could not finish
- * says so, and this browser stays signed in so the member can press again.
+ * every session of the account is ended, so this browser is signed out here
+ * too. It is NOT refused for a session that owes the authenticator step: the
+ * report ends the account's own sessions and tells the owners and admins once
+ * per alert, which is what the real owner wants when the password is known
+ * to someone else. A report that could not finish says so, and this browser
+ * stays signed in so the member can press again. An alert that was already
+ * reported says so and nothing more happens: no session is ended again and
+ * nobody is told again (review 1, finding 2).
  */
 
 const SECURITY_PAGE = '/dashboard/settings/security';
@@ -75,13 +78,18 @@ export async function reportSignInAlertAction(input: {
         userAgent: requestHeaders.get('user-agent'),
       },
     });
-    if (answer.outcome !== 'done') {
+    if (answer.outcome === 'already_reported') {
+      // Reported from the email's link or another tab: the list is stale.
+      revalidatePath(SECURITY_PAGE);
       return err(
-        'internal_error',
-        'We could not sign you out everywhere just now. Press the button again in a minute.',
+        'conflict',
+        'You already reported this sign-in. If you have not reset your password yet, reset it now.',
       );
     }
-    // Every session of the account has ended; this browser's cookies go too
+    if (answer.outcome !== 'done') {
+      return err('internal_error', 'We could not finish this just now. Press the button again in a minute.');
+    }
+    // Every session of the account has been ended; this browser's cookies go too
     // (scope 'local': auth-js removes them even when GoTrue does not answer,
     // and the helper never throws).
     await signOutThisSession(ctx.supabase);
