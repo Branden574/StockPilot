@@ -6,13 +6,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *
  * completePasswordResetAction picks the authenticator whose code it asks for
  * from the account's factor list. Supabase Auth lists the factors in an order
- * that flips with use (proof B7), so "the first verified one" was the bridge
- * after every passkey sign-in, and the member was asked for a code no app
- * shows. The pick is the first verified authenticator that is not the
- * account's RECORDED bridge (lib/auth/passkey-bridge.ts), whatever the order.
- * An account whose only factor is the bridge is never asked for its code
- * (GoTrue still refuses the new password without the second step). Before the
- * records exist, the pick is today's.
+ * that flips with use (proof B7: the factor used last goes to the END of the
+ * list), so "the first verified one" was the bridge after every use of the
+ * member's app, and the member was asked for a code no app shows. The pick is
+ * the first verified authenticator that is not the account's RECORDED bridge
+ * (lib/auth/passkey-bridge.ts), whatever the order. An account whose only
+ * factor is the bridge gets no code box at all: GoTrue refuses the new
+ * password without the second step, and the answer says, in plain words, to
+ * sign in and use a recovery code (review 2-3 finding 9). Before the records
+ * exist, the pick is today's. The record read is the account's own.
  */
 
 vi.hoisted(() => {
@@ -32,6 +34,8 @@ const getAuthenticatorAssuranceLevel = vi.fn();
 const challenge = vi.fn();
 const verify = vi.fn();
 const bridgeRecord = vi.fn();
+/** The filters of every passkey_bridges read: whose record was asked for. */
+const recordFilters: Array<[string, unknown]> = [];
 
 vi.mock('next/headers', () => ({
   headers: vi.fn(async () => new Headers()),
@@ -64,7 +68,10 @@ vi.mock('@/lib/supabase/admin', () => ({
     from: (table: string) => {
       const q: Record<string, unknown> = {};
       q.select = () => q;
-      q.eq = () => q;
+      q.eq = (column: string, value: unknown) => {
+        if (table === 'passkey_bridges') recordFilters.push([column, value]);
+        return q;
+      };
       q.maybeSingle = async () =>
         table === 'passkey_bridges' ? bridgeRecord() : { data: null, error: null };
       return q;
@@ -103,6 +110,7 @@ function listed(...factors: Array<typeof APP>) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  recordFilters.length = 0;
   getUser.mockResolvedValue({ data: { user: { id: 'u1', email: 'u@example.test' } } });
   getSession.mockResolvedValue({ data: { session: { access_token: STORED_ACCESS } }, error: null });
   getClaims.mockResolvedValue({
@@ -131,12 +139,14 @@ beforeEach(() => {
 });
 
 describe('the reset picks an authenticator app, never the bridge', () => {
-  it('the bridge listed first (after a passkey sign-in): the app is asked for', async () => {
+  it('the bridge listed first (after the app was used): the app is asked for', async () => {
     listed(BRIDGE, APP);
     const res = await completePasswordResetAction(INPUT);
     expect(res.ok).toBe(true);
     expect(challenge.mock.calls).toEqual([[{ factorId: APP.id }]]);
     expect(verify).toHaveBeenCalledWith(expect.objectContaining({ factorId: APP.id }));
+    // The record of the account this press is for.
+    expect(recordFilters).toEqual([['user_id', 'u1']]);
   });
 
   it('the app listed first: the app is asked for', async () => {
@@ -146,22 +156,52 @@ describe('the reset picks an authenticator app, never the bridge', () => {
     expect(challenge.mock.calls).toEqual([[{ factorId: APP.id }]]);
   });
 
-  it('an account whose only factor is the bridge is never asked for its code', async () => {
-    listed(BRIDGE);
-    // GoTrue refuses the new password without the second step.
-    updateUser.mockResolvedValue({
-      data: { user: null },
+  it.each([
+    ['with a code typed', INPUT],
+    ['with no code', { password: RESET_VALUE, confirmPassword: RESET_VALUE }],
+  ])(
+    'an account whose only factor is the bridge (%s): no code box, no code checked, a plain answer that says to use a recovery code',
+    async (_name, input) => {
+      listed(BRIDGE);
+      // GoTrue refuses the new password without the second step.
+      updateUser.mockResolvedValue({
+        data: { user: null },
+        error: {
+          name: 'AuthApiError',
+          status: 401,
+          code: 'insufficient_aal',
+          message: 'AAL2 session is required to update email or password when MFA is enabled.',
+        },
+      });
+      const res = await completePasswordResetAction(input);
+      // No `details.reason: 'aal2_required'`: the reset form shows no code box.
+      expect(res).toEqual({
+        ok: false,
+        error: {
+          code: 'forbidden',
+          message:
+            "Your account's second sign-in step can't be used to finish a password reset yet. Sign in with your current password and use a recovery code instead, then change your password in Settings.",
+        },
+      });
+      expect(challenge).not.toHaveBeenCalled();
+      expect(verify).not.toHaveBeenCalled();
+    },
+  );
+
+  it('an account with an app beside the bridge is still asked for the code of the app', async () => {
+    listed(BRIDGE, APP);
+    const res = await completePasswordResetAction({
+      password: RESET_VALUE,
+      confirmPassword: RESET_VALUE,
+    });
+    expect(res).toEqual({
+      ok: false,
       error: {
-        name: 'AuthApiError',
-        status: 401,
-        code: 'insufficient_aal',
-        message: 'AAL2 session is required to update email or password when MFA is enabled.',
+        code: 'forbidden',
+        message: 'Enter the 6-digit code from your authenticator app to finish resetting your password.',
+        details: { reason: 'aal2_required' },
       },
     });
-    const res = await completePasswordResetAction(INPUT);
-    expect(res.ok).toBe(false);
-    expect(challenge).not.toHaveBeenCalled();
-    expect(verify).not.toHaveBeenCalled();
   });
 
   it('before the records exist, the pick is today’s (the first verified factor)', async () => {

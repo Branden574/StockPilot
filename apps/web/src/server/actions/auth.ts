@@ -477,6 +477,15 @@ function normalizeTotpCode(raw: unknown): string | null {
 const RESET_CODE_ASK =
   'Enter the 6-digit code from your authenticator app to finish resetting your password.';
 
+/**
+ * The reset's answer for an account whose only authenticator is its passkey's
+ * bridge (lib/auth/passkey-bridge): no app shows that factor's code, and the
+ * web cannot take a passkey yet, so there is no code box (no `reason`); a
+ * recovery code is the way in (review 2-3 finding 9). Stage 5 replaces it.
+ */
+const RESET_BRIDGE_ONLY =
+  "Your account's second sign-in step can't be used to finish a password reset yet. Sign in with your current password and use a recovery code instead, then change your password in Settings.";
+
 /** The reset link's session is gone: spent, expired, or ended in another tab. */
 const RESET_LINK_GONE =
   'That link has expired or was already used. Choose Forgot? on the sign-in page to get a new link by email.';
@@ -578,14 +587,18 @@ export async function completePasswordResetAction(
     console.warn('[completePasswordResetAction] listFactors failed:', factorsError.message);
   }
   // The first verified authenticator that is not the account's recorded
-  // passkey bridge (lib/auth/passkey-bridge): Auth lists the bridge first
-  // after each passkey sign-in (proof B7), and no app shows its code. An
-  // account whose only factor is the bridge is asked for no code here (GoTrue
-  // still refuses the new password at aal1 below). The record is read for the
-  // account this press is for, only when a factor carries the reserved name.
+  // passkey bridge (lib/auth/passkey-bridge): Auth puts the factor used last
+  // at the END of its list, so the bridge is listed first after each use of
+  // the member's app (proof B7), and no app shows its code. An account whose
+  // only factor is the bridge is asked for no code here: GoTrue still refuses
+  // the new password at aal1 below, and the answer then says to use a
+  // recovery code, with no code box (RESET_BRIDGE_ONLY). The record is read
+  // for the account this press is for, only when a factor carries the
+  // reserved name.
   const verifiedTotp = (factorsData?.totp ?? []).filter((f) => f.status === 'verified');
   const bridge = await readPasskeyBridge(accountId, verifiedTotp, 'password_reset');
   const totpFactorId = withoutPasskeyBridge(verifiedTotp, bridge)[0]?.id ?? null;
+  const bridgeOnly = verifiedTotp.length > 0 && totpFactorId === null;
   if (totpFactorId) {
     // The session as it verifies AFTER the factor list (a read that can
     // refresh the session into another account's), against the account this
@@ -668,6 +681,9 @@ export async function completePasswordResetAction(
     // below has run: nobody is signed out and the old password still works.
     const refusal = classifyPasswordUpdateError(error);
     if (refusal?.kind === 'aal') {
+      // Only the passkey's bridge: no code box, a code would never be
+      // checked; say what to do instead.
+      if (bridgeOnly) return err('forbidden', RESET_BRIDGE_ONLY);
       // GoTrue still wants AAL2, so the code step above did not run (as when
       // the factor list could not be read). Ask for the code, so the form
       // shows its box; a code sent with this press was never checked, so say

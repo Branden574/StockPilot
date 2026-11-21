@@ -2307,9 +2307,15 @@ WEB_TESTS=(
   # pick, the code page and the Security page each leave out the account's
   # recorded bridge, read only when a factor carries the reserved name; a
   # reserved-name factor that is not recorded is treated as an app and
-  # reported; before 0475 nothing changes; an unreadable record hides
-  # nothing. A recovery code spends the code and removes the passkeys in one
-  # service-role call, with today's path when the function does not exist.
+  # reported (limited per account); the records missing with a reserved-name
+  # factor listed is reported (limited); an unreadable record hides nothing
+  # from a list, and the removal, the set-up confirmation and the set-up
+  # clean-up then leave every reserved-name factor alone. The removal looks
+  # at the names the context already read. A recovery code spends the code
+  # and removes the passkeys in one service-role call, made only after the
+  # three limits, the password and the held session, with today's path when
+  # the function does not exist. The step-up list is limited per account at
+  # an address and per account, closed.
   src/lib/auth/passkey-bridge.test.ts
   src/server/actions/mfa.passkey-bridge.test.ts
   src/server/actions/auth.reset-bridge.test.ts
@@ -2317,6 +2323,11 @@ WEB_TESTS=(
   'src/app/(auth)/signin/mfa/page.passkey-bridge.test.tsx'
   'src/app/(dashboard)/dashboard/settings/security/page.passkey-bridge.test.tsx'
   src/components/auth/step-up-modal.passkey-bridge.test.tsx
+  # The code page's form with no authenticator app to offer (an account whose
+  # only second step is the passkey's bridge): no code box and no code ever
+  # sent, so nothing can be typed at the bridge; the recovery code still
+  # sends the account password with the code.
+  src/components/auth/mfa-challenge-form.recovery-only.test.tsx
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

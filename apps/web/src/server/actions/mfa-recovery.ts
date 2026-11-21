@@ -3,6 +3,8 @@
 import { revalidatePath } from 'next/cache';
 import { headers } from 'next/headers';
 
+import { accountIdHash, reportPasskeyRecordsMissing } from '@/lib/auth/passkey-bridge';
+import { carriesBridgeName } from '@/lib/auth/passkey-bridge-name';
 import { requireSession } from '@/lib/auth/session';
 import { readVerifiedSessionTokenOf } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
@@ -201,16 +203,30 @@ function removedCount(res: { data: unknown; error: unknown }): number | null {
 /**
  * The one report of a recovery code whose passkey call failed: the failure's
  * code and whether passkey records may be left (false: the second removal
- * answered; 'unknown': it did not, or the code was not spent here). Never the
- * code, the account's passkeys or the bridge's id.
+ * answered; 'unknown': it did not, or the code was not spent here), with a
+ * hash of the account id so the operator can find the account
+ * (passkey_account_states, runbook 10; review 2-3 finding 7). Never the code,
+ * the account id, the account's passkeys or the bridge's id.
  */
-function reportPasskeyRemoval(failure: string, recordsLeft: false | 'unknown'): void {
+function reportPasskeyRemoval(
+  failure: string,
+  recordsLeft: false | 'unknown',
+  userId: string,
+): void {
   void reportError(new Error('A recovery code could not remove the passkey records in one call'), {
     tag: 'actions.mfa_recovery.passkey_removal',
     level: 'error',
+    userIdHash: accountIdHash(userId),
     extra: { failure, records_left: recordsLeft },
   });
 }
+
+/**
+ * The answer when the combined call failed and today's consume then refused
+ * the code: the combined call may have spent it before its answer was lost,
+ * so the code is not called wrong (review 2-3 finding 12).
+ */
+const RECOVERY_NOT_CHECKED = 'Could not check your recovery code just now. Try again.';
 
 /**
  * Used by /signin/mfa when the user can't reach their TOTP device.
@@ -367,7 +383,12 @@ export async function consumeMfaRecoveryCodeAction(input: {
       if (error) throw new ServiceError('internal_error', error.message);
       consumed = Boolean(ok_);
       if (spent.kind === 'failed' && !consumed) {
-        reportPasskeyRemoval(spent.code, 'unknown');
+        // The combined call may have committed (the code spent, the passkeys
+        // removed) and only its answer been lost; or the code is wrong. It is
+        // not known which, so it is not judged: "try again", no refused-code
+        // record and no audit row of a failed code. Reported.
+        reportPasskeyRemoval(spent.code, 'unknown', session.userId);
+        return err('internal_error', RECOVERY_NOT_CHECKED);
       }
     }
     if (!consumed) {
@@ -391,6 +412,14 @@ export async function consumeMfaRecoveryCodeAction(input: {
     const { data: factors } = await admin.auth.admin.mfa.listFactors({
       userId: session.userId,
     });
+    // The function missing (0475 not live, or lost from the schema cache) and a
+    // factor carrying the bridge's reserved name: a bridge may have existed,
+    // and its passkey records were not removed. Reported at error level, once
+    // per hour (review 2-3 finding 3); an account with no such factor reports
+    // nothing.
+    if (spent.kind === 'not_yet' && (factors?.factors ?? []).some(carriesBridgeName)) {
+      await reportPasskeyRecordsMissing('function', 'recovery_code', session.userId);
+    }
     let unenrolled = 0;
     for (const f of factors?.factors ?? []) {
       // We only deliberately enroll TOTP today; play it safe and only
@@ -412,7 +441,7 @@ export async function consumeMfaRecoveryCodeAction(input: {
       });
       const removed = removedCount(retry);
       if (removed !== null) passkeysRemoved = removed;
-      reportPasskeyRemoval(spent.code, removed === null ? 'unknown' : false);
+      reportPasskeyRemoval(spent.code, removed === null ? 'unknown' : false, session.userId);
     }
 
     // A used code removes every authenticator of the account: the person's

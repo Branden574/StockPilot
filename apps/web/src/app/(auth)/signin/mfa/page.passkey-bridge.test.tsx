@@ -20,11 +20,16 @@ const redirect = vi.fn((to: string) => {
 });
 vi.mock('next/navigation', () => ({ redirect: (to: string) => redirect(to) }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+vi.mock('@/lib/rate-limit', () => ({
+  checkRateLimit: vi.fn(async () => ({ allowed: true, count: 1, resetAt: Date.now() + 1000 })),
+}));
 
 const h = vi.hoisted(() => ({
   factors: [] as Array<{ id: string; status: string; friendly_name?: string | null }>,
   aal: 'aal1',
   record: { data: null as unknown, error: null as unknown },
+  /** The filters of every passkey_bridges read: whose record was asked for. */
+  recordFilters: [] as Array<[string, unknown]>,
 }));
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -46,7 +51,10 @@ vi.mock('@/lib/supabase/admin', () => ({
     from: () => {
       const q: Record<string, unknown> = {};
       q.select = () => q;
-      q.eq = () => q;
+      q.eq = (column: string, value: unknown) => {
+        h.recordFilters.push([column, value]);
+        return q;
+      };
       q.maybeSingle = async () => h.record;
       return q;
     },
@@ -93,6 +101,7 @@ beforeEach(() => {
   h.factors = [APP];
   h.aal = 'aal1';
   h.record = { data: { factor_id: BRIDGE.id }, error: null };
+  h.recordFilters = [];
 });
 
 describe('the code page and the passkey bridge', () => {
@@ -104,6 +113,8 @@ describe('the code page and the passkey bridge', () => {
       factors: [],
     });
     expect(redirect).not.toHaveBeenCalled();
+    // The record of the account the page validated, and no other.
+    expect(h.recordFilters).toEqual([['user_id', 'user-1']]);
   });
 
   it('an account with an app and the bridge is offered the app only, whatever the order', async () => {

@@ -67,6 +67,14 @@ export function useStepUp() {
  *  itself never got an answer. */
 const NO_ANSWER_COPY = 'Could not reach the server. Try again.';
 const FACTORS_UNREADABLE_COPY = 'Could not load your authenticator. Try again.';
+/**
+ * The account's only authenticator is its passkey's bridge (the server said
+ * so: no app beside it). No app shows that code and the web cannot take a
+ * passkey yet, so there is no code box, and the words say what to do (review
+ * 2-3 finding 9). Stage 5 replaces it with the passkey.
+ */
+const BRIDGE_ONLY_COPY =
+  "Your second sign-in step can't be used here yet. To go on, sign in again and use a recovery code.";
 
 /**
  * Stacking: the modal is usually opened from inside another dialog (Restore,
@@ -82,12 +90,15 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
   const [code, setCode] = React.useState('');
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  /** The server answered that the account's only authenticator is the passkey's bridge. */
+  const [bridgeOnly, setBridgeOnly] = React.useState(false);
 
   /** Every way out clears the typed code and the last error, so the next
    *  opening starts clean. */
   function done(ok: boolean) {
     setCode('');
     setError(null);
+    setBridgeOnly(false);
     onDone(ok);
   }
 
@@ -126,7 +137,16 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
             if (isControlFlow(e)) return;
           }
           if (cancelled) return;
-          if (methods?.ok) totp = methods.data.apps;
+          if (methods?.ok) {
+            totp = methods.data.apps;
+            if (totp.length === 0) {
+              setFactors(totp);
+              setFactorId('');
+              setBridgeOnly(true);
+              setError(BRIDGE_ONLY_COPY);
+              return;
+            }
+          }
         }
         setFactors(totp);
         setFactorId(totp[0]?.id ?? '');
@@ -212,21 +232,23 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
               </select>
             </div>
           ) : null}
-          <div data-glass="step-up-field" className="space-y-1.5">
-            <Label htmlFor="stepup-code">Authentication code</Label>
-            <Input
-              id="stepup-code"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              autoFocus
-              placeholder="123456"
-              value={code}
-              // Digits only, the first six. No maxLength: a browser cuts a pasted
-              // "123 456" at six characters before this runs, leaving five digits.
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              className="font-mono tracking-widest"
-            />
-          </div>
+          {bridgeOnly ? null : (
+            <div data-glass="step-up-field" className="space-y-1.5">
+              <Label htmlFor="stepup-code">Authentication code</Label>
+              <Input
+                id="stepup-code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                autoFocus
+                placeholder="123456"
+                value={code}
+                // Digits only, the first six. No maxLength: a browser cuts a pasted
+                // "123 456" at six characters before this runs, leaving five digits.
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                className="font-mono tracking-widest"
+              />
+            </div>
+          )}
           {error ? (
             <p className="text-destructive text-[12px]" role="alert">
               {error}

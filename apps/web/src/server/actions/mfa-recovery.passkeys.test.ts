@@ -18,10 +18,20 @@ import { verifiedSessionAuth } from '@/test/verified-session-stub';
  *   2. the factor loop removes every TOTP factor, the bridge among them, and
  *      the audit row says how many passkeys went.
  * Before 0475 is live the function does not exist (PostgREST PGRST202,
- * Postgres 42883, each naming it): today's path runs unchanged. Any other
- * failure: today's path spends the code, the factors are still removed, the
- * passkey removal is tried once more (passkey_remove_all), and one report at
- * error level says whether passkey records may be left.
+ * Postgres 42883, each naming it): today's path runs unchanged; when a factor
+ * it removes carries the bridge's reserved name, that is reported at error
+ * level, once per hour (review 2-3 finding 3). Any other failure: today's
+ * path spends the code, the factors are still removed, the passkey removal is
+ * tried once more (passkey_remove_all), and one report at error level, with a
+ * hash of the account id, says whether passkey records may be left (finding
+ * 7). When today's path then refuses the code, the combined call may have
+ * spent it before its answer was lost: "try again", with no refused-code
+ * record (finding 12).
+ *
+ * ORDER (review 2-3 finding 1): the service-role call takes the account as a
+ * parameter, so it runs only after the three closed limits, the password
+ * check and the held-session check. A press stopped by any of them makes no
+ * service-role passkey call at all.
  */
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
@@ -52,6 +62,8 @@ const h = vi.hoisted(() => ({
   /** The client that acts as the member's verified token. */
   member: null as unknown as { client: unknown },
   cookie: null as unknown as { client: { auth: Record<string, unknown> } },
+  /** Whose session the cookie's verified token names. */
+  sessionSub: 'user-1',
 }));
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -59,7 +71,7 @@ vi.mock('@/lib/supabase/server', () => ({
     Object.assign(h.cookie.client, {
       auth: Object.assign(
         h.cookie.client.auth,
-        verifiedSessionAuth(() => ({ sub: 'user-1', aal: 'aal1' })),
+        verifiedSessionAuth(() => ({ sub: h.sessionSub, aal: 'aal1' })),
       ),
     }),
   ),
@@ -69,8 +81,12 @@ vi.mock('@/lib/supabase/access-token-client', () => ({
 }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn(() => h.admin.client) }));
 
+import { createHash } from 'node:crypto';
+
+import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { reportError } from '@/lib/error-reporter';
 import { createAccessTokenClient } from '@/lib/supabase/access-token-client';
+import { recordAccountCodeBlocked } from '@/server/security/account-events';
 import { emitAuthAudit } from '@/server/services/auth-audit';
 
 import { consumeMfaRecoveryCodeAction } from './mfa-recovery';
@@ -85,13 +101,23 @@ const FACTORS = [
   { id: 'app-1', factor_type: 'totp' },
   { id: BRIDGE_ID, factor_type: 'totp' },
 ];
+/** The same factors as Auth names them: the bridge carries the reserved name. */
+const NAMED_FACTORS = [
+  { id: 'app-1', factor_type: 'totp', friendly_name: 'Phone' },
+  { id: BRIDGE_ID, factor_type: 'totp', friendly_name: 'sp-passkey-bridge-a1b2c3' },
+];
+/** The house hash of the account id in a report (lib/auth/login-device.ts). */
+const USER_HASH = createHash('sha256').update('user-1').digest('hex').slice(0, 16);
+const LIMIT_REFUSED = { data: [{ allowed: false, count: 6, reset_at: null }], error: null };
+/** The service-role calls that act on a code or on the passkey records. */
+const PASSKEY_CALLS = ['consume_recovery_code_with_passkeys', 'passkey_remove_all'];
 
-function adminWith(results: Record<string, unknown>): Stub {
+function adminWith(results: Record<string, unknown>, factors: unknown[] = FACTORS): Stub {
   const stub = makeSupabaseStub({ ...LIMITER_OK, ...results } as Parameters<
     typeof makeSupabaseStub
   >[0]);
   const deleteFactor = vi.fn(async () => ({ data: null, error: null }));
-  const listFactors = vi.fn(async () => ({ data: { factors: FACTORS }, error: null }));
+  const listFactors = vi.fn(async () => ({ data: { factors }, error: null }));
   stub.client.auth.admin = { mfa: { listFactors, deleteFactor } };
   h.admin = stub;
   return stub;
@@ -108,6 +134,19 @@ function deleteFactorOf(stub: Stub) {
 function rpcNames(stub: Stub) {
   return stub.rpcCalls.map((c) => c.name).filter((n) => n !== 'increment_rate_limit');
 }
+/** A limiter answer that refuses the bucket whose key starts with `prefix`, and allows the rest. */
+function refusingBucket(prefix: string) {
+  return {
+    'rpc:increment_rate_limit': (call: { args: unknown[][] }) =>
+      String((call.args[0]?.[0] as { p_key?: unknown } | undefined)?.p_key).startsWith(prefix)
+        ? LIMIT_REFUSED
+        : LIMITER_OK['rpc:increment_rate_limit'],
+  };
+}
+/** The records-missing reports (lib/auth/passkey-bridge.ts reportPasskeyRecordsMissing). */
+function recordsMissingReports() {
+  return vi.mocked(reportError).mock.calls.filter((c) => c[1].tag === 'passkeys.records_missing');
+}
 function consumedAudit() {
   return vi
     .mocked(emitAuthAudit)
@@ -116,6 +155,7 @@ function consumedAudit() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.sessionSub = 'user-1';
   h.cookie = makeSupabaseStub({}) as unknown as typeof h.cookie;
   memberWith({ 'rpc:consume_mfa_recovery_code': { data: true, error: null } });
 });
@@ -178,6 +218,85 @@ describe('the recovery code with passkey records (0475 live)', () => {
       'mfa.recovery.failed',
     ]);
     expect(rpcNames(admin)).toEqual(['consume_recovery_code_with_passkeys']);
+    // A refused code is a security event of the account's organization.
+    expect(recordAccountCodeBlocked).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(recordAccountCodeBlocked).mock.calls[0]!.slice(0, 2)).toEqual([
+      'wrong_recovery_code',
+      'user-1',
+    ]);
+  });
+});
+
+describe('the service-role call stays behind the limits, the password and the held session', () => {
+  const PASSKEYS_ANSWER = {
+    'rpc:consume_recovery_code_with_passkeys': {
+      data: [{ consumed: true, passkeys_removed: 1, bridge_factor_id: BRIDGE_ID }],
+      error: null,
+    },
+  };
+  function noPasskeyCall(admin: Stub) {
+    expect(rpcNames(admin).filter((n) => PASSKEY_CALLS.includes(n))).toEqual([]);
+    expect(deleteFactorOf(admin)).not.toHaveBeenCalled();
+    expect(createAccessTokenClient).not.toHaveBeenCalled();
+  }
+
+  it('no password: no service-role passkey call', async () => {
+    const admin = adminWith(PASSKEYS_ANSWER);
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE });
+    expect(res.ok).toBe(false);
+    noPasskeyCall(admin);
+  });
+
+  it('a wrong password: no service-role passkey call', async () => {
+    const admin = adminWith(PASSKEYS_ANSWER);
+    vi.mocked(verifyPasswordSideChannel).mockResolvedValueOnce({
+      ok: false,
+      reason: 'invalid_password',
+      message: 'That password is incorrect.',
+    } as never);
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: 'not it' });
+    expect(res).toEqual({
+      ok: false,
+      error: { code: 'forbidden', message: 'That password is incorrect.' },
+    });
+    noPasskeyCall(admin);
+  });
+
+  it.each([
+    ['the account at this address', 'mfa-recovery:user-1:'],
+    ['the password checks of the account', 'mfa-recovery-password:user-1'],
+    ['the code checks of the account', 'mfa-recovery-code:user-1'],
+  ])('the limit of %s refuses: no service-role passkey call', async (_name, prefix) => {
+    const admin = adminWith({ ...PASSKEYS_ANSWER, ...refusingBucket(prefix) });
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res.ok).toBe(false);
+    expect(
+      admin.rpcCalls.some(
+        (c) =>
+          c.name === 'increment_rate_limit' &&
+          String((c.args as { p_key: string }).p_key).startsWith(prefix),
+      ),
+    ).toBe(true);
+    noPasskeyCall(admin);
+  });
+
+  it('a session that no longer verifies as the account: no service-role passkey call', async () => {
+    const admin = adminWith(PASSKEYS_ANSWER);
+    h.sessionSub = 'user-2';
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe('unauthenticated');
+    noPasskeyCall(admin);
+  });
+
+  it('with every check passed, the call is made once, for the validated account', async () => {
+    const admin = adminWith(PASSKEYS_ANSWER);
+    await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(
+      admin.rpcCalls.filter((c) => c.name === 'consume_recovery_code_with_passkeys'),
+    ).toEqual([
+      { name: 'consume_recovery_code_with_passkeys', args: { p_user_id: 'user-1', p_code: CODE } },
+    ]);
   });
 });
 
@@ -201,6 +320,44 @@ describe('before 0475 is live: the function does not exist', () => {
     expect(deleteFactorOf(admin)).toHaveBeenCalledTimes(2);
     expect(consumedAudit()!.extra).toEqual({ unenrolled: 2 });
     expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('a factor it removes carries the reserved name: one error report, once per hour, with the account hash only', async () => {
+    const admin = adminWith(PASSKEY_RECOVERY_NOT_YET, NAMED_FACTORS);
+
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+
+    expect(res).toEqual({ ok: true, data: { unenrolled: 2 } });
+    expect(deleteFactorOf(admin)).toHaveBeenCalledTimes(2);
+    expect(
+      admin.rpcCalls.some(
+        (c) =>
+          c.name === 'increment_rate_limit' &&
+          (c.args as { p_key: string }).p_key === 'passkeys-records-missing-report:function',
+      ),
+    ).toBe(true);
+    const reports = recordsMissingReports();
+    expect(reports).toHaveLength(1);
+    expect(reports[0]![1]).toEqual({
+      tag: 'passkeys.records_missing',
+      level: 'error',
+      userIdHash: USER_HASH,
+      extra: { missing: 'function', site: 'recovery_code' },
+    });
+    expect(JSON.stringify(reports)).not.toMatch(/user-1|0b0b0b0b|ABCD/);
+  });
+
+  it('the same, a second time in the hour: not reported again', async () => {
+    adminWith(
+      {
+        ...PASSKEY_RECOVERY_NOT_YET,
+        ...refusingBucket('passkeys-records-missing-report:'),
+      },
+      NAMED_FACTORS,
+    );
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toEqual({ ok: true, data: { unenrolled: 2 } });
+    expect(recordsMissingReports()).toEqual([]);
   });
 
   it('a refused code on that path gets the refusal of today', async () => {
@@ -262,14 +419,16 @@ describe('any other failure of the new call', () => {
       expect(consumedAudit()!.extra).toEqual({ unenrolled: 2, passkeys_removed: 1 });
       expect(reportError).toHaveBeenCalledTimes(1);
       const [reported, context] = vi.mocked(reportError).mock.calls[0]!;
-      expect(context).toMatchObject({
+      expect(context).toEqual({
         tag: 'actions.mfa_recovery.passkey_removal',
         level: 'error',
-        extra: { records_left: false },
+        userIdHash: USER_HASH,
+        extra: { failure: expect.any(String), records_left: false },
       });
       const text = JSON.stringify([String(reported), context]);
       expect(text).not.toContain(CODE);
       expect(text).not.toContain(BRIDGE_ID);
+      expect(text).not.toContain('user-1');
     },
   );
 
@@ -295,7 +454,7 @@ describe('any other failure of the new call', () => {
     });
   });
 
-  it('when today’s path refuses the code, nothing is removed, and the failure is still reported', async () => {
+  it('when today’s path then refuses the code (the answer may have been lost): try again, no refused-code record, still reported', async () => {
     const admin = adminWith({
       'rpc:consume_recovery_code_with_passkeys': {
         data: null,
@@ -306,13 +465,25 @@ describe('any other failure of the new call', () => {
 
     const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
 
-    expect(res.ok).toBe(false);
+    // The combined call may have spent the code before its answer was lost:
+    // the code is not called wrong.
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message: 'Could not check your recovery code just now. Try again.',
+      },
+    });
     expect(deleteFactorOf(admin)).not.toHaveBeenCalled();
     expect(rpcNames(admin)).toEqual(['consume_recovery_code_with_passkeys']);
+    expect(recordAccountCodeBlocked).not.toHaveBeenCalled();
+    expect(vi.mocked(emitAuthAudit).mock.calls.map((c) => c[0].event)).toEqual([]);
     expect(reportError).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(reportError).mock.calls[0]![1]).toMatchObject({
+    expect(vi.mocked(reportError).mock.calls[0]![1]).toEqual({
       tag: 'actions.mfa_recovery.passkey_removal',
       level: 'error',
+      userIdHash: USER_HASH,
+      extra: { failure: '57014', records_left: 'unknown' },
     });
   });
 });

@@ -15,7 +15,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * reserved-name factor nothing new happens (the Classic pins in
  * __classic__/step-up-modal.*.txt hold that DOM byte for byte). When the
  * server cannot answer, the browser's list is used as it is: nothing is
- * hidden, and challengeFactorAction still refuses the bridge.
+ * hidden, and challengeFactorAction still refuses the bridge. When the server
+ * answers that the account has no app beside the bridge, the modal says so in
+ * plain words, with what to do (a recovery code), never "No authenticator is
+ * enrolled" (review 2-3 finding 9).
  */
 
 const listFactors = vi.fn();
@@ -103,6 +106,23 @@ describe('StepUpModal and the passkey bridge', () => {
       BRIDGE.id,
       APP.id,
     ]);
+  });
+
+  it('only the bridge: no code box, and plain words that say to use a recovery code', async () => {
+    listFactors.mockResolvedValue({ data: { totp: [BRIDGE] }, error: null });
+    stepUpMethodsAction.mockResolvedValue({ ok: true, data: { apps: [] } });
+    await openStepUp();
+    await waitFor(() => expect(stepUpMethodsAction).toHaveBeenCalledTimes(1));
+    expect(
+      await screen.findByText(
+        "Your second sign-in step can't be used here yet. To go on, sign in again and use a recovery code.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/No authenticator is enrolled/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Authenticator')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Authentication code')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Verify' })).toBeDisabled();
+    expect(challengeFactorAction).not.toHaveBeenCalled();
   });
 
   it('when the request itself fails, the browser’s list is used as it is', async () => {

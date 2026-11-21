@@ -19,7 +19,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *     without it.
  * A reserved-name factor that is not the recorded bridge, and every factor
  * while the records do not exist yet, is treated like any authenticator app.
- * A record that cannot be read hides nothing (and is reported).
+ * A record that cannot be read hides nothing from a list (and is reported);
+ * the three actions that CHANGE a factor (remove, confirm a set-up, the
+ * set-up clean-up) then leave every factor that carries the reserved name
+ * alone, with "try again in a moment" (review 2-3 finding 2). The removal
+ * looks at the names in the factor list withContext() already read, so an
+ * account with no reserved-name factor makes no extra Auth read and causes no
+ * report (finding 5). stepUpMethodsAction is limited per account at this
+ * address and per account, closed, before any read (finding 8). Every record
+ * read is of the account the request validated.
  */
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn(), updateTag: vi.fn() }));
@@ -37,18 +45,33 @@ vi.mock('@/lib/auth/session', () => ({
     role: 'admin',
   })),
 }));
-vi.mock('@/server/services/context', () => ({
-  withContext: vi.fn(async () => ({})),
-  assertCurrentAal2: vi.fn(async () => {}),
-  ServiceError: class extends Error {
-    constructor(
-      public code: string,
-      message: string,
-    ) {
-      super(message);
-    }
-  },
-}));
+vi.mock('@/server/services/context', async () => {
+  // The context keeps the factor list read it started, as withContext() does
+  // (lib/auth/context-factor-list.ts, the real module).
+  const { keepContextFactorListRead } = await import('@/lib/auth/context-factor-list');
+  return {
+    withContext: vi.fn(async () => {
+      const ctx = {};
+      h.contextReads += 1;
+      keepContextFactorListRead(
+        ctx,
+        h.contextListFails
+          ? Promise.reject(new Error('getMfaFactorsForRequest: unreadable'))
+          : Promise.resolve({ userId: h.accountId, factors: h.factors }),
+      );
+      return ctx;
+    }),
+    assertCurrentAal2: vi.fn(async () => {}),
+    ServiceError: class extends Error {
+      constructor(
+        public code: string,
+        message: string,
+      ) {
+        super(message);
+      }
+    },
+  };
+});
 vi.mock('@/lib/auth/verify-password', () => ({
   verifyPasswordSideChannel: vi.fn(async () => ({ ok: true })),
 }));
@@ -81,8 +104,13 @@ const h = vi.hoisted(() => ({
   }>,
   accountId: 'user-1',
   getUserFails: false,
+  /** The context's own factor list read fails (withContext() started it). */
+  contextListFails: false,
+  contextReads: 0,
   /** passkey_bridges' answer for the account. */
   record: { data: null as unknown, error: null as unknown },
+  /** The filters of every passkey_bridges read: whose record was asked for. */
+  recordFilters: [] as Array<[string, unknown]>,
   adminClients: 0,
 }));
 
@@ -137,7 +165,10 @@ vi.mock('@/lib/supabase/admin', () => ({
     h.adminClients += 1;
     const q: Record<string, unknown> = {};
     q.select = () => q;
-    q.eq = () => q;
+    q.eq = (column: string, value: unknown) => {
+      h.recordFilters.push([column, value]);
+      return q;
+    };
     q.maybeSingle = async () => h.record;
     return { from: (table: string) => (table === 'passkey_bridges' ? q : null) };
   }),
@@ -158,6 +189,11 @@ import {
 const NOT_STARTED = 'Could not start the authenticator check. Please try again.';
 const SETUP_NOT_OPEN = 'This authenticator set-up is no longer open. Start again.';
 const SESSION_ENDED = 'You were signed out on this device. Sign in again to continue.';
+const TRY_AGAIN = 'Could not check this authenticator just now. Try again in a moment.';
+const PAUSED = 'Too many checks of your authenticators. Try again in a few minutes.';
+const LIMIT_REFUSED = { allowed: false, count: 1, resetAt: Date.now() + 1000 };
+/** The record was read once, for the account the request validated. */
+const READ_OWN_RECORD = [['user_id', 'user-1']];
 const CODE = '246813';
 /** A dull value under a neutral name (secret-shaped-fixtures guard). */
 const ACCOUNT_VALUE = 'correct horse battery staple';
@@ -201,7 +237,10 @@ beforeEach(() => {
   h.factors = [APP];
   h.accountId = 'user-1';
   h.getUserFails = false;
+  h.contextListFails = false;
+  h.contextReads = 0;
   h.record = RECORDED;
+  h.recordFilters = [];
   h.adminClients = 0;
 });
 
@@ -225,6 +264,7 @@ describe('challengeFactorAction and the passkey bridge', () => {
     const reports = JSON.stringify(vi.mocked(reportError).mock.calls);
     expect(reports).not.toContain(BRIDGE.id);
     expect(reports).not.toContain(CODE);
+    expect(h.recordFilters).toEqual(READ_OWN_RECORD);
   });
 
   it('checks the authenticator app beside the bridge as before', async () => {
@@ -241,13 +281,15 @@ describe('challengeFactorAction and the passkey bridge', () => {
     expect(mfaStub.challenge).toHaveBeenCalledWith({ factorId: IMPOSTOR.id });
   });
 
-  it('before the records exist, a reserved-name factor is checked like any authenticator app', async () => {
+  it('before the records exist, a reserved-name factor is checked like any authenticator app, and the missing table is reported', async () => {
     h.factors = [BRIDGE];
     h.record = NOT_YET;
     const res = await challengeFactorAction({ factorId: BRIDGE.id, code: CODE });
     expect(res).toEqual({ ok: true, data: undefined });
     expect(mfaStub.challenge).toHaveBeenCalledWith({ factorId: BRIDGE.id });
-    expect(reportError).not.toHaveBeenCalled();
+    expect(vi.mocked(reportError).mock.calls.map((c) => [c[1].tag, c[1].level])).toEqual([
+      ['passkeys.records_missing', 'error'],
+    ]);
   });
 
   it('with no reserved-name factor, the records are never read', async () => {
@@ -272,6 +314,38 @@ describe('verifyEnrollmentAction and the passkey bridge', () => {
     expect(mfaStub.challenge).not.toHaveBeenCalled();
     expect(mfaStub.verify).not.toHaveBeenCalled();
     expect(audit).not.toHaveBeenCalled();
+    expect(h.recordFilters).toEqual(READ_OWN_RECORD);
+  });
+
+  it('while the record cannot be read, a reserved-name set-up is not confirmed: try again in a moment, reported', async () => {
+    h.factors = [{ ...BRIDGE, status: 'unverified' }];
+    h.record = UNREADABLE;
+    const res = await verifyEnrollmentAction({
+      factorId: BRIDGE.id,
+      code: CODE,
+      password: ACCOUNT_VALUE,
+    });
+    expect(res).toEqual({ ok: false, error: { code: 'internal_error', message: TRY_AGAIN } });
+    expect(mfaStub.challenge).not.toHaveBeenCalled();
+    expect(mfaStub.verify).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'passkeys.bridge_unreadable', level: 'error' }),
+    );
+  });
+
+  it('while the record cannot be read, a set-up without the reserved name is confirmed, with no record read', async () => {
+    h.factors = [{ ...APP, id: 'setup-1', friendly_name: 'StockPilot', status: 'unverified' }];
+    h.record = UNREADABLE;
+    const res = await verifyEnrollmentAction({
+      factorId: 'setup-1',
+      code: CODE,
+      password: ACCOUNT_VALUE,
+    });
+    expect(res).toEqual({ ok: true, data: undefined });
+    expect(h.adminClients).toBe(0);
+    expect(reportError).not.toHaveBeenCalled();
   });
 
   it('confirms an unverified reserved-name factor that is not recorded like any set-up', async () => {
@@ -288,7 +362,7 @@ describe('verifyEnrollmentAction and the passkey bridge', () => {
 });
 
 describe('unenrollFactorAction and the passkey bridge', () => {
-  it('refuses to remove the recorded bridge', async () => {
+  it('refuses to remove the recorded bridge, from the names the context already read', async () => {
     h.factors = [APP, BRIDGE];
     const res = await unenrollFactorAction({ factorId: BRIDGE.id });
     expect(res).toEqual({
@@ -297,13 +371,28 @@ describe('unenrollFactorAction and the passkey bridge', () => {
     });
     expect(mfaStub.unenroll).not.toHaveBeenCalled();
     expect(audit).not.toHaveBeenCalled();
+    expect(h.recordFilters).toEqual(READ_OWN_RECORD);
+    // No second Auth read: the list is the one withContext() started.
+    expect(authStub.getUser).not.toHaveBeenCalled();
+    expect(h.contextReads).toBe(1);
   });
 
-  it('removes the authenticator app beside the bridge as before', async () => {
+  it('removes the authenticator app beside the bridge as before, reading no record', async () => {
     h.factors = [BRIDGE, APP];
     const res = await unenrollFactorAction({ factorId: APP.id });
     expect(res).toEqual({ ok: true, data: undefined });
     expect(mfaStub.unenroll).toHaveBeenCalledWith({ factorId: APP.id });
+    expect(h.adminClients).toBe(0);
+  });
+
+  it('names first: an account with no reserved-name factor makes no extra Auth read, no record read and no report', async () => {
+    h.factors = [APP];
+    const res = await unenrollFactorAction({ factorId: APP.id });
+    expect(res).toEqual({ ok: true, data: undefined });
+    expect(mfaStub.unenroll).toHaveBeenCalledWith({ factorId: APP.id });
+    expect(authStub.getUser).not.toHaveBeenCalled();
+    expect(h.adminClients).toBe(0);
+    expect(reportError).not.toHaveBeenCalled();
   });
 
   it('removes a reserved-name factor that is not the recorded bridge, like any authenticator app', async () => {
@@ -314,23 +403,51 @@ describe('unenrollFactorAction and the passkey bridge', () => {
     expect(mfaStub.unenroll).toHaveBeenCalledWith({ factorId: IMPOSTOR.id });
   });
 
-  it('a record that cannot be read hides nothing: the removal goes on, and is reported', async () => {
+  it('while the record cannot be read, a factor that carries the reserved name is refused: try again in a moment, reported', async () => {
     h.factors = [APP, BRIDGE];
     h.record = UNREADABLE;
     const res = await unenrollFactorAction({ factorId: BRIDGE.id });
-    expect(res).toEqual({ ok: true, data: undefined });
-    expect(mfaStub.unenroll).toHaveBeenCalledWith({ factorId: BRIDGE.id });
+    expect(res).toEqual({ ok: false, error: { code: 'internal_error', message: TRY_AGAIN } });
+    expect(mfaStub.unenroll).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
     expect(reportError).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ tag: 'passkeys.bridge_unreadable', level: 'error' }),
     );
   });
 
-  it('a factor list that cannot be read hides nothing: the removal goes on as before', async () => {
-    h.getUserFails = true;
+  it('while the record cannot be read, a factor without the reserved name is removed as before, with no record read', async () => {
+    h.factors = [APP, BRIDGE];
+    h.record = UNREADABLE;
     const res = await unenrollFactorAction({ factorId: APP.id });
     expect(res).toEqual({ ok: true, data: undefined });
     expect(mfaStub.unenroll).toHaveBeenCalledWith({ factorId: APP.id });
+    expect(h.adminClients).toBe(0);
+  });
+
+  it('before the records exist (the table missing), a reserved-name factor is removed like any app', async () => {
+    h.factors = [APP, BRIDGE];
+    h.record = NOT_YET;
+    const res = await unenrollFactorAction({ factorId: BRIDGE.id });
+    expect(res).toEqual({ ok: true, data: undefined });
+    expect(mfaStub.unenroll).toHaveBeenCalledWith({ factorId: BRIDGE.id });
+  });
+
+  it('a factor list the context could not read hides nothing: the removal goes on as before, with no second read', async () => {
+    h.contextListFails = true;
+    const res = await unenrollFactorAction({ factorId: APP.id });
+    expect(res).toEqual({ ok: true, data: undefined });
+    expect(mfaStub.unenroll).toHaveBeenCalledWith({ factorId: APP.id });
+    expect(authStub.getUser).not.toHaveBeenCalled();
+    expect(h.adminClients).toBe(0);
+  });
+
+  it("another account's list (the session moved) is no answer: hides nothing, reads no record", async () => {
+    h.factors = [APP, BRIDGE];
+    h.accountId = 'user-2';
+    const res = await unenrollFactorAction({ factorId: BRIDGE.id });
+    expect(res).toEqual({ ok: true, data: undefined });
+    expect(h.adminClients).toBe(0);
   });
 });
 
@@ -349,6 +466,28 @@ describe('enrollFactorAction and the passkey bridge', () => {
     const res = await enrollFactorAction();
     expect(res.ok).toBe(true);
     expect(mfaStub.unenroll.mock.calls).toEqual([[{ factorId: 'setup-old' }]]);
+    expect(h.recordFilters).toEqual(READ_OWN_RECORD);
+  });
+
+  it('while the record cannot be read, the clean-up leaves every reserved-name set-up alone and removes the others', async () => {
+    h.factors = [
+      { ...BRIDGE, status: 'unverified' },
+      { ...IMPOSTOR, status: 'unverified' },
+      {
+        id: 'setup-old',
+        status: 'unverified',
+        factor_type: 'totp',
+        friendly_name: 'StockPilot · 2026-11-01',
+      },
+    ];
+    h.record = UNREADABLE;
+    const res = await enrollFactorAction();
+    expect(res.ok).toBe(true);
+    expect(mfaStub.unenroll.mock.calls).toEqual([[{ factorId: 'setup-old' }]]);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'passkeys.bridge_unreadable', level: 'error' }),
+    );
   });
 
   it('the clean-up removes an unfinished reserved-name factor that is not recorded, like any set-up', async () => {
@@ -387,6 +526,37 @@ describe('stepUpMethodsAction', () => {
         ],
       },
     });
+    expect(h.recordFilters).toEqual(READ_OWN_RECORD);
+  });
+
+  it('is limited per account at this address, then per account, both closed, before any read', async () => {
+    h.factors = [BRIDGE, APP];
+    await stepUpMethodsAction();
+    const limits = vi
+      .mocked(checkRateLimit)
+      .mock.calls.filter((c) => String(c[0]).startsWith('mfa-step-up-methods'));
+    expect(limits).toEqual([
+      [expect.stringMatching(/^mfa-step-up-methods:user-1:/), 20, 15 * 60_000, 'closed'],
+      ['mfa-step-up-methods-account:user-1', 60, 15 * 60_000, 'closed'],
+    ]);
+  });
+
+  it.each([
+    ['at this address', 0],
+    ['for the account', 1],
+  ])('a limit refused %s answers rate_limited, with no Auth read and no record read', async (_n, which) => {
+    h.factors = [BRIDGE, APP];
+    if (which === 1) {
+      vi.mocked(checkRateLimit)
+        .mockResolvedValueOnce({ allowed: true, count: 1, resetAt: Date.now() + 1000 })
+        .mockResolvedValueOnce(LIMIT_REFUSED);
+    } else {
+      vi.mocked(checkRateLimit).mockResolvedValueOnce(LIMIT_REFUSED);
+    }
+    const res = await stepUpMethodsAction();
+    expect(res).toEqual({ ok: false, error: { code: 'rate_limited', message: PAUSED } });
+    expect(authStub.getUser).not.toHaveBeenCalled();
+    expect(h.adminClients).toBe(0);
   });
 
   it('shows a reserved-name factor that is not the recorded bridge like any authenticator app', async () => {
