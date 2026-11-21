@@ -199,6 +199,10 @@ export function makeWorld() {
       unenrolError: null as string | null,
       /** The service role's factor delete lowers the factor's sessions too (Auth v2.193.0 and later). */
       adminDeleteDowngrades: false,
+      /** Auth refuses the new password itself (stage 5 review, finding 5). */
+      passwordRefusal: null as { code: string; reasons?: string[] } | null,
+      /** Writing the session to the cookies answers an error (the cookies keep the old one). */
+      setSessionFails: false,
     },
   };
 
@@ -696,6 +700,8 @@ export function makeWorld() {
       getUser: async () => ({ data: { user: null }, error: { name: 'AuthApiError', status: 401 } }),
       setSession: async ({ access_token }: { access_token: string; refresh_token: string }) => {
         w.calls.setSession += 1;
+        if (w.knobs.setSessionFails)
+          return { data: {}, error: { name: 'AuthApiError', message: 'sample failure' } };
         w.cookieToken = access_token;
         return { data: {}, error: null };
       },
@@ -738,6 +744,20 @@ export function makeWorld() {
               status: 401,
               code: 'insufficient_aal',
               message: 'AAL2 session is required to update email or password when MFA is enabled.',
+            },
+          };
+        }
+        if (w.knobs.passwordRefusal) {
+          return {
+            data: { user: null },
+            error: {
+              name: 'AuthApiError',
+              status: 422,
+              code: w.knobs.passwordRefusal.code,
+              ...(w.knobs.passwordRefusal.reasons
+                ? { reasons: w.knobs.passwordRefusal.reasons }
+                : {}),
+              message: 'sample refusal',
             },
           };
         }
@@ -809,6 +829,8 @@ export function makeWorld() {
       userReadFails: false,
       unenrolError: null,
       adminDeleteDowngrades: false,
+      passwordRefusal: null,
+      setSessionFails: false,
     };
   }
 

@@ -254,6 +254,24 @@ async function allowStart(userId: string, ip: string): Promise<LimitAnswer> {
   );
 }
 /**
+ * A start on a session that did not sign in with the password (an emailed
+ * link's: the reset's own start, or any other start called on that session)
+ * has its own keys (the review of stage 5, finding 6): a holder of the
+ * emailed link alone can start ceremonies, and must not spend the start
+ * limits of the member's own passkey at sign-in. Its account limit (8 an
+ * hour) stays below the 10 live challenges an account may hold (0475), so
+ * these starts alone never fill them.
+ */
+async function allowLinkStart(userId: string, ip: string): Promise<LimitAnswer> {
+  const a = limitAnswer(
+    await checkRateLimit(`passkey-link-start:${userId}:${ip}`, 5, 15 * MIN, 'closed'),
+  );
+  if (a !== 'allowed') return a;
+  return limitAnswer(
+    await checkRateLimit(`passkey-link-start-account:${userId}`, 8, 60 * MIN, 'closed'),
+  );
+}
+/**
  * Finishes are limited per account and address (review 4 finding 11): 10 in
  * 15 minutes for each address an account finishes from.
  */
@@ -439,7 +457,7 @@ async function clientIp(): Promise<string> {
   }
 }
 
-type Step = 'start' | 'finish' | 'register' | 'remove' | 'manage';
+type Step = 'start' | 'link_start' | 'finish' | 'register' | 'remove' | 'manage';
 type OpenGate = Extract<PasskeyGate, { open: true }>;
 
 /** A closed gate's refusal: the kill switch has its own words. */
@@ -505,13 +523,15 @@ async function limited(step: Step, userId: string): Promise<PasskeyFailure | nul
   const answer: LimitAnswer =
     step === 'start'
       ? await allowStart(userId, ip)
-      : step === 'finish'
-        ? await allowFinish(userId, ip)
-        : step === 'register'
-          ? await allowRegister(userId)
-          : step === 'remove'
-            ? await allowRemove(userId)
-            : 'allowed';
+      : step === 'link_start'
+        ? await allowLinkStart(userId, ip)
+        : step === 'finish'
+          ? await allowFinish(userId, ip)
+          : step === 'register'
+            ? await allowRegister(userId)
+            : step === 'remove'
+              ? await allowRemove(userId)
+              : 'allowed';
   if (answer === 'allowed') return null;
   if (answer === 'over_limit') await recordPasskeyEvent('passkey_checks_paused', userId);
   return fail('rate_limited', PASSKEY_WORDS.tooMany, 'limited');
@@ -532,7 +552,11 @@ async function prologue(
   const read = await readGate(held.claims.userId);
   const gate = level === 'add' ? gateForAdd(read) : gateForUse(read);
   if (!gate.open) return gateRefusal(gate.why);
-  const refused = await limited(step, held.claims.userId);
+  // A start on a session that did not sign in with the password (an emailed
+  // link's) counts on its own keys, never the member's sign-in start's
+  // (allowLinkStart; the review of stage 5, finding 6).
+  const bucket: Step = step === 'start' && !signedInWithPassword(held) ? 'link_start' : step;
+  const refused = await limited(bucket, held.claims.userId);
   if (refused) return refused;
   return { ok: true, held, gate };
 }
@@ -1451,6 +1475,7 @@ function finishesRemoval(p: AccountPicture): boolean {
  * with the password: its verified `amr` holds `password` (review of stage 5,
  * finding 2). Never on a session an emailed link made (`otp`): the link alone
  * must not turn an account that lists a verified factor into one with none.
+ * A start on any other session counts on its own limits (allowLinkStart).
  */
 function signedInWithPassword(held: Held): boolean {
   const amr = held.claims.amr;

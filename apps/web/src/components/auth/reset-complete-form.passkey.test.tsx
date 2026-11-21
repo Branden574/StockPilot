@@ -209,3 +209,78 @@ describe('a member with an authenticator app and a passkey', () => {
     expect(h.start).not.toHaveBeenCalled();
   });
 });
+
+describe('the review of stage 5', () => {
+  const PASSWORD_RULES = 'This password does not meet the password rules. Choose a stronger one.';
+  const refusedAfterTheRaise = {
+    ok: false,
+    error: { code: 'validation_error', message: PASSWORD_RULES, details: { secondStep: 'done' } },
+  };
+
+  it.each([
+    ['passkey', PASSKEY_ASK],
+    ['both', BOTH_ASK],
+  ] as const)(
+    'finding 5 (%s): after the raise a refused password shows Update password; the next press sends the passwords alone, with no device prompt',
+    async (method, ask) => {
+      h.complete
+        .mockResolvedValueOnce(asked(ask, method))
+        .mockResolvedValueOnce(refusedAfterTheRaise)
+        .mockResolvedValueOnce({ ok: true, data: { next: '/signin?reset=success' } });
+      const user = userEvent.setup();
+      render(<ResetCompleteForm />);
+      await typePasswords(user);
+      await user.click(screen.getByRole('button', { name: 'Update password' }));
+      await user.click(await screen.findByRole('button', { name: /Use your passkey/ }));
+
+      // The refusal stays on the form; the passkey and the code box are gone.
+      await waitFor(() => expect(screen.getByRole('alert').textContent).toContain(PASSWORD_RULES));
+      expect(screen.queryByRole('button', { name: /Use your passkey/ })).toBeNull();
+      expect(screen.queryByLabelText('Authentication code')).toBeNull();
+
+      await user.clear(screen.getByLabelText('New password'));
+      await user.type(screen.getByLabelText('New password'), 'Typed-value-3');
+      await user.clear(screen.getByLabelText('Confirm password'));
+      await user.type(screen.getByLabelText('Confirm password'), 'Typed-value-3');
+      await user.click(screen.getByRole('button', { name: 'Update password' }));
+
+      await waitFor(() => expect(h.complete).toHaveBeenCalledTimes(3));
+      expect(h.complete.mock.calls[2]![0]).toEqual({
+        password: 'Typed-value-3',
+        confirmPassword: 'Typed-value-3',
+      });
+      expect(h.start).toHaveBeenCalledTimes(1);
+      expect(h.startAuthentication).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(h.replace).toHaveBeenCalledWith('/signin?reset=success'));
+    },
+  );
+
+  it('finding 3: with an app too, a refused passkey answer keeps the code box usable', async () => {
+    h.complete
+      .mockResolvedValueOnce(asked(BOTH_ASK, 'both'))
+      .mockResolvedValueOnce({
+        ok: false,
+        error: {
+          code: 'validation_error',
+          message: 'This passkey is not one of yours. Try another one.',
+          details: { reason: 'aal2_required', method: 'both' },
+        },
+      })
+      .mockResolvedValueOnce({ ok: true, data: { next: '/signin?reset=success' } });
+    const user = userEvent.setup();
+    render(<ResetCompleteForm />);
+    await typePasswords(user);
+    await user.click(screen.getByRole('button', { name: 'Update password' }));
+    await user.click(await screen.findByRole('button', { name: /Use your passkey/ }));
+    await screen.findByText('This passkey is not one of yours. Try another one.');
+
+    await user.type(screen.getByLabelText('Authentication code'), '123456');
+    await user.click(screen.getByRole('button', { name: 'Update password' }));
+    await waitFor(() => expect(h.complete).toHaveBeenCalledTimes(3));
+    expect(h.complete.mock.calls[2]![0]).toEqual({
+      password: TYPED_VALUE,
+      confirmPassword: TYPED_VALUE,
+      totpCode: '123456',
+    });
+  });
+});

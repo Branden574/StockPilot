@@ -121,6 +121,21 @@ export function ResetCompleteForm() {
       return null;
     }
     if (!res.ok) {
+      if (res.error.details?.secondStep === 'done') {
+        // The session already passed the second step and the new password was
+        // refused (the review of stage 5, finding 5): no second step is asked
+        // again, so the passkey and the code box go, Update password shows,
+        // and the next press sends the passwords alone, with no device prompt
+        // the server would not read.
+        setPasskeyMethod(null);
+        setPasskeyAsk(null);
+        setNeedsCode(false);
+        setCode('');
+        setCodeAsk(null);
+        toast.error(res.error.message);
+        setError(res.error.message);
+        return null;
+      }
       const method = passkeyMethodOf(res.error.details);
       if (method) {
         // The passkey is offered (stage 5): its button, and with an app the

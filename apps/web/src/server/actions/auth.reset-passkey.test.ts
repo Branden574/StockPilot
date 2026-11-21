@@ -108,7 +108,8 @@ const { emitAuthAudit } = await import('@/server/services/auth-audit');
 const { reportError } = await import('@/lib/error-reporter');
 const { checkRateLimit } = await import('@/lib/rate-limit');
 const pk = await import('@/server/security/passkeys');
-const { startPasswordResetPasskeyAction, finishSecondStepAction } = await import('./passkeys');
+const { startPasswordResetPasskeyAction, finishSecondStepAction, startSecondStepAction } =
+  await import('./passkeys');
 const { completePasswordResetAction } = await import('./auth');
 
 const NEW_VALUE = 'Sample-new-value-9';
@@ -375,7 +376,7 @@ describe('a holder of the emailed link alone', () => {
     expect(world.calls.passwordSets).toEqual([]);
   });
 
-  it('the start and the answer count against the passkey limits of the code page: once spent, no challenge, no password', async () => {
+  it('the start counts against the reset’s own start limits and the answer against the finish limit: once spent, no challenge, no password', async () => {
     const { userId, soft } = await passkeyOnlyMember();
     openLink(userId);
     const { challengeId, options } = optionsOf(await startPasswordResetPasskeyAction());
@@ -391,7 +392,7 @@ describe('a holder of the emailed link alone', () => {
       ok: false,
       error: { code: 'rate_limited', message: pk.PASSKEY_WORDS.tooMany },
     });
-    expect(keys.some((k) => k.startsWith(`passkey-start:${userId}:`))).toBe(true);
+    expect(keys.some((k) => k.startsWith(`passkey-link-start:${userId}:`))).toBe(true);
     expect(fnNames()).not.toContain('issue_passkey_challenge');
     const res = await completePasswordResetAction({
       ...PASSWORDS,
@@ -1111,5 +1112,295 @@ describe('after the raise', () => {
     expect(res.ok).toBe(false);
     expect(fnNames()).not.toContain('take_passkey_challenge');
     expect(world.calls.passwordSets).toEqual([]);
+  });
+});
+
+describe('the review of stage 5', () => {
+  const PASSWORD_RULES = 'This password does not meet the password rules. Choose a stronger one.';
+  const raisedNow = (linkId: string) => {
+    expect(claimsNow()).toMatchObject({ session_id: linkId, aal: 'aal2' });
+  };
+
+  describe('finding 3: each step after the passkey checked out', () => {
+    it('the raise row is required: not written, the bridge is never answered; aal1, no password, reported', async () => {
+      const { userId, soft } = await passkeyOnlyMember();
+      const link = openLink(userId);
+      vi.mocked(emitAuthAudit).mockImplementation(
+        async (row) => row.event !== 'passkey.bridge_raise',
+      );
+      const res = await resetWithPasskey(soft);
+      expect(res).toEqual({
+        ok: false,
+        error: {
+          code: 'internal_error',
+          message: pk.PASSKEY_WORDS.couldNotFinish,
+          details: { reason: 'aal2_required', method: 'passkey' },
+        },
+      });
+      expect(verifyCalls()).toEqual([]);
+      expect(world.calls.setSession).toBe(0);
+      expect(world.calls.passwordSets).toEqual([]);
+      expect(claimsNow()).toMatchObject({ session_id: link.id, aal: 'aal1' });
+      expect(world.sessions.get(link.id)!.aal).toBe('aal1');
+      expect(
+        vi
+          .mocked(reportError)
+          .mock.calls.filter((c) => c[1]?.tag === 'passkeys.raise_row_unwritten')
+          .map((c) => c[1]!.extra),
+      ).toEqual([expect.objectContaining({ purpose: 'password_reset' })]);
+    });
+
+    it('the raised token is another session’s: it is signed out, the link’s words, no cookie written, no password', async () => {
+      const { userId, soft } = await passkeyOnlyMember();
+      const link = openLink(userId);
+      world.knobs.verifyAnswersOtherSession = true;
+      const res = await resetWithPasskey(soft);
+      expect(res).toEqual({
+        ok: false,
+        error: { code: 'unauthenticated', message: RESET_LINK_GONE },
+      });
+      expect(world.calls.setSession).toBe(0);
+      // The returned token was signed out (a /logout as that token).
+      expect(world.calls.auth.some((c) => /\/logout/.test(c.path))).toBe(true);
+      expect(world.calls.passwordSets).toEqual([]);
+      expect(claimsNow()).toMatchObject({ session_id: link.id, aal: 'aal1' });
+    });
+
+    it('a raised token that does not verify: refused the same way', async () => {
+      const { userId, soft } = await passkeyOnlyMember();
+      openLink(userId);
+      world.knobs.verifyAnswersTampered = true;
+      const res = await resetWithPasskey(soft);
+      expect(res).toEqual({
+        ok: false,
+        error: { code: 'unauthenticated', message: RESET_LINK_GONE },
+      });
+      expect(world.calls.setSession).toBe(0);
+      expect(world.calls.passwordSets).toEqual([]);
+    });
+
+    it('the raised session cannot be written to the cookies: refused, no password set', async () => {
+      const { userId, soft } = await passkeyOnlyMember();
+      const link = openLink(userId);
+      world.knobs.setSessionFails = true;
+      const res = await resetWithPasskey(soft);
+      expect(res).toEqual({
+        ok: false,
+        error: {
+          code: 'internal_error',
+          message: pk.PASSKEY_WORDS.couldNotFinish,
+          details: { reason: 'aal2_required', method: 'passkey' },
+        },
+      });
+      expect(world.calls.setSession).toBe(1);
+      expect(world.calls.passwordSets).toEqual([]);
+      // The cookies keep the link's aal1 token.
+      expect(claimsNow()).toMatchObject({ session_id: link.id, aal: 'aal1' });
+    });
+
+    it('a disabled account: the start is refused before any challenge, and an answer is refused; no password', async () => {
+      const { userId, soft } = await passkeyOnlyMember();
+      openLink(userId);
+      const { challengeId, options } = optionsOf(await startPasswordResetPasskeyAction());
+      const response = soft.get(options);
+      world.accountStatus = 'disabled';
+      world.calls.fns.length = 0;
+      const start = await startPasswordResetPasskeyAction();
+      expect(start).toEqual({
+        ok: false,
+        error: { code: 'forbidden', message: pk.PASSKEY_WORDS.disabled },
+      });
+      expect(fnNames()).not.toContain('issue_passkey_challenge');
+      const res = await completePasswordResetAction({
+        ...PASSWORDS,
+        passkeyAnswer: { challengeId, response },
+      });
+      expect(res).toEqual({
+        ok: false,
+        error: {
+          code: 'forbidden',
+          message: pk.PASSKEY_WORDS.disabled,
+          details: { reason: 'aal2_required', method: 'passkey' },
+        },
+      });
+      expect(fnNames()).not.toContain('take_passkey_challenge');
+      expect(verifyCalls()).toEqual([]);
+      expect(world.calls.passwordSets).toEqual([]);
+    });
+  });
+
+  describe('finding 5: Auth refuses the new password after the raise', () => {
+    it.each([
+      [{ code: 'weak_password' }, PASSWORD_RULES],
+      [
+        { code: 'weak_password', reasons: ['pwned'] },
+        'This password has appeared in a known data breach. Choose a different one.',
+      ],
+      [{ code: 'same_password' }, 'Choose a password that is different from your current one.'],
+    ])(
+      '%j: the session stays raised, the answer says the second step is done, and the next press with the passwords alone sets it',
+      async (refusal, words) => {
+        const { userId, soft } = await passkeyOnlyMember();
+        const link = openLink(userId);
+        world.knobs.passwordRefusal = refusal;
+        const res = await resetWithPasskey(soft);
+        expect(res).toEqual({
+          ok: false,
+          error: { code: 'validation_error', message: words, details: { secondStep: 'done' } },
+        });
+        expect(world.calls.passwordSets).toEqual([]);
+        raisedNow(link.id);
+
+        // The member corrects the password and presses again: no device
+        // prompt, no challenge, no bridge answer; the password is set.
+        world.knobs.passwordRefusal = null;
+        world.calls.fns.length = 0;
+        world.calls.auth.length = 0;
+        const again = await completePasswordResetAction(PASSWORDS);
+        expect(again).toEqual({ ok: true, data: { next: '/signin?reset=success' } });
+        expect(fnNames()).not.toContain('issue_passkey_challenge');
+        expect(fnNames()).not.toContain('take_passkey_challenge');
+        expect(verifyCalls()).toEqual([]);
+        expect(world.calls.passwordSets).toEqual([userId]);
+        expect(world.calls.cookieSignOut).toEqual(['global']);
+      },
+    );
+
+    it('a passkey answer sent again on the raised session is never read', async () => {
+      const { userId, soft } = await passkeyOnlyMember();
+      openLink(userId);
+      world.knobs.passwordRefusal = { code: 'weak_password' };
+      const { challengeId, options } = optionsOf(await startPasswordResetPasskeyAction());
+      const response = soft.get(options);
+      await completePasswordResetAction({ ...PASSWORDS, passkeyAnswer: { challengeId, response } });
+      world.knobs.passwordRefusal = null;
+      world.calls.fns.length = 0;
+      const again = await completePasswordResetAction({
+        ...PASSWORDS,
+        passkeyAnswer: { challengeId, response },
+      });
+      expect(again.ok).toBe(true);
+      expect(fnNames()).not.toContain('take_passkey_challenge');
+    });
+
+    it('a member with an app too: the same', async () => {
+      const { userId, soft } = await passkeyOnlyMember('both@example.test');
+      world.addApp(userId);
+      const link = openLink(userId);
+      world.knobs.passwordRefusal = { code: 'weak_password' };
+      const res = await resetWithPasskey(soft);
+      expect(res).toEqual({
+        ok: false,
+        error: {
+          code: 'validation_error',
+          message: PASSWORD_RULES,
+          details: { secondStep: 'done' },
+        },
+      });
+      raisedNow(link.id);
+    });
+
+    it('an account with no passkey is unchanged: the refusal carries no details', async () => {
+      const userId = world.addAccount('app-only@example.test');
+      world.addApp(userId);
+      const link = openLink(userId);
+      // The app's code raised the link session in an earlier press.
+      const raised = { ...world.sessions.get(link.id)!, aal: 'aal2' as const };
+      world.sessions.set(link.id, raised);
+      world.cookieToken = world.signToken(raised);
+      world.knobs.passwordRefusal = { code: 'weak_password' };
+      const res = await completePasswordResetAction(PASSWORDS);
+      expect(res).toEqual({
+        ok: false,
+        error: { code: 'validation_error', message: PASSWORD_RULES },
+      });
+    });
+  });
+
+  describe('finding 6: a start on a session the emailed link opened has its own limits', () => {
+    function recordKeys(refuse: (key: string) => boolean = () => false) {
+      const calls: Array<{ key: string; limit: number; windowMs: number }> = [];
+      vi.mocked(checkRateLimit).mockImplementation(async (key: string, limit, windowMs) => {
+        calls.push({ key, limit: limit as number, windowMs: windowMs as number });
+        return { allowed: !refuse(key) } as Awaited<ReturnType<typeof checkRateLimit>>;
+      });
+      return calls;
+    }
+
+    it('the reset’s start counts only its own keys, never the sign-in start’s; the sign-in start never the reset’s', async () => {
+      const { userId } = await passkeyOnlyMember();
+      openLink(userId);
+      const resetKeys = recordKeys();
+      expect((await startPasswordResetPasskeyAction()).ok).toBe(true);
+      const passkeyKeys = resetKeys.map((c) => c.key).filter((k) => k.startsWith('passkey-'));
+      expect(passkeyKeys).toEqual([
+        expect.stringMatching(new RegExp(`^passkey-link-start:${userId}:.+$`)),
+        `passkey-link-start-account:${userId}`,
+      ]);
+
+      world.signIn(userId, 'aal1');
+      const signInKeys = recordKeys();
+      expect((await startSecondStepAction()).ok).toBe(true);
+      const signInPasskeyKeys = signInKeys
+        .map((c) => c.key)
+        .filter((k) => k.startsWith('passkey-'));
+      expect(signInPasskeyKeys.length).toBeGreaterThan(0);
+      expect(signInPasskeyKeys.every((k) => k.startsWith('passkey-start'))).toBe(true);
+    });
+
+    it('a holder of the emailed link who spends every reset start does not pause the member’s passkey at sign-in', async () => {
+      const { userId } = await passkeyOnlyMember();
+      openLink(userId);
+      recordKeys((k) => k.startsWith('passkey-link-start'));
+      expect(await startPasswordResetPasskeyAction()).toEqual({
+        ok: false,
+        error: { code: 'rate_limited', message: pk.PASSKEY_WORDS.tooMany },
+      });
+      // The member, signed in with the password on their own device.
+      world.signIn(userId, 'aal1');
+      const start = await startSecondStepAction();
+      expect(start.ok && start.data.kind).toBe('options');
+    });
+
+    it('the code page’s start, called on the link session, counts on the same keys: the link alone never spends the sign-in start’s', async () => {
+      const { userId } = await passkeyOnlyMember();
+      openLink(userId);
+      const keys = recordKeys((k) => k.startsWith('passkey-link-start'));
+      expect(await startSecondStepAction()).toEqual({
+        ok: false,
+        error: { code: 'rate_limited', message: pk.PASSKEY_WORDS.tooMany },
+      });
+      expect(keys.map((c) => c.key).filter((k) => k.startsWith('passkey-start'))).toEqual([]);
+      // The member's own sign-in still starts.
+      world.signIn(userId, 'aal1');
+      const start = await startSecondStepAction();
+      expect(start.ok && start.data.kind).toBe('options');
+    });
+
+    it('the account’s link-start limit alone refuses, at every address', async () => {
+      const { userId } = await passkeyOnlyMember();
+      openLink(userId);
+      recordKeys((k) => k.startsWith('passkey-link-start-account:'));
+      expect(await startPasswordResetPasskeyAction()).toEqual({
+        ok: false,
+        error: { code: 'rate_limited', message: pk.PASSKEY_WORDS.tooMany },
+      });
+      expect(fnNames()).not.toContain('issue_passkey_challenge');
+    });
+
+    it('its limits: 5 in 15 minutes per address, 8 an hour for the account (below the 10 live challenges an account may hold)', async () => {
+      const { userId } = await passkeyOnlyMember();
+      openLink(userId);
+      const calls = recordKeys();
+      await startPasswordResetPasskeyAction();
+      expect(calls.filter((c) => c.key.startsWith('passkey-link-start'))).toEqual([
+        {
+          key: expect.stringMatching(new RegExp(`^passkey-link-start:${userId}:.+$`)),
+          limit: 5,
+          windowMs: 15 * 60_000,
+        },
+        { key: `passkey-link-start-account:${userId}`, limit: 8, windowMs: 60 * 60_000 },
+      ]);
+    });
   });
 });

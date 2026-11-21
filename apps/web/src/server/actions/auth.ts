@@ -811,8 +811,20 @@ export async function completePasswordResetAction(
         { reason: 'aal2_required' },
       );
     }
+    // A passkey account whose session is already raised (by the passkey or
+    // the app's code, this press or an earlier one) needs no second step on
+    // the next press: `details.secondStep` lets the form show Update password
+    // and send the passwords alone, with no device prompt the server would
+    // not read (the review of stage 5, finding 5). An account with no passkey
+    // gets the refusal of before.
+    const secondStepDone =
+      passkeyMethod && atUpdate.aal === 'aal2' ? { secondStep: 'done' } : undefined;
     if (refusal?.kind === 'same') {
-      return err('validation_error', 'Choose a password that is different from your current one.');
+      return err(
+        'validation_error',
+        'Choose a password that is different from your current one.',
+        secondStepDone,
+      );
     }
     if (refusal?.kind === 'weak') {
       return err(
@@ -820,6 +832,7 @@ export async function completePasswordResetAction(
         refusal.breached
           ? 'This password has appeared in a known data breach. Choose a different one.'
           : 'This password does not meet the password rules. Choose a stronger one.',
+        secondStepDone,
       );
     }
     if (refusal?.kind === 'session_gone') {
