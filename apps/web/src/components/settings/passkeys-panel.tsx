@@ -17,7 +17,10 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { isControlFlow } from '@/lib/control-flow';
-import { generateMfaRecoveryCodesAction } from '@/server/actions/mfa-recovery';
+import {
+  consumeMfaRecoveryCodeAction,
+  generateMfaRecoveryCodesAction,
+} from '@/server/actions/mfa-recovery';
 import {
   finishAddPasskeyAction,
   finishPasskeySetupAction,
@@ -51,6 +54,7 @@ export function PasskeysPanel({ data }: { data: PanelData }) {
   const [rowError, setRowError] = React.useState<string | null>(null);
   const [renaming, setRenaming] = React.useState<{ id: string; name: string } | null>(null);
   const [removing, setRemoving] = React.useState<string | null>(null);
+  const [recovering, setRecovering] = React.useState(false);
 
   async function finishSetup(id: string) {
     setBusyId(id);
@@ -161,7 +165,19 @@ export function PasskeysPanel({ data }: { data: PanelData }) {
         </ul>
       ) : null}
       {!data.aal2 && data.passkeys.length > 0 ? (
-        <p className="text-muted-foreground text-[12px]">{PASSKEYS_PANEL_WORDS.stepUp}</p>
+        data.onlyMethodUnfinished ? (
+          // Review 4 finding 4: no second step to confirm with; the two ways out.
+          <div className="space-y-2">
+            <p className="text-muted-foreground text-[12px]">
+              {PASSKEYS_PANEL_WORDS.onlyMethodUnfinished}
+            </p>
+            <Button size="sm" variant="outline" onClick={() => setRecovering(true)}>
+              {PASSKEYS_PANEL_WORDS.useRecoveryCode}
+            </Button>
+          </div>
+        ) : (
+          <p className="text-muted-foreground text-[12px]">{PASSKEYS_PANEL_WORDS.stepUp}</p>
+        )
       ) : null}
       <div role="alert">{rowError ? <p className="text-destructive text-[12px]">{rowError}</p> : null}</div>
       {!full || !data.canAdd ? null : data.atLimit ? (
@@ -172,6 +188,8 @@ export function PasskeysPanel({ data }: { data: PanelData }) {
           {PASSKEYS_PANEL_WORDS.add}
         </Button>
       )}
+
+      {recovering ? <RecoveryCodeDialog onClose={() => setRecovering(false)} /> : null}
 
       {adding ? (
         <AddPasskeyDialog
@@ -472,6 +490,86 @@ function AddPasskeyDialog({ data, onClose }: { data: PanelData; onClose: () => v
             </DialogFooter>
           </>
         )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Review 4 finding 4: a recovery code from the Security page, for a member
+ * whose only method is a passkey whose setup is not finished (the code page
+ * is not offered to an account with no verified factor). The same action as
+ * the code page's: the password is required, and the code removes every
+ * second step of the account, passkeys included.
+ */
+function RecoveryCodeDialog({ onClose }: { onClose: () => void }) {
+  const router = useRouter();
+  const [code, setCode] = React.useState('');
+  const [password, setPassword] = React.useState('');
+  const [pending, setPending] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!code.trim() || !password) return setError(PASSKEYS_PANEL_WORDS.recoveryMissing);
+    setPending(true);
+    setError(null);
+    try {
+      const res = await consumeMfaRecoveryCodeAction({ code: code.trim(), password });
+      if (!res.ok) return setError(res.error.message);
+      setPassword('');
+      onClose();
+      router.refresh();
+    } catch (err) {
+      if (isControlFlow(err)) return;
+      setError(PASSKEYS_PANEL_WORDS.noAnswer);
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => (!o ? onClose() : undefined)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{PASSKEYS_PANEL_WORDS.recoveryTitle}</DialogTitle>
+          <DialogDescription>{PASSKEYS_PANEL_WORDS.recoveryBody}</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="passkeys-recovery-code">Recovery code</Label>
+            <Input
+              id="passkeys-recovery-code"
+              value={code}
+              onChange={(e) => setCode(e.target.value.toUpperCase())}
+              className="font-mono tracking-widest"
+              maxLength={32}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="passkeys-recovery-password">Your password</Label>
+            <Input
+              id="passkeys-recovery-password"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+          <div role="alert">
+            {error ? <p className="text-destructive text-[12px]">{error}</p> : null}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose} disabled={pending}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={pending}>
+              {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Use recovery code'}
+            </Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );

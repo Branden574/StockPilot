@@ -32,6 +32,14 @@ export const PASSKEYS_PANEL_WORDS = {
   noSupport: "This browser can't use passkeys. Use another browser.",
   noAnswer: 'Could not reach StockPilot. Check your connection and try again.',
   stepUp: "Confirm it's you first. Sign out and sign in again with your second step.",
+  /** Review 4 finding 4: the same words as the server's (passkeys.test.ts pins them equal). */
+  onlyMethodUnfinished:
+    "This passkey's setup isn't finished and it is your only second step, so it can't be removed yet. Add an authenticator app first, then remove it. Or use a recovery code, if you saved one: it removes every second step, passkeys included.",
+  useRecoveryCode: 'Use a recovery code',
+  recoveryTitle: 'Use a recovery code',
+  recoveryBody:
+    'Enter one of the recovery codes you saved and your password. The code is used up, and every second step of your account is removed, passkeys included. Then set up a new one.',
+  recoveryMissing: 'Enter a recovery code and your password.',
   /** Decision A: the panel with only the list and Remove (the kill switch off). */
   turnedOff: 'Passkeys are turned off right now.',
   /** The same panel when the passkeys cannot work here now (no key, or the switch unreadable). */

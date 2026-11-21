@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 /**
@@ -15,7 +15,10 @@ vi.mock('@simplewebauthn/browser', () => ({
   startAuthentication: vi.fn(),
   startRegistration: vi.fn(),
 }));
-vi.mock('@/server/actions/mfa-recovery', () => ({ generateMfaRecoveryCodesAction: vi.fn() }));
+vi.mock('@/server/actions/mfa-recovery', () => ({
+  generateMfaRecoveryCodesAction: vi.fn(),
+  consumeMfaRecoveryCodeAction: vi.fn(async () => ({ ok: true, data: { unenrolled: 1 } })),
+}));
 vi.mock('@/server/actions/passkeys', () => ({
   finishAddPasskeyAction: vi.fn(),
   finishPasskeySetupAction: vi.fn(),
@@ -25,6 +28,8 @@ vi.mock('@/server/actions/passkeys', () => ({
   startConfirmAddAction: vi.fn(),
   startPasskeySetupAction: vi.fn(),
 }));
+
+import { consumeMfaRecoveryCodeAction } from '@/server/actions/mfa-recovery';
 
 import { PasskeysPanel } from './passkeys-panel';
 import { PASSKEYS_PANEL_WORDS } from './passkeys-copy';
@@ -52,6 +57,7 @@ function panel(extra: Partial<PanelData> = {}): PanelData {
     apps: [{ id: 'app-1', friendlyName: 'Phone' }],
     phoneConfirmation: false,
     aal2: true,
+    onlyMethodUnfinished: false,
     ...extra,
   };
 }
@@ -115,5 +121,47 @@ describe('the Passkeys panel (decision A)', () => {
     unmount();
     render(<PasskeysPanel data={panel({ passkeys: unfinished, canFinish: true, canAdd: false })} />);
     expect(buttons()).toEqual(['Finish', 'Remove']);
+  });
+});
+
+describe('review 4 finding 4: an unfinished passkey that is the only method', () => {
+  const onlyMethod = () =>
+    panel({
+      passkeys: [{ ...KEY, unfinished: true }],
+      canAdd: false,
+      canFinish: false,
+      hasApp: false,
+      apps: [],
+      aal2: false,
+      onlyMethodUnfinished: true,
+    });
+
+  it('says the two ways out instead of "sign in again with your second step", and offers the recovery code', () => {
+    render(<PasskeysPanel data={onlyMethod()} />);
+    expect(screen.getByText(PASSKEYS_PANEL_WORDS.onlyMethodUnfinished)).toBeTruthy();
+    expect(screen.queryByText(PASSKEYS_PANEL_WORDS.stepUp)).toBeNull();
+    expect(buttons()).toEqual(['Remove', PASSKEYS_PANEL_WORDS.useRecoveryCode]);
+  });
+
+  it('the recovery code is spent with the password, then the page is read again', async () => {
+    render(<PasskeysPanel data={onlyMethod()} />);
+    fireEvent.click(screen.getByRole('button', { name: PASSKEYS_PANEL_WORDS.useRecoveryCode }));
+    fireEvent.change(screen.getByLabelText('Recovery code'), { target: { value: 'sample-code' } });
+    fireEvent.change(screen.getByLabelText('Your password'), {
+      target: { value: 'sample-password-not-real' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Use recovery code' }));
+    await waitFor(() =>
+      expect(consumeMfaRecoveryCodeAction).toHaveBeenCalledWith({
+        code: 'SAMPLE-CODE',
+        password: 'sample-password-not-real',
+      }),
+    );
+  });
+
+  it('a member with another second step keeps the old hint', () => {
+    render(<PasskeysPanel data={panel({ aal2: false, passkeys: [{ ...KEY, unfinished: true }] })} />);
+    expect(screen.getByText(PASSKEYS_PANEL_WORDS.stepUp)).toBeTruthy();
+    expect(screen.queryByText(PASSKEYS_PANEL_WORDS.onlyMethodUnfinished)).toBeNull();
   });
 });

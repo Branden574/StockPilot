@@ -157,6 +157,15 @@ export const PASSKEY_WORDS = {
   addFailed: 'Could not add your passkey. Try again.',
   addNotFinished: 'Could not finish adding your passkey. Try again.',
   finishFirst: 'Finish setting up your passkey first. Press Finish next to it.',
+  /**
+   * Review 4 finding 4: a passkey whose setup is not finished, on an account
+   * with no other second step (no verified factor, so the session cannot
+   * reach aal2 to remove it). The two ways out, as they are.
+   */
+  onlyMethodUnfinished:
+    "This passkey's setup isn't finished and it is your only second step, so it can't be removed yet. Add an authenticator app first, then remove it. Or use a recovery code, if you saved one: it removes every second step, passkeys included.",
+  finishFirstOnlyMethod:
+    "Finish setting up your passkey first. Press Finish next to it. If you can't, add an authenticator app first, then remove the passkey. Or use a recovery code, if you saved one: it removes every second step, passkeys included.",
   /** Decision B: the same words as an authenticator app's removal (second-step-methods.ts). */
   policyBlocksRemoval: LAST_METHOD_WORDS,
   removedFinishing: 'Removed. Finishing in the background.',
@@ -692,6 +701,14 @@ function bridgeServes(p: Judged): boolean {
   if (p.state === 'healthy' || p.state === 'unverified_reserved_factor') return true;
   // S15: a second verified reserved-name factor beside a VERIFIED bridge.
   return p.state === 'reserved_factor_without_row' && p.facts.bridgeStatus === 'verified';
+}
+
+/**
+ * Review 4 finding 4: a setup not finished on an account with no verified
+ * factor at all, so no session of it can reach aal2 to remove the passkey.
+ */
+function onlyMethodUnfinished(p: AccountPicture): boolean {
+  return setupUnfinished(p) && !p.factors.some((f) => f.status === 'verified');
 }
 
 /**
@@ -1411,8 +1428,13 @@ export async function startAddPasskey(input: {
   if (!picture.bridge && picture.factors.length >= 10) {
     return fail('validation_error', PASSKEY_WORDS.removeAuthenticatorFirst, 'factor_limit');
   }
-  if (setupUnfinished(picture))
-    return fail('validation_error', PASSKEY_WORDS.finishFirst, 'setup_unfinished');
+  if (setupUnfinished(picture)) {
+    return fail(
+      'validation_error',
+      onlyMethodUnfinished(picture) ? PASSKEY_WORDS.finishFirstOnlyMethod : PASSKEY_WORDS.finishFirst,
+      'setup_unfinished',
+    );
+  }
 
   const anyVerified = picture.factors.some((f) => f.status === 'verified');
   // Rule 19: an account with a verified factor adds only from an aal2 session.
@@ -1776,8 +1798,18 @@ export async function removePasskey(input: {
   if (!p.ok) return p;
   const { held, rp } = p;
   const userId = held.claims.userId;
-  if (held.claims.aal !== 'aal2')
-    return fail('forbidden', PASSKEY_WORDS.stepUpFirst, 'aal2_required');
+  if (held.claims.aal !== 'aal2') {
+    // Review 4 finding 4: an account whose only method is a passkey whose
+    // setup is not finished cannot reach aal2 at all; its words say the two
+    // ways out. Anyone else: confirm it is you first.
+    const read = await readPicture(createAdminClient(), held, rp);
+    const only = read.ok && onlyMethodUnfinished(read.picture);
+    return fail(
+      'forbidden',
+      only ? PASSKEY_WORDS.onlyMethodUnfinished : PASSKEY_WORDS.stepUpFirst,
+      'aal2_required',
+    );
+  }
   const id = challengeIdSchema.safeParse(input.passkeyId);
   if (!id.success) return fail('validation_error', PASSKEY_WORDS.alreadyRemoved, 'id');
   const admin = createAdminClient();
@@ -1909,6 +1941,12 @@ export interface PasskeysPanel {
   phoneConfirmation: boolean;
   /** This session is aal2 (adding with a verified factor, removing, renaming need it). */
   aal2: boolean;
+  /**
+   * Review 4 finding 4: a setup not finished and no verified factor at all,
+   * so this account cannot reach aal2 to remove it: the panel says the two
+   * ways out (an authenticator app first, or a recovery code).
+   */
+  onlyMethodUnfinished: boolean;
 }
 
 /**
@@ -1997,6 +2035,7 @@ async function panelOf(
     apps: picture.apps.map((f) => ({ id: f.id, friendlyName: f.friendly_name })),
     phoneConfirmation: canAdd && !hasApp && (await usedPhoneAppRecently(admin, userId)),
     aal2: held.claims.aal === 'aal2',
+    onlyMethodUnfinished: onlyMethodUnfinished(picture),
   };
 }
 

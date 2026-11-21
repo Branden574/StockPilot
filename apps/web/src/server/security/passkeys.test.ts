@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { PASSKEYS_PANEL_WORDS } from '@/components/settings/passkeys-copy';
 import { SoftAuthenticator } from '@/test/fixtures/soft-authenticator';
 import { CONSOLE_EMAIL, ORIGIN, world } from '@/test/passkey-world';
 
@@ -1820,6 +1821,52 @@ describe('review 4 finding 3: only the second step can finish a removal the memb
       start: { kind: 'removal_finished' },
     });
     expect(world.calls.deleteFactor).toEqual([bridge.factor_id]);
+  });
+});
+
+describe('review 4 finding 4: an unfinished passkey that is the only method says the two ways out', () => {
+  it('Remove from a password-only session: add an authenticator app first, or use a recovery code; the panel and the Add say it too', async () => {
+    const { userId, passkeyId } = await memberWithPasskey();
+    dropBridgeAndFactor(userId);
+    world.signIn(userId, 'aal1');
+    expect(await pk.removePasskey({ passkeyId })).toMatchObject({
+      ok: false,
+      reason: 'aal2_required',
+      message: pk.PASSKEY_WORDS.onlyMethodUnfinished,
+    });
+    expect(pk.PASSKEY_WORDS.onlyMethodUnfinished).toMatch(/authenticator app/);
+    expect(pk.PASSKEY_WORDS.onlyMethodUnfinished).toMatch(/recovery code/);
+    expect(await panelFor(userId)).toMatchObject({
+      onlyMethodUnfinished: true,
+      aal2: false,
+      passkeys: [expect.objectContaining({ id: passkeyId, unfinished: true })],
+    });
+    expect(
+      await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } }),
+    ).toMatchObject({
+      ok: false,
+      reason: 'setup_unfinished',
+      message: pk.PASSKEY_WORDS.finishFirstOnlyMethod,
+    });
+    expect(pk.PASSKEY_WORDS.finishFirstOnlyMethod).toMatch(/recovery code/);
+    expect(world.passkeys[0]!.removed_at).toBeNull();
+  });
+
+  it('with an authenticator app beside it, the words stay "confirm it is you first"', async () => {
+    const { userId, passkeyId } = await memberWithPasskey();
+    world.addApp(userId);
+    dropBridgeAndFactor(userId);
+    world.signIn(userId, 'aal1');
+    expect(await pk.removePasskey({ passkeyId })).toMatchObject({
+      ok: false,
+      reason: 'aal2_required',
+      message: pk.PASSKEY_WORDS.stepUpFirst,
+    });
+    expect(await panelFor(userId)).toMatchObject({ onlyMethodUnfinished: false });
+  });
+
+  it('the panel says the same words as the server', () => {
+    expect(PASSKEYS_PANEL_WORDS.onlyMethodUnfinished).toBe(pk.PASSKEY_WORDS.onlyMethodUnfinished);
   });
 });
 
