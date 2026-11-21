@@ -55,6 +55,8 @@ describe('security events: the lists the database checks', () => {
       'auth_rate_limited',
       'auth_log_over_cap',
       'unclassified_sign_in_refusals',
+      'unrecorded_server_form_password',
+      'unrecorded_server_form_code',
       'over_minute_cap',
       'over_buffer_cap',
       ...SECURITY_PROBE_KINDS,
@@ -99,6 +101,12 @@ describe('security events: the lists the database checks', () => {
     );
     expect(securityEventReasonLabel('unclassified_sign_in_refusals')).toBe(
       'Refused sign-in requests of an unusual form',
+    );
+    expect(securityEventReasonLabel('unrecorded_server_form_password')).toBe(
+      "Refused sign-ins that looked like our server's but that our server did not make",
+    );
+    expect(securityEventReasonLabel('unrecorded_server_form_code')).toBe(
+      "Refused authenticator codes that looked like our server's but that our server did not make",
     );
   });
 });
