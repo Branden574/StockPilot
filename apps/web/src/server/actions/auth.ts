@@ -480,11 +480,14 @@ const RESET_CODE_ASK =
 /**
  * The reset's answer for an account whose only authenticator is its passkey's
  * bridge (lib/auth/passkey-bridge): no app shows that factor's code, and the
- * web cannot take a passkey yet, so there is no code box (no `reason`); a
- * recovery code is the way in (review 2-3 finding 9). Stage 5 replaces it.
+ * web cannot take a passkey here yet, so there is no code box (no `reason`;
+ * review 2-3 finding 9). The words say plainly that a reset is not available
+ * for this account yet and whom to ask (review B finding 6): the person is on
+ * the reset page, most often because they do not know the password, and a
+ * recovery code needs the password too. Stage 5 replaces it with the passkey.
  */
 const RESET_BRIDGE_ONLY =
-  "Your account's second sign-in step can't be used to finish a password reset yet. Sign in with your current password and use a recovery code instead, then change your password in Settings.";
+  "A password reset isn't available for this account yet. Ask your organization's owner or StockPilot support for help.";
 
 /** The reset link's session is gone: spent, expired, or ended in another tab. */
 const RESET_LINK_GONE =
@@ -591,8 +594,11 @@ export async function completePasswordResetAction(
   // at the END of its list, so the bridge is listed first after each use of
   // the member's app (proof B7), and no app shows its code. An account whose
   // only factor is the bridge is asked for no code here: GoTrue still refuses
-  // the new password at aal1 below, and the answer then says to use a
-  // recovery code, with no code box (RESET_BRIDGE_ONLY). The record is read
+  // the new password at aal1 below, and the answer then says plainly that a
+  // reset is not available for this account yet and whom to ask, with no
+  // code box (RESET_BRIDGE_ONLY; review 2-3 B finding 6: the reader most
+  // often does not know the password, so it never says to sign in with it).
+  // The record is read
   // for the account this press is for, only when a factor carries the
   // reserved name.
   const verifiedTotp = (factorsData?.totp ?? []).filter((f) => f.status === 'verified');

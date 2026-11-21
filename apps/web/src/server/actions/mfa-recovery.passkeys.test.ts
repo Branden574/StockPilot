@@ -322,7 +322,7 @@ describe('before 0475 is live: the function does not exist', () => {
     expect(reportError).not.toHaveBeenCalled();
   });
 
-  it('a factor it removes carries the reserved name: one error report, once per hour, with the account hash only', async () => {
+  it('a factor it removes carries the reserved name: one error report, once per hour for this account, with the account hash only', async () => {
     const admin = adminWith(PASSKEY_RECOVERY_NOT_YET, NAMED_FACTORS);
 
     const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
@@ -333,7 +333,7 @@ describe('before 0475 is live: the function does not exist', () => {
       admin.rpcCalls.some(
         (c) =>
           c.name === 'increment_rate_limit' &&
-          (c.args as { p_key: string }).p_key === 'passkeys-records-missing-report:function',
+          (c.args as { p_key: string }).p_key === 'passkeys-records-missing-report:function:user-1',
       ),
     ).toBe(true);
     const reports = recordsMissingReports();

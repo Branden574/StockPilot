@@ -16,9 +16,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * __classic__/step-up-modal.*.txt hold that DOM byte for byte). When the
  * server cannot answer, the browser's list is used as it is: nothing is
  * hidden, and challengeFactorAction still refuses the bridge. When the server
- * answers that the account has no app beside the bridge, the modal says so in
- * plain words, with what to do (a recovery code), never "No authenticator is
- * enrolled" (review 2-3 finding 9).
+ * answers that the account has no app beside the bridge, the modal asks for
+ * no code at all: its title and description say plainly that this
+ * confirmation cannot be done here yet and what to do, never "No
+ * authenticator is enrolled" (review 2-3 finding 9, review B finding 6). When
+ * the server gives no answer, the reserved-name factors go last in the
+ * browser's list, so the bridge is never the one chosen first (review B
+ * finding 7).
  */
 
 const listFactors = vi.fn();
@@ -54,12 +58,12 @@ function Harness() {
   );
 }
 
-async function openStepUp() {
+async function openStepUp(title: RegExp = /confirm with your authenticator/i) {
   render(<Harness />);
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: 'Do the dangerous thing' }));
   });
-  return screen.findByRole('dialog', { name: /confirm with your authenticator/i });
+  return screen.findByRole('dialog', { name: title });
 }
 
 beforeEach(() => {
@@ -93,7 +97,8 @@ describe('StepUpModal and the passkey bridge', () => {
     await waitFor(() => expect(screen.getByTestId('result')).toHaveTextContent('true'));
   });
 
-  it('when the server cannot answer, the browser’s list is used as it is', async () => {
+  it('when the server cannot answer, the browser’s list is used, nothing hidden, the reserved-name factor last and the app chosen', async () => {
+    const user = userEvent.setup();
     listFactors.mockResolvedValue({ data: { totp: [BRIDGE, APP] }, error: null });
     stepUpMethodsAction.mockResolvedValue({
       ok: false,
@@ -103,33 +108,66 @@ describe('StepUpModal and the passkey bridge', () => {
     await waitFor(() => expect(stepUpMethodsAction).toHaveBeenCalledTimes(1));
     const select = await screen.findByLabelText('Authenticator');
     expect(Array.from((select as HTMLSelectElement).options).map((o) => o.value)).toEqual([
-      BRIDGE.id,
       APP.id,
+      BRIDGE.id,
     ]);
+    expect((select as HTMLSelectElement).value).toBe(APP.id);
+    await user.type(screen.getByLabelText('Authentication code'), '123456');
+    await user.click(screen.getByRole('button', { name: 'Verify' }));
+    expect(challengeFactorAction).toHaveBeenCalledWith({ factorId: APP.id, code: '123456' });
   });
 
-  it('only the bridge: no code box, and plain words that say to use a recovery code', async () => {
+  it('only the bridge: no code asked anywhere, one plain sentence that says it cannot be done here yet and what to do', async () => {
     listFactors.mockResolvedValue({ data: { totp: [BRIDGE] }, error: null });
     stepUpMethodsAction.mockResolvedValue({ ok: true, data: { apps: [] } });
-    await openStepUp();
+    const dialog = await openStepUp(/^confirm it's you$/i);
     await waitFor(() => expect(stepUpMethodsAction).toHaveBeenCalledTimes(1));
     expect(
-      await screen.findByText(
-        "Your second sign-in step can't be used here yet. To go on, sign in again and use a recovery code.",
+      screen.getByText(
+        "This confirmation can't be done here yet, so close this and ask your organization's owner or StockPilot support for help.",
       ),
     ).toBeInTheDocument();
+    // Nothing on the dialog asks for a code: no title, description, field,
+    // button or alert speaks of one, and no recovery code is offered.
+    expect(dialog.textContent).not.toMatch(/code|authenticator app|6-digit|recovery/i);
     expect(screen.queryByText(/No authenticator is enrolled/)).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Authenticator')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Authentication code')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Verify' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Verify' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
     expect(challengeFactorAction).not.toHaveBeenCalled();
   });
 
-  it('when the request itself fails, the browser’s list is used as it is', async () => {
+  it('when the request itself fails, the browser’s list is used, the reserved-name factor last', async () => {
     listFactors.mockResolvedValue({ data: { totp: [BRIDGE, APP] }, error: null });
     stepUpMethodsAction.mockRejectedValue(new Error('network'));
     await openStepUp();
     await waitFor(() => expect(stepUpMethodsAction).toHaveBeenCalledTimes(1));
-    expect(await screen.findByLabelText('Authenticator')).toBeInTheDocument();
+    const select = await screen.findByLabelText('Authenticator');
+    expect(Array.from((select as HTMLSelectElement).options).map((o) => o.value)).toEqual([
+      APP.id,
+      BRIDGE.id,
+    ]);
+  });
+
+  it('with the server answering, its order is kept as it is (only the fallback is reordered)', async () => {
+    const SECOND = { ...APP, id: 'f-app-2', friendly_name: 'Tablet' };
+    listFactors.mockResolvedValue({ data: { totp: [BRIDGE, APP, SECOND] }, error: null });
+    stepUpMethodsAction.mockResolvedValue({
+      ok: true,
+      data: {
+        apps: [
+          { id: SECOND.id, friendlyName: 'Tablet' },
+          { id: APP.id, friendlyName: 'Phone' },
+        ],
+      },
+    });
+    await openStepUp();
+    const select = await screen.findByLabelText('Authenticator');
+    expect(Array.from((select as HTMLSelectElement).options).map((o) => o.value)).toEqual([
+      SECOND.id,
+      APP.id,
+    ]);
   });
 });

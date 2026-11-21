@@ -126,9 +126,11 @@ export const LIMITER_NOT_SECURITY_EVENTS: Readonly<Record<string, string>> = {
   'export-alert:': ALERT_PACING,
   // Reports about the passkey records (lib/auth/passkey-bridge.ts): a
   // reserved-name factor that is not the account's bridge, and the records
-  // missing while such a factor is listed.
+  // missing while such a factor is listed: the missing table once an hour
+  // for everyone (`...:table`), the missing function once an hour per account.
   'passkeys-not-ours-report:': ALERT_PACING,
   'passkeys-records-missing-report:': ALERT_PACING,
+  'passkeys-records-missing-report:function:': ALERT_PACING,
   // The platform console.
   'org-delete:': PLATFORM_ADMIN,
   'org-passphrase-rotate:': PLATFORM_ADMIN,

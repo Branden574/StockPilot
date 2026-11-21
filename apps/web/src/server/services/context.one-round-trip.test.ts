@@ -180,6 +180,8 @@ vi.mock('@/lib/supabase/server', () => ({
   },
 }));
 
+import { contextFactorsOf } from '@/lib/auth/context-factor-list';
+
 import { withContext } from './context';
 
 beforeEach(() => {
@@ -277,5 +279,44 @@ describe('withContext() in a Server Action', () => {
     const ctx = await withContext();
     expect(ctx.cookieClient).toBe(ctx.supabase);
     expect(calls.clients).toContain(ctx.supabase);
+  });
+});
+
+// Review 2-3 B finding 1: the real withContext() keeps the factor list it
+// read beside the context (server/services/context.ts,
+// keepContextFactorListRead), so "remove an authenticator" can look at the
+// factor's name without a second Auth read (server/actions/mfa.ts
+// unenrollFactorAction). Without that line the removal knows no names and
+// makes no bridge check at all; this case fails then.
+describe('withContext() keeps its factor list read for the removal check', () => {
+  it('answers the factors it read, for its own account, with no second read', async () => {
+    state.aal = 'aal2';
+    state.factors = [
+      { id: 'f-app', status: 'verified', factor_type: 'totp', friendly_name: 'Phone' },
+      {
+        id: 'f-bridge',
+        status: 'verified',
+        factor_type: 'totp',
+        friendly_name: 'sp-passkey-bridge-0a1b2c3d4e5f',
+      },
+    ] as unknown as Array<{ status: string }>;
+    const ctx = await withContext();
+    const listed = await contextFactorsOf(ctx, 'u1');
+    expect(listed?.map((f) => f.id)).toEqual(['f-app', 'f-bridge']);
+    expect(listed?.map((f) => f.friendly_name)).toEqual(['Phone', 'sp-passkey-bridge-0a1b2c3d4e5f']);
+    expect(calls.factorReads).toBe(1);
+  });
+
+  it('answers nothing for another account (the list is not theirs)', async () => {
+    state.aal = 'aal2';
+    state.factors = [{ id: 'f-app', status: 'verified' }] as unknown as Array<{ status: string }>;
+    const ctx = await withContext();
+    expect(await contextFactorsOf(ctx, 'someone-else')).toBeNull();
+  });
+
+  it('a context it did not build keeps no read', async () => {
+    state.aal = 'aal2';
+    const ctx = await withContext();
+    expect(await contextFactorsOf({ ...ctx }, 'u1')).toBeNull();
   });
 });

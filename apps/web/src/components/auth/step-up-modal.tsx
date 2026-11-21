@@ -70,11 +70,15 @@ const FACTORS_UNREADABLE_COPY = 'Could not load your authenticator. Try again.';
 /**
  * The account's only authenticator is its passkey's bridge (the server said
  * so: no app beside it). No app shows that code and the web cannot take a
- * passkey yet, so there is no code box, and the words say what to do (review
- * 2-3 finding 9). Stage 5 replaces it with the passkey.
+ * passkey here yet, so the modal asks for no code at all: no code box, no
+ * Verify, and the title and description say plainly that this confirmation
+ * cannot be done here yet and what to do (review 2-3 finding 9, review B
+ * finding 6). A recovery code is not offered: it removes every sign-in
+ * method, too much for one confirmation. The passkey replaces it later.
  */
+const BRIDGE_ONLY_TITLE = "Confirm it's you";
 const BRIDGE_ONLY_COPY =
-  "Your second sign-in step can't be used here yet. To go on, sign in again and use a recovery code.";
+  "This confirmation can't be done here yet, so close this and ask your organization's owner or StockPilot support for help.";
 
 /**
  * Stacking: the modal is usually opened from inside another dialog (Restore,
@@ -143,9 +147,17 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
               setFactors(totp);
               setFactorId('');
               setBridgeOnly(true);
-              setError(BRIDGE_ONLY_COPY);
               return;
             }
+          } else {
+            // No answer: the browser's list as it is (nothing hidden), with
+            // the reserved-name factors LAST, so the bridge is never the one
+            // chosen first (review B finding 7: after the member's app is
+            // used, Auth lists the bridge first, proof B7).
+            totp = [
+              ...totp.filter((f) => !carriesBridgeName({ friendly_name: f.friendlyName })),
+              ...totp.filter((f) => carriesBridgeName({ friendly_name: f.friendlyName })),
+            ];
           }
         }
         setFactors(totp);
@@ -204,12 +216,16 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
         <DialogHeader data-glass="step-up-head">
           <DialogTitle className="flex items-center gap-2">
             <ShieldCheck className="text-muted-foreground h-5 w-5" />
-            Confirm with your authenticator
+            {bridgeOnly ? BRIDGE_ONLY_TITLE : <>Confirm with your authenticator</>}
           </DialogTitle>
-          <DialogDescription>
-            This action needs a fresh two-factor check. Enter the current 6-digit code from your
-            authenticator app — you won&apos;t be signed out.
-          </DialogDescription>
+          {bridgeOnly ? (
+            <DialogDescription>{BRIDGE_ONLY_COPY}</DialogDescription>
+          ) : (
+            <DialogDescription>
+              This action needs a fresh two-factor check. Enter the current 6-digit code from your
+              authenticator app — you won&apos;t be signed out.
+            </DialogDescription>
+          )}
         </DialogHeader>
         <form data-glass="step-up-form" onSubmit={submit} className="space-y-3">
           {factors && factors.length > 1 ? (
@@ -258,9 +274,11 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
             <Button type="button" variant="outline" onClick={() => done(false)} disabled={pending}>
               Cancel
             </Button>
-            <Button type="submit" disabled={pending || code.length !== 6 || !factorId}>
-              {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Verify'}
-            </Button>
+            {bridgeOnly ? null : (
+              <Button type="submit" disabled={pending || code.length !== 6 || !factorId}>
+                {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Verify'}
+              </Button>
+            )}
           </DialogFooter>
         </form>
       </DialogContent>

@@ -12,8 +12,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * the first verified authenticator that is not the account's RECORDED bridge
  * (lib/auth/passkey-bridge.ts), whatever the order. An account whose only
  * factor is the bridge gets no code box at all: GoTrue refuses the new
- * password without the second step, and the answer says, in plain words, to
- * sign in and use a recovery code (review 2-3 finding 9). Before the records
+ * password without the second step, and the answer says, in plain words, that
+ * a reset is not available for this account yet and whom to ask (review 2-3
+ * finding 9, review B finding 6: never "sign in with your password", which
+ * the reader of a reset page most often does not know). Before the records
  * exist, the pick is today's. The record read is the account's own.
  */
 
@@ -160,7 +162,7 @@ describe('the reset picks an authenticator app, never the bridge', () => {
     ['with a code typed', INPUT],
     ['with no code', { password: RESET_VALUE, confirmPassword: RESET_VALUE }],
   ])(
-    'an account whose only factor is the bridge (%s): no code box, no code checked, a plain answer that says to use a recovery code',
+    'an account whose only factor is the bridge (%s): no code box, no code checked, a plain answer that a reset is not available yet and whom to ask',
     async (_name, input) => {
       listed(BRIDGE);
       // GoTrue refuses the new password without the second step.
@@ -180,11 +182,13 @@ describe('the reset picks an authenticator app, never the bridge', () => {
         error: {
           code: 'forbidden',
           message:
-            "Your account's second sign-in step can't be used to finish a password reset yet. Sign in with your current password and use a recovery code instead, then change your password in Settings.",
+            "A password reset isn't available for this account yet. Ask your organization's owner or StockPilot support for help.",
         },
       });
       expect(challenge).not.toHaveBeenCalled();
       expect(verify).not.toHaveBeenCalled();
+      // Never tells the reader of a reset page to sign in with the password.
+      expect(res.ok ? '' : res.error.message).not.toMatch(/sign in|password in Settings|recovery code/i);
     },
   );
 

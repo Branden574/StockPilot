@@ -272,10 +272,10 @@ describe('readPasskeyBridge', () => {
 });
 
 describe('reportPasskeyRecordsMissing (the recovery code: the function missing)', () => {
-  it('reports at error level, once per hour for every account, with the account hash only', async () => {
+  it('reports at error level, once per hour FOR EACH ACCOUNT, with the account hash only', async () => {
     await reportPasskeyRecordsMissing('function', 'recovery_code', USER);
     expect(checkRateLimit).toHaveBeenCalledWith(
-      'passkeys-records-missing-report:function',
+      `passkeys-records-missing-report:function:${USER}`,
       1,
       HOUR_MS,
       'closed',
@@ -290,6 +290,24 @@ describe('reportPasskeyRecordsMissing (the recovery code: the function missing)'
     vi.mocked(checkRateLimit).mockResolvedValueOnce(LIMIT_REFUSED);
     await reportPasskeyRecordsMissing('function', 'recovery_code', USER);
     expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('another account in the same hour is named too (its own key); the table stays one for all', async () => {
+    await reportPasskeyRecordsMissing('function', 'recovery_code', 'user-2');
+    expect(checkRateLimit).toHaveBeenCalledWith(
+      'passkeys-records-missing-report:function:user-2',
+      1,
+      HOUR_MS,
+      'closed',
+    );
+    vi.clearAllMocks();
+    await reportPasskeyRecordsMissing('table', 'sign_in_page', 'user-2');
+    expect(checkRateLimit).toHaveBeenCalledWith(
+      'passkeys-records-missing-report:table',
+      1,
+      HOUR_MS,
+      'closed',
+    );
   });
 
   it('the account hash is the house one (sha-256, first 16 hex characters)', () => {

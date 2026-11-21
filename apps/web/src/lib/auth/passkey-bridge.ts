@@ -25,9 +25,9 @@ import { createAdminClient } from '@/lib/supabase/admin';
  *     authenticator app, and reported at warning level at most once per
  *     account per hour (a closed limiter; review 2-3 finding 8);
  *   - the table missing (before 0475 is live, or a schema cache that lost it
- *     after a restore) means no bridge can be known: nothing is hidden, and
- *     it is reported at error level at most once per hour for every account
- *     together (review 2-3 finding 3);
+ *     after a restore) means no bridge can be known: nothing is hidden (and
+ *     nothing held back from removal), and it is reported at error level at
+ *     most once per hour for every account together (review 2-3 finding 3);
  *   - a record that cannot be read for any other reason hides nothing from a
  *     LIST, and is reported at error level: a factor shown that should not be
  *     is a page that offers a bridge Auth would then refuse to pass for want
@@ -144,21 +144,28 @@ async function reportNotOurs(site: PasskeyBridgeSite, userId: string): Promise<v
  * live that is a factor nobody made through our server; after it, something
  * broke (a schema cache that lost the objects after a restore, a changed
  * signature, a dropped grant), and bridges are then shown, offered and
- * removable like apps. One error report per window for every account
- * together (the state is the database's, not the account's), with the hash
- * of the account that met it first. Closed limiter. Never throws.
+ * removable like apps. Error level, with the account's hash. Closed limiter.
+ * Never throws.
+ *   - The table: one report per window for every account together (the
+ *     state is the database's, not the account's).
+ *   - The function: one report per window FOR EACH ACCOUNT (review 2-3 B
+ *     finding 5). Each member who uses a recovery code in that state is left
+ *     with passkey rows and a bridge row, so each is named once.
  */
 export async function reportPasskeyRecordsMissing(
   missing: 'table' | 'function',
   site: PasskeyBridgeSite,
   userId: string,
 ): Promise<void> {
-  const first = await checkRateLimit(
-    `passkeys-records-missing-report:${missing}`,
-    1,
-    REPORT_WINDOW_MS,
-    'closed',
-  );
+  const first =
+    missing === 'function'
+      ? await checkRateLimit(
+          `passkeys-records-missing-report:function:${userId}`,
+          1,
+          REPORT_WINDOW_MS,
+          'closed',
+        )
+      : await checkRateLimit('passkeys-records-missing-report:table', 1, REPORT_WINDOW_MS, 'closed');
   if (!first.allowed) return;
   void reportError(
     new Error(
