@@ -2071,3 +2071,67 @@ describe('review 4 finding 8: a failed Add leaves nothing that blocks the next o
     expect(factorsOfAccount(userId)).toEqual([]);
   });
 });
+
+describe('review 4 finding 11: notes', () => {
+  it('junk finishes from another address cannot pause the member\'s own passkey step (the limit is per account and address)', async () => {
+    const { soft } = await memberWithPasskey();
+    countingLimiter();
+    world.requestHeaders.set('x-real-ip', '198.51.100.9');
+    const junk = () => pk.completeSecondStep({ challengeId: crypto.randomUUID(), response: {} });
+    for (let i = 0; i < 30; i += 1) await junk();
+    expect(await junk()).toMatchObject({ ok: false, reason: 'limited' });
+    world.requestHeaders.set('x-real-ip', '203.0.113.7');
+    expect(await passkeyStep(soft)).toEqual({ ok: true });
+    const finishKeys = vi
+      .mocked(checkRateLimit)
+      .mock.calls.map(([k]) => String(k))
+      .filter((k) => k.startsWith('passkey-finish'));
+    expect(finishKeys.every((k) => /^passkey-finish:[^:]+:.+$/.test(k))).toBe(true);
+  });
+
+  it('attestation: none and packed self-attestation are verified; a statement with a certificate chain is refused before the library, and nothing is fetched', async () => {
+    const seen: string[] = [];
+    vi.stubGlobal('fetch', async (url: unknown, init?: unknown) => {
+      seen.push(String(url));
+      return world.fetch(url as never, init as never);
+    });
+    for (const attestation of ['packed-x5c', 'apple'] as const) {
+      const userId = world.addAccount(`${attestation}@example.test`);
+      world.signIn(userId, 'aal1');
+      const soft = new SoftAuthenticator();
+      const start = await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } });
+      if (!start.ok) throw new Error(start.reason);
+      const r = await pk.finishAddPasskey({
+        challengeId: start.challengeId,
+        response: soft.create(start.optionsJSON as never, { attestation }),
+        name: 'Work laptop',
+      });
+      expect(r, attestation).toMatchObject({
+        ok: false,
+        message: pk.PASSKEY_WORDS.refused,
+        reason: 'attestation_format',
+      });
+      expect(world.passkeys.filter((p) => p.user_id === userId)).toEqual([]);
+    }
+    const userId = world.addAccount('packed-self@example.test');
+    world.signIn(userId, 'aal1');
+    const soft = new SoftAuthenticator();
+    const start = await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } });
+    if (!start.ok) throw new Error(start.reason);
+    expect(
+      await pk.finishAddPasskey({
+        challengeId: start.challengeId,
+        response: soft.create(start.optionsJSON as never, { attestation: 'packed-self' }),
+        name: 'Work laptop',
+      }),
+    ).toMatchObject({ ok: true });
+    expect(emitAuthAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'passkey.added',
+        extra: expect.objectContaining({ fmt: 'packed' }),
+      }),
+    );
+    const supabase = String(world.env.NEXT_PUBLIC_SUPABASE_URL);
+    expect(seen.every((u) => u.startsWith(supabase))).toBe(true);
+  });
+});

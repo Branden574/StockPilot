@@ -16,7 +16,7 @@ const b64u = (b: Uint8Array | Buffer) => Buffer.from(b).toString('base64url');
 const fromB64u = (s: string) => Buffer.from(s, 'base64url');
 const sha256 = (b: Uint8Array | Buffer | string) => createHash('sha256').update(b).digest();
 
-/** The CBOR WebAuthn needs: ints, byte and text strings, maps. */
+/** The CBOR WebAuthn needs: ints, byte and text strings, arrays, maps. */
 function head(major: number, n: number): Buffer {
   if (n < 24) return Buffer.from([(major << 5) | n]);
   if (n < 0x100) return Buffer.from([(major << 5) | 24, n]);
@@ -32,7 +32,7 @@ function head(major: number, n: number): Buffer {
   return b;
 }
 
-type Cbor = number | string | Buffer | Map<Cbor, Cbor>;
+type Cbor = number | string | Buffer | Cbor[] | Map<Cbor, Cbor>;
 
 export function cborEncode(v: Cbor): Buffer {
   if (typeof v === 'number') return v >= 0 ? head(0, v) : head(1, -1 - v);
@@ -41,6 +41,7 @@ export function cborEncode(v: Cbor): Buffer {
     return Buffer.concat([head(3, s.length), s]);
   }
   if (Buffer.isBuffer(v)) return Buffer.concat([head(2, v.length), v]);
+  if (Array.isArray(v)) return Buffer.concat([head(4, v.length), ...v.map(cborEncode)]);
   const parts: Buffer[] = [head(5, v.size)];
   for (const [k, val] of v) parts.push(cborEncode(k), cborEncode(val));
   return Buffer.concat(parts);
@@ -65,6 +66,13 @@ export interface CreateKnobs {
   origin?: string;
   crossOrigin?: boolean;
   type?: string;
+  /**
+   * The attestation statement: 'none' (the default, what a browser sends when
+   * asked for none), 'packed-self' (packed self-attestation, signed by the new
+   * key, no certificate), or a statement that carries a certificate chain
+   * ('packed-x5c', 'apple'; made-up bytes, never a real chain).
+   */
+  attestation?: 'none' | 'packed-self' | 'packed-x5c' | 'apple';
 }
 
 export interface GetKnobs {
@@ -154,10 +162,21 @@ export class SoftAuthenticator {
         crossOrigin: knobs.crossOrigin ?? false,
       }),
     );
+    const kind = knobs.attestation ?? 'none';
+    const selfSig = () => sign('sha256', Buffer.concat([authData, sha256(clientDataJSON)]), privateKey);
+    const madeUpCert = Buffer.from('sample-made-up-certificate-bytes', 'utf8');
+    const [fmt, attStmt]: [string, Map<Cbor, Cbor>] =
+      kind === 'packed-self'
+        ? ['packed', new Map<Cbor, Cbor>([['alg', -7], ['sig', selfSig()]])]
+        : kind === 'packed-x5c'
+          ? ['packed', new Map<Cbor, Cbor>([['alg', -7], ['sig', selfSig()], ['x5c', [madeUpCert]]])]
+          : kind === 'apple'
+            ? ['apple', new Map<Cbor, Cbor>([['x5c', [madeUpCert]]])]
+            : ['none', new Map<Cbor, Cbor>()];
     const attestationObject = cborEncode(
       new Map<Cbor, Cbor>([
-        ['fmt', 'none'],
-        ['attStmt', new Map()],
+        ['fmt', fmt],
+        ['attStmt', attStmt],
         ['authData', authData],
       ]),
     );

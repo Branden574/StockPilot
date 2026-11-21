@@ -9,7 +9,7 @@ import {
   verifyAuthenticationResponse,
   verifyRegistrationResponse,
 } from '@simplewebauthn/server';
-import { decodeClientDataJSON } from '@simplewebauthn/server/helpers';
+import { decodeAttestationObject, decodeClientDataJSON } from '@simplewebauthn/server/helpers';
 
 import { loadAccountStatus } from '@/lib/auth/account-status';
 import {
@@ -203,11 +203,17 @@ async function allowStart(userId: string, ip: string): Promise<boolean> {
   const b = await checkRateLimit(`passkey-start-account:${userId}`, 60, 60 * MIN, 'closed');
   return b.allowed;
 }
+/**
+ * Finishes are limited per account AND address only (review 4 finding 11): a
+ * finish is counted before its challenge is taken, so an account-wide bucket
+ * let someone with only the password, from elsewhere, spend it with junk
+ * finishes and pause the member's own passkey step. The member's own address
+ * keeps its own bucket. A finish guesses no secret: it needs a fresh one-use
+ * challenge and a signature by the account's passkey.
+ */
 async function allowFinish(userId: string, ip: string): Promise<boolean> {
   const a = await checkRateLimit(`passkey-finish:${userId}:${ip}`, 10, 15 * MIN, 'closed');
-  if (!a.allowed) return false;
-  const b = await checkRateLimit(`passkey-finish-account:${userId}`, 20, 60 * MIN, 'closed');
-  return b.allowed;
+  return a.allowed;
 }
 async function allowRegister(userId: string): Promise<boolean> {
   return (await checkRateLimit(`passkey-register:${userId}`, 5, 15 * MIN, 'closed')).allowed;
@@ -884,6 +890,33 @@ function crossOriginOf(clientDataJSON: string): boolean | null {
     return decoded.crossOrigin === true;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Review 4 finding 11: `attestationType: 'none'` asks the browser for no
+ * attestation, but the answer is whatever the browser (or anyone calling the
+ * action) sends, and the library verifies the format it carries. For apple,
+ * android-key and android-safetynet it holds built-in root certificates; a
+ * statement whose chain reaches one makes it fetch the revocation lists named
+ * in the certificates, with no time limit of its own. Only two formats are
+ * verified with no certificate path at all: 'none' (an empty statement) and
+ * 'packed' self-attestation (signed by the new key, no x5c). Anything else is
+ * refused here, before the library, so no registration can make the server
+ * fetch anything. A browser asked for 'none' sends 'none' (it may keep a
+ * packed self-attestation, which carries nothing identifying).
+ */
+function attestationWithoutCertificates(attestationObject: string): boolean {
+  try {
+    const decoded = decodeAttestationObject(ownBytes(Buffer.from(attestationObject, 'base64url')));
+    const fmt = decoded.get('fmt');
+    const statement = decoded.get('attStmt');
+    if (!(statement instanceof Map)) return false;
+    if (fmt === 'none') return statement.size === 0;
+    if (fmt === 'packed') return !statement.has('x5c') && !statement.has('ecdaaKeyId');
+    return false;
+  } catch {
+    return false;
   }
 }
 
@@ -1596,6 +1629,10 @@ export async function finishAddPasskey(input: {
   const crossOrigin = crossOriginOf(answer.response.clientDataJSON);
   if (crossOrigin === null) return refuseByVerdict('refused', userId);
   if (crossOrigin) return refuseByVerdict('wrong_site', userId);
+  if (!attestationWithoutCertificates(answer.response.attestationObject)) {
+    await recordPasskeyEvent('passkey_refused', userId);
+    return fail('validation_error', PASSKEY_WORDS.refused, 'attestation_format');
+  }
   let verification: Awaited<ReturnType<typeof verifyRegistrationResponse>>;
   try {
     verification = await verifyRegistrationResponse({
