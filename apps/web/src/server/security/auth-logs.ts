@@ -151,8 +151,13 @@ export const AUTH_LOGS_UNCLASSIFIED_FLAG_AT = 1;
  * one side of an hour's edge and recorded on the other.
  */
 export const AUTH_LOGS_UNRECORDED_FLAG_AT = 10;
-/** Rows of our own record one reconciliation read takes; a fuller hour is not reconciled. */
-export const AUTH_LOGS_RECONCILE_ROW_LIMIT = 1000;
+/** Rows of our own record one page of the reconciliation read asks for. */
+export const AUTH_LOGS_RECONCILE_PAGE_ROWS = 1000;
+/**
+ * Pages the reconciliation read takes for one hour, at most. An hour with
+ * more rows is compared with the rows that were read (see readRecorded).
+ */
+export const AUTH_LOGS_RECONCILE_MAX_PAGES = 10;
 /** One logs call: one try, this long at most. */
 export const AUTH_LOGS_CALL_TIMEOUT_MS = 20_000;
 /** One read or write of the record, this long at most (the writer waits 2 s for its turn). */
@@ -193,7 +198,16 @@ export type AuthLogsSource = (typeof AUTH_LOGS_SOURCES)[number];
  * refused code (its 422) is wrong_code or repeated_wrong_code. Its other
  * reasons are not such refusals (sign_in_paused and code_checks_paused never
  * reach Supabase, auth_server_paused is Supabase's 429, recovery codes are
- * checked here). The two overflow reasons carry counts of any of them.
+ * checked here).
+ *
+ * THE TWO OVERFLOW REASONS ARE READ AND COVER NOTHING. An overflow row counts
+ * events of ANY password_guessing reason past the recorder's listed keys or
+ * the writer's minute caps, also ones that never reach Supabase (a paused
+ * sign-in), and anyone can fill it from our own sign-in page. Counted toward
+ * what our server recorded, it would let a caller dressed as our server buy
+ * as much room as it wanted for unrecorded guesses. Its sum is in the log
+ * line only. An hour that truly overflowed is a busy hour already: a flagged
+ * count there is true of what it says (our server has no record of them).
  */
 const RECORDED_PASSWORD_REASONS: readonly string[] = ['wrong_password', 'repeated_wrong_password'];
 const RECORDED_CODE_REASONS: readonly string[] = ['wrong_code', 'repeated_wrong_code'];
@@ -446,10 +460,17 @@ export interface AuthLogsElement {
 
 /** What our own server recorded for an hour (source web), for the reconciliation. */
 export interface AuthLogsRecorded {
+  /** Events on the rows whose reason names a refused password. */
   password: number;
+  /** Events on the rows whose reason names a refused code. */
   code: number;
-  /** The overflow rows' counts: of either kind. */
+  /** The overflow rows' counts, of any reason: for the log line only, never part of the comparison. */
   overflow: number;
+  /**
+   * False when not every row of the hour could be read: `password` and
+   * `code` are then lower bounds, so the excess can only be too large.
+   */
+  complete: boolean;
 }
 
 /** Our server's form of an hour, reconciled with what it recorded. */
@@ -458,7 +479,7 @@ export interface AuthLogsReconcile {
   gateway: { password: number; code: number };
   /** What our own server recorded, or null when it was not read. */
   recorded: AuthLogsRecorded | null;
-  /** gateway - (recorded + overflow) per kind, never below 0; null when not reconciled. */
+  /** gateway - recorded per kind, never below 0; null when not reconciled. */
   excess: { password: number; code: number } | null;
 }
 
@@ -524,7 +545,7 @@ export interface AuthLogsRunSummary {
   ambiguousForm: number;
   /** Flagged elements of refusals of our server's form that our server did not record. */
   unrecordedFlags: number;
-  /** Hours whose reconciliation read had more rows than it takes: not reconciled. */
+  /** Hours whose own record could not all be read: compared with what was read (fail closed). */
   reconcileIncomplete: number;
   /** `<kind> <status> <caller> <network>` -> lines, for the hours read. */
   seen: Record<string, number>;
@@ -805,8 +826,9 @@ export function reconcileServerForm(
     gateway,
     recorded,
     excess: {
-      password: Math.max(0, gateway.password - (recorded.password + recorded.overflow)),
-      code: Math.max(0, gateway.code - (recorded.code + recorded.overflow)),
+      // Only rows whose reason names the kind: overflow rows cover nothing.
+      password: Math.max(0, gateway.password - recorded.password),
+      code: Math.max(0, gateway.code - recorded.code),
     },
   };
 }
@@ -1194,45 +1216,78 @@ async function writeHour(ctx: RunContext, elements: AuthLogsElement[]): Promise<
 }
 
 /**
- * What our own server recorded for the hour: one service-role read of the
+ * What our own server recorded for the hour: service-role reads of the
  * record's rows with source web, category password_guessing and a reason of
- * AUTH_LOGS_RECONCILE_REASONS, in the hour (every organization), with the
- * count of rows. Their event counts are added up per kind. Null when there
- * are more rows than the read takes (AUTH_LOGS_RECONCILE_ROW_LIMIT): such an
- * hour is not reconciled. A row that is not what was asked for fails the
- * read, as does an answer with no count of rows.
+ * AUTH_LOGS_RECONCILE_REASONS, in the hour (every organization), a page of
+ * AUTH_LOGS_RECONCILE_PAGE_ROWS at a time in the order of their ids, the
+ * first with the count of rows. Their event counts are added up per kind.
+ *
+ * NEVER SKIPPED FOR BEING LARGE. An hour with many rows is exactly the hour
+ * in which someone could hope the comparison is not made. The read goes on,
+ * from the row after the last one it holds, until a page comes back short
+ * with every counted row read, and stops at AUTH_LOGS_RECONCILE_MAX_PAGES
+ * pages. If it could not read them all (the hard stop, or fewer rows than
+ * the count says) it FAILS CLOSED: the sums of what it did read are returned
+ * with `complete: false`. They are lower bounds, so the excess the caller
+ * works out can only be larger than the true one: a flag may be stored that
+ * a whole read would not store, never the reverse. (Ten full pages are taken
+ * as not all, since one more row cannot be told from none.)
+ *
+ * A page that fails, a row that is not what was asked for, or a first page
+ * with no count of rows fails the read: the hour is left for the next run.
  */
 async function readRecorded(
   ctx: RunContext,
   hour: AuthLogsHour,
-): Promise<Outcome<AuthLogsRecorded | null>> {
-  const failed = (code: string): Outcome<AuthLogsRecorded | null> => ({
+): Promise<Outcome<AuthLogsRecorded>> {
+  const failed = (code: string): Outcome<AuthLogsRecorded> => ({
     ok: false,
     failure: { cause: 'reconcile_read_failed', code },
   });
-  const limit = callLimit(ctx, AUTH_LOGS_DB_TIMEOUT_MS);
-  if (!limit) return { ok: false, failure: { cause: 'out_of_time' } };
-  try {
-    const { data, error, count } = await within(limit.ms, (signal) =>
-      Promise.resolve(
-        ctx
-          .admin()
-          .from('security_events')
-          .select('reason, event_count', { count: 'exact' })
-          .eq('source', 'web')
-          .eq('category', 'password_guessing')
-          .in('reason', AUTH_LOGS_RECONCILE_REASONS)
-          .gte('minute', iso(hour.startMs))
-          .lt('minute', iso(hour.endMs))
-          .limit(AUTH_LOGS_RECONCILE_ROW_LIMIT)
-          .abortSignal(signal),
-      ),
-    );
-    if (error) return failed(codeOf(error));
+  const recorded: AuthLogsRecorded = { password: 0, code: 0, overflow: 0, complete: false };
+  let rowsRead = 0;
+  let rowsCounted = 0;
+  for (let page = 0; page < AUTH_LOGS_RECONCILE_MAX_PAGES; page++) {
+    const limit = callLimit(ctx, AUTH_LOGS_DB_TIMEOUT_MS);
+    if (!limit) return { ok: false, failure: { cause: 'out_of_time' } };
+    const first = page === 0;
+    const from = rowsRead;
+    let data: unknown;
+    try {
+      const answer = await within(limit.ms, (signal) =>
+        Promise.resolve(
+          ctx
+            .admin()
+            .from('security_events')
+            .select('reason, event_count', first ? { count: 'exact' } : undefined)
+            .eq('source', 'web')
+            .eq('category', 'password_guessing')
+            .in('reason', AUTH_LOGS_RECONCILE_REASONS)
+            .gte('minute', iso(hour.startMs))
+            .lt('minute', iso(hour.endMs))
+            .order('id', { ascending: true })
+            .range(from, from + AUTH_LOGS_RECONCILE_PAGE_ROWS - 1)
+            .abortSignal(signal),
+        ),
+      );
+      if (answer.error) return failed(codeOf(answer.error));
+      if (first) {
+        const count = answer.count;
+        if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0)
+          return failed('no_count');
+        rowsCounted = count;
+      }
+      data = answer.data;
+    } catch (e) {
+      if (e instanceof CallTimeout) {
+        return {
+          ok: false,
+          failure: timedOut(limit.cut, { cause: 'reconcile_read_failed', code: 'timeout' }),
+        };
+      }
+      return failed(codeOf(e));
+    }
     if (!Array.isArray(data)) return failed('no_rows');
-    if (typeof count !== 'number' || !Number.isSafeInteger(count)) return failed('no_count');
-    if (count > data.length) return { ok: true, value: null };
-    const recorded: AuthLogsRecorded = { password: 0, code: 0, overflow: 0 };
     for (const row of data as unknown[]) {
       if (!isRecord(row) || typeof row.reason !== 'string') return failed('bad_row');
       const n = row.event_count;
@@ -1242,16 +1297,16 @@ async function readRecorded(
       else if (RECORDED_OVERFLOW_REASONS.includes(row.reason)) recorded.overflow += n;
       else return failed('bad_row');
     }
-    return { ok: true, value: recorded };
-  } catch (e) {
-    if (e instanceof CallTimeout) {
-      return {
-        ok: false,
-        failure: timedOut(limit.cut, { cause: 'reconcile_read_failed', code: 'timeout' }),
-      };
+    rowsRead += data.length;
+    // The end: nothing more came, or a short page with every counted row read.
+    if (data.length === 0 || data.length < AUTH_LOGS_RECONCILE_PAGE_ROWS) {
+      if (data.length === 0 || rowsRead >= rowsCounted) {
+        recorded.complete = rowsRead >= rowsCounted;
+        break;
+      }
     }
-    return failed(codeOf(e));
   }
+  return { ok: true, value: recorded };
 }
 
 // ── The run ─────────────────────────────────────────────────────────────────
@@ -1330,14 +1385,15 @@ async function runHour(
 
   // Our server's form, reconciled with what our own server recorded. A read
   // that fails leaves the whole hour for the next run: nothing of it is
-  // written, so the hour is not taken as done.
+  // written, so the hour is not taken as done. A read that could not take
+  // every row still compares, with what it read (fail closed), and says so.
   let recorded: AuthLogsRecorded | null = null;
   const gateway = serverFormRefusals(totals);
   if (gateway.password > 0 || gateway.code > 0) {
     const read = await readRecorded(ctx, hour);
     if (!read.ok) return read.failure;
     recorded = read.value;
-    if (!recorded) summary.reconcileIncomplete += 1;
+    if (!recorded.complete) summary.reconcileIncomplete += 1;
   }
 
   if (totalsAnswer.value.length >= AUTH_LOGS_ROW_LIMIT) summary.totalsCapped += 1;
@@ -1509,7 +1565,7 @@ export async function readAuthLogs(options: {
   }
   if (summary.reconcileIncomplete > 0) {
     await report(
-      "The refused web sign-ins our server recorded in an hour were too many to add up in one read; that hour's lines in our server's form were not compared with them (their count is in the log line)",
+      "The refused web sign-ins our server recorded in an hour could not all be read; that hour's lines in our server's form were compared with the part that was read, so a flagged count stored for it can be higher than what our server has no record of",
       'warning',
       { cause: 'reconcile_incomplete', hours: summary.reconcileIncomplete },
     );

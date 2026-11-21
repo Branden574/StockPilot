@@ -48,7 +48,18 @@ const fetchSpy = vi.fn(async (input: string | URL | Request) => answer(new URL(S
 /** An admin client whose reads find nothing (with a count of none) and whose writer takes everything. */
 function adminClient() {
   const builder: Record<string, unknown> = {};
-  for (const m of ['select', 'is', 'eq', 'in', 'gte', 'lt', 'limit', 'abortSignal'])
+  for (const m of [
+    'select',
+    'is',
+    'eq',
+    'in',
+    'gte',
+    'lt',
+    'limit',
+    'order',
+    'range',
+    'abortSignal',
+  ])
     builder[m] = () => builder;
   builder.then = (resolve: (v: unknown) => unknown) =>
     Promise.resolve({ data: [], error: null, count: 0 }).then(resolve);

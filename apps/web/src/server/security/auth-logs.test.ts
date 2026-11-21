@@ -56,6 +56,8 @@ type ReadQuery = {
   count?: string;
   filters: unknown[][];
   limit?: number;
+  order?: [string, unknown];
+  range?: [number, number];
 };
 
 const h = vi.hoisted(() => ({
@@ -68,7 +70,7 @@ const h = vi.hoisted(() => ({
   reads: [] as ReadQuery[],
   /** Replaces the answer of the "already stored" check. */
   readAnswer: null as null | ((q: ReadQuery) => { data: unknown; error: unknown }),
-  /** Replaces the answer of the reconciliation read. */
+  /** Replaces the answer of a page of the reconciliation read. */
   recordedAnswer: null as
     | null
     | ((q: ReadQuery) => {
@@ -76,6 +78,8 @@ const h = vi.hoisted(() => ({
         error: unknown;
         count: number | null;
       }),
+  /** The most rows the fake record returns for one read, as a server row cap would. */
+  serverMaxRows: Infinity,
   rpc: vi.fn(),
 }));
 
@@ -118,6 +122,14 @@ vi.mock('@/lib/supabase/admin', () => ({
           q.limit = n;
           return builder;
         },
+        order(col: string, options?: unknown) {
+          q.order = [col, options];
+          return builder;
+        },
+        range(from: number, to: number) {
+          q.range = [from, to];
+          return builder;
+        },
         abortSignal() {
           return builder;
         },
@@ -150,9 +162,14 @@ vi.mock('@/lib/supabase/admin', () => ({
                   listed('reason').includes(row.reason),
               )
               .map((row) => ({ reason: row.reason, event_count: row.n }));
+            // One page, as the database would cut it: the range asked for,
+            // and never more rows than the server's own cap. The count of
+            // every matching row comes only when it was asked for.
+            const [from, to] = q.range ?? [0, Infinity];
+            const page = rows.slice(from, Math.min(to + 1, from + h.serverMaxRows));
             answer = h.recordedAnswer
               ? h.recordedAnswer(q)
-              : { data: rows, error: null, count: rows.length };
+              : { data: page, error: null, count: q.count === 'exact' ? rows.length : null };
           }
           return Promise.resolve(answer).then(resolve, reject);
         },
@@ -177,7 +194,8 @@ const {
   AUTH_LOGS_HOURS_PER_RUN,
   AUTH_LOGS_UNCLASSIFIED_FLAG_AT,
   AUTH_LOGS_UNRECORDED_FLAG_AT,
-  AUTH_LOGS_RECONCILE_ROW_LIMIT,
+  AUTH_LOGS_RECONCILE_PAGE_ROWS,
+  AUTH_LOGS_RECONCILE_MAX_PAGES,
   buildHourElements,
   classifyAuthLogLine,
   hoursToRead,
@@ -371,6 +389,7 @@ beforeEach(() => {
   h.reads.length = 0;
   h.readAnswer = null;
   h.recordedAnswer = null;
+  h.serverMaxRows = Infinity;
   h.rpc.mockReset();
   writerStores();
   fetches.length = 0;
@@ -849,7 +868,7 @@ describe("one hour's elements for the writer", () => {
         totalsRow({ kind: 'token_known_other', caller: 'phone', n: 30 }),
         totalsRow({ kind: 'token_known_other', ...ours, n: 6 }),
       ],
-      { password: 4, code: 0, overflow: 0 },
+      { password: 4, code: 0, overflow: 0, complete: true },
     );
     expect(out.elements.map((e) => [e.source, e.count])).toEqual([['phone', 1]]);
     expect(out.notStored).toEqual({
@@ -877,7 +896,7 @@ describe("one hour's elements for the writer", () => {
         groupRow({ caller: 'server', network: 'other', n: 6, country: 'US' }),
       ],
       undefined,
-      { password: 4, code: 0, overflow: 0 },
+      { password: 4, code: 0, overflow: 0, complete: true },
     );
     expect(out.elements).toEqual([
       expect.objectContaining({ reason: 'wrong_password', source: 'api', count: 6, country: 'US' }),
@@ -999,17 +1018,17 @@ describe("one hour's elements for the writer", () => {
 
     it('an excess of 9 stores nothing, and is in the log line', () => {
       expect(AUTH_LOGS_UNRECORDED_FLAG_AT).toBe(10);
-      const out = build([], hourOf(21, 0), { password: 12, code: 0, overflow: 0 });
+      const out = build([], hourOf(21, 0), { password: 12, code: 0, overflow: 0, complete: true });
       expect(unrecordedOf(out)).toEqual([]);
       expect(out.reconcile).toEqual({
         gateway: { password: 21, code: 0 },
-        recorded: { password: 12, code: 0, overflow: 0 },
+        recorded: { password: 12, code: 0, overflow: 0, complete: true },
         excess: { password: 9, code: 0 },
       });
     });
 
     it('an excess of 10 stores one flagged element of count 10, source api, at the hour last minute', () => {
-      const out = build([], hourOf(22, 0), { password: 12, code: 0, overflow: 0 });
+      const out = build([], hourOf(22, 0), { password: 12, code: 0, overflow: 0, complete: true });
       expect(unrecordedOf(out)).toEqual([
         {
           category: 'password_guessing',
@@ -1024,26 +1043,36 @@ describe("one hour's elements for the writer", () => {
     });
 
     it('recorded at or above the gateway count stores nothing; the excess is never below zero', () => {
-      const out = build([], hourOf(21, 4), { password: 40, code: 25, overflow: 0 });
+      const out = build([], hourOf(21, 4), { password: 40, code: 25, overflow: 0, complete: true });
       expect(unrecordedOf(out)).toEqual([]);
       expect(out.reconcile.excess).toEqual({ password: 0, code: 0 });
-      const even = build([], hourOf(21, 4), { password: 21, code: 4, overflow: 0 });
+      const even = build([], hourOf(21, 4), { password: 21, code: 4, overflow: 0, complete: true });
       expect(unrecordedOf(even)).toEqual([]);
     });
 
-    it("overflow rows carry no kind, so they widen both kinds' allowance", () => {
-      const covered = build([], hourOf(25, 15), { password: 10, code: 0, overflow: 6 });
-      expect(unrecordedOf(covered)).toEqual([]);
-      expect(covered.reconcile.excess).toEqual({ password: 9, code: 9 });
-      const short = build([], hourOf(25, 15), { password: 10, code: 0, overflow: 5 });
-      expect(unrecordedOf(short).map((e) => [e.reason, e.count])).toEqual([
+    it('overflow rows do not widen the allowance: only rows whose reason names the kind count as recorded', () => {
+      // An overflow row counts events of any reason, also ones that never
+      // reached the sign-in service, and anyone can fill it from our own
+      // sign-in page. It is kept for the log line and covers nothing.
+      const out = build([], hourOf(25, 15), {
+        password: 10,
+        code: 5,
+        overflow: 100_000,
+        complete: true,
+      });
+      expect(out.reconcile).toEqual({
+        gateway: { password: 25, code: 15 },
+        recorded: { password: 10, code: 5, overflow: 100_000, complete: true },
+        excess: { password: 15, code: 10 },
+      });
+      expect(unrecordedOf(out).map((e) => [e.reason, e.count])).toEqual([
         ['unrecorded_server_form_code', 10],
-        ['unrecorded_server_form_password', 10],
+        ['unrecorded_server_form_password', 15],
       ]);
     });
 
     it('codes are reconciled on their own: recorded passwords do not cover them', () => {
-      const out = build([], hourOf(0, 14), { password: 500, code: 4, overflow: 0 });
+      const out = build([], hourOf(0, 14), { password: 500, code: 4, overflow: 0, complete: true });
       expect(unrecordedOf(out)).toEqual([
         expect.objectContaining({ reason: 'unrecorded_server_form_code', count: 10 }),
       ]);
@@ -1158,7 +1187,7 @@ describe("one hour's elements for the writer", () => {
           totalsRow({ ...ours, n: 40 }),
           totalsRow({ kind: 'verify', status: '422', ...ours, n: 30 }),
         ],
-        { recorded: { password: 0, code: 0, overflow: 0 } },
+        { recorded: { password: 0, code: 0, overflow: 0, complete: true } },
       );
       expect(out.elements).toHaveLength(200);
       expect(out.elements.filter((e) => e.outcome === 'flagged')).toHaveLength(4);
@@ -2031,7 +2060,7 @@ describe('a run: six hours, oldest first, each written once', () => {
       );
     }
 
-    it('one read of what our own server recorded for the hour, by reason, with the count of rows', async () => {
+    it('what our own server recorded for the hour: read by reason, a page at a time in a fixed order, with the count of rows', async () => {
       serverHour(H(5), 3);
       await run();
       expect(reconcileReads()).toEqual([
@@ -2039,6 +2068,8 @@ describe('a run: six hours, oldest first, each written once', () => {
           table: 'security_events',
           select: 'reason, event_count',
           count: 'exact',
+          order: ['id', { ascending: true }],
+          range: [0, AUTH_LOGS_RECONCILE_PAGE_ROWS - 1],
           filters: [
             ['eq', 'source', 'web'],
             ['eq', 'category', 'password_guessing'],
@@ -2057,10 +2088,10 @@ describe('a run: six hours, oldest first, each written once', () => {
             ['gte', 'minute', iso(H(5))],
             ['lt', 'minute', iso(H(6))],
           ],
-          limit: AUTH_LOGS_RECONCILE_ROW_LIMIT,
         },
       ]);
-      expect(AUTH_LOGS_RECONCILE_ROW_LIMIT).toBe(1000);
+      expect(AUTH_LOGS_RECONCILE_PAGE_ROWS).toBe(1000);
+      expect(AUTH_LOGS_RECONCILE_MAX_PAGES).toBe(10);
     });
 
     it('no read for an hour with no line of our server form', async () => {
@@ -2093,7 +2124,7 @@ describe('a run: six hours, oldest first, each written once', () => {
         outcome: 'stored',
         reconcile: {
           gateway: { password: 25, code: 2 },
-          recorded: { password: 15, code: 2, overflow: 0 },
+          recorded: { password: 15, code: 2, overflow: 0, complete: true },
           excess: { password: 10, code: 0 },
         },
       });
@@ -2104,22 +2135,198 @@ describe('a run: six hours, oldest first, each written once', () => {
       expect(fetches.map(startOf)).not.toContain(iso(H(5)));
     });
 
-    it('an excess of 9 stores nothing and is in the log line; overflow rows widen the allowance', async () => {
+    it('an excess of 9 stores nothing and is in the log line', async () => {
       serverHour(H(5), 21);
       recordWeb(H(5), 'wrong_password', 12);
       const nine = full(await run());
       expect(h.rpc).not.toHaveBeenCalled();
       expect(nine.hours[1]).toMatchObject({ reconcile: { excess: { password: 9, code: 0 } } });
+    });
 
-      serverHour(H(5), 30);
-      recordWeb(H(5), 'over_buffer_cap', 9);
-      const widened = full(await run());
-      expect(h.rpc).not.toHaveBeenCalled();
-      expect(widened.hours[1]).toMatchObject({
+    it('nine sources filling overflow rows do not hide an excess: the flag is stored, the overflow is only in the log line', async () => {
+      serverHour(H(5), 30, 14);
+      recordWeb(H(5), 'wrong_password', 12);
+      // Refusals past the recorder's listed keys and the writer's minute
+      // caps, as nine addresses hammering our own sign-in page would leave.
+      for (let source = 0; source < 9; source++) recordWeb(H(5), 'over_buffer_cap', 500);
+      recordWeb(H(5), 'over_minute_cap', 2_000);
+      const summary = full(await run());
+      expect(written()).toEqual([
+        expect.objectContaining({
+          outcome: 'flagged',
+          reason: 'unrecorded_server_form_code',
+          count: 14,
+        }),
+        expect.objectContaining({
+          outcome: 'flagged',
+          reason: 'unrecorded_server_form_password',
+          count: 18,
+        }),
+      ]);
+      expect(summary.hours[1]).toMatchObject({
         reconcile: {
-          recorded: { password: 12, code: 0, overflow: 9 },
-          excess: { password: 9, code: 0 },
+          gateway: { password: 30, code: 14 },
+          recorded: { password: 12, code: 0, overflow: 6_500, complete: true },
+          excess: { password: 18, code: 14 },
         },
+      });
+      expect(summary.unrecordedFlags).toBe(2);
+    });
+
+    describe('many recorded rows: read in pages, never skipped', () => {
+      const manyRows = (startMs: number, rows: number) => {
+        for (let i = 0; i < rows; i++) recordWeb(startMs, 'wrong_password', 1);
+      };
+
+      it('1,001 recorded rows: two pages, every row counted, the comparison is made', async () => {
+        serverHour(H(5), 1_020);
+        manyRows(H(5), 1_001);
+        const summary = full(await run());
+        const pages = reconcileReads();
+        expect(pages.map((q) => q.range)).toEqual([
+          [0, 999],
+          [1000, 1999],
+        ]);
+        // The same read each time, in the same order; the count of rows once.
+        expect(pages.map((q) => q.count)).toEqual(['exact', undefined]);
+        for (const q of pages) {
+          expect(q.order).toEqual(['id', { ascending: true }]);
+          expect(q.filters).toEqual(pages[0]!.filters);
+        }
+        expect(summary.hours[1]).toMatchObject({
+          outcome: 'stored',
+          reconcile: {
+            recorded: { password: 1_001, code: 0, overflow: 0, complete: true },
+            excess: { password: 19, code: 0 },
+          },
+        });
+        expect(written()).toEqual([
+          expect.objectContaining({ reason: 'unrecorded_server_form_password', count: 19 }),
+        ]);
+        expect(summary.reconcileIncomplete).toBe(0);
+        expect(h.report).not.toHaveBeenCalled();
+      });
+
+      it('1,001 recorded rows that cover the gateway count: no flag', async () => {
+        serverHour(H(5), 1_005);
+        manyRows(H(5), 1_001);
+        const summary = full(await run());
+        expect(h.rpc).not.toHaveBeenCalled();
+        expect(summary.hours[1]!.reconcile?.excess).toEqual({ password: 4, code: 0 });
+      });
+
+      it('10,001 recorded rows: the read stops at ten pages and FAILS CLOSED, compared with what it read, and says so', async () => {
+        // Honest traffic alone: the gateway and our record agree (10,001 each).
+        serverHour(H(5), 10_001);
+        manyRows(H(5), 10_001);
+        const summary = full(await run());
+        expect(reconcileReads()).toHaveLength(AUTH_LOGS_RECONCILE_MAX_PAGES);
+        expect(summary.hours[1]).toMatchObject({
+          outcome: 'nothing_to_store',
+          reconcile: {
+            gateway: { password: 10_001, code: 0 },
+            recorded: { password: 10_000, code: 0, overflow: 0, complete: false },
+            excess: { password: 1, code: 0 },
+          },
+        });
+        expect(summary.reconcileIncomplete).toBe(1);
+        expect(h.report).toHaveBeenCalledTimes(1);
+        const [err, ctx] = h.report.mock.calls[0]!;
+        expect(String(err)).toContain('could not all be read');
+        expect(ctx).toMatchObject({
+          level: 'warning',
+          extra: { cause: 'reconcile_incomplete', hours: 1 },
+        });
+      });
+
+      it('more recorded rows than the read takes never hide an excess: the comparison is made and the flag stored', async () => {
+        // 10,001 rows of our own record, and 40 more refusals on the gateway
+        // than we recorded.
+        serverHour(H(5), 10_041);
+        manyRows(H(5), 10_001);
+        const summary = full(await run());
+        expect(written()).toEqual([
+          {
+            category: 'password_guessing',
+            outcome: 'flagged',
+            reason: 'unrecorded_server_form_password',
+            source: 'api',
+            // Against the 10,000 that were read: never less than the true excess.
+            count: 41,
+            at_ms: H(5) + 59 * MIN,
+          },
+        ]);
+        expect(summary.hours[1]).toMatchObject({
+          outcome: 'stored',
+          reconcile: { recorded: { password: 10_000, complete: false } },
+        });
+        expect(summary.reconcileIncomplete).toBe(1);
+      });
+
+      it('a server that returns fewer rows than asked for: the read goes on from where it stopped', async () => {
+        h.serverMaxRows = 400;
+        serverHour(H(5), 1_001);
+        manyRows(H(5), 1_001);
+        const summary = full(await run());
+        expect(reconcileReads().map((q) => q.range)).toEqual([
+          [0, 999],
+          [400, 1399],
+          [800, 1799],
+        ]);
+        expect(summary.hours[1]).toMatchObject({
+          reconcile: {
+            recorded: { password: 1_001, complete: true },
+            excess: { password: 0, code: 0 },
+          },
+        });
+        expect(h.rpc).not.toHaveBeenCalled();
+        expect(h.report).not.toHaveBeenCalled();
+      });
+
+      it('a count of rows above what the pages hold: fails closed on what was read, said once', async () => {
+        hourAnswers(
+          H(5),
+          [groupRow({ n: 2 }, H(5))],
+          [totalsRow({ n: 2 }, H(5)), totalsRow({ ...ours, n: 500 }, H(5))],
+        );
+        h.recordedAnswer = (q) =>
+          q.range?.[0] === 0
+            ? { data: [{ reason: 'wrong_password', event_count: 3 }], error: null, count: 5000 }
+            : { data: [], error: null, count: null };
+        const summary = full(await run());
+        expect(written()).toEqual([
+          expect.objectContaining({ reason: 'wrong_password', count: 2 }),
+          expect.objectContaining({ reason: 'unrecorded_server_form_password', count: 497 }),
+        ]);
+        expect(summary).toMatchObject({ ok: true, reconcileIncomplete: 1 });
+        expect(summary.hours[1]).toMatchObject({
+          reconcile: {
+            gateway: { password: 500, code: 0 },
+            recorded: { password: 3, code: 0, overflow: 0, complete: false },
+            excess: { password: 497, code: 0 },
+          },
+        });
+        expect(h.report).toHaveBeenCalledTimes(1);
+        expect(String(h.report.mock.calls[0]![0])).toContain('could not all be read');
+      });
+
+      it('a page that fails part way: a failed read, nothing of the hour is written', async () => {
+        serverHour(H(5), 2_000);
+        h.recordedAnswer = (q) =>
+          q.range?.[0] === 0
+            ? {
+                data: Array.from({ length: 1000 }, () => ({
+                  reason: 'wrong_password',
+                  event_count: 1,
+                })),
+                error: null,
+                count: 1500,
+              }
+            : { data: null, error: { code: '57014', message: 'canceling statement' }, count: null };
+        const summary = full(await run());
+        expect(h.rpc).not.toHaveBeenCalled();
+        expect(summary.failure).toMatchObject({ cause: 'reconcile_read_failed', code: '57014' });
+        expect(summary.hours[1]!.outcome).toBe('failed');
       });
     });
 
@@ -2170,27 +2377,6 @@ describe('a run: six hours, oldest first, each written once', () => {
       const summary = full(await run());
       expect(h.rpc).not.toHaveBeenCalled();
       expect(summary.failure).toMatchObject({ cause: 'reconcile_read_failed' });
-    });
-
-    it('more recorded rows than one read holds: the hour is stored without a reconciliation flag, said once', async () => {
-      hourAnswers(
-        H(5),
-        [groupRow({ n: 2 }, H(5))],
-        [totalsRow({ n: 2 }, H(5)), totalsRow({ ...ours, n: 500 }, H(5))],
-      );
-      h.recordedAnswer = () => ({
-        data: [{ reason: 'wrong_password', event_count: 3 }],
-        error: null,
-        count: 5000,
-      });
-      const summary = full(await run());
-      expect(written()).toEqual([expect.objectContaining({ reason: 'wrong_password', count: 2 })]);
-      expect(summary).toMatchObject({ ok: true, reconcileIncomplete: 1 });
-      expect(summary.hours[1]).toMatchObject({
-        reconcile: { gateway: { password: 500, code: 0 }, recorded: null, excess: null },
-      });
-      expect(h.report).toHaveBeenCalledTimes(1);
-      expect(String(h.report.mock.calls[0]![0])).toContain('too many to add up');
     });
   });
 
