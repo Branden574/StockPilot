@@ -1,4 +1,5 @@
-import { readdirSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 
 import { buildCustomRoute } from 'next/dist/lib/build-custom-route';
@@ -349,4 +350,52 @@ describe('made-up scanner paths are taken by the rule of their kind', () => {
       for (const p of SCANNER_PATHS[kind]) expect(kindOf(p), p).toBe(kind);
     });
   }
+});
+
+describe('the longest path a server accepts bounds what a rule can cost', () => {
+  /**
+   * One rule (path_traversal, the encoded dot-dot segment) can take time that
+   * grows with the square of the number of segments in the path. Nothing in
+   * the rule stops that; the cap is the length of the request line the server
+   * reads at all. Node refuses a request whose line and headers pass
+   * http.maxHeaderSize (431, before any rule runs), and Vercel's edge refuses
+   * a shorter URL than that. This pins that cap, that nothing here raises it,
+   * and the time every rule takes at it.
+   */
+  const NODE_REQUEST_CAP_BYTES = 16 * 1024;
+
+  it('Node reads at most 16 KiB of request line and headers, and nothing in this app raises that', () => {
+    expect(http.maxHeaderSize).toBe(NODE_REQUEST_CAP_BYTES);
+    const raises = /max-http-header-size|maxHeaderSize/i;
+    for (const file of ['package.json', 'vercel.json', 'next.config.ts']) {
+      expect(readFileSync(path.join(WEB, file), 'utf8'), file).not.toMatch(raises);
+    }
+    expect(readFileSync(path.join(WEB, '..', '..', 'package.json'), 'utf8')).not.toMatch(raises);
+  });
+
+  it('at that length, every rule answers each matcher in well under a second', () => {
+    // Made-up paths as long as the cap, in the shapes the rules walk segment
+    // by segment, each ending so that no rule can match.
+    const fill = (segment: string, end: string) =>
+      segment.repeat(Math.ceil(NODE_REQUEST_CAP_BYTES / segment.length)) + end;
+    const longest = [
+      fill('/a..%2f', '//'),
+      fill('/a', '//'),
+      fill('/a', '/.envx'),
+      fill('/..', '//'),
+      fill('/a.php', '//'),
+      `/${'a'.repeat(NODE_REQUEST_CAP_BYTES)}`,
+    ];
+    for (const pathname of longest) {
+      expect(pathname.length).toBeGreaterThanOrEqual(NODE_REQUEST_CAP_BYTES);
+      for (const matchers of [nextStart, manifest]) {
+        for (const [at, match] of matchers.entries()) {
+          const started = performance.now();
+          expect(match(pathname), PROBE_RULES[at]!.source).toBe(false);
+          // About 40 ms for the slowest rule and shape where this was written.
+          expect(performance.now() - started, PROBE_RULES[at]!.source).toBeLessThan(1_000);
+        }
+      }
+    }
+  });
 });

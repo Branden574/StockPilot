@@ -3,9 +3,15 @@
  * ask every site for (a settings file, source control files, WordPress pages,
  * a PHP script, a database admin tool, a file outside the site). next.config.ts
  * rewrites each of them, before the filesystem, to
- * /api/security/probe/<kind>, which answers the same 404 any unknown address
- * gets and records the request as a security event (exploit / blocked /
- * <kind>). The answer a scanner sees does not change; the app only counts.
+ * /api/security/probe/<kind>, which answers a plain-text 404 ("Not found",
+ * text/plain, never cached), the same for every method and every kind, and
+ * records the request as a security event (exploit / blocked / <kind>).
+ *
+ * That answer is NOT the app's own not-found page: an address that simply
+ * does not exist gets the HTML page, a probe path gets bare text. So a probe
+ * path can be told apart from an unknown address, and a person who types one
+ * sees the bare text. Nothing is served and nothing about the kind is said
+ * either way.
  *
  * Plain module, NO IMPORTS: next.config.ts imports it, and a config may
  * import only modules that import nothing. The kinds are written out here and
@@ -79,6 +85,10 @@ export const PROBE_RULES: readonly ProbeRule[] = [
     kind: 'path_traversal',
     source: `/:dirs(${TRAVERSAL_SEGMENT})*/:target(etc/passwd|etc/shadow|etc/hosts|proc/self/environ|win\\.ini|windows/win\\.ini|boot\\.ini)`,
   },
+  // The work this rule can take grows with the square of the number of
+  // segments. It is bounded by the longest path a server accepts, not by the
+  // rule: probe-paths.test.ts pins that length and the time at it. A rule
+  // that must hold without that cap would give :dirs a fixed depth.
   {
     kind: 'path_traversal',
     source: `/:dirs(${TRAVERSAL_SEGMENT})*/:seg([^/]*(?:\\.\\.|%2e%2e|%2e\\.|\\.%2e|%252e%252e)(?:%2f|%5c|%252f|%255c|\\\\)[^/]*)/:rest*`,
