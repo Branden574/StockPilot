@@ -281,6 +281,13 @@ describe('3. the sync and both outbox drains hold on the same answer', () => {
     expect(owed).toBeGreaterThan(signedOut);
     expect(owner).toBeGreaterThan(owed);
     expect(decision.slice(owed).match(/send: true/g)).toHaveLength(1);
+    // Authenticator SET-UP is decided after whose row it is, per row, by the
+    // row's own workspace, before the one send (set-up-inputs.ts).
+    const setUp = decision.indexOf(
+      "if (setUpOwedIn(live.userId, orgId) === 'owed') return { send: false, reason: 'set-up-owed' };",
+    );
+    expect(setUp).toBeGreaterThan(owner);
+    expect(setUp).toBeLessThan(decision.indexOf('send: true'));
   });
 
   it('the snapshot pull returns before it reads, resets or asks for anything', () => {

@@ -1,6 +1,7 @@
 import { stepUpOwed } from '@stockpilot/core';
 
 import { reconcileStepUp, stepUpOwedFor, tokenAal, type SessionLike, type UserLike } from './mfa-level';
+import { noteServerReadUser } from './set-up-inputs';
 
 /**
  * KEEPING THE CODE GATE IN STEP WITH THE SERVER.
@@ -192,6 +193,9 @@ export function createStepUpReconciler(
   }
 
   return (liveUser) => {
+    // Every user the app reads from the server comes through here: its
+    // factor list is also what the queued-work hold reads (set-up-inputs.ts).
+    noteServerReadUser(liveUser);
     running ??= run(liveUser)
       .catch((e): StepUpReconcileOutcome => {
         console.warn('[auth] code gate reconcile failed', e);

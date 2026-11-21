@@ -8,6 +8,7 @@ import {
 } from './adjust-outbox';
 import { getDb, queuedWrite } from './db';
 import { HELD_FOR_OTHER_SQL, OWNED_BY_USER_SQL } from './outbox-scope';
+import { shownLastError } from './parked-set-up-words';
 import { REJECTED_KEEP_MAX, rejectedPruneCutoff } from './rejected-work';
 import { liveOutboxScope, outboxWriteScope } from './session-scope';
 
@@ -561,15 +562,18 @@ export async function discardUnsyncedFor(userId: string): Promise<number> {
 }
 
 function rowFromDb(r: PendingActionDbRow): PendingActionRow {
+  const payload = safeParse(r.payload_json);
   return {
     id: r.id,
     kind: r.kind as PendingActionKind,
     idempotencyKey: r.idempotency_key,
-    payload: safeParse(r.payload_json),
+    payload,
     createdAt: r.created_at,
     attempts: r.attempts,
     lastAttemptAt: r.last_attempt_at,
-    lastError: r.last_error,
+    // A row parked on the authenticator answer reads a plain sentence
+    // (parked-set-up-words.ts); every other row its stored message.
+    lastError: shownLastError({ status: r.status, kind: r.kind, payload, lastError: r.last_error }),
     status: r.status as PendingActionRow['status'],
     organizationId: r.organization_id ?? null,
     userId: r.user_id ?? null,

@@ -6,6 +6,7 @@ import { useAuth } from './auth-context';
 import { cycleCountSync } from './cycle-count-sync';
 import { deleteOrgData } from './db';
 import { refreshEnabledModules } from './enabled-modules';
+import { beginSetUpRead, recordMembershipInputs } from './set-up-inputs';
 import { refreshCacheOwner } from './use-cache-owner';
 import { syncAfterRunning, syncNow } from './sync';
 import { supabase } from './supabase';
@@ -88,11 +89,16 @@ function publish(next: Partial<WorkspaceState>) {
  * The user's accepted memberships, or null when the read FAILED (offline, a
  * dropped connection, a 5xx). A failed read is not "a member of nothing":
  * hydrate() keeps the workspace already on screen instead (see there).
+ *
+ * The same read carries each workspace's authenticator policy, handed to
+ * set-up-inputs.ts with the role (the queued-work hold); a failed read hands
+ * over nothing.
  */
 export async function loadOrgs(userId: string): Promise<OrgOption[] | null> {
+  const readSeq = beginSetUpRead();
   const { data, error } = await supabase
     .from('organization_members')
-    .select('role, organization_id, organizations:organization_id (name)')
+    .select('role, organization_id, organizations:organization_id (name, mfa_policy)')
     .eq('user_id', userId)
     .not('accepted_at', 'is', null);
   if (error) {
@@ -100,6 +106,15 @@ export async function loadOrgs(userId: string): Promise<OrgOption[] | null> {
     return null;
   }
   const rows = (data ?? []) as Array<Record<string, unknown>>;
+  recordMembershipInputs(
+    userId,
+    rows.map((r) => ({
+      organizationId: r.organization_id as string,
+      role: r.role as string,
+      organization: r.organizations,
+    })),
+    readSeq,
+  );
   return rows
     .map((r) => {
       const orgField = r.organizations as { name?: string } | { name?: string }[] | null;
