@@ -1,6 +1,6 @@
 {
   "generatedBy": "scripts/gen-postgrest-embed-snapshot.mjs (do not edit by hand)",
-  "source": "local database catalog (scripts/postgrest-embeds/census.sql), 2026-11-17",
+  "source": "local database catalog (scripts/postgrest-embeds/census.sql), 2026-11-21",
   "foreignKeys": [
     ["activity_logs","activity_logs_organization_id_fkey","organizations",["organization_id"],["id"]],
     ["activity_logs","activity_logs_user_id_fkey","user_profiles",["user_id"],["id"]],
@@ -330,6 +330,7 @@
     ["schedule_events","schedule_events_order_request_id_fkey","order_requests",["order_request_id"],["id"]],
     ["schedule_events","schedule_events_organization_id_fkey","organizations",["organization_id"],["id"]],
     ["schedule_events","schedule_events_warehouse_id_fkey","warehouses",["warehouse_id"],["id"]],
+    ["security_events","security_events_organization_id_fkey","organizations",["organization_id"],["id"]],
     ["serial_registry","serial_registry_item_id_fkey","inventory_items",["item_id"],["id"]],
     ["serial_registry","serial_registry_organization_id_fkey","organizations",["organization_id"],["id"]],
     ["serial_registry","serial_registry_receipt_line_id_fkey","receipt_lines",["receipt_line_id"],["id"]],
@@ -519,6 +520,7 @@
     "role_permission_overrides": ["organization_id","role","permission"],
     "saved_views": ["id"],
     "schedule_events": ["id"],
+    "security_events": ["id"],
     "serial_registry": ["id"],
     "shipment_lines": ["id"],
     "shipments": ["id"],

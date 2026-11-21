@@ -45,7 +45,7 @@ create temporary table expected_junctions (junction text, a text, b text, a_fk t
 create temporary table expected_pairs (a text, b text, relationships text) on commit drop;
 
 -- BEGIN GENERATED: scripts/gen-postgrest-embed-snapshot.mjs from scripts/postgrest-embeds/relationships.snapshot.json. Do not edit by hand.
--- 405 foreign keys, 9 junctions, 35 ambiguous pairs.
+-- 406 foreign keys, 9 junctions, 35 ambiguous pairs.
 insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('activity_logs', 'activity_logs_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('activity_logs', 'activity_logs_user_id_fkey', 'user_profiles', 'user_id', 'id'),
@@ -375,6 +375,7 @@ insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('schedule_events', 'schedule_events_order_request_id_fkey', 'order_requests', 'order_request_id', 'id'),
   ('schedule_events', 'schedule_events_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('schedule_events', 'schedule_events_warehouse_id_fkey', 'warehouses', 'warehouse_id', 'id'),
+  ('security_events', 'security_events_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('serial_registry', 'serial_registry_item_id_fkey', 'inventory_items', 'item_id', 'id'),
   ('serial_registry', 'serial_registry_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('serial_registry', 'serial_registry_receipt_line_id_fkey', 'receipt_lines', 'receipt_line_id', 'id'),
