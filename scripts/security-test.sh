@@ -2303,6 +2303,12 @@ WEB_TESTS=(
   # (its key is unique) writes the rest; a retry with the same key writes
   # nothing again, and the same key with other lines is the conflict.
   src/server/services/receiving.replay-writes-once.test.ts
+  # Membership rows are added by the server (0473): no later migration grants
+  # INSERT or ALL on organization_members, or on a column of it, to anon,
+  # authenticated or PUBLIC, and none drops, disables or restates the trigger
+  # that refuses a row inserted as either role, or its function. The file
+  # carries the "Security invariant" marker.
+  src/test/membership-insert-stays-revoked.guard.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
