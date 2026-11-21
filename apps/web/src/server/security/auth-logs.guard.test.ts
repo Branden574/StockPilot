@@ -28,12 +28,14 @@ import { LIMITER_BOT_PREFIXES, limiterSecurityEvent } from './limiter-events';
  *      phone or api (written so, or not a literal) must name its reason as a
  *      literal that is not one of the job's. A call this reading cannot see
  *      into (a spread, a variable) must be listed in REVIEWED, with a check
- *      below that proves it. The recorder may not be used as a value or
- *      imported under another name.
+ *      below that proves it. The recorder may not be used as a value, nor
+ *      imported or exported under another name.
  *   3. the recorder itself invents one reason only, over_buffer_cap, and the
  *      limiter's events carry `<family>_paused`: neither is one of the job's.
  *      The database writer's own renames (repeated_..., over_minute_cap) are
  *      not either.
+ *   4. the job's own lists of reasons and sources are pinned here by value,
+ *      so neither can change without this guard changing with it.
  * The self-tests at the bottom plant each violation, so this cannot pass by
  * reading nothing.
  */
@@ -134,6 +136,16 @@ function scan(rel: string, text: string): Scan {
       }
     }
 
+    // The same for an export: `export { recordSecurityEvent as rec }` (with
+    // or without `from`) would let another module call the recorder by a
+    // name this guard does not look for.
+    if (ts.isExportSpecifier(node)) {
+      const exported = (node.propertyName ?? node.name).text;
+      if (exported === 'recordSecurityEvent' && node.name.text !== 'recordSecurityEvent') {
+        out.violations.push(`${where(node)}: exports recordSecurityEvent under another name`);
+      }
+    }
+
     if (ts.isIdentifier(node) && node.text === 'recordSecurityEvent') {
       const parent = node.parent;
       const isCallee = ts.isCallExpression(parent) && parent.expression === node;
@@ -220,6 +232,31 @@ describe("only the auth-logs job writes the rows its 'already stored' check read
     }
   });
 
+  it("the job's reasons and sources are the ones reviewed here, value for value", () => {
+    // This guard reads both lists from the job's module. A reason or a source
+    // taken off them there would make every check above pass for it without
+    // anyone looking, and the job's check of what is already stored would
+    // stop reading rows the job still writes. So a change to either list is
+    // a change to this guard too.
+    expect([...AUTH_LOGS_REASONS]).toEqual([
+      'wrong_password',
+      'wrong_code',
+      'auth_rate_limited',
+      'auth_log_over_cap',
+      'unclassified_sign_in_refusals',
+      'unrecorded_server_form_password',
+      'unrecorded_server_form_code',
+    ]);
+    expect([...AUTH_LOGS_SOURCES]).toEqual(['phone', 'api']);
+    // And every element the job can build carries one of them: its element
+    // type takes its reason and source from these two lists (the compiler
+    // holds that), and the lists are frozen in shape by `as const`.
+    const source = read('server/security/auth-logs.ts');
+    expect(source).toMatch(/export type AuthLogsReason = \(typeof AUTH_LOGS_REASONS\)\[number\];/);
+    expect(source).toMatch(/export type AuthLogsSource = \(typeof AUTH_LOGS_SOURCES\)\[number\];/);
+    expect(source).toMatch(/\n {2}reason: AuthLogsReason;\n {2}source: AuthLogsSource;\n/);
+  });
+
   it("the limiter's events carry `<family>_paused`, never one of the job's reasons", () => {
     const prefixes = Object.keys(LIMITER_BOT_PREFIXES);
     expect(prefixes.length).toBeGreaterThan(10);
@@ -301,6 +338,26 @@ describe('the guard finds what it is meant to find (self-test)', () => {
     expect(s.violations).toEqual([
       'server/planted.ts:1: imports recordSecurityEvent under another name',
     ]);
+  });
+
+  it.each([
+    ["export { recordSecurityEvent as rec } from './events';"],
+    ["export { recordSecurityEvent as default } from '@/server/security/events';"],
+    ["import { recordSecurityEvent } from './events';\nexport { recordSecurityEvent as rec };"],
+  ])('reports the recorder exported under another name: %s', (text) => {
+    // Under another name its calls elsewhere would not be read at all.
+    const s = scan('server/planted.ts', `${text}\n`);
+    expect(s.violations).toEqual([
+      expect.stringMatching(
+        /^server\/planted\.ts:\d+: exports recordSecurityEvent under another name$/,
+      ),
+    ]);
+  });
+
+  it('passes the recorder exported under its own name (its calls are still read by that name)', () => {
+    expect(
+      scan('server/planted.ts', "export { recordSecurityEvent } from './events';\n").violations,
+    ).toEqual([]);
   });
 
   it.each([
