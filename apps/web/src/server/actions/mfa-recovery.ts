@@ -127,9 +127,24 @@ const RECOVERY_PASSWORD_CHECKS = 10;
 /** Presses of one account whose password checked out, at every address, in a window. */
 const RECOVERY_CODE_CHECKS = 5;
 
-/** One count in a bucket of the recovery code; closed: a limiter that cannot answer refuses. */
-async function allowRecoveryPress(key: string, limit: number): Promise<boolean> {
-  return (await checkRateLimit(key, limit, RECOVERY_WINDOW_MS, 'closed')).allowed;
+/**
+ * One count in a bucket of the recovery code; closed: a limiter that cannot
+ * answer refuses. A press refused because the bucket is over its count is a
+ * security event in the account's organization (looked up after the
+ * response), like a spent authenticator-code budget; a limiter that could not
+ * count (`failed`) is not one.
+ */
+async function allowRecoveryPress(
+  key: string,
+  limit: number,
+  userId: string,
+  requestHeaders: Awaited<ReturnType<typeof headers>>,
+): Promise<boolean> {
+  const answer = await checkRateLimit(key, limit, RECOVERY_WINDOW_MS, 'closed');
+  if (!answer.allowed && !answer.failed) {
+    recordAccountCodeBlocked('recovery_code_checks_paused', userId, requestHeaders);
+  }
+  return answer.allowed;
 }
 
 /**
@@ -182,6 +197,8 @@ export async function consumeMfaRecoveryCodeAction(input: {
       !(await allowRecoveryPress(
         `mfa-recovery:${session.userId}:${ip}`,
         RECOVERY_PRESSES_AT_ADDRESS,
+        session.userId,
+        requestHeaders,
       ))
     ) {
       return err('validation_error', RECOVERY_PAUSED);
@@ -199,6 +216,8 @@ export async function consumeMfaRecoveryCodeAction(input: {
       !(await allowRecoveryPress(
         `mfa-recovery-password:${session.userId}`,
         RECOVERY_PASSWORD_CHECKS,
+        session.userId,
+        requestHeaders,
       ))
     ) {
       // Presses from more than one address paused the account's password
@@ -229,7 +248,14 @@ export async function consumeMfaRecoveryCodeAction(input: {
     const held = await readVerifiedSessionTokenOf(supabase, session.userId);
     if (!held) return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
 
-    if (!(await allowRecoveryPress(`mfa-recovery-code:${session.userId}`, RECOVERY_CODE_CHECKS))) {
+    if (
+      !(await allowRecoveryPress(
+        `mfa-recovery-code:${session.userId}`,
+        RECOVERY_CODE_CHECKS,
+        session.userId,
+        requestHeaders,
+      ))
+    ) {
       return err('validation_error', RECOVERY_PAUSED);
     }
 

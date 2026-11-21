@@ -50,6 +50,7 @@ describe('security events: the lists the database checks', () => {
       'repeated_wrong_code',
       'code_checks_paused',
       'wrong_recovery_code',
+      'recovery_code_checks_paused',
       'unknown_api_key',
       'over_minute_cap',
       'over_buffer_cap',
@@ -68,6 +69,15 @@ describe('security events: the lists the database checks', () => {
   it('the two overflow rows read the same', () => {
     expect(securityEventReasonLabel('over_minute_cap')).toBe('More events than could be listed');
     expect(securityEventReasonLabel('over_buffer_cap')).toBe('More events than could be listed');
+  });
+
+  it('names the plain words of the two code-check pauses', () => {
+    expect(securityEventReasonLabel('code_checks_paused')).toBe(
+      'Authenticator code checks paused after too many attempts',
+    );
+    expect(securityEventReasonLabel('recovery_code_checks_paused')).toBe(
+      'Recovery code checks paused after too many attempts',
+    );
   });
 
   it('names the plain words of the sign-in reasons', () => {

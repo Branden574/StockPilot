@@ -81,7 +81,7 @@ export const LIMITER_BOT_PREFIXES: Readonly<Record<string, BotPrefix>> = {
 const RECORDED_AT_CALL_SITE =
   'Recorded at its call site (server/security/account-events.ts), so it is not counted twice.';
 const RECOVERY_RECORDED_AT_CALL_SITE =
-  "A signed-in account's recovery-code buckets: the call site records the refused code itself (wrong_recovery_code).";
+  "A signed-in account's recovery-code buckets: the call site records a refused press itself (recovery_code_checks_paused), and a refused code (wrong_recovery_code).";
 const SIGNED_IN = "A signed-in member's own limit: a fast worker is not an attack.";
 const ORGANIZATION_CAP = "An organization's own daily cap, reached by its signed-in members.";
 const ALERT_PACING = 'Paces an alert this server sends, not a request anyone made.';

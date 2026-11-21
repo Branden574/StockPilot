@@ -28,7 +28,11 @@ import { recordSecurityEvent, type SecurityEventHeaders } from './events';
 export type SignInBlockedReason = 'sign_in_paused' | 'wrong_password' | 'auth_server_paused';
 
 /** The code refusals that are recorded, for an account already past its password. */
-export type AccountCodeBlockedReason = 'wrong_code' | 'code_checks_paused' | 'wrong_recovery_code';
+export type AccountCodeBlockedReason =
+  | 'wrong_code'
+  | 'code_checks_paused'
+  | 'wrong_recovery_code'
+  | 'recovery_code_checks_paused';
 
 /** How long the organization found for an email is remembered. */
 export const SIGN_IN_ORGANIZATION_MEMORY_MS = 60_000;

@@ -114,6 +114,7 @@ export const SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, string>> = {
   repeated_wrong_code: 'Repeated wrong authenticator codes from one source',
   code_checks_paused: 'Authenticator code checks paused after too many attempts',
   wrong_recovery_code: 'Wrong recovery code',
+  recovery_code_checks_paused: 'Recovery code checks paused after too many attempts',
   unknown_api_key: 'Unknown API key',
   // Exploit attempts: a scanner asked for a path this site never serves.
   env_file: 'Request for a settings file',

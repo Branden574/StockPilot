@@ -1,14 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeSupabaseStub } from '@/test/supabase-mock';
+import { makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
 import { verifiedSessionAuth } from '@/test/verified-session-stub';
 
 /**
  * consumeMfaRecoveryCodeAction's security event (part 1 of the security
  * tools): a recovery code the database refused, for an account past its
  * password, is wrong_recovery_code in the account's organization (looked up
- * after the response, server/security/account-events.ts). A code that
- * worked, a wrong password and a call that failed record nothing.
+ * after the response, server/security/account-events.ts). A press the
+ * recovery limiter refused (any of its three buckets, over its count) is
+ * recovery_code_checks_paused in the same organization; a limiter that could
+ * not count is not an event. A code that worked, a wrong password and a call
+ * that failed record nothing.
  *
  * Addresses are from the documentation ranges (RFC 5737).
  */
@@ -115,5 +118,52 @@ describe('consumeMfaRecoveryCodeAction records a refused recovery code', () => {
     });
     await consumeMfaRecoveryCodeAction({ code: 'whatever', password: PW });
     expect(recorded()).toEqual([]);
+  });
+});
+
+describe('consumeMfaRecoveryCodeAction records a press its limiter refused', () => {
+  /** The limiter answers every bucket but the one whose key starts with `prefix`. */
+  const limiterRefusing = (prefix: string, answer: 'over the count' | 'could not count') => ({
+    'rpc:increment_rate_limit': (call: MockCall) => {
+      const key = String((call.args[0]?.[0] as { p_key?: unknown } | undefined)?.p_key ?? '');
+      if (!key.startsWith(prefix)) return { data: [{ allowed: true, count: 1, reset_at: null }], error: null };
+      return answer === 'over the count'
+        ? { data: [{ allowed: false, count: 6, reset_at: null }], error: null }
+        : { data: null, error: { message: 'down' } };
+    },
+    'rpc:consume_mfa_recovery_code': { data: false, error: null },
+  });
+
+  it.each([
+    ['the account at this address', 'mfa-recovery:user-1:198.51.100.4'],
+    ['the account’s password checks', 'mfa-recovery-password:user-1'],
+    ['the account’s code checks', 'mfa-recovery-code:user-1'],
+  ])('%s, over its count: recovery_code_checks_paused, for the account, with the request headers', async (_what, prefix) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    stubHolder.stub = makeSupabaseStub(limiterRefusing(prefix, 'over the count'));
+    const result = await consumeMfaRecoveryCodeAction({ code: 'any-code', password: PW });
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'validation_error',
+        message: 'Too many recovery-code attempts. Wait a few minutes and try again.',
+      },
+    });
+    expect(recorded()).toEqual([['recovery_code_checks_paused', 'user-1', request.headers]]);
+    // The code was never checked.
+    expect(stubHolder.stub.rpcCalls.map((c) => c.name)).not.toContain('consume_mfa_recovery_code');
+  });
+
+  it.each([
+    ['the account at this address', 'mfa-recovery:user-1:198.51.100.4'],
+    ['the account’s password checks', 'mfa-recovery-password:user-1'],
+    ['the account’s code checks', 'mfa-recovery-code:user-1'],
+  ])('%s, when the limiter could not count: still refused, nothing recorded', async (_what, prefix) => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    stubHolder.stub = makeSupabaseStub(limiterRefusing(prefix, 'could not count'));
+    const result = await consumeMfaRecoveryCodeAction({ code: 'any-code', password: PW });
+    expect(result).toMatchObject({ ok: false, error: { code: 'validation_error' } });
+    expect(recorded()).toEqual([]);
+    expect(stubHolder.stub.rpcCalls.map((c) => c.name)).not.toContain('consume_mfa_recovery_code');
   });
 });
