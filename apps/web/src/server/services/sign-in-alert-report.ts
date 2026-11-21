@@ -9,7 +9,7 @@ import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { recordSignInAlertEvent } from '@/server/security/sign-in-alert-events';
 import { insertAuditRowReported } from '@/server/services/audit';
-import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
+import { fetchAllRowsByIds, reportDegradedRead } from '@/server/services/lib/fetch-by-ids';
 import { createNotification } from '@/server/services/notifications';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 
@@ -322,11 +322,9 @@ async function peopleById(admin: Admin, ids: string[]): Promise<Map<string, Pers
     }
   } catch (err) {
     // Nobody is emailed from a partial list: the map stays empty. The raw
-    // text (a ServiceError's internal detail) goes to the server report only.
-    reportFailure('security.sign_in_report_read_failed', {
-      read: 'profiles',
-      detail: rawErrorText(err),
-    });
+    // text (a ServiceError's internal detail) goes to the server report only,
+    // through the house helper for a failed id-list read.
+    reportDegradedRead('security.sign_in_report_read_failed', err, { read: 'profiles' });
     return new Map<string, Person>();
   }
   return people;
