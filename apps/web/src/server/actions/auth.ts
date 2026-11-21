@@ -17,6 +17,7 @@ import {
 } from '@/lib/auth/mfa-code-attempts';
 import { appFactorsForCode, readPasskeyBridge } from '@/lib/auth/passkey-bridge';
 import { newSessionIdOf } from '@/lib/auth/new-session-id';
+import { carriesBridgeName } from '@/lib/auth/passkey-bridge-name';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
 import { openedFromResetLink } from '@/lib/auth/reset-link-session';
 import { sessionAccountNow, type SessionAccountNow } from '@/lib/auth/session-account';
@@ -38,6 +39,11 @@ import {
 } from '@/server/actions/auth-error-classify';
 import { unexpectedActionError } from '@/server/lib/action-error-result';
 import { recordSignInBlocked } from '@/server/security/account-events';
+import {
+  answerResetPasskey,
+  resetPasskeyStepFor,
+  type PasskeyFailure,
+} from '@/server/security/passkeys';
 import { audit } from '@/server/services/audit';
 import { emitAuthAudit, resolveDefaultOrgAndRole } from '@/server/services/auth-audit';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
@@ -514,6 +520,22 @@ const RESET_CODE_ASK =
 const RESET_BRIDGE_ONLY =
   "A password reset isn't available for this account yet. Ask your organization's owner or StockPilot support for help.";
 
+/**
+ * The reset's ask when the account's passkey can finish it (stage 5; plan
+ * section 4): a member whose only second step is the passkey, and a member
+ * with an authenticator app too. `details.method` tells the form which.
+ */
+const RESET_PASSKEY_ASK = 'Confirm with your passkey to finish resetting your password.';
+const RESET_PASSKEY_OR_CODE_ASK =
+  'Confirm with your passkey, or enter the 6-digit code from your authenticator app, to finish resetting your password.';
+
+/** The reset's passkey answer as the form sends it (read off the raw input, like `totpCode`). */
+function resetPasskeyAnswerOf(raw: unknown): { challengeId: unknown; response: unknown } | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const a = raw as { challengeId?: unknown; response?: unknown };
+  return { challengeId: a.challengeId, response: a.response };
+}
+
 /** The reset link's session is gone: spent, expired, or ended in another tab. */
 const RESET_LINK_GONE =
   'That link has expired or was already used. Choose Forgot? on the sign-in page to get a new link by email.';
@@ -547,13 +569,38 @@ async function resetSessionRefusal(
   return err('internal_error', RESET_UNCONFIRMED);
 }
 
+/**
+ * The reset's answer when its passkey answer was refused (stage 5). The session
+ * now holding another account is signed out here, as above; a session that
+ * ended or is no longer the link's gets the link's own words; any other
+ * refusal keeps the form on the passkey (`details.method`), with the passkey's
+ * words. No password is set in any of these.
+ */
+async function resetPasskeyRefusal(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  f: PasskeyFailure,
+  method: 'passkey' | 'both',
+): Promise<ActionResult<never>> {
+  if (f.reason === 'reset_other_account') {
+    await signOutThisSession(supabase);
+    return err('unauthenticated', RESET_LINK_GONE);
+  }
+  if (f.reason === 'not_reset_link') return err('forbidden', RESET_NEEDS_LINK);
+  if (f.code === 'unauthenticated') return err('unauthenticated', RESET_LINK_GONE);
+  return err(f.code, f.message, { reason: 'aal2_required', method });
+}
+
 export async function completePasswordResetAction(
   // `totpCode` is additive and optional: the emailed recovery link and the
   // form both keep working without it, and it is read off the raw input rather
   // than through completePasswordResetSchema, so the shared schema stays as it
   // is. The reset form sends it once this action asks for it (docket B50). See
-  // the MFA step-up block below for why it exists.
-  input: CompletePasswordResetInput & { totpCode?: string },
+  // the MFA step-up block below for why it exists. `passkeyAnswer` (stage 5)
+  // is the same: read off the raw input, only when the passkey is offered.
+  input: CompletePasswordResetInput & {
+    totpCode?: string;
+    passkeyAnswer?: { challengeId: string; response: unknown };
+  },
 ): Promise<ActionResult<{ next: string }>> {
   const parsed = completePasswordResetSchema.safeParse(input);
   if (!parsed.success) {
@@ -634,7 +681,24 @@ export async function completePasswordResetAction(
   const bridge = await readPasskeyBridge(accountId, verifiedTotp, 'password_reset');
   const totpFactorId = appFactorsForCode(verifiedTotp, bridge)[0]?.id ?? null;
   const bridgeOnly = verifiedTotp.length > 0 && totpFactorId === null;
-  if (totpFactorId) {
+  // THE PASSKEY (stage 5, dark). Offered only when the account's passkey can
+  // serve now: passkeys usable (decision A's USE level: a site, the bridge
+  // key, the kill switch on) and its bridge serving, on this link session of
+  // this account (server/security/passkeys.ts resetPasskeyStepFor). Asked only
+  // when a factor carries the bridge's reserved name, so an account without a
+  // passkey costs nothing. Otherwise everything below is stage 2's, exactly,
+  // and a passkey answer sent anyway is never read. The answer is checked
+  // only in answerResetPasskey (purpose password_reset, this session, this
+  // browser, spent once), which raises THIS session to aal2; the password is
+  // then set on it and every session of the account ends, as for a code.
+  const passkeyMethod: 'passkey' | 'both' | null =
+    verifiedTotp.some(carriesBridgeName) &&
+    (await resetPasskeyStepFor(supabase, accountId, verifiedTotp)) === 'ready'
+      ? totpFactorId
+        ? 'both'
+        : 'passkey'
+      : null;
+  if (totpFactorId || passkeyMethod) {
     // The session as it verifies AFTER the factor list (a read that can
     // refresh the session into another account's), against the account this
     // press is for: another account is signed out here and refused, a session
@@ -645,9 +709,22 @@ export async function completePasswordResetAction(
     const heldNow = await sessionAccountNow(supabase, accountId);
     if (heldNow.kind !== 'same') return resetSessionRefusal(supabase, heldNow);
     const held = heldNow.claims;
-    if (held.aal !== 'aal2') {
-      const code = normalizeTotpCode(input.totpCode);
-      if (!code) {
+    const passkeyAnswer = passkeyMethod ? resetPasskeyAnswerOf(input.passkeyAnswer) : null;
+    if (held.aal !== 'aal2' && passkeyMethod && passkeyAnswer) {
+      const raised = await answerResetPasskey(supabase, accountId, passkeyAnswer);
+      if (!raised.ok) return resetPasskeyRefusal(supabase, raised, passkeyMethod);
+    } else if (held.aal !== 'aal2') {
+      const code = totpFactorId ? normalizeTotpCode(input.totpCode) : null;
+      if (!code || !totpFactorId) {
+        // The passkey is offered: the form shows its button (and, with an
+        // app, the code box too).
+        if (passkeyMethod) {
+          return err(
+            'forbidden',
+            passkeyMethod === 'both' ? RESET_PASSKEY_OR_CODE_ASK : RESET_PASSKEY_ASK,
+            { reason: 'aal2_required', method: passkeyMethod },
+          );
+        }
         // `details.reason` lets the reset form reveal its code field instead of
         // showing a dead end. Same vocabulary as the API gate's aal2_required.
         return err('forbidden', RESET_CODE_ASK, { reason: 'aal2_required' });

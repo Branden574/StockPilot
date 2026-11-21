@@ -28,6 +28,7 @@ import {
   reservedFactorInFlight,
 } from '@/lib/auth/passkey-bridge-name';
 import { passkeyRelyingParty, type RelyingParty } from '@/lib/auth/passkey-relying-party';
+import { openedFromResetLink } from '@/lib/auth/reset-link-session';
 import {
   authenticationResponseSchema,
   challengeIdSchema,
@@ -124,8 +125,14 @@ import type { ActionErrorCode } from '@stockpilot/core';
  *   action's own; 22 every failed use write refuses the sign-in; 23 one
  *   account's state by the database's rule (passkey-state.ts).
  *
- * WHAT IS NOT HERE (stage 5 and 6): the password reset's passkey answer, the
- * recovery-code wording, the platform console's switches.
+ * THE PASSWORD RESET (stage 5): the reset's start (startResetPasskey, purpose
+ * `password_reset`) and its answer (answerResetPasskey, read only inside
+ * completePasswordResetAction, rule 20) work only on a session an emailed
+ * link opened within the hour (lib/auth/reset-link-session), at the USE level,
+ * and only while the account's passkey serves (resetPasskeyStepFor). They
+ * never finish a removal and never repair a bridge.
+ *
+ * WHAT IS NOT HERE (stage 6): the platform console's switches.
  */
 
 // ── Words (plain, short; plan section 4) ──────────────────────────────
@@ -185,6 +192,9 @@ export const PASSKEY_WORDS = {
   removedFinishing: 'Removed. Finishing in the background.',
   alreadyRemoved: 'This passkey is already removed.',
   nameInvalid: "Use letters, numbers, spaces and ( ) + ' _ - only.",
+  /** Stage 5: the reset's passkey on a session no emailed link opened within the hour. */
+  resetNeedsLink:
+    'This works only within an hour of opening the link in your email. Choose Forgot? on the sign-in page to get a new link.',
 } as const;
 
 /** The purposes of a challenge (0475's check). Never read from a browser (rule 20). */
@@ -401,8 +411,8 @@ interface Held {
   supabase: CookieClient;
 }
 
-async function holdSession(): Promise<Held | null> {
-  const supabase = await createClient();
+async function holdSession(given?: CookieClient): Promise<Held | null> {
+  const supabase = given ?? (await createClient());
   const session = await readVerifiedSession(supabase);
   if (!session) return null;
   return { token: session.token, claims: session.claims, supabase };
@@ -428,12 +438,40 @@ function gateRefusal(why: PasskeyGateClosed): PasskeyFailure {
   );
 }
 
+/**
+ * The password reset's own session rule (stage 5; plan 2.6 A.1): the session
+ * came from an emailed link within the hour, as completePasswordResetAction
+ * itself requires.
+ */
+function fromResetLink(held: Held): boolean {
+  return openedFromResetLink(held.claims.amr, Math.floor(Date.now() / 1000));
+}
+
+/**
+ * For the password reset (stage 5): the session must be the reset link's
+ * (fromResetLink), and when `accountId` is given, the account the reset's
+ * press is for. Checked right after the session is held, before the account
+ * status, any gate read or any limiter count.
+ */
+interface ResetSession {
+  /** The reset action's own cookie client: the raised session is written there. */
+  supabase?: CookieClient;
+  /** The account completePasswordResetAction verified for this press. */
+  accountId?: string;
+}
+
 /** The session part of every prologue: the verified session, a session id, the account not disabled (rule 15). */
-async function heldActive(): Promise<Result<{ held: Held }>> {
-  const held = await holdSession();
+async function heldActive(reset?: ResetSession): Promise<Result<{ held: Held }>> {
+  const held = await holdSession(reset?.supabase);
   if (!held) return fail('unauthenticated', PASSKEY_WORDS.sessionEnded);
   if (!held.claims.sessionId)
     return fail('unauthenticated', PASSKEY_WORDS.sessionEnded, 'no_session_id');
+  if (reset) {
+    if (reset.accountId !== undefined && held.claims.userId !== reset.accountId)
+      return fail('unauthenticated', PASSKEY_WORDS.sessionEnded, 'reset_other_account');
+    if (!fromResetLink(held))
+      return fail('forbidden', PASSKEY_WORDS.resetNeedsLink, 'not_reset_link');
+  }
   // Rule 15: a disabled account, before any limiter counts; a status that
   // cannot be read is closed.
   const status = await loadAccountStatus(held.supabase, held.claims.userId);
@@ -473,8 +511,9 @@ async function limited(step: Step, userId: string): Promise<PasskeyFailure | nul
 async function prologue(
   step: Step,
   level: 'add' | 'use',
+  reset?: ResetSession,
 ): Promise<Result<{ held: Held; gate: OpenGate }>> {
-  const h = await heldActive();
+  const h = await heldActive(reset);
   if (!h.ok) return h;
   const { held } = h;
   const read = await readGate(held.claims.userId);
@@ -808,8 +847,11 @@ function failClosedFault(picture: Judged, userId: string, keys: BridgeKeys): str
   return FAIL_CLOSED_STATES.has(picture.state) ? picture.state : null;
 }
 
+/** Where a fault was met: the second-step page, a ceremony's start, the password reset (stage 5). */
+type StepFaultSite = 'second_step' | 'start' | 'password_reset';
+
 /** Reported once an hour for everyone as `passkeys.key_fault` (review B6, corrected). */
-async function reportKeyFault(userId: string, fault: string, site: string): Promise<void> {
+async function reportKeyFault(userId: string, fault: string, site: StepFaultSite): Promise<void> {
   const all = await checkRateLimit(`passkeys-key-report:${fault}`, 1, 60 * MIN, 'closed');
   if (all.allowed) reportPasskeys('key_fault', 'error', userId, { fault, site });
 }
@@ -834,7 +876,7 @@ async function reportKeyFault(userId: string, fault: string, site: string): Prom
 async function reportStepFault(
   userId: string,
   fault: string,
-  site: 'second_step' | 'start' = 'second_step',
+  site: StepFaultSite = 'second_step',
 ): Promise<void> {
   try {
     if (fault === 'no_key') {
@@ -1236,7 +1278,7 @@ async function auditPasskey(
 async function recordRaise(
   userId: string,
   sessionId: string | null,
-  purpose: 'second_step' | 'add' | 'finish_setup',
+  purpose: 'second_step' | 'add' | 'finish_setup' | 'password_reset',
 ): Promise<Result<{ raiseId: string }>> {
   // Rule 17 refuses a session without an id before here; the row needs one.
   if (!sessionId) return fail('unauthenticated', PASSKEY_WORDS.sessionEnded, 'no_session_id');
@@ -1274,8 +1316,11 @@ type CeremonyStart = { held: Held; gate: OpenGate; admin: Admin; picture: Accoun
  * start at the USE level (Finish setup of a passkey that never served asks
  * the ADD level once the picture is read).
  */
-async function readForStart(level: 'add' | 'use'): Promise<Result<CeremonyStart>> {
-  const p = await prologue('start', level);
+async function readForStart(
+  level: 'add' | 'use',
+  reset?: ResetSession,
+): Promise<Result<CeremonyStart>> {
+  const p = await prologue('start', level, reset);
   if (!p.ok) return p;
   const admin = createAdminClient();
   const read = await readPicture(admin, p.held, p.gate.rp);
@@ -1290,7 +1335,7 @@ async function readForStart(level: 'add' | 'use'): Promise<Result<CeremonyStart>
  * confirm_add and finish_setup starts cannot reach a delete.
  */
 async function startCeremony(
-  purpose: 'second_step' | 'confirm_add' | 'finish_setup',
+  purpose: 'second_step' | 'confirm_add' | 'finish_setup' | 'password_reset',
   started: CeremonyStart,
 ): Promise<Result<{ start: SecondStepStart }>> {
   const { held, gate, admin, picture } = started;
@@ -1300,7 +1345,8 @@ async function startCeremony(
   // at the page's pace (review B6). A Finish setup start is the repair
   // itself and reports nothing here.
   const fault = purpose === 'finish_setup' ? null : failClosedFault(picture, userId, gate.keys);
-  if (fault) await reportStepFault(userId, fault, 'start');
+  const site: StepFaultSite = purpose === 'password_reset' ? 'password_reset' : 'start';
+  if (fault) await reportStepFault(userId, fault, site);
   if (picture.active.length === 0)
     return fail('validation_error', PASSKEY_WORDS.noPasskey, 'no_passkey');
   if (purpose === 'finish_setup') {
@@ -1315,7 +1361,7 @@ async function startCeremony(
   } else if (!bridgeServes(picture)) {
     if (setupUnfinished(picture))
       return fail('validation_error', PASSKEY_WORDS.setupNotFinished, 'setup_unfinished');
-    if (!fault) await reportStepFault(userId, picture.state, 'start');
+    if (!fault) await reportStepFault(userId, picture.state, site);
     return fail('forbidden', PASSKEY_WORDS.cantUse, picture.state);
   } else if (!opens(picture, userId, gate.keys)) {
     return fail('forbidden', PASSKEY_WORDS.cantUse, 'bridge_unopenable');
@@ -1538,6 +1584,123 @@ export async function startFinishSetup(): Promise<Result<{ start: SecondStepStar
   const started = await readForStart('use');
   if (!started.ok) return started;
   return startCeremony('finish_setup', started);
+}
+
+// ── The password reset's second step (stage 5; 2.6 A and B, password_reset) ──
+
+/**
+ * Whether the password reset offers the passkey to `accountId` (3.1 #4):
+ * 'ready' only when the USE level is open (decision A: a site, the key, the
+ * kill switch on) and the account's passkey serves now as the second-step page
+ * judges it (servesAsSecondStep), on the reset link's own session (`supabase`,
+ * the reset action's client) of that account. Otherwise 'none', and the reset
+ * is stage 2's, exactly. Never 'ready' for a removal to finish (S7, S13: the
+ * reset never deletes) or a bridge to repair (S9). Called only when the
+ * account's factor list carries the reserved name, so an account without a
+ * passkey costs nothing. A fault met here is reported at the page's pace. Never
+ * throws.
+ */
+export async function resetPasskeyStepFor(
+  supabase: CookieClient,
+  accountId: string,
+  factors: ReadonlyArray<{ friendly_name?: unknown; factor_type?: unknown }>,
+): Promise<'ready' | 'none'> {
+  try {
+    if (!factors.some(carriesBridgeName)) return 'none';
+    const gate = await passkeyUseGate(accountId);
+    if (!gate.open) {
+      if (gate.why === 'no_key') await reportStepFault(accountId, 'no_key', 'password_reset');
+      return 'none';
+    }
+    const held = await holdSession(supabase);
+    if (!held || held.claims.userId !== accountId || !fromResetLink(held)) return 'none';
+    const read = await readPicture(createAdminClient(), held, gate.rp);
+    if (!read.ok) return 'none';
+    if (servesAsSecondStep(read.picture, accountId, gate.keys)) return 'ready';
+    const fault = failClosedFault(read.picture, accountId, gate.keys);
+    if (fault) await reportStepFault(accountId, fault, 'password_reset');
+    return 'none';
+  } catch {
+    return 'none';
+  }
+}
+
+/**
+ * The reset's device prompt (2.6 A with password_reset): only on a session an
+ * emailed link opened within the hour (checked before the gate and any
+ * limiter count), at the USE level, for an account whose passkey serves. It
+ * writes one challenge, bound to this session, this purpose and this
+ * browser's cookie, and nothing else: it never finishes a removal.
+ */
+export async function startResetPasskey(): Promise<Result<{ start: SecondStepStart }>> {
+  const started = await readForStart('use', {});
+  if (!started.ok) return started;
+  return startCeremony('password_reset', started);
+}
+
+/**
+ * The reset's passkey answer (2.6 B with password_reset), read ONLY inside
+ * completePasswordResetAction (rule 20), with that action's own cookie client
+ * and the account its press is for. The session must still be that account's
+ * reset link session; the challenge is spent first (this account, THIS
+ * session, purpose password_reset, this browser's cookie); the passkey must be
+ * the account's own, user-verified; then the raise row, the bridge answer as
+ * the link session's token, and the raised session adopted in place (same
+ * session, aal2, written to the action's client). The action then sets the
+ * password and ends every session of the account. `passkey.used` carries no
+ * organization (the reset is before any sign-in, like a refused code). The
+ * reset never repairs a bridge: a passkey that does not serve now is refused.
+ */
+export async function answerResetPasskey(
+  supabase: CookieClient,
+  accountId: string,
+  input: { challengeId: unknown; response: unknown },
+): Promise<Result<object>> {
+  const p = await prologue('finish', 'use', { supabase, accountId });
+  if (!p.ok) return p;
+  const { held, gate } = p;
+  const userId = held.claims.userId;
+  const admin = createAdminClient();
+  const verified = await verifyAssertion(admin, held, gate.rp, 'password_reset', input);
+  if (!verified.ok) return verified;
+
+  const read = await readPicture(admin, held, gate.rp);
+  if (!read.ok) return read;
+  const picture = read.picture;
+  if (!bridgeServes(picture) || !picture.bridge) {
+    reportPasskeys(picture.state, 'error', userId, { site: 'password_reset' });
+    return fail('forbidden', PASSKEY_WORDS.cantUse, picture.state);
+  }
+  const bridge = picture.bridge;
+  const secret = openBridgeSecret(
+    { ciphertext: bridge.secret_ciphertext, keyVersion: bridge.key_version },
+    { userId, factorId: bridge.factor_id },
+    gate.keys,
+  );
+  if (!secret) {
+    reportPasskeys('bridge_unopenable', 'error', userId, { site: 'password_reset' });
+    return fail('forbidden', PASSKEY_WORDS.cantUse, 'bridge_unopenable');
+  }
+  const raise = await recordRaise(userId, held.claims.sessionId, 'password_reset');
+  if (!raise.ok) return raise;
+  const answered = await answerBridge(held.token, userId, bridge.factor_id, secret);
+  if (!answered.ok) return answered;
+  const adopted = await adoptRaisedSession(held, answered.session);
+  if (!adopted.ok) return adopted;
+
+  await emitAuthAudit({
+    event: 'passkey.used',
+    userId,
+    organizationId: null,
+    extra: {
+      passkey_id: verified.row.id,
+      purpose: 'password_reset',
+      backed_up: verified.backedUp,
+      session_id: held.claims.sessionId,
+      raise_id: raise.raiseId,
+    },
+  });
+  return { ok: true };
 }
 
 // ── C. D. Adding a passkey ─────────────────────────────────────────────

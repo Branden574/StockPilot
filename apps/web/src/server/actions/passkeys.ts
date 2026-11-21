@@ -12,6 +12,7 @@ import {
   startAddPasskey,
   startConfirmAdd,
   startFinishSetup,
+  startResetPasskey,
   startSecondStep,
   type PasskeyFailure,
   type SecondStepStart,
@@ -68,6 +69,21 @@ export async function finishSecondStepAction(input: {
     return r.ok ? ok(undefined) : refused(r);
   } catch (e) {
     return unexpected(e, 'finish_second_step');
+  }
+}
+
+/**
+ * The password reset's device prompt (stage 5, purpose password_reset): only
+ * on a session an emailed link opened within the hour. Its answer is read
+ * only inside completePasswordResetAction (server/actions/auth.ts), which then
+ * sets the new password.
+ */
+export async function startPasswordResetPasskeyAction(): Promise<ActionResult<SecondStepStart>> {
+  try {
+    const r = await startResetPasskey();
+    return r.ok ? ok(r.start) : refused(r);
+  } catch (e) {
+    return unexpected(e, 'start_password_reset');
   }
 }
 
