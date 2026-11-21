@@ -279,20 +279,3 @@ describe('/dashboard/orders/manage-items opens the phone management screen', () 
     expect(existsSync(path.join(__dirname, '../../app/order/manage-items.tsx'))).toBe(true);
   });
 });
-
-// Part 3 (sign-in alerts): the in-app notice security.sign_in_reported links
-// to the web's Sign-in alerts page, which the phone does not have. Its tap
-// opens the inbox, whose detail sheet shows the notice in full, instead of
-// dead-ending on home.
-describe('sign-in alerts notice (web-only page)', () => {
-  it('the Sign-in alerts page opens the inbox', () => {
-    expect(rewriteWebPath('/dashboard/settings/security/sign-ins')).toBe('/notifications');
-  });
-  it('a query is dropped the same way', () => {
-    expect(rewriteWebPath('/dashboard/settings/security/sign-ins?page=2')).toBe('/notifications');
-  });
-  it('the Security page itself is not swallowed by the rule', () => {
-    expect(rewriteWebPath('/dashboard/settings/security')).toBe('/');
-    expect(rewriteWebPath('/dashboard/settings/security/sign-ins-old')).toBe('/');
-  });
-});

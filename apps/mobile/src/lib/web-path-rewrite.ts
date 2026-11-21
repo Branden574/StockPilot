@@ -107,11 +107,6 @@ const REWRITES: { re: RegExp; to: (m: RegExpMatchArray) => string }[] = [
   { re: new RegExp(`/dashboard/bundles/${UUID}`), to: (m) => `/bundles/${m[1]}` },
   { re: /\/dashboard\/schedule(\/.*)?$/, to: () => '/schedule' },
   { re: /\/dashboard\/insights$/, to: () => '/notifications' },
-  // Sign-in alerts (part 3 of the security tools): the owners' and admins'
-  // notice security.sign_in_reported links to this web-only page. The phone
-  // has no twin, so the tap opens the inbox, whose detail sheet shows the
-  // notice in full. Query dropped.
-  { re: /\/dashboard\/settings\/security\/sign-ins(\?.*)?$/, to: () => '/notifications' },
   // Real native twins for the pages What's New CTAs (and some notifications)
   // link to — without these they fell through the catch-all to home.
   { re: /\/dashboard\/support(\/.*)?$/, to: () => '/support' },
