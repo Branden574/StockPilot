@@ -25,9 +25,9 @@ import {
  *     an address, a raw log line, a path, a query string, a network owner's
  *     name or the raw client string;
  *   - the lines are read through a loose net (every refused POST whose
- *     decoded path, in small letters with repeated slashes as one, starts
- *     with the token, factors or verify path), so no spelling of those paths
- *     that the gateway might route is left unread;
+ *     decoded path, in small letters, holds `auth` and one of `token`,
+ *     `factors` or `verify`), so no spelling of those paths that the gateway
+ *     might route is left unread;
  *   - the kind is read the way the request is routed and the way the sign-in
  *     service reads it: the path as sent with repeated slashes as one, the
  *     FIRST decoded grant_type; known requests that check no password and no
@@ -1666,18 +1666,79 @@ describe('the SQL is two constants that return classes and counts only', () => {
       expect(groups.kept).toBe(false);
     });
 
+    // The net is wider than the paths that start as the three do: any path
+    // that holds `auth` and one of the three words is read, so a spelling the
+    // gateway might tidy before it routes (a dot segment, another separator,
+    // an encoded letter or slash, a parameter, a byte after the word) is
+    // never unread. None is an exact form, so none can be stored as a wrong
+    // password or code: each is an unknown form (flagged unless answered 404).
+    it.each([
+      ['a dot segment', '/auth/v1/./token', 'token_other'],
+      ['a dot segment earlier', '/auth/./v1/token', 'token_other'],
+      ['a segment taken back', '/auth/v1/x/../token', 'token_other'],
+      ['a segment taken back after the word', '/auth/v1/token/x/..', 'token_other'],
+      ['a segment taken back before the path', '/x/../auth/v1/token', 'token_other'],
+      ['an encoded dot segment', '/auth/v1/%2e/token', 'token_other'],
+      ['an encoded segment taken back', '/auth/v1/x/%2e%2e/token', 'token_other'],
+      ['another separator', '/auth\\v1\\token', 'token_other'],
+      ['another separator, encoded', '/auth%5Cv1%5Ctoken', 'token_other'],
+      ['encoded letters in the version', '/auth/%76%31/token', 'token_other'],
+      ['an encoded first letter', '/%61uth/v1/token', 'token_other'],
+      ['capitals at the start', '/AUTH/v1/token', 'token_other'],
+      ['a capital in the version', '/auth/V1/token', 'token_other'],
+      ['an encoded slash', '/auth/v1%2Ftoken', 'token_other'],
+      ['an encoded slash earlier', '/auth%2Fv1/token', 'token_other'],
+      ['a parameter after the word', '/auth/v1/token;x=1', 'token_other'],
+      ['a parameter earlier', '/auth;x=1/v1/token', 'token_other'],
+      ['an encoded NUL after the word', '/auth/v1/token%00', 'token_other'],
+      ['an encoded space after the word', '/auth/v1/token%20', 'token_other'],
+      ['an encoded tab after the word', '/auth/v1/token%09', 'token_other'],
+      ['a query string inside the path', '/auth/v1/token%3Fgrant_type=password', 'token_other'],
+      ['a byte that is not text before the word', '/auth/v1/%FF/token', 'token_other'],
+      ['another version', '/auth/v2/token', 'token_other'],
+      ['no version', '/auth/token', 'token_other'],
+      ['a segment before the path', '/x/auth/v1/token', 'token_other'],
+      ['a longer path that ends as the token path does', '/auth/v1/oauth/token', 'token_other'],
+      ['a dot segment on the code path', `/auth/v1/./factors/${UUID}/verify`, 'verify_other'],
+      ['another separator on the code path', `/auth\\v1\\factors\\${UUID}\\verify`, 'verify_other'],
+      ['a parameter on the code path', `/auth/v1/factors;x=1/${UUID}/verify`, 'verify_other'],
+      ['a dot segment on the emailed code path', '/auth/v1/./verify', 'emailed_code_other'],
+      ['an encoded slash on the emailed code path', '/auth%2Fv1%2Fverify', 'emailed_code_other'],
+    ])('%s (%s) is inside the net, as an unknown form (%s)', (_what, p, kind) => {
+      const { groups, totals } = bothOn(gatewayLine({ path: p }));
+      expect(totals.kept).toBe(true);
+      expect(totals.values.kind).toBe(kind);
+      // Never listed as a wrong password or code.
+      expect(groups.kept).toBe(false);
+    });
+
+    it('a leading doubled slash and several doubled slashes are still the plain path (only repeated slashes)', () => {
+      for (const p of ['//auth/v1/token', '/auth//v1//token']) {
+        expect(kindOf(gatewayLine({ path: p })), p).toBe('password');
+        expect(formOfPath(p), p).toBe('ambiguous');
+      }
+    });
+
+    it('every path that starts as the token, factors or verify path does is inside the net', () => {
+      for (const start of ['/auth/v1/token', '/auth/v1/factors', '/auth/v1/verify']) {
+        for (const rest of ['', '/', 'x', '/more', '%00', ';a=b', '/../x']) {
+          expect(kindOf(gatewayLine({ path: `${start}${rest}` })), `${start}${rest}`).not.toBeNull();
+        }
+      }
+    });
+
     it.each([
       ['/auth/v1/user'],
       ['/auth/v1/otp'],
       ['/auth/v1/recover'],
       ['/auth/v1/logout'],
-      ['/auth/v2/token'],
-      ['/auth/token'],
-      ['/x/auth/v1/token'],
+      ['/auth/v1/signup'],
       [`/rest/v1/factors/${UUID}/verify`],
       ['/rest/v1/token'],
+      ['/token'],
+      ['/auth'],
       [''],
-    ])('%j is outside the net: not read', (p) => {
+    ])('%j holds no sign-in path: not read', (p) => {
       expect(kindOf(gatewayLine({ path: p }))).toBeNull();
     });
 
@@ -1685,15 +1746,18 @@ describe('the SQL is two constants that return classes and counts only', () => {
       expect(kindOf(gatewayLine({ path: null }))).toBeNull();
     });
 
-    it('the net is the decoded path in small letters with repeated slashes as one, by its start', () => {
+    it('the net is the decoded path in small letters, holding `auth` and one of the three words', () => {
+      const decoded = "lower(decodeURLComponent(log_attributes['request.path']))";
       for (const [name, sql] of BOTH) {
         const where = JSON.stringify(parseReaderQuery(sql).levels[2]!.where);
-        for (const family of ['/auth/v1/token', '/auth/v1/factors', '/auth/v1/verify']) {
-          expect(where, `${name} ${family}`).toContain(JSON.stringify({ k: 'str', v: family }));
+        for (const word of ['auth', 'token', 'factors', 'verify']) {
+          expect(where, `${name} ${word}`).toContain(JSON.stringify({ k: 'str', v: word }));
+          expect(sql, `${name} ${word}`).toContain(`position(${decoded}, '${word}') > 0`);
         }
-        expect(sql, name).toContain(
-          "replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/') AS net_path",
-        );
+        // A search for the bytes of a word: no pattern, so no byte of the
+        // path (one that is not text, a line break, a NUL) can end it early.
+        expect(sql.match(/position\(lower\(decodeURLComponent\(/g), name).toHaveLength(4);
+        expect(sql, name).toContain(`${decoded} AS net_path`);
         // The exact forms are compared with the path as sent, repeated slashes as one, case kept.
         expect(sql, name).toContain(
           "replaceRegexpAll(log_attributes['request.path'], '/+', '/') AS routed_path",

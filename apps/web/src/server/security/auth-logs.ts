@@ -30,11 +30,15 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * checked before use (parseGroupRow, parseTotalsRow); a row that fails is
  * dropped and counted in the run's log line.
  *
- * WHICH LINES ARE READ: A LOOSE NET. Every refused POST whose path, decoded,
- * in small letters and with repeated slashes as one, STARTS with
- * `/auth/v1/token`, `/auth/v1/factors` or `/auth/v1/verify`. The net is wide
- * on purpose: whatever spelling of those paths the gateway might route, the
- * line is read, and what is not an exact form below is an unknown form.
+ * WHICH LINES ARE READ: A LOOSE NET. Every refused POST whose path, decoded
+ * and in small letters, HOLDS `auth` and one of `token`, `factors` or
+ * `verify`, wherever they stand. That takes in every path that starts as
+ * `/auth/v1/token`, `/auth/v1/factors` or `/auth/v1/verify` does, and every
+ * other spelling of them: dot segments, another separator, an encoded letter
+ * or slash, a parameter, a byte after the word. The net is wide on purpose,
+ * and it is a search for the words' bytes, not a pattern, so no byte of a
+ * path can end it early: whatever spelling the gateway might route, the line
+ * is read, and what is not an exact form below is an unknown form.
  *
  * THE KIND is read the way the request is routed and the way the sign-in
  * service reads it. The exact forms are compared with the path AS SENT, its
@@ -58,8 +62,9 @@ import { createAdminClient } from '@/lib/supabase/admin';
  *   - `/auth/v1/verify`: `emailed_code`, a check of an emailed code or link.
  *     It is COUNTED in the log line (by status and caller class), NOT STORED,
  *     until its refused statuses are measured.
- *   - anything else in the net is an unknown form: `token_other`,
- *     `verify_other` (under the factors path) or `emailed_code_other`.
+ *   - anything else in the net is an unknown form: `verify_other` (the
+ *     path holds `factors`), `emailed_code_other` (it holds `verify`) or
+ *     `token_other`.
  *
  * WHAT IS STORED (classifyAuthLogLine, buildHourElements):
  *   - a password sign-in answered 400: password_guessing / wrong_password;
@@ -299,9 +304,9 @@ type AuthLogsNetwork = 'hosting' | 'other';
  * Read from Supabase's single `logs` table (ClickHouse), gateway lines only
  * (source edge_logs), where every field is a string in log_attributes. Only
  * POSTs answered 400 to 499 inside the loose net (net_path: the decoded
- * path in small letters, repeated slashes as one, starting with one of the
- * three paths). routed_path is the path as sent with repeated slashes as
- * one, case kept: the exact forms are compared with it.
+ * path in small letters, holding `auth` and one of the three words).
+ * routed_path is the path as sent with repeated slashes as one, case kept:
+ * the exact forms are compared with it.
  *
  * THE FORM IS NESTED SELECTS, the one the logs service's own SQL parser
  * accepts (it refuses a `WITH <expression> AS <name>` list): the innermost
@@ -332,9 +337,9 @@ FROM (
       match(routed_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/verify$'), 'verify',
       routed_path = '/auth/v1/factors', 'factors_known_other',
       match(routed_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/challenge$'), 'factors_known_other',
-      startsWith(net_path, '/auth/v1/factors'), 'verify_other',
+      position(net_path, 'factors') > 0, 'verify_other',
       routed_path = '/auth/v1/verify', 'emailed_code',
-      startsWith(net_path, '/auth/v1/verify'), 'emailed_code_other',
+      position(net_path, 'verify') > 0, 'emailed_code_other',
       routed_path != '/auth/v1/token', 'token_other',
       match(raw_search, '%([^0-9A-Fa-f]|[0-9A-Fa-f][^0-9A-Fa-f]|[0-9A-Fa-f]?$|26|3[Dd]|[01][0-9A-Fa-f]|7[Ff])'), 'token_other',
       first_grant = 'password', 'password',
@@ -358,7 +363,7 @@ FROM (
     SELECT
       toString(toStartOfMinute(timestamp)) AS minute,
       replaceRegexpAll(log_attributes['request.path'], '/+', '/') AS routed_path,
-      replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/') AS net_path,
+      lower(decodeURLComponent(log_attributes['request.path'])) AS net_path,
       log_attributes['request.search'] AS raw_search,
       extract(decodeURLComponent(log_attributes['request.search']), '(?:^[?]?|&)grant_type=([^&]*)(?:&|$)') AS first_grant,
       log_attributes['request.headers.x_client_info'] AS client,
@@ -369,9 +374,10 @@ FROM (
     WHERE source = 'edge_logs'
       AND log_attributes['request.method'] = 'POST'
       AND match(log_attributes['response.status_code'], '^4[0-9][0-9]$')
-      AND (startsWith(replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/'), '/auth/v1/token')
-           OR startsWith(replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/'), '/auth/v1/factors')
-           OR startsWith(replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/'), '/auth/v1/verify'))
+      AND position(lower(decodeURLComponent(log_attributes['request.path'])), 'auth') > 0
+      AND (position(lower(decodeURLComponent(log_attributes['request.path'])), 'token') > 0
+           OR position(lower(decodeURLComponent(log_attributes['request.path'])), 'factors') > 0
+           OR position(lower(decodeURLComponent(log_attributes['request.path'])), 'verify') > 0)
   )
 )
 WHERE kind IN ('password', 'verify') AND (caller != 'server' OR network != 'hosting')
@@ -396,9 +402,9 @@ FROM (
       match(routed_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/verify$'), 'verify',
       routed_path = '/auth/v1/factors', 'factors_known_other',
       match(routed_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/challenge$'), 'factors_known_other',
-      startsWith(net_path, '/auth/v1/factors'), 'verify_other',
+      position(net_path, 'factors') > 0, 'verify_other',
       routed_path = '/auth/v1/verify', 'emailed_code',
-      startsWith(net_path, '/auth/v1/verify'), 'emailed_code_other',
+      position(net_path, 'verify') > 0, 'emailed_code_other',
       routed_path != '/auth/v1/token', 'token_other',
       match(raw_search, '%([^0-9A-Fa-f]|[0-9A-Fa-f][^0-9A-Fa-f]|[0-9A-Fa-f]?$|26|3[Dd]|[01][0-9A-Fa-f]|7[Ff])'), 'token_other',
       first_grant = 'password', 'password',
@@ -423,7 +429,7 @@ FROM (
       timestamp AS ts,
       log_attributes['request.path'] AS raw_path,
       replaceRegexpAll(log_attributes['request.path'], '/+', '/') AS routed_path,
-      replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/') AS net_path,
+      lower(decodeURLComponent(log_attributes['request.path'])) AS net_path,
       log_attributes['request.search'] AS raw_search,
       decodeURLComponent(log_attributes['request.search']) AS decoded_search,
       extract(decodeURLComponent(log_attributes['request.search']), '(?:^[?]?|&)grant_type=([^&]*)(?:&|$)') AS first_grant,
@@ -434,9 +440,10 @@ FROM (
     WHERE source = 'edge_logs'
       AND log_attributes['request.method'] = 'POST'
       AND match(log_attributes['response.status_code'], '^4[0-9][0-9]$')
-      AND (startsWith(replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/'), '/auth/v1/token')
-           OR startsWith(replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/'), '/auth/v1/factors')
-           OR startsWith(replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/'), '/auth/v1/verify'))
+      AND position(lower(decodeURLComponent(log_attributes['request.path'])), 'auth') > 0
+      AND (position(lower(decodeURLComponent(log_attributes['request.path'])), 'token') > 0
+           OR position(lower(decodeURLComponent(log_attributes['request.path'])), 'factors') > 0
+           OR position(lower(decodeURLComponent(log_attributes['request.path'])), 'verify') > 0)
   )
 )
 GROUP BY kind, form, status, caller, network
