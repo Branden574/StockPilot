@@ -1246,7 +1246,11 @@ describe("one hour's elements for the writer", () => {
         expect(hourEdgeCarry({ firstMinute: none, recorded: none, gateway: none })).toEqual(none);
       });
 
-      const withCarry = (password: number, code: number, carry: { password: number; code: number }) =>
+      const withCarry = (
+        password: number,
+        code: number,
+        carry: { password: number; code: number },
+      ) =>
         buildHourElements({
           hour,
           groups: [],
@@ -1669,7 +1673,13 @@ describe('the SQL is two constants that return classes and counts only', () => {
     expect(totals.groupBy).toEqual(['kind', 'status', 'caller', 'network']);
     expect(answersOf(AUTH_LOGS_TOTALS_SQL, 'kind')).toEqual([...ALL_KINDS].sort());
     // The statuses the job acts on, and one class for every other refused status.
-    expect(answersOf(AUTH_LOGS_TOTALS_SQL, 'status')).toEqual(['400', '404', '422', '429', 'other']);
+    expect(answersOf(AUTH_LOGS_TOTALS_SQL, 'status')).toEqual([
+      '400',
+      '404',
+      '422',
+      '429',
+      'other',
+    ]);
     // The callers the job tells apart, and one class for every other client string.
     expect(answersOf(AUTH_LOGS_TOTALS_SQL, 'caller')).toEqual(['other', 'phone', 'server']);
     expect(answersOf(AUTH_LOGS_TOTALS_SQL, 'network')).toEqual(['hosting', 'other']);
@@ -1687,12 +1697,19 @@ describe('the SQL is two constants that return classes and counts only', () => {
     // A hosting network is answered for our server's client string alone,
     // so a caller class and a network class make four pairs, not six.
     const pairs = new Set<string>();
-    for (const client of [SERVER_SSR, SERVER_NODE, 'supabase-js-react-native/2.50.0', 'curl/8.4.0', ''])
+    for (const client of [
+      SERVER_SSR,
+      SERVER_NODE,
+      'supabase-js-react-native/2.50.0',
+      'curl/8.4.0',
+      '',
+    ])
       for (const owner of ['Amazon Example Hosting', 'Example Telecom', '']) {
-        const { values } = runReaderQueryOnLine(AUTH_LOGS_TOTALS_SQL, gatewayLine({ client, owner }), [
-          'caller',
-          'network',
-        ]);
+        const { values } = runReaderQueryOnLine(
+          AUTH_LOGS_TOTALS_SQL,
+          gatewayLine({ client, owner }),
+          ['caller', 'network'],
+        );
         pairs.add(`${String(values.caller)} ${String(values.network)}`);
       }
     expect([...pairs].sort()).toEqual([
@@ -1941,7 +1958,10 @@ describe('the SQL is two constants that return classes and counts only', () => {
     // say: never a refresh, never another known grant, never a password.
     it.each([
       ['in the first grant, before a password grant', '?grant_type=x;y&grant_type=password'],
-      ['in a refresh grant, before a password grant', '?grant_type=refresh_token;&grant_type=password'],
+      [
+        'in a refresh grant, before a password grant',
+        '?grant_type=refresh_token;&grant_type=password',
+      ],
       ['in another pair, after a refresh grant', '?grant_type=refresh_token&scope=a;b'],
       ['in another pair, before a refresh grant', '?scope=a;b&grant_type=refresh_token'],
       ['in another pair, after a known grant', '?grant_type=pkce&scope=a;b'],
@@ -2142,7 +2162,10 @@ describe('the SQL is two constants that return classes and counts only', () => {
     it('every path that starts as the token, factors or verify path does is inside the net', () => {
       for (const start of ['/auth/v1/token', '/auth/v1/factors', '/auth/v1/verify']) {
         for (const rest of ['', '/', 'x', '/more', '%00', ';a=b', '/../x']) {
-          expect(kindOf(gatewayLine({ path: `${start}${rest}` })), `${start}${rest}`).not.toBeNull();
+          expect(
+            kindOf(gatewayLine({ path: `${start}${rest}` })),
+            `${start}${rest}`,
+          ).not.toBeNull();
         }
       }
     });
@@ -2306,9 +2329,9 @@ describe('the SQL is two constants that return classes and counts only', () => {
     });
 
     it('a line with no owner name is other', () => {
-      expect(
-        bothOn(gatewayLine({ client: SERVER_SSR, owner: null })).totals.values.network,
-      ).toBe('other');
+      expect(bothOn(gatewayLine({ client: SERVER_SSR, owner: null })).totals.values.network).toBe(
+        'other',
+      );
     });
 
     it.each([
@@ -2780,7 +2803,11 @@ describe('a run: six hours, oldest first, each written once', () => {
     });
 
     it('several grant_type values: classed by the first, counted as ambiguous in the log line', async () => {
-      hourAnswers(H(5), [groupRow({ n: 2 }, H(5))], [totalsRow({ n: 2, forms: 'ambiguous' }, H(5))]);
+      hourAnswers(
+        H(5),
+        [groupRow({ n: 2 }, H(5))],
+        [totalsRow({ n: 2, forms: 'ambiguous' }, H(5))],
+      );
       const summary = full(await run());
       expect(written()).toEqual([expect.objectContaining({ reason: 'wrong_password', count: 2 })]);
       expect(summary.ambiguousFormGroups).toBe(1);
@@ -3156,7 +3183,7 @@ describe('a run: six hours, oldest first, each written once', () => {
         expect(summary.hours[1]!.reconcile?.carried).toBeUndefined();
       });
 
-      it("the newest hour waits one run when it would be flagged: the hour after it is not complete yet", async () => {
+      it('the newest hour waits one run when it would be flagged: the hour after it is not complete yet', async () => {
         // 09:00 to 10:00 is the newest complete hour at 10:10. Its edge
         // refusals are recorded in hour 10, which is still running.
         hourAnswers(
@@ -3178,7 +3205,9 @@ describe('a run: six hours, oldest first, each written once', () => {
         // An hour later the hour after it is complete: the three are carried,
         // and the hour's ordinary counts are stored, once.
         const next = full(await run({ nowMs: NOW + HOUR }));
-        expect(written()).toEqual([expect.objectContaining({ reason: 'wrong_password', count: 2 })]);
+        expect(written()).toEqual([
+          expect.objectContaining({ reason: 'wrong_password', count: 2 }),
+        ]);
         expect(next).toMatchObject({ hoursWaiting: 0, hoursStored: 1 });
         expect(next.hours[4]).toMatchObject({
           hour: '2026-11-21T09:00Z',
@@ -3209,7 +3238,7 @@ describe('a run: six hours, oldest first, each written once', () => {
         expect(summary.hours[5]!.outcome).toBe('stored');
       });
 
-      it("a read for the carry that fails leaves the hour for the next run: no flag is stored on a guess", async () => {
+      it('a read for the carry that fails leaves the hour for the next run: no flag is stored on a guess', async () => {
         serverHour(H(5), 3);
         answers.set(`totals@${iso(H(6))}`, status(503));
         const summary = full(await run());
