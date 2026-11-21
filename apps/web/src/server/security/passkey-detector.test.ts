@@ -4,14 +4,16 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * Plan 10.4 as decided on 2026-11-21: the hourly check of sessions raised
- * through a passkey bridge. A raise is explained only by its own
- * passkey.bridge_raise row (the ceremony writes it before answering and
- * refuses without it, passkeys.test.ts "10.4"). An unexplained raise gets an
- * error report and a security event and nothing else; doubt of any kind acts
- * on nothing; the caps hold. The session list is given in the shape 0475's
- * passkey_bridge_sessions returns (with the proposed raised_at where a case
- * needs it); the audit rows are filtered by a fake of the query builder.
+ * Plan 10.4 as decided on 2026-11-21 (and decision C): the hourly check of
+ * sessions raised through a passkey bridge. A raise is explained only by its
+ * own passkey.bridge_raise row near its raised_at (the ceremony writes it
+ * before answering and refuses without it, passkeys.test.ts "10.4"). An
+ * unexplained raise gets an error report, the end of THAT ONE session
+ * (0475's passkey_end_bridge_session), the devices told, a security event,
+ * and at most one email a day; never a factor deleted or a passkey removed.
+ * Doubt of any kind acts on nothing; the caps hold. The session list is given
+ * in the shape 0475's passkey_bridge_sessions returns; the audit rows are
+ * filtered by a fake of the query builder.
  */
 
 interface Row {
@@ -36,6 +38,19 @@ const h = vi.hoisted(() => ({
   reports: [] as Array<{ tag: string; level?: string; extra?: Record<string, unknown> }>,
   events: [] as Array<{ reason: string; outcome: string; category: string }>,
   onEvent: null as null | (() => void),
+  /** passkey_end_bridge_session's answer, and the ids it was asked to end. */
+  endAnswer: { data: true, error: null } as { data: unknown; error: unknown },
+  endAsked: [] as unknown[],
+  broadcasts: [] as Array<{ userId: string; listed: unknown; stays: string }>,
+  /** The pace of the email: keys asked, and the keys already used today. */
+  paceKeys: [] as string[],
+  paced: new Set<string>(),
+  limiterDown: false,
+  address: { data: { user: { email: 'member@example.test' } }, error: null } as {
+    data: unknown;
+    error: unknown;
+  },
+  emails: [] as string[],
 }));
 
 vi.mock('@/lib/auth/passkey-relying-party', () => ({ passkeyRelyingParty: () => h.rp }));
@@ -56,10 +71,34 @@ vi.mock('./events', () => ({
     h.onEvent?.();
   },
 }));
+vi.mock('@/server/services/sessions', () => ({
+  broadcastEndedSessions: async (userId: string, listed: unknown, stays: string) => {
+    h.broadcasts.push({ userId, listed, stays });
+  },
+}));
+vi.mock('@/lib/rate-limit', () => ({
+  checkRateLimit: async (key: string, limit: number, windowMs: number, mode: string) => {
+    h.paceKeys.push(key);
+    expect([limit, windowMs, mode]).toEqual([1, 24 * 60 * 60_000, 'closed']);
+    if (h.limiterDown || h.paced.has(key)) return { allowed: false };
+    h.paced.add(key);
+    return { allowed: true };
+  },
+}));
+vi.mock('./passkey-emails', () => ({
+  sendPasskeySignInEndedEmail: (to: string) => {
+    h.emails.push(to);
+  },
+}));
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => ({
-    rpc: async (name: string) => {
+    auth: { admin: { getUserById: async () => h.address } },
+    rpc: async (name: string, args: Record<string, unknown>) => {
       h.rpcNames.push(name);
+      if (name === 'passkey_end_bridge_session') {
+        h.endAsked.push(args.p_session_id);
+        return h.endAnswer;
+      }
       expect(name).toBe('passkey_bridge_sessions');
       return h.sessions;
     },
@@ -141,6 +180,14 @@ beforeEach(() => {
   h.reports = [];
   h.events = [];
   h.onEvent = null;
+  h.endAnswer = { data: true, error: null };
+  h.endAsked = [];
+  h.broadcasts = [];
+  h.paceKeys = [];
+  h.paced = new Set();
+  h.limiterDown = false;
+  h.address = { data: { user: { email: 'member@example.test' } }, error: null };
+  h.emails = [];
   vi.spyOn(console, 'info').mockImplementation(() => {});
 });
 afterEach(() => {
@@ -162,7 +209,18 @@ describe('a raise is explained by its own row', () => {
     h.audit = [raiseRow(ago(50 * MIN))];
     const s = await runPasskeyDetector();
     expect(s).toMatchObject({ explained: 0, unexplained: 1 });
-    expect(flagged()[0]?.extra).toMatchObject({ boundBy: 'raiseTime' });
+    expect(flagged()[0]?.extra).toMatchObject({ ending: 'ended' });
+  });
+
+  it('the bound is the raise: a row 2 minutes before it explains; a row 6 seconds after it, or 2 minutes and 1 second before, does not', async () => {
+    h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
+    h.audit = [raiseRow(ago(22 * MIN - 50))];
+    expect(await runPasskeyDetector()).toMatchObject({ explained: 1, unexplained: 0 });
+    for (const at of [ago(20 * MIN - 6_000), ago(22 * MIN + 1_000)]) {
+      h.reports = [];
+      h.audit = [raiseRow(at), row('passkey.used', ago(90 * MIN))];
+      expect(await runPasskeyDetector()).toMatchObject({ explained: 0, unexplained: 1 });
+    }
   });
 
   it('another kind of row, or the raise row of another session, explains nothing', async () => {
@@ -174,27 +232,38 @@ describe('a raise is explained by its own row', () => {
     expect((await runPasskeyDetector()).unexplained).toBe(1);
   });
 
-  it('without raised_at (0475 today) the session life bounds it: a raise row in it explains; one from before it does not', async () => {
+  it('a session without a raise time is not settled: nothing is done', async () => {
     h.sessions = { data: [session()], error: null };
-    h.audit = [raiseRow(ago(40 * MIN))];
-    expect(await runPasskeyDetector()).toMatchObject({ explained: 1, unexplained: 0 });
-
-    h.reports = [];
-    h.audit = [raiseRow(ago(65 * MIN)), row('passkey.used', ago(30 * MIN))];
+    h.audit = [row('passkey.used', ago(90 * MIN))];
     const s = await runPasskeyDetector();
-    expect(s.unexplained).toBe(1);
-    expect(flagged()[0]?.extra).toMatchObject({ boundBy: 'sessionLife' });
+    expect(s).toMatchObject({ examined: 0, unexplained: 0, notSettled: { times: 1 } });
+    expect(h.endAsked).toEqual([]);
+    expect(h.events).toEqual([]);
   });
 });
 
-describe('a raise with no row: a report and a security event, nothing else', () => {
-  it('an error report with the account as a hash, and one flagged security event', async () => {
-    h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
-    h.audit = [row('passkey.used', ago(90 * MIN))];
+describe('a raise with no row: that one session ended, a report, a security event, one email', () => {
+  it('ends THAT session (and no other), tells the devices, reports with a hash, records a flagged event, emails once', async () => {
+    h.sessions = {
+      data: [
+        session({ raised_at: ago(20 * MIN) }),
+        { ...session({ raised_at: ago(25 * MIN) }), session_id: 'explained-1' },
+      ],
+      error: null,
+    };
+    h.audit = [row('passkey.used', ago(90 * MIN)), raiseRow(ago(25 * MIN + 1000), 'explained-1')];
     const s = await runPasskeyDetector();
-    expect(s.unexplained).toBe(1);
+    expect(s).toMatchObject({
+      unexplained: 1,
+      explained: 1,
+      ending: { ended: 1, alreadyGone: 0, refused: 0, failed: 0 },
+      emailed: 1,
+    });
+    expect(h.endAsked).toEqual([S]);
+    expect(h.broadcasts).toEqual([{ userId: U, listed: [S], stays: '' }]);
     expect(flagged()).toHaveLength(1);
     expect(flagged()[0]!.level).toBe('error');
+    expect(flagged()[0]!.extra).toMatchObject({ ending: 'ended', recorded: true });
     expect(flagged()[0]!.extra!.userIdHash).toMatch(/^[0-9a-f]{16}$/);
     expect(JSON.stringify(h.reports)).not.toContain(U);
     expect(h.events).toEqual([
@@ -204,13 +273,64 @@ describe('a raise with no row: a report and a security event, nothing else', () 
         category: 'password_guessing',
       }),
     ]);
-    // Only the switch, the session list and the audit rows were read; no other call was made.
-    expect(h.rpcNames).toEqual(['passkey_bridge_sessions']);
+    expect(h.paceKeys).toEqual([`passkey-detector-email:${U}`]);
+    expect(h.emails).toEqual(['member@example.test']);
+    // The switch, the list, the audit rows, and the one end: nothing else.
+    expect(h.rpcNames).toEqual(['passkey_bridge_sessions', 'passkey_end_bridge_session']);
     expect([...new Set(h.tables)].sort()).toEqual(['audit_logs', 'platform_settings']);
     expect(tags()).not.toContain('passkeys.detector_failed');
   });
 
-  it('the module cannot delete a factor, remove a passkey or end a session: it names none of them', () => {
+  it('one email a day: a second run the same day ends the new raise but sends no second email', async () => {
+    h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
+    h.audit = [row('passkey.used', ago(90 * MIN))];
+    await runPasskeyDetector();
+    const again = await runPasskeyDetector();
+    expect(again).toMatchObject({ ending: { ended: 1 }, emailed: 0 });
+    expect(h.endAsked).toEqual([S, S]);
+    expect(h.emails).toEqual(['member@example.test']);
+  });
+
+  it('a pace that cannot be counted sends no email (closed); an account with no address is reported', async () => {
+    h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
+    h.audit = [row('passkey.used', ago(90 * MIN))];
+    h.limiterDown = true;
+    expect(await runPasskeyDetector()).toMatchObject({ ending: { ended: 1 }, emailed: 0 });
+    expect(h.emails).toEqual([]);
+
+    h.limiterDown = false;
+    h.address = { data: { user: null }, error: { status: 404 } };
+    expect(await runPasskeyDetector()).toMatchObject({ emailed: 0 });
+    expect(h.emails).toEqual([]);
+    expect(tags()).toContain('passkeys.detector_email_no_address');
+  });
+
+  it('the database refuses (not raised by a recorded bridge now): reported, the event recorded, nobody told, no email', async () => {
+    h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
+    h.audit = [row('passkey.used', ago(90 * MIN))];
+    h.endAnswer = { data: null, error: { code: '22023', message: 'passkey_session_not_bridge_raised' } };
+    const s = await runPasskeyDetector();
+    expect(s).toMatchObject({ unexplained: 1, ending: { ended: 0, refused: 1 }, emailed: 0 });
+    expect(flagged()[0]!.extra).toMatchObject({ ending: 'refused' });
+    expect(h.events).toHaveLength(1);
+    expect(h.broadcasts).toEqual([]);
+    expect(h.emails).toEqual([]);
+  });
+
+  it('a session already gone, or an end that failed: no broadcast, no email; the failure is in the report', async () => {
+    h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
+    h.audit = [row('passkey.used', ago(90 * MIN))];
+    h.endAnswer = { data: false, error: null };
+    expect(await runPasskeyDetector()).toMatchObject({ ending: { alreadyGone: 1 }, emailed: 0 });
+    h.reports = [];
+    h.endAnswer = { data: null, error: { code: '55P03' } };
+    expect(await runPasskeyDetector()).toMatchObject({ ending: { failed: 1 }, emailed: 0 });
+    expect(flagged()[0]!.extra).toMatchObject({ ending: 'failed' });
+    expect(h.broadcasts).toEqual([]);
+    expect(h.emails).toEqual([]);
+  });
+
+  it('the module cannot delete a factor or remove a passkey, and ends sessions only through the one function', () => {
     const source = readFileSync(path.join(__dirname, 'passkey-detector.ts'), 'utf8');
     const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
     for (const forbidden of [
@@ -221,21 +341,32 @@ describe('a raise with no row: a report and a security event, nothing else', () 
       /revoke|signOut|sign_out|logout/i,
       /\.(delete|update|insert|upsert)\(/,
       /\/factors/,
+      /auth\.sessions|admin_revoke/,
     ]) {
       expect(code, String(forbidden)).not.toMatch(forbidden);
     }
     const imports = [...code.matchAll(/from '([^']+)'/g)].map((m) => m[1]).sort();
     expect(imports).toEqual([
       './events',
+      './passkey-emails',
       './passkey-state',
       '@/lib/auth/passkey-bridge',
       '@/lib/auth/passkey-relying-party',
       '@/lib/error-reporter',
+      '@/lib/rate-limit',
       '@/lib/supabase/admin',
       '@/server/services/auth-audit',
+      '@/server/services/sessions',
     ]);
     const rpcs = [...code.matchAll(/\.rpc\('([^']+)'/g)].map((m) => m[1]);
-    expect(rpcs).toEqual(['passkey_bridge_sessions']);
+    expect(rpcs).toEqual(['passkey_end_bridge_session', 'passkey_bridge_sessions']);
+    // The one email it can send, and the one Auth admin call (the address).
+    expect([...code.matchAll(/send[A-Za-z]*Email\(/g)].map((m) => m[0])).toEqual([
+      'sendPasskeySignInEndedEmail(',
+    ]);
+    expect([...code.matchAll(/auth\.admin\.([A-Za-z]+)/g)].map((m) => m[1])).toEqual([
+      'getUserById',
+    ]);
   });
 });
 
@@ -346,10 +477,12 @@ describe('the bounds hold', () => {
     return out;
   }
 
-  it(`at most ${MAX_FINDINGS} sessions flagged a run; then it stops and one error report says so`, async () => {
+  it(`at most ${MAX_FINDINGS} sessions flagged, and so ended, a run; then it stops and one error report says so`, async () => {
     h.sessions = { data: unexplainedSessions(MAX_FINDINGS + 2), error: null };
     const s = await runPasskeyDetector();
     expect(s.unexplained).toBe(MAX_FINDINGS);
+    expect(s.ending.ended).toBe(MAX_FINDINGS);
+    expect(h.endAsked).toHaveLength(MAX_FINDINGS);
     expect(h.events).toHaveLength(MAX_FINDINGS);
     expect(s.stop).toBe('finding_cap');
     const stop = h.reports.find((r) => r.tag === 'passkeys.detector_stopped');

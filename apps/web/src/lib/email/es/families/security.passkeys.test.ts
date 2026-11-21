@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { renderPasskeyAddedEmail, renderPasskeyRemovedEmail } from './security';
+import {
+  renderPasskeyAddedEmail,
+  renderPasskeyRemovedEmail,
+  renderPasskeySignInEndedEmail,
+} from './security';
 
 /**
  * The two passkey emails of stage 4 (plan 2.8, section 4): the subject, the
@@ -18,6 +22,12 @@ const added = renderPasskeyAddedEmail({
 const removed = renderPasskeyRemovedEmail({
   email: 'member@example.test',
   removedAt: 'Nov 21, 2026, 9:41 AM UTC',
+  appUrl: 'https://app.example.test',
+});
+
+const ended = renderPasskeySignInEndedEmail({
+  email: 'member@example.test',
+  endedAt: 'Nov 21, 2026, 9:41 AM UTC',
   appUrl: 'https://app.example.test',
 });
 
@@ -55,6 +65,36 @@ describe('passkey emails', () => {
       for (const href of hrefs(html)) {
         expect(href, href).not.toMatch(/signin|sign-in|token=|code=|verify|magic|reset/i);
       }
+    }
+  });
+});
+
+describe('the sign-in ended email (decision C: the hourly check ended a sign-in)', () => {
+  it('says a sign-in was ended and to reset the password, from the security sender', () => {
+    expect(ended.subject).toBe('We ended a sign-in to your StockPilot account');
+    expect(ended.from).toBe('StockPilot Security <security@stockpilotusa.com>');
+    expect(ended.text).toContain('on Nov 21, 2026, 9:41 AM UTC we ended a sign-in to your StockPilot account');
+    expect(ended.text).toContain('Reset your password now: https://app.example.test/reset');
+    expect(ended.html).toContain('Reset your password');
+  });
+
+  it('its one action is the password reset page: no link signs in, none carries a token or code', () => {
+    const links = hrefs(ended.html).filter((h) => h.startsWith('https://app.example.test'));
+    expect(links).toContain('https://app.example.test/reset');
+    for (const href of hrefs(ended.html)) {
+      expect(href, href).not.toMatch(/signin|sign-in|token=|code=|verify|magic/i);
+    }
+  });
+
+  it('names no device, no place and no passkey: it takes none', () => {
+    const withMore = renderPasskeySignInEndedEmail({
+      email: 'member@example.test',
+      endedAt: 'now',
+      ...({ device: 'Sample device', name: 'Front desk key' } as object),
+    });
+    for (const out of [withMore.html, withMore.text]) {
+      expect(out).not.toContain('Sample device');
+      expect(out).not.toContain('Front desk key');
     }
   });
 });

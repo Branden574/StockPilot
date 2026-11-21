@@ -142,6 +142,9 @@ export const LIMITER_NOT_SECURITY_EVENTS: Readonly<Record<string, string>> = {
   'new-device-event:org:': ALERT_PACING,
   'new-device-event-held:org:': ALERT_PACING,
   'export-alert:': ALERT_PACING,
+  // The hourly passkey check's email of a sign-in it ended (one a day per
+  // account; server/security/passkey-detector.ts).
+  'passkey-detector-email:': ALERT_PACING,
   // Reports about the passkey records (lib/auth/passkey-bridge.ts): a
   // reserved-name factor that is not the account's bridge, and the records
   // missing while such a factor is listed: the missing table once an hour

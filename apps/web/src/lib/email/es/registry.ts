@@ -365,6 +365,30 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
     motionAsset: null,
     footer: 'ess',
   }),
+  // A sign-in ended by the hourly passkey check (integrator decision C,
+  // 2026-11-21): its second step was answered by a code our server did not
+  // send. At most one a day per account (server/security/passkey-detector.ts).
+  d({
+    id: 'passkey-sign-in-ended',
+    family: 'security',
+    name: 'Sign-in Ended',
+    status: 'live',
+    category: 'ess',
+    tag: 'Security',
+    trigger:
+      'The hourly passkey check ended a sign-in whose second step did not come from the member\'s passkey (at most one a day)',
+    to: 'Account holder (current address)',
+    from: 'StockPilot Security <security@stockpilotusa.com>',
+    replyTo: 'Not monitored — support link inside',
+    subject: () => 'We ended a sign-in to your StockPilot account',
+    preheader: () =>
+      'We could not confirm a sign-in to your account was you, so we ended it. Reset your password now.',
+    badge: { variant: 'sec', label: () => 'Sign-in ended' },
+    cta: 'Reset your password',
+    motionNote: 'None',
+    motionAsset: null,
+    footer: 'ess',
+  }),
 
   // ── Invitations ───────────────────────────────────────────────────
   d({

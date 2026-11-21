@@ -3,10 +3,13 @@ import 'server-only';
 import { accountIdHash } from '@/lib/auth/passkey-bridge';
 import { passkeyRelyingParty } from '@/lib/auth/passkey-relying-party';
 import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { resolveDefaultOrgAndRole } from '@/server/services/auth-audit';
+import { broadcastEndedSessions } from '@/server/services/sessions';
 
 import { recordSecurityEvent } from './events';
+import { sendPasskeySignInEndedEmail } from './passkey-emails';
 import { PASSKEY_RAISE_EVENT, timeNanos } from './passkey-state';
 
 /**
@@ -19,40 +22,40 @@ import { PASSKEY_RAISE_EVENT, timeNanos } from './passkey-state';
  * is held by a reserved-name factor, with no raise row of that session near
  * the time of its raise, was not raised by us.
  *
- * WHAT IT DOES on such a session: an error report (the account as a hash of
- * its id) and a security event (passkey_unexplained_sign_in, outcome
- * flagged). Nothing else. There is no service-role way in this codebase to
- * end ONE session by id (revoke_my_session needs the member's own token;
- * admin_revoke_user_sessions ends every session), so no session is ended. It
- * deletes no factor and removes no passkey, ever (pinned by
- * passkey-detector.test.ts, which reads this file). No email: the security
- * family has no sentence for "found, not ended", and a message saying a
- * sign-in was ended would not be true.
+ * WHAT IT DOES on such a session (integrator decision C, 2026-11-21): an
+ * error report (the account as a hash of its id); it ENDS THAT ONE SESSION
+ * through 0475's passkey_end_bridge_session, which ends only a session whose
+ * second step is held now by the account's recorded bridge (any other is
+ * refused by the database, and that refusal is reported); the account's
+ * devices learn through the sessions broadcast, as for any ended session; a
+ * security event (passkey_unexplained_sign_in, outcome flagged); and, when
+ * the session was ended, at most one email a day to the account (the
+ * security family: a sign-in was ended, reset your password). It deletes no
+ * factor and removes no passkey, ever (pinned by passkey-detector.test.ts,
+ * which reads this file): the bridge factor stays, so the member's own
+ * passkey keeps working.
  *
- * WHICH RAISE: 0475's passkey_bridge_sessions gives the session's times, not
- * the time of its raise. When a row carries `raised_at` (the time of the
- * session's TOTP claim at Auth: a proposed column, not in 0475 today) the
- * row of that raise must lie in [raised_at - 2 min, raised_at + 5 s]: a
- * second raise of the same session needs its own row. Without it, the bound
- * is the session's own life, [created_at - 2 min, updated_at + 5 s]: any
- * raise row of that session in it explains the session. That can miss a
- * second raise of a session already raised by us; it can never invent one.
+ * WHICH RAISE: passkey_bridge_sessions gives each session's raised_at, the
+ * time of its TOTP method row at Auth (auth.mfa_amr_claims, upserted with
+ * Auth's clock on every TOTP answer; read from the Auth source, not measured
+ * for a bridge raise). The row of that raise must lie in [raised_at - 2 min,
+ * raised_at + 5 s]: a second raise of the same session needs its own row.
  *
  * IT NEVER ACTS ON DOUBT. Each of these is "not settled", skipped and
  * reported: the passkey switch could not be read (error; never read as off);
  * the session list could not be read (error); the audit rows could not all be
- * read (error, every session of the run); a session's times cannot be read;
- * a raise in the last two minutes (our row may not be committed yet; the next
- * hourly run still sees it, the window is two hours); an account with no
- * passkey audit row at all in the two-hour window (or since its raise bound
- * began, when that is earlier): the audit stream may be unreliable for it;
- * reported with the account hashes.
+ * read (error, every session of the run); a session's raise time is missing
+ * or cannot be read; a raise in the last two minutes (our row may not be
+ * committed yet; the next hourly run still sees it, the window is two hours);
+ * an account with no passkey audit row at all in the two-hour window (or
+ * since its raise bound began, when that is earlier): the audit stream may be
+ * unreliable for it; reported with the account hashes.
  *
  * BOUNDS (like the retention route): at most MAX_SESSIONS sessions examined
- * a run, at most MAX_FINDINGS sessions flagged a run (past that the run stops
- * and one error report says a person must look: the detector is wrong or
- * there is a real wave), no new session started after RUN_BUDGET_MS. An early
- * stop is reported with the counts.
+ * a run, at most MAX_FINDINGS sessions flagged (and so at most MAX_FINDINGS
+ * ended) a run (past that the run stops and one error report says a person
+ * must look: the detector is wrong or there is a real wave), no new session
+ * started after RUN_BUDGET_MS. An early stop is reported with the counts.
  *
  * And the other way round (10.4 a): a `passkey.used` row of the window whose
  * session is not listed is a warning with a count (the list is blind, the
@@ -69,8 +72,11 @@ const ROW_AFTER_RAISE_MS = 5_000;
 /** A raise this recent waits for the next run. */
 const SETTLE_MS = 2 * 60_000;
 export const MAX_SESSIONS = 500;
+/** Sessions flagged a run, and so sessions ended a run (decision C: at most 5). */
 export const MAX_FINDINGS = 5;
 export const RUN_BUDGET_MS = 30_000;
+/** One email a day per account at most. */
+const EMAIL_EVERY_MS = 24 * 60 * 60_000;
 const AUDIT_PAGE = 1000;
 const AUDIT_MAX_PAGES = 20;
 
@@ -96,7 +102,7 @@ interface BridgeSession {
   aal?: string | null;
   created_at: string | null;
   updated_at: string | null;
-  /** The time of the session's TOTP claim at Auth (proposed; absent in 0475 today). */
+  /** The time of the session's TOTP method row at Auth (0475, stage 1 additions). */
   raised_at?: string | null;
 }
 
@@ -118,7 +124,9 @@ export interface PasskeyDetectorSummary {
   unexplained: number;
   waiting: number;
   notSettled: { times: number; auditRead: number; noRows: number };
-  boundBy: { raiseTime: number; sessionLife: number };
+  /** What became of the unexplained sessions (decision C). */
+  ending: { ended: number; alreadyGone: number; refused: number; failed: number };
+  emailed: number;
   usedButNotListed: number;
   stop: Stop | null;
 }
@@ -127,8 +135,9 @@ interface Checked {
   session: BridgeSession;
   lo: bigint;
   hi: bigint;
-  boundBy: 'raiseTime' | 'sessionLife';
 }
+
+type Ending = 'ended' | 'already_gone' | 'refused' | 'failed';
 
 const MS = 1_000_000n;
 const isoOf = (nanos: bigint) => new Date(Number(nanos / MS)).toISOString();
@@ -164,7 +173,59 @@ export async function recordUnexplainedBridgeSession(userId: string): Promise<vo
   );
 }
 
-/** Never throws; changes nothing but reports and security events. */
+/**
+ * Ends ONE session raised through a recorded bridge (0475's
+ * passkey_end_bridge_session refuses any other, 22023) and tells the
+ * account's devices.
+ */
+async function endBridgeSession(admin: Admin, s: BridgeSession): Promise<Ending> {
+  try {
+    const { data, error } = await admin.rpc('passkey_end_bridge_session', {
+      p_session_id: s.session_id,
+    });
+    if (error) return codeOf(error) === '22023' ? 'refused' : 'failed';
+    if (data !== true) return 'already_gone';
+  } catch {
+    return 'failed';
+  }
+  try {
+    await broadcastEndedSessions(s.user_id, [s.session_id], '');
+  } catch {
+    // The refresh token is gone either way; the access token lasts until it expires.
+    report('detector_broadcast_failed', 'warning', { userIdHash: accountIdHash(s.user_id) });
+  }
+  return 'ended';
+}
+
+/** At most one email a day per account; true when one was sent. Closed when the pace cannot be counted. */
+async function emailOnceADay(admin: Admin, userId: string): Promise<boolean> {
+  try {
+    const paced = await checkRateLimit(
+      `passkey-detector-email:${userId}`,
+      1,
+      EMAIL_EVERY_MS,
+      'closed',
+    );
+    if (!paced.allowed) return false;
+    const { data, error } = await admin.auth.admin.getUserById(userId);
+    const to = data?.user?.email;
+    if (error || typeof to !== 'string' || !to) {
+      report('detector_email_no_address', 'warning', { userIdHash: accountIdHash(userId) });
+      return false;
+    }
+    sendPasskeySignInEndedEmail(to);
+    return true;
+  } catch {
+    report('detector_email_failed', 'warning', { userIdHash: accountIdHash(userId) });
+    return false;
+  }
+}
+
+/**
+ * Never throws. Changes nothing but reports, security events, the ending of
+ * an unexplained bridge-raised session (at most MAX_FINDINGS a run) and its
+ * email.
+ */
 export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
   const started = Date.now();
   const summary: PasskeyDetectorSummary = {
@@ -176,7 +237,8 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
     unexplained: 0,
     waiting: 0,
     notSettled: { times: 0, auditRead: 0, noRows: 0 },
-    boundBy: { raiseTime: 0, sessionLife: 0 },
+    ending: { ended: 0, alreadyGone: 0, refused: 0, failed: 0 },
+    emailed: 0,
     usedButNotListed: 0,
     stop: null,
   };
@@ -223,25 +285,20 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
     const checked: Checked[] = [];
     const settledBefore = nowNs - BigInt(SETTLE_MS) * MS;
     for (const s of sessions) {
-      const hasRaiseTime = Object.prototype.hasOwnProperty.call(s, 'raised_at');
-      const raised = hasRaiseTime ? timeNanos(s.raised_at) : null;
-      const created = timeNanos(s.created_at);
-      const updated = timeNanos(s.updated_at ?? s.created_at);
-      if ((hasRaiseTime && raised === null) || created === null || updated === null) {
+      // The raise this check is about: its time at Auth, or not settled.
+      const raised = timeNanos(s.raised_at);
+      if (raised === null) {
         summary.notSettled.times += 1;
         continue;
       }
-      const anchor = raised ?? updated;
-      if (anchor > settledBefore) {
+      if (raised > settledBefore) {
         summary.waiting += 1;
         continue;
       }
-      const boundBy = raised !== null ? 'raiseTime' : 'sessionLife';
       checked.push({
         session: s,
-        lo: (raised ?? created) - BigInt(ROW_BEFORE_RAISE_MS) * MS,
-        hi: (raised ?? updated) + BigInt(ROW_AFTER_RAISE_MS) * MS,
-        boundBy,
+        lo: raised - BigInt(ROW_BEFORE_RAISE_MS) * MS,
+        hi: raised + BigInt(ROW_AFTER_RAISE_MS) * MS,
       });
     }
 
@@ -290,13 +347,20 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
           break;
         }
         summary.unexplained += 1;
-        summary.boundBy[c.boundBy] += 1;
+        const ending = await endBridgeSession(admin, c.session);
+        if (ending === 'ended') summary.ending.ended += 1;
+        else if (ending === 'already_gone') summary.ending.alreadyGone += 1;
+        else if (ending === 'refused') summary.ending.refused += 1;
+        else summary.ending.failed += 1;
         report('bridge_session_unexplained', 'error', {
           userIdHash: accountIdHash(c.session.user_id),
           recorded: c.session.recorded === true,
-          boundBy: c.boundBy,
+          ending,
         });
         await recordUnexplainedBridgeSession(c.session.user_id);
+        if (ending === 'ended' && (await emailOnceADay(admin, c.session.user_id))) {
+          summary.emailed += 1;
+        }
       }
       if (summary.notSettled.noRows > 0) {
         report('detector_no_passkey_rows', 'warning', {
@@ -333,6 +397,7 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
         listed: summary.listed,
         examined: summary.examined,
         unexplained: summary.unexplained,
+        ended: summary.ending.ended,
       });
     }
   } catch (e) {

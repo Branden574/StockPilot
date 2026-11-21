@@ -1202,3 +1202,88 @@ export function renderPasskeyRemovedEmail(params: PasskeyRemovedEmailParams): Re
 
   return { id: def.id, subject, preheader, html, text, from: def.from };
 }
+
+// ── passkey-sign-in-ended ───────────────────────────────────────────
+
+export interface PasskeySignInEndedEmailParams {
+  /** Recipient: the account's current sign-in address. */
+  email: string;
+  /** Preformatted time the sign-in was ended, e.g. "Nov 21, 2026, 9:41 AM UTC". */
+  endedAt: string;
+  firstName?: string | null;
+  appUrl?: string;
+}
+
+/**
+ * A sign-in was ended by the hourly passkey check (integrator decision C): its
+ * second step did not come from the member's passkey through our server. Says
+ * what happened and to reset the password; no device, no place, no name.
+ */
+export function renderPasskeySignInEndedEmail(params: PasskeySignInEndedEmailParams): RenderedEsEmail {
+  const def = esEmailById('passkey-sign-in-ended');
+  const appUrl = params.appUrl ?? DEFAULT_APP_URL;
+  const urls = marketingUrls(appUrl);
+  const email = escapeHtml(params.email);
+  const endedAt = escapeHtml(params.endedAt);
+  const resetUrl = `${appUrl.replace(/\/$/, '')}/reset`;
+
+  const subject = def.subject({});
+  const preheader = def.preheader({});
+
+  const styles = { darkPills: ['sec' as const] };
+  const html = emailShell({
+    title: escapeHtml(subject),
+    preheader,
+    preheaderPad: 6,
+    styles,
+    rows: [
+      brandStrip({ tag: def.tag }),
+      section(
+        '36px 36px 24px',
+        [
+          statusPill({ variant: 'sec', label: 'Security &middot; Sign-in ended' }),
+          headline({ lead: 'We ended a sign-in.', turn: 'Reset your password now.' }),
+          bodyText(
+            `${greeting(params.firstName)}— on ${endedAt} we ended a sign-in to your StockPilot account. Its second step did not come from your passkey, so we could not confirm it was you. Someone may know your password.`,
+          ),
+        ].join('\n      '),
+      ),
+      section(
+        '0 36px 20px',
+        banner({
+          tone: 'err',
+          titleHtml: 'What to do now',
+          bodyHtml:
+            'Reset your password. Then check your passkeys and authenticator apps in Settings, Security, and tell your administrator.',
+        }),
+      ),
+      section(
+        '0 36px 30px',
+        [
+          ctaRow({
+            primary: { label: def.cta, href: escapeHtml(resetUrl) },
+          }),
+          linkFallback(escapeHtml(resetUrl), { marginTop: 12 }),
+        ].join('\n      '),
+      ),
+      footer({
+        kind: 'ess',
+        reasonHtml: `Sent to <span class="ink2" style="color:${L.ink2};text-decoration:underline">${email}</span> because a sign-in to this StockPilot account was ended — a core account-safety notice.`,
+        urls,
+      }),
+    ].join('\n    '),
+  });
+  assertEmailWeight(html);
+
+  const text = [
+    'We ended a sign-in to your StockPilot account.',
+    '',
+    `${greetingText(params.firstName)}— on ${params.endedAt} we ended a sign-in to your StockPilot account. Its second step did not come from your passkey, so we could not confirm it was you. Someone may know your password.`,
+    '',
+    `Reset your password now: ${resetUrl}`,
+    '',
+    'Then check your passkeys and authenticator apps in Settings, Security, and tell your administrator.',
+  ].join('\n');
+
+  return { id: def.id, subject, preheader, html, text, from: def.from };
+}

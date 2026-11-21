@@ -3,14 +3,19 @@ import 'server-only';
 import { headers } from 'next/headers';
 
 import { parseUserAgent } from '@/lib/auth/user-agent';
-import { renderPasskeyAddedEmail, renderPasskeyRemovedEmail } from '@/lib/email/es/families/security';
+import {
+  renderPasskeyAddedEmail,
+  renderPasskeyRemovedEmail,
+  renderPasskeySignInEndedEmail,
+} from '@/lib/email/es/families/security';
 import { sendEmail } from '@/lib/email/resend';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { defer } from '@/server/services/lib/defer';
 
 /**
- * The two passkey emails of stage 4 (plan 2.8): sent after the response,
+ * The passkey emails of stage 4 (plan 2.8; the third, a sign-in ended by the
+ * hourly check, from integrator decision C): sent after the response,
  * never blocking it, and never printing the member's name for the passkey
  * (review 1 F5). The device is the kind our server read from the request
  * (lib/auth/user-agent: a fixed set of words, never the agent's own text).
@@ -49,4 +54,10 @@ export async function sendPasskeyAddedEmail(to: string): Promise<void> {
 export function sendPasskeyRemovedEmail(to: string): void {
   const message = renderPasskeyRemovedEmail({ email: to, removedAt: whenNow(), appUrl: env.NEXT_PUBLIC_APP_URL });
   send(message, to, 'passkey-removed');
+}
+
+/** "We ended a sign-in to your StockPilot account" (the hourly check; at most one a day per account, paced by its caller). */
+export function sendPasskeySignInEndedEmail(to: string): void {
+  const message = renderPasskeySignInEndedEmail({ email: to, endedAt: whenNow(), appUrl: env.NEXT_PUBLIC_APP_URL });
+  send(message, to, 'passkey-sign-in-ended');
 }
