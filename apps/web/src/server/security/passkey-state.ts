@@ -1,3 +1,5 @@
+import 'server-only';
+
 import { PASSKEY_BRIDGE_NAME_PREFIX } from '@/lib/auth/passkey-bridge-name';
 
 /**
@@ -24,7 +26,7 @@ import { PASSKEY_BRIDGE_NAME_PREFIX } from '@/lib/auth/passkey-bridge-name';
  *   - A time this code cannot read is treated like no time (closed): the
  *     database always has one, so this only ever makes the answer stricter.
  *
- * Pure: no server import, no read. passkey-state.test.ts runs the accounts
+ * Pure: no read (server-only, as every module under server/security). passkey-state.test.ts runs the accounts
  * of pgTAP 0475/164 and 0475/166 through it and expects the same answers.
  */
 

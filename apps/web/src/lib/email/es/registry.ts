@@ -322,6 +322,49 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
     motionAsset: null,
     footer: 'ess',
   }),
+  // Outside the design package (2026-11-21, passkeys, plan 2.8): a passkey
+  // added to or removed from the account. Never the member's name for the
+  // passkey (review 1 F5): "a passkey" and the kind of device our server read.
+  d({
+    id: 'passkey-added',
+    family: 'security',
+    name: 'Passkey Added',
+    status: 'live',
+    category: 'ess',
+    tag: 'Security',
+    trigger: 'A passkey was added to the account (Settings, Security)',
+    to: 'Account holder (current address)',
+    from: 'StockPilot Security <security@stockpilotusa.com>',
+    replyTo: 'Not monitored — support link inside',
+    subject: () => 'A passkey was added to your StockPilot account',
+    preheader: (p: { device: string }) =>
+      `A passkey was added from ${p.device}. If this was not you, remove it in Settings, Security, and change your password.`,
+    badge: { variant: 'sec', label: () => 'Passkey added' },
+    cta: 'Contact support',
+    motionNote: 'None',
+    motionAsset: null,
+    footer: 'ess',
+  }),
+  d({
+    id: 'passkey-removed',
+    family: 'security',
+    name: 'Passkey Removed',
+    status: 'live',
+    category: 'ess',
+    tag: 'Security',
+    trigger: 'A passkey was removed from the account (Settings, Security)',
+    to: 'Account holder (current address)',
+    from: 'StockPilot Security <security@stockpilotusa.com>',
+    replyTo: 'Not monitored — support link inside',
+    subject: () => 'A passkey was removed from your StockPilot account',
+    preheader: () =>
+      'A passkey was removed and your other devices were signed out. If this was not you, change your password now.',
+    badge: { variant: 'sec', label: () => 'Passkey removed' },
+    cta: 'Contact support',
+    motionNote: 'None',
+    motionAsset: null,
+    footer: 'ess',
+  }),
 
   // ── Invitations ───────────────────────────────────────────────────
   d({

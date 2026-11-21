@@ -1037,3 +1037,168 @@ export function renderAccountDeleteCodeEmail(params: AccountDeleteCodeEmailParam
 
   return { id: def.id, subject, preheader, html, text, from: def.from };
 }
+
+// ── passkey-added / passkey-removed ─────────────────────────────────
+
+export interface PasskeyAddedEmailParams {
+  /** Recipient: the account's current sign-in address. */
+  email: string;
+  /** Preformatted time, e.g. "Nov 21, 2026, 9:41 AM UTC". */
+  addedAt: string;
+  /** The kind of device our server read ("Chrome on macOS"), never the passkey's name. */
+  device: string;
+  firstName?: string | null;
+  appUrl?: string;
+}
+
+/**
+ * A passkey was added (plan 2.8, section 4). Never the member's name for the
+ * passkey (review 1 F5): "a passkey" and the kind of device. No link that
+ * signs in: the one button is support.
+ */
+export function renderPasskeyAddedEmail(params: PasskeyAddedEmailParams): RenderedEsEmail {
+  const def = esEmailById('passkey-added');
+  const appUrl = params.appUrl ?? DEFAULT_APP_URL;
+  const urls = marketingUrls(appUrl);
+  const email = escapeHtml(params.email);
+  const addedAt = escapeHtml(params.addedAt);
+  const device = escapeHtml(params.device);
+
+  const subject = def.subject({});
+  const preheader = def.preheader({ device: params.device });
+
+  const styles = { darkPills: ['sec' as const], mobileExtras: MOBILE_GRID_RULES };
+  const html = emailShell({
+    title: escapeHtml(subject),
+    preheader: def.preheader({ device }),
+    preheaderPad: 6,
+    styles,
+    rows: [
+      brandStrip({ tag: def.tag }),
+      section(
+        '36px 36px 24px',
+        [
+          statusPill({ variant: 'sec', label: 'Security &middot; Passkey added' }),
+          headline({ lead: 'A passkey was added.', turn: 'This is the record of it.' }),
+          bodyText(
+            `${greeting(params.firstName)}— a passkey was added to your StockPilot account on ${addedAt} from ${device}. You now confirm it&rsquo;s you with it after your password.`,
+          ),
+        ].join('\n      '),
+      ),
+      section(
+        '0 36px 24px',
+        detailGrid({
+          rows: [
+            [
+              { label: 'Added', valueHtml: addedAt },
+              { label: 'From', valueHtml: device },
+            ],
+          ],
+        }),
+      ),
+      section(
+        '0 36px 20px',
+        banner({
+          tone: 'err',
+          titleHtml: 'Was this not you?',
+          bodyHtml:
+            'Sign in, remove it in Settings, Security, and change your password. If you can&rsquo;t sign in, use a recovery code, then contact your administrator.',
+        }),
+      ),
+      section(
+        '0 36px 30px',
+        ctaRow({
+          primary: { label: def.cta, href: escapeHtml(urls.support) },
+        }),
+      ),
+      footer({
+        kind: 'ess',
+        reasonHtml: `Sent to <span class="ink2" style="color:${L.ink2};text-decoration:underline">${email}</span> because a passkey was added to this StockPilot account — a core account-safety notice.`,
+        urls,
+      }),
+    ].join('\n    '),
+  });
+  assertEmailWeight(html);
+
+  const text = [
+    'A passkey was added to your StockPilot account.',
+    '',
+    `${greetingText(params.firstName)}— a passkey was added to your StockPilot account on ${params.addedAt} from ${params.device}. You now confirm it’s you with it after your password.`,
+    '',
+    `Was this not you? Sign in, remove it in Settings, Security, and change your password. If you can’t sign in, use a recovery code, then contact your administrator. Support: ${urls.support}`,
+  ].join('\n');
+
+  return { id: def.id, subject, preheader, html, text, from: def.from };
+}
+
+export interface PasskeyRemovedEmailParams {
+  /** Recipient: the account's current sign-in address. */
+  email: string;
+  /** Preformatted time, e.g. "Nov 21, 2026, 9:41 AM UTC". */
+  removedAt: string;
+  firstName?: string | null;
+  appUrl?: string;
+}
+
+/** A passkey was removed and the other devices signed out (plan 2.8, section 4). */
+export function renderPasskeyRemovedEmail(params: PasskeyRemovedEmailParams): RenderedEsEmail {
+  const def = esEmailById('passkey-removed');
+  const appUrl = params.appUrl ?? DEFAULT_APP_URL;
+  const urls = marketingUrls(appUrl);
+  const email = escapeHtml(params.email);
+  const removedAt = escapeHtml(params.removedAt);
+
+  const subject = def.subject({});
+  const preheader = def.preheader({});
+
+  const styles = { darkPills: ['sec' as const], mobileExtras: MOBILE_GRID_RULES };
+  const html = emailShell({
+    title: escapeHtml(subject),
+    preheader,
+    preheaderPad: 6,
+    styles,
+    rows: [
+      brandStrip({ tag: def.tag }),
+      section(
+        '36px 36px 24px',
+        [
+          statusPill({ variant: 'sec', label: 'Security &middot; Passkey removed' }),
+          headline({ lead: 'A passkey was removed.', turn: 'This is the record of it.' }),
+          bodyText(
+            `${greeting(params.firstName)}— a passkey was removed from your StockPilot account on ${removedAt}. You were signed out on your other devices.`,
+          ),
+        ].join('\n      '),
+      ),
+      section(
+        '0 36px 20px',
+        banner({
+          tone: 'err',
+          titleHtml: 'Was this not you?',
+          bodyHtml: 'Change your password now and check Settings, Security.',
+        }),
+      ),
+      section(
+        '0 36px 30px',
+        ctaRow({
+          primary: { label: def.cta, href: escapeHtml(urls.support) },
+        }),
+      ),
+      footer({
+        kind: 'ess',
+        reasonHtml: `Sent to <span class="ink2" style="color:${L.ink2};text-decoration:underline">${email}</span> because a passkey was removed from this StockPilot account — a core account-safety notice.`,
+        urls,
+      }),
+    ].join('\n    '),
+  });
+  assertEmailWeight(html);
+
+  const text = [
+    'A passkey was removed from your StockPilot account.',
+    '',
+    `${greetingText(params.firstName)}— a passkey was removed from your StockPilot account on ${params.removedAt}. You were signed out on your other devices.`,
+    '',
+    `Was this not you? Change your password now and check Settings, Security. Support: ${urls.support}`,
+  ].join('\n');
+
+  return { id: def.id, subject, preheader, html, text, from: def.from };
+}

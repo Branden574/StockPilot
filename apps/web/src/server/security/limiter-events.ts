@@ -104,6 +104,14 @@ export const LIMITER_NOT_SECURITY_EVENTS: Readonly<Record<string, string>> = {
   'mfa-recovery:': RECOVERY_RECORDED_AT_CALL_SITE,
   'mfa-recovery-password:': RECOVERY_RECORDED_AT_CALL_SITE,
   'mfa-recovery-code:': RECOVERY_RECORDED_AT_CALL_SITE,
+  // The passkey actions (server/security/passkeys.ts) record a refusal of
+  // their own limits as passkey_checks_paused at the call site.
+  'passkey-start:': RECORDED_AT_CALL_SITE,
+  'passkey-start-account:': RECORDED_AT_CALL_SITE,
+  'passkey-finish:': RECORDED_AT_CALL_SITE,
+  'passkey-finish-account:': RECORDED_AT_CALL_SITE,
+  'passkey-register:': RECORDED_AT_CALL_SITE,
+  'passkey-remove:': RECORDED_AT_CALL_SITE,
   // A signed-in account's own security actions.
   'mfa-recovery-gen:': SIGNED_IN,
   'mfa-enroll-verify:': SIGNED_IN,
