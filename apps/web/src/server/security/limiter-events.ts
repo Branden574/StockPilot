@@ -150,6 +150,11 @@ export const LIMITER_NOT_SECURITY_EVENTS: Readonly<Record<string, string>> = {
   // missing while such a factor is listed: the missing table once an hour
   // for everyone (`...:table`), the missing function once an hour per account.
   'passkeys-not-ours-report:': ALERT_PACING,
+  // A fail-closed state or a key fault met by the second-step page
+  // (server/security/passkeys.ts): once an hour per account and fault, and
+  // a key fault once an hour for everyone (`...:all`).
+  'passkeys-step-report:': ALERT_PACING,
+  'passkeys-key-report:': ALERT_PACING,
   'passkeys-records-missing-report:': ALERT_PACING,
   'passkeys-records-missing-report:function:': ALERT_PACING,
   // The platform console.

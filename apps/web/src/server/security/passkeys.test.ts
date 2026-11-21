@@ -1088,8 +1088,20 @@ describe('states: the server branches on the facts (2.7)', () => {
     const bridge = world.bridges.get(userId)!;
     world.passkeys[0]!.removed_at = new Date(Date.now() - 60_000).toISOString();
     world.passkeys[0]!.removed_reason = 'member';
+    const s17 = () =>
+      vi
+        .mocked(reportError)
+        .mock.calls.map((c) => c[1])
+        .filter((ctx) => ctx.tag === 'passkeys.bridge_newer_than_removal');
     const r = await pk.startSecondStep();
     expect(r.ok).toBe(false);
+    // Reported by the start itself (review 4 finding 1: above the "no passkey" answer).
+    expect(s17()).toEqual([
+      expect.objectContaining({
+        level: 'error',
+        extra: expect.objectContaining({ userIdHash: expect.stringMatching(/^[0-9a-f]{16}$/) }),
+      }),
+    ]);
     expect(world.calls.deleteFactor).not.toContain(bridge.factor_id);
     expect(world.bridges.has(userId)).toBe(true);
     expect(
@@ -1098,6 +1110,9 @@ describe('states: the server branches on the facts (2.7)', () => {
         world.factors.filter((f) => f.user_id === userId),
       ),
     ).toBe('none');
+    // And by the page's own read (the second-step page), which is what a member meets.
+    expect(s17()).toHaveLength(2);
+    expect(JSON.stringify(vi.mocked(reportError).mock.calls)).not.toContain(userId);
   });
 
   it('S8 (a bridge with no passkey row ever) fails closed', async () => {
@@ -1660,6 +1675,124 @@ function leftoverFactor(userId: string) {
   world.factors.push(f);
   return f;
 }
+
+describe('review 4 finding 1: a fail-closed state or a key fault met by the page is reported from its own read', () => {
+  it('S9 (the secret does not open): no passkey offered, an error report with the hash, and a key fault for all, each at most once an hour', async () => {
+    const first = await memberWithPasskey('first-s9@example.test');
+    const second = await memberWithPasskey('second-s9@example.test');
+    countingLimiter();
+    const key = world.env.PASSKEY_BRIDGE_KEY_V1;
+    world.env.PASSKEY_BRIDGE_KEY_V1 = Buffer.alloc(32, 7).toString('base64');
+    try {
+      expect(await pk.passkeyStepFor(second.userId, factorsOfAccount(second.userId))).toBe('none');
+      expect(reportsTagged('passkeys.bridge_unopenable')).toEqual([
+        expect.objectContaining({ level: 'error', extra: hashed }),
+      ]);
+      expect(reportsTagged('passkeys.key_fault')).toEqual([
+        expect.objectContaining({ level: 'error' }),
+      ]);
+      // The same account again within the hour: nothing more.
+      expect(await pk.passkeyStepFor(second.userId, factorsOfAccount(second.userId))).toBe('none');
+      expect(reportsTagged('passkeys.bridge_unopenable')).toHaveLength(1);
+      // Another account in the same fault: its own report; the key fault is said once for all.
+      world.signIn(first.userId, 'aal1');
+      expect(await pk.passkeyStepFor(first.userId, factorsOfAccount(first.userId))).toBe('none');
+      expect(reportsTagged('passkeys.bridge_unopenable')).toHaveLength(2);
+      expect(reportsTagged('passkeys.key_fault')).toHaveLength(1);
+      // The member's words are unchanged.
+      expect(await pk.startSecondStep()).toMatchObject({
+        ok: false,
+        message: pk.PASSKEY_WORDS.cantUse,
+        reason: 'bridge_unopenable',
+      });
+      expect(JSON.stringify(vi.mocked(reportError).mock.calls)).not.toContain(first.userId);
+    } finally {
+      world.env.PASSKEY_BRIDGE_KEY_V1 = key;
+    }
+  });
+
+  it('no key: a holder (a reserved-name factor listed) gets an error report and a key fault; an account without one costs nothing', async () => {
+    const { userId } = await memberWithPasskey();
+    countingLimiter();
+    const key = world.env.PASSKEY_BRIDGE_KEY_V1;
+    world.env.PASSKEY_BRIDGE_KEY_V1 = '';
+    try {
+      expect(await pk.passkeyStepFor(userId, factorsOfAccount(userId))).toBe('none');
+      expect(reportsTagged('passkeys.no_key')).toEqual([
+        expect.objectContaining({ level: 'error', extra: hashed }),
+      ]);
+      expect(reportsTagged('passkeys.key_fault')).toHaveLength(1);
+      const plain = world.addAccount('plain@example.test');
+      world.signIn(plain, 'aal1');
+      vi.mocked(checkRateLimit).mockClear();
+      vi.mocked(reportError).mockClear();
+      world.calls.fns.length = 0;
+      world.calls.reads.length = 0;
+      expect(await pk.passkeyStepFor(plain, factorsOfAccount(plain))).toBe('none');
+      expect(checkRateLimit).not.toHaveBeenCalled();
+      expect(reportError).not.toHaveBeenCalled();
+      expect(world.calls.fns).toEqual([]);
+      expect(world.calls.reads).toEqual([]);
+    } finally {
+      world.env.PASSKEY_BRIDGE_KEY_V1 = key;
+    }
+  });
+
+  it('S8, S12 and S17 at the page: none, one error report with the state word (paced per account and state); the words of a start are unchanged', async () => {
+    countingLimiter();
+    const cases: Array<[string, (userId: string) => void, string]> = [
+      [
+        'bridge_without_passkey',
+        (u) => {
+          for (let i = world.passkeys.length - 1; i >= 0; i -= 1)
+            if (world.passkeys[i]!.user_id === u) world.passkeys.splice(i, 1);
+        },
+        pk.PASSKEY_WORDS.noPasskey,
+      ],
+      ['reserved_factor_without_row', (u) => world.bridges.delete(u), pk.PASSKEY_WORDS.cantUse],
+      [
+        'bridge_newer_than_removal',
+        (u) => {
+          const r = world.passkeys.find((p) => p.user_id === u)!;
+          r.removed_at = new Date(Date.now() - 60_000).toISOString();
+          r.removed_reason = 'member';
+        },
+        pk.PASSKEY_WORDS.noPasskey,
+      ],
+    ];
+    for (const [state, make, words] of cases) {
+      const { userId } = await memberWithPasskey(`${state}@example.test`);
+      make(userId);
+      const tag = `passkeys.${state}`;
+      expect(await pk.passkeyStepFor(userId, factorsOfAccount(userId)), state).toBe('none');
+      expect(reportsTagged(tag), state).toEqual([
+        expect.objectContaining({ level: 'error', extra: hashed }),
+      ]);
+      expect(await pk.passkeyStepFor(userId, factorsOfAccount(userId)), state).toBe('none');
+      expect(reportsTagged(tag), state).toHaveLength(1);
+      expect(await pk.startSecondStep(), state).toMatchObject({ ok: false, message: words });
+    }
+    expect(
+      vi
+        .mocked(checkRateLimit)
+        .mock.calls.filter(([k]) => String(k).startsWith('passkeys-step-report:'))
+        .every(([, limit, windowMs, mode]) => limit === 1 && windowMs === 60 * 60_000 && mode === 'closed'),
+    ).toBe(true);
+  });
+
+  it('a setup not finished, the kill switch off, or a healthy passkey: nothing reported', async () => {
+    const healthy = await memberWithPasskey('healthy@example.test');
+    expect(await pk.passkeyStepFor(healthy.userId, factorsOfAccount(healthy.userId))).toBe('ready');
+    world.addAllowed = 'kill_switch_off';
+    expect(await pk.passkeyStepFor(healthy.userId, factorsOfAccount(healthy.userId))).toBe('none');
+    world.addAllowed = 'ok';
+    const s4 = await memberWithPasskey('s4@example.test');
+    const bridge = world.bridges.get(s4.userId)!;
+    world.factors.find((f) => f.id === bridge.factor_id)!.status = 'unverified';
+    expect(await pk.passkeyStepFor(s4.userId, factorsOfAccount(s4.userId))).toBe('none');
+    expect(passkeyErrorReports()).toEqual([]);
+  });
+});
 
 describe('review 4 finding 3: only the second step can finish a removal the member started', () => {
   it('the removal is reached from startSecondStep alone (so the other starts cannot delete)', () => {

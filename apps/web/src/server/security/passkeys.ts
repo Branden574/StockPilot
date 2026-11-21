@@ -694,6 +694,61 @@ function bridgeServes(p: Judged): boolean {
   return p.state === 'reserved_factor_without_row' && p.facts.bridgeStatus === 'verified';
 }
 
+/**
+ * The states that fail closed and wait for the member or the operator (10.1,
+ * the upkeep's CLOSED_STATES): S8, S12 and S14 (S15 serves), S17.
+ */
+const FAIL_CLOSED_STATES = new Set<string>([
+  'bridge_without_passkey',
+  'reserved_factor_without_row',
+  'bridge_newer_than_removal',
+]);
+
+/**
+ * Why a picture fails closed, or null: 'bridge_unopenable' (S9: the bridge
+ * would serve but the keys we hold do not open its secret), else the state
+ * word of a fail-closed state that does not serve.
+ */
+function failClosedFault(picture: Judged, userId: string, keys: BridgeKeys): string | null {
+  if (bridgeServes(picture)) return opens(picture, userId, keys) ? null : 'bridge_unopenable';
+  return FAIL_CLOSED_STATES.has(picture.state) ? picture.state : null;
+}
+
+/** A key fault: no key at all, or one that does not open a secret. */
+const KEY_FAULTS = new Set(['no_key', 'bridge_unopenable']);
+
+/**
+ * Review 4 finding 1: a fail-closed state or a key fault the second-step page
+ * meets is reported from the page's own read (stepOf), since the page then
+ * offers no passkey and no button press can report it. Error level, the
+ * account as a hash of its id, at most once an hour per account and fault; a
+ * key fault also once an hour for everyone (a wrong or missing key is one
+ * fault, not one per member). The limiter is closed: one that cannot count
+ * reports nothing (lib/rate-limit logs it). The member's answer and words do
+ * not change. Never throws.
+ */
+async function reportStepFault(userId: string, fault: string): Promise<void> {
+  try {
+    const one = await checkRateLimit(
+      `passkeys-step-report:${userId}:${fault}`,
+      1,
+      60 * MIN,
+      'closed',
+    );
+    if (one.allowed) reportPasskeys(fault, 'error', userId, { site: 'second_step' });
+    if (!KEY_FAULTS.has(fault)) return;
+    const all = await checkRateLimit('passkeys-key-report:all', 1, 60 * MIN, 'closed');
+    if (!all.allowed) return;
+    void reportError(new Error('Passkeys: the bridge key is missing or does not open a secret'), {
+      tag: 'passkeys.key_fault',
+      level: 'error',
+      extra: { fault },
+    });
+  } catch {
+    // A report never changes the page.
+  }
+}
+
 /** Setup not finished: S2 (no row), S4 (factor unverified), S10 (factor gone). */
 function setupUnfinished(p: AccountPicture): boolean {
   return (
@@ -1082,6 +1137,11 @@ async function startCeremony(
 ): Promise<Result<{ start: SecondStepStart }>> {
   const { held, gate, admin, picture } = started;
   const userId = held.claims.userId;
+  // Review 4 finding 1: a state that fails closed (or S9) is reported before
+  // any answer, the "no passkey" one included (S8, S17 have no active row).
+  // A Finish setup start is the repair itself and reports nothing here.
+  const fault = purpose === 'finish_setup' ? null : failClosedFault(picture, userId, gate.keys);
+  if (fault) reportPasskeys(fault, 'error', userId);
   if (picture.active.length === 0)
     return fail('validation_error', PASSKEY_WORDS.noPasskey, 'no_passkey');
   if (purpose === 'finish_setup') {
@@ -1096,10 +1156,9 @@ async function startCeremony(
   } else if (!bridgeServes(picture)) {
     if (setupUnfinished(picture))
       return fail('validation_error', PASSKEY_WORDS.setupNotFinished, 'setup_unfinished');
-    reportPasskeys(picture.state, 'error', userId);
+    if (!fault) reportPasskeys(picture.state, 'error', userId);
     return fail('forbidden', PASSKEY_WORDS.cantUse, picture.state);
   } else if (!opens(picture, userId, gate.keys)) {
-    reportPasskeys('bridge_unopenable', 'error', userId);
     return fail('forbidden', PASSKEY_WORDS.cantUse, 'bridge_unopenable');
   }
 
@@ -1963,22 +2022,25 @@ async function stepOf(
   userId: string,
   factors: ReadonlyArray<{ friendly_name?: unknown; factor_type?: unknown }>,
 ): Promise<'ready' | 'none'> {
-  const named = factors.some(
-    (f) =>
-      typeof f.friendly_name === 'string' && f.friendly_name.startsWith(PASSKEY_BRIDGE_NAME_PREFIX),
-  );
-  if (!named) return 'none';
+  if (!factors.some(carriesBridgeName)) return 'none';
   // Decision A: the USE level (site, key, kill switch); an organization
   // switched off never takes an existing holder's second step away.
   const gate = await passkeyUseGate(userId);
-  if (!gate.open) return 'none';
+  if (!gate.open) {
+    // Review 4 finding 1: a missing key is a fault to see, not a choice.
+    if (gate.why === 'no_key') await reportStepFault(userId, 'no_key');
+    return 'none';
+  }
   const held = await holdSession();
   if (!held || held.claims.userId !== userId) return 'none';
   const read = await readPicture(createAdminClient(), held, gate.rp);
   if (!read.ok) return 'none';
   const picture = read.picture;
   if (finishesRemoval(picture)) return 'ready';
-  return servesAsSecondStep(picture, userId, gate.keys) ? 'ready' : 'none';
+  if (servesAsSecondStep(picture, userId, gate.keys)) return 'ready';
+  const fault = failClosedFault(picture, userId, gate.keys);
+  if (fault) await reportStepFault(userId, fault);
+  return 'none';
 }
 
 /**
