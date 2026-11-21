@@ -22,9 +22,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * recorded, or none for this account) it is never offered for a typed code,
  * and the code check refuses it before any attempt, with the words of a
  * second step that cannot be used here, reported at error level (the lab
- * walk of stage 4, state S12). Every factor while the records do not exist
- * yet, or while they cannot be read, is treated like any authenticator app.
- * A record that cannot be read hides nothing from a list (and is reported);
+ * walk of stage 4, state S12). While the records cannot be read (a failed
+ * read, or the table missing) a factor that carries the reserved name is
+ * still never offered for a typed code, and the code check refuses it before
+ * any attempt is spent and before Auth is asked, with the code page's own
+ * "could not check, try again" words (fail closed); the step-up list then
+ * says the records were not read, so a modal left with no app says "try
+ * again" too. An account with no reserved-name factor makes no record read,
+ * so a failed read changes nothing for it.
+ * A record that cannot be read hides nothing from the Settings list (and is
+ * reported);
  * the three actions that CHANGE a factor (remove, confirm a set-up, the
  * set-up clean-up) then leave every factor that carries the reserved name
  * alone, with "try again in a moment" (review 2-3 finding 2). The removal
@@ -192,6 +199,8 @@ import {
 } from './mfa';
 
 const NOT_STARTED = 'Could not start the authenticator check. Please try again.';
+/** The code page's own words for a code that could not be checked just now. */
+const NOT_CHECKED = 'Could not check your code just now. Try again.';
 /** The words of a second step that cannot be used here (the sign-in code page's own). */
 const CANT_USE =
   "Your second step can't be used here right now. Use a recovery code to get back in, or try again later.";
@@ -336,25 +345,71 @@ describe('challengeFactorAction and the passkey bridge', () => {
       ).toEqual([]);
       expect(mfaStub.challenge).not.toHaveBeenCalled();
     });
-
-    it('while the record cannot be read: checked like any authenticator app, as before', async () => {
-      h.factors = [IMPOSTOR, APP];
-      h.record = UNREADABLE;
-      const res = await challengeFactorAction({ factorId: IMPOSTOR.id, code: CODE });
-      expect(res).toEqual({ ok: true, data: undefined });
-      expect(mfaStub.challenge).toHaveBeenCalledWith({ factorId: IMPOSTOR.id });
-    });
   });
 
-  it('before the records exist, a reserved-name factor is checked like any authenticator app, and the missing table is reported', async () => {
-    h.factors = [BRIDGE];
-    h.record = NOT_YET;
-    const res = await challengeFactorAction({ factorId: BRIDGE.id, code: CODE });
-    expect(res).toEqual({ ok: true, data: undefined });
-    expect(mfaStub.challenge).toHaveBeenCalledWith({ factorId: BRIDGE.id });
-    expect(vi.mocked(reportError).mock.calls.map((c) => [c[1].tag, c[1].level])).toEqual([
-      ['passkeys.records_missing', 'error'],
-    ]);
+  describe('while the record cannot be read (a failed read, or the table missing): fail closed', () => {
+    it.each([
+      ['a failed read, with an app beside it', UNREADABLE, [IMPOSTOR, APP], IMPOSTOR],
+      ['a failed read, the bridge itself', UNREADABLE, [BRIDGE, APP], BRIDGE],
+      ['a failed read, no app', UNREADABLE, [BRIDGE], BRIDGE],
+      ['the table missing, with an app beside it', NOT_YET, [BRIDGE, APP], BRIDGE],
+      ['the table missing, no app', NOT_YET, [BRIDGE], BRIDGE],
+    ] as Array<[string, typeof UNREADABLE, Factor[], Factor]>)(
+      '%s: a reserved-name factor is refused before any code attempt and before Auth is asked, with the try-again words',
+      async (_state, record, factors, named) => {
+        h.factors = factors;
+        h.record = record;
+        const res = await challengeFactorAction({ factorId: named.id, code: CODE });
+        expect(res).toEqual({ ok: false, error: { code: 'internal_error', message: NOT_CHECKED } });
+        expect(codeBudgetCalls()).toEqual([]);
+        expect(mfaStub.challenge).not.toHaveBeenCalled();
+        expect(mfaStub.verify).not.toHaveBeenCalled();
+        // The failed read is what gets reported (by the read itself); the
+        // press adds no report of its own, and none names the factor or code.
+        expect(vi.mocked(reportError).mock.calls.map((c) => [c[1].tag, c[1].level])).toEqual([
+          [
+            record === NOT_YET ? 'passkeys.records_missing' : 'passkeys.bridge_unreadable',
+            'error',
+          ],
+        ]);
+        const reports = JSON.stringify(vi.mocked(reportError).mock.calls);
+        expect(reports).not.toContain(named.id);
+        expect(reports).not.toContain(CODE);
+      },
+    );
+
+    it.each([
+      ['a failed read', UNREADABLE],
+      ['the table missing', NOT_YET],
+    ])(
+      '%s: the app beside a reserved-name factor is checked as before, with no record read',
+      async (_state, record) => {
+        h.factors = [BRIDGE, APP];
+        h.record = record;
+        const res = await challengeFactorAction({ factorId: APP.id, code: CODE });
+        expect(res).toEqual({ ok: true, data: undefined });
+        expect(mfaStub.challenge).toHaveBeenCalledWith({ factorId: APP.id });
+        expect(h.adminClients).toBe(0);
+      },
+    );
+
+    it.each([
+      ['a failed read', UNREADABLE],
+      ['the table missing', NOT_YET],
+    ])(
+      '%s: an account with no reserved-name factor is exactly as before (no record read, no report, the code checked)',
+      async (_state, record) => {
+        h.factors = [APP, { ...APP, id: 'app-2', friendly_name: 'Tablet' }];
+        h.record = record;
+        const res = await challengeFactorAction({ factorId: 'app-2', code: CODE });
+        expect(res).toEqual({ ok: true, data: undefined });
+        expect(mfaStub.challenge.mock.calls).toEqual([[{ factorId: 'app-2' }]]);
+        expect(mfaStub.verify).toHaveBeenCalledTimes(1);
+        expect(codeBudgetCalls()).toHaveLength(2);
+        expect(h.adminClients).toBe(0);
+        expect(reportError).not.toHaveBeenCalled();
+      },
+    );
   });
 
   it('with no reserved-name factor, the records are never read', async () => {
@@ -642,29 +697,48 @@ describe('stepUpMethodsAction', () => {
     },
   );
 
-  it('before the records exist, a reserved-name factor is listed like any app, as before', async () => {
-    h.factors = [IMPOSTOR];
-    h.record = NOT_YET;
-    const res = await stepUpMethodsAction();
-    expect(res).toMatchObject({
-      ok: true,
-      data: { apps: [{ id: IMPOSTOR.id, friendlyName: IMPOSTOR.friendly_name }] },
-    });
-  });
+  it.each([
+    ['a failed read', UNREADABLE],
+    ['the table missing', NOT_YET],
+  ])(
+    'while the record cannot be read (%s), no reserved-name factor is listed, and the answer says the records were not read',
+    async (_state, record) => {
+      h.record = record;
+      h.factors = [BRIDGE, APP];
+      const withApp = await stepUpMethodsAction();
+      expect(withApp).toMatchObject({
+        ok: true,
+        data: { apps: [{ id: APP.id, friendlyName: 'Phone' }], recordsUnread: true },
+      });
+      expect(withApp.ok && withApp.data.apps).toHaveLength(1);
 
-  it('a record that cannot be read hides nothing', async () => {
-    h.factors = [BRIDGE, APP];
-    h.record = UNREADABLE;
+      h.factors = [IMPOSTOR];
+      const alone = await stepUpMethodsAction();
+      expect(alone).toMatchObject({ ok: true, data: { apps: [], recordsUnread: true } });
+    },
+  );
+
+  it.each([
+    ['a failed read', UNREADABLE],
+    ['the table missing', NOT_YET],
+    ['records that answer', RECORDED],
+  ])(
+    'an account with no reserved-name factor (%s): its apps, no record read, and no word about the records',
+    async (_state, record) => {
+      h.record = record;
+      h.factors = [APP];
+      const res = await stepUpMethodsAction();
+      expect(res).toMatchObject({ ok: true, data: { apps: [{ id: APP.id, friendlyName: 'Phone' }] } });
+      expect(res.ok && 'recordsUnread' in res.data).toBe(false);
+      expect(h.adminClients).toBe(0);
+      expect(reportError).not.toHaveBeenCalled();
+    },
+  );
+
+  it('with the records read, the answer carries no word about them', async () => {
+    h.factors = [IMPOSTOR, BRIDGE, APP];
     const res = await stepUpMethodsAction();
-    expect(res).toEqual({
-      ok: true,
-      data: {
-        apps: [
-          { id: BRIDGE.id, friendlyName: BRIDGE.friendly_name },
-          { id: APP.id, friendlyName: 'Phone' },
-        ],
-      },
-    });
+    expect(res.ok && 'recordsUnread' in res.data).toBe(false);
   });
 
   it('answers nothing for a session that does not verify', async () => {

@@ -24,35 +24,46 @@ import { createAdminClient } from '@/lib/supabase/admin';
  *   - a reserved-name factor that is not the recorded one is LISTED like any
  *     authenticator app (Settings, Security shows it with Remove), and
  *     reported at warning level at most once per account per hour (a closed
- *     limiter; review 2-3 finding 8). Once the records are read (a bridge
- *     recorded, or none for this account), it is never offered for a typed
- *     code and the code check refuses it (appFactorsForCode,
- *     refusedForCode; the lab walk of stage 4, state S12): its code is one no
- *     member has, since our pages never give an app the reserved name;
+ *     limiter; review 2-3 finding 8);
+ *   - where a CODE is typed (the sign-in code page, the step-up modal's
+ *     list, the code check, the password reset) a factor that carries the
+ *     reserved name is never an app, whatever the read answered
+ *     (appFactorsForCode, refusedForCode): its code is one no member has,
+ *     since our pages never give an app the reserved name. With the records
+ *     read (a bridge recorded, or none for this account) such a factor is
+ *     refused as a second step that cannot be used here (the lab walk of
+ *     stage 4, state S12). While the records cannot be read (a failed read,
+ *     or the table missing) it is refused all the same, with "try again"
+ *     words, and no code for it is sent to Auth: fail closed (the owner's
+ *     decision of 2026-11-21; passkeyRecordsUnread tells the two apart);
  *   - the table missing (before 0475 is live, or a schema cache that lost it
- *     after a restore) means no bridge can be known: nothing is hidden (and
- *     nothing held back from removal), and it is reported at error level at
- *     most once per hour for every account together (review 2-3 finding 3);
- *   - a record that cannot be read for any other reason hides nothing from a
- *     LIST, and is reported at error level: a factor shown that should not be
- *     is a page that offers a bridge Auth would then refuse to pass for want
- *     of its code; a factor hidden that should not be would be an app taken
- *     away. An action that CHANGES a factor holds back, while the record
- *     cannot be read, every factor that carries the reserved name
- *     (factorChangeRefusal, review 2-3 finding 2).
+ *     after a restore) means no bridge can be known: nothing is hidden from
+ *     the Settings list (and nothing held back from removal), and it is
+ *     reported at error level at most once per hour for every account
+ *     together (review 2-3 finding 3);
+ *   - a record that cannot be read for any other reason hides nothing from
+ *     the Settings LIST, and is reported at error level. An action that
+ *     CHANGES a factor holds back, while the record cannot be read, every
+ *     factor that carries the reserved name (factorChangeRefusal, review 2-3
+ *     finding 2).
+ * An account with no reserved-name factor makes no read here, so none of
+ * this, a failed read included, changes anything for it.
  * Reports carry no factor id and no account id; the ones about one account
  * carry a hash of its id (accountIdHash).
  */
 export type PasskeyBridge =
   /**
-   * No reserved-name factor listed, no bridge recorded, or no records yet.
+   * No reserved-name factor listed (no read was made), no bridge recorded,
+   * or no records yet.
    * `noRecord`: the records were read and none names this account (a
-   * reserved-name factor is listed): appFactorsForCode.
+   * reserved-name factor is listed).
+   * `noTable`: a reserved-name factor is listed and the table is missing, so
+   * no bridge can be known (passkeyRecordsUnread).
    */
-  | { kind: 'none'; noRecord?: true }
+  | { kind: 'none'; noRecord?: true; noTable?: true }
   /** The account's recorded bridge factor. */
   | { kind: 'recorded'; factorId: string }
-  /** The record could not be read: nothing is hidden. */
+  /** The record could not be read: nothing is hidden from a list; no code is asked for a reserved name. */
   | { kind: 'unreadable' };
 
 /** Where a read is made, for the reports (never an id). */
@@ -74,6 +85,7 @@ interface ListedFactor {
 
 const NONE: PasskeyBridge = { kind: 'none' };
 const NO_RECORD: PasskeyBridge = { kind: 'none', noRecord: true };
+const NO_TABLE: PasskeyBridge = { kind: 'none', noTable: true };
 const UNREADABLE: PasskeyBridge = { kind: 'unreadable' };
 
 /**
@@ -219,7 +231,7 @@ export async function readPasskeyBridge(
   if (answer.error) {
     if (tableMissing(answer.error)) {
       await reportPasskeyRecordsMissing('table', site, userId);
-      return NONE;
+      return NO_TABLE;
     }
     const code = typeof answer.error.code === 'string' ? answer.error.code : 'none';
     return reportUnreadable(site, { read: 'error', code });
@@ -253,41 +265,54 @@ export function withoutPasskeyBridge<T extends { id?: string }>(
 }
 
 /**
+ * Whether the account's bridge record could not be read: a failed read, or
+ * the table missing (both only ever answered when a reserved-name factor is
+ * listed). The places where a code is typed then say "try again" for an
+ * account left with no app, instead of the words of a second step that
+ * cannot be used here.
+ */
+export function passkeyRecordsUnread(bridge: PasskeyBridge): boolean {
+  return bridge.kind === 'unreadable' || (bridge.kind === 'none' && bridge.noTable === true);
+}
+
+/**
  * The authenticator apps whose code a step may ask for (the sign-in code
  * page, the step-up modal's list; the password reset), in their order: never
- * the recorded bridge, and,
- * once the records were read (a bridge recorded, or none for this account),
- * never a factor that carries the reserved name either. Such a factor is a
- * bridge that no record names (S12, S13, S14, S17 with no row; or S15's
- * second one), and its code is one no member has: our pages never give an app
- * the reserved name. Before the records exist (the table missing) and while
- * they cannot be read, the pick is by the recorded id only, as everywhere else
- * (the reserved name alone is never a proof).
+ * the recorded bridge, and never a factor that carries the reserved name,
+ * whatever the record read answered. Such a factor is a bridge (the recorded
+ * one, or one that no record names: S12, S13, S14, S17 with no row, S15's
+ * second one), and its code is one no member has: our pages never give an
+ * app the reserved name. While the records cannot be read (a failed read, or
+ * the table missing) the rule is the same: fail closed. A list with no
+ * reserved-name factor comes back as it is.
  */
 export function appFactorsForCode<T extends ListedFactor>(
   factors: readonly T[],
   bridge: PasskeyBridge,
 ): T[] {
-  const others = withoutPasskeyBridge(factors, bridge);
-  const recordsRead =
-    bridge.kind === 'recorded' || (bridge.kind === 'none' && bridge.noRecord === true);
-  return recordsRead ? others.filter((f) => !carriesBridgeName(f)) : others;
+  return withoutPasskeyBridge(factors, bridge).filter((f) => !carriesBridgeName(f));
 }
 
 /**
  * Why the code check (challengeFactorAction) must refuse `factor` before any
- * attempt is spent, or null when it may go on: 'passkey_bridge', the recorded
- * bridge; 'reserved_name_unrecorded', once the records are read, a factor
- * carrying the reserved name that no record names (appFactorsForCode's rule).
- * Before the records exist and while they cannot be read, only the recorded
- * id is refused (nothing is), as before.
+ * attempt is spent and before Auth is asked, or null when it may go on:
+ *   - 'passkey_bridge': the recorded bridge;
+ *   - 'reserved_name_unrecorded': the records were read, and no record names
+ *     this factor that carries the reserved name;
+ *   - 'records_unread': the factor carries the reserved name and the records
+ *     could not be read (a failed read, or the table missing): fail closed,
+ *     with "try again" words.
+ * A factor without the reserved name is never refused here.
  */
 export function refusedForCode(
   bridge: PasskeyBridge,
   factor: ListedFactor,
-): 'passkey_bridge' | 'reserved_name_unrecorded' | null {
+): 'passkey_bridge' | 'reserved_name_unrecorded' | 'records_unread' | null {
   if (isPasskeyBridge(bridge, factor.id)) return 'passkey_bridge';
-  return appFactorsForCode([factor], bridge).length === 0 ? 'reserved_name_unrecorded' : null;
+  if (!carriesBridgeName(factor)) return null;
+  const recordsRead =
+    bridge.kind === 'recorded' || (bridge.kind === 'none' && bridge.noRecord === true);
+  return recordsRead ? 'reserved_name_unrecorded' : 'records_unread';
 }
 
 /**
@@ -303,7 +328,7 @@ export function refusedForCode(
  *     here only while the record cannot be read; the answer is "try again in
  *     a moment" (FACTOR_CHECK_RETRY), and the failed read was reported.
  * A factor without the reserved name is never held back, and the table
- * missing ('none') holds back nothing.
+ * missing ('none', `noTable`) holds back nothing.
  */
 export function factorChangeRefusal(
   bridge: PasskeyBridge,

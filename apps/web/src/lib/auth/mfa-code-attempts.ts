@@ -87,7 +87,12 @@ export const MFA_CODE_BUDGET_SPENT = 'Too many code attempts. Wait a few minutes
 /** GoTrue's own rate limit answered. */
 export const MFA_CODE_GOTRUE_LIMITED =
   'Too many code checks right now. Wait a minute and try again.';
-/** GoTrue did not judge the code: no answer, or an answer this does not know. */
+/**
+ * GoTrue did not judge the code: no answer, or an answer this does not know.
+ * Also the code check's answer, before GoTrue is asked, for a factor that
+ * carries the passkey bridge's reserved name while the bridge record could
+ * not be read (lib/auth/passkey-bridge, refusedForCode).
+ */
 export const MFA_CODE_NOT_CHECKED = 'Could not check your code just now. Try again.';
 /** The challenge itself could not be started. */
 export const MFA_CHALLENGE_NOT_STARTED =

@@ -15,9 +15,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * account), a reserved-name factor that no record names is no app either: it
  * is never offered for a typed code (the lab walk of stage 4, state S12; its
  * code is one no member has), so an account left with no app gets the words
- * of a second step that cannot be used here and the recovery code. Every
- * factor while the records do not exist yet, or cannot be read, is listed
- * like any app, as before.
+ * of a second step that cannot be used here and the recovery code. While the
+ * records cannot be read (a failed read, or the table missing) a factor that
+ * carries the reserved name is still never offered for a typed code (fail
+ * closed): an account with an app is offered the app, and an account left
+ * with none gets the page's own "could not load, reload to try again" card,
+ * with no form. An account with no reserved-name factor makes no record
+ * read, so a failed read changes nothing for it.
  */
 
 const redirect = vi.fn((to: string) => {
@@ -35,6 +39,9 @@ const h = vi.hoisted(() => ({
   record: { data: null as unknown, error: null as unknown },
   /** The filters of every passkey_bridges read: whose record was asked for. */
   recordFilters: [] as Array<[string, unknown]>,
+  /** The service client cannot be made (a server without its key). */
+  adminThrows: false,
+  adminClients: 0,
 }));
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -52,18 +59,22 @@ vi.mock('@/lib/supabase/server', () => ({
   }),
 }));
 vi.mock('@/lib/supabase/admin', () => ({
-  createAdminClient: () => ({
-    from: () => {
-      const q: Record<string, unknown> = {};
-      q.select = () => q;
-      q.eq = (column: string, value: unknown) => {
-        h.recordFilters.push([column, value]);
+  createAdminClient: () => {
+    h.adminClients += 1;
+    if (h.adminThrows) throw new Error('the service client could not be made');
+    return {
+      from: () => {
+        const q: Record<string, unknown> = {};
+        q.select = () => q;
+        q.eq = (column: string, value: unknown) => {
+          h.recordFilters.push([column, value]);
+          return q;
+        };
+        q.maybeSingle = async () => h.record;
         return q;
-      };
-      q.maybeSingle = async () => h.record;
-      return q;
-    },
-  }),
+      },
+    };
+  },
 }));
 vi.mock('@/components/auth/mfa-challenge-form', () => ({ MfaChallengeForm: () => null }));
 
@@ -76,9 +87,12 @@ const BRIDGE = { id: 'bridge-1', status: 'verified', friendly_name: 'sp-passkey-
 const IMPOSTOR = { id: 'other-1', status: 'verified', friendly_name: 'sp-passkey-bridge-zzz' };
 
 /** The card's words and the factors handed to the form, or the redirect. */
-async function shown(): Promise<
+async function shown(
+  /** How many forms the card must hold: one, or none for a card of words only. */
+  forms_expected = 1,
+): Promise<
   | { to: string }
-  | { description: string; factors: Array<{ id: string; friendlyName: string | null }> }
+  | { description: string; factors: Array<{ id: string; friendlyName: string | null }> | null }
 > {
   let page: ReactElement<{ description: string; children: ReactNode }>;
   try {
@@ -97,8 +111,8 @@ async function shown(): Promise<
     walk(el.props?.children);
   };
   walk(page.props.children);
-  expect(forms).toHaveLength(1);
-  return { description: page.props.description, factors: forms[0]!.factors };
+  expect(forms).toHaveLength(forms_expected);
+  return { description: page.props.description, factors: forms[0]?.factors ?? null };
 }
 
 beforeEach(() => {
@@ -107,6 +121,8 @@ beforeEach(() => {
   h.aal = 'aal1';
   h.record = { data: { factor_id: BRIDGE.id }, error: null };
   h.recordFilters = [];
+  h.adminThrows = false;
+  h.adminClients = 0;
 });
 
 describe('the code page and the passkey bridge', () => {
@@ -165,28 +181,79 @@ describe('the code page and the passkey bridge', () => {
     }
   });
 
-  it('before the records exist, every verified factor is listed, as today', async () => {
-    h.factors = [BRIDGE, APP];
-    h.record = {
-      data: null,
-      error: {
-        code: 'PGRST205',
-        message: "Could not find the table 'public.passkey_bridges' in the schema cache",
-      },
-    };
-    expect(await shown()).toEqual({
-      description: "One more step. Confirm it's you with a code from your authenticator app.",
-      factors: [
-        { id: BRIDGE.id, friendlyName: BRIDGE.friendly_name },
-        { id: APP.id, friendlyName: 'Phone' },
-      ],
-    });
-  });
+  const NOT_YET = {
+    data: null,
+    error: {
+      code: 'PGRST205',
+      message: "Could not find the table 'public.passkey_bridges' in the schema cache",
+    },
+  };
+  const FAILED = { data: null, error: { code: '57014', message: 'canceling statement' } };
+  /** The page's own words for a list it could not load. */
+  const TRY_AGAIN = 'We could not load your authenticator just now. Reload this page to try again.';
 
-  it('a record that cannot be read hides nothing', async () => {
-    h.factors = [BRIDGE];
-    h.record = { data: null, error: { code: '57014', message: 'canceling statement' } };
-    expect(await shown()).toMatchObject({ factors: [{ id: BRIDGE.id }] });
+  describe('while the record cannot be read (fail closed)', () => {
+    it.each([
+      ['a failed read', FAILED, false],
+      ['the table missing', NOT_YET, false],
+      ['a service client that cannot be made', FAILED, true],
+    ])(
+      '%s, an app beside a reserved-name factor: the app only, whatever the order',
+      async (_state, record, adminThrows) => {
+        h.record = record;
+        h.adminThrows = adminThrows;
+        for (const order of [
+          [BRIDGE, APP],
+          [APP, IMPOSTOR, BRIDGE],
+        ]) {
+          h.factors = order;
+          expect(await shown()).toEqual({
+            description: "One more step. Confirm it's you with a code from your authenticator app.",
+            factors: [{ id: APP.id, friendlyName: 'Phone' }],
+          });
+        }
+      },
+    );
+
+    it.each([
+      ['a failed read', FAILED, false],
+      ['the table missing', NOT_YET, false],
+      ['a service client that cannot be made', FAILED, true],
+    ])(
+      '%s, no app: the try-again card, no code box, no form, and no trip to the dashboard',
+      async (_state, record, adminThrows) => {
+        h.record = record;
+        h.adminThrows = adminThrows;
+        for (const factors of [[BRIDGE], [IMPOSTOR, BRIDGE]]) {
+          h.factors = factors;
+          expect(await shown(0)).toEqual({ description: TRY_AGAIN, factors: null });
+        }
+        expect(redirect).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ['a failed read', FAILED, false],
+      ['the table missing', NOT_YET, false],
+      ['a service client that cannot be made', FAILED, true],
+    ])(
+      '%s: an account with no reserved-name factor gets the page exactly as before, with no record read',
+      async (_state, record, adminThrows) => {
+        h.record = record;
+        h.adminThrows = adminThrows;
+        const second = { id: 'app-2', status: 'verified', friendly_name: null };
+        h.factors = [APP, second];
+        expect(await shown()).toEqual({
+          description: "One more step. Confirm it's you with a code from your authenticator app.",
+          factors: [
+            { id: APP.id, friendlyName: 'Phone' },
+            { id: 'app-2', friendlyName: null },
+          ],
+        });
+        expect(h.adminClients).toBe(0);
+        expect(h.recordFilters).toEqual([]);
+      },
+    );
   });
 
   it('still sends an account with no verified factor, or a session at aal2, to the dashboard', async () => {

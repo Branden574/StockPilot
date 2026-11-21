@@ -18,9 +18,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * the reader of a reset page most often does not know). Once the records are
  * read, a factor that carries the bridge's reserved name and that no record
  * names (S12, S13, S14, S17 with no row) is not an app either: its code is
- * one no member has, so it is never asked for (the stage 5 fix). Before the
- * records exist, and while they cannot be read, the pick is today's. The
- * record read is the account's own.
+ * one no member has, so it is never asked for (the stage 5 fix). While the
+ * records cannot be read (a failed read, or the table missing) a factor that
+ * carries the reserved name is still never asked for (fail closed): the code
+ * of the member's app is, whatever the order, and an account with no app
+ * gets the plain answer with no code box. An account with no reserved-name
+ * factor makes no record read. The record read is the account's own.
  */
 
 vi.hoisted(() => {
@@ -212,17 +215,82 @@ describe('the reset picks an authenticator app, never the bridge', () => {
     });
   });
 
-  it('before the records exist, the pick is today’s (the first verified factor)', async () => {
-    listed(BRIDGE, APP);
+  it('an account with no reserved-name factor: the first verified app, and no record read at all', async () => {
+    const second = { ...APP, id: 'app-2', friendly_name: 'Tablet' };
+    listed(second, APP);
     bridgeRecord.mockResolvedValue({
       data: null,
+      error: { code: '57014', message: 'canceling statement due to statement timeout' },
+    });
+    const res = await completePasswordResetAction(INPUT);
+    expect(res.ok).toBe(true);
+    expect(challenge.mock.calls).toEqual([[{ factorId: 'app-2' }]]);
+    expect(bridgeRecord).not.toHaveBeenCalled();
+    expect(recordFilters).toEqual([]);
+  });
+});
+
+describe('while the bridge record cannot be read, the reset asks for no reserved-name factor’s code (fail closed)', () => {
+  const UNREAD: Array<[string, () => void]> = [
+    [
+      'the table missing',
+      () =>
+        bridgeRecord.mockResolvedValue({
+          data: null,
+          error: {
+            code: 'PGRST205',
+            message: "Could not find the table 'public.passkey_bridges' in the schema cache",
+          },
+        }),
+    ],
+    [
+      'a failed read',
+      () =>
+        bridgeRecord.mockResolvedValue({
+          data: null,
+          error: { code: '57014', message: 'canceling statement due to statement timeout' },
+        }),
+    ],
+  ];
+
+  it.each(UNREAD)('%s, with an app: the code of the app, whatever the order', async (_name, arrange) => {
+    arrange();
+    for (const order of [
+      [BRIDGE, APP],
+      [APP, BRIDGE],
+    ]) {
+      challenge.mockClear();
+      listed(...order);
+      const res = await completePasswordResetAction(INPUT);
+      expect(res.ok).toBe(true);
+      expect(challenge.mock.calls).toEqual([[{ factorId: APP.id }]]);
+    }
+  });
+
+  it.each(UNREAD)('%s, and no app: no code box, no code checked, the plain answer', async (_name, arrange) => {
+    arrange();
+    listed(BRIDGE);
+    updateUser.mockResolvedValue({
+      data: { user: null },
       error: {
-        code: 'PGRST205',
-        message: "Could not find the table 'public.passkey_bridges' in the schema cache",
+        name: 'AuthApiError',
+        status: 401,
+        code: 'insufficient_aal',
+        message: 'AAL2 session is required to update email or password when MFA is enabled.',
       },
     });
-    await completePasswordResetAction(INPUT);
-    expect(challenge.mock.calls).toEqual([[{ factorId: BRIDGE.id }]]);
+    for (const input of [INPUT, { password: RESET_VALUE, confirmPassword: RESET_VALUE }]) {
+      expect(await completePasswordResetAction(input)).toEqual({
+        ok: false,
+        error: {
+          code: 'forbidden',
+          message:
+            "A password reset isn't available for this account yet. Ask your organization's owner or StockPilot support for help.",
+        },
+      });
+    }
+    expect(challenge).not.toHaveBeenCalled();
+    expect(verify).not.toHaveBeenCalled();
   });
 });
 
@@ -295,15 +363,5 @@ describe('a reserved-name factor that no record names is not an app the member h
     const res = await completePasswordResetAction(INPUT);
     expect(res.ok).toBe(true);
     expect(challenge.mock.calls).toEqual([[{ factorId: APP.id }]]);
-  });
-
-  it('a record that cannot be read: the pick is today’s (nothing hidden; reported by the read)', async () => {
-    bridgeRecord.mockResolvedValue({
-      data: null,
-      error: { code: '57014', message: 'canceling statement due to statement timeout' },
-    });
-    listed(UNRECORDED, APP);
-    await completePasswordResetAction(INPUT);
-    expect(challenge.mock.calls).toEqual([[{ factorId: UNRECORDED.id }]]);
   });
 });

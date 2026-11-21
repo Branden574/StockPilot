@@ -595,7 +595,8 @@ export async function completePasswordResetAction(
   // the member's app (proof B7), and no app shows its code. Once the records
   // are read, a factor carrying the bridge's reserved name that no record
   // names is no app either (appFactorsForCode; S12, S13, S14, S17 with no
-  // row): its code is one no member has. An account whose
+  // row): its code is one no member has. While the record cannot be read
+  // the rule is the same (fail closed). An account whose
   // only factor is the bridge is asked for no code here: GoTrue still refuses
   // the new password at aal1 below, and the answer then says plainly that a
   // reset is not available for this account yet and whom to ask, with no

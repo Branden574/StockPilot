@@ -33,6 +33,7 @@ import {
   appFactorsForCode,
   FACTOR_CHECK_RETRY,
   factorChangeRefusal,
+  passkeyRecordsUnread,
   readPasskeyBridge,
   refusedForCode,
 } from '@/lib/auth/passkey-bridge';
@@ -124,7 +125,8 @@ const REFUSED_FACTOR_REPORT_WINDOW_MS = 60 * 60_000;
  * one account at one client address, then of the account at every address,
  * per window. The step-up modal asks once per opening, and only when the
  * browser lists a factor with the bridge's reserved name; a refusal leaves
- * the modal with the browser's own list, as before the action existed.
+ * the modal with the browser's own list without the reserved-name factors
+ * (it never offers one for a code).
  */
 const STEP_UP_METHODS_AT_ADDRESS = 20;
 const STEP_UP_METHODS_PER_ACCOUNT = 60;
@@ -508,13 +510,20 @@ export async function challengeFactorAction(input: {
     const factor = factors.find((f) => f.id === parsed.data.factorId);
     // The account's recorded passkey bridge is no authenticator of the
     // member's (lib/auth/passkey-bridge): Auth would check a code for it like
-    // any app. Nor, once the records are read, is a factor carrying the
-    // reserved name that no record names (the lab walk of stage 4, state
-    // S12): its code is one no member has. Read only when the factor named
-    // carries the reserved name; a record that cannot be read, or records
-    // that do not exist yet, hide nothing.
+    // any app. Nor is any factor carrying the reserved name: its code is one
+    // no member has. With the records read and no record naming it (the lab
+    // walk of stage 4, state S12) it is a second step that cannot be used
+    // here; while the records cannot be read (a failed read, or the table
+    // missing) it is refused all the same, with the "could not check, try
+    // again" words (fail closed). The record is read only when the factor
+    // named carries the reserved name, so an app's check is as it always was.
     let refused:
-      'not_listed' | 'not_verified' | 'passkey_bridge' | 'reserved_name_unrecorded' | null = null;
+      | 'not_listed'
+      | 'not_verified'
+      | 'passkey_bridge'
+      | 'reserved_name_unrecorded'
+      | 'records_unread'
+      | null = null;
     if (!factor) refused = 'not_listed';
     else if (factor.status !== 'verified') refused = 'not_verified';
     let hasApp = false;
@@ -532,6 +541,14 @@ export async function challengeFactorAction(input: {
           ),
           bridge,
         ).length > 0;
+    }
+    if (refused === 'records_unread') {
+      // Fail closed, before any attempt of the code budget and before Auth
+      // is asked: whether this factor is the account's bridge could not be
+      // read, and no member has a code for a factor of that name either
+      // way. The code page's own words for a code that could not be checked;
+      // the failed read was reported where it was made (readPasskeyBridge).
+      return err('internal_error', MFA_CODE_NOT_CHECKED);
     }
     if (refused === 'reserved_name_unrecorded') {
       // Fail closed, before any attempt of the code budget: the words of a
@@ -627,19 +644,28 @@ export async function challengeFactorAction(input: {
  * offers, when the browser's factor list shows a factor with the reserved
  * passkey bridge name (lib/auth/passkey-bridge-name): the browser cannot tell
  * the bridge from an app, so it asks here, once. The answer is the account's
- * verified TOTP factors without its RECORDED bridge (lib/auth/passkey-bridge),
- * in Auth's order; a record that cannot be read hides nothing.
+ * verified TOTP factors without its RECORDED bridge and without any other
+ * factor that carries the reserved name (lib/auth/passkey-bridge,
+ * appFactorsForCode), in Auth's order. While the record cannot be read (a
+ * failed read, or the table missing) the answer also says so
+ * (`recordsUnread: true`), so a modal left with no app says "try again"
+ * instead of "this cannot be done here".
  *
  * Reads only: the account from this session's verified token, that account's
  * own factor list (GoTrue's user answer, which says whose list it is) and its
  * own record. It runs at aal1 or aal2, like the code check it serves. Each
  * call first counts in two closed limits (the account at this address, then
  * the account: STEP_UP_METHODS_*); a refusal reads nothing, and the modal
- * keeps the browser's list. The one change it can make: a session whose
+ * keeps the browser's list without the reserved-name factors. The one change
+ * it can make: a session whose
  * factor list is another account's is signed out here.
  */
 export async function stepUpMethodsAction(): Promise<
-  ActionResult<{ apps: Array<{ id: string; friendlyName: string | null }> }>
+  ActionResult<{
+    apps: Array<{ id: string; friendlyName: string | null }>;
+    /** Present only when the bridge record could not be read. */
+    recordsUnread?: true;
+  }>
 > {
   try {
     const supabase = await createClient();
@@ -663,7 +689,7 @@ export async function stepUpMethodsAction(): Promise<
     );
     if (!forAccount.allowed) return err('rate_limited', STEP_UP_METHODS_PAUSED);
     // A list that cannot be read throws to the catch below; the modal then
-    // keeps the browser's own list.
+    // keeps the browser's own list, without the reserved-name factors.
     const factors = factorsOf(await readMfaFactorList(supabase), claims.userId);
     if (!factors) {
       // The session now holds another account than the one it verified as:
@@ -677,12 +703,13 @@ export async function stepUpMethodsAction(): Promise<
     );
     const bridge = await readPasskeyBridge(claims.userId, verified, 'step_up_methods');
     return ok({
-      // Never the recorded bridge, and once the records are read never a
-      // reserved-name factor that no record names (appFactorsForCode).
+      // Never the recorded bridge, nor any other factor that carries the
+      // reserved name, whatever the record read answered (appFactorsForCode).
       apps: appFactorsForCode(verified, bridge).map((f) => ({
         id: f.id,
         friendlyName: f.friendly_name ?? null,
       })),
+      ...(passkeyRecordsUnread(bridge) ? { recordsUnread: true as const } : {}),
     });
   } catch (e) {
     rethrowControlFlow(e);

@@ -130,8 +130,9 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
         }));
         // A factor with the passkey bridge's reserved name: only the server
         // knows whether it is the account's bridge, whose code no app shows,
-        // so it is asked once for the account's apps. Without an answer the
-        // list stays as it is (the code check refuses the bridge itself).
+        // so it is asked once for the account's apps. A factor of that name
+        // is never offered for a code here, whatever the server answered
+        // (fail closed; the code check refuses it too).
         if (verified.some(carriesBridgeName)) {
           let methods: Awaited<ReturnType<typeof stepUpMethodsAction>> | null = null;
           try {
@@ -144,20 +145,31 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
           if (methods?.ok) {
             totp = methods.data.apps;
             if (totp.length === 0) {
+              if (methods.data.recordsUnread) {
+                // The bridge record could not be read just now: a passing
+                // fault, said in the words of a list that could not load.
+                setFactors(null);
+                setFactorId('');
+                setError(FACTORS_UNREADABLE_COPY);
+                return;
+              }
               setFactors(totp);
               setFactorId('');
               setBridgeOnly(true);
               return;
             }
           } else {
-            // No answer: the browser's list as it is (nothing hidden), with
-            // the reserved-name factors LAST, so the bridge is never the one
-            // chosen first (review B finding 7: after the member's app is
-            // used, Auth lists the bridge first, proof B7).
-            totp = [
-              ...totp.filter((f) => !carriesBridgeName({ friendly_name: f.friendlyName })),
-              ...totp.filter((f) => carriesBridgeName({ friendly_name: f.friendlyName })),
-            ];
+            // No answer: the browser's own list without the reserved-name
+            // factors (fail closed: which of them is the bridge is not
+            // known, and no member has a code for any of them). With no app
+            // left, the words of a list that could not load.
+            totp = totp.filter((f) => !carriesBridgeName({ friendly_name: f.friendlyName }));
+            if (totp.length === 0) {
+              setFactors(null);
+              setFactorId('');
+              setError(FACTORS_UNREADABLE_COPY);
+              return;
+            }
           }
         }
         setFactors(totp);

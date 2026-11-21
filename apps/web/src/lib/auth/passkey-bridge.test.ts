@@ -14,11 +14,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *     warning level, at most once per account per hour (a closed limiter);
  *   - the table missing (PostgREST PGRST205, Postgres 42P01, naming the
  *     table: before 0475 is live, or a schema cache that lost it) hides
- *     nothing; with a reserved-name factor listed it is reported at error
- *     level, at most once per hour for every account together (review 2-3
- *     finding 3);
+ *     nothing from a list; with a reserved-name factor listed it is reported
+ *     at error level, at most once per hour for every account together
+ *     (review 2-3 finding 3);
  *   - a read that fails any other way, throws, or answers in a shape this
- *     does not know hides nothing and is reported at error level;
+ *     does not know hides nothing from a list and is reported at error level;
+ *   - where a CODE is typed (the code page, the step-up list, the code
+ *     check, the password reset) a factor that carries the reserved name is
+ *     never an app, whatever the record read answered: with the records
+ *     read it is refused as a second step that cannot be used here, and
+ *     while they cannot be read (a failed read, or the table missing) it is
+ *     refused as "could not check, try again" (fail closed). A factor
+ *     without the name is never touched by any of this;
  *   - an action that CHANGES a factor (removal, confirming a set-up, the
  *     set-up clean-up) leaves the recorded bridge alone, and, while the
  *     record cannot be read, every factor that carries the reserved name
@@ -65,6 +72,7 @@ import {
   factorChangeRefusal,
   refusedForCode,
   isPasskeyBridge,
+  passkeyRecordsUnread,
   readPasskeyBridge,
   reportPasskeyRecordsMissing,
   withoutPasskeyBridge,
@@ -186,7 +194,9 @@ describe('readPasskeyBridge', () => {
     async (code, message) => {
       h.answer = { data: null, error: { code, message } };
       const bridge = await readPasskeyBridge(USER, [BRIDGE, APP], 'challenge');
-      expect(bridge).toEqual({ kind: 'none' });
+      // No bridge can be known, and the answer says why: the table is missing.
+      expect(bridge).toEqual({ kind: 'none', noTable: true });
+      expect(passkeyRecordsUnread(bridge)).toBe(true);
       expect(withoutPasskeyBridge([BRIDGE, APP], bridge)).toEqual([BRIDGE, APP]);
       expect(checkRateLimit).toHaveBeenCalledWith(
         'passkeys-records-missing-report:table',
@@ -215,7 +225,10 @@ describe('readPasskeyBridge', () => {
       },
     };
     vi.mocked(checkRateLimit).mockResolvedValueOnce(LIMIT_REFUSED);
-    expect(await readPasskeyBridge(USER, [BRIDGE], 'unenroll')).toEqual({ kind: 'none' });
+    expect(await readPasskeyBridge(USER, [BRIDGE], 'unenroll')).toEqual({
+      kind: 'none',
+      noTable: true,
+    });
     expect(reportError).not.toHaveBeenCalled();
   });
 
@@ -377,9 +390,41 @@ describe('appFactorsForCode: the apps a code can be asked for (the code page, th
     expect(appFactorsForCode([second, IMPOSTOR, APP], recorded)).toEqual([second, APP]);
   });
 
-  it('before the records exist, and while they cannot be read, the pick is stage 2’s: by the recorded id only', () => {
-    expect(appFactorsForCode([BRIDGE, APP], { kind: 'none' })).toEqual([BRIDGE, APP]);
-    expect(appFactorsForCode([BRIDGE, APP], { kind: 'unreadable' })).toEqual([BRIDGE, APP]);
+  it('while the records cannot be read (a failed read, or the table missing): still no factor that carries the reserved name', () => {
+    for (const unread of [
+      { kind: 'unreadable' },
+      { kind: 'none', noTable: true },
+    ] as PasskeyBridge[]) {
+      expect(appFactorsForCode([BRIDGE, APP], unread)).toEqual([APP]);
+      expect(appFactorsForCode([APP, IMPOSTOR, BRIDGE], unread)).toEqual([APP]);
+      expect(appFactorsForCode([BRIDGE], unread)).toEqual([]);
+    }
+  });
+
+  it('an account with no reserved-name factor keeps every app, whatever the record read would have answered', () => {
+    const second = { ...APP, id: 'app-2' };
+    for (const bridge of [
+      { kind: 'none' },
+      { kind: 'none', noTable: true },
+      { kind: 'none', noRecord: true },
+      { kind: 'unreadable' },
+      recorded,
+    ] as PasskeyBridge[]) {
+      expect(appFactorsForCode([APP, second], bridge)).toEqual([APP, second]);
+    }
+  });
+});
+
+describe('passkeyRecordsUnread: whether the records could not be read', () => {
+  it('a failed read and a missing table: yes', () => {
+    expect(passkeyRecordsUnread({ kind: 'unreadable' })).toBe(true);
+    expect(passkeyRecordsUnread({ kind: 'none', noTable: true })).toBe(true);
+  });
+
+  it('records read (a bridge, or none for the account), and no read at all: no', () => {
+    expect(passkeyRecordsUnread({ kind: 'recorded', factorId: BRIDGE.id })).toBe(false);
+    expect(passkeyRecordsUnread({ kind: 'none', noRecord: true })).toBe(false);
+    expect(passkeyRecordsUnread({ kind: 'none' })).toBe(false);
   });
 });
 
@@ -398,9 +443,23 @@ describe('refusedForCode: the code check (the lab walk of stage 4, state S12)', 
     expect(refusedForCode(noRecord, APP)).toBeNull();
   });
 
-  it('before the records exist, and while they cannot be read: nothing is refused (stage 2 as before)', () => {
-    expect(refusedForCode({ kind: 'none' }, IMPOSTOR)).toBeNull();
-    expect(refusedForCode({ kind: 'unreadable' }, IMPOSTOR)).toBeNull();
-    expect(refusedForCode({ kind: 'unreadable' }, BRIDGE)).toBeNull();
+  it('while the records cannot be read (a failed read, or the table missing): every factor that carries the reserved name is refused, as not checked', () => {
+    for (const unread of [
+      { kind: 'unreadable' },
+      { kind: 'none', noTable: true },
+    ] as PasskeyBridge[]) {
+      expect(refusedForCode(unread, IMPOSTOR)).toBe('records_unread');
+      expect(refusedForCode(unread, BRIDGE)).toBe('records_unread');
+    }
+  });
+
+  it('a reserved-name factor is refused even when no read was made for it (never a code for that name)', () => {
+    expect(refusedForCode({ kind: 'none' }, IMPOSTOR)).toBe('records_unread');
+  });
+
+  it('while the records cannot be read, an app is checked exactly as before', () => {
+    expect(refusedForCode({ kind: 'unreadable' }, APP)).toBeNull();
+    expect(refusedForCode({ kind: 'none', noTable: true }, APP)).toBeNull();
+    expect(refusedForCode({ kind: 'none' }, APP)).toBeNull();
   });
 });

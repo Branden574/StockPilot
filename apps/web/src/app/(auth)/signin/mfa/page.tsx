@@ -4,7 +4,11 @@ import { Suspense } from 'react';
 import { AuthCard } from '@/components/auth/auth-card';
 import { MfaChallengeForm } from '@/components/auth/mfa-challenge-form';
 import { Skeleton } from '@/components/ui/skeleton';
-import { appFactorsForCode, readPasskeyBridge } from '@/lib/auth/passkey-bridge';
+import {
+  appFactorsForCode,
+  passkeyRecordsUnread,
+  readPasskeyBridge,
+} from '@/lib/auth/passkey-bridge';
 import { createClient } from '@/lib/supabase/server';
 
 export const metadata = {
@@ -47,11 +51,11 @@ export default async function MfaChallengePage() {
   // phone + hardware backup app), pass the full list so the form can
   // let them pick which one they want to challenge against. Never the
   // account's recorded passkey bridge (lib/auth/passkey-bridge): no app
-  // shows its code. Nor, once the records are read, a factor carrying the
-  // reserved name that no record names (the lab walk of stage 4, state S12):
-  // its code is one no member has, so an account left with no app gets the
-  // words below and the recovery code. A record that cannot be read, or
-  // records that do not exist yet, hide nothing.
+  // shows its code. Nor any other factor carrying the reserved name,
+  // whatever the record read answered (the lab walk of stage 4, state S12;
+  // fail closed while the record cannot be read): its code is one no member
+  // has, so an account left with no app gets the words below. An account
+  // with no reserved-name factor makes no record read.
   const bridge = await readPasskeyBridge(user.id, verifiedTotp, 'sign_in_page');
   const factors = appFactorsForCode(verifiedTotp, bridge).map((f) => ({
     id: f.id,
@@ -62,6 +66,18 @@ export default async function MfaChallengePage() {
   // Only a passkey, which this page cannot take yet: the recovery code is
   // the way in (the form shows no code box without an app).
   if (factors.length === 0) {
+    // The bridge record could not be read (a failed read, or the table
+    // missing): a passing fault, not a second step that cannot be used. The
+    // page's own words for a list it could not load, and no form.
+    if (passkeyRecordsUnread(bridge)) {
+      return (
+        <AuthCard
+          eyebrow="Two-factor"
+          title="Two-factor authentication"
+          description="We could not load your authenticator just now. Reload this page to try again."
+        />
+      );
+    }
     return (
       <AuthCard
         eyebrow="Two-factor"

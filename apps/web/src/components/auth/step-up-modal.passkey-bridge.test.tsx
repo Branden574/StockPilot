@@ -14,15 +14,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * once (stepUpMethodsAction) for the account's apps, and offers those. With no
  * reserved-name factor nothing new happens (the Classic pins in
  * __classic__/step-up-modal.*.txt hold that DOM byte for byte). When the
- * server cannot answer, the browser's list is used as it is: nothing is
- * hidden, and challengeFactorAction still refuses the bridge. When the server
- * answers that the account has no app beside the bridge, the modal asks for
- * no code at all: its title and description say plainly that this
+ * server answers that the account has no app beside the bridge, the modal
+ * asks for no code at all: its title and description say plainly that this
  * confirmation cannot be done here yet and what to do, never "No
- * authenticator is enrolled" (review 2-3 finding 9, review B finding 6). When
- * the server gives no answer, the reserved-name factors go last in the
- * browser's list, so the bridge is never the one chosen first (review B
- * finding 7).
+ * authenticator is enrolled" (review 2-3 finding 9, review B finding 6).
+ *
+ * Fail closed: a factor with the reserved name is never offered for a code
+ * here, whatever the server answered. When the server gives no answer, or
+ * says the bridge record could not be read, the modal offers the account's
+ * other apps only; with none left it says, in its own words for a list it
+ * could not load, to try again, and no code can be sent.
  */
 
 const listFactors = vi.fn();
@@ -97,7 +98,7 @@ describe('StepUpModal and the passkey bridge', () => {
     await waitFor(() => expect(screen.getByTestId('result')).toHaveTextContent('true'));
   });
 
-  it('when the server cannot answer, the browser’s list is used, nothing hidden, the reserved-name factor last and the app chosen', async () => {
+  it('when the server cannot answer, the app alone is offered: a reserved-name factor is never listed', async () => {
     const user = userEvent.setup();
     listFactors.mockResolvedValue({ data: { totp: [BRIDGE, APP] }, error: null });
     stepUpMethodsAction.mockResolvedValue({
@@ -106,15 +107,88 @@ describe('StepUpModal and the passkey bridge', () => {
     });
     await openStepUp();
     await waitFor(() => expect(stepUpMethodsAction).toHaveBeenCalledTimes(1));
+    // One app: the code field alone, no Authenticator select.
+    await waitFor(() => expect(screen.getByLabelText('Authentication code')).toBeInTheDocument());
+    expect(screen.queryByLabelText('Authenticator')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText('Authentication code'), '123456');
+    await user.click(screen.getByRole('button', { name: 'Verify' }));
+    expect(challengeFactorAction.mock.calls).toEqual([[{ factorId: APP.id, code: '123456' }]]);
+  });
+
+  it('when the server cannot answer and two apps sit beside reserved-name factors, only the apps can be chosen', async () => {
+    const SECOND = { ...APP, id: 'f-app-2', friendly_name: 'Tablet' };
+    const STRAY = { ...BRIDGE, id: 'f-stray', friendly_name: 'sp-passkey-bridge-zzz' };
+    listFactors.mockResolvedValue({ data: { totp: [BRIDGE, APP, STRAY, SECOND] }, error: null });
+    stepUpMethodsAction.mockResolvedValue({
+      ok: false,
+      error: { code: 'rate_limited', message: 'x' },
+    });
+    await openStepUp();
     const select = await screen.findByLabelText('Authenticator');
     expect(Array.from((select as HTMLSelectElement).options).map((o) => o.value)).toEqual([
       APP.id,
-      BRIDGE.id,
+      SECOND.id,
     ]);
-    expect((select as HTMLSelectElement).value).toBe(APP.id);
+  });
+
+  it.each([
+    [
+      'the server cannot answer',
+      () =>
+        stepUpMethodsAction.mockResolvedValue({
+          ok: false,
+          error: { code: 'internal_error', message: 'x' },
+        }),
+    ],
+    ['the request itself fails', () => stepUpMethodsAction.mockRejectedValue(new Error('network'))],
+    [
+      'the server says the bridge record could not be read',
+      () =>
+        stepUpMethodsAction.mockResolvedValue({
+          ok: true,
+          data: { apps: [], recordsUnread: true },
+        }),
+    ],
+  ])(
+    'only a reserved-name factor and %s: the try-again words, and no code can be sent',
+    async (_name, arrange) => {
+      listFactors.mockResolvedValue({ data: { totp: [BRIDGE] }, error: null });
+      arrange();
+      const dialog = await openStepUp();
+      await waitFor(() => expect(stepUpMethodsAction).toHaveBeenCalledTimes(1));
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'Could not load your authenticator. Try again.',
+      );
+      // Not the words of an account with nothing set up, nor of one whose
+      // confirmation cannot be done here at all: this is a passing fault.
+      expect(dialog.textContent).not.toMatch(/No authenticator is enrolled|can't be done here/);
+      expect(dialog.textContent).not.toContain('sp-passkey-bridge');
+      expect(screen.queryByLabelText('Authenticator')).not.toBeInTheDocument();
+      // No factor is chosen, so Verify stays off whatever is typed.
+      fireEvent.change(screen.getByLabelText('Authentication code'), {
+        target: { value: '123456' },
+      });
+      expect(screen.getByRole('button', { name: 'Verify' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+      expect(challengeFactorAction).not.toHaveBeenCalled();
+    },
+  );
+
+  it('the server says the bridge record could not be read, and names an app: the app is offered as usual', async () => {
+    const user = userEvent.setup();
+    listFactors.mockResolvedValue({ data: { totp: [BRIDGE, APP] }, error: null });
+    stepUpMethodsAction.mockResolvedValue({
+      ok: true,
+      data: { apps: [{ id: APP.id, friendlyName: 'Phone' }], recordsUnread: true },
+    });
+    await openStepUp();
+    await waitFor(() => expect(stepUpMethodsAction).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByLabelText('Authentication code')).toBeInTheDocument());
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     await user.type(screen.getByLabelText('Authentication code'), '123456');
     await user.click(screen.getByRole('button', { name: 'Verify' }));
-    expect(challengeFactorAction).toHaveBeenCalledWith({ factorId: APP.id, code: '123456' });
+    expect(challengeFactorAction.mock.calls).toEqual([[{ factorId: APP.id, code: '123456' }]]);
   });
 
   it('only the bridge: no code asked anywhere, one plain sentence that says it cannot be done here yet and what to do', async () => {
@@ -139,19 +213,17 @@ describe('StepUpModal and the passkey bridge', () => {
     expect(challengeFactorAction).not.toHaveBeenCalled();
   });
 
-  it('when the request itself fails, the browser’s list is used, the reserved-name factor last', async () => {
+  it('when the request itself fails, the app alone is offered', async () => {
     listFactors.mockResolvedValue({ data: { totp: [BRIDGE, APP] }, error: null });
     stepUpMethodsAction.mockRejectedValue(new Error('network'));
     await openStepUp();
     await waitFor(() => expect(stepUpMethodsAction).toHaveBeenCalledTimes(1));
-    const select = await screen.findByLabelText('Authenticator');
-    expect(Array.from((select as HTMLSelectElement).options).map((o) => o.value)).toEqual([
-      APP.id,
-      BRIDGE.id,
-    ]);
+    await waitFor(() => expect(screen.getByLabelText('Authentication code')).toBeInTheDocument());
+    expect(screen.queryByLabelText('Authenticator')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
-  it('with the server answering, its order is kept as it is (only the fallback is reordered)', async () => {
+  it('with the server answering, its order is kept as it is', async () => {
     const SECOND = { ...APP, id: 'f-app-2', friendly_name: 'Tablet' };
     listFactors.mockResolvedValue({ data: { totp: [BRIDGE, APP, SECOND] }, error: null });
     stepUpMethodsAction.mockResolvedValue({
