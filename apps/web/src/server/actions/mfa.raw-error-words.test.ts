@@ -106,7 +106,7 @@ vi.mock('@/lib/supabase/server', () => ({
 // last method, so the words of GoTrue's refusal are what is pinned.
 vi.mock('@/server/security/second-step-methods', () => ({
   LAST_METHOD_WORDS: 'last method',
-  lastMethodBlocks: vi.fn(async () => false),
+  lastMethodVerdict: vi.fn(async () => 'allowed'),
 }));
 
 import { reportError } from '@/lib/error-reporter';

@@ -11,8 +11,8 @@ import { audit } from '@/server/services/audit';
 import { assertCurrentAal2, ServiceError, withContext } from '@/server/services/context';
 import { dispatchEvent } from '@/server/services/integration-events';
 import { SESSION_CHANGED } from '@/server/services/step-up-held';
-import { passkeyStepFor } from '@/server/security/passkeys';
-import { LAST_METHOD_WORDS, lastMethodBlocks } from '@/server/security/second-step-methods';
+import { passkeyStepFor, servingPasskeyIds } from '@/server/security/passkeys';
+import { LAST_METHOD_WORDS, lastMethodVerdict } from '@/server/security/second-step-methods';
 import {
   checkMfaCode,
   MFA_CHALLENGE_NOT_STARTED,
@@ -420,22 +420,25 @@ export async function unenrollFactorAction(input: {
     const listed = await contextFactorsOf(svcCtx, session.userId);
     // Decision B (2026-11-21), "the last method": the account's LAST
     // second-step method (verified authenticator apps, never the bridge, and
-    // active passkeys) cannot be removed while a policy of an organization
-    // the member belongs to requires one; removing one of two is allowed. The
-    // active organization's policy is the one read above; the others are
-    // read only when no method would be left. Strict on doubt: a list that
-    // cannot be read counts as the last method. The same words as a
-    // passkey's removal (server/security/second-step-methods.ts).
-    if (
-      await lastMethodBlocks({
-        userId: session.userId,
-        removing: { kind: 'app', factorId: parsed.data.factorId },
-        factors: listed,
-        requiredKnown: required,
-      })
-    ) {
-      return err('forbidden', LAST_METHOD_WORDS);
-    }
+    // passkeys that can actually serve as the second step now) cannot be
+    // removed while a policy of an organization the member belongs to
+    // requires one; removing one of two is allowed. The active
+    // organization's policy is the one read above; the others are read only
+    // when no method would be left. The passkeys are judged by the
+    // second-step page's own rule, only when no app would remain, and never
+    // with an unknown list. Unknown is never fine: a list or a judgement that
+    // cannot be read, under a policy that requires a second step, is "try
+    // again in a moment". The same words as a passkey's removal
+    // (server/security/second-step-methods.ts).
+    const verdict = await lastMethodVerdict({
+      userId: session.userId,
+      removing: { kind: 'app', factorId: parsed.data.factorId },
+      factors: listed,
+      servingPasskeys: () => servingPasskeyIds(session.userId, listed),
+      requiredKnown: required,
+    });
+    if (verdict === 'last_method') return err('forbidden', LAST_METHOD_WORDS);
+    if (verdict === 'unreadable') return err('internal_error', FACTOR_CHECK_RETRY);
 
     // Never the account's recorded passkey bridge (lib/auth/passkey-bridge):
     // Auth would remove it like any factor (proof B6) and the passkey would

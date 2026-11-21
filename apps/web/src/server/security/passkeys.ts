@@ -59,13 +59,14 @@ import {
   type RaisedSession,
 } from './passkey-auth';
 import { sendPasskeyAddedEmail, sendPasskeyRemovedEmail } from './passkey-emails';
-import { LAST_METHOD_WORDS, lastMethodBlocks } from './second-step-methods';
+import { LAST_METHOD_RETRY_WORDS, LAST_METHOD_WORDS, lastMethodVerdict } from './second-step-methods';
 import {
   compareTimes,
   isReservedTotp,
   judgePasskeyAccount,
   PASSKEY_RAISE_EVENT,
   passkeyFactsOf,
+  type AuthFactorFact,
 } from './passkey-state';
 
 import type { ActionErrorCode } from '@stockpilot/core';
@@ -613,8 +614,6 @@ async function readPicture(
     return fail('unauthenticated', PASSKEY_WORDS.sessionEnded, 'account_changed');
   if (rows === null || bridge === 'unreadable')
     return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'records_unreadable');
-  const facts = passkeyFactsOf(rows, bridge?.factor_id ?? null, account.factors, rp.rpId);
-  const active = rows.filter((r) => r.removed_at === null && r.rp_id === rp.rpId);
   const apps = account.factors.filter(
     (f) => f.factor_type === 'totp' && f.status === 'verified' && f.id !== bridge?.factor_id,
   );
@@ -623,18 +622,33 @@ async function readPicture(
     picture: {
       email: account.email,
       factors: account.factors,
-      rows,
-      bridge,
-      state: judgePasskeyAccount(facts),
-      facts,
-      active,
+      ...judged(rows, bridge, account.factors, rp),
       apps,
     },
   };
 }
 
+/** The judged part of a picture: the account's rows, bridge row and factors, by rule 23. */
+type Judged = Pick<AccountPicture, 'rows' | 'bridge' | 'state' | 'facts' | 'active'>;
+
+function judged(
+  rows: PasskeyRow[],
+  bridge: BridgeRow | null,
+  factors: ReadonlyArray<AuthFactorFact>,
+  rp: RelyingParty,
+): Judged {
+  const facts = passkeyFactsOf(rows, bridge?.factor_id ?? null, factors, rp.rpId);
+  return {
+    rows,
+    bridge,
+    state: judgePasskeyAccount(facts),
+    facts,
+    active: rows.filter((r) => r.removed_at === null && r.rp_id === rp.rpId),
+  };
+}
+
 /** A healthy state, where the passkey answers: S6, plus S15 and S3 beside a healthy bridge. */
-function bridgeServes(p: AccountPicture): boolean {
+function bridgeServes(p: Judged): boolean {
   if (p.active.length === 0 || !p.bridge || p.facts.bridgeStatus !== 'verified') return false;
   if (p.state === 'healthy' || p.state === 'unverified_reserved_factor') return true;
   // S15: a second verified reserved-name factor beside a VERIFIED bridge.
@@ -1078,8 +1092,18 @@ function existingHolder(
   return picture.active.some(usedBefore);
 }
 
+/**
+ * The passkeys answer as the second step: the bridge serves (bridgeServes)
+ * and its secret opens with the keys we hold. The second-step page's own
+ * judgement (stepOf), and the last-method rule's (servingPasskeyIds,
+ * removePasskey; decision B, correction 1).
+ */
+function servesAsSecondStep(picture: Judged, userId: string, keys: BridgeKeys): boolean {
+  return bridgeServes(picture) && opens(picture, userId, keys);
+}
+
 /** Whether the recorded bridge's secret opens with the keys we hold (not S9). */
-function opens(picture: AccountPicture, userId: string, keys: BridgeKeys): boolean {
+function opens(picture: Pick<AccountPicture, 'bridge'>, userId: string, keys: BridgeKeys): boolean {
   const b = picture.bridge;
   if (!b) return false;
   return (
@@ -1641,17 +1665,24 @@ export async function removePasskey(input: {
   const target = picture.rows.find((r) => r.id === id.data && r.removed_at === null);
   if (!target) return fail('not_found', PASSKEY_WORDS.alreadyRemoved, 'not_found');
   // Decision B: the account's last second-step method (apps and passkeys
-  // counted alike), under a policy of any organization of the member.
-  if (
-    await lastMethodBlocks({
-      userId,
-      removing: { kind: 'passkey', passkeyId: target.id },
-      factors: picture.factors,
-      passkeyIds: picture.active.map((r) => r.id),
-    })
-  ) {
+  // counted alike), under a policy of any organization of the member. With
+  // the corrections: the passkeys counted are those that serve now (the USE
+  // level, read only when no app would remain, and the page's own
+  // judgement), else none; what cannot be read is "try again".
+  const verdict = await lastMethodVerdict({
+    userId,
+    removing: { kind: 'passkey', passkeyId: target.id },
+    factors: picture.factors,
+    servingPasskeys: async () => {
+      const use = await passkeyUseGate(userId);
+      if (!use.open) return use.why === 'unreadable' ? null : [];
+      return servesAsSecondStep(picture, userId, use.keys) ? picture.active.map((r) => r.id) : [];
+    },
+  });
+  if (verdict === 'last_method')
     return fail('forbidden', PASSKEY_WORDS.policyBlocksRemoval, 'policy');
-  }
+  if (verdict === 'unreadable')
+    return fail('internal_error', LAST_METHOD_RETRY_WORDS, 'last_method_unreadable');
   // The other sessions, listed before anything ends (for the broadcast).
   const asMember = createAccessTokenClient(held.token);
   const listed = await listMySessionIds(asMember);
@@ -1867,7 +1898,64 @@ async function stepOf(
   if (!read.ok) return 'none';
   const picture = read.picture;
   if (finishesRemoval(picture)) return 'ready';
-  return bridgeServes(picture) && opens(picture, userId, gate.keys) ? 'ready' : 'none';
+  return servesAsSecondStep(picture, userId, gate.keys) ? 'ready' : 'none';
+}
+
+/**
+ * Decision B, correction 1 (2026-11-21): the ids of the account's passkeys
+ * that can ACTUALLY serve as its second step now, judged as the second-step
+ * page judges them (stepOf): the USE level open (a site, a key, the kill
+ * switch on, the account on) and servesAsSecondStep (an active row of this
+ * site, a recorded bridge whose reserved-name TOTP factor exists and is
+ * verified in a state where the bridge answers, a secret the keys open).
+ * A passkey row alone is no method.
+ *
+ * [] when none can serve (no site: nothing is read). null when it cannot be
+ * told (correction 2): the factor list unknown (nothing is read; the bridge
+ * cannot be judged without it), the switch unread, a record unread. Never
+ * throws. `factors` is the caller's list of `userId`'s factors (the one
+ * withContext() read); a factor without an id is left out.
+ */
+export async function servingPasskeyIds(
+  userId: string,
+  factors: ReadonlyArray<{
+    id?: unknown;
+    factor_type?: unknown;
+    status?: unknown;
+    friendly_name?: unknown;
+    created_at?: unknown;
+  }> | null,
+): Promise<string[] | null> {
+  try {
+    if (!passkeyRelyingParty()) return [];
+    if (factors === null) return null;
+    const gate = await passkeyUseGate(userId);
+    if (!gate.open) return gate.why === 'unreadable' ? null : [];
+    const admin = createAdminClient();
+    const [rows, bridge] = await Promise.all([
+      readRows(admin, userId),
+      readBridgeRow(admin, userId),
+    ]);
+    if (rows === null || bridge === 'unreadable') return null;
+    const text = (v: unknown) => (typeof v === 'string' ? v : null);
+    const listed: AuthFactorFact[] = factors.flatMap((f) =>
+      typeof f.id === 'string'
+        ? [
+            {
+              id: f.id,
+              factor_type: text(f.factor_type),
+              status: text(f.status),
+              friendly_name: text(f.friendly_name),
+              created_at: text(f.created_at),
+            },
+          ]
+        : [],
+    );
+    const picture = judged(rows, bridge, listed, gate.rp);
+    return servesAsSecondStep(picture, userId, gate.keys) ? picture.active.map((r) => r.id) : [];
+  } catch {
+    return null;
+  }
 }
 
 /** The user handle of an account (tests and the registration options agree on it). */

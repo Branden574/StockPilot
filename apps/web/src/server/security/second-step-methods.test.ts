@@ -4,20 +4,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * Decision B (2026-11-21): one last-method rule for authenticator apps and
  * passkeys. The LAST second-step method cannot be removed while a policy of
  * an organization the member belongs to requires one; one of two may go.
- * Apps counted: verified TOTP factors without the reserved bridge name.
- * Passkeys counted: active rows of this site. Strict on doubt. Reads only
- * what it needs. The service-role client is a fake that applies the filters
- * it is given and records every read.
+ *
+ * With the integrator's two corrections of the same day:
+ *   1. A passkey counts only when it can actually serve as the second step
+ *      (the caller's judgement: the second-step page's own, in
+ *      server/security/passkeys.ts servingPasskeyIds). A row alone is not a
+ *      method.
+ *   2. Unknown is never fine. An unknown app count (the factor list unread,
+ *      or another account's) never lets the passkeys answer "allowed"; a
+ *      passkey judgement that could not be made, or a policy that could not
+ *      be read, answers "try again" wherever a requiring policy could hold.
+ *
+ * Apps counted: verified TOTP factors without the reserved bridge name. The
+ * service-role client is a fake that applies the filters it is given and
+ * records every read; the passkey judgement is a spy.
  */
 
 type Row = Record<string, unknown>;
 
 const h = vi.hoisted(() => ({
-  rp: { rpId: 'localhost', origins: ['http://localhost:3000'] } as {
-    rpId: string;
-    origins: string[];
-  } | null,
-  passkeys: [] as Row[],
   memberships: [] as Row[],
   organizations: [] as Row[],
   fail: new Set<string>(),
@@ -25,7 +30,6 @@ const h = vi.hoisted(() => ({
   clients: 0,
 }));
 
-vi.mock('@/lib/auth/passkey-relying-party', () => ({ passkeyRelyingParty: () => h.rp }));
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => {
     h.clients += 1;
@@ -34,12 +38,7 @@ vi.mock('@/lib/supabase/admin', () => ({
         h.reads.push(table);
         const filters: Array<(r: Row) => boolean> = [];
         let single = false;
-        const rows = () =>
-          table === 'member_passkeys'
-            ? h.passkeys
-            : table === 'organization_members'
-              ? h.memberships
-              : h.organizations;
+        const rows = () => (table === 'organization_members' ? h.memberships : h.organizations);
         const answer = () => {
           if (h.fail.has(table)) return { data: null, error: { code: '57014' } };
           const out = rows().filter((r) => filters.every((f) => f(r)));
@@ -60,7 +59,15 @@ vi.mock('@/lib/supabase/admin', () => ({
   },
 }));
 
-import { LAST_METHOD_WORDS, lastMethodBlocks, secondStepRequired } from './second-step-methods';
+import { FACTOR_CHECK_RETRY } from '@/lib/auth/passkey-bridge';
+
+import {
+  LAST_METHOD_RETRY_WORDS,
+  LAST_METHOD_WORDS,
+  lastMethodVerdict,
+  secondStepPolicy,
+  type RemovingMethod,
+} from './second-step-methods';
 
 const U = 'user-1';
 const app = (id: string, extra: Row = {}) => ({
@@ -71,13 +78,6 @@ const app = (id: string, extra: Row = {}) => ({
   ...extra,
 });
 const BRIDGE = app('bridge-1', { friendly_name: 'sp-passkey-bridge-a1b2c3d4e5f6' });
-const passkey = (id: string, extra: Row = {}) => ({
-  id,
-  user_id: U,
-  rp_id: 'localhost',
-  removed_at: null,
-  ...extra,
-});
 function member(policy: string, role = 'staff', extra: Row = {}) {
   const org = `org-${h.organizations.length + 1}`;
   h.organizations.push({ id: org, mfa_policy: policy });
@@ -91,9 +91,27 @@ function member(policy: string, role = 'staff', extra: Row = {}) {
   });
 }
 
+/** The caller's passkey judgement as a spy: the ids that can serve, null (could not tell), or a throw. */
+function serving(answer: ReadonlyArray<string> | null | Error) {
+  return vi.fn(async () => {
+    if (answer instanceof Error) throw answer;
+    return answer;
+  });
+}
+
+const APP_A: RemovingMethod = { kind: 'app', factorId: 'a' };
+const passkeyOf = (id: string): RemovingMethod => ({ kind: 'passkey', passkeyId: id });
+
+function verdict(
+  removing: RemovingMethod,
+  factors: ReadonlyArray<Row> | null,
+  servingPasskeys = serving([]),
+  requiredKnown?: boolean,
+) {
+  return lastMethodVerdict({ userId: U, removing, factors, servingPasskeys, requiredKnown });
+}
+
 beforeEach(() => {
-  h.rp = { rpId: 'localhost', origins: ['http://localhost:3000'] };
-  h.passkeys = [];
   h.memberships = [];
   h.organizations = [];
   h.fail = new Set();
@@ -102,155 +120,175 @@ beforeEach(() => {
 });
 
 describe('decision B: the last-method rule', () => {
-  it('one plain sentence for both kinds', () => {
+  it('one plain sentence for both kinds, and one retry sentence (the bridge check\'s own)', () => {
     expect(LAST_METHOD_WORDS).toBe(
       'Your organization requires a second step. Add another authenticator app or passkey before you remove this one.',
     );
+    expect(LAST_METHOD_RETRY_WORDS).toBe(FACTOR_CHECK_RETRY);
   });
 
-  it('one of two apps may go under a requiring policy, with no read at all', async () => {
+  it('one of two apps may go under a requiring policy: nothing read, the passkeys never asked', async () => {
     member('all_required');
-    const blocks = await lastMethodBlocks({
-      userId: U,
-      removing: { kind: 'app', factorId: 'a' },
-      factors: [app('a'), app('b')],
-    });
-    expect(blocks).toBe(false);
+    const passkeys = serving(['p1']);
+    expect(await verdict(APP_A, [app('a'), app('b')], passkeys)).toBe('allowed');
+    expect(passkeys).not.toHaveBeenCalled();
     expect(h.clients).toBe(0);
   });
 
-  it('removing a factor that is no method (unverified, or not listed) never blocks', async () => {
+  it('removing a factor that is no method (unverified, not listed, the reserved name) never blocks', async () => {
     member('all_required');
-    for (const factors of [[app('a', { status: 'unverified' })], [app('b')]]) {
-      expect(
-        await lastMethodBlocks({ userId: U, removing: { kind: 'app', factorId: 'a' }, factors }),
-      ).toBe(false);
+    for (const factors of [
+      [app('a', { status: 'unverified' })],
+      [app('b')],
+      [app('a', { friendly_name: 'sp-passkey-bridge-0123456789ab' })],
+    ]) {
+      const passkeys = serving([]);
+      expect(await verdict(APP_A, factors, passkeys)).toBe('allowed');
+      expect(passkeys).not.toHaveBeenCalled();
     }
+    expect(h.clients).toBe(0);
   });
 
-  it('the last app: an active passkey of this site keeps a second step (one read, the policy never asked)', async () => {
+  it('the last app beside a passkey that can serve may go; the policy is never read', async () => {
     member('all_required');
-    h.passkeys = [passkey('p1')];
-    const blocks = await lastMethodBlocks({
-      userId: U,
-      removing: { kind: 'app', factorId: 'a' },
-      factors: [app('a'), BRIDGE],
-    });
-    expect(blocks).toBe(false);
-    expect(h.reads).toEqual(['member_passkeys']);
+    const passkeys = serving(['p1']);
+    expect(await verdict(APP_A, [app('a'), BRIDGE], passkeys)).toBe('allowed');
+    expect(passkeys).toHaveBeenCalledOnce();
+    expect(h.reads).toEqual([]);
   });
 
-  it('the last app: a removed passkey, another site\'s, or another account\'s keeps nothing', async () => {
+  it('correction 1: the last app while the passkeys cannot serve is refused under a requiring policy', async () => {
     member('all_required');
-    h.passkeys = [
-      passkey('p1', { removed_at: '2026-11-20T00:00:00Z' }),
-      passkey('p2', { rp_id: 'other.example.test' }),
-      passkey('p3', { user_id: 'user-2' }),
-    ];
-    expect(
-      await lastMethodBlocks({ userId: U, removing: { kind: 'app', factorId: 'a' }, factors: [app('a')] }),
-    ).toBe(true);
+    // The member has passkey rows, but the caller judged that none can serve
+    // (no verified bridge, the switch off, a secret that does not open).
+    expect(await verdict(APP_A, [app('a'), BRIDGE], serving([]))).toBe('last_method');
+    expect(await verdict(APP_A, [app('a'), { ...BRIDGE, status: 'unverified' }], serving([]))).toBe(
+      'last_method',
+    );
   });
 
-  it('the bridge is never an app: a passkey whose only other factor is its bridge is the last method', async () => {
+  it('a passkey beside an app (the passkeys never asked), or beside another passkey that can serve, may go', async () => {
     member('all_required');
-    expect(
-      await lastMethodBlocks({
-        userId: U,
-        removing: { kind: 'passkey', passkeyId: 'p1' },
-        factors: [BRIDGE],
-        passkeyIds: ['p1'],
-      }),
-    ).toBe(true);
+    const unasked = serving(['p1']);
+    expect(await verdict(passkeyOf('p1'), [app('a'), BRIDGE], unasked)).toBe('allowed');
+    expect(unasked).not.toHaveBeenCalled();
+    expect(await verdict(passkeyOf('p1'), [BRIDGE], serving(['p1', 'p2']))).toBe('allowed');
   });
 
-  it('a passkey beside an app, or beside another passkey, may go', async () => {
+  it('the last passkey that can serve is refused; a passkey that cannot serve is no method, and may go', async () => {
     member('all_required');
-    for (const [factors, passkeyIds] of [
-      [[app('a'), BRIDGE], ['p1']],
-      [[BRIDGE], ['p1', 'p2']],
-    ] as const) {
-      expect(
-        await lastMethodBlocks({
-          userId: U,
-          removing: { kind: 'passkey', passkeyId: 'p1' },
-          factors,
-          passkeyIds,
-        }),
-      ).toBe(false);
-    }
+    // The bridge alone (a verified reserved-name factor) is never an app.
+    expect(await verdict(passkeyOf('p1'), [BRIDGE], serving(['p1']))).toBe('last_method');
+    expect(await verdict(passkeyOf('p1'), [BRIDGE], serving([]))).toBe('allowed');
+    expect(await verdict(passkeyOf('p1'), [BRIDGE], serving(['p2']))).toBe('allowed');
   });
 
   it('the last method: refused under all_required, and under admins_required for an owner or admin only', async () => {
-    const lastApp = () =>
-      lastMethodBlocks({ userId: U, removing: { kind: 'app', factorId: 'a' }, factors: [app('a')] });
-    expect(await lastApp()).toBe(false);
+    const lastApp = () => verdict(APP_A, [app('a')]);
+    expect(await lastApp()).toBe('allowed');
     member('optional', 'owner');
-    expect(await lastApp()).toBe(false);
+    expect(await lastApp()).toBe('allowed');
     member('admins_required', 'staff');
-    expect(await lastApp()).toBe(false);
+    expect(await lastApp()).toBe('allowed');
     member('admins_required', 'admin');
-    expect(await lastApp()).toBe(true);
+    expect(await lastApp()).toBe('last_method');
     h.memberships = [];
     h.organizations = [];
     member('all_required', 'staff');
-    expect(await lastApp()).toBe(true);
+    expect(await lastApp()).toBe('last_method');
   });
 
   it('any organization of the member counts, not only the active one; an act-as seat and an invitation do not', async () => {
     member('optional', 'owner');
     member('all_required', 'owner', { impersonation_expires_at: '2026-12-01T00:00:00Z' });
     member('all_required', 'owner', { accepted_at: null });
-    const lastApp = () =>
-      lastMethodBlocks({ userId: U, removing: { kind: 'app', factorId: 'a' }, factors: [app('a')] });
-    expect(await lastApp()).toBe(false);
+    const lastApp = () => verdict(APP_A, [app('a')]);
+    expect(await lastApp()).toBe('allowed');
     member('all_required', 'staff');
-    expect(await lastApp()).toBe(true);
+    expect(await lastApp()).toBe('last_method');
   });
 
   it('a policy the caller already read as requiring: refused with no policy read', async () => {
-    const blocks = await lastMethodBlocks({
-      userId: U,
-      removing: { kind: 'app', factorId: 'a' },
-      factors: [app('a')],
-      requiredKnown: true,
-    });
-    expect(blocks).toBe(true);
-    expect(h.reads).toEqual(['member_passkeys']);
+    expect(await verdict(APP_A, [app('a')], serving([]), true)).toBe('last_method');
+    expect(h.reads).toEqual([]);
   });
+});
 
-  it('strict on doubt: an unread factor list or passkey list is the last method; only the policy then decides', async () => {
-    const unknownApps = () =>
-      lastMethodBlocks({ userId: U, removing: { kind: 'app', factorId: 'a' }, factors: null });
-    expect(await unknownApps()).toBe(false);
+describe('correction 2: unknown is never fine', () => {
+  it('an unknown factor list (unread, or another account\'s): the passkeys are never asked, and a requiring policy answers try again', async () => {
     member('all_required');
-    expect(await unknownApps()).toBe(true);
-    h.passkeys = [passkey('p1')];
-    expect(await unknownApps()).toBe(false);
-    h.fail.add('member_passkeys');
-    expect(await unknownApps()).toBe(true);
+    for (const removing of [APP_A, passkeyOf('p1')]) {
+      const passkeys = serving(['p1', 'p2']);
+      expect(await verdict(removing, null, passkeys)).toBe('unreadable');
+      expect(passkeys).not.toHaveBeenCalled();
+    }
+    expect(await verdict(APP_A, null, serving(['p1']), true)).toBe('unreadable');
   });
 
-  it('strict on doubt: memberships or a policy that cannot be read, or an organization row hidden, require', async () => {
+  it('an unknown factor list where no policy requires a second step: allowed (the rule holds only under a requiring policy)', async () => {
+    expect(await verdict(APP_A, null)).toBe('allowed');
+    member('optional', 'owner');
+    member('admins_required', 'staff');
+    expect(await verdict(APP_A, null)).toBe('allowed');
+  });
+
+  it('a passkey judgement that could not be made (a read failed, the switch unread, a throw): try again, never allowed', async () => {
+    member('all_required');
+    expect(await verdict(APP_A, [app('a')], serving(null))).toBe('unreadable');
+    expect(await verdict(APP_A, [app('a')], serving(new Error('sample-read-failure')))).toBe(
+      'unreadable',
+    );
+    expect(await verdict(passkeyOf('p1'), [BRIDGE], serving(null))).toBe('unreadable');
+    expect(await verdict(APP_A, [app('a')], serving(null), true)).toBe('unreadable');
+  });
+
+  it('a passkey judgement that could not be made where no policy requires one: allowed', async () => {
+    member('optional', 'owner');
+    expect(await verdict(APP_A, [app('a')], serving(null))).toBe('allowed');
+    expect(await verdict(passkeyOf('p1'), [BRIDGE], serving(null))).toBe('allowed');
+  });
+
+  it('a policy that cannot be read (memberships, an organization, a missing organization row): try again, never allowed', async () => {
     member('optional');
-    const admin = (await import('@/lib/supabase/admin')).createAdminClient();
-    expect(await secondStepRequired(admin, U)).toBe(false);
-    h.fail.add('organization_members');
-    expect(await secondStepRequired(admin, U)).toBe(true);
+    const lastApp = () => verdict(APP_A, [app('a')]);
+    expect(await lastApp()).toBe('allowed');
+    h.fail = new Set(['organization_members']);
+    expect(await lastApp()).toBe('unreadable');
     h.fail = new Set(['organizations']);
-    expect(await secondStepRequired(admin, U)).toBe(true);
+    expect(await lastApp()).toBe('unreadable');
     h.fail = new Set();
     h.organizations = [];
-    expect(await secondStepRequired(admin, U)).toBe(true);
+    expect(await lastApp()).toBe('unreadable');
   });
 
-  it('with no site no passkey can serve here: none is counted, and none is read', async () => {
-    h.rp = null;
-    h.passkeys = [passkey('p1')];
+  it('one organization unread and another that requires: refused with the rule\'s own words', async () => {
+    member('optional');
     member('all_required');
-    expect(
-      await lastMethodBlocks({ userId: U, removing: { kind: 'app', factorId: 'a' }, factors: [app('a')] }),
-    ).toBe(true);
-    expect(h.reads).not.toContain('member_passkeys');
+    // The first organization's row is gone (read as nothing): unread.
+    h.organizations = h.organizations.filter((o) => o.id !== 'org-1');
+    expect(await verdict(APP_A, [app('a')])).toBe('last_method');
+    h.organizations = h.organizations.filter((o) => o.id !== 'org-2');
+    expect(await verdict(APP_A, [app('a')])).toBe('unreadable');
+  });
+});
+
+describe('secondStepPolicy: required, not required, or unreadable', () => {
+  it('answers each, strict on an unknown policy word', async () => {
+    const admin = (await import('@/lib/supabase/admin')).createAdminClient();
+    expect(await secondStepPolicy(admin, U)).toBe('not_required');
+    member('optional');
+    expect(await secondStepPolicy(admin, U)).toBe('not_required');
+    member('sample-new-policy-word');
+    expect(await secondStepPolicy(admin, U)).toBe('required');
+    h.memberships = [];
+    h.organizations = [];
+    member('optional');
+    h.fail = new Set(['organization_members']);
+    expect(await secondStepPolicy(admin, U)).toBe('unreadable');
+    h.fail = new Set(['organizations']);
+    expect(await secondStepPolicy(admin, U)).toBe('unreadable');
+    h.fail = new Set();
+    h.organizations = [];
+    expect(await secondStepPolicy(admin, U)).toBe('unreadable');
   });
 });

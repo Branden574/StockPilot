@@ -155,6 +155,8 @@ export function makeWorld() {
       enrolError: null as string | null,
       takeRpId: null as string | null,
       authUserOtherAccount: false,
+      /** Tables whose service-role reads answer an error (a timeout). */
+      failReads: [] as string[],
     },
   };
 
@@ -519,6 +521,12 @@ export function makeWorld() {
         reject?: (e: unknown) => unknown,
       ) {
         try {
+          if (!update && w.knobs.failReads.includes(table)) {
+            return Promise.resolve(err('57014', 'canceling statement due to statement timeout')).then(
+              resolve,
+              reject,
+            );
+          }
           const rows = tableRows(table).filter((r) => filters.every((f) => f(r)));
           if (update) {
             if (table === 'member_passkeys' && w.knobs.useWriteFails && 'counter' in update) {
@@ -628,6 +636,7 @@ export function makeWorld() {
       enrolError: null,
       takeRpId: null,
       authUserOtherAccount: false,
+      failReads: [],
     };
   }
 

@@ -81,7 +81,7 @@ const { emitAuthAudit } = await import('@/server/services/auth-audit');
 const { recordSecurityEvent } = await import('./events');
 const { sendPasskeyAddedEmail, sendPasskeyRemovedEmail } = await import('./passkey-emails');
 const pk = await import('./passkeys');
-const { LAST_METHOD_WORDS } = await import('./second-step-methods');
+const { LAST_METHOD_RETRY_WORDS, LAST_METHOD_WORDS } = await import('./second-step-methods');
 
 const SAMPLE_PASSWORD = 'sample-password-not-real';
 
@@ -1348,6 +1348,56 @@ describe('E: removal', () => {
     expect(await pk.removePasskey({ passkeyId })).toEqual({ ok: true, finishing: false });
   });
 
+  it('correction 1: a passkey whose bridge cannot serve is no method, so removing it is not refused', async () => {
+    const { userId, passkeyId } = await memberWithPasskey();
+    world.signIn(userId, 'aal2');
+    requiringOrg(userId);
+    const bridge = world.bridges.get(userId)!;
+    world.factors.find((f) => f.id === bridge.factor_id)!.status = 'unverified';
+    expect(await pk.removePasskey({ passkeyId })).toEqual({ ok: true, finishing: false });
+  });
+
+  it('correction 1: with the kill switch off no passkey serves; the passkey itself may still go (decision A)', async () => {
+    const { userId, passkeyId } = await memberWithPasskey();
+    world.signIn(userId, 'aal2');
+    requiringOrg(userId);
+    world.addAllowed = 'kill_switch_off';
+    expect(await pk.removePasskey({ passkeyId })).toEqual({ ok: true, finishing: false });
+  });
+
+  it('correction 2: the switch cannot be read: the last passkey stays, try again in a moment', async () => {
+    const { userId, passkeyId } = await memberWithPasskey();
+    world.signIn(userId, 'aal2');
+    requiringOrg(userId);
+    world.addAllowed = 'sample-unknown-word';
+    expect(await pk.removePasskey({ passkeyId })).toMatchObject({
+      ok: false,
+      code: 'internal_error',
+      message: LAST_METHOD_RETRY_WORDS,
+      reason: 'last_method_unreadable',
+    });
+    expect(world.passkeys[0]!.removed_at).toBeNull();
+  });
+
+  it('correction 2: the switch cannot be read and no policy requires one: removed', async () => {
+    const { userId, passkeyId } = await memberWithPasskey();
+    world.signIn(userId, 'aal2');
+    requiringOrg(userId, 'optional', 'owner');
+    world.addAllowed = 'sample-unknown-word';
+    expect(await pk.removePasskey({ passkeyId })).toEqual({ ok: true, finishing: false });
+  });
+
+  it('an app beside: the passkey goes and the switch is never read', async () => {
+    const { userId, passkeyId } = await memberWithPasskey();
+    world.addApp(userId);
+    world.signIn(userId, 'aal2');
+    requiringOrg(userId);
+    world.addAllowed = 'sample-unknown-word';
+    world.calls.fns.length = 0;
+    expect(await pk.removePasskey({ passkeyId })).toEqual({ ok: true, finishing: false });
+    expect(world.calls.fns.map((c) => c.name)).not.toContain('passkey_add_allowed');
+  });
+
   it('rename keeps the table rule (no dot) and needs aal2', async () => {
     const { userId, passkeyId } = await memberWithPasskey();
     world.signIn(userId, 'aal2');
@@ -1357,6 +1407,99 @@ describe('E: removal', () => {
     });
     expect(await pk.renamePasskey({ passkeyId, name: ' Front  desk ' })).toEqual({ ok: true });
     expect(world.passkeys[0]!.name).toBe('Front desk');
+  });
+});
+
+describe('correction 1: servingPasskeyIds, the passkeys that can serve as the second step now (the page\'s own judgement)', () => {
+  const factorsOf = (userId: string) => world.factors.filter((f) => f.user_id === userId);
+
+  it('a healthy passkey serves; an organization switched off does not change that (the USE level)', async () => {
+    const { userId, passkeyId } = await memberWithPasskey();
+    expect(await pk.servingPasskeyIds(userId, factorsOf(userId))).toEqual([passkeyId]);
+    world.addAllowed = 'organization_off';
+    expect(await pk.servingPasskeyIds(userId, factorsOf(userId))).toEqual([passkeyId]);
+    world.addAllowed = 'adds_off';
+    expect(await pk.servingPasskeyIds(userId, factorsOf(userId))).toEqual([passkeyId]);
+  });
+
+  it('an active row alone is no method: no bridge row, the bridge factor unverified or missing, a secret the keys do not open', async () => {
+    const cases: Array<[string, (userId: string) => void]> = [
+      ['no bridge row', (u) => void world.bridges.delete(u)],
+      [
+        'bridge factor unverified',
+        (u) => {
+          const b = world.bridges.get(u)!;
+          world.factors.find((f) => f.id === b.factor_id)!.status = 'unverified';
+        },
+      ],
+      [
+        'bridge factor missing',
+        (u) => {
+          const b = world.bridges.get(u)!;
+          world.factors = world.factors.filter((f) => f.id !== b.factor_id);
+        },
+      ],
+      [
+        'the bridge row names an authenticator app',
+        (u) => {
+          world.bridges.get(u)!.factor_id = world.addApp(u).id;
+        },
+      ],
+      [
+        'a secret the keys do not open',
+        () => (world.env.PASSKEY_BRIDGE_KEY_V1 = Buffer.alloc(32, 7).toString('base64')),
+      ],
+    ];
+    for (const [label, breakIt] of cases) {
+      world.reset();
+      vi.stubGlobal('fetch', world.fetch);
+      const { userId } = await memberWithPasskey(`${label.replace(/\W+/g, '-')}@example.test`);
+      breakIt(userId);
+      expect([label, await pk.servingPasskeyIds(userId, factorsOf(userId))]).toEqual([label, []]);
+    }
+  });
+
+  it('only active rows of this site: a removed row and another site\'s row serve nothing', async () => {
+    const { userId } = await memberWithPasskey();
+    world.passkeys[0]!.rp_id = 'other.example.test';
+    expect(await pk.servingPasskeyIds(userId, factorsOf(userId))).toEqual([]);
+    world.passkeys[0]!.rp_id = 'localhost';
+    world.passkeys[0]!.removed_at = new Date().toISOString();
+    expect(await pk.servingPasskeyIds(userId, factorsOf(userId))).toEqual([]);
+  });
+
+  it('the kill switch off, the account turned off, no key: nothing serves', async () => {
+    const { userId } = await memberWithPasskey();
+    for (const word of ['kill_switch_off', 'disabled', 'no_profile']) {
+      world.addAllowed = word;
+      expect([word, await pk.servingPasskeyIds(userId, factorsOf(userId))]).toEqual([word, []]);
+    }
+    world.addAllowed = 'ok';
+    world.env.PASSKEY_BRIDGE_KEY_V1 = '';
+    expect(await pk.servingPasskeyIds(userId, factorsOf(userId))).toEqual([]);
+  });
+
+  it('with no site nothing serves and nothing is read', async () => {
+    const { userId } = await memberWithPasskey();
+    world.calls.fns.length = 0;
+    process.env.VERCEL = '1';
+    process.env.VERCEL_ENV = 'preview';
+    expect(await pk.servingPasskeyIds(userId, factorsOf(userId))).toEqual([]);
+    expect(world.calls.fns).toEqual([]);
+  });
+
+  it('correction 2: what cannot be told is null, never a list: an unknown factor list (nothing read), the switch unread, a failed read', async () => {
+    const { userId } = await memberWithPasskey();
+    world.calls.fns.length = 0;
+    expect(await pk.servingPasskeyIds(userId, null)).toBeNull();
+    expect(world.calls.fns).toEqual([]);
+    world.addAllowed = 'sample-unknown-word';
+    expect(await pk.servingPasskeyIds(userId, factorsOf(userId))).toBeNull();
+    world.addAllowed = 'ok';
+    for (const table of ['member_passkeys', 'passkey_bridges']) {
+      world.knobs.failReads = [table];
+      expect([table, await pk.servingPasskeyIds(userId, factorsOf(userId))]).toEqual([table, null]);
+    }
   });
 });
 
