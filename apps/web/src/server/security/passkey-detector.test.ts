@@ -374,6 +374,10 @@ describe('it never acts on doubt', () => {
   const noAction = () => {
     expect(flagged()).toEqual([]);
     expect(h.events).toEqual([]);
+    // Decision C: no session is ended on doubt, no device told, no email.
+    expect(h.endAsked).toEqual([]);
+    expect(h.broadcasts).toEqual([]);
+    expect(h.emails).toEqual([]);
   };
 
   it('a switch that cannot be read settles nothing (error); the sessions are not even read', async () => {

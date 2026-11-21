@@ -157,6 +157,10 @@ export function makeWorld() {
       authUserOtherAccount: false,
       /** Tables whose service-role reads answer an error (a timeout). */
       failReads: [] as string[],
+      /** Database functions that answer an error (a timeout). */
+      failFns: [] as string[],
+      /** passkey_add_allowed's next answers, one per call, before addAllowed again. */
+      addAllowedNext: [] as string[],
     },
   };
 
@@ -329,9 +333,10 @@ export function makeWorld() {
   function rpc(name: string, args: Record<string, unknown>): { data: unknown; error: unknown } {
     w.calls.fns.push({ name, args });
     const user = String(args.p_user_id ?? '');
+    if (w.knobs.failFns.includes(name)) return err('57014', 'canceling statement due to statement timeout');
     switch (name) {
       case 'passkey_add_allowed':
-        return { data: w.addAllowed, error: null };
+        return { data: w.knobs.addAllowedNext.shift() ?? w.addAllowed, error: null };
       case 'issue_passkey_challenge': {
         if (w.addAllowed === 'kill_switch_off') return err('42501');
         const c: FakeChallenge = {
@@ -637,6 +642,8 @@ export function makeWorld() {
       takeRpId: null,
       authUserOtherAccount: false,
       failReads: [],
+      failFns: [],
+      addAllowedNext: [],
     };
   }
 

@@ -798,6 +798,23 @@ describe('rules 13 to 18', () => {
     );
   });
 
+  it('rule 13 for adding: an organization switched off between the check and the store refuses the add, nothing stored', async () => {
+    const userId = world.addAccount('org-off-later@example.test');
+    world.signIn(userId);
+    const soft = new SoftAuthenticator();
+    const start = await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } });
+    if (!start.ok) throw new Error(`start add refused: ${start.reason}`);
+    const created = soft.create(start.optionsJSON as never);
+    // The finish's first read still says yes; its read just before the store says no.
+    world.knobs.addAllowedNext = ['ok'];
+    world.addAllowed = 'organization_off';
+    expect(
+      await pk.finishAddPasskey({ challengeId: start.challengeId, response: created, name: 'Laptop' }),
+    ).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.unavailable, reason: 'gate_organization_off' });
+    expect(world.passkeys).toEqual([]);
+    expect(world.bridges.has(userId)).toBe(false);
+  });
+
   it('rule 14: a platform console account cannot add a passkey', async () => {
     const userId = world.addAccount(CONSOLE_EMAIL);
     world.signIn(userId);
@@ -1486,6 +1503,14 @@ describe('correction 1: servingPasskeyIds, the passkeys that can serve as the se
     process.env.VERCEL_ENV = 'preview';
     expect(await pk.servingPasskeyIds(userId, factorsOf(userId))).toEqual([]);
     expect(world.calls.fns).toEqual([]);
+  });
+
+  it('a gate read that answers an error is closed at every level, and the passkeys cannot be told (null)', async () => {
+    const { userId } = await memberWithPasskey();
+    world.knobs.failFns = ['passkey_add_allowed'];
+    expect(await pk.passkeyGate(userId)).toEqual({ open: false, why: 'unreadable' });
+    expect(await pk.passkeyUseGate(userId)).toEqual({ open: false, why: 'unreadable' });
+    expect(await pk.servingPasskeyIds(userId, factorsOf(userId))).toBeNull();
   });
 
   it('correction 2: what cannot be told is null, never a list: an unknown factor list (nothing read), the switch unread, a failed read', async () => {

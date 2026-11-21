@@ -80,6 +80,12 @@ describe('the Passkeys panel (decision A)', () => {
     expect(screen.getByText(PASSKEYS_PANEL_WORDS.unavailable)).toBeTruthy();
   });
 
+  it('list only never shows Add or the limit line, even if the data says a passkey could be added', () => {
+    render(<PasskeysPanel data={panel({ listOnly: 'turned_off', canAdd: true, atLimit: true })} />);
+    expect(buttons()).toEqual(['Remove']);
+    expect(screen.queryByText(PASSKEYS_PANEL_WORDS.atLimit)).toBeNull();
+  });
+
   it('list only hides Finish too, whatever the setup', () => {
     render(
       <PasskeysPanel
