@@ -52,6 +52,8 @@ describe('security events: the lists the database checks', () => {
       'wrong_recovery_code',
       'recovery_code_checks_paused',
       'unknown_api_key',
+      'auth_rate_limited',
+      'auth_log_over_cap',
       'over_minute_cap',
       'over_buffer_cap',
       ...SECURITY_PROBE_KINDS,
@@ -84,6 +86,15 @@ describe('security events: the lists the database checks', () => {
     expect(securityEventReasonLabel('wrong_password')).toBe('Wrong password at sign-in');
     expect(securityEventReasonLabel('repeated_wrong_password')).toBe(
       'Repeated wrong passwords from one source',
+    );
+  });
+
+  it("names the plain words of the refusals read from the sign-in service's own log", () => {
+    expect(securityEventReasonLabel('auth_rate_limited')).toBe(
+      'Too many sign-in attempts, paused by the sign-in service',
+    );
+    expect(securityEventReasonLabel('auth_log_over_cap')).toBe(
+      'More refused sign-ins than could be listed',
     );
   });
 });

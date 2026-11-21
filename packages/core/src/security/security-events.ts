@@ -116,6 +116,11 @@ export const SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, string>> = {
   wrong_recovery_code: 'Wrong recovery code',
   recovery_code_checks_paused: 'Recovery code checks paused after too many attempts',
   unknown_api_key: 'Unknown API key',
+  // Read from the sign-in service's own log (the phone app and direct
+  // callers): its own limit refused the attempt, or more refusals came in one
+  // hour than could be listed one by one.
+  auth_rate_limited: 'Too many sign-in attempts, paused by the sign-in service',
+  auth_log_over_cap: 'More refused sign-ins than could be listed',
   // Exploit attempts: a scanner asked for a path this site never serves.
   env_file: 'Request for a settings file',
   git_dir: 'Request for source control files',
