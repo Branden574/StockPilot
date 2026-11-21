@@ -4,16 +4,16 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * Plan 10.4 as decided on 2026-11-21 (and decision C): the hourly check of
- * sessions raised through a passkey bridge. A raise is explained only by its
- * own passkey.bridge_raise row near its raised_at (the ceremony writes it
- * before answering and refuses without it, passkeys.test.ts "10.4"). An
- * unexplained raise gets an error report and a security event. It STARTS IN
- * REPORT-ONLY MODE (review 3, A7): only while
- * platform_settings.passkey_check_ends_sessions is true does it also end THAT
- * ONE session (0475's passkey_end_bridge_session), tell the devices and send
- * at most one email a day; off, missing or unreadable, it ends nothing. Never
- * a factor deleted or a passkey removed. Doubt of any kind acts on nothing;
+ * Plan 10.4 as decided on 2026-11-21 (decision C and review 4): the hourly
+ * check of sessions raised through a passkey bridge. The rule: a raise is
+ * explained only by its own passkey.bridge_raise row near its raised_at (the
+ * ceremony writes it before answering and refuses without it,
+ * passkeys.test.ts "10.4"); every raise without one gets an error report and
+ * a security event, once (the check's own memory row). Ending is a setting
+ * (review 3, A7): only while platform_settings.passkey_check_ends_sessions is
+ * true does it also end THAT ONE session (0475's passkey_end_bridge_session),
+ * tell the devices and send at most one email a day. Never a factor deleted
+ * or a passkey removed. What cannot be read is reported and decides nothing;
  * the caps hold. The session list is given in the shape 0475's
  * passkey_bridge_sessions returns; the audit rows are filtered by a fake of
  * the query builder. Most blocks below run with ending ON (ENDS_ON), to pin
@@ -564,11 +564,11 @@ describe('report only first (review 3, A7): ending is a setting, off by default'
   });
 });
 
-describe('it never acts on doubt', () => {
+describe('what cannot be read decides nothing', () => {
   const noAction = () => {
     expect(flagged()).toEqual([]);
     expect(h.events).toEqual([]);
-    // Decision C: no session is ended on doubt, no device told, no email.
+    // Decision C: nothing unread ends a session, tells a device or sends an email.
     expect(h.endAsked).toEqual([]);
     expect(h.broadcasts).toEqual([]);
     expect(h.emails).toEqual([]);
@@ -619,7 +619,7 @@ describe('it never acts on doubt', () => {
     noAction();
   });
 
-  it('a switch that is off is a value, not doubt: the check still runs', async () => {
+  it('a switch that is off is a value that was read: the check still runs', async () => {
     h.settings = { data: { passkeys_on: false }, error: null };
     h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
     h.audit = [row('passkey.used', ago(90 * MIN))];
@@ -751,7 +751,7 @@ describe('the other way round (10.4 a)', () => {
   });
 });
 
-describe('review 4 finding 2: a bridge-raised session with no raise row of ours is never doubt', () => {
+describe('review 4 finding 2: a bridge-raised session with no raise row of ours is always unexplained', () => {
   it('an account with no passkey audit row at all: an error report and a security event, like any unexplained raise', async () => {
     h.settings = { data: { passkeys_on: true, passkey_check_ends_sessions: false }, error: null };
     h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
@@ -866,7 +866,7 @@ describe('review 4 finding 9: the detector remembers what it reported', () => {
 });
 
 describe('review 4 finding 11: the file header states the rule', () => {
-  it('no "never acts on doubt" in the header; the header says what is reported and what cannot be read', () => {
+  it('the header states the rule, what cannot be read, and what the check cannot see', () => {
     const source = readFileSync(path.join(__dirname, 'passkey-detector.ts'), 'utf8');
     const header = source
       .slice(0, source.indexOf('type Admin'))

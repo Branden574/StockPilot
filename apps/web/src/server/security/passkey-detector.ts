@@ -459,8 +459,9 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
           if (spread.max === null || offset > spread.max) spread.max = offset;
           continue;
         }
-        // Review 4 finding 2: no raise row of ours is never doubt. Review 4
-        // finding 9: a raise reported by an earlier run is not counted again.
+        // The rule (review 4 finding 2): no raise row of ours near the raise
+        // is unexplained, whatever else the account did. Review 4 finding 9:
+        // a raise reported by an earlier run is not counted again.
         if (remembered.has(memoryKey(c.session.session_id, c.raised))) {
           summary.alreadyReported += 1;
           continue;
