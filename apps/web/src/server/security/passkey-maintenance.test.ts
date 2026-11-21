@@ -285,3 +285,50 @@ describe('runPasskeyMaintenance (10.3)', () => {
     expect(tags()).toContain('passkeys.states_unreadable');
   });
 });
+
+describe('review 4 finding 10: the upkeep has a time budget and a stop report', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('no new account is started after the budget; the stop is reported with counts', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const rows = Array.from({ length: 3 }, (_, i) =>
+      stateRow('reserved_factor_without_row', {
+        user_id: `user-${i}`,
+        reserved_factors: [{ factor_id: `old-${i}`, status: 'unverified', created_at: ago(60 * MIN) }],
+      }),
+    );
+    h.rpc.passkey_account_states = { data: rows, error: null };
+    const { MAINTENANCE_BUDGET_MS } = await import('./passkey-maintenance');
+    let deletes = 0;
+    const spy = h.deleted;
+    // Each account's sweep takes longer than the whole budget.
+    const push = spy.push.bind(spy);
+    spy.push = (...ids: string[]) => {
+      deletes += 1;
+      vi.setSystemTime(Date.now() + MAINTENANCE_BUDGET_MS + 1);
+      return push(...ids);
+    };
+    const s = await runPasskeyMaintenance();
+    expect(deletes).toBe(1);
+    expect(s).toMatchObject({ stop: 'time_limit', accountsSeen: 1, accountsListed: 3 });
+    expect(h.reports.find((r) => r.tag === 'passkeys.maintenance_stopped')).toMatchObject({
+      level: 'warning',
+      extra: { stop: 'time_limit', accountsSeen: 1, accountsListed: 3 },
+    });
+  });
+
+  it('a run within the budget says nothing about stopping', async () => {
+    h.rpc.passkey_account_states = { data: [stateRow('healthy')], error: null };
+    const s = await runPasskeyMaintenance();
+    expect(s).toMatchObject({ stop: null, accountsSeen: 1, accountsListed: 1 });
+    expect(tags()).not.toContain('passkeys.maintenance_stopped');
+  });
+
+  it('the comments say four times a day where the code runs four times a day (the retention cron)', async () => {
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const source = readFileSync(path.join(__dirname, 'passkey-maintenance.ts'), 'utf8');
+    expect(source).not.toMatch(/\bdaily\b|every day/i);
+    expect(source).toMatch(/four times a day/);
+  });
+});

@@ -9,9 +9,10 @@ import { compareTimes } from './passkey-state';
 
 /**
  * The scheduled passkey upkeep (plan 10.3), run from a cron that already
- * exists (no new Vercel setting): the security-events retention job runs
+ * exists (no new Vercel setting): the security-events retention job, four
+ * times a day (vercel.json: half past every sixth hour), runs
  * runPasskeyMaintenance (the purge, the sweep, the counts, the Auth version
- * check). The hourly check of bridge-raised sessions (10.4) is its own
+ * check). Every count and report below is per run, so four times a day. The hourly check of bridge-raised sessions (10.4) is its own
  * module, server/security/passkey-detector.ts, which deletes nothing. This
  * never throws and never changes its cron's own answer: a failure is
  * reported (counts and codes only).
@@ -40,7 +41,7 @@ const CLOSED_STATES = new Set([
   'reserved_factor_without_row',
   'bridge_newer_than_removal',
 ]);
-/** The open states (an active passkey with no verified bridge): counted every day. */
+/** The open states (an active passkey with no verified bridge): counted on every run. */
 const OPEN_STATES = new Set(['no_bridge', 'bridge_factor_missing', 'bridge_factor_unverified']);
 
 interface StateRow {
@@ -71,23 +72,40 @@ const olderThan = (time: string | null, ms: number) => {
   return compareTimes(time, cutoff) === -1;
 };
 
+/**
+ * Review 4 finding 10: no account's sweep starts after this long into the run
+ * (one Auth admin call at a time per factor). The retention route's own loop
+ * stops at 45 s and its function at 120 s (maxDuration); the sweep in flight
+ * and the version check (8 s at most) still end inside it. What a run leaves,
+ * the next takes, and the early stop is reported with the counts.
+ */
+export const MAINTENANCE_BUDGET_MS = 60_000;
+
 export interface PasskeyMaintenanceSummary {
   ran: boolean;
   purged: { challenges: number; removedPasskeys: number } | null;
   swept: number;
   removalsFinished: number;
   counts: Record<string, number>;
+  /** Accounts in the state list, and those whose sweep ran before the budget. */
+  accountsListed: number;
+  accountsSeen: number;
+  stop: 'time_limit' | null;
   authVersion: 'proven' | 'unproven' | 'not_checked';
 }
 
-/** The daily work (10.3). Never throws. */
+/** The work of one run, four times a day (10.3). Never throws. */
 export async function runPasskeyMaintenance(): Promise<PasskeyMaintenanceSummary> {
+  const started = Date.now();
   const summary: PasskeyMaintenanceSummary = {
     ran: false,
     purged: null,
     swept: 0,
     removalsFinished: 0,
     counts: {},
+    accountsListed: 0,
+    accountsSeen: 0,
+    stop: null,
     authVersion: 'not_checked',
   };
   try {
@@ -119,9 +137,27 @@ export async function runPasskeyMaintenance(): Promise<PasskeyMaintenanceSummary
         code: String((states.error as { code?: unknown }).code ?? 'none'),
       });
     } else {
-      for (const row of (states.data ?? []) as StateRow[]) {
+      const rows = (states.data ?? []) as StateRow[];
+      summary.accountsListed = rows.length;
+      for (const row of rows) {
+        // The counts cover every account listed; the sweep stops at the budget.
         summary.counts[row.state] = (summary.counts[row.state] ?? 0) + 1;
+        if (summary.stop !== null) continue;
+        if (Date.now() - started >= MAINTENANCE_BUDGET_MS) {
+          summary.stop = 'time_limit';
+          continue;
+        }
+        summary.accountsSeen += 1;
         await sweepOne(admin, row, summary);
+      }
+      if (summary.stop !== null) {
+        report('maintenance_stopped', 'warning', {
+          stop: summary.stop,
+          accountsListed: summary.accountsListed,
+          accountsSeen: summary.accountsSeen,
+          swept: summary.swept,
+          removalsFinished: summary.removalsFinished,
+        });
       }
       const closed = Object.entries(summary.counts).filter(([s]) => CLOSED_STATES.has(s));
       const open = Object.entries(summary.counts).filter(([s]) => OPEN_STATES.has(s));
@@ -203,7 +239,7 @@ async function sweepOne(
   }
 }
 
-/** The daily version check (2.9), only while passkeys are on. Reports; never turns anything off. */
+/** The version check (2.9), on every run while passkeys are on. Reports; never turns anything off. */
 async function checkAuthVersion(admin: Admin): Promise<PasskeyMaintenanceSummary['authVersion']> {
   const settings = await admin
     .from('platform_settings')
