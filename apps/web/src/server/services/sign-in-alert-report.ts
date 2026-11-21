@@ -9,6 +9,7 @@ import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { recordSignInAlertEvent } from '@/server/security/sign-in-alert-events';
 import { insertAuditRowReported } from '@/server/services/audit';
+import { fetchAllRowsByIds } from '@/server/services/lib/fetch-by-ids';
 import { createNotification } from '@/server/services/notifications';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 
@@ -269,6 +270,7 @@ async function ownersAndAdminsOf(
     const { data, error } = await admin
       .from('organization_members')
       .select('organization_id, user_id')
+      // in-list-bound: the member's organizations, at most MAX_ORGANIZATIONS (5)
       .in('organization_id', organizationIds)
       .in('role', ['owner', 'admin'])
       .not('accepted_at', 'is', null)
@@ -292,15 +294,17 @@ async function ownersAndAdminsOf(
 async function peopleById(admin: Admin, ids: string[]): Promise<Map<string, Person>> {
   const people = new Map<string, Person>();
   try {
-    const { data, error } = await admin
-      .from('user_profiles')
-      .select('id, full_name, email, disabled_at')
-      .in('id', ids);
-    if (error || !Array.isArray(data)) {
-      reportFailure('security.sign_in_report_read_failed', { read: 'profiles', code: codeOf(error) });
-      return people;
-    }
-    for (const row of data as Array<Record<string, unknown>>) {
+    // The member and every owner and admin of up to 5 organizations: no
+    // ceiling on the owners and admins, so the ids go in batches.
+    const rows = await fetchAllRowsByIds<Record<string, unknown>>(ids, (batch) => (from, to) =>
+      admin
+        .from('user_profiles')
+        .select('id, full_name, email, disabled_at')
+        .in('id', batch)
+        .order('id')
+        .range(from, to),
+    );
+    for (const row of rows) {
       const id = text(row.id);
       if (!id) continue;
       people.set(id, {
@@ -310,8 +314,11 @@ async function peopleById(admin: Admin, ids: string[]): Promise<Map<string, Pers
         disabled: Boolean(row.disabled_at),
       });
     }
-  } catch {
-    reportFailure('security.sign_in_report_read_failed', { read: 'profiles', code: null });
+  } catch (err) {
+    reportFailure('security.sign_in_report_read_failed', {
+      read: 'profiles',
+      code: codeOf(err) ?? null,
+    });
   }
   return people;
 }
@@ -320,7 +327,11 @@ async function organizationNames(admin: Admin, ids: string[]): Promise<Map<strin
   const names = new Map<string, string>();
   if (ids.length === 0) return names;
   try {
-    const { data, error } = await admin.from('organizations').select('id, name').in('id', ids);
+    const { data, error } = await admin
+      .from('organizations')
+      .select('id, name')
+      // in-list-bound: the member's organizations, at most MAX_ORGANIZATIONS (5)
+      .in('id', ids);
     if (error || !Array.isArray(data)) {
       reportFailure('security.sign_in_report_read_failed', { read: 'organization_names', code: codeOf(error) });
       return names;

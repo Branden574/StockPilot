@@ -45,6 +45,7 @@ function builder(table: string) {
     tests: [] as Array<(r: Row) => boolean>,
     patch: undefined as Row | undefined,
     limit: undefined as number | undefined,
+    offset: 0,
     returning: false,
     orderBy: null as null | { column: string; ascending: boolean },
   };
@@ -67,7 +68,7 @@ function builder(table: string) {
       const { column, ascending } = state.orderBy;
       out.sort((a, b) => (String(a[column]) < String(b[column]) ? -1 : 1) * (ascending ? 1 : -1));
     }
-    if (state.limit !== undefined) out = out.slice(0, state.limit);
+    if (state.limit !== undefined) out = out.slice(state.offset, state.limit);
     return { data: out, error: null };
   };
   const b: Record<string, unknown> = {
@@ -115,6 +116,11 @@ function builder(table: string) {
     },
     limit: (n: number) => {
       state.limit = n;
+      return b;
+    },
+    range: (from: number, to: number) => {
+      state.limit = to + 1;
+      state.offset = from;
       return b;
     },
     then: (ok: (v: unknown) => unknown, bad: (e: unknown) => unknown) =>
