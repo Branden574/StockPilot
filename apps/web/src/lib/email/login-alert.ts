@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { signInAlertPlaceWords } from '@/lib/auth/sign-in-alert-words';
+
 import { renderSigninAlertEmail } from './es/families/security';
 import { sendEmail } from './resend';
 
@@ -49,6 +51,13 @@ export async function sendNewDeviceLoginEmail(args: {
   /** The account's last new-device email until its 24-hour count starts
    *  again (lib/auth/login-device.ts). */
   lastForADay?: boolean;
+  /** Where the sign-in came from (part 3): a Location row when the country is known. */
+  place?: { country: string | null; city: string | null } | null;
+  /** What was new (part 3). A device by default. */
+  newDevice?: boolean;
+  newCountry?: boolean;
+  /** The signed "This was not me" link (part 3), or null when the alert's record could not be written. */
+  notMeUrl?: string | null;
 }): Promise<void> {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://stockpilotusa.com';
   const when =
@@ -67,6 +76,12 @@ export async function sendNewDeviceLoginEmail(args: {
     resetUrl: `${appUrl}/reset`,
     appUrl,
     lastForADay: args.lastForADay === true,
+    location: signInAlertPlaceWords(args.place?.country, args.place?.city),
+    kind: {
+      newDevice: args.newDevice ?? !args.newCountry,
+      newCountry: args.newCountry === true,
+    },
+    notMeUrl: args.notMeUrl ?? null,
   });
 
   await sendEmail({

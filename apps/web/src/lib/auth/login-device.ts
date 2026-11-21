@@ -2,11 +2,14 @@ import 'server-only';
 
 import { createHash } from 'node:crypto';
 
+import { signInAlertLinkUrl } from '@/lib/auth/sign-in-alert-url';
 import { browserDeviceName } from '@/lib/auth/user-agent';
 import { sendNewDeviceLoginEmail } from '@/lib/email/login-alert';
 import { reportError } from '@/lib/error-reporter';
+import { cityForRecord } from '@/lib/place-name';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { recordSignInAlertEvent } from '@/server/security/sign-in-alert-events';
 import { dispatchEvent } from '@/server/services/integration-events';
 
 /** Collapse version numbers out of a UA so a routine browser auto-update
@@ -33,11 +36,12 @@ function deviceHash(userId: string, ua: string, deviceKey: string | null): strin
 }
 
 /**
- * New-device alerts (the email and the organizations' events together) per
- * account in a window. Past it the device is still recorded (the sign-in
- * monitor, app/api/cron/auth-anomalies, counts it) and the sign-in still
- * appears among the account's active sessions; no email and no event are
- * sent. The email that reaches the count says so.
+ * Sign-in alerts (a new device, a new country or both: the alert row, the
+ * email and the organizations' events together) per account in a window.
+ * Past it the device and the country are still recorded (the sign-in
+ * monitor, app/api/cron/auth-anomalies, counts devices) and the sign-in still
+ * appears among the account's active sessions; no alert row, no email and no
+ * event. The email that reaches the count says so.
  */
 export const NEW_DEVICE_ALERTS_PER_ACCOUNT = 5;
 export const NEW_DEVICE_ALERT_WINDOW_MS = 24 * 60 * 60_000;
@@ -45,14 +49,227 @@ export const NEW_DEVICE_ALERT_WINDOW_MS = 24 * 60 * 60_000;
 export const NEW_DEVICE_EVENTS_PER_ORGANIZATION = 30;
 export const NEW_DEVICE_EVENT_WINDOW_MS = 60 * 60_000;
 
+/** The admin client's type, for the helpers below. */
+type AdminClient = ReturnType<typeof createAdminClient>;
+
+/** What sign_in_alerts.device_label and device_family accept (migration sign_in_alerts). */
+const DEVICE_WORDS_RE = /^[A-Za-z0-9 ()+.-]{1,120}$/;
+/** The words a device gets when its own would not fit the table's rule. */
+const UNKNOWN_DEVICE = 'Unknown device';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Device words a sign_in_alerts row can hold: the words, else the fallback, else "Unknown device". */
+function deviceWordsForRecord(words: string | null | undefined, fallback: string): string {
+  const text = words?.trim() ?? '';
+  if (DEVICE_WORDS_RE.test(text)) return text;
+  return DEVICE_WORDS_RE.test(fallback) ? fallback : UNKNOWN_DEVICE;
+}
+
+/** The error code of a refused write, for a report: never its message. */
+function codeOf(error: unknown): string | null {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && code.length > 0 ? code : null;
+}
+
+/** The device this sign-in used: refreshed when known, recorded when new. */
+interface DeviceNote {
+  /** This call inserted the device row (so it may take it back). */
+  insertedNow: boolean;
+  /** The device is new on an account that already had one: owed an alert. */
+  alerts: boolean;
+}
+
+async function noteDevice(
+  admin: AdminClient,
+  args: { userId: string; hash: string; shown: string; ip: string | null },
+): Promise<DeviceNote> {
+  // Known device? → bump last-seen, no alert.
+  const { data: existing } = await admin
+    .from('user_login_devices')
+    .select('id')
+    .eq('user_id', args.userId)
+    .eq('device_hash', args.hash)
+    .maybeSingle();
+  if (existing) {
+    await admin
+      .from('user_login_devices')
+      .update({
+        last_seen_at: new Date().toISOString(),
+        last_ip: args.ip,
+        user_agent: args.shown.slice(0, 400),
+      })
+      .eq('id', (existing as { id: string }).id);
+    return { insertedNow: false, alerts: false };
+  }
+
+  // New device. Did the account already have known devices? If this is the
+  // user's FIRST-ever device, record it silently — alerting on a brand-new
+  // account's first login (or on everyone's existing device at rollout) is
+  // pure noise.
+  const { count } = await admin
+    .from('user_login_devices')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', args.userId);
+  const hadKnownDevices = (count ?? 0) > 0;
+
+  const { error: insertError } = await admin.from('user_login_devices').insert({
+    user_id: args.userId,
+    device_hash: args.hash,
+    user_agent: args.shown.slice(0, 400),
+    last_ip: args.ip,
+  });
+  if (insertError) {
+    // Another sign-in on this device recorded it first; that one alerts for
+    // the device. This one still notes its country.
+    if (insertError.code === '23505') return { insertedNow: false, alerts: false };
+    throw new Error(`user_login_devices insert refused (${insertError.code ?? 'no code'})`);
+  }
+  return { insertedNow: true, alerts: hadKnownDevices };
+}
+
+/** The country this sign-in came from. */
+interface CountryNote {
+  /** This call inserted the country row (so it may take it back). */
+  insertedNow: boolean;
+  /** The country is new on an account that already had one: owed an alert. */
+  alerts: boolean;
+}
+
+const NO_COUNTRY: CountryNote = { insertedNow: false, alerts: false };
+
 /**
- * Record the device a user just signed in from, and email a "new device" alert
- * when it's a device we haven't seen on an ALREADY-established account.
+ * THE COUNTRY RULE (part 3): a plain INSERT of (account, country). A 23505 is
+ * the answer "known country": its row's last_seen_at is moved on, no alert.
+ * Nothing reads this country before the insert, so two sign-ins racing from
+ * one new country cannot both see it as new: one insert wins, one gets 23505.
+ *
+ * A row this call inserted is new. It alerts only when the account now has
+ * more than one country: the first country ever seen for an account is
+ * recorded silently, as the first device is (so nobody is alerted at rollout).
+ * The count is read AFTER the insert, so two first sign-ins racing from two
+ * countries both alert rather than both staying silent. A count that cannot
+ * be read takes the row back (the country is still new at the next sign-in),
+ * and nothing alerts for it. Any other refusal is reported with its code,
+ * and the sign-in is judged by its device alone.
+ */
+async function noteCountry(
+  admin: AdminClient,
+  userId: string,
+  country: string,
+): Promise<CountryNote> {
+  const { error } = await admin.from('user_sign_in_countries').insert({ user_id: userId, country });
+  if (error) {
+    if (error.code === '23505') {
+      await admin
+        .from('user_sign_in_countries')
+        .update({ last_seen_at: new Date().toISOString() })
+        .eq('user_id', userId)
+        .eq('country', country);
+      return NO_COUNTRY;
+    }
+    void reportError(new Error('A sign-in country could not be noted'), {
+      tag: 'auth.sign_in_country_note_failed',
+      level: 'warning',
+      extra: { code: codeOf(error) },
+    });
+    return NO_COUNTRY;
+  }
+  const { count, error: countError } = await admin
+    .from('user_sign_in_countries')
+    .select('country', { count: 'exact', head: true })
+    .eq('user_id', userId);
+  if (countError || typeof count !== 'number') {
+    await forgetCountry(admin, userId, country);
+    return NO_COUNTRY;
+  }
+  return { insertedNow: true, alerts: count > 1 };
+}
+
+async function forgetDevice(admin: AdminClient, userId: string, hash: string): Promise<void> {
+  const { error } = await admin
+    .from('user_login_devices')
+    .delete()
+    .eq('user_id', userId)
+    .eq('device_hash', hash);
+  if (error) {
+    throw new Error(
+      `user_login_devices delete after an uncounted alert refused (${error.code ?? 'no code'})`,
+    );
+  }
+}
+
+async function forgetCountry(admin: AdminClient, userId: string, country: string): Promise<void> {
+  const { error } = await admin
+    .from('user_sign_in_countries')
+    .delete()
+    .eq('user_id', userId)
+    .eq('country', country);
+  if (error) {
+    throw new Error(`user_sign_in_countries delete refused (${error.code ?? 'no code'})`);
+  }
+}
+
+/**
+ * The sign_in_alerts row, written BEFORE the email so the email's link can
+ * name it. Its id, or null when it could not be written (reported with the
+ * code only): the email then goes without the link, so an alert is never lost
+ * for its record.
+ */
+async function insertAlertRow(
+  admin: AdminClient,
+  row: {
+    user_id: string;
+    session_id: string | null;
+    new_device: boolean;
+    new_country: boolean;
+    client: 'web' | 'phone';
+    device_label: string;
+    device_family: string;
+    device_hash: string;
+    country: string | null;
+    city: string | null;
+  },
+): Promise<string | null> {
+  try {
+    const { data, error } = await admin.from('sign_in_alerts').insert(row).select('id').single();
+    const id = (data as { id?: unknown } | null)?.id;
+    if (error || typeof id !== 'string') {
+      void reportError(new Error('A sign-in alert could not be recorded'), {
+        tag: 'auth.sign_in_alert_insert_failed',
+        level: 'warning',
+        extra: { code: codeOf(error) },
+      });
+      return null;
+    }
+    return id;
+  } catch (e) {
+    void reportError(new Error('A sign-in alert could not be recorded'), {
+      tag: 'auth.sign_in_alert_insert_failed',
+      level: 'warning',
+      extra: { code: e instanceof Error ? e.name : null },
+    });
+    return null;
+  }
+}
+
+/**
+ * Record the device a user just signed in from, and the country, and alert
+ * the member when either is new on an ALREADY-established account.
  *
  * Self-contained + best-effort: never throws. Sign-in hooks fire this via
  * Next's `after()` so it runs AFTER the response and adds zero login latency.
  * The first device a user is ever seen on is recorded silently (baseline) — we
- * only alert on a genuinely new device once the account has a known one.
+ * only alert on a genuinely new device once the account has a known one. The
+ * first country is recorded silently the same way (noteCountry).
+ *
+ * ONE ALERT PER SIGN-IN (part 3), owed when the device is new OR the country
+ * is new, with both flags. The alert is a row in sign_in_alerts first (so the
+ * member can answer it, from the email's "This was not me" link or from
+ * Active sessions, and the organization's owners and admins can list it),
+ * then the email, then the organizations' webhook event (new device only, as
+ * its name says) and, for a new country, a security event
+ * (server/security/sign-in-alert-events.ts). A row that cannot be written is
+ * reported and the email still goes, without the link.
  *
  * The email and the webhook event go out only for a device THIS call recorded
  * (S5). The insert's answer used to be ignored: two sign-ins racing on one new
@@ -63,14 +280,16 @@ export const NEW_DEVICE_EVENT_WINDOW_MS = 60 * 60_000;
  *
  * Alerts are counted (S79), both buckets closed: nothing is sent without a
  * count.
- *   - per account: NEW_DEVICE_ALERTS_PER_ACCOUNT a day. The email that
+ *   - per account: NEW_DEVICE_ALERTS_PER_ACCOUNT a day, for the alert as a
+ *     whole (a new country counts as a new device does). The email that
  *     reaches the count says that no more will come for 24 hours. Past it the
- *     device is recorded with no email and no event; the first device held in
- *     a window is reported once (auth.new_device_alerts_held) with the first
- *     16 hex characters of the SHA-256 of the account id, which the operator
- *     matches by hashing account ids. When the limiter cannot answer, the
- *     device row this call inserted is removed, so the device is still new
- *     at its next sign-in, and nothing is sent.
+ *     rows are recorded with no alert row, no email and no event; the first
+ *     alert held in a window is reported once (auth.new_device_alerts_held)
+ *     with the first 16 hex characters of the SHA-256 of the account id, which
+ *     the operator matches by hashing account ids. When the limiter cannot
+ *     answer, the device row AND the country row this call inserted are
+ *     removed, so both are still new at the next sign-in, and nothing is
+ *     sent.
  *   - per organization: NEW_DEVICE_EVENTS_PER_ORGANIZATION
  *     security.new_device_login events an hour, so the organization's
  *     channels are not flooded; the person's own email is not held by it.
@@ -94,6 +313,13 @@ export async function noteLoginDevice(args: {
    *  it (a web sign-in) the event names the browser and system, also from
    *  fixed words ("Chrome on macOS", S56). */
   deviceFamily?: string | null;
+  /** Where the sign-in came from (lib/client-ip.ts clientPlaceFromHeaders:
+   *  Vercel's headers, only on Vercel). No place, no country rule. */
+  place?: { country: string | null; city: string | null } | null;
+  /** The Auth session the sign-in made, from verified claims. */
+  sessionId?: string | null;
+  /** Which app signed in. */
+  client?: 'web' | 'phone';
 }): Promise<void> {
   try {
     const ua = (args.userAgent ?? '').trim() || 'Unknown device';
@@ -105,82 +331,69 @@ export async function noteLoginDevice(args: {
     // agent's own text and the label stay in the person's own list and email.
     const forOrganization = args.deviceFamily?.trim() || browserDeviceName(ua);
     const hash = deviceHash(args.userId, ua, args.deviceKey?.trim() || null);
+    const client = args.client === 'phone' ? 'phone' : 'web';
+    // The place as the rows hold it: two capital letters, and a city the
+    // tables accept (lib/place-name.ts empties one they would refuse).
+    const country =
+      typeof args.place?.country === 'string' && /^[A-Z]{2}$/.test(args.place.country)
+        ? args.place.country
+        : null;
+    const place = { country, city: country ? cityForRecord(args.place?.city) : null };
     const admin = createAdminClient();
 
-    // Known device? → bump last-seen, no alert.
-    const { data: existing } = await admin
-      .from('user_login_devices')
-      .select('id')
-      .eq('user_id', args.userId)
-      .eq('device_hash', hash)
-      .maybeSingle();
-    if (existing) {
-      await admin
-        .from('user_login_devices')
-        .update({
-          last_seen_at: new Date().toISOString(),
-          last_ip: args.ip,
-          user_agent: shown.slice(0, 400),
-        })
-        .eq('id', (existing as { id: string }).id);
+    const device = await noteDevice(admin, { userId: args.userId, hash, shown, ip: args.ip });
+    const countryNote = country ? await noteCountry(admin, args.userId, country) : NO_COUNTRY;
+    const newDevice = device.alerts;
+    const newCountry = countryNote.alerts;
+    if (!(newDevice || newCountry) || !args.email) return;
+
+    const alert = await checkRateLimit(
+      `new-device-alert:user:${args.userId}`,
+      NEW_DEVICE_ALERTS_PER_ACCOUNT,
+      NEW_DEVICE_ALERT_WINDOW_MS,
+      'closed',
+    );
+    if (alert.failed) {
+      // Could not count: nothing is sent, and neither row this sign-in added
+      // is left recorded as seen, so its next sign-in is still new.
+      if (device.insertedNow) await forgetDevice(admin, args.userId, hash);
+      if (countryNote.insertedNow && country) await forgetCountry(admin, args.userId, country);
+      return;
+    }
+    if (!alert.allowed) {
+      await reportAlertsHeld(args.userId);
       return;
     }
 
-    // New device. Did the account already have known devices? If this is the
-    // user's FIRST-ever device, record it silently — alerting on a brand-new
-    // account's first login (or on everyone's existing device at rollout) is
-    // pure noise.
-    const { count } = await admin
-      .from('user_login_devices')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', args.userId);
-    const hadKnownDevices = (count ?? 0) > 0;
-
-    const { error: insertError } = await admin.from('user_login_devices').insert({
+    const alertId = await insertAlertRow(admin, {
       user_id: args.userId,
+      session_id:
+        typeof args.sessionId === 'string' && UUID_RE.test(args.sessionId) ? args.sessionId : null,
+      new_device: newDevice,
+      new_country: newCountry,
+      client,
+      // The member's words: the phone's label, or the browser and system.
+      device_label: deviceWordsForRecord(label ?? forOrganization, forOrganization),
+      // The organization's words: the family, or the browser and system.
+      device_family: deviceWordsForRecord(forOrganization, UNKNOWN_DEVICE),
       device_hash: hash,
-      user_agent: shown.slice(0, 400),
-      last_ip: args.ip,
+      country: place.country,
+      city: place.city,
     });
-    if (insertError) {
-      // Another sign-in on this device recorded it first; that one alerts.
-      if (insertError.code === '23505') return;
-      throw new Error(`user_login_devices insert refused (${insertError.code ?? 'no code'})`);
-    }
 
-    if (hadKnownDevices && args.email) {
-      const alert = await checkRateLimit(
-        `new-device-alert:user:${args.userId}`,
-        NEW_DEVICE_ALERTS_PER_ACCOUNT,
-        NEW_DEVICE_ALERT_WINDOW_MS,
-        'closed',
-      );
-      if (alert.failed) {
-        // Could not count: nothing is sent, and the device is not left
-        // recorded as seen, so its next sign-in is still a new device.
-        const { error: deleteError } = await admin
-          .from('user_login_devices')
-          .delete()
-          .eq('user_id', args.userId)
-          .eq('device_hash', hash);
-        if (deleteError) {
-          throw new Error(
-            `user_login_devices delete after an uncounted alert refused (${deleteError.code ?? 'no code'})`,
-          );
-        }
-        return;
-      }
-      if (!alert.allowed) {
-        await reportAlertsHeld(args.userId);
-        return;
-      }
-      await sendNewDeviceLoginEmail({
-        to: args.email,
-        userAgent: ua,
-        ip: args.ip,
-        deviceLabel: label,
-        lastForADay: alert.count === NEW_DEVICE_ALERTS_PER_ACCOUNT,
-      });
+    await sendNewDeviceLoginEmail({
+      to: args.email,
+      userAgent: ua,
+      ip: args.ip,
+      deviceLabel: label,
+      lastForADay: alert.count === NEW_DEVICE_ALERTS_PER_ACCOUNT,
+      place,
+      newDevice,
+      newCountry,
+      notMeUrl: alertId ? signInAlertLinkUrl({ alertId, userId: args.userId }) : null,
+    });
+
+    if (newDevice) {
       // Security feed: also surface the new device in each of the user's orgs'
       // subscribed channels (the email above only reaches the user — a hijacked
       // account's owner may never see it; the org's #security channel will).
@@ -212,11 +425,23 @@ export async function noteLoginDevice(args: {
         // infra, so it must carry NO PII. Send a non-PII user id + the device's
         // name in fixed words only — NOT the email or IP (those go only to the
         // user's own email alert above + the internal audit_logs in Supabase).
+        // Part 3 adds the country, two letters or null, and never the city.
         void dispatchEvent(m.organization_id, 'security.new_device_login', {
           userId: args.userId,
           device: forOrganization.slice(0, 120),
+          country: place.country,
         });
       }
+    }
+
+    if (newCountry) {
+      // The organizations' Blocked activity and the platform console count it.
+      await recordSignInAlertEvent({
+        reason: 'sign_in_new_country',
+        userId: args.userId,
+        source: client,
+        place,
+      });
     }
   } catch (e) {
     // Never let an alert failure affect sign-in.

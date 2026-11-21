@@ -121,3 +121,52 @@ describe('sendNewDeviceLoginEmail', () => {
     expect(msg.html).toContain('Safari on iPhone');
   });
 });
+
+describe('sendNewDeviceLoginEmail (part 3): the place, the kind and the link reach the email', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sendEmail.mockResolvedValue({ ok: true, id: 'test' });
+  });
+
+  it('a new country with a city: the Location row names the country in English, and the kind is said', async () => {
+    await sendNewDeviceLoginEmail({
+      to: 'member@example.test',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0) Firefox/127.0',
+      ip: null,
+      place: { country: 'MX', city: 'Tijuana' },
+      newDevice: false,
+      newCountry: true,
+      notMeUrl: 'https://app.example.test/sign-in-alert?a=0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d&i=20261120&t=x',
+    });
+    const msg = sendEmail.mock.calls[0]![0] as { html: string; text: string };
+    expect(msg.text).toContain('Location:    Tijuana, Mexico (approximate)');
+    expect(msg.text).toContain('from a country we haven’t seen on this account before');
+    expect(msg.html).toContain('>This was not me &rarr;</a>');
+    expect(msg.text).toContain(
+      'This was not me (signs you out on every device): https://app.example.test/sign-in-alert?a=0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d&i=20261120&t=x',
+    );
+  });
+
+  it('the country alone when there is no city; no Location row when there is no country', async () => {
+    await sendNewDeviceLoginEmail({
+      to: 'member@example.test',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0) Firefox/127.0',
+      ip: null,
+      place: { country: 'BR', city: null },
+    });
+    expect((sendEmail.mock.calls[0]![0] as { text: string }).text).toContain(
+      'Location:    Brazil (approximate)',
+    );
+    sendEmail.mockClear();
+    await sendNewDeviceLoginEmail({
+      to: 'member@example.test',
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0) Firefox/127.0',
+      ip: null,
+      place: { country: null, city: null },
+      notMeUrl: null,
+    });
+    const msg = sendEmail.mock.calls[0]![0] as { html: string; text: string };
+    expect(msg.text).not.toContain('Location:');
+    expect(msg.html).not.toContain('This was not me');
+  });
+});
