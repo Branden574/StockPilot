@@ -51,6 +51,9 @@ describe('security events: the lists the database checks', () => {
       'code_checks_paused',
       'wrong_recovery_code',
       'recovery_code_checks_paused',
+      'wrong_current_password',
+      'wrong_setup_code',
+      'sign_in_refused_other',
       'unknown_api_key',
       'auth_rate_limited',
       'auth_log_over_cap',
@@ -102,11 +105,31 @@ describe('security events: the lists the database checks', () => {
     expect(securityEventReasonLabel('unclassified_sign_in_refusals')).toBe(
       'Refused sign-in requests of an unusual form',
     );
+  });
+
+  it('the two reconciliation flags say what is always true: our server has no record of them', () => {
+    // True when someone else sent them, and true when our own server did and
+    // its record of them was lost: never "did not make".
     expect(securityEventReasonLabel('unrecorded_server_form_password')).toBe(
-      "Refused sign-ins that looked like our server's but that our server did not make",
+      "Refused sign-ins in our server's form that our server has no record of",
     );
     expect(securityEventReasonLabel('unrecorded_server_form_code')).toBe(
-      "Refused authenticator codes that looked like our server's but that our server did not make",
+      "Refused authenticator codes in our server's form that our server has no record of",
+    );
+    for (const reason of ['unrecorded_server_form_password', 'unrecorded_server_form_code']) {
+      expect(securityEventReasonLabel(reason)).not.toMatch(/did not make|looked like/);
+    }
+  });
+
+  it("names the plain words of a signed-in member's refused password and set-up code, and of a sign-in refused for another reason", () => {
+    expect(securityEventReasonLabel('wrong_current_password')).toBe(
+      'Wrong current password entered by a signed-in member',
+    );
+    expect(securityEventReasonLabel('wrong_setup_code')).toBe(
+      'Wrong code while setting up an authenticator',
+    );
+    expect(securityEventReasonLabel('sign_in_refused_other')).toBe(
+      'Sign-in refused for another reason',
     );
   });
 });
