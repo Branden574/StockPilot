@@ -107,6 +107,7 @@ const { createClient } = await import('@/lib/supabase/server');
 const { emitAuthAudit } = await import('@/server/services/auth-audit');
 const { reportError } = await import('@/lib/error-reporter');
 const { checkRateLimit } = await import('@/lib/rate-limit');
+const { recordSecurityEvent } = await import('@/server/security/events');
 const pk = await import('@/server/security/passkeys');
 const { startPasswordResetPasskeyAction, finishSecondStepAction, startSecondStepAction } =
   await import('./passkeys');
@@ -986,6 +987,48 @@ describe('the reset’s own words: none sends the person to a sign-in or a code 
     ).toContainEqual(['passkeys.bridge_unopenable', 'password_reset']);
   });
 
+  describe('the start’s words never point to a code nobody has (a reserved-name factor that no row records is no app)', () => {
+    /** A verified factor that carries the bridge's reserved name and that no row records. */
+    function strayFactor(userId: string) {
+      const f = world.addApp(userId);
+      f.friendly_name = 'sp-passkey-bridge-0123456789ab';
+      return f;
+    }
+    const STATES: Array<[string, (userId: string) => void]> = [
+      [
+        'S15 with a bridge secret that does not open',
+        (userId) => {
+          strayFactor(userId);
+          world.bridges.get(userId)!.secret_ciphertext = 'AAAA';
+        },
+      ],
+      ['S12 (the bridge row gone)', (userId) => void world.bridges.delete(userId)],
+    ];
+
+    it.each(STATES)('%s, no app: the words ask for no code', async (_state, make) => {
+      const { userId } = await passkeyOnlyMember();
+      make(userId);
+      openLink(userId);
+      const start = await startPasswordResetPasskeyAction();
+      expect(start).toMatchObject({ ok: false, error: { code: 'forbidden', message: CANT_USE } });
+      expect(start.ok ? '' : start.error.message).not.toMatch(/code|authenticator/i);
+    });
+
+    it.each(STATES)(
+      '%s, with an authenticator app of the member’s own: the words point to its code',
+      async (_state, make) => {
+        const { userId } = await passkeyOnlyMember();
+        world.addApp(userId);
+        make(userId);
+        openLink(userId);
+        expect(await startPasswordResetPasskeyAction()).toMatchObject({
+          ok: false,
+          error: { code: 'forbidden', message: CANT_USE_APP },
+        });
+      },
+    );
+  });
+
   it('with an authenticator app too, the words point to its code', async () => {
     const res = await answerWhileTheAccountChanges((userId) => {
       world.bridges.get(userId)!.secret_ciphertext = 'AAAA';
@@ -1386,6 +1429,142 @@ describe('the review of stage 5', () => {
         error: { code: 'rate_limited', message: pk.PASSKEY_WORDS.tooMany },
       });
       expect(fnNames()).not.toContain('issue_passkey_challenge');
+    });
+
+    describe('every session that did not sign in with the password counts there (an allow-list: only an amr entry whose method is exactly password is a password session)', () => {
+      const at = () => Math.floor(Date.now() / 1000) - 60;
+      const NOT_PASSWORD: Array<[string, { claim: unknown }]> = [
+        ['an emailed one-time link (otp)', { claim: [{ method: 'otp', timestamp: at() }] }],
+        ['a recovery link (recovery)', { claim: [{ method: 'recovery', timestamp: at() }] }],
+        ['an invitation (invite)', { claim: [{ method: 'invite', timestamp: at() }] }],
+        ['a magic link (magiclink)', { claim: [{ method: 'magiclink', timestamp: at() }] }],
+        ['a method this build does not know', { claim: [{ method: 'sso/saml', timestamp: at() }] }],
+        ['an empty list', { claim: [] }],
+        ['no amr claim at all', { claim: undefined }],
+        ['the bare-string list form', { claim: ['password'] }],
+        ['a bare string', { claim: 'password' }],
+        ['a method in another case', { claim: [{ method: 'Password', timestamp: at() }] }],
+      ];
+
+      it.each(NOT_PASSWORD)(
+        'the code page’s start on a session of %s counts on the link keys only',
+        async (_session, amrClaim) => {
+          const { userId } = await passkeyOnlyMember();
+          world.signIn(userId, 'aal1', { amrClaim });
+          const calls = recordKeys();
+          expect((await startSecondStepAction()).ok).toBe(true);
+          expect(calls.map((c) => c.key).filter((k) => k.startsWith('passkey-'))).toEqual([
+            expect.stringMatching(new RegExp(`^passkey-link-start:${userId}:.+$`)),
+            `passkey-link-start-account:${userId}`,
+          ]);
+        },
+      );
+
+      it.each(NOT_PASSWORD)(
+        'with the link keys spent by a session of %s, the member’s own sign-in still starts',
+        async (_session, amrClaim) => {
+          const { userId } = await passkeyOnlyMember();
+          world.signIn(userId, 'aal1', { amrClaim });
+          const keys = recordKeys((k) => k.startsWith('passkey-link-start'));
+          expect(await startSecondStepAction()).toEqual({
+            ok: false,
+            error: { code: 'rate_limited', message: pk.PASSKEY_WORDS.tooMany },
+          });
+          expect(keys.map((c) => c.key).filter((k) => k.startsWith('passkey-start'))).toEqual([]);
+          world.signIn(userId, 'aal1');
+          const start = await startSecondStepAction();
+          expect(start.ok && start.data.kind).toBe('options');
+        },
+      );
+
+      it.each([
+        ['password', { claim: [{ method: 'password', timestamp: at() }] }],
+        [
+          'password, then an answered factor',
+          {
+            claim: [
+              { method: 'password', timestamp: at() },
+              { method: 'totp', timestamp: at() },
+            ],
+          },
+        ],
+      ] as Array<[string, { claim: unknown }]>)(
+        'a session whose amr holds %s counts on the sign-in start’s keys, never the link keys',
+        async (_session, amrClaim) => {
+          const { userId } = await passkeyOnlyMember();
+          world.signIn(userId, 'aal1', { amrClaim });
+          const calls = recordKeys();
+          expect((await startSecondStepAction()).ok).toBe(true);
+          expect(calls.map((c) => c.key).filter((k) => k.startsWith('passkey-'))).toEqual([
+            expect.stringMatching(new RegExp(`^passkey-start:${userId}:.+$`)),
+            `passkey-start-account:${userId}`,
+          ]);
+        },
+      );
+    });
+
+    describe('a limiter that cannot count on the link keys refuses, and records no pause of the member', () => {
+      type Limit = Awaited<ReturnType<typeof checkRateLimit>>;
+      const COULD_NOT_COUNT = { allowed: false, failed: true } as Limit;
+      const pauseEvents = () =>
+        vi
+          .mocked(recordSecurityEvent)
+          .mock.calls.filter(
+            (c) => (c[0] as { reason?: string }).reason === 'passkey_checks_paused',
+          );
+
+      it('the reset’s start: refused with the usual words, one limiter call, no challenge, no passkey_checks_paused event', async () => {
+        const { userId } = await passkeyOnlyMember();
+        openLink(userId);
+        vi.mocked(recordSecurityEvent).mockClear();
+        const keys: string[] = [];
+        vi.mocked(checkRateLimit).mockImplementation(async (key: string) => {
+          keys.push(key);
+          return COULD_NOT_COUNT;
+        });
+        expect(await startPasswordResetPasskeyAction()).toEqual({
+          ok: false,
+          error: { code: 'rate_limited', message: pk.PASSKEY_WORDS.tooMany },
+        });
+        // The account key is not asked once the address key could not count.
+        expect(keys.filter((k) => k.startsWith('passkey-'))).toEqual([
+          expect.stringMatching(new RegExp(`^passkey-link-start:${userId}:.+$`)),
+        ]);
+        expect(fnNames()).not.toContain('issue_passkey_challenge');
+        expect(pauseEvents()).toEqual([]);
+      });
+
+      it('the account’s link key cannot count: refused, no event', async () => {
+        const { userId } = await passkeyOnlyMember();
+        openLink(userId);
+        vi.mocked(recordSecurityEvent).mockClear();
+        vi.mocked(checkRateLimit).mockImplementation(async (key: string) =>
+          key.startsWith('passkey-link-start-account:')
+            ? COULD_NOT_COUNT
+            : ({ allowed: true } as Limit),
+        );
+        expect(await startPasswordResetPasskeyAction()).toMatchObject({
+          ok: false,
+          error: { code: 'rate_limited' },
+        });
+        expect(fnNames()).not.toContain('issue_passkey_challenge');
+        expect(pauseEvents()).toEqual([]);
+      });
+
+      it.each([
+        ['the address key', 'passkey-link-start:'],
+        ['the account key', 'passkey-link-start-account:'],
+      ])('a count over the limit on %s is still recorded as a pause', async (_which, prefix) => {
+        const { userId } = await passkeyOnlyMember();
+        openLink(userId);
+        vi.mocked(recordSecurityEvent).mockClear();
+        recordKeys((k) => k.startsWith(prefix));
+        expect(await startPasswordResetPasskeyAction()).toMatchObject({
+          ok: false,
+          error: { code: 'rate_limited' },
+        });
+        expect(pauseEvents()).toHaveLength(1);
+      });
     });
 
     it('its limits: 5 in 15 minutes per address, 8 an hour for the account (below the 10 live challenges an account may hold)', async () => {
