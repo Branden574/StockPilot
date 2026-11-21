@@ -30,17 +30,36 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * checked before use (parseGroupRow, parseTotalsRow); a row that fails is
  * dropped and counted in the run's log line.
  *
- * THE KIND is read the way the sign-in service reads the request: from the
- * DECODED path, with the case it routes, and from the FIRST decoded
- * grant_type of the query string (the value the service acts on). `password`
- * and `refresh_token` (an ordinary expired session) are named; the other
- * grants Supabase Auth knows (pkce, id_token, web3) are `token_known_other`;
- * anything else sent to the sign-in path (no grant, an empty or unknown one,
- * a query string that does not decode the way the service decodes it) is
- * `token_other`. A code check on `/auth/v1/factors/<id>/verify` with a
- * well-formed id is `verify`; any other form of it is `verify_other`. The id
- * never leaves the query. Several grant_type values are counted in the log
- * line as of an ambiguous form.
+ * WHICH LINES ARE READ: A LOOSE NET. Every refused POST whose path, decoded,
+ * in small letters and with repeated slashes as one, STARTS with
+ * `/auth/v1/token`, `/auth/v1/factors` or `/auth/v1/verify`. The net is wide
+ * on purpose: whatever spelling of those paths the gateway might route, the
+ * line is read, and what is not an exact form below is an unknown form.
+ *
+ * THE KIND is read the way the request is routed and the way the sign-in
+ * service reads it. The exact forms are compared with the path AS SENT, its
+ * repeated slashes as one and its case kept: measured on 2026-11-21, the
+ * gateway routes `/auth/v1//token` to the same password check as
+ * `/auth/v1/token` (and logs the path as sent), and answers 404 for a
+ * trailing slash, capitals or an encoded letter. Such a line with a repeated
+ * slash is classed exactly as the plain path is, and counted in the log line
+ * as of an ambiguous form.
+ *   - `/auth/v1/token`: by the FIRST decoded grant_type of the query string
+ *     (the value the service acts on). `password` and `refresh_token` (an
+ *     ordinary expired session) are named; the other grants Supabase Auth
+ *     knows (pkce, id_token, web3) are `token_known_other`; anything else
+ *     (no grant, an empty or unknown one, a query string that does not decode
+ *     the way the service decodes it) is `token_other`. Several grant_type
+ *     values are counted in the log line as of an ambiguous form.
+ *   - `/auth/v1/factors/<id>/verify` with a well-formed id: `verify`, a code
+ *     check. `/auth/v1/factors` (enrolling a factor) and
+ *     `/auth/v1/factors/<id>/challenge` (asking for a challenge) check no
+ *     secret: `factors_known_other`. The id never leaves the query.
+ *   - `/auth/v1/verify`: `emailed_code`, a check of an emailed code or link.
+ *     It is COUNTED in the log line (by status and caller class), NOT STORED,
+ *     until its refused statuses are measured.
+ *   - anything else in the net is an unknown form: `token_other`,
+ *     `verify_other` (under the factors path) or `emailed_code_other`.
  *
  * WHAT IS STORED (classifyAuthLogLine, buildHourElements):
  *   - a password sign-in answered 400: password_guessing / wrong_password;
@@ -48,10 +67,13 @@ import { createAdminClient } from '@/lib/supabase/admin';
  *   - either answered 429, Supabase's own limit: bots / auth_rate_limited;
  *   - any other status of those two is counted in the log line and not
  *     stored: a status whose meaning is not known is not shown as an attack;
- *   - refreshes and the other known grants are counted, never stored;
- *   - requests of an unknown form (token_other, verify_other), even one, are
- *     stored as ONE flagged count per source for the hour
- *     (unclassified_sign_in_refusals), never taken for our own server.
+ *   - refreshes, the other known grants, factor enrolments, challenge
+ *     requests and checks of an emailed code are counted, never stored;
+ *   - requests of an unknown form, even one, are stored as ONE flagged count
+ *     per source for the hour (unclassified_sign_in_refusals), never taken
+ *     for our own server. The one exception: an unknown form answered 404
+ *     was routed nowhere, so nothing was checked; it is counted in the log
+ *     line (not_routed) and neither stored nor flagged.
  *   The source is phone for the phone app's client string and api for
  *   everything else (a browser, anything unknown, none). Every element has no
  *   organization (the line names no account), no city and no source hash.
@@ -193,6 +215,9 @@ const KINDS = [
   'token_other',
   'verify',
   'verify_other',
+  'factors_known_other',
+  'emailed_code',
+  'emailed_code_other',
 ] as const;
 type AuthLogsKind = (typeof KINDS)[number];
 const CALLERS = ['phone', 'server', 'browser', 'other', 'none'] as const;
@@ -206,15 +231,18 @@ type AuthLogsNetwork = 'hosting' | 'other';
  *
  * Read from Supabase's single `logs` table (ClickHouse), gateway lines only
  * (source edge_logs), where every field is a string in log_attributes. Only
- * POSTs answered 400 to 499 whose decoded path is `/auth/v1/token` or
- * `/auth/v1/factors/<one segment>/verify`.
+ * POSTs answered 400 to 499 inside the loose net (net_path: the decoded
+ * path in small letters, repeated slashes as one, starting with one of the
+ * three paths). routed_path is the path as sent with repeated slashes as
+ * one, case kept: the exact forms are compared with it.
  *
  * THE FORM IS NESTED SELECTS, the one the logs service's own SQL parser
  * accepts (it refuses a `WITH <expression> AS <name>` list): the innermost
  * select names the raw fields and filters the lines; the middle one works out
  * the kind, the caller class, the network class and the country from those
  * names; the outermost filters by kind, groups, orders and limits. A select
- * uses only the names of the select it reads from. AUTH_LOGS_TOTALS_SQL
+ * uses only the names of the select it reads from, and only functions that
+ * were seen to run on the logs service on 2026-11-21. AUTH_LOGS_TOTALS_SQL
  * defines every name it shares with this query the same way (a test compares
  * them), and reads the same lines.
  *
@@ -234,9 +262,13 @@ FROM (
   SELECT
     minute,
     multiIf(
-      match(raw_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/verify$'), 'verify',
-      decoded_path != '/auth/v1/token', 'verify_other',
-      raw_path != '/auth/v1/token', 'token_other',
+      match(routed_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/verify$'), 'verify',
+      routed_path = '/auth/v1/factors', 'factors_known_other',
+      match(routed_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/challenge$'), 'factors_known_other',
+      startsWith(net_path, '/auth/v1/factors'), 'verify_other',
+      routed_path = '/auth/v1/verify', 'emailed_code',
+      startsWith(net_path, '/auth/v1/verify'), 'emailed_code_other',
+      routed_path != '/auth/v1/token', 'token_other',
       match(raw_search, '%([^0-9A-Fa-f]|[0-9A-Fa-f][^0-9A-Fa-f]|[0-9A-Fa-f]?$|26|3[Dd]|[01][0-9A-Fa-f]|7[Ff])'), 'token_other',
       first_grant = 'password', 'password',
       first_grant = 'refresh_token', 'refresh',
@@ -257,8 +289,8 @@ FROM (
   FROM (
     SELECT
       toString(toStartOfMinute(timestamp)) AS minute,
-      log_attributes['request.path'] AS raw_path,
-      decodeURLComponent(log_attributes['request.path']) AS decoded_path,
+      replaceRegexpAll(log_attributes['request.path'], '/+', '/') AS routed_path,
+      replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/') AS net_path,
       log_attributes['request.search'] AS raw_search,
       extract(decodeURLComponent(log_attributes['request.search']), '(?:^[?]?|&)grant_type=([^&]*)') AS first_grant,
       log_attributes['request.headers.x_client_info'] AS client,
@@ -269,8 +301,9 @@ FROM (
     WHERE source = 'edge_logs'
       AND log_attributes['request.method'] = 'POST'
       AND match(log_attributes['response.status_code'], '^4[0-9][0-9]$')
-      AND (decodeURLComponent(log_attributes['request.path']) = '/auth/v1/token'
-           OR match(decodeURLComponent(log_attributes['request.path']), '^/auth/v1/factors/[^/]+/verify$'))
+      AND (startsWith(replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/'), '/auth/v1/token')
+           OR startsWith(replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/'), '/auth/v1/factors')
+           OR startsWith(replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/'), '/auth/v1/verify'))
   )
 )
 WHERE kind IN ('password', 'verify')
@@ -279,8 +312,9 @@ ORDER BY n DESC, minute, kind, status, caller, network, country
 LIMIT 199`;
 
 /**
- * Every refused line of the same hour, of every kind, by kind, form (one
- * grant_type value or several), status, caller class and network class only,
+ * Every refused line of the same hour, of every kind, by kind, form
+ * (`ambiguous` for several grant_type values or a path with a repeated
+ * slash), status, caller class and network class only,
  * with the first and last instant of each group: the log line's counts, the
  * flagged counts, our server's counts for the reconciliation and, when the
  * groups query was full, what it did not list.
@@ -291,16 +325,20 @@ FROM (
   SELECT
     ts,
     multiIf(
-      match(raw_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/verify$'), 'verify',
-      decoded_path != '/auth/v1/token', 'verify_other',
-      raw_path != '/auth/v1/token', 'token_other',
+      match(routed_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/verify$'), 'verify',
+      routed_path = '/auth/v1/factors', 'factors_known_other',
+      match(routed_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/challenge$'), 'factors_known_other',
+      startsWith(net_path, '/auth/v1/factors'), 'verify_other',
+      routed_path = '/auth/v1/verify', 'emailed_code',
+      startsWith(net_path, '/auth/v1/verify'), 'emailed_code_other',
+      routed_path != '/auth/v1/token', 'token_other',
       match(raw_search, '%([^0-9A-Fa-f]|[0-9A-Fa-f][^0-9A-Fa-f]|[0-9A-Fa-f]?$|26|3[Dd]|[01][0-9A-Fa-f]|7[Ff])'), 'token_other',
       first_grant = 'password', 'password',
       first_grant = 'refresh_token', 'refresh',
       first_grant IN ('pkce', 'id_token', 'web3'), 'token_known_other',
       'token_other'
     ) AS kind,
-    if(match(decoded_search, '(^[?]?|&)grant_type=.*&grant_type='), 'ambiguous', 'plain') AS form,
+    if(match(decoded_search, '(^[?]?|&)grant_type=.*&grant_type=') OR raw_path != routed_path, 'ambiguous', 'plain') AS form,
     status,
     multiIf(
       match(client, '^supabase-ssr/[0-9]+[.][0-9]+[.][0-9]+ createServerClient$'), 'server',
@@ -315,7 +353,8 @@ FROM (
     SELECT
       timestamp AS ts,
       log_attributes['request.path'] AS raw_path,
-      decodeURLComponent(log_attributes['request.path']) AS decoded_path,
+      replaceRegexpAll(log_attributes['request.path'], '/+', '/') AS routed_path,
+      replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/') AS net_path,
       log_attributes['request.search'] AS raw_search,
       decodeURLComponent(log_attributes['request.search']) AS decoded_search,
       extract(decodeURLComponent(log_attributes['request.search']), '(?:^[?]?|&)grant_type=([^&]*)') AS first_grant,
@@ -326,8 +365,9 @@ FROM (
     WHERE source = 'edge_logs'
       AND log_attributes['request.method'] = 'POST'
       AND match(log_attributes['response.status_code'], '^4[0-9][0-9]$')
-      AND (decodeURLComponent(log_attributes['request.path']) = '/auth/v1/token'
-           OR match(decodeURLComponent(log_attributes['request.path']), '^/auth/v1/factors/[^/]+/verify$'))
+      AND (startsWith(replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/'), '/auth/v1/token')
+           OR startsWith(replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/'), '/auth/v1/factors')
+           OR startsWith(replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/'), '/auth/v1/verify'))
   )
 )
 GROUP BY kind, form, status, caller, network
@@ -361,13 +401,21 @@ export interface AuthLogsGroupRow extends AuthLogsLine {
 
 /** One checked row of the totals query. */
 export interface AuthLogsTotalsRow extends AuthLogsLine {
-  /** `ambiguous` when the query string held several grant_type values (log line only). */
+  /** `ambiguous` for several grant_type values or a repeated slash in the path (log line only). */
   form: 'plain' | 'ambiguous';
   n: number;
 }
 
-/** Why a line is counted in the log line and not stored. */
-export type AuthLogsNotStored = 'our_server' | 'other_status' | 'refresh' | 'known_other';
+/**
+ * Why a line is counted in the log line and not stored: our own server's
+ * form (reconciled), a status whose meaning is not known, a refresh, a known
+ * request that checks no password and no code (another grant, enrolling a
+ * factor, asking for a challenge), a check of an emailed code (not stored
+ * until its statuses are measured), or a request of an unknown form that the
+ * service routed nowhere (404: nothing was checked).
+ */
+export type AuthLogsNotStored =
+  'our_server' | 'other_status' | 'refresh' | 'known_other' | 'emailed_code' | 'not_routed';
 
 export type AuthLogsVerdict =
   | {
@@ -470,7 +518,7 @@ export interface AuthLogsRunSummary {
   notStored: Record<AuthLogsNotStored, number>;
   /** Lines of an unknown form (all stored, as flagged counts). */
   unclassified: number;
-  /** Lines whose query string held several grant_type values (classed by the first). */
+  /** Lines with several grant_type values (classed by the first) or a repeated slash in the path. */
   ambiguousForm: number;
   /** Flagged elements of refusals of our server's form that our server did not record. */
   unrecordedFlags: number;
@@ -538,8 +586,16 @@ const isOurServerForm = (line: AuthLogsLine) =>
 /** What a refused line stands for: the event to store, or why it is not stored one by one. */
 export function classifyAuthLogLine(line: AuthLogsLine): AuthLogsVerdict {
   const source: AuthLogsSource = line.caller === 'phone' ? 'phone' : 'api';
-  // An unknown form is never taken for our own server: nothing of it is hidden.
-  if (line.kind === 'token_other' || line.kind === 'verify_other') {
+  // An unknown form is never taken for our own server: nothing of it is
+  // hidden. Answered 404, the service routed it nowhere and checked nothing
+  // (measured: a trailing slash, capitals, an encoded letter): counted only.
+  // Any other refused status of it is flagged.
+  if (
+    line.kind === 'token_other' ||
+    line.kind === 'verify_other' ||
+    line.kind === 'emailed_code_other'
+  ) {
+    if (line.status === '404') return { store: false, why: 'not_routed' };
     return { store: false, why: 'unclassified', source };
   }
   // Ours: already recorded by part 1, with the member's real place (its count
@@ -550,7 +606,10 @@ export function classifyAuthLogLine(line: AuthLogsLine): AuthLogsVerdict {
     case 'refresh':
       return { store: false, why: 'refresh' };
     case 'token_known_other':
+    case 'factors_known_other':
       return { store: false, why: 'known_other' };
+    case 'emailed_code':
+      return { store: false, why: 'emailed_code' };
     case 'password':
       if (line.status === '429')
         return { store: true, category: 'bots', reason: 'auth_rate_limited', source };
@@ -702,7 +761,7 @@ export interface AuthLogsHourElements {
   notStored: Record<AuthLogsNotStored, number>;
   /** Lines of an unknown form (stored as flagged counts, one per source). */
   unclassified: number;
-  /** Lines whose query string held several grant_type values. */
+  /** Lines with several grant_type values, or a repeated slash in the path. */
   ambiguousForm: number;
   /** Our server's form, reconciled with what it recorded. */
   reconcile: AuthLogsReconcile;
@@ -801,6 +860,8 @@ export function buildHourElements(input: {
     other_status: 0,
     refresh: 0,
     known_other: 0,
+    emailed_code: 0,
+    not_routed: 0,
   };
   const unclassifiedBySource: Record<AuthLogsSource, number> = { phone: 0, api: 0 };
   let ambiguousForm = 0;
@@ -1208,7 +1269,14 @@ function emptySummary(hours: AuthLogsHour[]): AuthLogsRunSummary {
     elements: 0,
     eventsStored: 0,
     clamped: 0,
-    notStored: { our_server: 0, other_status: 0, refresh: 0, known_other: 0 },
+    notStored: {
+      our_server: 0,
+      other_status: 0,
+      refresh: 0,
+      known_other: 0,
+      emailed_code: 0,
+      not_routed: 0,
+    },
     unclassified: 0,
     ambiguousForm: 0,
     unrecordedFlags: 0,

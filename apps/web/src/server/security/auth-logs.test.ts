@@ -191,6 +191,18 @@ const {
 
 const MIN = 60_000;
 const HOUR = 3_600_000;
+/** Every kind the queries answer. */
+const ALL_KINDS = [
+  'password',
+  'refresh',
+  'token_known_other',
+  'token_other',
+  'verify',
+  'verify_other',
+  'factors_known_other',
+  'emailed_code',
+  'emailed_code_other',
+] as const;
 /** 2026-11-21 10:10 UTC: the run reads 04:00 to 10:00. */
 const NOW = Date.UTC(2026, 10, 21, 10, 10);
 const H04 = Date.UTC(2026, 10, 21, 4);
@@ -510,9 +522,12 @@ describe('the mapping from a log line to an event', () => {
     ['token_other', '401', 'none', 'other', 'api'],
     ['verify_other', '422', 'phone', 'other', 'phone'],
     ['verify_other', '429', 'other', 'other', 'api'],
+    ['emailed_code_other', '403', 'none', 'other', 'api'],
+    ['emailed_code_other', '405', 'phone', 'other', 'phone'],
     // Never taken for our own server.
     ['token_other', '400', 'server', 'hosting', 'api'],
     ['verify_other', '422', 'server', 'hosting', 'api'],
+    ['emailed_code_other', '403', 'server', 'hosting', 'api'],
   ])(
     '%s %s from %s on a %s network is of an unknown form: counted for a flagged count from %s',
     (kind, st, caller, network, source) => {
@@ -524,8 +539,60 @@ describe('the mapping from a log line to an event', () => {
     },
   );
 
+  it.each([
+    ['token_other', 'phone', 'other'],
+    ['verify_other', 'none', 'other'],
+    ['emailed_code_other', 'browser', 'other'],
+    ['token_other', 'server', 'hosting'],
+    ['verify_other', 'server', 'other'],
+  ])(
+    '%s answered 404 from %s on a %s network: the service routed it nowhere and checked nothing, so it is counted only',
+    (kind, caller, network) => {
+      expect(classifyAuthLogLine(line(kind, '404', caller, network))).toEqual({
+        store: false,
+        why: 'not_routed',
+      });
+    },
+  );
+
+  it.each([
+    ['403', 'none', 'other'],
+    ['400', 'phone', 'other'],
+    ['429', 'browser', 'hosting'],
+    ['404', 'other', 'other'],
+  ])(
+    'a refused check of an emailed code answered %s from %s: counted, not stored until its statuses are measured',
+    (st, caller, network) => {
+      expect(classifyAuthLogLine(line('emailed_code', st, caller, network))).toEqual({
+        store: false,
+        why: 'emailed_code',
+      });
+    },
+  );
+
+  it.each([
+    ['422', 'phone', 'other'],
+    ['400', 'browser', 'other'],
+    ['404', 'none', 'other'],
+  ])(
+    'a refused request to enrol a factor or to ask for a challenge, answered %s from %s: no secret is checked there, counted only',
+    (st, caller, network) => {
+      expect(classifyAuthLogLine(line('factors_known_other', st, caller, network))).toEqual({
+        store: false,
+        why: 'known_other',
+      });
+    },
+  );
+
   it('our own server is its client string AND a hosting network: its known kinds are not stored one by one', () => {
-    for (const kind of ['password', 'verify', 'refresh', 'token_known_other'])
+    for (const kind of [
+      'password',
+      'verify',
+      'refresh',
+      'token_known_other',
+      'factors_known_other',
+      'emailed_code',
+    ])
       for (const st of ['400', '422', '429', '401']) {
         expect(classifyAuthLogLine(line(kind, st, 'server', 'hosting')), `${kind} ${st}`).toEqual({
           store: false,
@@ -539,14 +606,7 @@ describe('the mapping from a log line to an event', () => {
   it('nothing the mapping answers is outside the job reasons and the two sources', () => {
     const reasons = new Set<string>();
     const sources = new Set<string>();
-    for (const kind of [
-      'password',
-      'refresh',
-      'token_known_other',
-      'token_other',
-      'verify',
-      'verify_other',
-    ])
+    for (const kind of ALL_KINDS)
       for (const st of ['400', '401', '403', '404', '422', '429', '499'])
         for (const caller of ['phone', 'server', 'browser', 'other', 'none'])
           for (const network of ['hosting', 'other']) {
@@ -689,14 +749,7 @@ describe('every returned field is checked before use', () => {
       network: 'other',
       n: 3,
     });
-    for (const kind of [
-      'password',
-      'refresh',
-      'token_known_other',
-      'token_other',
-      'verify',
-      'verify_other',
-    ])
+    for (const kind of ALL_KINDS)
       expect(parseTotalsRow(totalsRow({ kind }), hour)?.kind).toBe(kind);
     expect(
       parseTotalsRow(totalsRow({ first_seen: '2026-11-21 04:00:00.000001' }), hour),
@@ -804,6 +857,8 @@ describe("one hour's elements for the writer", () => {
       other_status: 2,
       refresh: 40,
       known_other: 30,
+      emailed_code: 0,
+      not_routed: 0,
     });
     expect(out.seen).toEqual({
       'password 400 phone other': 1,
@@ -879,6 +934,32 @@ describe("one hour's elements for the writer", () => {
       expect(out.elements.filter((e) => e.outcome === 'blocked')).toEqual([
         expect.objectContaining({ reason: 'wrong_password', count: 2 }),
       ]);
+    });
+
+    it('an unknown form answered 404 is counted, not flagged; any other refused status of it is flagged', () => {
+      const out = build(
+        [],
+        [
+          totalsRow({ kind: 'token_other', status: '404', caller: 'none', n: 30 }),
+          totalsRow({ kind: 'verify_other', status: '404', caller: 'phone', n: 4 }),
+          totalsRow({ kind: 'token_other', status: '400', caller: 'none', n: 1 }),
+          totalsRow({ kind: 'emailed_code_other', status: '403', caller: 'none', n: 2 }),
+          totalsRow({ kind: 'emailed_code', status: '403', caller: 'none', n: 9 }),
+          totalsRow({ kind: 'factors_known_other', status: '422', caller: 'browser', n: 5 }),
+        ],
+      );
+      expect(flaggedOf(out)).toEqual([
+        expect.objectContaining({ outcome: 'flagged', source: 'api', count: 3, at_ms: H04 }),
+      ]);
+      expect(out.elements).toHaveLength(1);
+      expect(out.unclassified).toBe(3);
+      expect(out.notStored).toMatchObject({ not_routed: 34, emailed_code: 9, known_other: 5 });
+      // Each is still in the log line, by kind, status and caller.
+      expect(out.seen).toMatchObject({
+        'token_other 404 none other': 30,
+        'emailed_code 403 none other': 9,
+        'factors_known_other 422 browser other': 5,
+      });
     });
 
     it('a flagged count past what the writer reads is cut to 999,999', () => {
@@ -1062,6 +1143,8 @@ describe("one hour's elements for the writer", () => {
         other_status: 300,
         refresh: 80,
         known_other: 0,
+        emailed_code: 0,
+        not_routed: 0,
       });
     });
 
@@ -1159,6 +1242,21 @@ describe('the SQL is two constants that return classes and counts only', () => {
         expect(inner.limit, name).toBeNull();
       }
       expect(levels[2]!.where, name).not.toBeNull();
+    }
+  });
+
+  it('each query fits a request line: its whole URL stays far below 8,000 bytes', () => {
+    // The query travels in the URL of a GET. The longest one seen to run on
+    // the logs service was about 3,600 bytes; a common limit for a request
+    // line is 8,000.
+    for (const [name, sql] of BOTH) {
+      const params = new URLSearchParams({
+        sql,
+        iso_timestamp_start: iso(H04),
+        iso_timestamp_end: iso(H04 + HOUR),
+      });
+      const url = `https://api.supabase.com/v1/projects/${PROJECT_REF}/analytics/endpoints/logs?${params.toString()}`;
+      expect(url.length, name).toBeLessThan(5_500);
     }
   });
 
@@ -1396,40 +1494,134 @@ describe('the SQL is two constants that return classes and counts only', () => {
     });
   });
 
-  describe('the paths are read decoded, with the case the service routes', () => {
+  describe('the paths: a loose net, and inside it the exact forms the gateway routes', () => {
+    const formOfPath = (p: string) => bothOn(gatewayLine({ path: p })).form;
+
     it.each([
       ['/auth/v1/token', 'password'],
-      ['/auth/v1/%74oken', 'token_other'],
-      ['/auth/v1/to%6Ben', 'token_other'],
       [`/auth/v1/factors/${UUID}/verify`, 'verify'],
       [`/auth/v1/factors/${UUID.toUpperCase()}/verify`, 'verify'],
+      // No secret is checked by these two: enrolling a factor, asking for a challenge.
+      ['/auth/v1/factors', 'factors_known_other'],
+      [`/auth/v1/factors/${UUID}/challenge`, 'factors_known_other'],
+      // A check of an emailed code: counted, not stored.
+      ['/auth/v1/verify', 'emailed_code'],
+    ])('%s is read, as %s, of a plain form', (p, kind) => {
+      expect(kindOf(gatewayLine({ path: p }))).toBe(kind);
+      expect(formOfPath(p)).toBe('plain');
+    });
+
+    // Measured on 2026-11-21: the gateway routes a repeated slash to the same
+    // check (a password WAS checked for the first two), and logs the path as sent.
+    it.each([
+      ['/auth/v1//token', 'password'],
+      ['/auth//v1/token', 'password'],
+      ['//auth/v1/token', 'password'],
+      ['/auth///v1////token', 'password'],
+      [`/auth/v1//factors/${UUID}/verify`, 'verify'],
+      [`/auth/v1/factors//${UUID}//verify`, 'verify'],
+      ['/auth/v1//factors', 'factors_known_other'],
+      [`/auth//v1/factors/${UUID}/challenge`, 'factors_known_other'],
+      ['/auth/v1//verify', 'emailed_code'],
+    ])(
+      '%s (a repeated slash) is read as the plain path is, as %s, and counted as of an ambiguous form',
+      (p, kind) => {
+        expect(kindOf(gatewayLine({ path: p }))).toBe(kind);
+        expect(formOfPath(p)).toBe('ambiguous');
+      },
+    );
+
+    it('a repeated slash changes nothing else: the grant decides, and the groups query lists the line', () => {
+      const refresh = gatewayLine({ path: '/auth/v1//token', search: '?grant_type=refresh_token' });
+      expect(kindOf(refresh)).toBe('refresh');
+      expect(kindOf(gatewayLine({ path: '/auth//v1/token', search: '?grant_type=magic' }))).toBe(
+        'token_other',
+      );
+      const wrong = bothOn(gatewayLine({ path: '/auth/v1//token' }));
+      expect(wrong.kind).toBe('password');
+      expect(wrong.groups.kept).toBe(true);
+      expect(wrong.groups.values.caller).toBe('phone');
+    });
+
+    // Inside the net, and not one of the exact forms: an unknown form. (Measured
+    // on 2026-11-21: a trailing slash, capitals and an encoded letter were
+    // answered 404; the mapping counts a 404 of an unknown form and flags any
+    // other refused status.)
+    it.each([
+      ['/auth/v1/%74oken', 'token_other'],
+      ['/auth/v1/to%6Ben', 'token_other'],
+      ['/auth/v1/TOKEN', 'token_other'],
+      ['/auth/v1/Token', 'token_other'],
+      ['/AUTH/V1/token', 'token_other'],
+      ['/auth/v1/%54OKEN', 'token_other'],
+      ['/auth/v1/token/', 'token_other'],
+      ['/auth/v1/token//', 'token_other'],
+      ['/auth/v1/tokens', 'token_other'],
+      ['/auth/v1/token/more', 'token_other'],
+      ['/auth%2Fv1%2Ftoken', 'token_other'],
+      ['/auth/v1%2F%2Ftoken', 'token_other'],
       [`/auth/v1/factors/${UUID.replaceAll('-', '')}/verify`, 'verify_other'],
       [`/auth/v1/factors/{${UUID}}/verify`, 'verify_other'],
       ['/auth/v1/factors/not-an-id/verify', 'verify_other'],
       [`/auth/v1/factors/%35${UUID.slice(1)}/verify`, 'verify_other'],
       [`/auth/v1/factors/${UUID}/verif%79`, 'verify_other'],
       [`/auth/v1/factors/${UUID}%2Fverify`, 'verify_other'],
-    ])('%s is read, as %s', (p, kind) => {
-      expect(kindOf(gatewayLine({ path: p }))).toBe(kind);
+      [`/auth/v1/factors/${UUID}/VERIFY`, 'verify_other'],
+      [`/auth/v1/FACTORS/${UUID}/verify`, 'verify_other'],
+      [`/auth/v1/factors/${UUID}/verify/more`, 'verify_other'],
+      [`/auth/v1/factors/${UUID}/verify/`, 'verify_other'],
+      ['/auth/v1/factors//verify', 'verify_other'],
+      [`/auth/v1/factors/a/${UUID}/verify`, 'verify_other'],
+      [`/auth/v1/factors/${UUID}`, 'verify_other'],
+      ['/auth/v1/factors/', 'verify_other'],
+      [`/auth/v1/factors/${UUID}/challenge/`, 'verify_other'],
+      [`/auth/v1/factors/${UUID}/CHALLENGE`, 'verify_other'],
+      ['/auth/v1/factors/not-an-id/challenge', 'verify_other'],
+      ['/auth/v1/VERIFY', 'emailed_code_other'],
+      ['/auth/v1/verify/', 'emailed_code_other'],
+      ['/auth/v1/verify/more', 'emailed_code_other'],
+      ['/auth/v1/%76erify', 'emailed_code_other'],
+    ])('%s is read, as an unknown form (%s)', (p, kind) => {
+      const { groups, totals } = bothOn(gatewayLine({ path: p }));
+      expect(totals.kept).toBe(true);
+      expect(totals.values.kind).toBe(kind);
+      // Never listed by minute and country: an unknown form is counted, or flagged.
+      expect(groups.kept).toBe(false);
     });
 
     it.each([
-      ['/auth/v1/TOKEN'],
-      ['/auth/v1/Token'],
-      ['/auth/v1/token/'],
-      ['/auth/v1/tokens'],
-      ['/auth/v1/%54OKEN'],
-      ['/auth/v1/verify'],
       ['/auth/v1/user'],
-      [`/auth/v1/factors/${UUID}/VERIFY`],
-      [`/auth/v1/factors/${UUID}/challenge`],
-      [`/auth/v1/factors/${UUID}/verify/more`],
-      [`/auth/v1/factors/${UUID}/verify/`],
-      ['/auth/v1/factors//verify'],
-      [`/auth/v1/factors/a/${UUID}/verify`],
+      ['/auth/v1/otp'],
+      ['/auth/v1/recover'],
+      ['/auth/v1/logout'],
+      ['/auth/v2/token'],
+      ['/auth/token'],
+      ['/x/auth/v1/token'],
       [`/rest/v1/factors/${UUID}/verify`],
-    ])('%s is not read', (p) => {
+      ['/rest/v1/token'],
+      [''],
+    ])('%j is outside the net: not read', (p) => {
       expect(kindOf(gatewayLine({ path: p }))).toBeNull();
+    });
+
+    it('a line with no path at all is not read', () => {
+      expect(kindOf(gatewayLine({ path: null }))).toBeNull();
+    });
+
+    it('the net is the decoded path in small letters with repeated slashes as one, by its start', () => {
+      for (const [name, sql] of BOTH) {
+        const where = JSON.stringify(parseReaderQuery(sql).levels[2]!.where);
+        for (const family of ['/auth/v1/token', '/auth/v1/factors', '/auth/v1/verify']) {
+          expect(where, `${name} ${family}`).toContain(JSON.stringify({ k: 'str', v: family }));
+        }
+        expect(sql, name).toContain(
+          "replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/') AS net_path",
+        );
+        // The exact forms are compared with the path as sent, repeated slashes as one, case kept.
+        expect(sql, name).toContain(
+          "replaceRegexpAll(log_attributes['request.path'], '/+', '/') AS routed_path",
+        );
+      }
     });
 
     it('the factor id never comes back', () => {
@@ -1472,6 +1664,9 @@ describe('the SQL is two constants that return classes and counts only', () => {
       [gatewayLine({ search: '?grant_type=pkce' }), 'token_known_other', false],
       [gatewayLine({ search: '?grant_type=magic' }), 'token_other', false],
       [gatewayLine({ path: '/auth/v1/factors/not-an-id/verify' }), 'verify_other', false],
+      [gatewayLine({ path: '/auth/v1/factors' }), 'factors_known_other', false],
+      [gatewayLine({ path: '/auth/v1/verify', status: '403' }), 'emailed_code', false],
+      [gatewayLine({ path: '/auth/v1/verify/', status: '404' }), 'emailed_code_other', false],
     ];
     for (const [line, kind, listed] of cases) {
       const { groups, totals } = bothOn(line);
@@ -1488,7 +1683,7 @@ describe('the SQL is two constants that return classes and counts only', () => {
     expect(JSON.stringify(groups[2]!.where)).toBe(JSON.stringify(totals[2]!.where));
     // Only the groups query filters again, by the computed kind.
     expect(totals[0]!.where).toBeNull();
-    expect(AUTH_LOGS_GROUPS_SQL).toContain("\nWHERE kind IN ('password', 'verify')");
+    expect(AUTH_LOGS_GROUPS_SQL).toContain("\nWHERE kind IN ('password', 'verify')\n");
     for (const [, sql] of BOTH) {
       expect(sql.trimEnd().endsWith(`LIMIT ${AUTH_LOGS_ROW_LIMIT}`)).toBe(true);
       expect(sql).toMatch(/ORDER BY n DESC/);
@@ -1585,14 +1780,7 @@ describe('the SQL is two constants that return classes and counts only', () => {
     for (const line of lines) {
       const { groups, totals } = bothOn(line);
       expect(JSON.stringify([groups.values, totals.values])).not.toContain(marker);
-      expect([
-        'password',
-        'refresh',
-        'token_known_other',
-        'token_other',
-        'verify',
-        'verify_other',
-      ]).toContain(groups.values.kind);
+      expect(ALL_KINDS).toContain(groups.values.kind);
       expect(['plain', 'ambiguous']).toContain(totals.values.form);
       expect(['phone', 'server', 'browser', 'other', 'none']).toContain(groups.values.caller);
       expect(['hosting', 'other']).toContain(groups.values.network);
