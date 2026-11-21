@@ -173,7 +173,8 @@ import { createAdminClient } from '@/lib/supabase/admin';
  *
  * A FLAGGED COUNT IS REPORTED AS WELL AS STORED. The rows this job stores
  * have no organization, so they are on no organization's Blocked activity
- * page. Whenever a run stores a flagged element (requests of an unknown
+ * page, only on the platform console's Security page (the newest entries of
+ * every organization and none). Whenever a run stores a flagged element (requests of an unknown
  * form, refusals in our server's form that our server has no record of,
  * totals that were not whole) it sends one warning with the events by
  * reason. A run that stores only ordinary counts reports nothing.
@@ -2145,14 +2146,15 @@ export async function readAuthLogs(options: {
     });
   }
   // A FLAGGED COUNT IS TOLD, NOT ONLY STORED. Every row this job stores has
-  // no organization, so no organization's Blocked activity page shows it. A
-  // flagged count is what the job could not account for, and the comparison
-  // with our own record only protects anyone if someone hears of it: one
-  // warning for the run, with the events stored by reason.
+  // no organization, so no organization's Blocked activity page shows it;
+  // only the platform console's Security page does, among its newest
+  // entries. A flagged count is what the job could not account for, and the
+  // comparison with our own record only protects anyone if someone hears of
+  // it: one warning for the run, with the events stored by reason.
   if (summary.flaggedHours > 0) {
     reports.push({
       message:
-        "Flagged counts of refused sign-ins were stored. They have no organization, so they are on no organization's Blocked activity page; the counts by reason are in this report",
+        "Flagged counts of refused sign-ins were stored. They have no organization, so no organization's Blocked activity page shows them; the platform console's Security page does. The counts by reason are in this report",
       level: 'warning',
       extra: { cause: 'flagged_stored', hours: summary.flaggedHours, ...summary.flaggedStored },
     });

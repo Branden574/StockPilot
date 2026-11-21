@@ -3690,6 +3690,7 @@ describe('a run: six hours, oldest first, each written once', () => {
       const [err, ctx] = h.report.mock.calls[0]!;
       expect(String(err)).toContain('Flagged counts of refused sign-ins were stored');
       expect(String(err)).toContain('no organization');
+      expect(String(err)).toContain("the platform console's Security page does");
       expect(ctx).toEqual({
         tag: 'cron.security-events-auth-logs',
         level: 'warning',
