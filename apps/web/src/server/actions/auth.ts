@@ -711,7 +711,12 @@ export async function completePasswordResetAction(
     const held = heldNow.claims;
     const passkeyAnswer = passkeyMethod ? resetPasskeyAnswerOf(input.passkeyAnswer) : null;
     if (held.aal !== 'aal2' && passkeyMethod && passkeyAnswer) {
-      const raised = await answerResetPasskey(supabase, accountId, passkeyAnswer);
+      const raised = await answerResetPasskey(
+        supabase,
+        accountId,
+        passkeyAnswer,
+        passkeyMethod === 'both',
+      );
       if (!raised.ok) return resetPasskeyRefusal(supabase, raised, passkeyMethod);
     } else if (held.aal !== 'aal2') {
       const code = totpFactorId ? normalizeTotpCode(input.totpCode) : null;

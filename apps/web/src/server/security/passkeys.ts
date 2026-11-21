@@ -195,6 +195,19 @@ export const PASSKEY_WORDS = {
   /** Stage 5: the reset's passkey on a session no emailed link opened within the hour. */
   resetNeedsLink:
     'This works only within an hour of opening the link in your email. Choose Forgot? on the sign-in page to get a new link.',
+  /**
+   * Stage 5: the reset page's own words where the ones above would send the
+   * person to a sign-in or a code page they do not have (inResetWords). The
+   * first is the reset action's own (server/actions/auth.ts RESET_LINK_GONE).
+   */
+  resetLinkGone:
+    'That link has expired or was already used. Choose Forgot? on the sign-in page to get a new link by email.',
+  resetOff:
+    "Passkeys are turned off right now. Try again later, or ask your organization's owner or StockPilot support for help.",
+  resetCantUse:
+    "Your passkey can't be used to reset your password right now. Ask your organization's owner or StockPilot support for help.",
+  resetCantUseApp:
+    "Your passkey can't be used right now. Enter the 6-digit code from your authenticator app.",
 } as const;
 
 /** The purposes of a challenge (0475's check). Never read from a browser (rule 20). */
@@ -1634,8 +1647,36 @@ export async function resetPasskeyStepFor(
  */
 export async function startResetPasskey(): Promise<Result<{ start: SecondStepStart }>> {
   const started = await readForStart('use', {});
-  if (!started.ok) return started;
-  return startCeremony('password_reset', started);
+  if (!started.ok) return inResetWords(started, false);
+  const r = await startCeremony('password_reset', started);
+  return r.ok ? r : inResetWords(r, started.picture.apps.length > 0);
+}
+
+/** Words that would send the person elsewhere: the passkey cannot do it now. */
+const RESET_CANT_USE_WORDS: ReadonlySet<string> = new Set([
+  PASSKEY_WORDS.cantUse,
+  PASSKEY_WORDS.counterWentBack,
+  PASSKEY_WORDS.setupNotFinished,
+]);
+
+/**
+ * The reset's own words for a refusal (stage 5). The person on the reset page
+ * has no session to sign in again with and has not reached the code page, so
+ * "sign in again" becomes the link's words, and "use a recovery code" or
+ * "Settings" becomes what is true there: with an authenticator app (`withApp`),
+ * its code; without one, stage 2's words for an account the reset cannot
+ * serve. The refusal's code and reason are kept.
+ */
+function inResetWords(f: PasskeyFailure, withApp: boolean): PasskeyFailure {
+  if (f.code === 'unauthenticated') return { ...f, message: PASSKEY_WORDS.resetLinkGone };
+  if (f.message === PASSKEY_WORDS.off) return { ...f, message: PASSKEY_WORDS.resetOff };
+  if (RESET_CANT_USE_WORDS.has(f.message)) {
+    return {
+      ...f,
+      message: withApp ? PASSKEY_WORDS.resetCantUseApp : PASSKEY_WORDS.resetCantUse,
+    };
+  }
+  return f;
 }
 
 /**
@@ -1650,8 +1691,21 @@ export async function startResetPasskey(): Promise<Result<{ start: SecondStepSta
  * password and ends every session of the account. `passkey.used` carries no
  * organization (the reset is before any sign-in, like a refused code). The
  * reset never repairs a bridge: a passkey that does not serve now is refused.
+ * A refusal carries the reset's own words (inResetWords; `withApp`: the
+ * account has an authenticator app too, offered beside the passkey).
  */
 export async function answerResetPasskey(
+  supabase: CookieClient,
+  accountId: string,
+  input: { challengeId: unknown; response: unknown },
+  withApp: boolean,
+): Promise<Result<object>> {
+  const r = await spendResetAnswer(supabase, accountId, input);
+  return r.ok ? r : inResetWords(r, withApp);
+}
+
+/** answerResetPasskey's steps, in the passkey module's own words. */
+async function spendResetAnswer(
   supabase: CookieClient,
   accountId: string,
   input: { challengeId: unknown; response: unknown },

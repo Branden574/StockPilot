@@ -600,16 +600,29 @@ describe('dark: with passkeys not usable (decision A), the reset is stage 2’s,
       expect(world.calls.passwordSets).toEqual([]);
     });
 
-    it('a member with an app gets the code box of stage 2, never the passkey', async () => {
-      const { userId } = await passkeyOnlyMember();
+    it('a member with an app gets the code box of stage 2, never the passkey; an answer sent anyway is never read', async () => {
+      const { userId, soft } = await passkeyOnlyMember();
       world.addApp(userId);
       openLink(userId);
+      const { challengeId, options } = optionsOf(await startPasswordResetPasskeyAction());
+      const response = soft.get(options);
       close();
-      const res = await completePasswordResetAction(PASSWORDS);
-      expect(res).toEqual({
-        ok: false,
-        error: { code: 'forbidden', message: RESET_CODE_ASK, details: { reason: 'aal2_required' } },
-      });
+      world.calls.fns.length = 0;
+      world.calls.auth.length = 0;
+      for (const input of [PASSWORDS, { ...PASSWORDS, passkeyAnswer: { challengeId, response } }]) {
+        const res = await completePasswordResetAction(input);
+        expect(res).toEqual({
+          ok: false,
+          error: {
+            code: 'forbidden',
+            message: RESET_CODE_ASK,
+            details: { reason: 'aal2_required' },
+          },
+        });
+      }
+      expect(fnNames()).not.toContain('take_passkey_challenge');
+      expect(verifyCalls()).toEqual([]);
+      expect(world.calls.passwordSets).toEqual([]);
     });
   });
 
@@ -632,6 +645,122 @@ describe('dark: with passkeys not usable (decision A), the reset is stage 2’s,
     });
     expect(fnNames()).toEqual([]);
     expect(world.calls.reads).toEqual([]);
+  });
+});
+
+describe('the reset’s own words: none sends the person to a sign-in or a code page they do not have', () => {
+  const CANT_USE =
+    "Your passkey can't be used to reset your password right now. Ask your organization's owner or StockPilot support for help.";
+  const CANT_USE_APP =
+    "Your passkey can't be used right now. Enter the 6-digit code from your authenticator app.";
+
+  it('the link’s words are the reset action’s own', () => {
+    expect(pk.PASSKEY_WORDS.resetLinkGone).toBe(RESET_LINK_GONE);
+  });
+
+  it('a start with no session left: the link’s words, not “sign in again”', async () => {
+    const { userId } = await passkeyOnlyMember();
+    openLink(userId);
+    world.cookieToken = null;
+    const start = await startPasswordResetPasskeyAction();
+    expect(start).toEqual({
+      ok: false,
+      error: { code: 'unauthenticated', message: RESET_LINK_GONE },
+    });
+  });
+
+  it('a start after the kill switch went off: no recovery code is offered', async () => {
+    const { userId } = await passkeyOnlyMember();
+    openLink(userId);
+    world.addAllowed = 'kill_switch_off';
+    const start = await startPasswordResetPasskeyAction();
+    expect(start).toEqual({
+      ok: false,
+      error: {
+        code: 'forbidden',
+        message:
+          "Passkeys are turned off right now. Try again later, or ask your organization's owner or StockPilot support for help.",
+      },
+    });
+  });
+
+  /**
+   * The account's passkey stops serving during the press, after the reset
+   * offered it and once the answer's challenge is spent: `change` runs right
+   * after take_passkey_challenge.
+   */
+  async function answerWhileTheAccountChanges(change: (userId: string) => void, withApp = false) {
+    const { userId, soft } = await passkeyOnlyMember();
+    if (withApp) world.addApp(userId);
+    const link = openLink(userId);
+    const { challengeId, options } = optionsOf(await startPasswordResetPasskeyAction());
+    const response = soft.get(options);
+    const rpc = world.admin.rpc;
+    const spy = vi.spyOn(world.admin, 'rpc').mockImplementation(async (name, args) => {
+      const out = await rpc(name, args);
+      if (name === 'take_passkey_challenge') change(userId);
+      return out;
+    });
+    vi.mocked(reportError).mockClear();
+    const res = await completePasswordResetAction({
+      ...PASSWORDS,
+      passkeyAnswer: { challengeId, response },
+    });
+    spy.mockRestore();
+    expect(world.calls.passwordSets).toEqual([]);
+    expect(verifyCalls()).toEqual([]);
+    expect(fnNames()).not.toContain('passkey_replace_bridge');
+    expect(claimsNow()).toMatchObject({ session_id: link.id, aal: 'aal1' });
+    return res;
+  }
+
+  it('the bridge factor is gone at Auth: the reset’s words, reported for the reset, no repair', async () => {
+    const res = await answerWhileTheAccountChanges((userId) => {
+      const bridgeId = world.bridges.get(userId)!.factor_id;
+      world.factors = world.factors.filter((f) => f.id !== bridgeId);
+    });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'forbidden',
+        message: CANT_USE,
+        details: { reason: 'aal2_required', method: 'passkey' },
+      },
+    });
+    expect(
+      vi.mocked(reportError).mock.calls.map((c) => [c[1]?.tag, c[1]?.extra?.site]),
+    ).toContainEqual(['passkeys.bridge_factor_missing', 'password_reset']);
+  });
+
+  it('the bridge secret does not open: the reset’s words, reported for the reset', async () => {
+    const res = await answerWhileTheAccountChanges((userId) => {
+      world.bridges.get(userId)!.secret_ciphertext = 'AAAA';
+    });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'forbidden',
+        message: CANT_USE,
+        details: { reason: 'aal2_required', method: 'passkey' },
+      },
+    });
+    expect(
+      vi.mocked(reportError).mock.calls.map((c) => [c[1]?.tag, c[1]?.extra?.site]),
+    ).toContainEqual(['passkeys.bridge_unopenable', 'password_reset']);
+  });
+
+  it('with an authenticator app too, the words point to its code', async () => {
+    const res = await answerWhileTheAccountChanges((userId) => {
+      world.bridges.get(userId)!.secret_ciphertext = 'AAAA';
+    }, true);
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'forbidden',
+        message: CANT_USE_APP,
+        details: { reason: 'aal2_required', method: 'both' },
+      },
+    });
   });
 });
 
