@@ -17,7 +17,10 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { recoveryCodeDoneWords } from '@/lib/auth/recovery-code-words';
+import {
+  recoveryCodeDoneReportsProblem,
+  recoveryCodeDoneWords,
+} from '@/lib/auth/recovery-code-words';
 import { isControlFlow } from '@/lib/control-flow';
 import {
   consumeMfaRecoveryCodeAction,
@@ -534,7 +537,12 @@ function RecoveryCodeDialog({ onClose }: { onClose: () => void }) {
       if (!res.ok) return setError(res.error.message);
       setPassword('');
       // What a used code did (Q6): the other devices signed out, or not.
-      toast.success(recoveryCodeDoneWords(res.data));
+      // Words that report a problem are a warning, never a success.
+      if (recoveryCodeDoneReportsProblem(res.data)) {
+        toast.warning(recoveryCodeDoneWords(res.data));
+      } else {
+        toast.success(recoveryCodeDoneWords(res.data));
+      }
       onClose();
       router.refresh();
     } catch (err) {

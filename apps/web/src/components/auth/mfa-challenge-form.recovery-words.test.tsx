@@ -10,7 +10,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * authenticator app was removed, and your other devices were signed out. Set
  * up a new one now." When the server could not end the other sessions
  * (`otherSessionsLeft`), or could not remove a method (`methodsLeft`, the
- * review of stage 5, finding 1), it says that instead, and what to do.
+ * review of stage 5, finding 1), it says that instead, and what to do, as a
+ * WARNING: words that report a problem never sit in a success toast (the
+ * review of the last deltas, finding 8).
  * The page then goes to Settings, Security, as before. The words name no
  * passkey: they are the same for every member.
  */
@@ -19,6 +21,7 @@ const consumeMfaRecoveryCodeAction = vi.fn();
 const replace = vi.fn();
 const refresh = vi.fn();
 const toastSuccess = vi.fn();
+const toastWarning = vi.fn();
 const toastError = vi.fn();
 
 vi.mock('@/server/actions/mfa', () => ({ challengeFactorAction: vi.fn() }));
@@ -34,6 +37,7 @@ vi.mock('sonner', () => ({
   toast: {
     error: (...a: unknown[]) => toastError(...a),
     success: (...a: unknown[]) => toastSuccess(...a),
+    warning: (...a: unknown[]) => toastWarning(...a),
   },
 }));
 
@@ -78,6 +82,7 @@ describe.each([
         'Recovery code accepted. 1 authenticator app was removed, and your other devices were signed out. Set up a new one now.',
       ),
     );
+    expect(toastWarning).not.toHaveBeenCalled();
     expect(replace).toHaveBeenCalledWith('/dashboard/settings/security');
   });
 
@@ -89,10 +94,11 @@ describe.each([
     render(<MfaChallengeForm factors={factors} />);
     useACode();
     await waitFor(() =>
-      expect(toastSuccess).toHaveBeenCalledWith(
+      expect(toastWarning).toHaveBeenCalledWith(
         'Recovery code accepted. 1 authenticator app was removed. We could not sign out your other devices, so change your password now. Then set up a new one.',
       ),
     );
+    expect(toastSuccess).not.toHaveBeenCalled();
     expect(replace).toHaveBeenCalledWith('/dashboard/settings/security');
   });
 
@@ -104,9 +110,35 @@ describe.each([
     render(<MfaChallengeForm factors={factors} />);
     useACode();
     await waitFor(() =>
-      expect(toastSuccess).toHaveBeenCalledWith(
+      expect(toastWarning).toHaveBeenCalledWith(
         "Recovery code accepted. An authenticator app could not be removed. Your other devices were signed out. Ask your organization's owner or StockPilot support for help.",
       ),
     );
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'no removal was tried',
+      { unenrolled: 0, methodsLeft: 'unchecked' },
+      "Recovery code accepted. Your sign-in methods could not be removed. Your other devices were signed out. Ask your organization's owner or StockPilot support for help.",
+    ],
+    [
+      'the passkeys went but the account still lists a second step',
+      { unenrolled: 0, passkeysRemoved: true, appsRemoved: 0, methodsLeft: 'second_step' },
+      "Recovery code accepted. Your passkeys were removed. Your account still asks for a second step. Your other devices were signed out. Ask your organization's owner or StockPilot support for help.",
+    ],
+    [
+      'a passkey may be left',
+      { unenrolled: 1, appsRemoved: 0, methodsLeft: 'passkey' },
+      "Recovery code accepted. A passkey may still be on your account. Your other devices were signed out. Ask your organization's owner or StockPilot support for help.",
+    ],
+  ])('%s: the true words, as a warning and never as a success', async (_name, data, words) => {
+    consumeMfaRecoveryCodeAction.mockResolvedValue({ ok: true, data });
+    render(<MfaChallengeForm factors={factors} />);
+    useACode();
+    await waitFor(() => expect(toastWarning).toHaveBeenCalledWith(words));
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
   });
 });

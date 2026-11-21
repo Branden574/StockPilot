@@ -7,7 +7,10 @@
  * review of stage 5, finding 1): the count of authenticator apps removed, the
  * passkeys only for an account that had them, a method that could not be
  * removed (which kind, never which one), and whether the other devices were
- * signed out. Client-safe: no server import.
+ * signed out. Nothing claims a removal that is not known, or a check that
+ * was not made (the review of the last deltas, findings 3 and 8). Words that
+ * report a problem are shown as a warning, never as a success
+ * (recoveryCodeDoneReportsProblem). Client-safe: no server import.
  */
 export const RECOVERY_CODE_WORDS = {
   /** The code page's dialog, before the press. */
@@ -15,8 +18,19 @@ export const RECOVERY_CODE_WORDS = {
     'Enter one of the recovery codes you saved when you set up two-factor authentication. This uses up the code and removes your two-factor sign-in methods. Your other devices are signed out. You stay signed in here and set up a new one next.',
 } as const;
 
-/** What could not be removed: which kind, never which one. */
-export type RecoveryMethodsLeft = 'app' | 'passkey' | 'app_and_passkey' | 'unchecked';
+/**
+ * What a used code left, by kind, never which one:
+ *   - 'app': an authenticator app could not be removed;
+ *   - 'passkey': the account's passkey records are not known to be removed,
+ *     so a passkey may still be on the account;
+ *   - 'app_and_passkey': both of the above;
+ *   - 'second_step': the passkeys were removed, and the account still asks
+ *     for a second step (the removal could not be finished);
+ *   - 'unchecked': the list of methods could not be read, so no removal was
+ *     tried.
+ */
+export type RecoveryMethodsLeft =
+  'app' | 'passkey' | 'app_and_passkey' | 'second_step' | 'unchecked';
 
 /** The action's answer after a used code (consumeMfaRecoveryCodeAction). */
 export interface RecoveryCodeDone {
@@ -24,20 +38,45 @@ export interface RecoveryCodeDone {
   unenrolled: number;
   /** The other sessions could not be ended. */
   otherSessionsLeft?: boolean;
-  /** The account's passkeys were removed (only for an account that had them). */
+  /**
+   * The account's passkeys were removed, and that is known (only for an
+   * account that had them). Never set while their records may be left.
+   */
   passkeysRemoved?: boolean;
   /** Authenticator apps removed, when the account had passkeys (else `unenrolled`). */
   appsRemoved?: number;
-  /** A method that could not be removed, or a factor list that could not be read. */
+  /** What the code left (RecoveryMethodsLeft). */
   methodsLeft?: RecoveryMethodsLeft;
 }
 
-const LEFT_WORDS: Record<RecoveryMethodsLeft, string> = {
-  app: 'An authenticator app could not be removed.',
-  passkey: 'A passkey could not be removed.',
-  app_and_passkey: 'An authenticator app and a passkey could not be removed.',
-  unchecked: 'We could not check that your sign-in methods were removed.',
-};
+/**
+ * The sentence for what was left. `somethingRemoved`: the words before it
+ * already say what was removed, so "your sign-in methods" would be untrue.
+ */
+function leftWords(left: RecoveryMethodsLeft, somethingRemoved: boolean): string {
+  switch (left) {
+    case 'app':
+      return 'An authenticator app could not be removed.';
+    case 'passkey':
+      return 'A passkey may still be on your account.';
+    case 'app_and_passkey':
+      return 'An authenticator app could not be removed, and a passkey may still be on your account.';
+    case 'second_step':
+      return 'Your account still asks for a second step.';
+    case 'unchecked':
+      return somethingRemoved
+        ? 'Your other sign-in methods could not be removed.'
+        : 'Your sign-in methods could not be removed.';
+  }
+}
+
+/**
+ * Whether the words after a used code report a problem (a method left, or
+ * the other devices not signed out): such words are shown as a warning.
+ */
+export function recoveryCodeDoneReportsProblem(answer: RecoveryCodeDone): boolean {
+  return answer.methodsLeft !== undefined || answer.otherSessionsLeft === true;
+}
 
 const apps = (n: number) => `${n} authenticator app${n === 1 ? '' : 's'}`;
 
@@ -58,7 +97,7 @@ export function recoveryCodeDoneWords(answer: RecoveryCodeDone): string {
   const words = ['Recovery code accepted.'];
   if (answer.methodsLeft) {
     if (removed) words.push(`${removed} removed.`);
-    words.push(LEFT_WORDS[answer.methodsLeft]);
+    words.push(leftWords(answer.methodsLeft, removed !== null));
     words.push(
       othersLeft
         ? 'We could not sign out your other devices.'

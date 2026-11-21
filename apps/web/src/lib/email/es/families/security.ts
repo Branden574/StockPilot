@@ -1297,25 +1297,41 @@ export interface RecoveryCodeUsedEmailParams {
   usedAt: string;
   /** The account had a passkey (one was removed, or its bridge factor was). */
   passkeys: boolean;
+  /**
+   * The passkeys are known removed while `methodsLeft` is 'unchecked' (they
+   * went with the code; no other removal was tried).
+   */
+  passkeysRemoved?: boolean;
   /** Every other session of the account was ended. */
   othersSignedOut: boolean;
   /**
-   * A method that could not be removed (which kind, never which one), or a
-   * factor list that could not be read (the review of stage 5, finding 1).
+   * What the code left, by kind, never which one (the review of stage 5,
+   * finding 1; lib/auth/recovery-code-words.ts RecoveryMethodsLeft): an app
+   * that could not be removed, a passkey whose records are not known to be
+   * removed, passkeys removed while the account still asks for a second
+   * step, or a list of methods that could not be read (no removal tried).
    */
-  methodsLeft?: 'app' | 'passkey' | 'app_and_passkey' | 'unchecked';
+  methodsLeft?: 'app' | 'passkey' | 'app_and_passkey' | 'second_step' | 'unchecked';
   firstName?: string | null;
   appUrl?: string;
 }
 
-/** The sentence for a method left, which never says one was removed. */
+/**
+ * The sentence for what was left. It never says a method was removed unless
+ * that is known, and never that a check was made when no removal was tried
+ * (the review of the last deltas, findings 3 and 8).
+ */
 const RECOVERY_METHODS_LEFT = {
   app: 'An authenticator app could not be removed, so it is still on your account.',
-  passkey: 'A passkey could not be removed, so it is still on your account.',
+  passkey: 'A passkey may still be on your account.',
   app_and_passkey:
-    'An authenticator app and a passkey could not be removed, so they are still on your account.',
-  unchecked: 'We could not check that your sign-in methods were removed.',
+    'An authenticator app could not be removed, so it is still on your account. A passkey may still be on it too.',
+  second_step: 'Your passkeys were removed, but your account still asks for a second step.',
+  unchecked: 'Your sign-in methods could not be removed.',
 } as const;
+/** No removal was tried, but the passkeys went with the code. */
+const RECOVERY_UNCHECKED_AFTER_PASSKEYS =
+  'Your passkeys were removed. Your other sign-in methods could not be removed.';
 
 /**
  * A recovery code was used (answers Q6 and Q7 of the passkey plan): every
@@ -1344,8 +1360,14 @@ export function renderRecoveryCodeUsedEmail(params: RecoveryCodeUsedEmailParams)
   const others = params.othersSignedOut
     ? 'Your other devices were signed out.'
     : 'We could not sign out your other devices.';
+  const left =
+    params.methodsLeft === 'unchecked' && params.passkeysRemoved === true
+      ? RECOVERY_UNCHECKED_AFTER_PASSKEYS
+      : params.methodsLeft
+        ? RECOVERY_METHODS_LEFT[params.methodsLeft]
+        : '';
   const outcome = params.methodsLeft
-    ? `${RECOVERY_METHODS_LEFT[params.methodsLeft]} ${others}`
+    ? `${left} ${others}`
     : params.othersSignedOut
       ? `${removed}, and your other devices were signed out.`
       : `${removed}. ${others}`;

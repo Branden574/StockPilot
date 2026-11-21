@@ -32,6 +32,8 @@ export function sendRecoveryCodeUsedEmail(
     passkeys: boolean;
     othersSignedOut: boolean;
     methodsLeft?: RecoveryCodeUsedEmailParams['methodsLeft'];
+    /** With `methodsLeft: 'unchecked'`: the passkeys are known removed. */
+    passkeysRemoved?: boolean;
   },
 ): void {
   // The time the code was used, read now, not when the deferred work runs.
@@ -45,6 +47,7 @@ export function sendRecoveryCodeUsedEmail(
         passkeys: facts.passkeys,
         othersSignedOut: facts.othersSignedOut,
         ...(facts.methodsLeft ? { methodsLeft: facts.methodsLeft } : {}),
+        ...(facts.passkeysRemoved ? { passkeysRemoved: true } : {}),
         appUrl: env.NEXT_PUBLIC_APP_URL,
       });
     } catch {

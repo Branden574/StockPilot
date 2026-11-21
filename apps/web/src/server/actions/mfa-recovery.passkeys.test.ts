@@ -28,6 +28,13 @@ import { verifiedSessionAuth } from '@/test/verified-session-stub';
  * spent it before its answer was lost: "try again", with no refused-code
  * record (finding 12).
  *
+ * The answer never says a passkey was removed when its records are not KNOWN
+ * to be removed (the review of the last deltas, finding 3): when a factor the
+ * code removed carries the bridge's reserved name and the function is missing,
+ * or the combined call and the second removal both failed, the answer and the
+ * email say a passkey may be left (`methodsLeft: 'passkey'`), never
+ * `passkeysRemoved`. An account with no such factor is answered as before.
+ *
  * ORDER (review 2-3 finding 1): the service-role call takes the account as a
  * parameter, so it runs only after the three closed limits, the password
  * check and the held-session check. A press stopped by any of them makes no
@@ -99,6 +106,7 @@ import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { reportError } from '@/lib/error-reporter';
 import { createAccessTokenClient } from '@/lib/supabase/access-token-client';
 import { recordAccountCodeBlocked } from '@/server/security/account-events';
+import { sendRecoveryCodeUsedEmail } from '@/server/security/recovery-code-email';
 import { emitAuthAudit } from '@/server/services/auth-audit';
 
 import { consumeMfaRecoveryCodeAction } from './mfa-recovery';
@@ -343,9 +351,11 @@ describe('before 0475 is live: the function does not exist', () => {
 
     const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
 
+    // The function is missing, so the passkey records were not removed: the
+    // answer says a passkey may be left, never that the passkeys were removed.
     expect(res).toEqual({
       ok: true,
-      data: { unenrolled: 2, passkeysRemoved: true, appsRemoved: 1 },
+      data: { unenrolled: 2, appsRemoved: 1, methodsLeft: 'passkey' },
     });
     expect(deleteFactorOf(admin)).toHaveBeenCalledTimes(2);
     expect(
@@ -377,7 +387,7 @@ describe('before 0475 is live: the function does not exist', () => {
     const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
     expect(res).toEqual({
       ok: true,
-      data: { unenrolled: 2, passkeysRemoved: true, appsRemoved: 1 },
+      data: { unenrolled: 2, appsRemoved: 1, methodsLeft: 'passkey' },
     });
     expect(recordsMissingReports()).toEqual([]);
   });
@@ -476,6 +486,71 @@ describe('any other failure of the new call', () => {
       tag: 'actions.mfa_recovery.passkey_removal',
       level: 'error',
       extra: { records_left: 'unknown' },
+    });
+  });
+
+  it('when the second removal fails too and a removed factor carries the reserved name: a passkey may be left, never "removed", in the answer and the email', async () => {
+    const admin = adminWith(
+      {
+        'rpc:consume_recovery_code_with_passkeys': {
+          data: null,
+          error: { code: '57014', message: 'x' },
+        },
+        'rpc:passkey_remove_all': { data: null, error: { code: '57014', message: 'x' } },
+      },
+      NAMED_FACTORS,
+    );
+
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+
+    // Both factors went at Auth; the passkey records are not known removed.
+    expect(res).toEqual({
+      ok: true,
+      data: { unenrolled: 2, appsRemoved: 1, methodsLeft: 'passkey' },
+    });
+    expect(res.ok && 'passkeysRemoved' in res.data).toBe(false);
+    expect(deleteFactorOf(admin)).toHaveBeenCalledTimes(2);
+    expect(rpcNames(admin)).toEqual(['consume_recovery_code_with_passkeys', 'passkey_remove_all']);
+    expect(sendRecoveryCodeUsedEmail).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendRecoveryCodeUsedEmail).mock.calls[0]![2]).toEqual({
+      passkeys: true,
+      othersSignedOut: true,
+      methodsLeft: 'passkey',
+    });
+    expect(consumedAudit()!.extra).toEqual({ unenrolled: 2 });
+    const reports = vi.mocked(reportError).mock.calls.map((c) => [c[1].tag, c[1].extra]);
+    expect(reports).toEqual([
+      ['actions.mfa_recovery.passkey_removal', { failure: '57014', records_left: 'unknown' }],
+      ['actions.mfa_recovery.methods_left', { methods_left: 'passkey', failed: 0 }],
+    ]);
+    const text = JSON.stringify(vi.mocked(reportError).mock.calls.map((c) => [String(c[0]), c[1]]));
+    for (const secret of [CODE, BRIDGE_ID, 'user-1', 'sp-passkey-bridge']) {
+      expect(text).not.toContain(secret);
+    }
+  });
+
+  it('when the second removal answers, the passkeys are known removed: said so, as before', async () => {
+    adminWith(
+      {
+        'rpc:consume_recovery_code_with_passkeys': {
+          data: null,
+          error: { code: '57014', message: 'x' },
+        },
+        'rpc:passkey_remove_all': {
+          data: [{ removed: 1, bridge_factor_id: BRIDGE_ID }],
+          error: null,
+        },
+      },
+      NAMED_FACTORS,
+    );
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toEqual({
+      ok: true,
+      data: { unenrolled: 2, passkeysRemoved: true, appsRemoved: 1 },
+    });
+    expect(vi.mocked(sendRecoveryCodeUsedEmail).mock.calls[0]![2]).toEqual({
+      passkeys: true,
+      othersSignedOut: true,
     });
   });
 

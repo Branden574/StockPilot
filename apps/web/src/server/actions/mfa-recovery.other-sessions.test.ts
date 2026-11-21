@@ -511,10 +511,121 @@ describe('an account with passkeys (0475 live)', () => {
     );
   });
 
-  it('before the records answer, a removed factor carrying the reserved name still counts as a passkey for the words', async () => {
+  it('with the function missing, a removed factor carrying the reserved name: a passkey may be left, never "removed"', async () => {
     adminWith(PASSKEY_RECOVERY_NOT_YET, [APP, BRIDGE]);
-    await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
-    expect(sent()[0]!.text).toContain('Every authenticator app and passkey was removed');
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toEqual({
+      ok: true,
+      data: { unenrolled: 2, appsRemoved: 1, methodsLeft: 'passkey' },
+    });
+    const mail = sent()[0]!;
+    expect(mail.subject).toBe('A recovery code was used on your StockPilot account');
+    expect(mail.text).toContain(
+      'A passkey may still be on your account. Your other devices were signed out.',
+    );
+    expect(`${mail.text}\n${mail.html}`).not.toMatch(
+      /Every authenticator app|passkeys? (was|were) removed|Sign-in methods removed/i,
+    );
+  });
+});
+
+describe('the passkey records are not known to be removed (the review of the last deltas, finding 3)', () => {
+  const FAILED = { data: null, error: { code: '57014', message: 'sample timeout' } };
+  /** The combined call failed; today's consume spends the code (memberWith's default). */
+  const bothFail = (factors: unknown[]) =>
+    adminWith(
+      { 'rpc:consume_recovery_code_with_passkeys': FAILED, 'rpc:passkey_remove_all': FAILED },
+      factors,
+    );
+  const NEVER_REMOVED =
+    /Every authenticator app|passkeys? (was|were) removed|Sign-in methods removed/i;
+
+  it('the combined call and the second removal both fail, the factors go: "a passkey may still be on your account"', async () => {
+    const a = bothFail([APP, BRIDGE]);
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+
+    expect(res).toEqual({
+      ok: true,
+      data: { unenrolled: 2, appsRemoved: 1, methodsLeft: 'passkey' },
+    });
+    expect(deleteFactorOf(a)).toHaveBeenCalledTimes(2);
+    const mail = sent()[0]!;
+    expect(mail.subject).toBe('A recovery code was used on your StockPilot account');
+    expect(mail.text).toContain(
+      'A passkey may still be on your account. Your other devices were signed out.',
+    );
+    expect(`${mail.subject}\n${mail.text}\n${mail.html}`).not.toMatch(NEVER_REMOVED);
+    expect(methodReports().map((r) => r[1]!.extra)).toEqual([
+      { methods_left: 'passkey', failed: 0 },
+    ]);
+    // The other sessions still end.
+    expect(signOutAs).toHaveBeenCalledWith(expect.any(String), 'others');
+  });
+
+  it('a passkey-only account in the same state: no app is counted, and nothing is called removed', async () => {
+    bothFail([BRIDGE]);
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toEqual({
+      ok: true,
+      data: { unenrolled: 1, appsRemoved: 0, methodsLeft: 'passkey' },
+    });
+    expect(`${sent()[0]!.text}\n${sent()[0]!.html}`).not.toMatch(NEVER_REMOVED);
+  });
+
+  it('the same, and the bridge factor could not be deleted either: still "may be left"', async () => {
+    const a = bothFail([APP, BRIDGE]);
+    failDeletes(a, ['bridge-1']);
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toEqual({
+      ok: true,
+      data: { unenrolled: 1, appsRemoved: 1, methodsLeft: 'passkey' },
+    });
+    expect(sent()[0]!.text).toContain('A passkey may still be on your account.');
+  });
+
+  it('the same, and an app could not be deleted: both are said', async () => {
+    const a = bothFail([APP, BRIDGE]);
+    failDeletes(a, ['app-1']);
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toEqual({
+      ok: true,
+      data: { unenrolled: 1, appsRemoved: 0, methodsLeft: 'app_and_passkey' },
+    });
+    expect(sent()[0]!.text).toContain(
+      'An authenticator app could not be removed, so it is still on your account. A passkey may still be on it too.',
+    );
+  });
+
+  it('the second removal answers: the passkeys are known removed, and the words say so', async () => {
+    adminWith(
+      {
+        'rpc:consume_recovery_code_with_passkeys': FAILED,
+        'rpc:passkey_remove_all': {
+          data: [{ removed: 1, bridge_factor_id: BRIDGE.id }],
+          error: null,
+        },
+      },
+      [APP, BRIDGE],
+    );
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toEqual({
+      ok: true,
+      data: { unenrolled: 2, passkeysRemoved: true, appsRemoved: 1 },
+    });
+    expect(sent()[0]!.subject).toBe(SUBJECT);
+    expect(sent()[0]!.text).toContain(
+      'Every authenticator app and passkey was removed, and your other devices were signed out.',
+    );
+  });
+
+  it('an account with no reserved-name factor in the same failure: answered as before, and never reads the word passkey', async () => {
+    bothFail([APP]);
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toEqual(DONE);
+    const mail = sent()[0]!;
+    expect(mail.subject).toBe(SUBJECT);
+    expect(`${mail.text}\n${mail.html}`).not.toMatch(/passkey/i);
+    expect(methodReports()).toEqual([]);
   });
 });
 
@@ -539,7 +650,7 @@ describe('a method that could not be removed (the review of stage 5, finding 1)'
     ['before 0475', () => adminWith(PASSKEY_RECOVERY_NOT_YET)],
     ['with 0475 live, no passkey', () => recordsNoPasskey()],
   ])(
-    '%s: the factor list cannot be read: "could not check", reported, and the other sessions still end',
+    '%s: the factor list cannot be read: no removal is tried, the words say the methods could not be removed, reported, and the other sessions still end',
     async (_when, admin) => {
       const a = admin();
       listFactorsOf(a).mockResolvedValue({ data: null, error: { message: 'sample failure' } });
@@ -552,9 +663,10 @@ describe('a method that could not be removed (the review of stage 5, finding 1)'
       const mail = sent()[0]!;
       expect(mail.subject).toBe('A recovery code was used on your StockPilot account');
       expect(mail.text).toContain(
-        'We could not check that your sign-in methods were removed. Your other devices were signed out.',
+        'Your sign-in methods could not be removed. Your other devices were signed out.',
       );
       expect(mail.text).not.toContain('Every authenticator app');
+      expect(`${mail.text}\n${mail.html}`).not.toMatch(/could not check|passkey/i);
       expect(methodReports().map((r) => r[1])).toEqual([
         expect.objectContaining({
           level: 'error',
@@ -609,7 +721,7 @@ describe('a method that could not be removed (the review of stage 5, finding 1)'
     expect(sent()).toHaveLength(1);
   });
 
-  it('a passkey account whose bridge factor could not be removed: "a passkey could not be removed"', async () => {
+  it('a passkey account whose passkeys went but whose account still lists a second step: said so, never "a passkey is still on your account"', async () => {
     const a = adminWith(
       {
         'rpc:consume_recovery_code_with_passkeys': {
@@ -622,16 +734,70 @@ describe('a method that could not be removed (the review of stage 5, finding 1)'
     failDeletes(a, ['bridge-1']);
     const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
 
+    // The passkey records went with the code (0475 answered); what is left
+    // is that the account still asks for a second step.
     expect(res).toEqual({
       ok: true,
-      data: { unenrolled: 1, appsRemoved: 1, methodsLeft: 'passkey' },
+      data: { unenrolled: 1, appsRemoved: 1, passkeysRemoved: true, methodsLeft: 'second_step' },
     });
     const mail = sent()[0]!;
-    expect(mail.text).toContain('A passkey could not be removed, so it is still on your account.');
+    expect(mail.subject).toBe('A recovery code was used on your StockPilot account');
+    expect(mail.text).toContain(
+      'Your passkeys were removed, but your account still asks for a second step. Your other devices were signed out.',
+    );
     expect(mail.text).not.toContain('Every authenticator app');
+    expect(`${mail.text}\n${mail.html}`).not.toMatch(
+      /passkey (could not be removed|may still be|is still)/i,
+    );
+    // The plain-text part holds every sentence a person reads: no word of the mechanism.
+    expect(`${mail.subject}\n${mail.text}`).not.toMatch(/bridge|factor|hidden/i);
     expect(methodReports().map((r) => r[1]!.extra)).toEqual([
-      { methods_left: 'passkey', failed: 1 },
+      { methods_left: 'second_step', failed: 1 },
     ]);
+  });
+
+  it('the same account, and an app could not be removed too: the app is said left, the passkeys removed', async () => {
+    const a = adminWith(
+      {
+        'rpc:consume_recovery_code_with_passkeys': {
+          data: [{ consumed: true, passkeys_removed: 1, bridge_factor_id: BRIDGE.id }],
+          error: null,
+        },
+      },
+      [APP, BRIDGE],
+    );
+    failDeletes(a, ['app-1', 'bridge-1']);
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toEqual({
+      ok: true,
+      data: { unenrolled: 0, appsRemoved: 0, passkeysRemoved: true, methodsLeft: 'app' },
+    });
+    expect(sent()[0]!.text).toContain(
+      'An authenticator app could not be removed, so it is still on your account.',
+    );
+    expect(methodReports().map((r) => r[1]!.extra)).toEqual([{ methods_left: 'app', failed: 2 }]);
+  });
+
+  it('no removal was tried, but the passkeys went with the code: both are said', async () => {
+    const a = adminWith(
+      {
+        'rpc:consume_recovery_code_with_passkeys': {
+          data: [{ consumed: true, passkeys_removed: 2, bridge_factor_id: BRIDGE.id }],
+          error: null,
+        },
+      },
+      [APP, BRIDGE],
+    );
+    listFactorsOf(a).mockResolvedValue({ data: null, error: { message: 'sample failure' } });
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toEqual({
+      ok: true,
+      data: { unenrolled: 0, passkeysRemoved: true, methodsLeft: 'unchecked' },
+    });
+    expect(deleteFactorOf(a)).not.toHaveBeenCalled();
+    expect(sent()[0]!.text).toContain(
+      'Your passkeys were removed. Your other sign-in methods could not be removed. Your other devices were signed out.',
+    );
   });
 
   it('an app and the bridge both left, and the other sessions not ended: every true sentence', async () => {
@@ -651,7 +817,7 @@ describe('a method that could not be removed (the review of stage 5, finding 1)'
       },
     });
     expect(sent()[0]!.text).toContain(
-      'An authenticator app and a passkey could not be removed, so they are still on your account. We could not sign out your other devices.',
+      'An authenticator app could not be removed, so it is still on your account. A passkey may still be on it too. We could not sign out your other devices.',
     );
   });
 

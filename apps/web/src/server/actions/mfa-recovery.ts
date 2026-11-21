@@ -243,7 +243,7 @@ type ListedAdminFactor = {
   friendly_name?: string | null;
 };
 
-/** What the factor removal did: the true count, and what may be left. */
+/** What the factor removal did at Auth: the true count, and what is left there. */
 type FactorRemoval = {
   /** The factors listed (none when the list could not be read). */
   factors: ListedAdminFactor[];
@@ -253,8 +253,12 @@ type FactorRemoval = {
   appsRemoved: number;
   /** Deletes that failed (any factor). */
   failed: number;
-  /** A verified method that may be left, by kind; undefined when none. */
-  left: RecoveryMethodsLeft | undefined;
+  /** The list could not be read: no delete was tried. */
+  unchecked: boolean;
+  /** A verified authenticator app could not be deleted. */
+  appLeft: boolean;
+  /** A verified factor carrying the bridge's reserved name could not be deleted. */
+  passkeyFactorLeft: boolean;
 };
 
 /**
@@ -262,10 +266,12 @@ type FactorRemoval = {
  * the list's error and each delete's error (the review of stage 5, finding
  * 1). A list that cannot be read (an error, or a throw) is `unchecked`: no
  * factor is deleted and none is called removed. A verified factor whose
- * delete failed (an error, or a throw) is left: a passkey when it carries the
- * bridge's reserved name, else an authenticator app. A factor never set up
- * (`unverified`) is no sign-in method, so its failed delete leaves nothing.
- * Never throws for a failed Auth call: the code is already spent.
+ * delete failed (an error, or a throw) is left: the passkey's own when it
+ * carries the bridge's reserved name, else an authenticator app. A factor
+ * never set up (`unverified`) is no sign-in method, so its failed delete
+ * leaves nothing. What the member is told is decided with the passkey
+ * records' own outcome (methodsLeftOf). Never throws for a failed Auth call:
+ * the code is already spent.
  */
 async function removeFactors(
   admin: ReturnType<typeof createAdminClient>,
@@ -277,13 +283,21 @@ async function removeFactors(
     if (listed.error || !listed.data) throw new Error('list');
     factors = (listed.data.factors ?? []) as ListedAdminFactor[];
   } catch {
-    return { factors: [], unenrolled: 0, appsRemoved: 0, failed: 0, left: 'unchecked' };
+    return {
+      factors: [],
+      unenrolled: 0,
+      appsRemoved: 0,
+      failed: 0,
+      unchecked: true,
+      appLeft: false,
+      passkeyFactorLeft: false,
+    };
   }
   let unenrolled = 0;
   let appsRemoved = 0;
   let failed = 0;
   let appLeft = false;
-  let passkeyLeft = false;
+  let passkeyFactorLeft = false;
   for (const f of factors) {
     // We only deliberately enroll TOTP today; play it safe and only
     // remove totp factors so we don't surprise SSO/SAML setups later.
@@ -302,18 +316,34 @@ async function removeFactors(
     }
     failed += 1;
     if (f.status === 'unverified') continue;
-    if (carriesBridgeName(f)) passkeyLeft = true;
+    if (carriesBridgeName(f)) passkeyFactorLeft = true;
     else appLeft = true;
   }
-  const left: RecoveryMethodsLeft | undefined =
-    appLeft && passkeyLeft
-      ? 'app_and_passkey'
-      : appLeft
-        ? 'app'
-        : passkeyLeft
-          ? 'passkey'
-          : undefined;
-  return { factors, unenrolled, appsRemoved, failed, left };
+  return { factors, unenrolled, appsRemoved, failed, unchecked: false, appLeft, passkeyFactorLeft };
+}
+
+/**
+ * What a used code left, for the answer and the email (the review of the
+ * last deltas, findings 3 and 8), or undefined when nothing was:
+ *   - the list of methods could not be read: no removal was tried
+ *     ('unchecked');
+ *   - `passkeyMaybeLeft` (a listed factor carries the bridge's reserved name
+ *     and the passkey records are not known to be removed): a passkey may be
+ *     left ('passkey', or 'app_and_passkey' with an app left), whether or not
+ *     its factor went;
+ *   - an app could not be deleted ('app');
+ *   - the passkey records are known removed and only the passkey's own
+ *     factor could not be deleted: the passkeys are removed, and the account
+ *     still asks for a second step ('second_step').
+ */
+function methodsLeftOf(
+  removal: FactorRemoval,
+  passkeyMaybeLeft: boolean,
+): RecoveryMethodsLeft | undefined {
+  if (removal.unchecked) return 'unchecked';
+  if (removal.appLeft) return passkeyMaybeLeft ? 'app_and_passkey' : 'app';
+  if (passkeyMaybeLeft) return 'passkey';
+  return removal.passkeyFactorLeft ? 'second_step' : undefined;
 }
 
 /**
@@ -375,9 +405,10 @@ async function endOtherSessions(
  * the account's OTHER sessions (this one stays) and emails the account
  * (answers Q6 and Q7). The user then sets up a new method on this session.
  * `otherSessionsLeft` is there only when the other sessions could not be
- * ended, and `methodsLeft` only when a method could not be removed (or the
- * list of them could not be read), so the form says so. An account with
- * passkeys also gets `appsRemoved` and, when they went, `passkeysRemoved`.
+ * ended, and `methodsLeft` only when something was left (methodsLeftOf), so
+ * the form says so, as a warning. An account with passkeys also gets
+ * `appsRemoved` and, only when its passkeys are KNOWN removed,
+ * `passkeysRemoved`.
  */
 export async function consumeMfaRecoveryCodeAction(input: {
   code: string;
@@ -571,6 +602,10 @@ export async function consumeMfaRecoveryCodeAction(input: {
     }
     const { unenrolled, appsRemoved } = removal;
 
+    // Whether the passkey records are KNOWN removed: the combined call
+    // answered, or the second removal below did. Not when the function is
+    // missing, and not when both calls failed.
+    let recordsKnownRemoved = spent.kind === 'answered';
     if (spent.kind === 'failed') {
       // The code is spent and the factors are gone; the passkey records may
       // not be. One more try, then one report either way.
@@ -579,14 +614,22 @@ export async function consumeMfaRecoveryCodeAction(input: {
         p_reason: 'recovery_code',
       });
       const removed = removedCount(retry);
-      if (removed !== null) passkeysRemoved = removed;
+      if (removed !== null) {
+        passkeysRemoved = removed;
+        recordsKnownRemoved = true;
+      }
       reportPasskeyRemoval(spent.code, removed === null ? 'unknown' : false, session.userId);
     }
 
     // Q6: every OTHER session of the account ends; this one stays, whether
     // or not every method was removed.
     const othersEnded = await endOtherSessions(held, member, session.userId);
-    const methodsLeft = removal.left;
+    // A listed factor carries the bridge's reserved name, and the passkey
+    // records are not known removed: a passkey may be left, and is never
+    // called removed (the review of the last deltas, finding 3). An account
+    // with no such factor is told nothing about passkeys here.
+    const reservedListed = factors.some(carriesBridgeName);
+    const methodsLeft = methodsLeftOf(removal, reservedListed && !recordsKnownRemoved);
     if (methodsLeft) {
       // Which kind, and how many deletes failed: never a factor, the account
       // id or the code.
@@ -599,7 +642,9 @@ export async function consumeMfaRecoveryCodeAction(input: {
     }
     // The account had a passkey: one was removed, or a factor carrying the
     // bridge's reserved name was listed.
-    const hadPasskeys = (passkeysRemoved ?? 0) > 0 || factors.some(carriesBridgeName);
+    const hadPasskeys = (passkeysRemoved ?? 0) > 0 || reservedListed;
+    // Its passkeys are said removed only when that is known.
+    const passkeysKnownRemoved = hadPasskeys && recordsKnownRemoved;
 
     // A used code removes every authenticator of the account: the person's
     // own act, recorded in their default organization. Never the code.
@@ -620,17 +665,18 @@ export async function consumeMfaRecoveryCodeAction(input: {
         passkeys: hadPasskeys,
         othersSignedOut: othersEnded,
         ...(methodsLeft ? { methodsLeft } : {}),
+        ...(methodsLeft === 'unchecked' && passkeysKnownRemoved ? { passkeysRemoved: true } : {}),
       });
     }
     revalidatePath('/dashboard', 'layout');
     // The answer of an account with no passkey whose methods all went, and
     // whose other sessions ended, is `{ unenrolled }`, as before stage 5.
     const answer: RecoveryCodeDone = { unenrolled };
-    if (hadPasskeys && methodsLeft !== 'unchecked') {
-      if (methodsLeft !== 'passkey' && methodsLeft !== 'app_and_passkey') {
-        answer.passkeysRemoved = true;
-      }
-      answer.appsRemoved = appsRemoved;
+    if (hadPasskeys) {
+      if (passkeysKnownRemoved) answer.passkeysRemoved = true;
+      // The count of apps, apart from the passkey's own factor; not known
+      // when the list could not be read.
+      if (methodsLeft !== 'unchecked') answer.appsRemoved = appsRemoved;
     }
     if (methodsLeft) answer.methodsLeft = methodsLeft;
     if (!othersEnded) answer.otherSessionsLeft = true;

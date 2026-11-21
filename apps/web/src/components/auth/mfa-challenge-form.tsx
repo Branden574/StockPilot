@@ -6,7 +6,11 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
-import { RECOVERY_CODE_WORDS, recoveryCodeDoneWords } from '@/lib/auth/recovery-code-words';
+import {
+  RECOVERY_CODE_WORDS,
+  recoveryCodeDoneReportsProblem,
+  recoveryCodeDoneWords,
+} from '@/lib/auth/recovery-code-words';
 import { safeRedirectPath } from '@/lib/auth/safe-redirect';
 import {
   Dialog,
@@ -88,8 +92,13 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
       return;
     }
     // A used code removed the methods and ended the other sessions (Q6);
-    // the words say which happened.
-    toast.success(recoveryCodeDoneWords(res.data));
+    // the words say which happened. Words that report a problem (a method
+    // left, the other devices not signed out) are a warning, never a success.
+    if (recoveryCodeDoneReportsProblem(res.data)) {
+      toast.warning(recoveryCodeDoneWords(res.data));
+    } else {
+      toast.success(recoveryCodeDoneWords(res.data));
+    }
     setRecoveryOpen(false);
     setRecoveryPassword('');
     router.replace('/dashboard/settings/security');

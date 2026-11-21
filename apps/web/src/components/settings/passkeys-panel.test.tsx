@@ -11,7 +11,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 const toastSuccess = vi.hoisted(() => vi.fn());
-vi.mock('sonner', () => ({ toast: { success: toastSuccess, error: vi.fn() } }));
+const toastWarning = vi.hoisted(() => vi.fn());
+vi.mock('sonner', () => ({
+  toast: { success: toastSuccess, warning: toastWarning, error: vi.fn() },
+}));
 vi.mock('@simplewebauthn/browser', () => ({
   browserSupportsWebAuthn: () => true,
   startAuthentication: vi.fn(),
@@ -202,7 +205,44 @@ describe('review 4 finding 4: an unfinished passkey that is the only method', ()
         'Recovery code accepted. 1 authenticator app was removed, and your other devices were signed out. Set up a new one now.',
       ),
     );
+    expect(toastWarning).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [
+      'the other devices could not be signed out',
+      { unenrolled: 1, otherSessionsLeft: true },
+      'Recovery code accepted. 1 authenticator app was removed. We could not sign out your other devices, so change your password now. Then set up a new one.',
+    ],
+    [
+      'no removal was tried',
+      { unenrolled: 0, methodsLeft: 'unchecked' as const },
+      "Recovery code accepted. Your sign-in methods could not be removed. Your other devices were signed out. Ask your organization's owner or StockPilot support for help.",
+    ],
+    [
+      'a passkey may be left',
+      { unenrolled: 0, appsRemoved: 0, methodsLeft: 'passkey' as const },
+      "Recovery code accepted. A passkey may still be on your account. Your other devices were signed out. Ask your organization's owner or StockPilot support for help.",
+    ],
+  ])(
+    'a used code that left a problem (%s) says so as a warning, never as a success',
+    async (_name, data, words) => {
+      toastSuccess.mockClear();
+      toastWarning.mockClear();
+      vi.mocked(consumeMfaRecoveryCodeAction).mockResolvedValueOnce({ ok: true, data });
+      render(<PasskeysPanel data={onlyMethod()} />);
+      fireEvent.click(screen.getByRole('button', { name: PASSKEYS_PANEL_WORDS.useRecoveryCode }));
+      fireEvent.change(screen.getByLabelText('Recovery code'), {
+        target: { value: 'sample-code' },
+      });
+      fireEvent.change(screen.getByLabelText('Your password'), {
+        target: { value: 'sample-password-not-real' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Use recovery code' }));
+      await waitFor(() => expect(toastWarning).toHaveBeenCalledWith(words));
+      expect(toastSuccess).not.toHaveBeenCalled();
+    },
+  );
 
   it('a member with another second step keeps the old hint', () => {
     render(
