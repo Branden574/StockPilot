@@ -61,8 +61,10 @@ export const LIMITER_BOT_PREFIXES: Readonly<Record<string, BotPrefix>> = {
   // Unsubscribe links from email.
   'unsubscribe:link:': { family: 'unsubscribe', source: 'web' },
   'unsubscribe:ip:': { family: 'unsubscribe', source: 'web' },
-  // The "This was not me" link in a sign-in alert email (part 3), by address
-  // and, once its signature checks out, by alert.
+  // The "This was not me" link in a sign-in alert email (part 3): opening its
+  // page by address, pressing its button by address and, once its signature
+  // checks out, by alert.
+  'sign-in-alert:view:': { family: 'sign_in_alert', source: 'web' },
   'sign-in-alert:ip:': { family: 'sign_in_alert', source: 'web' },
   'sign-in-alert:alert:': { family: 'sign_in_alert', source: 'web' },
   // The public support form.

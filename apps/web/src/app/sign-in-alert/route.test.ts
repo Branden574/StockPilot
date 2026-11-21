@@ -6,14 +6,22 @@ import { NextRequest } from 'next/server';
 /**
  * Part 3 (sign-in alerts): the page the "This was not me" button of an alert
  * email opens, outside the login wall.
- *   - GET shows what the alert was and one button, and changes NOTHING (mail
- *     scanners open links): no report, no limiter, no write.
+ *   - GET shows what the alert was and one button, and changes NOTHING about
+ *     the alert or the account (mail scanners open links): no report, no
+ *     write. It is counted per address before the alert is read (review 1,
+ *     finding 9), so a well-shaped link cannot be used to make reads without
+ *     end.
  *   - POST (the page's own form) refuses a post from another site first, is
- *     limited by address and then by alert, and runs the report.
+ *     limited by address and then by alert, and runs the report. An alert
+ *     already reported gets the "already reported" page and nothing more.
  *   - Every link that does not check out (malformed, past its 7 days, a
  *     changed tag, a tag for another account, an alert that does not exist)
  *     gets ONE plain page, the same bytes each time, so the page never tells
  *     a real alert id from a made-up one.
+ *   - A limiter that cannot count is "try again in a moment", never "too many
+ *     tries" with an hour's wait.
+ *   - The words promise what happens and no more (finding 1), and say the
+ *     owners and admins were told only when one was (finding 8).
  *
  * The signing value is a dull one under a neutral name
  * (src/test/secret-shaped-fixtures.guard.test.ts); every id and address is
@@ -47,6 +55,7 @@ import { signInAlertLinkUrl } from '@/lib/auth/sign-in-alert-url';
 import { GET, POST } from './route';
 
 const BASE = 'https://app.example.test';
+const ADDRESS = { 'x-forwarded-for': '203.0.113.9' };
 const MEMBER = '11111111-1111-4111-8111-111111111111';
 const OTHER = '99999999-9999-4999-8999-999999999999';
 const ALERT = 'a1e27000-0000-4000-8000-000000000001';
@@ -76,8 +85,8 @@ function linkQuery(userId = MEMBER, now = new Date()): URLSearchParams {
   return new URL(url).searchParams;
 }
 
-function get(query: URLSearchParams | string): NextRequest {
-  return new NextRequest(`${BASE}/sign-in-alert?${query.toString()}`);
+function get(query: URLSearchParams | string, headers: Record<string, string> = ADDRESS): NextRequest {
+  return new NextRequest(`${BASE}/sign-in-alert?${query.toString()}`, { headers });
 }
 
 function post(query: URLSearchParams, headers: Record<string, string> = {}): NextRequest {
@@ -95,12 +104,19 @@ function post(query: URLSearchParams, headers: Record<string, string> = {}): Nex
 }
 
 const DAY = 24 * 60 * 60 * 1000;
+const HOUR = 60 * 60 * 1000;
+const VIEW_KEY = 'sign-in-alert:view:203.0.113.9';
+const SESSIONS_ENDED = 'Every session of your account has been ended.';
+const OPEN_DEVICE =
+  'A device that is already open can keep working for a short while, until its current pass expires. That is about an hour at most.';
+/** What a limiter that could not count answers in closed mode (lib/rate-limit.ts). */
+const COULD_NOT_COUNT = { allowed: false, count: 60, resetAt: Date.now() + HOUR, failed: true as const };
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv('VERCEL', '1');
   h.read.mockResolvedValue({ kind: 'found', alert: alert() });
-  h.report.mockResolvedValue({ outcome: 'done', firstReport: true });
+  h.report.mockResolvedValue({ outcome: 'done', adminsTold: false });
   h.limit.mockResolvedValue({ allowed: true, remaining: 1, resetAt: Date.now() + 60_000 });
 });
 
@@ -124,12 +140,61 @@ describe('GET /sign-in-alert', () => {
     expect(html).toContain('Tijuana, Mexico (approximate)');
     expect(html).toContain('Nov 20, 2026');
     expect(html).toContain('New device and new country');
-    expect(html).toContain('This was not me: sign me out everywhere');
+    expect(html).toContain('This was not me: end every session');
     expect(html).toContain('<form method="post" action="/sign-in-alert">');
     expect(html).toContain(`name="a" value="${ALERT}"`);
     expect(html).toContain(`name="t" value="${q.get('t')}"`);
     expect(h.read).toHaveBeenCalledWith(ALERT);
     expect(h.report).not.toHaveBeenCalled();
+  });
+
+  it('says what the button does and no more: no "signed out everywhere", and nothing about who is told', async () => {
+    const html = await (await GET(get(linkQuery()))).text();
+    expect(html).toContain('It ends every session of your account.');
+    expect(html).toContain(OPEN_DEVICE);
+    expect(html).toContain('Then reset your password. That is what closes the door.');
+    expect(html).not.toMatch(/signs you out|sign me out|every device|everywhere|right away/i);
+    // Whether anyone is told is not known before the press (finding 8).
+    expect(html).not.toMatch(/owners and admins/);
+  });
+
+  it('is counted per address, 60 an hour, BEFORE the alert is read', async () => {
+    await GET(get(linkQuery()));
+    expect(h.limit.mock.calls).toEqual([[VIEW_KEY, 60, HOUR, 'closed']]);
+    expect(h.limit.mock.invocationCallOrder[0]!).toBeLessThan(h.read.mock.invocationCallOrder[0]!);
+  });
+
+  it('over the count: the same plain page as a bad link, with a 429, and the alert is not read', async () => {
+    const bad = await (await GET(get('a=nope&i=2026&t=x'))).text();
+    h.limit.mockResolvedValue({ allowed: false, count: 60, resetAt: Date.now() + 120_000 });
+    const res = await GET(get(linkQuery()));
+    expect(res.status).toBe(429);
+    expect(Number(res.headers.get('retry-after'))).toBeGreaterThan(0);
+    expect(await res.text()).toBe(bad);
+    expect(h.read).not.toHaveBeenCalled();
+  });
+
+  it('a limiter that cannot count: "try again in a moment", not "too many tries", no hour to wait, and no read', async () => {
+    h.limit.mockResolvedValue(COULD_NOT_COUNT);
+    const res = await GET(get(linkQuery()));
+    expect(res.status).toBe(503);
+    expect(res.headers.get('retry-after')).toBeNull();
+    const html = await res.text();
+    expect(html).toContain('Please try again in a moment');
+    expect(html).not.toContain('Too many tries');
+    expect(h.read).not.toHaveBeenCalled();
+  });
+
+  it('a link out of shape or past its days is turned away before anything is counted', async () => {
+    await GET(get('a=nope&i=2026&t=x'));
+    await GET(get(linkQuery(MEMBER, new Date(Date.now() - 9 * DAY))));
+    expect(h.limit).not.toHaveBeenCalled();
+    expect(h.read).not.toHaveBeenCalled();
+  });
+
+  it('an address that cannot be resolved skips the count; the page still opens', async () => {
+    const res = await GET(get(linkQuery(), {}));
+    expect(res.status).toBe(200);
     expect(h.limit).not.toHaveBeenCalled();
   });
 
@@ -178,6 +243,19 @@ describe('GET /sign-in-alert', () => {
     const res = await GET(get(linkQuery(MEMBER, new Date(Date.now() - DAY))));
     expect(res.status).toBe(200);
   });
+
+  it('markup in the device words or the city is shown as text, never as markup', async () => {
+    // The table's checks refuse these; the page escapes them all the same.
+    h.read.mockResolvedValue({
+      kind: 'found',
+      alert: alert({ deviceLabel: '<img src=x onerror=alert(1)>"\'', city: '<script>x</script>&' }),
+    });
+    const html = await (await GET(get(linkQuery()))).text();
+    expect(html).not.toContain('<img');
+    expect(html).not.toContain('<script');
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;&quot;&#39;');
+    expect(html).toContain('&lt;script&gt;x&lt;/script&gt;&amp;, Mexico (approximate)');
+  });
 });
 
 describe('POST /sign-in-alert', () => {
@@ -185,7 +263,7 @@ describe('POST /sign-in-alert', () => {
     const res = await POST(post(linkQuery()));
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain('You are signed out on every device.');
+    expect(html).toContain(SESSIONS_ENDED);
     expect(html).toContain('Reset your password now.');
     expect(html).toContain('href="/reset"');
     expect(h.limit.mock.calls.map((c) => [c[0], c[3]])).toEqual([
@@ -199,13 +277,41 @@ describe('POST /sign-in-alert', () => {
     });
   });
 
-  it('the same link again: the same done page (the report tells nobody twice)', async () => {
-    await POST(post(linkQuery()));
-    h.report.mockResolvedValue({ outcome: 'done', firstReport: false });
-    const again = await POST(post(linkQuery()));
-    expect(again.status).toBe(200);
-    expect(await again.text()).toContain('You are signed out on every device.');
-    expect(h.report).toHaveBeenCalledTimes(2);
+  it('the done page promises what happens and no more: an open device has up to about an hour, the reset closes the door (finding 1)', async () => {
+    const html = await (await POST(post(linkQuery()))).text();
+    expect(html).toContain(SESSIONS_ENDED);
+    expect(html).toContain(OPEN_DEVICE);
+    expect(html).toContain('That is what closes the door: until you do, anyone who knows it can sign in again.');
+    expect(html).not.toMatch(/signed out|every device|everywhere|right away/i);
+  });
+
+  it('the done page says the owners and admins were told only when one was (finding 8)', async () => {
+    const alone = await (await POST(post(linkQuery()))).text();
+    expect(alone).not.toMatch(/owners and admins/);
+    h.report.mockResolvedValue({ outcome: 'done', adminsTold: true });
+    const told = await (await POST(post(linkQuery()))).text();
+    expect(told).toContain('The owners and admins of your organization were told, so they can help.');
+  });
+
+  it('an alert already reported: the "already reported" page with the reset button, and nothing runs', async () => {
+    h.read.mockResolvedValue({ kind: 'found', alert: alert({ status: 'not_me' }) });
+    const res = await POST(post(linkQuery()));
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('You already reported this sign-in');
+    expect(html).toContain('href="/reset"');
+    expect(h.report).not.toHaveBeenCalled();
+    // Nothing to pace: the alert's own bucket is not counted.
+    expect(h.limit.mock.calls.map((c) => c[0])).toEqual(['sign-in-alert:ip:203.0.113.9']);
+  });
+
+  it('two presses at once: the one the report calls already reported gets that page too', async () => {
+    h.report.mockResolvedValue({ outcome: 'already_reported' });
+    const res = await POST(post(linkQuery()));
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('You already reported this sign-in');
+    expect(html).not.toContain(SESSIONS_ENDED);
   });
 
   it('a report that could not finish: a try-again page, and the same link works again', async () => {
@@ -223,11 +329,14 @@ describe('POST /sign-in-alert', () => {
     expect(h.report).not.toHaveBeenCalled();
   });
 
-  it('too many from one address: 429 before the alert is read', async () => {
+  it('too many from one address: 429 before the alert is read, and the page names the other way in', async () => {
     h.limit.mockResolvedValueOnce({ allowed: false, remaining: 0, resetAt: Date.now() + 120_000 });
     const res = await POST(post(linkQuery()));
     expect(res.status).toBe(429);
     expect(res.headers.get('retry-after')).toBeTruthy();
+    const html = await res.text();
+    expect(html).toContain('Too many tries');
+    expect(html).toContain('href="/dashboard/settings/security"');
     expect(h.read).not.toHaveBeenCalled();
     expect(h.report).not.toHaveBeenCalled();
   });
@@ -238,6 +347,29 @@ describe('POST /sign-in-alert', () => {
       .mockResolvedValueOnce({ allowed: false, remaining: 0, resetAt: Date.now() + 60_000 });
     const res = await POST(post(linkQuery()));
     expect(res.status).toBe(429);
+    expect(h.report).not.toHaveBeenCalled();
+  });
+
+  it('the address count cannot be read: "try again in a moment", no hour to wait, nothing read', async () => {
+    h.limit.mockResolvedValueOnce(COULD_NOT_COUNT);
+    const res = await POST(post(linkQuery()));
+    expect(res.status).toBe(503);
+    expect(res.headers.get('retry-after')).toBeNull();
+    const html = await res.text();
+    expect(html).toContain('Please try again in a moment');
+    expect(html).not.toContain('Too many tries');
+    expect(h.read).not.toHaveBeenCalled();
+    expect(h.report).not.toHaveBeenCalled();
+  });
+
+  it('the alert count cannot be read: "try again in a moment", and no report', async () => {
+    h.limit
+      .mockResolvedValueOnce({ allowed: true, remaining: 5, resetAt: Date.now() + 60_000 })
+      .mockResolvedValueOnce(COULD_NOT_COUNT);
+    const res = await POST(post(linkQuery()));
+    expect(res.status).toBe(503);
+    expect(res.headers.get('retry-after')).toBeNull();
+    expect(await res.text()).toContain('Please try again in a moment');
     expect(h.report).not.toHaveBeenCalled();
   });
 

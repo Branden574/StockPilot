@@ -3,7 +3,11 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { fetchSiteIsElsewhere } from '@/lib/auth/cross-site-request';
 import { readSignInAlertLink, signInAlertLinkInWindow } from '@/lib/auth/sign-in-alert-link';
 import { verifySignInAlertLink } from '@/lib/auth/sign-in-alert-url';
-import { signInAlertKindWords, signInAlertPlaceWords } from '@/lib/auth/sign-in-alert-words';
+import {
+  NOT_ME_WORDS,
+  signInAlertKindWords,
+  signInAlertPlaceWords,
+} from '@/lib/auth/sign-in-alert-words';
 import { clientIpForRecord, clientIpFromRequest } from '@/lib/client-ip';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
@@ -23,13 +27,16 @@ export const dynamic = 'force-dynamic';
  * open it signed out, on another device, or after someone else has changed
  * their password.
  *
- * GET CHANGES NOTHING. Mail scanners open every link in an email within
- * seconds of delivery, so GET only shows what the alert was (the member's own
- * words for the device, the place, the time) and one button. Nothing is
- * written and no limiter is counted: the link check is computation and one
- * read. POST, from that page's own form, does the report
- * (server/services/sign-in-alert-report.ts): the alert is marked, every
- * session of the account ends, the owners and admins are told.
+ * GET CHANGES NOTHING about the alert or the account. Mail scanners open
+ * every link in an email within seconds of delivery, so GET only shows what
+ * the alert was (the member's own words for the device, the place, the time)
+ * and one button. It is counted per address (60 an hour) after the link's
+ * shape and window check out and BEFORE the alert is read with the service
+ * role, so a well-shaped link cannot be used to make reads without end
+ * (review 1, finding 9). Over the count it answers the bad-link page with a
+ * 429. POST, from that page's own form, does the report
+ * (server/services/sign-in-alert-report.ts): every session of the account is
+ * ended, the alert is marked, and the owners and admins are told.
  *
  * ONE PAGE FOR EVERY BAD LINK. A link out of shape, past its 7 days, with a
  * changed tag, with a tag made for another account, or for an alert that does
@@ -45,11 +52,25 @@ export const dynamic = 'force-dynamic';
  * cross-site-request rule /auth/confirm uses; this page's own form is always
  * same-origin), then the address is counted, then the link is checked, then
  * the alert is counted, all failing CLOSED. A bad link never gets a bucket
- * of its own. A press that could not finish (the alert could not be marked,
- * or some session did not end) gets a try-again page, and the same link works
- * again: the report signs out every time it runs, and tells people only once.
+ * of its own. An alert already reported gets the "already reported" page and
+ * nothing more: the link signs nobody out a second time. A press that could
+ * not finish (some session did not end, or the alert could not be marked)
+ * gets a try-again page, and the same link works again.
+ *
+ * A LIMITER THAT CANNOT COUNT is not "too many tries": the caller did nothing
+ * wrong and an hour's wait would be untrue. It answers "Please try again in a
+ * moment" (503, no Retry-After) and nothing is read or done.
+ *
+ * THE WORDS (review 1, findings 1 and 8; NOT_ME_WORDS in
+ * lib/auth/sign-in-alert-words.ts) promise what happens and no more: the
+ * sessions are ended, a device already open keeps its pass until it expires,
+ * the reset closes the door. The done page says the owners and admins were
+ * told only when the report says one was; before the press nothing is said
+ * about it, because it is not known yet.
  */
 
+/** GETs per address per hour: generous for a person, a bound for a script. */
+const VIEWS_PER_ADDRESS_PER_HOUR = 60;
 /** POSTs per address per hour. */
 const POSTS_PER_ADDRESS_PER_HOUR = 30;
 /** POSTs per alert per hour: a member pressing again, or a retry. */
@@ -131,12 +152,13 @@ function htmlPage(
 }
 
 /** The one page for every link that does not check out. */
-function badLinkPage(): NextResponse {
+function badLinkPage(status = 400, extraHeaders: Record<string, string> = {}): NextResponse {
   return htmlPage(
     'This link has expired',
     `<p>Open Settings &gt; Security to review your sessions.</p>
     <a class="link" href="/dashboard/settings/security">Go to Settings &gt; Security</a>`,
-    400,
+    status,
+    extraHeaders,
   );
 }
 
@@ -157,22 +179,44 @@ function tryAgainPage(): NextResponse {
   );
 }
 
+/** A limiter could not count: the caller did nothing wrong, and no hour to wait is claimed. */
+function busyPage(): NextResponse {
+  return htmlPage(
+    'Please try again in a moment',
+    `<p>We could not check this just now. Nothing changed. Open the link from your email again in a moment.</p>`,
+    503,
+  );
+}
+
+function retryAfterOf(resetAt: number): string {
+  return String(Math.max(1, Math.ceil((resetAt - Date.now()) / 1000)));
+}
+
 function tooManyPage(resetAt: number): NextResponse {
-  const retryAfter = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000));
+  // The count is by address, and a whole school can share one: name the
+  // other way in, which that count does not hold.
   return htmlPage(
     'Too many tries',
-    `<p>Wait a few minutes, then use the link again.</p>`,
+    `<p>Wait a few minutes, then use the link again. You can also sign in and answer the alert in Settings &gt; Security.</p>
+    <a class="link" href="/dashboard/settings/security">Go to Settings &gt; Security</a>`,
     429,
-    { 'retry-after': String(retryAfter) },
+    { 'retry-after': retryAfterOf(resetAt) },
   );
+}
+
+/** Too many views from one address: the bad-link page, byte for byte, with a 429. */
+function tooManyViewsPage(resetAt: number): NextResponse {
+  return badLinkPage(429, { 'retry-after': retryAfterOf(resetAt) });
 }
 
 const RESET_BUTTON = `<a class="btn" href="/reset">Reset my password</a>`;
 
-function donePage(): NextResponse {
+/** `adminsTold`: the report told at least one owner or admin; said only then. */
+function donePage(adminsTold: boolean): NextResponse {
   return htmlPage(
-    'You are signed out on every device.',
-    `<p>Reset your password now. Until you do, anyone who knows it can sign in again.</p>
+    NOT_ME_WORDS.sessionsEnded,
+    `<p>${NOT_ME_WORDS.openDevice}</p>
+    <p>${NOT_ME_WORDS.resetNow}${adminsTold ? ` ${NOT_ME_WORDS.adminsTold}` : ''}</p>
     ${RESET_BUTTON}`,
     200,
   );
@@ -181,7 +225,7 @@ function donePage(): NextResponse {
 function alreadyReportedPage(): NextResponse {
   return htmlPage(
     'You already reported this sign-in',
-    `<p>Every session of your account was ended then. If you have not reset your password yet, reset it now.</p>
+    `<p>Every session of your account was ended then. If you have not reset your password yet, reset it now. That is what closes the door.</p>
     ${RESET_BUTTON}`,
     200,
   );
@@ -207,12 +251,13 @@ function confirmPage(alert: SignInAlertRecord, link: { a: string; i: string; t: 
   return htmlPage(
     'Was this sign-in you?',
     `<dl>${rows}</dl>
-    <p>If it was not you, press the button. It signs you out on every device, and the owners and admins of your organization are told.</p>
+    <p>If it was not you, press the button. ${NOT_ME_WORDS.whatItDoes} ${NOT_ME_WORDS.openDevice}</p>
+    <p>${NOT_ME_WORDS.thenReset}</p>
     <form method="post" action="/sign-in-alert">
       <input type="hidden" name="a" value="${escapeHtml(link.a)}">
       <input type="hidden" name="i" value="${escapeHtml(link.i)}">
       <input type="hidden" name="t" value="${escapeHtml(link.t)}">
-      <button type="submit" class="btn">This was not me: sign me out everywhere</button>
+      <button type="submit" class="btn">This was not me: end every session</button>
     </form>`,
     200,
   );
@@ -220,16 +265,21 @@ function confirmPage(alert: SignInAlertRecord, link: { a: string; i: string; t: 
 
 /**
  * The alert a link names, once every check has passed; or the answer to give
- * instead. Shape and window first (no read), then the read, then the tag
- * against the alert's own account.
+ * instead. Shape and window first (no read); then `beforeRead`, where GET
+ * counts the address; then the read; then the tag against the alert's own
+ * account.
  */
 async function checkedAlert(
   params: { a: string | null; i: string | null; t: string | null },
+  beforeRead?: () => Promise<NextResponse | null>,
 ): Promise<{ alert: SignInAlertRecord; link: { a: string; i: string; t: string } } | NextResponse> {
   const link = readSignInAlertLink(params);
   if (!link) return badLinkPage();
   const now = new Date();
   if (!signInAlertLinkInWindow(link.issuedDay, now)) return badLinkPage();
+
+  const stopped = beforeRead ? await beforeRead() : null;
+  if (stopped) return stopped;
 
   const read = await readSignInAlert(link.alertId);
   if (read.kind === 'failed') return tryAgainPage();
@@ -247,11 +297,27 @@ async function checkedAlert(
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  const checked = await checkedAlert({
-    a: searchParams.get('a'),
-    i: searchParams.get('i'),
-    t: searchParams.get('t'),
-  });
+  const checked = await checkedAlert(
+    {
+      a: searchParams.get('a'),
+      i: searchParams.get('i'),
+      t: searchParams.get('t'),
+    },
+    async () => {
+      // An address that cannot be resolved skips the count rather than
+      // sharing one counter with every other such caller (as on POST).
+      const ip = clientIpFromRequest(request);
+      if (ip === 'unknown') return null;
+      const views = await checkRateLimit(
+        `sign-in-alert:view:${ip}`,
+        VIEWS_PER_ADDRESS_PER_HOUR,
+        ONE_HOUR_MS,
+        'closed',
+      );
+      if (views.failed) return busyPage();
+      return views.allowed ? null : tooManyViewsPage(views.resetAt);
+    },
+  );
   if (checked instanceof NextResponse) return checked;
   if (checked.alert.status === 'not_me') return alreadyReportedPage();
   return confirmPage(checked.alert, checked.link);
@@ -276,6 +342,7 @@ export async function POST(request: NextRequest) {
       ONE_HOUR_MS,
       'closed',
     );
+    if (byAddress.failed) return busyPage();
     if (!byAddress.allowed) return tooManyPage(byAddress.resetAt);
   }
 
@@ -286,6 +353,9 @@ export async function POST(request: NextRequest) {
     t: formString(form, 't'),
   });
   if (checked instanceof NextResponse) return checked;
+  // Reported already: every session was ended then, and this link ends none
+  // again. (The report refuses it too; this saves the count.)
+  if (checked.alert.status === 'not_me') return alreadyReportedPage();
 
   const byAlert = await checkRateLimit(
     `sign-in-alert:alert:${checked.alert.id}`,
@@ -293,6 +363,7 @@ export async function POST(request: NextRequest) {
     ONE_HOUR_MS,
     'closed',
   );
+  if (byAlert.failed) return busyPage();
   if (!byAlert.allowed) return tooManyPage(byAlert.resetAt);
 
   const answer = await reportSignInAlertNotMe({
@@ -303,5 +374,7 @@ export async function POST(request: NextRequest) {
       userAgent: request.headers.get('user-agent'),
     },
   });
-  return answer.outcome === 'done' ? donePage() : tryAgainPage();
+  if (answer.outcome === 'done') return donePage(answer.adminsTold);
+  if (answer.outcome === 'already_reported') return alreadyReportedPage();
+  return tryAgainPage();
 }
