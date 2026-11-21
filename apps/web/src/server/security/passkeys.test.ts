@@ -2128,20 +2128,41 @@ describe('review 4 finding 8: a failed Add leaves nothing that blocks the next o
 });
 
 describe('review 4 finding 11: notes', () => {
-  it("junk finishes from another address cannot pause the member's own passkey step (the limit is per account and address)", async () => {
+  it("junk finishes from other addresses cannot pause the member's own passkey step (the limit is per account and address)", async () => {
     const { soft } = await memberWithPasskey();
     countingLimiter();
-    world.requestHeaders.set('x-real-ip', '198.51.100.9');
+    // Someone with only the password, sending junk finishes from five
+    // addresses until each one is refused: sixty in all.
+    const elsewhere = [
+      '198.51.100.9',
+      '198.51.100.10',
+      '198.51.100.11',
+      '198.51.100.12',
+      '198.51.100.13',
+    ];
+    const own = '203.0.113.7';
     const junk = () => pk.completeSecondStep({ challengeId: crypto.randomUUID(), response: {} });
-    for (let i = 0; i < 30; i += 1) await junk();
-    expect(await junk()).toMatchObject({ ok: false, reason: 'limited' });
-    world.requestHeaders.set('x-real-ip', '203.0.113.7');
+    const from = vi.mocked(checkRateLimit).mock.calls.length;
+    for (const ip of elsewhere) {
+      world.requestHeaders.set('x-real-ip', ip);
+      for (let i = 0; i < 11; i += 1) await junk();
+      expect(await junk(), ip).toMatchObject({ ok: false, reason: 'limited' });
+    }
+    world.requestHeaders.set('x-real-ip', own);
     expect(await passkeyStep(soft)).toEqual({ ok: true });
+    // Every finish bucket is this account at the request's own address: no
+    // bucket that the junk from elsewhere could fill.
+    const addresses = new Set([...elsewhere, own]);
     const finishKeys = vi
       .mocked(checkRateLimit)
-      .mock.calls.map(([k]) => String(k))
+      .mock.calls.slice(from)
+      .map(([k]) => String(k))
       .filter((k) => k.startsWith('passkey-finish'));
-    expect(finishKeys.every((k) => /^passkey-finish:[^:]+:.+$/.test(k))).toBe(true);
+    expect(finishKeys.length).toBeGreaterThan(60);
+    for (const k of finishKeys) {
+      const address = /^passkey-finish:[^:]+:(.+)$/.exec(k)?.[1];
+      expect(address !== undefined && addresses.has(address), k).toBe(true);
+    }
   });
 
   it('attestation: none and packed self-attestation are verified; a statement with a certificate chain is refused before the library, and nothing is fetched', async () => {
