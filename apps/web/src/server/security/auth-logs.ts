@@ -207,62 +207,73 @@ type AuthLogsNetwork = 'hosting' | 'other';
  * Read from Supabase's single `logs` table (ClickHouse), gateway lines only
  * (source edge_logs), where every field is a string in log_attributes. Only
  * POSTs answered 400 to 499 whose decoded path is `/auth/v1/token` or
- * `/auth/v1/factors/<one segment>/verify`. The named values at the top are
- * shared with AUTH_LOGS_TOTALS_SQL, word for word:
- *   - hosting_owner_prefix: the start of the network owner's name that makes
- *     a line's network `hosting` (measured; see the comment in the query);
- *   - the path and the query string, raw and decoded;
- *   - first_grant: the first decoded grant_type value;
- *   - client: the client string.
- * The kind is `token_other` when the query string holds an escape that does
- * not decode, an encoded `&` or `=` (which the sign-in service keeps inside a
+ * `/auth/v1/factors/<one segment>/verify`.
+ *
+ * THE FORM IS NESTED SELECTS, the one the logs service's own SQL parser
+ * accepts (it refuses a `WITH <expression> AS <name>` list): the innermost
+ * select names the raw fields and filters the lines; the middle one works out
+ * the kind, the caller class, the network class and the country from those
+ * names; the outermost filters by kind, groups, orders and limits. A select
+ * uses only the names of the select it reads from. AUTH_LOGS_TOTALS_SQL
+ * defines every name it shares with this query the same way (a test compares
+ * them), and reads the same lines.
+ *
+ * The network is `hosting` when the network owner's name starts with the one
+ * prefix written in the query (measured: the leading comment says when). The
+ * kind is `token_other` when the query string holds an escape that does not
+ * decode, an encoded `&` or `=` (which the sign-in service keeps inside a
  * value, so reading the whole decoded string would read it differently) or
  * an encoded control character. Our server's class is its two client
  * strings matched whole (a `.` is written `[.]`, so the text holds no
  * backslash). The client string and the owner's name are reduced to a class
  * here; the path and the query string are compared, never returned.
  */
-export const AUTH_LOGS_GROUPS_SQL = `WITH
-  /* The hosting of our own server, measured on 2026-11-21 from 24 hours of gateway lines: every
-     line with the client string of our own server came from a network owner whose name starts
-     with this, and no line of the phone app or of a browser did. */
-  'Amazon' AS hosting_owner_prefix,
-  log_attributes['request.path'] AS raw_path,
-  decodeURLComponent(raw_path) AS decoded_path,
-  log_attributes['request.search'] AS raw_search,
-  decodeURLComponent(raw_search) AS decoded_search,
-  extract(decoded_search, '(?:^[?]?|&)grant_type=([^&]*)') AS first_grant,
-  log_attributes['request.headers.x_client_info'] AS client
-SELECT
-  toString(toStartOfMinute(timestamp)) AS minute,
-  multiIf(
-    match(raw_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/verify$'), 'verify',
-    decoded_path != '/auth/v1/token', 'verify_other',
-    raw_path != '/auth/v1/token', 'token_other',
-    match(raw_search, '%([^0-9A-Fa-f]|[0-9A-Fa-f][^0-9A-Fa-f]|[0-9A-Fa-f]?$|26|3[Dd]|[01][0-9A-Fa-f]|7[Ff])'), 'token_other',
-    first_grant = 'password', 'password',
-    first_grant = 'refresh_token', 'refresh',
-    first_grant IN ('pkce', 'id_token', 'web3'), 'token_known_other',
-    'token_other'
-  ) AS kind,
-  log_attributes['response.status_code'] AS status,
-  multiIf(
-    match(client, '^supabase-ssr/[0-9]+[.][0-9]+[.][0-9]+ createServerClient$'), 'server',
-    match(client, '^supabase-js/[0-9]+[.][0-9]+[.][0-9]+; runtime=node; runtime-version=[0-9]+[.][0-9]+[.][0-9]+$'), 'server',
-    position(client, 'supabase-js-react-native') > 0, 'phone',
-    position(client, 'createBrowserClient') > 0, 'browser',
-    client = '', 'none',
-    'other'
-  ) AS caller,
-  if(startsWith(log_attributes['request.cf.asOrganization'], hosting_owner_prefix), 'hosting', 'other') AS network,
-  if(match(log_attributes['request.cf.country'], '^[A-Z]{2}$') AND log_attributes['request.cf.country'] != 'XX', log_attributes['request.cf.country'], '') AS country,
-  count() AS n
-FROM logs
-WHERE source = 'edge_logs'
-  AND log_attributes['request.method'] = 'POST'
-  AND match(log_attributes['response.status_code'], '^4[0-9][0-9]$')
-  AND (decoded_path = '/auth/v1/token' OR match(decoded_path, '^/auth/v1/factors/[^/]+/verify$'))
-  AND kind IN ('password', 'verify')
+export const AUTH_LOGS_GROUPS_SQL = `/* The hosting network owner prefix in this query was measured on 2026-11-21 from 24 hours of gateway lines. */
+SELECT minute, kind, status, caller, network, country, count() AS n
+FROM (
+  SELECT
+    minute,
+    multiIf(
+      match(raw_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/verify$'), 'verify',
+      decoded_path != '/auth/v1/token', 'verify_other',
+      raw_path != '/auth/v1/token', 'token_other',
+      match(raw_search, '%([^0-9A-Fa-f]|[0-9A-Fa-f][^0-9A-Fa-f]|[0-9A-Fa-f]?$|26|3[Dd]|[01][0-9A-Fa-f]|7[Ff])'), 'token_other',
+      first_grant = 'password', 'password',
+      first_grant = 'refresh_token', 'refresh',
+      first_grant IN ('pkce', 'id_token', 'web3'), 'token_known_other',
+      'token_other'
+    ) AS kind,
+    status,
+    multiIf(
+      match(client, '^supabase-ssr/[0-9]+[.][0-9]+[.][0-9]+ createServerClient$'), 'server',
+      match(client, '^supabase-js/[0-9]+[.][0-9]+[.][0-9]+; runtime=node; runtime-version=[0-9]+[.][0-9]+[.][0-9]+$'), 'server',
+      position(client, 'supabase-js-react-native') > 0, 'phone',
+      position(client, 'createBrowserClient') > 0, 'browser',
+      client = '', 'none',
+      'other'
+    ) AS caller,
+    if(startsWith(owner, 'Amazon'), 'hosting', 'other') AS network,
+    if(match(raw_country, '^[A-Z]{2}$') AND raw_country != 'XX', raw_country, '') AS country
+  FROM (
+    SELECT
+      toString(toStartOfMinute(timestamp)) AS minute,
+      log_attributes['request.path'] AS raw_path,
+      decodeURLComponent(log_attributes['request.path']) AS decoded_path,
+      log_attributes['request.search'] AS raw_search,
+      extract(decodeURLComponent(log_attributes['request.search']), '(?:^[?]?|&)grant_type=([^&]*)') AS first_grant,
+      log_attributes['request.headers.x_client_info'] AS client,
+      log_attributes['response.status_code'] AS status,
+      log_attributes['request.cf.asOrganization'] AS owner,
+      log_attributes['request.cf.country'] AS raw_country
+    FROM logs
+    WHERE source = 'edge_logs'
+      AND log_attributes['request.method'] = 'POST'
+      AND match(log_attributes['response.status_code'], '^4[0-9][0-9]$')
+      AND (decodeURLComponent(log_attributes['request.path']) = '/auth/v1/token'
+           OR match(decodeURLComponent(log_attributes['request.path']), '^/auth/v1/factors/[^/]+/verify$'))
+  )
+)
+WHERE kind IN ('password', 'verify')
 GROUP BY minute, kind, status, caller, network, country
 ORDER BY n DESC, minute, kind, status, caller, network, country
 LIMIT 199`;
@@ -274,47 +285,51 @@ LIMIT 199`;
  * flagged counts, our server's counts for the reconciliation and, when the
  * groups query was full, what it did not list.
  */
-export const AUTH_LOGS_TOTALS_SQL = `WITH
-  /* The hosting of our own server, measured on 2026-11-21 from 24 hours of gateway lines: every
-     line with the client string of our own server came from a network owner whose name starts
-     with this, and no line of the phone app or of a browser did. */
-  'Amazon' AS hosting_owner_prefix,
-  log_attributes['request.path'] AS raw_path,
-  decodeURLComponent(raw_path) AS decoded_path,
-  log_attributes['request.search'] AS raw_search,
-  decodeURLComponent(raw_search) AS decoded_search,
-  extract(decoded_search, '(?:^[?]?|&)grant_type=([^&]*)') AS first_grant,
-  log_attributes['request.headers.x_client_info'] AS client
-SELECT
-  multiIf(
-    match(raw_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/verify$'), 'verify',
-    decoded_path != '/auth/v1/token', 'verify_other',
-    raw_path != '/auth/v1/token', 'token_other',
-    match(raw_search, '%([^0-9A-Fa-f]|[0-9A-Fa-f][^0-9A-Fa-f]|[0-9A-Fa-f]?$|26|3[Dd]|[01][0-9A-Fa-f]|7[Ff])'), 'token_other',
-    first_grant = 'password', 'password',
-    first_grant = 'refresh_token', 'refresh',
-    first_grant IN ('pkce', 'id_token', 'web3'), 'token_known_other',
-    'token_other'
-  ) AS kind,
-  if(match(decoded_search, '(^[?]?|&)grant_type=.*&grant_type='), 'ambiguous', 'plain') AS form,
-  log_attributes['response.status_code'] AS status,
-  multiIf(
-    match(client, '^supabase-ssr/[0-9]+[.][0-9]+[.][0-9]+ createServerClient$'), 'server',
-    match(client, '^supabase-js/[0-9]+[.][0-9]+[.][0-9]+; runtime=node; runtime-version=[0-9]+[.][0-9]+[.][0-9]+$'), 'server',
-    position(client, 'supabase-js-react-native') > 0, 'phone',
-    position(client, 'createBrowserClient') > 0, 'browser',
-    client = '', 'none',
-    'other'
-  ) AS caller,
-  if(startsWith(log_attributes['request.cf.asOrganization'], hosting_owner_prefix), 'hosting', 'other') AS network,
-  toString(min(timestamp)) AS first_seen,
-  toString(max(timestamp)) AS last_seen,
-  count() AS n
-FROM logs
-WHERE source = 'edge_logs'
-  AND log_attributes['request.method'] = 'POST'
-  AND match(log_attributes['response.status_code'], '^4[0-9][0-9]$')
-  AND (decoded_path = '/auth/v1/token' OR match(decoded_path, '^/auth/v1/factors/[^/]+/verify$'))
+export const AUTH_LOGS_TOTALS_SQL = `/* The hosting network owner prefix in this query was measured on 2026-11-21 from 24 hours of gateway lines. */
+SELECT kind, form, status, caller, network, toString(min(ts)) AS first_seen, toString(max(ts)) AS last_seen, count() AS n
+FROM (
+  SELECT
+    ts,
+    multiIf(
+      match(raw_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/verify$'), 'verify',
+      decoded_path != '/auth/v1/token', 'verify_other',
+      raw_path != '/auth/v1/token', 'token_other',
+      match(raw_search, '%([^0-9A-Fa-f]|[0-9A-Fa-f][^0-9A-Fa-f]|[0-9A-Fa-f]?$|26|3[Dd]|[01][0-9A-Fa-f]|7[Ff])'), 'token_other',
+      first_grant = 'password', 'password',
+      first_grant = 'refresh_token', 'refresh',
+      first_grant IN ('pkce', 'id_token', 'web3'), 'token_known_other',
+      'token_other'
+    ) AS kind,
+    if(match(decoded_search, '(^[?]?|&)grant_type=.*&grant_type='), 'ambiguous', 'plain') AS form,
+    status,
+    multiIf(
+      match(client, '^supabase-ssr/[0-9]+[.][0-9]+[.][0-9]+ createServerClient$'), 'server',
+      match(client, '^supabase-js/[0-9]+[.][0-9]+[.][0-9]+; runtime=node; runtime-version=[0-9]+[.][0-9]+[.][0-9]+$'), 'server',
+      position(client, 'supabase-js-react-native') > 0, 'phone',
+      position(client, 'createBrowserClient') > 0, 'browser',
+      client = '', 'none',
+      'other'
+    ) AS caller,
+    if(startsWith(owner, 'Amazon'), 'hosting', 'other') AS network
+  FROM (
+    SELECT
+      timestamp AS ts,
+      log_attributes['request.path'] AS raw_path,
+      decodeURLComponent(log_attributes['request.path']) AS decoded_path,
+      log_attributes['request.search'] AS raw_search,
+      decodeURLComponent(log_attributes['request.search']) AS decoded_search,
+      extract(decodeURLComponent(log_attributes['request.search']), '(?:^[?]?|&)grant_type=([^&]*)') AS first_grant,
+      log_attributes['request.headers.x_client_info'] AS client,
+      log_attributes['response.status_code'] AS status,
+      log_attributes['request.cf.asOrganization'] AS owner
+    FROM logs
+    WHERE source = 'edge_logs'
+      AND log_attributes['request.method'] = 'POST'
+      AND match(log_attributes['response.status_code'], '^4[0-9][0-9]$')
+      AND (decodeURLComponent(log_attributes['request.path']) = '/auth/v1/token'
+           OR match(decodeURLComponent(log_attributes['request.path']), '^/auth/v1/factors/[^/]+/verify$'))
+  )
+)
 GROUP BY kind, form, status, caller, network
 ORDER BY n DESC, kind, form, status, caller, network
 LIMIT 199`;
