@@ -2320,6 +2320,19 @@ WEB_TESTS=(
   # that refuses a row inserted as either role, or its function. The file
   # carries the "Security invariant" marker.
   src/test/membership-insert-stays-revoked.guard.test.ts
+  # Refused sign-ins read from Supabase's gateway log (the hourly cron
+  # security-events-auth-logs): the cron secret is checked first; without the
+  # logs token nothing is done; the token is sent only as the Authorization
+  # header to api.supabase.com and is in no report, answer or log line, even
+  # when the service repeats it back; the SQL is two constants that return
+  # counts and codes, never an address, a raw log line or the client string;
+  # every returned field is checked; an hour is written once; our own
+  # server's lines are not stored. The guard pins that no other writer sends
+  # source phone or api with the job's reasons, which its "already stored"
+  # check relies on.
+  src/server/security/auth-logs.test.ts
+  src/server/security/auth-logs.guard.test.ts
+  src/app/api/cron/security-events-auth-logs/route.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
