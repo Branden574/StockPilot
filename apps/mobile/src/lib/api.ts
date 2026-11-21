@@ -7,6 +7,7 @@ import { readErrorBody, statusSentence } from './api-error-body';
 import { REQUEST_TIMED_OUT_COPY } from './connection-copy';
 import { OutboxSessionChangedError } from './outbox-scope';
 import { registerInFlight } from './request-cancellation';
+import { askForSetUpReadOnRefusal } from './set-up-inputs';
 import { supabase } from './supabase';
 import { trackWrite } from './update-prompt-holds';
 import { readSavedWorkspace, savedWorkspaceFor } from './workspace-keys';
@@ -227,6 +228,11 @@ async function send<T>(path: string, opts: ApiOptions): Promise<T> {
       // answer, not an identity one), throttles to one getUser() per burst, and
       // never throws back into this path.
       notifyUnauthorized({ status: res.status });
+      // A 403 whose details.reason is 'mfa_required': this account must set
+      // up an authenticator in this workspace. That only ASKS for the set-up
+      // inputs to be read again (set-up-inputs.ts); the holding screen comes
+      // up only if the read finds it owed.
+      askForSetUpReadOnRefusal(res.status, details);
       throw new ApiError(message, res.status, code, details);
     }
     return (await res.json()) as T;

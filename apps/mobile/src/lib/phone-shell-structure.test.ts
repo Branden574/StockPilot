@@ -290,7 +290,7 @@ describe('root layout: RootGate keeps its order, its hooks and its timing', () =
   const gate = functionText(ROOT_LAYOUT, 'RootGate');
   const layout = functionText(ROOT_LAYOUT, 'RootLayout');
 
-  it('the gates return in this order: disabled (no session needed), then MFA, then the biometric lock, then the app', () => {
+  it('the gates return in this order: disabled (no session needed), then the code screen, then the biometric lock, then authenticator set-up, then the app', () => {
     const disabled = gate.indexOf(
       "if (!loading && accountGate.state === 'disabled') { return <AccountDisabledScreen />;",
     );
@@ -302,11 +302,15 @@ describe('root layout: RootGate keeps its order, its hooks and its timing', () =
     const lock = gate.indexOf(
       'if (!loading && session && locked) { return <BiometricLockScreen />;',
     );
+    // The set-up screen does not wait for `loading` either (code-gate-wiring.test.ts section 7).
+    const setUp = gate.indexOf('if (session && setUpHold) {');
+    expect(gate).not.toContain('!loading && session && setUpHold');
     const stack = gate.indexOf('<Stack screenOptions=');
     expect(disabled).toBeGreaterThan(-1);
     expect(mfa).toBeGreaterThan(disabled);
     expect(lock).toBeGreaterThan(mfa);
-    expect(stack).toBeGreaterThan(lock);
+    expect(setUp).toBeGreaterThan(lock);
+    expect(stack).toBeGreaterThan(setUp);
   });
 
   it("What's New renders only in the signed-in shell, beside the Stack", () => {
@@ -321,8 +325,10 @@ describe('root layout: RootGate keeps its order, its hooks and its timing', () =
     // The four hooks that read, send or register for the account's data take
     // dataUser: nobody until the session has entered its authenticator code
     // (docket S43b). The account gate and the revocation listener keep the
-    // session.
-    expect(gate).toContain('const dataUser = session && !mfaRequired ? session.user : null;');
+    // session. Nobody either while the authenticator set-up screen holds the app.
+    expect(gate).toContain(
+      'const dataUser = session && !mfaRequired && !setUpHold ? session.user : null;',
+    );
     for (const hook of [
       'usePushNotifications(dataUser);',
       'useSync(dataUser);',

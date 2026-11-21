@@ -26,7 +26,11 @@ import { describe, expect, it } from 'vitest';
  *      the factors or the gate is listed here with what it does. A new one
  *      fails this test until it is listed and reviewed;
  *   6. the server-backed note is read by one rule: the gate, the outbox hold
- *      and push registration cannot disagree about it.
+ *      and push registration cannot disagree about it;
+ *   7. the authenticator SET-UP hold (set-up-hold.ts): worked out in render
+ *      beside the code gate, after it; RootGate shows the set-up screen after
+ *      the lock and hands the data hooks nobody while it holds; push is
+ *      unbound once per hold; its reads never wait for the sync.
  */
 
 const MOBILE_ROOT = path.resolve(__dirname, '../..');
@@ -165,7 +169,10 @@ describe('2. RootGate: the code screen before anything else, and no data hook be
   });
 
   it('the data hooks are handed nobody until the code is entered', () => {
-    const dataUser = gate.indexOf('const dataUser = session && !mfaRequired ? session.user : null;');
+    // Nor while the authenticator set-up screen holds the app (section 7).
+    const dataUser = gate.indexOf(
+      'const dataUser = session && !mfaRequired && !setUpHold ? session.user : null;',
+    );
     expect(dataUser).toBeGreaterThan(-1);
     for (const hook of [
       'usePushNotifications(dataUser);',
@@ -199,7 +206,7 @@ describe('2. RootGate: the code screen before anything else, and no data hook be
     // listener must reach a phone sitting on the code screen; dataUser is the
     // gate above.
     expect(gate.match(/[^;{}]*\bsession\??\.user\b[^;]*;/g)?.map((s) => s.trim())).toEqual([
-      'const dataUser = session && !mfaRequired ? session.user : null;',
+      'const dataUser = session && !mfaRequired && !setUpHold ? session.user : null;',
       'useSessionRevocation(session?.user?.id ?? null, onForcedSignOut, revocationOptions);',
     ]);
     // And every hook RootGate calls is one this test knows about.
@@ -218,10 +225,13 @@ describe('2. RootGate: the code screen before anything else, and no data hook be
   });
 
   it('the redirect never navigates while the code screen has replaced the navigator', () => {
+    // Nor while the set-up screen has (section 7).
     expect(gate).toContain(
-      "if (loading || accountGate.state === 'disabled') return; if (session && mfaRequired) return; const inAuthGroup = segments[0] === '(auth)';",
+      "if (loading || accountGate.state === 'disabled') return; if (session && mfaRequired) return; if (session && setUpHold) return; const inAuthGroup = segments[0] === '(auth)';",
     );
-    expect(gate).toContain('}, [session, loading, mfaRequired, segments, router, accountGate.state]);');
+    expect(gate).toContain(
+      '}, [session, loading, mfaRequired, setUpHold, segments, router, accountGate.state]);',
+    );
   });
 
   it("What's New and the update pop-up stay in the signed-in shell only", () => {
@@ -303,6 +313,19 @@ describe('3. the sync and both outbox drains hold on the same answer', () => {
     for (const later of ['cacheOwnerAction(', 'deleteOrgData', 'getMeta(', 'isOnline()', 'api<SnapshotResponse>(']) {
       expect(pull.indexOf(later), later).toBeGreaterThan(hold);
     }
+    // The authenticator set-up hold right after it, before the same reads.
+    const setUp = pull.indexOf('if (setUpHoldIn(liveUserId)) return null;');
+    expect(setUp).toBeGreaterThan(hold);
+    expect(pull.slice(hold, setUp)).toBe('if (stepUpOwed) return null; ');
+    for (const later of ['cacheOwnerAction(', 'deleteOrgData', 'getMeta(', 'isOnline()', 'api<SnapshotResponse>(']) {
+      expect(pull.indexOf(later), later).toBeGreaterThan(setUp);
+    }
+    // The one snapshot request in the app is this pull's.
+    const pulls = [...sourceFiles('app'), ...sourceFiles('src')].filter((rel) =>
+      /api<SnapshotResponse>\(/.test(codeOnly(read(rel))),
+    );
+    expect(pulls).toEqual(['src/lib/sync.ts']);
+    expect(code('src/lib/sync.ts').match(/api<SnapshotResponse>\(/g)).toHaveLength(1);
   });
 
   it('the count drain settles nothing and sends nothing through the same module', () => {
@@ -383,7 +406,7 @@ describe("4. the server's own factor list reaches the gate wherever the app alre
 describe('5. the whole set: every place the phone reads the level, the factors or the gate', () => {
   /** What marks a file as part of the set. Server refusal codes such as aal2_required are not it. */
   const MARK =
-    /getAuthenticatorAssuranceLevel|listFactors|\.mfa\.(?:challenge|verify|enroll|unenroll)\b|\bmfaRequired\b|\bstepUpOwed\w*|\bcodeGateUp\b|\btokenAal\b|\bstepUpForcedFor\b|\bsetStepUpForcedFor\b|\bstepUpNoteHolds\b|\breadStoredStepUp\b/;
+    /getAuthenticatorAssuranceLevel|listFactors|\.mfa\.(?:challenge|verify|enroll|unenroll)\b|\bmfaRequired\b|\bstepUpOwed\w*|\bcodeGateUp\b|\btokenAal\b|\bstepUpForcedFor\b|\bsetStepUpForcedFor\b|\bstepUpNoteHolds\b|\breadStoredStepUp\b|\bsetUpHoldFor\b|\bsetUpHoldDetails\b|\bsetUpHoldIn\b/;
 
   /** The set, and what each file does with the answer. */
   const KNOWN: Record<string, string> = {
@@ -391,15 +414,22 @@ describe('5. the whole set: every place the phone reads the level, the factors o
     'src/lib/appearance/account.ts':
       'peekSignedInUser: the first-paint appearance read is not made for a session that owes its code',
     'src/lib/appearance/session-bridge.tsx': 'reports nobody to the appearance controller while the code is owed',
-    'src/lib/auth-context.tsx': 'the gate, the code check and the reconcile wiring (sections 1 and 4)',
+    'src/components/authenticator-set-up-screen.tsx':
+      "the set-up screen's words, from the same decision the provider reads (section 7)",
+    'src/lib/auth-context.tsx':
+      'the gate, the code check, the reconcile wiring and the set-up hold (sections 1, 4 and 7)',
     'src/lib/auth-storage.ts': 'the stored session says whether the code is owed (section 3)',
     'src/lib/mfa-level.ts': 'the rule, read from a session (mfa-level.test.ts)',
     'src/lib/mfa-reconcile.ts': "the gate against the server's list (mfa-reconcile.test.ts)",
     'src/lib/outbox-scope.ts': 'the send decision holds every row while the code is owed (section 3)',
     'src/lib/session-scope.ts': 'the live scope carries the answer to both drains and the pull (section 3)',
-    'src/lib/sync.ts': 'the snapshot pull holds (section 3)',
+    'src/lib/set-up-hold.ts':
+      "the set-up hold: the server's factor list read this run, else the stored session's copy, for the screen only (section 7)",
+    'src/lib/sync.ts': 'the snapshot pull holds, for the code and for the set-up hold (section 3)',
     'src/lib/use-push-notifications.ts':
-      'registerThisDevice: writes no push token for a session that owes its code, read right before the write (sections 5 and 6)',
+      'registerThisDevice: writes no push token for a session that owes its code, read right before the write, nor while the set-up hold is up (sections 5, 6 and 7)',
+    'src/lib/use-workspace.ts':
+      'no warehouse read for a workspace the set-up hold holds the account in (section 7)',
   };
 
   it('is exactly the listed files', { timeout: 60_000 }, () => {
@@ -418,6 +448,11 @@ describe('5. the whole set: every place the phone reads the level, the factors o
     const level = push.indexOf('if (await owesAuthenticatorCode(user.id)) return;');
     expect(level).toBeGreaterThan(-1);
     expect(push.indexOf("rpc('register_push_token'")).toBeGreaterThan(level);
+    // The set-up hold read after the code check, before the write.
+    const setUp = push.indexOf('if (setUpHoldIn(user.id)) return;');
+    expect(setUp).toBeGreaterThan(level);
+    expect(push.indexOf("rpc('register_push_token'")).toBeGreaterThan(setUp);
+    expect(push.match(/setUpHoldIn\(/g)).toHaveLength(1);
     // One write site, behind that one check: the helper's definition and its one call.
     expect(push.match(/owesAuthenticatorCode\(/g)).toHaveLength(2);
     expect(push.match(/rpc\('register_push_token'/g)).toHaveLength(1);
@@ -507,5 +542,137 @@ describe('6. the server-backed note is read by one rule', () => {
     expect(run.indexOf('deps.refreshSession()')).toBeGreaterThan(atAal2);
     // Whether to refresh is mfa-level.ts's comparison, not a second copy.
     expect(run).toContain("if (reconcileStepUp(session, liveUser) === 'none' && !staleNote) return 'none';");
+  });
+});
+
+describe('7. the authenticator set-up hold', () => {
+  const auth = code(AUTH);
+  const gate = functionText(LAYOUT, 'RootGate');
+
+  it('is worked out in render after the code gate, and is null while the code is owed', () => {
+    const codeGate = auth.indexOf('const mfaRequired = codeGateUp(session, stepUpForced);');
+    const hold = auth.indexOf(
+      'const heldBy = React.useSyncExternalStore(subscribeSetUpHold, () => setUpHoldFor(session?.user));',
+    );
+    expect(codeGate).toBeGreaterThan(-1);
+    expect(hold).toBeGreaterThan(codeGate);
+    expect(auth).toContain('const setUpHold: SetUpHold = session && !mfaRequired ? heldBy : null;');
+    expect(auth.match(/\bsetUpHold(?:: SetUpHold)? = /g)).toHaveLength(1);
+    expect(auth).toMatch(/enableBiometric, disableBiometric, setUpHold, \}\}/);
+    // No request decides it here either.
+    expect(auth).not.toMatch(/setSetUpHold|useState[^;]*setUp/);
+  });
+
+  it("the stored session's factor list goes to the decision only, never to the store the queue asks", () => {
+    const store = code('src/lib/set-up-inputs.ts');
+    expect(store).not.toMatch(/session/i);
+    for (const rel of [...sourceFiles('app'), ...sourceFiles('src')]) {
+      const text = flat(codeOnly(read(rel)));
+      const calls = text.match(/noteServerReadUser\([^;]*;/g) ?? [];
+      for (const call of calls) expect(call, rel).not.toMatch(/session/);
+    }
+  });
+
+  it('RootGate: the set-up screen after the lock, before the navigator, without waiting for `loading`', () => {
+    expect(gate).toContain('const { session, loading, locked, mfaRequired, setUpHold } = useAuth();');
+    const lock = gate.indexOf('if (!loading && session && locked) { return <BiometricLockScreen />; }');
+    const held = gate.indexOf(
+      "if (session && setUpHold) { const { AuthenticatorSetUpScreen } = require('@/components/authenticator-set-up-screen') as typeof import('@/components/authenticator-set-up-screen'); return <AuthenticatorSetUpScreen state={setUpHold} />; }",
+    );
+    expect(lock).toBeGreaterThan(-1);
+    expect(held).toBeGreaterThan(lock);
+    expect(gate.indexOf('<Stack screenOptions=')).toBeGreaterThan(held);
+    expect(gate).not.toContain('!loading && session && setUpHold');
+    // Off the launch path: the screen is not imported at the top of the layout.
+    expect(read(LAYOUT)).not.toMatch(/^import [^;]*authenticator-set-up-screen/m);
+  });
+
+  it('the data hooks are handed nobody while held, and the push hook registers again on release', () => {
+    expect(gate).toContain('const dataUser = session && !mfaRequired && !setUpHold ? session.user : null;');
+    expect(gate).toContain('usePushNotifications(dataUser);');
+    const hook = functionText('src/lib/use-push-notifications.ts', 'usePushNotifications');
+    expect(hook).toContain('void registerThisDevice(user, { isCancelled: () => cancelled });');
+    expect(hook).toContain('}, [user]);');
+  });
+
+  it('push is unbound each time the hold comes up for an account, and tried again at each change while held', () => {
+    expect(auth).toContain(
+      'const [holdPush] = React.useState(() => createHoldPushUnbinder(() => unbindThisDevice({ timeoutMs: SIGN_OUT_UNBIND_TIMEOUT_MS })), );',
+    );
+    expect(auth).toContain('const heldUserId = setUpHold ? (session?.user?.id ?? null) : null;');
+    expect(auth).toContain(
+      'React.useEffect(() => { holdPush.update(heldUserId); if (!heldUserId) return; return subscribeSetUpHold(() => holdPush.retry()); }, [holdPush, heldUserId]);',
+    );
+  });
+
+  it("the session's user is noted for the hold's callers outside React, before any screen's effects", () => {
+    expect(auth).toContain(
+      'React.useLayoutEffect(() => { noteHoldSessionUser(session?.user ?? null); }, [session]);',
+    );
+    expect(auth.match(/noteHoldSessionUser\(/g)).toHaveLength(1);
+  });
+
+  it('re-checked every 30 s while nothing answered this run, and while could-not-check is up', () => {
+    expect(auth).toContain(
+      'const recheckDue = React.useSyncExternalStore(subscribeSetUpHold, () => setUpRecheckDue(session?.user), );',
+    );
+    expect(auth).toContain('const recheckFor = setUpReadFor && recheckDue ? setUpReadFor : null;');
+    expect(auth).toContain(
+      'React.useEffect(() => { if (!recheckFor) return; const timer = setInterval(() => { void readSetUpInputsForHold(recheckFor); }, SET_UP_RECHECK_INTERVAL_MS); return () => clearInterval(timer); }, [recheckFor]);',
+    );
+  });
+
+  it('released with a session, the count drain gets a pass at once', () => {
+    expect(auth).toContain(
+      'if (setUpHold) { holdWasUp.current = true; return; } if (!holdWasUp.current) return; holdWasUp.current = false; if (holdSessionUserId) void cycleCountSync.forceSync().catch(() => undefined); }, [setUpHold, holdSessionUserId]);',
+    );
+  });
+
+  it('the workspace load tells the hold its choice before the save, and neither it nor a switch reads warehouses while held', () => {
+    const load = functionText('src/lib/use-workspace.ts', 'loadWorkspace');
+    const chosen = load.indexOf('const activeOrgId = choice.activeOrgId;');
+    const told = load.indexOf('noteHoldWorkspace(userId, activeOrgId);');
+    expect(told).toBeGreaterThan(chosen);
+    expect(load.indexOf('await saveWorkspace(')).toBeGreaterThan(told);
+    expect(load.indexOf('await loadWarehousesBounded(activeOrgId)')).toBeGreaterThan(
+      load.indexOf('if (activeOrgId && !setUpHoldIn(userId, activeOrgId)) {'),
+    );
+    const sw = functionText('src/lib/use-workspace.ts', 'switchActiveOrg');
+    expect(sw).toContain(
+      'const warehouses = setUpHoldIn(ownerId, orgId) ? [] : ((await loadWarehousesBounded(orgId)) ?? []);',
+    );
+    // The two warehouse reads are these, and the hold is told in publish before the screens.
+    expect(code('src/lib/use-workspace.ts').match(/loadWarehousesBounded\(/g)).toHaveLength(3);
+    expect(functionText('src/lib/use-workspace.ts', 'publish')).toContain(
+      'noteHoldWorkspace(epochUserId ?? null, cached.activeOrgId); for (const fn of listeners) fn(cached);',
+    );
+  });
+
+  it('its reads never wait for the sync: sign-in, the foreground, the connection back', () => {
+    expect(auth).toContain(
+      'const setUpReadFor = session && !mfaRequired ? (session.user?.id ?? null) : null;',
+    );
+    const effect = auth.slice(
+      auth.indexOf('React.useEffect(() => { if (!setUpReadFor) return;'),
+      auth.indexOf('}, [setUpReadFor]);'),
+    );
+    expect(effect).toContain('void readSetUpInputsForHold(setUpReadFor); const appSub');
+    expect(effect).toContain("if (state === 'active') void readSetUpInputsForHold(setUpReadFor);");
+    expect(effect).toContain(
+      'if (!offline && wasOffline !== false) void readSetUpInputsForHold(setUpReadFor);',
+    );
+    expect(code('src/lib/use-sync.ts')).not.toContain('readSetUpInputsForHold');
+  });
+
+  it('an authenticator answer from any route asks for a read and never raises the hold itself', () => {
+    const api = code('src/lib/api.ts');
+    const probe = api.indexOf('notifyUnauthorized({ status: res.status });');
+    const ask = api.indexOf('askForSetUpReadOnRefusal(res.status, details);');
+    expect(ask).toBeGreaterThan(probe);
+    expect(api.indexOf('throw new ApiError(message, res.status, code, details);')).toBeGreaterThan(ask);
+    // Screens never touch the queue's refusal marks.
+    for (const rel of [...sourceFiles('app'), ...sourceFiles('src/components')]) {
+      expect(code(rel), rel).not.toMatch(/noteKeptRefusal|setUpAnswerAfterRefusal/);
+    }
   });
 });

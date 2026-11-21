@@ -6,7 +6,8 @@ import { useAuth } from './auth-context';
 import { cycleCountSync } from './cycle-count-sync';
 import { deleteOrgData } from './db';
 import { refreshEnabledModules } from './enabled-modules';
-import { beginSetUpRead, recordMembershipInputs } from './set-up-inputs';
+import { noteHoldWorkspace, setUpHoldIn } from './set-up-hold';
+import { beginSetUpRead, noteMembershipReadFailed, recordMembershipInputs } from './set-up-inputs';
 import { refreshCacheOwner } from './use-cache-owner';
 import { syncAfterRunning, syncNow } from './sync';
 import { supabase } from './supabase';
@@ -80,8 +81,25 @@ let cached: WorkspaceState = {
   activeWarehouseName: null,
 };
 
+/** No workspace: with nobody signed in (not loading), or for an account just
+ *  signed in whose own load is still to run (loading). */
+function noWorkspace(loading: boolean): WorkspaceState {
+  return {
+    loading,
+    orgs: [],
+    activeOrgId: null,
+    activeOrgName: null,
+    activeRole: null,
+    warehouses: [],
+    activeWarehouseId: null,
+    activeWarehouseName: null,
+  };
+}
+
 function publish(next: Partial<WorkspaceState>) {
   cached = { ...cached, ...next };
+  // The workspace the holding screen checks (set-up-hold.ts): the one shown.
+  noteHoldWorkspace(epochUserId ?? null, cached.activeOrgId);
   for (const fn of listeners) fn(cached);
 }
 
@@ -96,13 +114,15 @@ function publish(next: Partial<WorkspaceState>) {
  */
 export async function loadOrgs(userId: string): Promise<OrgOption[] | null> {
   const readSeq = beginSetUpRead();
-  const { data, error } = await supabase
+  const { data, error, status } = await supabase
     .from('organization_members')
     .select('role, organization_id, organizations:organization_id (name, mfa_policy)')
     .eq('user_id', userId)
     .not('accepted_at', 'is', null);
   if (error) {
     console.warn('[workspace] loadOrgs failed:', error.message);
+    // Answered with an error, or no answer at all (supabase-js status 0).
+    noteMembershipReadFailed(userId, readSeq, (status ?? 0) > 0);
     return null;
   }
   const rows = (data ?? []) as Array<Record<string, unknown>>;
@@ -240,14 +260,26 @@ let shownEpoch: number | null = null;
 // so, before any screen reacts: a workspace load or switch still running for
 // the previous account then saves and shows nothing. A token refresh keeps the
 // same user id and ends nothing; the first event only records who is signed in.
+//
+// The previous account's workspace leaves memory at the same moment, whether
+// or not a screen is mounted (the set-up holding screen and the sign-in
+// screens mount none): its name, organizations and warehouses are replaced
+// by no workspace, so the next account's first screen starts from nothing of
+// the previous account's. For an account signing in, that state says loading:
+// its own load is still to run (each screen that mounts runs one).
 let epochUserId: string | null | undefined;
 supabase.auth.onAuthStateChange((_event, session) => {
   const id = session?.user?.id ?? null;
-  if (epochUserId !== undefined && id !== epochUserId) {
+  const accountChanged = epochUserId !== undefined && id !== epochUserId;
+  if (accountChanged) {
     endAccountEpoch();
     forgetWorkspacePicks();
   }
   epochUserId = id;
+  if (accountChanged) {
+    shownEpoch = null;
+    publish(noWorkspace(id !== null));
+  }
 });
 
 /**
@@ -388,6 +420,11 @@ async function loadWorkspace(userId: string, given?: OrgOption[]) {
   }
   const choice = chooseActiveOrg({ orgIds: orgs.map((o) => o.id), stored: persisted, profileDefault });
   const activeOrgId = choice.activeOrgId;
+  // The set-up hold is told the workspace as soon as it is chosen, before the
+  // save and the warehouse read (set-up-hold.ts): a fresh sign-in into a
+  // workspace that holds the account is held without waiting for the rest of
+  // this load. The publish below tells it again, before the screens.
+  noteHoldWorkspace(userId, activeOrgId);
   // WHICH WORKSPACE THE CACHE HOLDS is not the same question as which one this
   // account chooses. Another account's saved workspace (persisted is null for
   // it) is not this account's choice, but the cache was pulled for it: that
@@ -545,7 +582,10 @@ async function loadWorkspace(userId: string, given?: OrgOption[]) {
   }
   let warehouses: WarehouseOption[] = [];
   let activeWarehouseId: string | null = null;
-  if (activeOrgId) {
+  // No warehouse is read for a workspace the set-up hold holds the account
+  // in: the hold shows organizations only. The load that runs once the app
+  // is shown again (every screen that mounts runs one) reads them.
+  if (activeOrgId && !setUpHoldIn(userId, activeOrgId)) {
     // Bounded like a switch's read: a hung request must not hold `loading`.
     const read = await loadWarehousesBounded(activeOrgId);
     if (read === null && activeOrgId === cached.activeOrgId && shownEpoch === epochAtStart) {
@@ -733,8 +773,9 @@ async function switchActiveOrg(orgId: string, epoch: number): Promise<void> {
     activeWarehouseName: null,
   });
   // A failed read leaves this new workspace with no warehouse list yet: there
-  // is nothing of its own on screen to keep.
-  const warehouses = (await loadWarehousesBounded(orgId)) ?? [];
+  // is nothing of its own on screen to keep. None is read for a workspace the
+  // set-up hold holds the account in (told by the publish above).
+  const warehouses = setUpHoldIn(ownerId, orgId) ? [] : ((await loadWarehousesBounded(orgId)) ?? []);
   const persistedWh = await AsyncStorage.getItem(WAREHOUSE_STORAGE_KEY(orgId));
   const activeWarehouseId =
     persistedWh && warehouses.some((w) => w.id === persistedWh) ? persistedWh : null;
@@ -794,16 +835,7 @@ export function useWorkspace(): WorkspaceState {
   React.useEffect(() => {
     if (!user) {
       shownEpoch = null;
-      publish({
-        loading: false,
-        orgs: [],
-        activeOrgId: null,
-        activeOrgName: null,
-        activeRole: null,
-        warehouses: [],
-        activeWarehouseId: null,
-        activeWarehouseName: null,
-      });
+      publish(noWorkspace(false));
       return;
     }
     publish({ loading: true });
