@@ -2049,14 +2049,18 @@ export interface PasskeysPanel {
  * sees them with Remove, whatever the switches say (listOnly when the kill
  * switch is off, the key is missing or the switch cannot be read).
  *
- * Truly dark (review 4 finding 6), names first as passkeyHolder: `factors` is
- * the factor list the page's service context already read (null: not known).
- * Without a factor carrying the reserved bridge name, the panel is absent
- * with NOTHING read while passkeys are dark here: no site, or no key (the
- * database is not asked), or the kill switch off (the one word that says so
- * is the only read). No member_passkeys or passkey_bridges read, and no
- * second read of the session. A holder (the name listed) still gets their
- * list with Remove.
+ * Dark (review 4 finding 6, review B3), names first as passkeyHolder:
+ * `factors` is the factor list the page's service context already read
+ * (null: not known). Without a factor carrying the reserved bridge name, the
+ * panel is shown only when THIS member can add a passkey; otherwise it is
+ * absent at the cost of at most one read: no site reads nothing, no key reads
+ * nothing (the database is not asked), and anything else (the kill switch
+ * off, new passkeys off, an organization of the member off, no organization)
+ * is the one passkey_add_allowed answer. No member_passkeys or
+ * passkey_bridges read, no Auth call, and no second read of the session. So a
+ * passkey left unfinished with no reserved-name factor (S2, S10) is not shown
+ * until adding is open to the member again, whatever closed it. A holder (the
+ * name listed) still gets their list with Remove.
  */
 export async function passkeysPanelFor(
   userId: string,
@@ -2077,10 +2081,10 @@ async function panelOf(
   if (!rp) return null;
   const named = factors !== null && factors.some(carriesBridgeName);
   const gate = gateForUse(await readGate(userId));
-  if (!named && !gate.open && (gate.why === 'no_key' || gate.why === 'kill_switch_off'))
-    return null;
-  if (!gate.open && (gate.why === 'disabled' || gate.why === 'no_profile')) return null;
   const canAdd = gate.open && gate.addOpen;
+  // Review B3: no reserved-name factor and adding not open to this member.
+  if (!named && !canAdd) return null;
+  if (!gate.open && (gate.why === 'disabled' || gate.why === 'no_profile')) return null;
   const held = await holdSession();
   if (!held || held.claims.userId !== userId) return null;
   const admin = createAdminClient();

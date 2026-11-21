@@ -69,10 +69,12 @@ export default async function SecuritySettingsPage({
     getMfaRecoveryCodeStatus(),
     // Stage 4: the Passkeys panel, or null when it must be ABSENT
     // (server/security/passkeys.ts passkeysPanelFor). Names first, with the
-    // factor list the service context already read: for a member with no
-    // factor carrying the passkey bridge name, no site or no bridge key reads
-    // nothing at all, and the kill switch off reads only that switch; no
-    // passkey table and no second session read (review 4 finding 6).
+    // factor list the service context already read: a member with no factor
+    // carrying the passkey bridge name gets the panel only when they can add
+    // a passkey. Otherwise no site or no bridge key reads nothing at all, and
+    // anything else (the kill switch, new passkeys or an organization off)
+    // reads only the one passkey_add_allowed answer; no passkey table, no
+    // Auth call and no second session read (review 4 finding 6, review B3).
     contextFactorsOf(serviceContext, ctx.userId)
       .then((factors) => passkeysPanelFor(ctx.userId, factors))
       .catch(() => null),

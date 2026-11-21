@@ -394,15 +394,12 @@ describe('decision A: Finish setup is a repair for an existing holder (USE) and 
     world.factors = world.factors.filter((f) => f.id !== old.factor_id);
   }
 
-  it('a passkey that never served: with an organization off, no Finish and the start refuses; with it on, Finish works', async () => {
+  it('a passkey that never served: with an organization off, no panel (review B3: no reserved-name factor, adding closed) and the start refuses; with it on, Finish works', async () => {
     const { soft, userId } = await memberWithPasskey();
     breakBridge(userId);
     world.signIn(userId, 'aal2');
     world.addAllowed = 'organization_off';
-    expect(await panelFor(userId)).toMatchObject({
-      canFinish: false,
-      passkeys: [expect.objectContaining({ unfinished: true })],
-    });
+    expect(await panelFor(userId)).toBeNull();
     expect(await pk.startFinishSetup()).toMatchObject({
       ok: false,
       code: 'forbidden',
@@ -429,13 +426,16 @@ describe('decision A: Finish setup is a repair for an existing holder (USE) and 
     expect(world.bridges.has(userId)).toBe(false);
   });
 
-  it('an existing holder (the passkey served before): Finish repairs with an organization off, or new passkeys off', async () => {
+  it('an existing holder (the passkey served before): the Finish action repairs with an organization off, or new passkeys off; the panel shows it only while adding is open (review B3)', async () => {
     const { soft, userId } = await memberWithPasskey();
     expect(await passkeyStep(soft)).toEqual({ ok: true });
     breakBridge(userId);
+    world.addAllowed = 'ok';
+    expect(await panelFor(userId)).toMatchObject({ canFinish: true, canAdd: true });
     for (const word of ['organization_off', 'adds_off']) {
       world.addAllowed = word;
-      expect(await panelFor(userId)).toMatchObject({ canFinish: true, canAdd: false });
+      // No reserved-name factor is listed (S2): nothing read, no panel.
+      expect(await panelFor(userId), word).toBeNull();
     }
     const { challengeId, options } = optionsOf(await pk.startFinishSetup());
     expect(await pk.finishPasskeySetup({ challengeId, response: soft.get(options) })).toEqual({
@@ -2248,5 +2248,59 @@ describe("review B6: the start reports a fault at the page's pace", () => {
     expect(new Set(keys)).toEqual(
       new Set([`passkeys-step-report:${userId}:bridge_without_passkey`]),
     );
+  });
+});
+
+describe('review B3: the Security page is dark for a member who cannot add and holds no reserved-name factor', () => {
+  const quiet = () => {
+    world.calls.fns.length = 0;
+    world.calls.reads.length = 0;
+    world.calls.sessionReads = 0;
+    world.calls.auth.length = 0;
+  };
+
+  for (const word of ['organization_off', 'adds_off', 'no_membership']) {
+    it(`the platform switch on, ${word}: exactly one read, the gate's answer; no table, no session, no Auth call`, async () => {
+      const userId = world.addAccount(`${word}@example.test`);
+      world.signIn(userId, 'aal1');
+      world.addApp(userId);
+      world.addAllowed = word;
+      quiet();
+      expect(await panelFor(userId)).toBeNull();
+      expect(world.calls.fns.map((c) => c.name)).toEqual(['passkey_add_allowed']);
+      expect(world.calls.reads).toEqual([]);
+      expect(world.calls.sessionReads).toBe(0);
+      expect(world.calls.auth).toEqual([]);
+    });
+  }
+
+  it('one rule for an unfinished passkey whose bridge factor is gone (S10): no panel while adding is closed to this member, the panel again once it opens', async () => {
+    const { userId, passkeyId } = await memberWithPasskey();
+    const bridge = world.bridges.get(userId)!;
+    world.factors = world.factors.filter((f) => f.id !== bridge.factor_id);
+    world.signIn(userId, 'aal1');
+    for (const word of ['organization_off', 'kill_switch_off']) {
+      world.addAllowed = word;
+      quiet();
+      expect(await panelFor(userId), word).toBeNull();
+      expect(world.calls.reads, word).toEqual([]);
+      expect(world.calls.sessionReads, word).toBe(0);
+    }
+    world.addAllowed = 'ok';
+    expect(await panelFor(userId)).toMatchObject({
+      canAdd: true,
+      passkeys: [expect.objectContaining({ id: passkeyId, unfinished: true })],
+    });
+  });
+
+  it('a holder (the reserved name listed) with the organization off still gets the list and Remove', async () => {
+    const { userId, passkeyId } = await memberWithPasskey();
+    world.signIn(userId, 'aal2');
+    world.addAllowed = 'organization_off';
+    expect(await panelFor(userId)).toMatchObject({
+      canAdd: false,
+      listOnly: null,
+      passkeys: [expect.objectContaining({ id: passkeyId })],
+    });
   });
 });
