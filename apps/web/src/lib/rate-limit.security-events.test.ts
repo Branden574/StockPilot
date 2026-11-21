@@ -91,6 +91,28 @@ describe('checkRateLimit: a refusal of an anonymous endpoint is a security event
   });
 });
 
+describe('checkRateLimit: nothing the recorder does can change the limiter’s answer', () => {
+  it.each([
+    ['rejects', () => vi.mocked(recordSecurityEvent).mockRejectedValueOnce(new Error('recorder down'))],
+    [
+      'throws',
+      () =>
+        vi.mocked(recordSecurityEvent).mockImplementationOnce(() => {
+          throw new Error('recorder down');
+        }),
+    ],
+  ])('a recorder that %s: the refusal is returned as it was counted', async (_what, arrange) => {
+    h.rpc.mockResolvedValue(refusedRow);
+    arrange();
+    await expect(checkRateLimit('public-order-request:203.0.113.7', 60, 60_000, 'closed')).resolves.toEqual({
+      allowed: false,
+      count: 61,
+      resetAt: Date.parse('2026-11-21T10:16:00Z'),
+    });
+    expect(recordSecurityEvent).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('the map', () => {
   it('no prefix is on both lists', () => {
     const both = Object.keys(LIMITER_BOT_PREFIXES).filter((p) =>

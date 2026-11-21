@@ -54,9 +54,17 @@ export async function checkRateLimit(
   const result = await countRequest(key, limit, windowMs, mode);
   // A REFUSAL (over the count, never a limiter that could not count) of an
   // anonymous public endpoint is a security event: the one map in
-  // server/security/limiter-events.ts decides which keys those are. Never
-  // throws and never waits on the database.
-  if (!result.allowed && !result.failed) await recordLimiterRefusal(key);
+  // server/security/limiter-events.ts decides which keys those are. The
+  // recorder never throws and never waits on the database; the try/catch
+  // here keeps "checkRateLimit never throws, and answers what it counted"
+  // true on its own, whatever the recorder later becomes.
+  if (!result.allowed && !result.failed) {
+    try {
+      await recordLimiterRefusal(key);
+    } catch {
+      // The limiter's answer stands; an event that could not be recorded is dropped.
+    }
+  }
   return result;
 }
 
