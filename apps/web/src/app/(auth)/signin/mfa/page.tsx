@@ -4,7 +4,7 @@ import { Suspense } from 'react';
 import { AuthCard } from '@/components/auth/auth-card';
 import { MfaChallengeForm } from '@/components/auth/mfa-challenge-form';
 import { Skeleton } from '@/components/ui/skeleton';
-import { readPasskeyBridge, withoutPasskeyBridge } from '@/lib/auth/passkey-bridge';
+import { appFactorsForCode, readPasskeyBridge } from '@/lib/auth/passkey-bridge';
 import { createClient } from '@/lib/supabase/server';
 
 export const metadata = {
@@ -47,9 +47,13 @@ export default async function MfaChallengePage() {
   // phone + hardware backup app), pass the full list so the form can
   // let them pick which one they want to challenge against. Never the
   // account's recorded passkey bridge (lib/auth/passkey-bridge): no app
-  // shows its code. A record that cannot be read hides nothing.
+  // shows its code. Nor, once the records are read, a factor carrying the
+  // reserved name that no record names (the lab walk of stage 4, state S12):
+  // its code is one no member has, so an account left with no app gets the
+  // words below and the recovery code. A record that cannot be read, or
+  // records that do not exist yet, hide nothing.
   const bridge = await readPasskeyBridge(user.id, verifiedTotp, 'sign_in_page');
-  const factors = withoutPasskeyBridge(verifiedTotp, bridge).map((f) => ({
+  const factors = appFactorsForCode(verifiedTotp, bridge).map((f) => ({
     id: f.id,
     friendlyName:
       (f.friendly_name as string | null) ?? null,

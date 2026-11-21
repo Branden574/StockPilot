@@ -61,7 +61,9 @@ import { checkRateLimit } from '@/lib/rate-limit';
 
 import {
   accountIdHash,
+  appFactorsForCode,
   factorChangeRefusal,
+  refusedForCode,
   isPasskeyBridge,
   readPasskeyBridge,
   reportPasskeyRecordsMissing,
@@ -127,7 +129,8 @@ describe('readPasskeyBridge', () => {
       [IMPOSTOR, APP, { ...IMPOSTOR, id: 'other-2' }],
       'sign_in_page',
     );
-    expect(bridge).toEqual({ kind: 'none' });
+    // The records were read, and none names this account.
+    expect(bridge).toEqual({ kind: 'none', noRecord: true });
     expect(withoutPasskeyBridge([IMPOSTOR, APP], bridge)).toEqual([IMPOSTOR, APP]);
     expect(reportError).toHaveBeenCalledTimes(1);
     const [, context] = vi.mocked(reportError).mock.calls[0]!;
@@ -152,7 +155,7 @@ describe('readPasskeyBridge', () => {
     vi.clearAllMocks();
     vi.mocked(checkRateLimit).mockResolvedValueOnce(LIMIT_REFUSED);
     const bridge = await readPasskeyBridge(USER, [IMPOSTOR], 'challenge');
-    expect(bridge).toEqual({ kind: 'none' });
+    expect(bridge).toEqual({ kind: 'none', noRecord: true });
     expect(reportError).not.toHaveBeenCalled();
   });
 
@@ -356,5 +359,48 @@ describe('isPasskeyBridge and withoutPasskeyBridge', () => {
     expect(withoutPasskeyBridge([BRIDGE, APP], recorded)).toEqual([APP]);
     expect(withoutPasskeyBridge([APP, BRIDGE], recorded)).toEqual([APP]);
     expect(withoutPasskeyBridge([BRIDGE], recorded)).toEqual([]);
+  });
+});
+
+describe('appFactorsForCode: the apps a code can be asked for (the code page, the step-up modal, the password reset)', () => {
+  const recorded: PasskeyBridge = { kind: 'recorded', factorId: BRIDGE.id };
+
+  it('once the records are read, no factor that carries the reserved name: not the recorded bridge, not one no record names', () => {
+    expect(appFactorsForCode([BRIDGE, IMPOSTOR, APP], recorded)).toEqual([APP]);
+    expect(appFactorsForCode([IMPOSTOR, BRIDGE], recorded)).toEqual([]);
+    expect(appFactorsForCode([IMPOSTOR, APP], { kind: 'none', noRecord: true })).toEqual([APP]);
+    expect(appFactorsForCode([IMPOSTOR], { kind: 'none', noRecord: true })).toEqual([]);
+  });
+
+  it('the apps keep their order', () => {
+    const second = { ...APP, id: 'app-2' };
+    expect(appFactorsForCode([second, IMPOSTOR, APP], recorded)).toEqual([second, APP]);
+  });
+
+  it('before the records exist, and while they cannot be read, the pick is stage 2’s: by the recorded id only', () => {
+    expect(appFactorsForCode([BRIDGE, APP], { kind: 'none' })).toEqual([BRIDGE, APP]);
+    expect(appFactorsForCode([BRIDGE, APP], { kind: 'unreadable' })).toEqual([BRIDGE, APP]);
+  });
+});
+
+describe('refusedForCode: the code check (the lab walk of stage 4, state S12)', () => {
+  const recorded: PasskeyBridge = { kind: 'recorded', factorId: BRIDGE.id };
+  const noRecord: PasskeyBridge = { kind: 'none', noRecord: true };
+
+  it('refuses the recorded bridge, and once the records are read a reserved-name factor no record names', () => {
+    expect(refusedForCode(recorded, BRIDGE)).toBe('passkey_bridge');
+    expect(refusedForCode(recorded, IMPOSTOR)).toBe('reserved_name_unrecorded');
+    expect(refusedForCode(noRecord, IMPOSTOR)).toBe('reserved_name_unrecorded');
+  });
+
+  it('never an app', () => {
+    expect(refusedForCode(recorded, APP)).toBeNull();
+    expect(refusedForCode(noRecord, APP)).toBeNull();
+  });
+
+  it('before the records exist, and while they cannot be read: nothing is refused (stage 2 as before)', () => {
+    expect(refusedForCode({ kind: 'none' }, IMPOSTOR)).toBeNull();
+    expect(refusedForCode({ kind: 'unreadable' }, IMPOSTOR)).toBeNull();
+    expect(refusedForCode({ kind: 'unreadable' }, BRIDGE)).toBeNull();
   });
 });

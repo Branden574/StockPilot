@@ -11,8 +11,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * redirect is for an account with no verified factor at all). The form lists
  * the verified authenticators without the account's RECORDED bridge
  * (lib/auth/passkey-bridge.ts); an account left with none gets the recovery
- * code only. A reserved-name factor that is not the recorded bridge, and every
- * factor while the records do not exist yet, is listed like any app.
+ * code only. Once the records are read (a bridge recorded, or none for this
+ * account), a reserved-name factor that no record names is no app either: it
+ * is never offered for a typed code (the lab walk of stage 4, state S12; its
+ * code is one no member has), so an account left with no app gets the words
+ * of a second step that cannot be used here and the recovery code. Every
+ * factor while the records do not exist yet, or cannot be read, is listed
+ * like any app, as before.
  */
 
 const redirect = vi.fn((to: string) => {
@@ -130,12 +135,34 @@ describe('the code page and the passkey bridge', () => {
     }
   });
 
-  it('a reserved-name factor that is not the recorded bridge is listed like any app', async () => {
-    h.factors = [IMPOSTOR, BRIDGE];
-    const page = await shown();
-    expect(page).toMatchObject({
-      factors: [{ id: IMPOSTOR.id, friendlyName: IMPOSTOR.friendly_name }],
-    });
+  it.each([
+    ['beside the recorded bridge (S15)', { data: { factor_id: BRIDGE.id }, error: null }],
+    ['with no bridge row for the account (S12)', { data: null, error: null }],
+  ])(
+    'a reserved-name factor that no record names, %s, is never offered for a code: no app left, the can\u2019t-be-used words',
+    async (_state, record) => {
+      h.factors = [IMPOSTOR, BRIDGE];
+      h.record = record;
+      expect(await shown()).toEqual({
+        description:
+          "Your second step can't be used here right now. Use a recovery code to get back in, or try again later.",
+        factors: [],
+      });
+    },
+  );
+
+  it('S12 with an authenticator app too: the app only, whatever the order', async () => {
+    h.record = { data: null, error: null };
+    for (const order of [
+      [IMPOSTOR, APP],
+      [APP, IMPOSTOR],
+    ]) {
+      h.factors = order;
+      expect(await shown()).toEqual({
+        description: "One more step. Confirm it's you with a code from your authenticator app.",
+        factors: [{ id: APP.id, friendlyName: 'Phone' }],
+      });
+    }
   });
 
   it('before the records exist, every verified factor is listed, as today', async () => {

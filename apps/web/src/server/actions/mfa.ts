@@ -18,6 +18,8 @@ import {
   MFA_CODE_GOTRUE_LIMITED,
   MFA_CODE_NOT_CHECKED,
   MFA_CODE_REFUSED,
+  MFA_SECOND_STEP_CANT_USE,
+  MFA_SECOND_STEP_CANT_USE_WITH_APP,
   MFA_SESSION_ENDED,
   MFA_SETUP_NOT_OPEN,
   MFA_SETUP_UNREADABLE,
@@ -27,11 +29,12 @@ import { contextFactorsOf } from '@/lib/auth/context-factor-list';
 import { factorsOf, readMfaFactorList, type MfaFactorList } from '@/lib/auth/mfa-factors';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import {
+  accountIdHash,
+  appFactorsForCode,
   FACTOR_CHECK_RETRY,
   factorChangeRefusal,
-  isPasskeyBridge,
   readPasskeyBridge,
-  withoutPasskeyBridge,
+  refusedForCode,
 } from '@/lib/auth/passkey-bridge';
 import { requireOrgContext, requireSession } from '@/lib/auth/session';
 import { isSessionEndedError } from '@/lib/auth/session-ended';
@@ -505,15 +508,59 @@ export async function challengeFactorAction(input: {
     const factor = factors.find((f) => f.id === parsed.data.factorId);
     // The account's recorded passkey bridge is no authenticator of the
     // member's (lib/auth/passkey-bridge): Auth would check a code for it like
-    // any app. Read only when the factor named carries the reserved name; a
-    // record that cannot be read hides nothing.
-    let refused: 'not_listed' | 'not_verified' | 'passkey_bridge' | null = null;
+    // any app. Nor, once the records are read, is a factor carrying the
+    // reserved name that no record names (the lab walk of stage 4, state
+    // S12): its code is one no member has. Read only when the factor named
+    // carries the reserved name; a record that cannot be read, or records
+    // that do not exist yet, hide nothing.
+    let refused:
+      'not_listed' | 'not_verified' | 'passkey_bridge' | 'reserved_name_unrecorded' | null = null;
     if (!factor) refused = 'not_listed';
     else if (factor.status !== 'verified') refused = 'not_verified';
-    else if (
-      isPasskeyBridge(await readPasskeyBridge(claims.userId, [factor], 'challenge'), factor.id)
-    ) {
-      refused = 'passkey_bridge';
+    let hasApp = false;
+    if (factor && !refused) {
+      const bridge = await readPasskeyBridge(claims.userId, [factor], 'challenge');
+      refused = refusedForCode(bridge, factor);
+      // The account's own authenticator apps beside it, by the same rule.
+      hasApp =
+        appFactorsForCode(
+          factors.filter(
+            (f) =>
+              f.status === 'verified' &&
+              (f.factor_type ?? 'totp') === 'totp' &&
+              f.id !== parsed.data.factorId,
+          ),
+          bridge,
+        ).length > 0;
+    }
+    if (refused === 'reserved_name_unrecorded') {
+      // Fail closed, before any attempt of the code budget: the words of a
+      // second step that cannot be used here (with an authenticator app of
+      // the account's own, its code), and one report at error level, paced
+      // by the same closed counter as the refusals below.
+      const report = await checkRateLimit(
+        `mfa-factor-refused-report:${claims.userId}`,
+        REFUSED_FACTOR_REPORTS,
+        REFUSED_FACTOR_REPORT_WINDOW_MS,
+        'closed',
+      );
+      if (report.allowed) {
+        void reportError(
+          new Error(
+            'A code press named a verified factor that carries the passkey bridge name and that no record names',
+          ),
+          {
+            tag: 'actions.mfa.challenge',
+            level: 'error',
+            userIdHash: accountIdHash(claims.userId),
+            extra: { factor: refused },
+          },
+        );
+      }
+      return err(
+        'forbidden',
+        hasApp ? MFA_SECOND_STEP_CANT_USE_WITH_APP : MFA_SECOND_STEP_CANT_USE,
+      );
     }
     if (refused) {
       // The same words as a challenge that could not start, and no code
@@ -630,7 +677,9 @@ export async function stepUpMethodsAction(): Promise<
     );
     const bridge = await readPasskeyBridge(claims.userId, verified, 'step_up_methods');
     return ok({
-      apps: withoutPasskeyBridge(verified, bridge).map((f) => ({
+      // Never the recorded bridge, and once the records are read never a
+      // reserved-name factor that no record names (appFactorsForCode).
+      apps: appFactorsForCode(verified, bridge).map((f) => ({
         id: f.id,
         friendlyName: f.friendly_name ?? null,
       })),

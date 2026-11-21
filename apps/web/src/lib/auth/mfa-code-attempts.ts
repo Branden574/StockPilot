@@ -92,6 +92,17 @@ export const MFA_CODE_NOT_CHECKED = 'Could not check your code just now. Try aga
 /** The challenge itself could not be started. */
 export const MFA_CHALLENGE_NOT_STARTED =
   'Could not start the authenticator check. Please try again.';
+/**
+ * The code check refused a factor whose code no member has (a verified
+ * factor that carries the passkey bridge's reserved name and that no record
+ * names; the lab walk of stage 4, state S12): the sign-in code page's own
+ * words for a second step that cannot be used here, or, with an
+ * authenticator app of the account's own, its code.
+ */
+export const MFA_SECOND_STEP_CANT_USE =
+  "Your second step can't be used here right now. Use a recovery code to get back in, or try again later.";
+export const MFA_SECOND_STEP_CANT_USE_WITH_APP =
+  "Your second step can't be used here right now. Enter the code from your authenticator app, or use a recovery code.";
 /** The session is gone (the sign-in card's words for it). */
 export const MFA_SESSION_ENDED = SESSION_ENDED_NOTICE.text;
 /** Authenticator set-up: the factor id is not the open set-up of this account. */

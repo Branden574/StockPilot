@@ -17,8 +17,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *     name it gives a new authenticator never carries the reserved prefix;
  *   - stepUpMethodsAction lists the account's verified authenticator apps
  *     without it.
- * A reserved-name factor that is not the recorded bridge, and every factor
- * while the records do not exist yet, is treated like any authenticator app.
+ * A reserved-name factor that is not the recorded bridge is LISTED like any
+ * authenticator app (and removable); once the records are read (a bridge
+ * recorded, or none for this account) it is never offered for a typed code,
+ * and the code check refuses it before any attempt, with the words of a
+ * second step that cannot be used here, reported at error level (the lab
+ * walk of stage 4, state S12). Every factor while the records do not exist
+ * yet, or while they cannot be read, is treated like any authenticator app.
  * A record that cannot be read hides nothing from a list (and is reported);
  * the three actions that CHANGE a factor (remove, confirm a set-up, the
  * set-up clean-up) then leave every factor that carries the reserved name
@@ -187,6 +192,11 @@ import {
 } from './mfa';
 
 const NOT_STARTED = 'Could not start the authenticator check. Please try again.';
+/** The words of a second step that cannot be used here (the sign-in code page's own). */
+const CANT_USE =
+  "Your second step can't be used here right now. Use a recovery code to get back in, or try again later.";
+const CANT_USE_WITH_APP =
+  "Your second step can't be used here right now. Enter the code from your authenticator app, or use a recovery code.";
 const SETUP_NOT_OPEN = 'This authenticator set-up is no longer open. Start again.';
 const SESSION_ENDED = 'You were signed out on this device. Sign in again to continue.';
 const TRY_AGAIN = 'Could not check this authenticator just now. Try again in a moment.';
@@ -274,11 +284,66 @@ describe('challengeFactorAction and the passkey bridge', () => {
     expect(mfaStub.challenge).toHaveBeenCalledWith({ factorId: APP.id });
   });
 
-  it('checks a reserved-name factor that is not the recorded bridge like any authenticator app', async () => {
-    h.factors = [IMPOSTOR, APP];
-    const res = await challengeFactorAction({ factorId: IMPOSTOR.id, code: CODE });
-    expect(res).toEqual({ ok: true, data: undefined });
-    expect(mfaStub.challenge).toHaveBeenCalledWith({ factorId: IMPOSTOR.id });
+  describe('a reserved-name factor that no record names, once the records are read (S12; S15 beside the recorded bridge)', () => {
+    it.each([
+      ['no bridge row for the account (S12)', { data: null, error: null }],
+      ['beside the recorded bridge (S15)', RECORDED],
+    ])(
+      '%s, with an app: refused before any code attempt, the words point to the app, reported at error level',
+      async (_state, record) => {
+        h.factors = [IMPOSTOR, BRIDGE, APP];
+        h.record = record;
+        const res = await challengeFactorAction({ factorId: IMPOSTOR.id, code: CODE });
+        expect(res).toEqual({
+          ok: false,
+          error: { code: 'forbidden', message: CANT_USE_WITH_APP },
+        });
+        expect(codeBudgetCalls()).toEqual([]);
+        expect(mfaStub.challenge).not.toHaveBeenCalled();
+        expect(mfaStub.verify).not.toHaveBeenCalled();
+        const refusals = vi
+          .mocked(reportError)
+          .mock.calls.filter((c) => c[1].tag === 'actions.mfa.challenge');
+        expect(refusals.map((c) => [c[1].level, c[1].extra])).toEqual([
+          ['error', { factor: 'reserved_name_unrecorded' }],
+        ]);
+        const reports = JSON.stringify(vi.mocked(reportError).mock.calls);
+        expect(reports).not.toContain(IMPOSTOR.id);
+        expect(reports).not.toContain(CODE);
+      },
+    );
+
+    it('with no app (only that factor): the words say to use a recovery code', async () => {
+      h.factors = [IMPOSTOR];
+      h.record = { data: null, error: null };
+      const res = await challengeFactorAction({ factorId: IMPOSTOR.id, code: CODE });
+      expect(res).toEqual({ ok: false, error: { code: 'forbidden', message: CANT_USE } });
+      expect(mfaStub.challenge).not.toHaveBeenCalled();
+    });
+
+    it('the reports are paced: past the account’s window, the same refusal and no report', async () => {
+      h.factors = [IMPOSTOR];
+      h.record = { data: null, error: null };
+      vi.mocked(checkRateLimit).mockImplementation(async (key) =>
+        String(key).startsWith('mfa-factor-refused-report:')
+          ? LIMIT_REFUSED
+          : { allowed: true, count: 1, resetAt: Date.now() + 1000 },
+      );
+      const res = await challengeFactorAction({ factorId: IMPOSTOR.id, code: CODE });
+      expect(res).toEqual({ ok: false, error: { code: 'forbidden', message: CANT_USE } });
+      expect(
+        vi.mocked(reportError).mock.calls.filter((c) => c[1].tag === 'actions.mfa.challenge'),
+      ).toEqual([]);
+      expect(mfaStub.challenge).not.toHaveBeenCalled();
+    });
+
+    it('while the record cannot be read: checked like any authenticator app, as before', async () => {
+      h.factors = [IMPOSTOR, APP];
+      h.record = UNREADABLE;
+      const res = await challengeFactorAction({ factorId: IMPOSTOR.id, code: CODE });
+      expect(res).toEqual({ ok: true, data: undefined });
+      expect(mfaStub.challenge).toHaveBeenCalledWith({ factorId: IMPOSTOR.id });
+    });
   });
 
   it('before the records exist, a reserved-name factor is checked like any authenticator app, and the missing table is reported', async () => {
@@ -559,10 +624,29 @@ describe('stepUpMethodsAction', () => {
     expect(h.adminClients).toBe(0);
   });
 
-  it('shows a reserved-name factor that is not the recorded bridge like any authenticator app', async () => {
-    h.factors = [IMPOSTOR, BRIDGE];
+  it.each([
+    ['beside the recorded bridge (S15)', RECORDED],
+    ['with no bridge row for the account (S12)', { data: null, error: null }],
+  ])(
+    'never lists a reserved-name factor that no record names, %s: no code is asked for it',
+    async (_state, record) => {
+      h.factors = [IMPOSTOR, BRIDGE, APP];
+      h.record = record;
+      const res = await stepUpMethodsAction();
+      // The apps exactly; stage 4 adds a field of its own beside them.
+      expect(res).toMatchObject({
+        ok: true,
+        data: { apps: [{ id: APP.id, friendlyName: 'Phone' }] },
+      });
+      expect(res.ok && res.data.apps).toHaveLength(1);
+    },
+  );
+
+  it('before the records exist, a reserved-name factor is listed like any app, as before', async () => {
+    h.factors = [IMPOSTOR];
+    h.record = NOT_YET;
     const res = await stepUpMethodsAction();
-    expect(res).toEqual({
+    expect(res).toMatchObject({
       ok: true,
       data: { apps: [{ id: IMPOSTOR.id, friendlyName: IMPOSTOR.friendly_name }] },
     });
