@@ -963,8 +963,29 @@ describe('review B1: the memory keeps what became of each finding', () => {
     h.endAnswer = FAILS;
     await runPasskeyDetector();
     h.settings = { data: { passkeys_on: true, passkey_check_ends_sessions: false }, error: null };
-    expect(await runPasskeyDetector()).toMatchObject({ retries: { tried: 0 } });
+    // Nothing is pending either: a retry exists only while ending is on.
+    expect(await runPasskeyDetector()).toMatchObject({ retries: { tried: 0, waiting: 0 } });
     expect(h.endAsked).toEqual([S]);
+  });
+
+  it('no retry is started after the time budget: it waits for the next run and spends no try', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    h.sessions = { data: [session({ raised_at: ago(10 * MIN) })], error: null };
+    h.endAnswer = FAILS;
+    await runPasskeyDetector();
+    // The next run: the remembered raise (newest) and a new finding whose
+    // security event takes 31 seconds of the run.
+    h.sessions = {
+      data: [
+        session({ raised_at: ago(10 * MIN) }),
+        { ...session({ raised_at: ago(20 * MIN) }), session_id: 'slow-1', user_id: 'slow-user' },
+      ],
+      error: null,
+    };
+    h.onEvent = () => vi.setSystemTime(Date.now() + 31_000);
+    const s = await runPasskeyDetector();
+    expect(s).toMatchObject({ unexplained: 1, retries: { tried: 0, waiting: 1 } });
+    expect(memoryOf(S).map((m) => (m.metadata as { tries?: number }).tries)).toEqual([1]);
   });
 
   it('an end the database refused, or a session already gone, is final', async () => {

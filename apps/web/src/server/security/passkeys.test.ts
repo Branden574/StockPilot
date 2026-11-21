@@ -2408,6 +2408,24 @@ describe('review B2: the leftover clean-up deletes only an unverified factor old
     ]);
   });
 
+  it('a clean-up read that answers for another account deletes nothing and is reported', async () => {
+    const userId = world.addAccount('reread-other@example.test');
+    world.signIn(userId, 'aal1');
+    const leftover = leftoverFactor(userId);
+    const { verifyPasswordSideChannel } = await import('@/lib/auth/verify-password');
+    vi.mocked(verifyPasswordSideChannel).mockImplementationOnce(async () => {
+      world.knobs.authUserOtherAccount = true;
+      return { ok: true } as never;
+    });
+    const r = await pk.startAddPasskey({
+      proof: { kind: 'password', password: SAMPLE_PASSWORD },
+    });
+    expect(r).toMatchObject({ ok: false, reason: 'leftover_left' });
+    expect(world.calls.deleteFactor).toEqual([]);
+    expect(world.factors.some((f) => f.id === leftover.id)).toBe(true);
+    expect(reportsTagged('passkeys.add_leftover_left')).toHaveLength(1);
+  });
+
   it('with no old leftover in the picture there is no second read of the account', async () => {
     const userId = world.addAccount('no-old-leftover@example.test');
     world.signIn(userId, 'aal1');
