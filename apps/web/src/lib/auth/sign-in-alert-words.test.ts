@@ -122,16 +122,19 @@ describe('reportedMemberName: a member-chosen name, made safe for the body of a 
 });
 
 describe('the words of a "This was not me" (review 1, finding 1)', () => {
-  it('say what happens and no more: the sessions ended, an open device has up to about an hour, the reset closes the door', () => {
+  it('say what happens and no more: the sessions ended, an open device keeps its pass for a short while, the reset closes the door', () => {
     expect(NOT_ME_WORDS.sessionsEnded).toBe('Every session of your account has been ended.');
     expect(NOT_ME_WORDS.openDevice).toBe(
-      'A device that is already open can keep working for a short while, until its current pass expires. That is about an hour at most.',
+      'A device that is already open can keep working for a short while (until its current pass expires).',
     );
     expect(NOT_ME_WORDS.resetNow).toBe(
       'Reset your password now. That is what closes the door: until you do, anyone who knows it can sign in again.',
     );
     for (const words of Object.values(NOT_ME_WORDS)) {
       expect(words).not.toMatch(/signed out (on|of) every|everywhere|right away|at once|immediately/i);
+      // How long a pass lives is a setting of the live project, which the code
+      // does not know: no sentence names a length (review 2, finding 5).
+      expect(words).not.toMatch(/hour|minute/i);
       // Plain text that needs no escaping in a page or an email.
       expect(words).not.toMatch(/[<>&"'’]/);
     }

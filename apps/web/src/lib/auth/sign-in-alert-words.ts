@@ -83,8 +83,10 @@ export function signInAlertAnswerWords(status: string | null | undefined): strin
  *   - every session of the account is ended on the server, so no device can
  *     renew its sign-in;
  *   - a device that is already open and does not listen for the sign-out keeps
- *     the pass it already holds until that pass expires (about an hour at
- *     most), so nothing here says "signed out everywhere" or "right away";
+ *     the pass it already holds until that pass expires, so nothing here says
+ *     "signed out everywhere" or "right away". How long a pass lives is a
+ *     setting of the live project that the code does not know, so no sentence
+ *     names a length: "for a short while (until its current pass expires)";
  *   - a password someone else knows still signs in, so the reset is what
  *     closes the door.
  * Plain text with no character a page or an email has to escape.
@@ -93,7 +95,7 @@ export const NOT_ME_WORDS = {
   /** After the press, to the member. */
   sessionsEnded: 'Every session of your account has been ended.',
   openDevice:
-    'A device that is already open can keep working for a short while, until its current pass expires. That is about an hour at most.',
+    'A device that is already open can keep working for a short while (until its current pass expires).',
   resetNow:
     'Reset your password now. That is what closes the door: until you do, anyone who knows it can sign in again.',
   /** Before the press: what the button does. */

@@ -522,6 +522,30 @@ describe('signin (part 3): the place, which kind it is, and "This was not me"', 
     expect(res.text).toContain(`Why:         ${pill}`);
   });
 
+  it('the email that reaches the 24-hour count, for a new COUNTRY: it says "sign-in alerts", not "new-device sign-ins"', () => {
+    const sentence =
+      'Further sign-in alerts won’t send more emails for up to 24 hours, so if these sign-ins weren’t you, change your password and review your devices under Active sessions in your security settings now.';
+    for (const kind of [
+      { newDevice: false, newCountry: true },
+      { newDevice: true, newCountry: true },
+    ]) {
+      const res = renderSigninAlertEmail({ ...base, kind, lastForADay: true });
+      expect(res.text).toContain(sentence);
+      expect(res.html).toContain(sentence.replace(/’/g, '&rsquo;'));
+      expect(res.text).not.toContain('Further new-device sign-ins');
+      expect(res.html).not.toContain('Further new-device sign-ins');
+      assertWeight(res);
+    }
+    // A new device alone keeps the sentence it had.
+    const device = renderSigninAlertEmail({
+      ...base,
+      kind: { newDevice: true, newCountry: false },
+      lastForADay: true,
+    });
+    expect(device.text).toContain(SIGNIN_ALERT_LAST_FOR_A_DAY_TEXT);
+    expect(device.text).toContain('Further new-device sign-ins');
+  });
+
   it('with the link: a primary "This was not me" button, and "Secure my account" kept beside it', () => {
     const res = renderSigninAlertEmail({ ...base, notMeUrl: NOT_ME_URL });
     expect(SIGNIN_ALERT_NOT_ME_LABEL).toBe('This was not me');
@@ -583,11 +607,13 @@ describe('signin-signed-out (renderSigninSignedOutEmail): the member, after "Thi
     expect(res.text).toContain('Reset my password: https://stockpilotusa.com/reset');
   });
 
-  it('promises what happens and no more: an open device has up to about an hour, and the reset closes the door (finding 1)', () => {
+  it('promises what happens and no more: an open device keeps its pass for a short while, and the reset closes the door (finding 1)', () => {
     const res = render();
     for (const part of [res.html, res.text]) {
       expect(part).toContain(NOT_ME_WORDS.sessionsEnded);
       expect(part).toContain(NOT_ME_WORDS.openDevice);
+      expect(part).toContain('for a short while (until its current pass expires)');
+      expect(part).not.toMatch(/hour at most/);
       expect(part).toContain(NOT_ME_WORDS.resetNow);
       expect(part).not.toMatch(/signed out (on|of)|signed you out|every device|everywhere|right away/i);
     }
@@ -712,6 +738,7 @@ describe('signin-reported (renderSigninReportedEmail): owners and admins', () =>
     for (const part of [res.html, res.text]) {
       expect(part).toContain(NOT_ME_WORDS.theirSessionsEnded);
       expect(part).toContain(NOT_ME_WORDS.openDevice);
+      expect(part).not.toMatch(/hour at most/);
       expect(part).toContain('reset their password now');
       expect(part).not.toMatch(/signed (them )?out|every device|everywhere|right away/i);
     }

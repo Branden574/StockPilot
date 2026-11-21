@@ -118,15 +118,16 @@ describe('a session with an open alert', () => {
     await waitFor(() => expect(h.assign).toHaveBeenCalledWith('/reset'));
   });
 
-  it('the question says what happens and no more: an open device has up to about an hour, the reset closes the door', async () => {
+  it('the question says what happens and no more: an open device keeps its pass for a short while, the reset closes the door', async () => {
     render(<ActiveSessions sessions={SESSIONS as never} alerts={[alert()]} />);
     fireEvent.click(screen.getByRole('button', { name: 'This was not me' }));
     const dialog = await screen.findByRole('dialog');
     const words = dialog.textContent ?? '';
     expect(words).toContain('End every session?');
     expect(words).toContain(
-      'A device that is already open can keep working for a short while, until its current pass expires. That is about an hour at most.',
+      'A device that is already open can keep working for a short while (until its current pass expires).',
     );
+    expect(words).not.toMatch(/hour/i);
     expect(words).toContain('Then reset your password. That is what closes the door.');
     expect(words).not.toMatch(/signs you out|sign me out|every device|everywhere|right away/i);
     // Whether anyone is told is not known before the press.

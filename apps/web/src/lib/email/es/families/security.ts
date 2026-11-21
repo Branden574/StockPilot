@@ -251,11 +251,21 @@ function signinKindSentence(kind: { newDevice: boolean; newCountry: boolean }): 
   return 'from a device we haven’t seen before';
 }
 
-/** The sentence on the email that reaches the 24-hour count (text part). */
+/** The sentence on the email that reaches the 24-hour count (text part), for a new device. */
 export const SIGNIN_ALERT_LAST_FOR_A_DAY_TEXT =
   'Further new-device sign-ins won’t send more emails for up to 24 hours, so if these sign-ins weren’t you, change your password and review your devices under Active sessions in your security settings now.';
-const SIGNIN_ALERT_LAST_FOR_A_DAY_HTML =
-  'Further new-device sign-ins won&rsquo;t send more emails for up to 24 hours, so if these sign-ins weren&rsquo;t you, change your password and review your devices under Active sessions in your security settings now.';
+
+/**
+ * The same sentence as the email prints it. The count is of sign-in alerts of
+ * either kind, so an alert that is for a new country (alone, or with a new
+ * device) says "sign-in alerts": "new-device sign-ins" would be untrue of it
+ * (review 2, finding 5). A new device alone keeps the sentence it had.
+ */
+function lastForADaySentence(kind: { newDevice: boolean; newCountry: boolean }): string {
+  return kind.newCountry
+    ? SIGNIN_ALERT_LAST_FOR_A_DAY_TEXT.replace('Further new-device sign-ins', 'Further sign-in alerts')
+    : SIGNIN_ALERT_LAST_FOR_A_DAY_TEXT;
+}
 
 export function renderSigninAlertEmail(params: SigninAlertEmailParams): RenderedEsEmail {
   const def = esEmailById('signin');
@@ -338,7 +348,7 @@ export function renderSigninAlertEmail(params: SigninAlertEmailParams): Rendered
         }),
       ),
       ...(params.lastForADay
-        ? [section('0 36px 20px', bodyText(SIGNIN_ALERT_LAST_FOR_A_DAY_HTML))]
+        ? [section('0 36px 20px', bodyText(lastForADaySentence(kind).replace(/’/g, '&rsquo;')))]
         : []),
       section(
         '0 36px 30px',
@@ -391,7 +401,7 @@ export function renderSigninAlertEmail(params: SigninAlertEmailParams): Rendered
           `Don’t recognize this? Secure your account right away — sign out all devices and reset your password: ${params.securityUrl}`,
           `Reset password: ${params.resetUrl}`,
         ]),
-    ...(params.lastForADay ? ['', SIGNIN_ALERT_LAST_FOR_A_DAY_TEXT] : []),
+    ...(params.lastForADay ? ['', lastForADaySentence(kind)] : []),
   ].join('\n');
 
   return { id: def.id, subject, preheader, html, text, from: def.from };
