@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server';
 const ITEM_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { isbnVariants } from '@/lib/books/isbn-variants';
 import { IN_FILTER_MAX_VALUES } from '@/lib/supabase/in-filter';
 import { answerModuleState } from '@/server/lib/api-error-response';
@@ -62,7 +62,9 @@ const VALID_SORTS = new Set<ItemListSort>([
  * behaves exactly as it always has.
  */
 export async function GET(req: Request): Promise<Response> {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }

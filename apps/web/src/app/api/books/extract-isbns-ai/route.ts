@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import {
   aiExtractIsbns,
   aiExtractIsbnsFromBuffer,
@@ -31,7 +31,9 @@ const MAX_BYTES = 10 * 1024 * 1024;
  * locally first (cheaper) and run through the text-based path.
  */
 export async function POST(req: Request) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req, 'read');
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   // MED-20: module gate + permission gate.

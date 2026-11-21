@@ -17,7 +17,8 @@ import { describe, expect, it } from 'vitest';
  * lets the error escape as the framework's own 500 page, logged as uncaught.
  *
  * WHAT IT READS. Every route file under app/api that gets the context
- * (withApiContext, apiContextGate, returnsContext, memberRequesterGate), and
+ * (withApiContext, apiContextGate, apiReadContext, returnsContext,
+ * memberRequesterGate), and
  * the two context helpers (http.ts). In each exported handler (each exported
  * function of a helper), a "reach" is:
  *   - a call that hands `ctx` itself to another function, other than the
@@ -72,6 +73,10 @@ const NO_MODULE_READ = new Set([
   'mayHandOverOrder',
   // Rack holdings for items (server/services/rack-holdings.ts): placement rows.
   'fetchRackHoldingsByItem',
+  // The read answer for a member who must set up an authenticator first
+  // (server/lib/api-read-context.ts): the context's three authenticator labels,
+  // the request's method and how the session came; never the path, no module.
+  'refuseSetUpOwedRead',
 ]);
 
 /**
@@ -81,7 +86,8 @@ const NO_MODULE_READ = new Set([
  */
 const NO_MODULE_READ_SERVICES = new Set(['ItemImagesService']);
 
-const CONTEXT_SOURCES = /withApiContext\(|apiContextGate\(|returnsContext\(|memberRequesterGate\(/;
+const CONTEXT_SOURCES =
+  /withApiContext\(|apiContextGate\(|apiReadContext\(|returnsContext\(|memberRequesterGate\(/;
 const HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']);
 
 function routeFiles(): Map<string, string> {

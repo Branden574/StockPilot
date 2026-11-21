@@ -10,7 +10,7 @@ import {
   SIZE_SCAN_PROMPT,
   SIZE_SCAN_RESPONSE_SCHEMA,
 } from '@/lib/ai/size-scan';
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { scanDocumentBytes, THREAT_MESSAGES } from '@/lib/document-threat-scan';
 import { env } from '@/lib/env';
 import { isSniffedKindAllowedInBucket, MIME_FOR_KIND, sniffImage } from '@/lib/image-signature';
@@ -59,7 +59,9 @@ export const maxDuration = 60;
 const SCAN_MAX_BYTES = 6 * 1024 * 1024;
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req, 'read');
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
   const { id } = await params;

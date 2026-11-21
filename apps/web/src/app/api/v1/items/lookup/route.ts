@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { formatPlacementLabel, resolvePlacement, type RackHoldingLike } from '@stockpilot/core';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { reportError } from '@/lib/error-reporter';
 import { fetchRackHoldingsByItem } from '@/server/services/rack-holdings';
 
@@ -89,7 +89,9 @@ function embedCharterName(value: LookupRow['charter']): string | null {
  * Query: ?code=<barcode_or_sku>
  */
 export async function GET(req: NextRequest) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }

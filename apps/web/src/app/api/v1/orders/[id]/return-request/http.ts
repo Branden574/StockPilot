@@ -5,6 +5,7 @@ import { RETURN_ERROR_WORDS } from '@stockpilot/core';
 import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { answerModuleState } from '@/server/lib/api-error-response';
+import { refuseSetUpOwedRead } from '@/server/lib/api-read-context';
 import { isModuleEnabled, type ServiceContext } from '@/server/services/context';
 
 import { contextFailedResponse, NO_STORE, RATE_LIMITED_MESSAGE } from '../../../returns/http';
@@ -63,6 +64,12 @@ export async function memberRequesterGate(
       ),
     };
   }
+  // A READ (a GET or HEAD, or this gate's `kind` 'read', which the options
+  // POST asks for) by a member who must set up an authenticator first: the
+  // answer every API read gives them, before the rate limit
+  // (server/lib/api-read-context.ts). A write is never held here.
+  const setUpOwed = refuseSetUpOwedRead(req, ctx, kind);
+  if (setUpOwed) return { response: setUpOwed };
   const limit = kind === 'read' ? MEMBER_READS_PER_HOUR : MEMBER_WRITES_PER_HOUR;
   const rl = await checkRateLimit(`return-request-${kind}:${ctx.userId}`, limit, ONE_HOUR_MS, 'closed');
   if (!rl.allowed) {

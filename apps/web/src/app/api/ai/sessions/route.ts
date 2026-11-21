@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { createSession, listSessions } from '@/lib/ai/sessions';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
 
@@ -13,7 +14,9 @@ export const dynamic = 'force-dynamic';
  */
 
 export async function GET(req: Request) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   try {
     const sessions = await listSessions(ctx);

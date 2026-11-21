@@ -3,7 +3,7 @@ import { renderToStream } from '@react-pdf/renderer';
 
 import { can, formatCycleCountNumber, resolveOrgTimezone, variantLabel } from '@stockpilot/core';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
 import { countSheetLocationLabel } from '@/lib/pdf/count-sheet-location';
@@ -27,7 +27,9 @@ export async function GET(
 ) {
   const { id } = await params;
   try {
-    const ctx = await withApiContext(req);
+    const read = await apiReadContext(req);
+    if ('response' in read) return read.response;
+    const ctx = read.ctx;
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }

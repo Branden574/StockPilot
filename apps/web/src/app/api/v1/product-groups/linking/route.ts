@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { linkFamilySchema, unlinkItemsSchema } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import {
@@ -50,7 +51,9 @@ function errorResponse(e: unknown) {
 
 /** Suggested families. Reads only — nothing here writes. */
 export async function GET(req: NextRequest) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
   const rl = await checkRateLimit(`v1-group-linking-suggest:${ctx.userId}`, 60, 60_000);

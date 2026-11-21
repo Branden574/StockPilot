@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { AUTHENTICATOR_SET_UP_OWED_COPY, CONTEXT_UNAVAILABLE_COPY } from '@stockpilot/core';
+
 /**
  * The phone's sync when the organization's module state cannot be read.
  *
@@ -39,6 +41,7 @@ import { reportError } from '@/lib/error-reporter';
 import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
+  legacyBearerToken,
   legacyContextClient,
   legacyContextWorld,
   legacyPhoneHeaders,
@@ -73,24 +76,32 @@ const policyReportCauses = () =>
     .mock.calls.filter((c) => c[1].tag === 'auth.mfa_policy.unread')
     .map((c) => c[1].extra?.cause);
 
+// A member with an authenticator sends a token at aal2, as a phone does once
+// the code was entered.
 const pull = () =>
   GET(
     new NextRequest('https://app.example.test/api/v1/mobile/snapshot', {
-      headers: legacyPhoneHeaders(),
+      headers: legacyPhoneHeaders(
+        world.authenticator ? { authorization: `Bearer ${legacyBearerToken('aal2')}` } : {},
+      ),
     }),
   );
 
 describe('GET /api/v1/mobile/snapshot with the module state unreadable', () => {
   it.each<[string, Partial<LegacyContextWorld>, string[]]>([
     ['the rows read failed', { moduleRowsFail: true }, []],
+    // The organization row itself could not be read, so its authenticator
+    // policy was not read either and is held to the strictest: a member with
+    // an authenticator at aal2 passes it and meets the module state; one
+    // without is told to try again first (below).
     [
       'the comp flag read failed',
-      { organizationFail: true, moduleRows: ['orders'] },
+      { organizationFail: true, moduleRows: ['orders'], authenticator: true },
       ['read_failed'],
     ],
     [
       'the organization row read back hidden',
-      { organizationHidden: true, moduleRows: ['orders'] },
+      { organizationHidden: true, moduleRows: ['orders'], authenticator: true },
       ['hidden_row'],
     ],
     ['the rows read answered no list', { moduleRowsNoList: true }, []],
@@ -125,6 +136,42 @@ describe('GET /api/v1/mobile/snapshot with the module state unreadable', () => {
       expect(context).toEqual(
         expect.objectContaining({ tag: 'mobile.snapshot.module_state', level: 'warning' }),
       );
+    },
+  );
+
+  it.each<[string, Partial<LegacyContextWorld>, string]>([
+    [
+      'the comp flag read failed',
+      { organizationFail: true, moduleRows: ['orders'] },
+      'read_failed',
+    ],
+    [
+      'the organization row read back hidden',
+      { organizationHidden: true, moduleRows: ['orders'] },
+      'hidden_row',
+    ],
+  ])(
+    '%s, for a member with no authenticator: the policy was not read either, so a retryable 503 check_failed, never the set-up sentence, with no read and only the policy reported',
+    async (_what, failure, policyCause) => {
+      Object.assign(world, failure);
+      const res = await pull();
+      expect(res.status).toBe(503);
+      expect(res.headers.get('retry-after')).toBe('5');
+      expect(res.headers.get('cache-control')).toBe('private, no-store');
+      const body = await res.json();
+      expect(body).toEqual({
+        error: 'check_failed',
+        message: CONTEXT_UNAVAILABLE_COPY,
+        details: { reason: 'context_unavailable', retryable: true },
+      });
+      expect(JSON.stringify(body)).not.toContain(AUTHENTICATOR_SET_UP_OWED_COPY);
+      expect(checkRateLimit).not.toHaveBeenCalled();
+      expect(routeWork(world)).toEqual([]);
+      // The snapshot reports nothing of its own; withApiContext reports that
+      // the policy was not read.
+      expect(snapshotReports()).toEqual([]);
+      expect(policyReportCauses()).toEqual([policyCause]);
+      expect(reportError).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -211,8 +258,18 @@ describe('GET /api/v1/mobile/snapshot: module-gated lists with the module state 
 
   it.each<[string, Partial<LegacyContextWorld>]>([
     ['the rows read failed', { moduleRowsFail: true }],
-    ['the comp flag read failed', { organizationFail: true, moduleRows: ['orders'] }],
-    ['the organization row read back hidden', { organizationHidden: true, moduleRows: ['orders'] }],
+    // The organization row itself could not be read, so its authenticator
+    // policy was not read either and is held to the strictest: a member with
+    // an authenticator at aal2 passes it and meets the module state; one
+    // without is told to try again first (below).
+    [
+      'the comp flag read failed',
+      { organizationFail: true, moduleRows: ['orders'], authenticator: true },
+    ],
+    [
+      'the organization row read back hidden',
+      { organizationHidden: true, moduleRows: ['orders'], authenticator: true },
+    ],
     ['the rows read answered no list', { moduleRowsNoList: true }],
     [
       'the organization row answered without its comp flag',

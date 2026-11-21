@@ -3,7 +3,7 @@ import { Readable } from 'node:stream';
 import { renderToStream } from '@react-pdf/renderer';
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { reportError } from '@/lib/error-reporter';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { sanitizeFilenameSegment } from '@/lib/exports/filename';
@@ -77,7 +77,9 @@ const PDF_COVER_EDGE_PX = 240;
  * that read fails, the file names it from the answer's echo.
  */
 export async function GET(req: NextRequest) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return bookReportUnauthenticatedResponse();
   try {
     assertPermission(ctx, 'reports:export');

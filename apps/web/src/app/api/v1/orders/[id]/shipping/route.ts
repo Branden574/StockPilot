@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { invalidPathIdResponse } from '@/server/lib/path-id';
 import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import { ShippingService } from '@/server/services/shipping';
@@ -16,7 +16,9 @@ export const dynamic = 'force-dynamic';
  * `serviceErrorStatus` mapper.
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
   const { id } = await params;

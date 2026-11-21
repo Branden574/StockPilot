@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { Readable } from 'node:stream';
 import { renderToStream } from '@react-pdf/renderer';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { prefetchImagesAsDataUris, prefetchPdfLogo } from '@/lib/pdf/image-prefetch';
 import {
@@ -26,7 +26,9 @@ export async function GET(req: NextRequest) {
     // a session (401); reports:export with the MFA step-up (403);
     // reports:read (the valuation report's gate, 403); then the export limit
     // (429). The service checks the same gate again before it reads.
-    ctx = await withApiContext(req);
+    const read = await apiReadContext(req);
+    if ('response' in read) return read.response;
+    ctx = read.ctx;
     if (!ctx) return reportExportUnauthenticated();
     assertPermission(ctx, 'reports:export');
     const reportsSvc = new ReportsService(ctx);

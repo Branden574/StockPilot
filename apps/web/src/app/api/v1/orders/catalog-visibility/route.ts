@@ -3,6 +3,7 @@ import type { NextRequest } from 'next/server';
 import { ORDER_ITEMS_INVALID_COPY, parseOrderCatalogManageQuery } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
   manageError,
@@ -41,7 +42,9 @@ export const dynamic = 'force-dynamic';
  * Private, no-store, and every answer names the organization.
  */
 export async function GET(req: NextRequest) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return manageUnauthenticated();
 
   const rl = await checkRateLimit(`order-catalog-manage:${ctx.userId}`, 120, 60_000);

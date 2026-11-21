@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 
@@ -42,7 +43,9 @@ const listQuerySchema = z.object({
 
 export async function GET(req: NextRequest) {
   try {
-    const ctx = await withApiContext(req);
+    const read = await apiReadContext(req);
+    if ('response' in read) return read.response;
+    const ctx = read.ctx;
     if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
     const params = new URL(req.url).searchParams;

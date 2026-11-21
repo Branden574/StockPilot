@@ -3,7 +3,7 @@ import 'server-only';
 import ExcelJS from 'exceljs';
 import { NextResponse } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { escapeForSpreadsheet } from '@/lib/csv';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportExportErrorResponse, reportExportUnauthenticated } from '@/lib/reports/export-errors';
@@ -38,7 +38,9 @@ export async function GET(request: Request) {
     // reports:read and the purchase orders module (403); the item id (400);
     // then the export limit (429); then the item, read with the caller's
     // client (another warehouse's or category's item is 404).
-    ctx = await withApiContext(request);
+    const read = await apiReadContext(request);
+    if ('response' in read) return read.response;
+    ctx = read.ctx;
     if (!ctx) return reportExportUnauthenticated();
     assertPermission(ctx, 'reports:export');
     const svc = new ReportsService(ctx);

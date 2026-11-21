@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import {
   BOOK_REPORT_NO_STORE,
   bookReportApiQuery,
@@ -32,7 +32,9 @@ export const dynamic = 'force-dynamic';
  * charter the caller may not report on.
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ itemId: string }> }) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return bookReportUnauthenticatedResponse();
   const { itemId } = await params;
   try {

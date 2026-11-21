@@ -349,10 +349,9 @@ describe('every withApiContext call is handed the request it judges', () => {
   ]);
 
   it('finds the calls (routes and the shared gates)', () => {
-    const total = [...CALLERS].reduce(
-      (n, [file, src]) => n + withApiContextCalls(file, src).length,
-      0,
-    );
+    // Every call that reaches withApiContext: the rule itself, or a shared gate
+    // that hands it on (the /api/v1 read wrapper holds most GET handlers).
+    const total = [...CALLERS].reduce((n, [file, src]) => n + gateCalls(file, src).length, 0);
     expect(total).toBeGreaterThan(150);
     for (const gate of GATE_FILES)
       expect(withApiContextCalls(gate, CALLERS.get(gate)!)).toHaveLength(1);

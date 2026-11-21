@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { closedOrderSlipAnswer } from '@/lib/orders/slip-availability';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
@@ -29,7 +29,9 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }

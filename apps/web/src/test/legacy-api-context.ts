@@ -71,6 +71,12 @@ export interface LegacyContextWorld {
     orgId?: string;
     how: ReadFailure;
   } | null;
+  /**
+   * The account has a verified authenticator (getUser's factor list). Pair it
+   * with an aal2 token (legacyBearerToken('aal2')), or the session still owes
+   * its code and withApiContext answers null before any read.
+   */
+  authenticator: boolean;
   /** Single-row answers for other tables, by table name. */
   singles: Record<string, unknown>;
   /** List answers for other tables, by table name. */
@@ -96,6 +102,7 @@ export function legacyContextWorld(over: Partial<LegacyContextWorld> = {}): Lega
     profileMissing: false,
     accountStatusFails: false,
     membershipReadFails: null,
+    authenticator: false,
     singles: {},
     lists: {},
     calls: [],
@@ -314,7 +321,13 @@ export function legacyContextClient(world: LegacyContextWorld) {
     },
     auth: {
       getUser: async () => ({
-        data: { user: { id: LEGACY_USER_ID, email: 'member@example.com', factors: [] } },
+        data: {
+          user: {
+            id: LEGACY_USER_ID,
+            email: 'member@example.com',
+            factors: world.authenticator ? [{ id: 'factor-1', status: 'verified' }] : [],
+          },
+        },
         error: null,
       }),
     },
@@ -323,9 +336,9 @@ export function legacyContextClient(world: LegacyContextWorld) {
 
 const seg = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
 
-/** The bearer token a phone sends: only its shape matters to the double. */
-export function legacyBearerToken(): string {
-  return `${seg({ alg: 'HS256', typ: 'JWT' })}.${seg({ sub: LEGACY_USER_ID, aal: 'aal1' })}.sig`;
+/** The bearer token a phone sends: only its shape and its level matter to the double. */
+export function legacyBearerToken(aal: 'aal1' | 'aal2' = 'aal1'): string {
+  return `${seg({ alg: 'HS256', typ: 'JWT' })}.${seg({ sub: LEGACY_USER_ID, aal })}.sig`;
 }
 
 /** Headers a phone sends with every /api/v1 call. */

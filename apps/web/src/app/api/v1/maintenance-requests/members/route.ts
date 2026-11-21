@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { can } from '@stockpilot/core';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { reportError } from '@/lib/error-reporter';
 import { fetchAcceptedMembers } from '@/server/lib/maintenance-members';
 
@@ -31,7 +31,9 @@ export const dynamic = 'force-dynamic';
  * cross-org or over-privileged read here can leak at most a name.
  */
 export async function GET(req: NextRequest) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   if (!can(ctx, 'maintenance_requests:manage')) {
     return NextResponse.json({ error: 'forbidden' }, { status: 403 });

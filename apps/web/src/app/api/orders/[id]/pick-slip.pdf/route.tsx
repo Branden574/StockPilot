@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { closedOrderSlipAnswer } from '@/lib/orders/slip-availability';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
@@ -28,7 +28,9 @@ export async function GET(
   // requireOrgContext() — using withApiContext here means the auth
   // failure path returns a clean 401 instead of throwing NEXT_REDIRECT
   // (which the try/catch below would mis-classify as internal_error).
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }

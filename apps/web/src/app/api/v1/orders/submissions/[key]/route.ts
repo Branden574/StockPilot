@@ -2,7 +2,7 @@ import type { NextRequest } from 'next/server';
 
 import { ORDER_BODY_UNREADABLE_COPY } from '@stockpilot/core';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
   readPlacerParam,
@@ -39,7 +39,9 @@ const KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
  * is the X-Organization-Id the call is sent with.
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ key: string }> }) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return submissionUnauthenticated();
 
   const rl = await checkRateLimit(`order-submission:${ctx.userId}`, 60, 60_000);
