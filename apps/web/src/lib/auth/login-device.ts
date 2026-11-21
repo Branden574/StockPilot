@@ -9,7 +9,10 @@ import { reportError } from '@/lib/error-reporter';
 import { cityForRecord } from '@/lib/place-name';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { recordSignInAlertEvent } from '@/server/security/sign-in-alert-events';
+import {
+  recordSignInAlertEvent,
+  recordSignInAlertsHeldEvent,
+} from '@/server/security/sign-in-alert-events';
 import { dispatchEvent } from '@/server/services/integration-events';
 
 /** Collapse version numbers out of a UA so a routine browser auto-update
@@ -50,8 +53,10 @@ export const NEW_DEVICE_ALERT_WINDOW_MS = 24 * 60 * 60_000;
  * Sign-in alert ROWS per account in the same window: a hard ceiling, so the
  * rows one account can write in a day have an end. Past it nothing is
  * learned and nothing is written: the device row and the country row this
- * sign-in added are taken back (they are still new at the next sign-in), and
- * the first sign-in turned away in a window is reported once.
+ * sign-in added are taken back (they are still new at the next sign-in, so no
+ * sign-in becomes trusted by being turned away). Every sign-in turned away is
+ * counted as a security event (sign_in_alerts_held), and the first in a
+ * window is also reported once.
  */
 export const SIGN_IN_ALERT_ROWS_PER_ACCOUNT = 50;
 /** security.new_device_login events per organization in a window. */
@@ -203,7 +208,7 @@ async function noteCountry(
         extra: { code: codeOf(countError), step: 'count' },
       });
       // A take-back that fails is reported there, and still answers "no country".
-      await takeBack('country', () => forgetCountry(admin, userId, country));
+      await takeBack('country', userId, () => forgetCountry(admin, userId, country));
       return NO_COUNTRY;
     }
     return { insertedNow: true, alerts: count > 1 };
@@ -216,7 +221,7 @@ async function noteCountry(
       level: 'warning',
       extra: { code: null, step: inserted ? 'count' : 'insert' },
     });
-    if (inserted) await takeBack('country', () => forgetCountry(admin, userId, country));
+    if (inserted) await takeBack('country', userId, () => forgetCountry(admin, userId, country));
     return NO_COUNTRY;
   }
 }
@@ -242,26 +247,51 @@ async function forgetCountry(admin: AdminClient, userId: string, country: string
 }
 
 /**
+ * How long a take-back waits before its one more try. An object so a test can
+ * set the wait to nothing; nothing else writes it.
+ */
+export const TAKE_BACK_RETRY = { waitMs: 300 };
+
+/** One try of a take-back: whether it worked, and the refusal's code when it did not. */
+async function tryForget(
+  forget: () => Promise<string | null>,
+): Promise<{ done: boolean; code: string | null }> {
+  try {
+    const code = await forget();
+    return { done: code === null, code };
+  } catch {
+    // No code: the failure's own text is never carried.
+    return { done: false, code: null };
+  }
+}
+
+/**
  * ONE take-back, on its own (review 1, finding 5): whether it is refused or
- * throws, it is reported once (which row, and the refusal's code only) and
- * nothing is thrown, so the other take-back and everything after it still
- * run. A row that could not be taken back stays recorded as seen.
+ * throws, nothing is thrown, so the other take-back and everything after it
+ * still run.
+ *
+ * A take-back that fails would leave a device or a country recorded as seen
+ * with NO alert, quietly: that sign-in's next visit would be trusted. So a
+ * failed delete is tried ONCE more after a short wait (a passing fault clears
+ * itself), and if that fails too it is reported at ERROR level, with a hash
+ * of the account id, which row, and the refusal's code only, so it is seen
+ * and the row can be removed by hand.
  */
 async function takeBack(
   row: 'device' | 'country',
+  userId: string,
   forget: () => Promise<string | null>,
 ): Promise<void> {
-  let code: string | null = null;
-  try {
-    code = await forget();
-    if (code === null) return;
-  } catch {
-    // Reported below with no code: the failure's own text is never carried.
-  }
+  const first = await tryForget(forget);
+  if (first.done) return;
+  await new Promise((resolve) => setTimeout(resolve, TAKE_BACK_RETRY.waitMs));
+  const second = await tryForget(forget);
+  if (second.done) return;
   void reportError(new Error('A row a sign-in added could not be taken back'), {
     tag: 'auth.sign_in_note_undo_failed',
-    level: 'warning',
-    extra: { row, code },
+    level: 'error',
+    userIdHash: createHash('sha256').update(userId).digest('hex').slice(0, 16),
+    extra: { row, code: second.code },
   });
 }
 
@@ -339,9 +369,10 @@ async function insertAlertRow(
  *   - per account, the alert's ROW: SIGN_IN_ALERT_ROWS_PER_ACCOUNT a day, a
  *     hard ceiling asked first. Past it nothing is learned and nothing is
  *     written or sent: the device row and the country row this call inserted
- *     are removed, so both are still new at the next sign-in, and the first
- *     sign-in turned away in a window is reported once
- *     (auth.sign_in_alert_rows_ceiling).
+ *     are removed, so both are still new at the next sign-in. Every sign-in
+ *     turned away is a security event (password_guessing / flagged /
+ *     sign_in_alerts_held, in the member's organizations), and the first in
+ *     a window is reported once (auth.sign_in_alert_rows_ceiling).
  *   - per account, the alert's EMAIL: NEW_DEVICE_ALERTS_PER_ACCOUNT a day (a
  *     new country counts as a new device does). The email that reaches the
  *     count says that no more will come for 24 hours. Past it ONLY THE EMAIL
@@ -417,10 +448,19 @@ export async function noteLoginDevice(args: {
 
     // Neither row this sign-in added is left recorded as seen, so its next
     // sign-in is still new. Each take-back runs whatever the other one did.
+    //
+    // TWO SIGN-INS AT ONCE FROM ONE NEW COUNTRY: the first inserts the country
+    // row; the second, at the same instant, finds it (23505) and takes the
+    // country as known, so it is silent. If the first is then held here, it
+    // takes its row back. The outcome: the country row is gone, so the
+    // country is NOT learned, and the next sign-in from it alerts. Neither of
+    // the two alerted for the country, and nothing was learned from either.
     const undoNotes = async () => {
-      if (device.insertedNow) await takeBack('device', () => forgetDevice(admin, args.userId, hash));
+      if (device.insertedNow) {
+        await takeBack('device', args.userId, () => forgetDevice(admin, args.userId, hash));
+      }
       if (countryNote.insertedNow && country) {
-        await takeBack('country', () => forgetCountry(admin, args.userId, country));
+        await takeBack('country', args.userId, () => forgetCountry(admin, args.userId, country));
       }
     };
 
@@ -434,7 +474,12 @@ export async function noteLoginDevice(args: {
     );
     if (!rows.allowed) {
       await undoNotes();
-      if (!rows.failed) await reportRowsCeiling(args.userId);
+      if (!rows.failed) {
+        // Over the ceiling (not "could not count"): every sign-in turned away
+        // is one security event, and the first in a window one error report.
+        await recordSignInAlertsHeldEvent({ userId: args.userId, source: client, place });
+        await reportRowsCeiling(args.userId);
+      }
       return;
     }
 

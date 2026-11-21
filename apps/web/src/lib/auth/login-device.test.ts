@@ -83,6 +83,8 @@ const db = vi.hoisted(() => ({
   countError: null as null | { code: string; message: string },
   /** Every delete on these tables is refused with this, or throws ('throw'), until cleared. */
   deleteError: {} as Record<string, { code: string; message: string } | 'throw'>,
+  /** The same, for the NEXT delete on the table only. */
+  deleteErrorOnce: {} as Record<string, { code: string; message: string } | 'throw'>,
   /** The next insert on this table throws (the network, not a refusal). */
   insertThrowsTable: null as string | null,
   nextId: 1,
@@ -200,7 +202,9 @@ function tableClient(name: TableName) {
       throw new Error(`insert into ${name} is not modelled`);
     }
     if (q.op === 'delete') {
-      const refusal = db.deleteError[name];
+      const once = db.deleteErrorOnce[name];
+      delete db.deleteErrorOnce[name];
+      const refusal = once ?? db.deleteError[name];
       if (refusal === 'throw') throw new Error(`delete from ${name} threw for member@example.com`);
       if (refusal) return { data: null, error: refusal };
       setRows(rows().filter((r) => !matches(r)));
@@ -302,7 +306,13 @@ vi.mock('@/lib/auth/sign-in-alert-url', () => ({
 const recordSignInAlertEvent = vi.hoisted(() =>
   vi.fn(async (_args: Record<string, unknown>) => undefined),
 );
-vi.mock('@/server/security/sign-in-alert-events', () => ({ recordSignInAlertEvent }));
+const recordSignInAlertsHeldEvent = vi.hoisted(() =>
+  vi.fn(async (_args: Record<string, unknown>) => undefined),
+);
+vi.mock('@/server/security/sign-in-alert-events', () => ({
+  recordSignInAlertEvent,
+  recordSignInAlertsHeldEvent,
+}));
 // The bucket table, in memory, with lib/rate-limit's own answer when its
 // store cannot be reached: a closed bucket refuses, an open one allows.
 const limiter = vi.hoisted(() => ({
@@ -311,10 +321,17 @@ const limiter = vi.hoisted(() => ({
   /** Only the buckets whose key starts with this cannot answer. */
   downPrefix: null as string | null,
   calls: [] as Array<{ key: string; limit: number; windowMs: number; mode?: string }>,
+  /** Runs once, when the limiter is next asked: what another sign-in does meanwhile. */
+  meanwhile: null as null | (() => Promise<void>),
 }));
 vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: vi.fn(async (key: string, limit: number, windowMs: number, mode?: string) => {
     limiter.calls.push({ key, limit, windowMs, mode });
+    if (limiter.meanwhile) {
+      const other = limiter.meanwhile;
+      limiter.meanwhile = null;
+      await other();
+    }
     if (limiter.storeDown || (limiter.downPrefix && key.startsWith(limiter.downPrefix))) {
       return mode === 'closed'
         ? { allowed: false, count: limit, resetAt: Date.now() + windowMs, failed: true }
@@ -327,7 +344,7 @@ vi.mock('@/lib/rate-limit', () => ({
   }),
 }));
 
-import { noteLoginDevice } from './login-device';
+import { TAKE_BACK_RETRY, noteLoginDevice } from './login-device';
 
 const USER = '11111111-1111-4111-8111-111111111111';
 const EMAIL = 'member@example.com';
@@ -338,6 +355,8 @@ const APP_UA_2 = 'StockPilot/42 CFNetwork/1568.200.51 Darwin/24.1.0';
 const INSTALL_1 = '0f6c2d1e-8a4b-4c5d-9e6f-7a8b9c0d1e2f';
 const INSTALL_2 = '3a4b5c6d-7e8f-4a0b-8c1d-2e3f4a5b6c7d';
 const LABEL = 'StockPilot app on iPhone 15 Pro (iOS 18.1)';
+/** How a report names the account: the first 16 hex characters of the SHA-256 of its id. */
+const USER_HASH = createHash('sha256').update(USER).digest('hex').slice(0, 16);
 const FAMILY = 'StockPilot app on iPhone';
 
 const phone = (deviceKey: string, userAgent = APP_UA_1, deviceLabel = LABEL) =>
@@ -362,11 +381,16 @@ beforeEach(() => {
   db.insertErrorTable = 'user_login_devices';
   db.countError = null;
   db.deleteError = {};
+  db.deleteErrorOnce = {};
   db.insertThrowsTable = null;
   db.nextId = 1;
   db.ops = [];
   db.clock = 0;
   recordSignInAlertEvent.mockClear();
+  recordSignInAlertsHeldEvent.mockClear();
+  // The wait before a take-back's one more try: none here, so no test waits.
+  TAKE_BACK_RETRY.waitMs = 0;
+  limiter.meanwhile = null;
   sendNewDeviceLoginEmail.mockClear();
   dispatchEvent.mockClear();
   reportError.mockClear();
@@ -972,7 +996,7 @@ describe('noteLoginDevice — the country step never costs the device alert (rev
   const tagged = (tag: string) =>
     reportError.mock.calls.filter((c) => (c[1] as { tag: string }).tag === tag);
 
-  it('the count read fails and the take-back fails too: the new device still alerts, and the failed take-back is reported once', async () => {
+  it('the count read fails and the take-back fails twice: the new device still alerts, and the failed take-back is reported once, as an error', async () => {
     await known();
     db.countError = { code: '57014', message: 'timeout' };
     db.deleteError.user_sign_in_countries = { code: '42501', message: 'refused for member@example.com' };
@@ -984,9 +1008,11 @@ describe('noteLoginDevice — the country step never costs the device alert (rev
     expect(undo).toHaveLength(1);
     expect(undo[0]![1]).toEqual({
       tag: 'auth.sign_in_note_undo_failed',
-      level: 'warning',
+      level: 'error',
+      userIdHash: USER_HASH,
       extra: { row: 'country', code: '42501' },
     });
+    expect(JSON.stringify(undo)).not.toContain(USER);
     expect(tagged('auth.login_device_note_failed')).toEqual([]);
     expect(JSON.stringify(reportError.mock.calls)).not.toContain(EMAIL);
   });
@@ -1088,6 +1114,119 @@ describe('noteLoginDevice — each take-back runs whatever the other one did (re
   });
 });
 
+describe('noteLoginDevice — a take-back that fails is tried once more, then reported as an error', () => {
+  const newPhoneFromMexico = () =>
+    noteLoginDevice({
+      userId: USER,
+      email: EMAIL,
+      userAgent: APP_UA_1,
+      ip: null,
+      deviceKey: INSTALL_1,
+      deviceLabel: LABEL,
+      deviceFamily: FAMILY,
+      place: { country: 'MX', city: null },
+      client: 'phone',
+    });
+  const undoReports = () =>
+    reportError.mock.calls.filter((c) => (c[1] as { tag: string }).tag === 'auth.sign_in_note_undo_failed');
+
+  beforeEach(async () => {
+    await noteLoginDevice({ userId: USER, email: EMAIL, userAgent: WEB_UA, ip: null, place: { country: 'US', city: null } });
+    limiter.storeDown = true;
+    db.ops = [];
+  });
+
+  it('the first delete is refused and the second works: the row is gone, and nothing is reported', async () => {
+    db.deleteErrorOnce.user_login_devices = { code: '57014', message: 'timeout' };
+    db.deleteErrorOnce.user_sign_in_countries = { code: '57014', message: 'timeout' };
+    await newPhoneFromMexico();
+    expect(db.devices).toHaveLength(1);
+    expect(db.countries.map((c) => c.country)).toEqual(['US']);
+    expect(db.ops.filter((op) => op === 'delete:user_login_devices')).toHaveLength(2);
+    expect(db.ops.filter((op) => op === 'delete:user_sign_in_countries')).toHaveLength(2);
+    expect(undoReports()).toEqual([]);
+  });
+
+  it('the first delete throws and the second works: the row is gone, and nothing is reported', async () => {
+    db.deleteErrorOnce.user_login_devices = 'throw';
+    await newPhoneFromMexico();
+    expect(db.devices).toHaveLength(1);
+    expect(undoReports()).toEqual([]);
+  });
+
+  it('both tries fail: ONE report, at error level, with a hash of the account id and which row, and no third try', async () => {
+    db.deleteError.user_login_devices = { code: '42501', message: 'refused for member@example.com' };
+    await newPhoneFromMexico();
+    // The device stays recorded as seen with no alert: that is what the error says.
+    expect(db.devices).toHaveLength(2);
+    expect(db.ops.filter((op) => op === 'delete:user_login_devices')).toHaveLength(2);
+    const reports = undoReports();
+    expect(reports).toHaveLength(1);
+    expect(reports[0]![1]).toEqual({
+      tag: 'auth.sign_in_note_undo_failed',
+      level: 'error',
+      userIdHash: USER_HASH,
+      extra: { row: 'device', code: '42501' },
+    });
+    const text = JSON.stringify(reports);
+    for (const absent of [USER, EMAIL, 'refused for']) expect(text).not.toContain(absent);
+    // The other row was still taken back.
+    expect(db.countries.map((c) => c.country)).toEqual(['US']);
+  });
+
+  it('the one more try waits a short while first', async () => {
+    expect(TAKE_BACK_RETRY.waitMs).toBe(0);
+    TAKE_BACK_RETRY.waitMs = 300;
+    vi.useFakeTimers();
+    try {
+      db.deleteErrorOnce.user_login_devices = { code: '57014', message: 'timeout' };
+      const pending = newPhoneFromMexico();
+      await vi.advanceTimersByTimeAsync(299);
+      expect(db.ops.filter((op) => op === 'delete:user_login_devices')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(db.ops.filter((op) => op === 'delete:user_login_devices')).toHaveLength(2);
+      expect(db.devices).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('noteLoginDevice — two sign-ins at once from one new country, and the first is held', () => {
+  it('the country row the first one added is taken back, so the country is NOT learned and the next sign-in from it alerts', async () => {
+    const fromMexico = () =>
+      noteLoginDevice({ userId: USER, email: EMAIL, userAgent: WEB_UA, ip: null, place: { country: 'MX', city: null } });
+    await noteLoginDevice({ userId: USER, email: EMAIL, userAgent: WEB_UA, ip: null, place: { country: 'US', city: null } });
+
+    // The first sign-in inserts the country row and asks the limiter, which
+    // cannot answer. While it waits, a second sign-in from the same country
+    // finds the row and takes the country as known: it is silent.
+    limiter.storeDown = true;
+    let secondSawItKnown = false;
+    limiter.meanwhile = async () => {
+      const before = db.alerts.length;
+      await fromMexico();
+      secondSawItKnown = db.alerts.length === before && db.countries.some((c) => c.country === 'MX');
+    };
+    await fromMexico();
+    expect(secondSawItKnown).toBe(true);
+
+    // The first one could not be counted, so it took its row back: after the
+    // take-back the country row is gone. Neither sign-in alerted, and the
+    // country is not learned.
+    expect(db.countries.map((c) => c.country)).toEqual(['US']);
+    expect(db.alerts).toEqual([]);
+    expect(sendNewDeviceLoginEmail).not.toHaveBeenCalled();
+
+    // The next sign-in from that country alerts.
+    limiter.storeDown = false;
+    await fromMexico();
+    expect(db.alerts).toHaveLength(1);
+    expect(db.alerts[0]).toMatchObject({ new_country: true, country: 'MX' });
+  });
+});
+
 describe('noteLoginDevice — past the daily email count the alert is still recorded (review 1, finding 6)', () => {
   const DAY_MS = 24 * 60 * 60_000;
   const SESSION = '5e551011-0000-4000-8000-000000000003';
@@ -1109,6 +1248,14 @@ describe('noteLoginDevice — past the daily email count the alert is still reco
     noteLoginDevice({ userId: USER, email: EMAIL, userAgent: WEB_UA, ip: null, place: { country: 'US', city: null } });
   const tagged = (tag: string) =>
     reportError.mock.calls.filter((c) => (c[1] as { tag: string }).tag === tag);
+
+  it('an alert whose email is held is not a sign-in turned away: no "alerts held" security event', async () => {
+    await known();
+    limiter.buckets.set(`new-device-alert:user:${USER}`, 5);
+    await newPhone(1);
+    expect(db.alerts).toHaveLength(1);
+    expect(recordSignInAlertsHeldEvent).not.toHaveBeenCalled();
+  });
 
   it('the sixth sign-in of a day from a new device: its alert row is written, with its session, and only the email is held', async () => {
     db.members = [
@@ -1178,6 +1325,13 @@ describe('noteLoginDevice — past the daily email count the alert is still reco
     expect(sendNewDeviceLoginEmail).not.toHaveBeenCalled();
     expect(dispatchEvent).not.toHaveBeenCalled();
     expect(recordSignInAlertEvent).not.toHaveBeenCalled();
+    // It is counted as a security event, with the sign-in's place and client.
+    expect(recordSignInAlertsHeldEvent).toHaveBeenCalledTimes(1);
+    expect(recordSignInAlertsHeldEvent).toHaveBeenCalledWith({
+      userId: USER,
+      source: 'phone',
+      place: { country: 'MX', city: null },
+    });
     // The email count is not spent on it.
     expect(limiter.calls.filter((c) => c.key === `new-device-alert:user:${USER}`)).toEqual([]);
 
@@ -1195,6 +1349,8 @@ describe('noteLoginDevice — past the daily email count the alert is still reco
     await newPhone(2, 'CA');
     const reports = tagged('auth.sign_in_alert_rows_ceiling');
     expect(reports).toHaveLength(1);
+    // The error report is once per window; the security event is every time.
+    expect(recordSignInAlertsHeldEvent).toHaveBeenCalledTimes(2);
     expect(reports[0]![1]).toMatchObject({
       level: 'warning',
       extra: { limit: 50, window_hours: 24 },
@@ -1217,6 +1373,8 @@ describe('noteLoginDevice — past the daily email count the alert is still reco
     expect(db.countries.map((c) => c.country)).toEqual(['US']);
     expect(db.alerts).toEqual([]);
     expect(tagged('auth.sign_in_alert_rows_ceiling')).toEqual([]);
+    // A count that could not be read is not "too many": no security event.
+    expect(recordSignInAlertsHeldEvent).not.toHaveBeenCalled();
   });
 
   it('the email count cannot answer: both rows are taken back and nothing is written or sent, as before', async () => {
