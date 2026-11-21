@@ -3091,6 +3091,21 @@ describe('failures: reported once, in plain words and codes, never the token', (
       expect(full(await pending).ok).toBe(false);
     });
 
+    it('a reporter that throws, or whose report fails, never reaches the caller: the run still answers', async () => {
+      answers.set(`groups@${iso(H(4))}`, status(503));
+      h.report.mockImplementation(() => {
+        throw new Error('reporter down');
+      });
+      await expect(run()).resolves.toMatchObject({ ok: false });
+      h.report.mockImplementation(async () => {
+        throw new Error('report refused');
+      });
+      await expect(run()).resolves.toMatchObject({ ok: false });
+      await expect(run({ supabaseUrl: 'http://127.0.0.1:54321' })).resolves.toEqual({
+        skipped: 'no_project',
+      });
+    });
+
     it('a skipped run waits for its one report no longer either', async () => {
       vi.useFakeTimers();
       vi.setSystemTime(NOW);

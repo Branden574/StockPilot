@@ -1627,16 +1627,18 @@ interface Report {
 /**
  * Sends a run's reports, all at once, and waits for them
  * AUTH_LOGS_REPORTS_MAX_MS at most: a report that hangs cannot carry the run
- * past the limit of its route. reportError never throws.
+ * past the limit of its route, and one that fails never reaches the caller.
  */
 async function sendReports(reports: readonly Report[]): Promise<void> {
   if (reports.length === 0) return;
   const sent = Promise.all(
-    reports.map(({ message, level, extra }) =>
-      Promise.resolve(reportError(new Error(message), { tag: AUTH_LOGS_TAG, level, extra })).catch(
-        () => undefined,
-      ),
-    ),
+    reports.map(async ({ message, level, extra }) => {
+      try {
+        await reportError(new Error(message), { tag: AUTH_LOGS_TAG, level, extra });
+      } catch {
+        // A report that could not be sent is dropped: the run still answers.
+      }
+    }),
   );
   let timer: ReturnType<typeof setTimeout> | undefined;
   const limit = new Promise<void>((resolve) => {

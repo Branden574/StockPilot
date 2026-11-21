@@ -199,7 +199,7 @@ describe('an account with no verified authenticator', () => {
 
   it('the right password: confirmed, checked against the current address, one try counted first', async () => {
     expect(await confirm({ password: PASSWORD })).toEqual({ ok: true, by: 'password' });
-    expect(verifyPassword).toHaveBeenCalledWith(EMAIL, PASSWORD);
+    expect(verifyPassword).toHaveBeenCalledWith(EMAIL, PASSWORD, USER);
     expect(checkRateLimit).toHaveBeenCalledWith(
       `account-delete-password:${USER}`,
       ACCOUNT_DELETE_CREDENTIAL_LIMIT,

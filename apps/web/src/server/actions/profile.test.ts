@@ -1569,7 +1569,7 @@ describe('deleteOwnAccountAction', () => {
       requiringOrgWithoutFactor();
       const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(true);
-      expect(verifyPasswordMock).toHaveBeenCalledWith('u@example.test', PASSWORD);
+      expect(verifyPasswordMock).toHaveBeenCalledWith('u@example.test', PASSWORD, 'user-1');
       expect(adminAuth.deleteUser).toHaveBeenCalledWith('user-1');
     });
 
