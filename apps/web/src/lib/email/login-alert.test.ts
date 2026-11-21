@@ -10,7 +10,11 @@ vi.mock('./resend', () => ({
   sendEmail: (...args: unknown[]) => sendEmail(...args),
 }));
 
-import { sendNewDeviceLoginEmail } from './login-alert';
+import {
+  sendNewDeviceLoginEmail,
+  sendSignedOutEverywhereEmail,
+  sendSignInReportedEmail,
+} from './login-alert';
 
 describe('sendNewDeviceLoginEmail', () => {
   beforeEach(() => {
@@ -168,5 +172,76 @@ describe('sendNewDeviceLoginEmail (part 3): the place, the kind and the link rea
     const msg = sendEmail.mock.calls[0]![0] as { html: string; text: string };
     expect(msg.text).not.toContain('Location:');
     expect(msg.html).not.toContain('This was not me');
+  });
+});
+
+describe('sendSignedOutEverywhereEmail (part 3)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sendEmail.mockResolvedValue({ ok: true, id: 'test' });
+  });
+
+  it('the member is told every session ended, with the reset button; the answer of the send is handed back', async () => {
+    const result = await sendSignedOutEverywhereEmail({
+      to: 'member@example.test',
+      firstName: 'Avery',
+      device: 'Firefox on Windows',
+      place: { country: 'MX', city: 'Tijuana' },
+      signedInAt: new Date('2026-11-20T15:30:00Z'),
+      appUrl: 'https://app.example.test',
+    });
+    expect(result).toEqual({ ok: true, id: 'test' });
+    const msg = sendEmail.mock.calls[0]![0] as { to: string; subject: string; html: string; text: string; from?: string };
+    expect(msg.to).toBe('member@example.test');
+    expect(msg.subject).toBe('We signed you out of StockPilot everywhere');
+    expect(msg.from).toBe('StockPilot Security <security@stockpilotusa.com>');
+    expect(msg.html).toContain('https://app.example.test/reset');
+    expect(msg.text).toContain('Tijuana, Mexico');
+    expect(msg.text).toContain('Nov 20, 2026');
+    expect(msg.text).toContain('Firefox on Windows');
+  });
+});
+
+describe('sendSignInReportedEmail (part 3)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sendEmail.mockResolvedValue({ ok: true, id: 'test' });
+  });
+
+  it('an owner or admin is told who, the device family, where and when, with a link to the list', async () => {
+    await sendSignInReportedEmail({
+      to: 'admin@example.test',
+      adminFirstName: 'Jordan',
+      memberName: 'Avery Example',
+      memberEmail: 'member@example.test',
+      organizationName: 'Example School',
+      deviceFamily: 'Chrome on macOS',
+      place: { country: 'MX', city: null },
+      signedInAt: new Date('2026-11-20T15:30:00Z'),
+      appUrl: 'https://app.example.test',
+    });
+    const msg = sendEmail.mock.calls[0]![0] as { to: string; subject: string; html: string; text: string };
+    expect(msg.to).toBe('admin@example.test');
+    expect(msg.subject).toBe('Avery Example reported a sign-in they did not make');
+    expect(msg.text).toContain('Chrome on macOS');
+    expect(msg.text).toContain('Mexico');
+    expect(msg.text).toContain('Example School');
+    expect(msg.html).toContain('https://app.example.test/dashboard/settings/security/sign-ins');
+  });
+
+  it('a send that throws is answered as not sent, never thrown', async () => {
+    sendEmail.mockRejectedValue(new Error('network'));
+    await expect(
+      sendSignInReportedEmail({
+        to: 'admin@example.test',
+        memberName: 'Avery Example',
+        memberEmail: 'member@example.test',
+        organizationName: 'Example School',
+        deviceFamily: 'Chrome on macOS',
+        place: null,
+        signedInAt: new Date('2026-11-20T15:30:00Z'),
+        appUrl: 'https://app.example.test',
+      }),
+    ).resolves.toEqual({ ok: false, error: 'send_threw' });
   });
 });

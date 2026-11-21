@@ -2,8 +2,15 @@ import 'server-only';
 
 import { signInAlertPlaceWords } from '@/lib/auth/sign-in-alert-words';
 
-import { renderSigninAlertEmail } from './es/families/security';
+import {
+  renderSigninAlertEmail,
+  renderSigninReportedEmail,
+  renderSigninSignedOutEmail,
+} from './es/families/security';
 import { sendEmail } from './resend';
+
+/** The organization's list of sign-in alerts (owners and admins). */
+export const SIGN_IN_ALERTS_LIST_PATH = '/dashboard/settings/security/sign-ins';
 
 /** Coarse, human-readable device label from a UA string — "Chrome on macOS",
  *  "Safari on iPhone", etc. Falls back to a trimmed UA when unrecognized. */
@@ -85,6 +92,100 @@ export async function sendNewDeviceLoginEmail(args: {
   });
 
   await sendEmail({
+    to: args.to,
+    subject: message.subject,
+    html: message.html,
+    text: message.text,
+    from: message.from,
+  });
+}
+
+/** A sign-in time as the sign-in emails print it: "Nov 20, 2026, 3:30 PM UTC". */
+function whenWords(at: Date): string {
+  return (
+    at.toLocaleString('en-US', { timeZone: 'UTC', dateStyle: 'medium', timeStyle: 'short' }) + ' UTC'
+  );
+}
+
+/** The answer of one send: sendEmail's, or not sent when it threw. Never throws. */
+async function sendOnce(message: {
+  to: string;
+  subject: string;
+  html: string;
+  text: string;
+  from?: string;
+}): Promise<{ ok: boolean; id?: string; error?: string }> {
+  try {
+    return await sendEmail(message);
+  } catch {
+    return { ok: false, error: 'send_threw' };
+  }
+}
+
+/**
+ * Part 3: to the member, after their "This was not me". Every session of the
+ * account has ended; one button, to reset the password. The device is the
+ * member's own words for it (the alert's label). Hands back the send's answer
+ * so the report can say when it failed. Never throws.
+ */
+export async function sendSignedOutEverywhereEmail(args: {
+  to: string;
+  firstName?: string | null;
+  device: string;
+  place: { country: string | null; city: string | null } | null;
+  signedInAt: Date;
+  appUrl?: string;
+}): Promise<{ ok: boolean; id?: string; error?: string }> {
+  const appUrl = args.appUrl || process.env.NEXT_PUBLIC_APP_URL || 'https://stockpilotusa.com';
+  const message = renderSigninSignedOutEmail({
+    email: args.to,
+    firstName: args.firstName ?? null,
+    device: args.device,
+    location: signInAlertPlaceWords(args.place?.country, args.place?.city),
+    when: whenWords(args.signedInAt),
+    resetUrl: `${appUrl}/reset`,
+    appUrl,
+  });
+  return sendOnce({
+    to: args.to,
+    subject: message.subject,
+    html: message.html,
+    text: message.text,
+    from: message.from,
+  });
+}
+
+/**
+ * Part 3: to one owner or admin of an organization the member belongs to,
+ * after the member's "This was not me". Names the device FAMILY only, as the
+ * organization's list does, never the member's own label. Hands back the
+ * send's answer. Never throws.
+ */
+export async function sendSignInReportedEmail(args: {
+  to: string;
+  adminFirstName?: string | null;
+  memberName: string;
+  memberEmail: string;
+  organizationName: string;
+  deviceFamily: string;
+  place: { country: string | null; city: string | null } | null;
+  signedInAt: Date;
+  appUrl?: string;
+}): Promise<{ ok: boolean; id?: string; error?: string }> {
+  const appUrl = args.appUrl || process.env.NEXT_PUBLIC_APP_URL || 'https://stockpilotusa.com';
+  const message = renderSigninReportedEmail({
+    adminEmail: args.to,
+    adminFirstName: args.adminFirstName ?? null,
+    memberName: args.memberName,
+    memberEmail: args.memberEmail,
+    organizationName: args.organizationName,
+    deviceFamily: args.deviceFamily,
+    location: signInAlertPlaceWords(args.place?.country, args.place?.city),
+    when: whenWords(args.signedInAt),
+    listUrl: `${appUrl}${SIGN_IN_ALERTS_LIST_PATH}`,
+    appUrl,
+  });
+  return sendOnce({
     to: args.to,
     subject: message.subject,
     html: message.html,
