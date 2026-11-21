@@ -81,7 +81,9 @@ const { emitAuthAudit } = await import('@/server/services/auth-audit');
 const { recordSecurityEvent } = await import('./events');
 const { sendPasskeyAddedEmail, sendPasskeyRemovedEmail } = await import('./passkey-emails');
 const pk = await import('./passkeys');
-const { LAST_METHOD_RETRY_WORDS, LAST_METHOD_WORDS } = await import('./second-step-methods');
+const { LAST_METHOD_RETRY_WORDS, LAST_METHOD_WORDS, lastMethodVerdict } = await import(
+  './second-step-methods'
+);
 
 const SAMPLE_PASSWORD = 'sample-password-not-real';
 
@@ -1503,6 +1505,45 @@ describe('correction 1: servingPasskeyIds, the passkeys that can serve as the se
     process.env.VERCEL_ENV = 'preview';
     expect(await pk.servingPasskeyIds(userId, factorsOf(userId))).toEqual([]);
     expect(world.calls.fns).toEqual([]);
+  });
+
+  it('end to end, as unenrollFactorAction asks the rule: the only app beside passkeys that cannot serve is the last method under a requiring policy', async () => {
+    const { userId } = await memberWithPasskey();
+    const app = world.addApp(userId);
+    const org = crypto.randomUUID();
+    world.organizations.push({ id: org, mfa_policy: 'all_required' });
+    world.memberships.push({
+      user_id: userId,
+      organization_id: org,
+      role: 'member',
+      accepted_at: new Date().toISOString(),
+      impersonation_expires_at: null,
+    });
+    const verdict = () => {
+      const factors = factorsOf(userId);
+      return lastMethodVerdict({
+        userId,
+        removing: { kind: 'app', factorId: app.id },
+        factors,
+        servingPasskeys: () => pk.servingPasskeyIds(userId, factors),
+      });
+    };
+    // A passkey that serves keeps a second step: the app may go.
+    expect(await verdict()).toBe('allowed');
+    // Its bridge factor unverified: the rows remain, but no passkey can serve.
+    const bridgeFactor = world.factors.find((f) => f.id === world.bridges.get(userId)!.factor_id)!;
+    bridgeFactor.status = 'unverified';
+    expect(await verdict()).toBe('last_method');
+    // The kill switch off: no passkey serves either.
+    bridgeFactor.status = 'verified';
+    world.addAllowed = 'kill_switch_off';
+    expect(await verdict()).toBe('last_method');
+    // The switch unread, or the bridge record unread: try again, never allowed.
+    world.addAllowed = 'sample-unknown-word';
+    expect(await verdict()).toBe('unreadable');
+    world.addAllowed = 'ok';
+    world.knobs.failReads = ['passkey_bridges'];
+    expect(await verdict()).toBe('unreadable');
   });
 
   it('a gate read that answers an error is closed at every level, and the passkeys cannot be told (null)', async () => {
