@@ -101,6 +101,14 @@ vi.mock('@/lib/supabase/server', () => ({
   }),
 }));
 
+// Stage 4 (passkeys, decision B): the last-method rule has its own tests
+// (server/security/second-step-methods.test.ts); here a removal is never the
+// last method, so the words of GoTrue's refusal are what is pinned.
+vi.mock('@/server/security/second-step-methods', () => ({
+  LAST_METHOD_WORDS: 'last method',
+  lastMethodBlocks: vi.fn(async () => false),
+}));
+
 import { reportError } from '@/lib/error-reporter';
 
 import {

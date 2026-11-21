@@ -68,6 +68,29 @@ vi.mock('@/lib/supabase/server', () => ({
   }),
 }));
 
+// Stage 4 (passkeys, decision B): the last-method rule
+// (server/security/second-step-methods.ts) reads, with the service role, the
+// member's passkeys and the policy of every organization of the member when
+// the factor list (here unread) cannot show a method is left. The member has
+// no passkey and one membership: org-1, this role, the policy the test sets.
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: () => ({
+    from: (table: string) => {
+      const answer = () =>
+        table === 'organization_members'
+          ? { data: [{ organization_id: 'org-1', role: role.current }], error: null }
+          : table === 'organizations'
+            ? orgRead.current
+            : { data: [], error: null };
+      const q: Record<string, unknown> = {};
+      for (const m of ['select', 'eq', 'not', 'is', 'limit']) q[m] = () => q;
+      q.maybeSingle = async () => answer();
+      q.then = (resolve: (v: unknown) => unknown) => Promise.resolve(answer()).then(resolve);
+      return q;
+    },
+  }),
+}));
+
 import { unenrollFactorAction } from './mfa';
 
 const FACTOR = '11111111-2222-3333-4444-555555555555';

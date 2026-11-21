@@ -11,7 +11,8 @@ import { audit } from '@/server/services/audit';
 import { assertCurrentAal2, ServiceError, withContext } from '@/server/services/context';
 import { dispatchEvent } from '@/server/services/integration-events';
 import { SESSION_CHANGED } from '@/server/services/step-up-held';
-import { passkeyKeepsSecondStep, passkeyStepFor } from '@/server/security/passkeys';
+import { passkeyStepFor } from '@/server/security/passkeys';
+import { LAST_METHOD_WORDS, lastMethodBlocks } from '@/server/security/second-step-methods';
 import {
   checkMfaCode,
   MFA_CHALLENGE_NOT_STARTED,
@@ -413,15 +414,27 @@ export async function unenrollFactorAction(input: {
     const required =
       policy === 'all_required' ||
       (policy === 'admins_required' && (role === 'owner' || role === 'admin'));
-    // Review 13, "last method": an app is not the account's last method when
-    // an active passkey with a verified, recorded bridge remains (and
-    // passkeys are open to the member). Asked only under a policy that
-    // requires a second step; for a member without a passkey nothing changes.
-    if (required && !(await passkeyKeepsSecondStep(session.userId))) {
-      return err(
-        'forbidden',
-        'Your organization requires MFA. Ask an admin to lower the policy before disabling.',
-      );
+
+    // The factor list withContext() already read (lib/auth/context-factor-
+    // list): null when it could not be read, or was another account's.
+    const listed = await contextFactorsOf(svcCtx, session.userId);
+    // Decision B (2026-11-21), "the last method": the account's LAST
+    // second-step method (verified authenticator apps, never the bridge, and
+    // active passkeys) cannot be removed while a policy of an organization
+    // the member belongs to requires one; removing one of two is allowed. The
+    // active organization's policy is the one read above; the others are
+    // read only when no method would be left. Strict on doubt: a list that
+    // cannot be read counts as the last method. The same words as a
+    // passkey's removal (server/security/second-step-methods.ts).
+    if (
+      await lastMethodBlocks({
+        userId: session.userId,
+        removing: { kind: 'app', factorId: parsed.data.factorId },
+        factors: listed,
+        requiredKnown: required,
+      })
+    ) {
+      return err('forbidden', LAST_METHOD_WORDS);
     }
 
     // Never the account's recorded passkey bridge (lib/auth/passkey-bridge):
@@ -433,7 +446,6 @@ export async function unenrollFactorAction(input: {
     // reserved name is not removed (try again in a moment; the failed read is
     // reported). A list the context could not read, or another account's,
     // names nothing: the removal goes on as before (Auth decides).
-    const listed = await contextFactorsOf(svcCtx, session.userId);
     const named = (listed ?? []).filter((f) => f.id === parsed.data.factorId);
     const bridge = await readPasskeyBridge(session.userId, named, 'unenroll');
     const held = named[0] ? factorChangeRefusal(bridge, named[0]) : null;

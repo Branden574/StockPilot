@@ -107,7 +107,13 @@ vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
 // open (the stage 2 behaviour these tests pin); passkeys.test.ts covers them.
 vi.mock('@/server/security/passkeys', () => ({
   passkeyStepFor: vi.fn(async () => 'none'),
-  passkeyKeepsSecondStep: vi.fn(async () => false),
+}));
+// Stage 4 decision B: the last-method rule has its own tests
+// (server/security/second-step-methods.test.ts); here no removal is the last
+// method, so what is pinned is the bridge's own refusal.
+vi.mock('@/server/security/second-step-methods', () => ({
+  LAST_METHOD_WORDS: 'last method',
+  lastMethodBlocks: vi.fn(async () => false),
 }));
 
 type Factor = {
