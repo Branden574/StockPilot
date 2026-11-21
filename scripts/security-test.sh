@@ -2283,18 +2283,21 @@ WEB_TESTS=(
   # nothing is signed without the key. Its page outside the login wall reads
   # the account from the alert's own row, gives every bad link one page, byte
   # for byte, changes nothing on GET (counted per address before the alert is
-  # read), refuses a post from another site first, and counts each press per
-  # address and per alert, all closed.
+  # read), refuses a post from another site first, counts each press per
+  # address and per alert, all closed, and gives a reported alert a page with
+  # no button and no form.
   src/lib/auth/sign-in-alert-link.test.ts
   src/lib/auth/sign-in-alert-url.test.ts
   src/app/sign-in-alert/route.test.ts
-  # Sign-in alerts, the report: every press ends every session of the alert's
-  # own account first and changes nothing else when that fails; only the
-  # press that marks the alert forgets its device or country row and tells
-  # the member, the owners and admins (accepted, not act-as, at most 5
+  # Sign-in alerts, the report: it ends every session of the alert's own
+  # account first and changes nothing else when that fails; only the press
+  # that marks the alert forgets its device or country row and tells the
+  # member, the owners and admins (accepted, not act-as, at most 5
   # organizations; never managers or staff), the audit log and the security
-  # events, once. The signed-in action acts only on the caller's own alert,
-  # and another account's alert and a made-up id are refused alike.
+  # events, once. One alert, one sign-out: an alert already reported ends no
+  # session again, from the link or from Settings. The signed-in action acts
+  # only on the caller's own alert (another account's and a made-up id are
+  # refused alike) and is counted per account, closed.
   src/server/services/sign-in-alert-report.test.ts
   src/server/actions/sign-in-alerts.test.ts
   # Sign-in alerts, the reads: a member's own alerts and "This was me" (one
