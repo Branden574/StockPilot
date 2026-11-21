@@ -98,6 +98,16 @@ function optionsOf(start: Start) {
   };
 }
 
+/**
+ * The Security page's panel for `userId`, with the factor list the page's
+ * service context read (names first: review 4 finding 6).
+ */
+const panelFor = (userId: string) =>
+  pk.passkeysPanelFor(
+    userId,
+    world.factors.filter((f) => f.user_id === userId),
+  );
+
 /** A member with no method adds a first passkey with the password (2.6 C, D). */
 async function addFirstPasskey(soft: SoftAuthenticator, name = 'Work laptop') {
   const start = await pk.startAddPasskey({
@@ -136,6 +146,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   // Every audit row is written unless a test says otherwise.
   vi.mocked(emitAuthAudit).mockImplementation(async () => true);
+  // The limiter answers the world's knob unless a test counts (countingLimiter).
+  vi.mocked(checkRateLimit).mockImplementation(
+    async () => ({ allowed: world.limiterAllows }) as Awaited<ReturnType<typeof checkRateLimit>>,
+  );
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -214,7 +228,7 @@ describe('the gates (decision A): ADD needs all four conditions; USE the site, t
       const key = world.env.PASSKEY_BRIDGE_KEY_V1 ?? '';
       close();
       try {
-        const panel = await pk.passkeysPanelFor(userId);
+        const panel = await panelFor(userId);
         expect(panel?.canAdd).toBe(false);
         const refusals = [
           await pk.startConfirmAdd(),
@@ -243,7 +257,7 @@ describe('the gates (decision A): ADD needs all four conditions; USE the site, t
       expect(await pk.passkeyStepFor(userId, factorsOf(userId))).toBe('ready');
       expect(await passkeyStep(soft)).toEqual({ ok: true });
       expect(world.claimsOf(world.cookieToken!)).toMatchObject({ aal: 'aal2' });
-      expect(await pk.passkeysPanelFor(userId)).toMatchObject({
+      expect(await panelFor(userId)).toMatchObject({
         listOnly: null,
         canAdd: false,
         passkeys: [expect.objectContaining({ id: passkeyId })],
@@ -278,7 +292,7 @@ describe('the gates (decision A): ADD needs all four conditions; USE the site, t
         for (const r of refusals) expect(r).toMatchObject({ ok: false, code: 'forbidden' });
         // Signed in with the authenticator app (aal2), the member manages theirs.
         world.signIn(userId, 'aal2');
-        expect(await pk.passkeysPanelFor(userId)).toMatchObject({
+        expect(await panelFor(userId)).toMatchObject({
           listOnly: notice,
           canAdd: false,
           canFinish: false,
@@ -291,7 +305,7 @@ describe('the gates (decision A): ADD needs all four conditions; USE the site, t
         expect(world.bridges.has(userId)).toBe(false);
         expect(world.calls.deleteFactor).toContain(bridge.factor_id);
         // With nothing left to list, the panel is absent again.
-        expect(await pk.passkeysPanelFor(userId)).toBeNull();
+        expect(await panelFor(userId)).toBeNull();
       } finally {
         world.env.PASSKEY_BRIDGE_KEY_V1 = key;
       }
@@ -318,7 +332,7 @@ describe('the gates (decision A): ADD needs all four conditions; USE the site, t
     world.signIn(userId, 'aal2');
     for (const word of ['disabled', 'no_profile']) {
       world.addAllowed = word;
-      expect(await pk.passkeysPanelFor(userId)).toBeNull();
+      expect(await panelFor(userId)).toBeNull();
     }
   });
 
@@ -329,7 +343,7 @@ describe('the gates (decision A): ADD needs all four conditions; USE the site, t
     process.env.VERCEL_ENV = 'preview';
     expect(await pk.passkeyGate(userId)).toEqual({ open: false, why: 'no_site' });
     expect(await pk.passkeyUseGate(userId)).toEqual({ open: false, why: 'no_site' });
-    expect(await pk.passkeysPanelFor(userId)).toBeNull();
+    expect(await panelFor(userId)).toBeNull();
     expect(world.calls.fns).toEqual([]);
   });
 
@@ -357,7 +371,7 @@ describe('the gates (decision A): ADD needs all four conditions; USE the site, t
   it('the panel is absent for a member who cannot add and has no passkey, and present when every condition holds', async () => {
     const userId = world.addAccount('panel@example.test');
     world.signIn(userId, 'aal1');
-    expect(await pk.passkeysPanelFor(userId)).toMatchObject({
+    expect(await panelFor(userId)).toMatchObject({
       passkeys: [],
       proof: 'password',
       atLimit: false,
@@ -366,7 +380,7 @@ describe('the gates (decision A): ADD needs all four conditions; USE the site, t
     });
     for (const word of ['organization_off', 'adds_off', 'no_membership', 'kill_switch_off']) {
       world.addAllowed = word;
-      expect(await pk.passkeysPanelFor(userId)).toBeNull();
+      expect(await panelFor(userId)).toBeNull();
     }
   });
 });
@@ -384,7 +398,7 @@ describe('decision A: Finish setup is a repair for an existing holder (USE) and 
     breakBridge(userId);
     world.signIn(userId, 'aal2');
     world.addAllowed = 'organization_off';
-    expect(await pk.passkeysPanelFor(userId)).toMatchObject({
+    expect(await panelFor(userId)).toMatchObject({
       canFinish: false,
       passkeys: [expect.objectContaining({ unfinished: true })],
     });
@@ -394,7 +408,7 @@ describe('decision A: Finish setup is a repair for an existing holder (USE) and 
       reason: 'gate_organization_off',
     });
     world.addAllowed = 'ok';
-    expect(await pk.passkeysPanelFor(userId)).toMatchObject({ canFinish: true });
+    expect(await panelFor(userId)).toMatchObject({ canFinish: true });
     const { challengeId, options } = optionsOf(await pk.startFinishSetup());
     expect(await pk.finishPasskeySetup({ challengeId, response: soft.get(options) })).toEqual({
       ok: true,
@@ -420,7 +434,7 @@ describe('decision A: Finish setup is a repair for an existing holder (USE) and 
     breakBridge(userId);
     for (const word of ['organization_off', 'adds_off']) {
       world.addAllowed = word;
-      expect(await pk.passkeysPanelFor(userId)).toMatchObject({ canFinish: true, canAdd: false });
+      expect(await panelFor(userId)).toMatchObject({ canFinish: true, canAdd: false });
     }
     const { challengeId, options } = optionsOf(await pk.startFinishSetup());
     expect(await pk.finishPasskeySetup({ challengeId, response: soft.get(options) })).toEqual({
@@ -826,7 +840,7 @@ describe('rules 13 to 18', () => {
       ok: false,
       message: pk.PASSKEY_WORDS.console,
     });
-    expect(await pk.passkeysPanelFor(userId)).toBeNull();
+    expect(await panelFor(userId)).toBeNull();
   });
 
   it('rule 14 at the finish: an account on the console list by then is refused, nothing stored', async () => {
@@ -960,7 +974,7 @@ describe('rule 19 and the proof to add', () => {
     expect((await pk.startAddPasskey({ proof, phoneConfirmation: '  I Understand ' })).ok).toBe(
       true,
     );
-    expect(await pk.passkeysPanelFor(userId)).toMatchObject({ phoneConfirmation: true });
+    expect(await panelFor(userId)).toMatchObject({ phoneConfirmation: true });
   });
 });
 
@@ -1126,7 +1140,7 @@ describe('states: the server branches on the facts (2.7)', () => {
       ok: false,
       message: pk.PASSKEY_WORDS.setupNotFinished,
     });
-    expect(await pk.passkeysPanelFor(userId)).toMatchObject({
+    expect(await panelFor(userId)).toMatchObject({
       passkeys: [expect.objectContaining({ unfinished: true })],
     });
     const { challengeId, options } = optionsOf(await pk.startFinishSetup());
@@ -1598,5 +1612,161 @@ describe('the page reads', () => {
 
   it('the origin the library is given is the configured one, never the request', () => {
     expect(ORIGIN).toBe('http://localhost:3000');
+  });
+});
+
+// ── Review 4 (REVIEW-STAGE-4.md), the integrator's decisions of 2026-11-21 ──
+
+/** Counts each limiter key against its own limit, as the real limiter does (in memory). */
+function countingLimiter() {
+  const counts = new Map<string, number>();
+  vi.mocked(checkRateLimit).mockImplementation(async (key: string, limit: number) => {
+    const n = (counts.get(key) ?? 0) + 1;
+    counts.set(key, n);
+    return { allowed: n <= limit } as Awaited<ReturnType<typeof checkRateLimit>>;
+  });
+  return counts;
+}
+const reportsTagged = (tag: string) =>
+  vi
+    .mocked(reportError)
+    .mock.calls.map((c) => c[1])
+    .filter((ctx) => ctx.tag === tag);
+const passkeyErrorReports = () =>
+  vi
+    .mocked(reportError)
+    .mock.calls.map((c) => c[1])
+    .filter((ctx) => ctx.tag.startsWith('passkeys.') && ctx.level === 'error');
+const factorsOfAccount = (userId: string) => world.factors.filter((f) => f.user_id === userId);
+const hashed = expect.objectContaining({ userIdHash: expect.stringMatching(/^[0-9a-f]{16}$/) });
+
+/** S2: the bridge row and its factor gone; the passkey row stays (no verified factor left). */
+function dropBridgeAndFactor(userId: string) {
+  const old = world.bridges.get(userId)!;
+  world.bridges.delete(userId);
+  world.factors = world.factors.filter((f) => f.id !== old.factor_id);
+}
+/** An unverified factor with the reserved name and no row: the leftover of a failed Add (S3). */
+function leftoverFactor(userId: string) {
+  const f = {
+    id: crypto.randomUUID(),
+    user_id: userId,
+    friendly_name: 'sp-passkey-bridge-0123456789ab',
+    factor_type: 'totp' as const,
+    status: 'unverified' as const,
+    created_at: new Date().toISOString(),
+    secret: 'JBSWY3DPEHPK3PXP',
+  };
+  world.factors.push(f);
+  return f;
+}
+
+describe('review 4 finding 5: active rows are read on their own, never cut off by removed history', () => {
+  it('600 removed rows (newer removals than the bridge) and one active: the passkey still serves, nothing is finished or deleted', async () => {
+    const { soft, userId, passkeyId } = await memberWithPasskey();
+    const active = world.passkeys.find((p) => p.id === passkeyId)!;
+    active.created_at = new Date(Date.now() + 5_000).toISOString();
+    const removedAt = new Date(Date.now() + 1_000).toISOString();
+    for (let i = 0; i < 600; i += 1) {
+      world.passkeys.push({
+        ...active,
+        id: crypto.randomUUID(),
+        credential_id: `sample-removed-${i}`,
+        name: `Old ${i}`,
+        created_at: new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString(),
+        removed_at: removedAt,
+        removed_reason: 'member',
+      });
+    }
+    expect(await pk.passkeyStepFor(userId, factorsOfAccount(userId))).toBe('ready');
+    expect(await passkeyStep(soft)).toEqual({ ok: true });
+    expect(world.calls.deleteFactor).toEqual([]);
+    expect(world.bridges.has(userId)).toBe(true);
+    expect((await panelFor(userId))?.passkeys.map((p) => p.id)).toEqual([passkeyId]);
+  });
+});
+
+describe('review 4 finding 6: truly dark (no site, no key, or the kill switch off, and no reserved-name factor)', () => {
+  const quiet = () => {
+    world.calls.fns.length = 0;
+    world.calls.reads.length = 0;
+    world.calls.sessionReads = 0;
+  };
+
+  it('no key: the Security page makes no passkey read and no extra session read', async () => {
+    const userId = world.addAccount('dark@example.test');
+    world.signIn(userId, 'aal1');
+    world.addApp(userId);
+    const key = world.env.PASSKEY_BRIDGE_KEY_V1;
+    world.env.PASSKEY_BRIDGE_KEY_V1 = '';
+    try {
+      quiet();
+      expect(await panelFor(userId)).toBeNull();
+      expect(world.calls.fns).toEqual([]);
+      expect(world.calls.reads).toEqual([]);
+      expect(world.calls.sessionReads).toBe(0);
+      // A factor list that could not be read: no names known, the same.
+      expect(await pk.passkeysPanelFor(userId, null)).toBeNull();
+      expect(world.calls.reads).toEqual([]);
+      expect(world.calls.sessionReads).toBe(0);
+    } finally {
+      world.env.PASSKEY_BRIDGE_KEY_V1 = key;
+    }
+  });
+
+  it('the kill switch off: only the switch is read, then nothing', async () => {
+    const userId = world.addAccount('switch-off@example.test');
+    world.signIn(userId, 'aal1');
+    world.addAllowed = 'kill_switch_off';
+    quiet();
+    expect(await panelFor(userId)).toBeNull();
+    expect(world.calls.fns.map((c) => c.name)).toEqual(['passkey_add_allowed']);
+    expect(world.calls.reads).toEqual([]);
+    expect(world.calls.sessionReads).toBe(0);
+  });
+
+  it('no site: nothing at all', async () => {
+    const userId = world.addAccount('no-site@example.test');
+    world.signIn(userId, 'aal1');
+    process.env.VERCEL = '1';
+    process.env.VERCEL_ENV = 'preview';
+    quiet();
+    expect(await panelFor(userId)).toBeNull();
+    expect(world.calls.fns).toEqual([]);
+    expect(world.calls.reads).toEqual([]);
+    expect(world.calls.sessionReads).toBe(0);
+  });
+
+  it('a holder (a reserved-name factor listed) still gets the list with Remove while dark', async () => {
+    const { userId, passkeyId } = await memberWithPasskey();
+    world.signIn(userId, 'aal2');
+    const key = world.env.PASSKEY_BRIDGE_KEY_V1;
+    world.env.PASSKEY_BRIDGE_KEY_V1 = '';
+    try {
+      expect(await panelFor(userId)).toMatchObject({
+        listOnly: 'unavailable',
+        canAdd: false,
+        passkeys: [expect.objectContaining({ id: passkeyId })],
+      });
+      world.env.PASSKEY_BRIDGE_KEY_V1 = key;
+      world.addAllowed = 'kill_switch_off';
+      expect(await panelFor(userId)).toMatchObject({
+        listOnly: 'turned_off',
+        passkeys: [expect.objectContaining({ id: passkeyId })],
+      });
+    } finally {
+      world.env.PASSKEY_BRIDGE_KEY_V1 = key;
+    }
+  });
+
+  it('the page passes the factor list its context read, and its comment says what is read', () => {
+    const page = readFileSync(
+      path.join(__dirname, '../../app/(dashboard)/dashboard/settings/security/page.tsx'),
+      'utf8',
+    );
+    expect(page).toMatch(
+      /contextFactorsOf\(serviceContext, ctx\.userId\)\s*\.then\(\(factors\) => passkeysPanelFor\(ctx\.userId, factors\)\)/,
+    );
+    expect(page).not.toMatch(/With no site or no bridge key nothing is read/);
   });
 });

@@ -68,9 +68,16 @@ vi.mock('@/components/settings/passkeys-panel', async () => {
       React.createElement('div', { 'data-testid': 'passkeys-panel' }, String(data.passkeys.length)),
   };
 });
+vi.mock('@/lib/auth/context-factor-list', () => ({
+  contextFactorsOf: async (ctx: unknown, userId: string) => {
+    h.contextAsked.push([ctx, userId]);
+    return h.contextFactors;
+  },
+}));
 vi.mock('@/server/security/passkeys', () => ({
-  passkeysPanelFor: async (userId: string) => {
+  passkeysPanelFor: async (userId: string, factors: unknown) => {
     h.panelReads.push(userId);
+    h.panelFactors.push(factors);
     if (h.panelThrows) throw new Error('read failed');
     return h.panel;
   },
@@ -84,6 +91,10 @@ const h = vi.hoisted(() => ({
   panel: null as unknown,
   panelThrows: false,
   panelReads: [] as string[],
+  /** Review 4 finding 6: the factor list the context read, handed to the panel. */
+  contextFactors: null as unknown,
+  contextAsked: [] as Array<[unknown, string]>,
+  panelFactors: [] as unknown[],
 }));
 
 vi.mock('@/lib/auth/verified-claims', () => ({
@@ -150,6 +161,9 @@ beforeEach(() => {
   h.panel = null;
   h.panelThrows = false;
   h.panelReads = [];
+  h.contextFactors = [APP];
+  h.contextAsked = [];
+  h.panelFactors = [];
 });
 
 describe('Security page: the Passkeys panel', () => {
@@ -186,5 +200,15 @@ describe('Security page: the Passkeys panel', () => {
     h.panelThrows = true;
     const failed = await renderPage();
     expect(markup(failed.container.innerHTML)).toBe(without);
+  });
+});
+
+describe('review 4 finding 6: the panel is read with the factor list the context already read', () => {
+  it('names first: the context factor list goes to the panel (no second factor read for it)', async () => {
+    h.panel = PANEL;
+    await renderPage();
+    expect(h.contextAsked).toHaveLength(1);
+    expect(h.contextAsked[0]![1]).toBe('user-1');
+    expect(h.panelFactors).toEqual([[APP]]);
   });
 });

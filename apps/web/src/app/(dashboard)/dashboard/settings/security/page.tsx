@@ -11,6 +11,7 @@ import { PasskeysPanel } from '@/components/settings/passkeys-panel';
 import { PASSKEYS_PANEL_WORDS } from '@/components/settings/passkeys-copy';
 import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
 import { Button } from '@/components/ui/button';
+import { contextFactorsOf } from '@/lib/auth/context-factor-list';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { readPasskeyBridge, withoutPasskeyBridge } from '@/lib/auth/passkey-bridge';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -66,10 +67,15 @@ export default async function SecuritySettingsPage({
     supabase.auth.mfa.listFactors(),
     supabase.from('organizations').select('mfa_policy').eq('id', ctx.organizationId).maybeSingle(),
     getMfaRecoveryCodeStatus(),
-    // Stage 4: the Passkeys panel, or null when it must be ABSENT (any of
-    // the conditions of server/security/passkeys.ts passkeyGate false). With
-    // no site or no bridge key nothing is read.
-    passkeysPanelFor(ctx.userId).catch(() => null),
+    // Stage 4: the Passkeys panel, or null when it must be ABSENT
+    // (server/security/passkeys.ts passkeysPanelFor). Names first, with the
+    // factor list the service context already read: for a member with no
+    // factor carrying the passkey bridge name, no site or no bridge key reads
+    // nothing at all, and the kill switch off reads only that switch; no
+    // passkey table and no second session read (review 4 finding 6).
+    contextFactorsOf(serviceContext, ctx.userId)
+      .then((factors) => passkeysPanelFor(ctx.userId, factors))
+      .catch(() => null),
   ]);
 
   // Display only (every action on this page re-checks server-side), but an

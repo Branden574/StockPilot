@@ -145,6 +145,10 @@ export function makeWorld() {
       deleteFactor: [] as string[],
       setSession: 0,
       cookieSignOut: [] as string[],
+      /** Every service-role table read, by table (finding 6 counts them). */
+      reads: [] as string[],
+      /** Every read of the cookie session (the page's own session read is not here). */
+      sessionReads: 0,
     },
     /** Knobs for one test: what the fake answers differently. */
     knobs: {
@@ -161,6 +165,10 @@ export function makeWorld() {
       failFns: [] as string[],
       /** passkey_add_allowed's next answers, one per call, before addAllowed again. */
       addAllowedNext: [] as string[],
+      /** The service role's factor deletes answer an error. */
+      deleteFails: false,
+      /** Auth's enrol answers an id with no secret (the factor is made all the same). */
+      enrolNoSecret: false,
     },
   };
 
@@ -276,6 +284,7 @@ export function makeWorld() {
         secret: newBase32Secret(),
       };
       w.factors.push(f);
+      if (w.knobs.enrolNoSecret) return json(200, { id: f.id, type: 'totp', totp: {} });
       return json(200, {
         id: f.id,
         type: 'totp',
@@ -501,6 +510,7 @@ export function makeWorld() {
     let update: Row | null = null;
     let single = false;
     let limit = Infinity;
+    const orders: Array<{ col: string; ascending: boolean; nullsFirst: boolean }> = [];
     const valueOf = (r: Row, col: string) => {
       const m = /^metadata->>(.+)$/.exec(col);
       return m ? (r.metadata as Row | undefined)?.[m[1]!] : r[col];
@@ -512,12 +522,21 @@ export function makeWorld() {
         q
       ),
       is: (col: string, v: null) => (filters.push((r) => (valueOf(r, col) ?? null) === v), q),
+      neq: (col: string, v: unknown) => (
+        filters.push((r) => String(valueOf(r, col)) !== String(v)),
+        q
+      ),
       not: (col: string, _op: string, _v: null) => (
         filters.push((r) => (valueOf(r, col) ?? null) !== null),
         q
       ),
       gte: (col: string, v: string) => (filters.push((r) => String(valueOf(r, col)) >= v), q),
-      order: () => q,
+      order: (col: string, opts: { ascending?: boolean; nullsFirst?: boolean } = {}) => {
+        const ascending = opts.ascending ?? true;
+        // PostgREST's default: nulls last ascending, nulls first descending.
+        orders.push({ col, ascending, nullsFirst: opts.nullsFirst ?? !ascending });
+        return q;
+      },
       limit: (n: number) => ((limit = n), q),
       update: (values: Row) => ((update = values), q),
       maybeSingle: () => ((single = true), q),
@@ -532,7 +551,22 @@ export function makeWorld() {
               reject,
             );
           }
+          if (!update) w.calls.reads.push(table);
           const rows = tableRows(table).filter((r) => filters.every((f) => f(r)));
+          if (orders.length > 0) {
+            rows.sort((a, b) => {
+              for (const o of orders) {
+                const x = valueOf(a, o.col) ?? null;
+                const y = valueOf(b, o.col) ?? null;
+                if (x === y) continue;
+                if (x === null) return o.nullsFirst ? -1 : 1;
+                if (y === null) return o.nullsFirst ? 1 : -1;
+                const c = String(x) < String(y) ? -1 : 1;
+                return o.ascending ? c : -c;
+              }
+              return 0;
+            });
+          }
           if (update) {
             if (table === 'member_passkeys' && w.knobs.useWriteFails && 'counter' in update) {
               return Promise.resolve({ data: [], error: null }).then(resolve, reject);
@@ -560,6 +594,7 @@ export function makeWorld() {
         mfa: {
           deleteFactor: async ({ id, userId }: { id: string; userId: string }) => {
             w.calls.deleteFactor.push(id);
+            if (w.knobs.deleteFails) return { data: null, error: { status: 500, code: 'unexpected_failure' } };
             w.factors = w.factors.filter((f) => !(f.id === id && f.user_id === userId));
             return { data: { id }, error: null };
           },
@@ -571,10 +606,13 @@ export function makeWorld() {
   // ── fake cookie client (lib/supabase/server createClient) ───────────
   const cookieClient = {
     auth: {
-      getSession: async () => ({
-        data: { session: w.cookieToken ? { access_token: w.cookieToken } : null },
-        error: null,
-      }),
+      getSession: async () => {
+        w.calls.sessionReads += 1;
+        return {
+          data: { session: w.cookieToken ? { access_token: w.cookieToken } : null },
+          error: null,
+        };
+      },
       getClaims: async (token: string) => {
         const claims = claimsOf(token);
         return claims
@@ -633,6 +671,9 @@ export function makeWorld() {
     w.calls.deleteFactor.length = 0;
     w.calls.setSession = 0;
     w.calls.cookieSignOut.length = 0;
+    w.calls.reads.length = 0;
+    w.calls.sessionReads = 0;
+    w.requestHeaders.delete('x-real-ip');
     w.knobs = {
       useWriteFails: false,
       verifyAnswersOtherSession: false,
@@ -644,6 +685,8 @@ export function makeWorld() {
       failReads: [],
       failFns: [],
       addAllowedNext: [],
+      deleteFails: false,
+      enrolNoSecret: false,
     };
   }
 

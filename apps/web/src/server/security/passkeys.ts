@@ -22,7 +22,7 @@ import {
 } from '@/lib/auth/bridge-secret';
 import { checkMfaCode } from '@/lib/auth/mfa-code-attempts';
 import { accountIdHash } from '@/lib/auth/passkey-bridge';
-import { PASSKEY_BRIDGE_NAME_PREFIX } from '@/lib/auth/passkey-bridge-name';
+import { carriesBridgeName, PASSKEY_BRIDGE_NAME_PREFIX } from '@/lib/auth/passkey-bridge-name';
 import { passkeyRelyingParty, type RelyingParty } from '@/lib/auth/passkey-relying-party';
 import {
   authenticationResponseSchema,
@@ -522,16 +522,55 @@ interface BridgeRow {
 const ROW_COLUMNS =
   'id, credential_id, public_key, counter, transports, backup_eligible, backed_up, rp_id, name, created_at, last_used_at, removed_at';
 
-async function readRows(admin: Admin, userId: string): Promise<PasskeyRow[] | null> {
+/**
+ * More than an account can hold active (passkey_add_allowed answers too_many
+ * at 10); a full page of active rows is not believed (closed).
+ */
+const ACTIVE_ROWS_READ = 25;
+
+/**
+ * The rows that decide `userId`'s state for this site (review 4 finding 5):
+ * the ACTIVE rows of this site, read on their own (newest first), so no
+ * amount of removed history can cut one off; then one active row of another
+ * site, if any, and the newest removed row, if any, which is all the state
+ * needs of them (passkey-state: whether there are any, and the newest
+ * removal). Removed rows live 90 days and nothing caps their number. null
+ * when any read fails, or when the active page is full.
+ */
+async function readRows(
+  admin: Admin,
+  userId: string,
+  rpId: string,
+): Promise<PasskeyRow[] | null> {
   try {
-    const { data, error } = await admin
-      .from('member_passkeys')
-      .select(ROW_COLUMNS)
-      .eq('user_id', userId)
-      .order('created_at', { ascending: true })
-      .limit(500);
-    if (error || !Array.isArray(data)) return null;
-    return data as PasskeyRow[];
+    const [active, otherSite, newestRemoved] = await Promise.all([
+      admin
+        .from('member_passkeys')
+        .select(ROW_COLUMNS)
+        .eq('user_id', userId)
+        .eq('rp_id', rpId)
+        .is('removed_at', null)
+        .order('created_at', { ascending: false })
+        .limit(ACTIVE_ROWS_READ),
+      admin
+        .from('member_passkeys')
+        .select(ROW_COLUMNS)
+        .eq('user_id', userId)
+        .neq('rp_id', rpId)
+        .is('removed_at', null)
+        .limit(1),
+      admin
+        .from('member_passkeys')
+        .select(ROW_COLUMNS)
+        .eq('user_id', userId)
+        .not('removed_at', 'is', null)
+        .order('removed_at', { ascending: false })
+        .limit(1),
+    ]);
+    const parts = [active, otherSite, newestRemoved];
+    if (parts.some((p) => p.error || !Array.isArray(p.data))) return null;
+    if ((active.data as unknown[]).length >= ACTIVE_ROWS_READ) return null;
+    return parts.flatMap((p) => p.data as PasskeyRow[]);
   } catch {
     return null;
   }
@@ -604,7 +643,7 @@ async function readPicture(
 ): Promise<Result<{ picture: AccountPicture }>> {
   const userId = held.claims.userId;
   const [rows, bridge, account] = await Promise.all([
-    readRows(admin, userId),
+    readRows(admin, userId, rp.rpId),
     readBridgeRow(admin, userId),
     readAccountAs(held.token),
   ]);
@@ -801,7 +840,7 @@ async function verifyAssertion(
 
   const answer = response.data;
   if (answer.id !== answer.rawId) return refuseByVerdict('refused', userId);
-  const rows = await readRows(admin, userId);
+  const rows = await readRows(admin, userId, rp.rpId);
   if (rows === null)
     return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'records_unreadable');
   const row = rows.find(
@@ -1795,21 +1834,38 @@ export interface PasskeysPanel {
  * account, a console account, anything unreadable, or a member who cannot
  * add a passkey and has none. A member who has passkeys of this site always
  * sees them with Remove, whatever the switches say (listOnly when the kill
- * switch is off, the key is missing or the switch cannot be read). With no
- * site nothing is read; with no key the database's word is not asked.
+ * switch is off, the key is missing or the switch cannot be read).
+ *
+ * Truly dark (review 4 finding 6), names first as passkeyHolder: `factors` is
+ * the factor list the page's service context already read (null: not known).
+ * Without a factor carrying the reserved bridge name, the panel is absent
+ * with NOTHING read while passkeys are dark here: no site, or no key (the
+ * database is not asked), or the kill switch off (the one word that says so
+ * is the only read). No member_passkeys or passkey_bridges read, and no
+ * second read of the session. A holder (the name listed) still gets their
+ * list with Remove.
  */
-export async function passkeysPanelFor(userId: string): Promise<PasskeysPanel | null> {
+export async function passkeysPanelFor(
+  userId: string,
+  factors: ReadonlyArray<{ friendly_name?: unknown }> | null,
+): Promise<PasskeysPanel | null> {
   try {
-    return await panelOf(userId);
+    return await panelOf(userId, factors);
   } catch {
     return null;
   }
 }
 
-async function panelOf(userId: string): Promise<PasskeysPanel | null> {
+async function panelOf(
+  userId: string,
+  factors: ReadonlyArray<{ friendly_name?: unknown }> | null,
+): Promise<PasskeysPanel | null> {
   const rp = passkeyRelyingParty();
   if (!rp) return null;
+  const named = factors !== null && factors.some(carriesBridgeName);
   const gate = gateForUse(await readGate(userId));
+  if (!named && !gate.open && (gate.why === 'no_key' || gate.why === 'kill_switch_off'))
+    return null;
   if (!gate.open && (gate.why === 'disabled' || gate.why === 'no_profile')) return null;
   const canAdd = gate.open && gate.addOpen;
   const held = await holdSession();
@@ -1817,7 +1873,7 @@ async function panelOf(userId: string): Promise<PasskeysPanel | null> {
   const admin = createAdminClient();
   if (!canAdd) {
     // Only a member who has passkeys of this site sees the panel now.
-    const rows = await readRows(admin, userId);
+    const rows = await readRows(admin, userId, rp.rpId);
     if (rows === null || !rows.some((r) => r.removed_at === null && r.rp_id === rp.rpId))
       return null;
   }
@@ -1933,7 +1989,7 @@ export async function servingPasskeyIds(
     if (!gate.open) return gate.why === 'unreadable' ? null : [];
     const admin = createAdminClient();
     const [rows, bridge] = await Promise.all([
-      readRows(admin, userId),
+      readRows(admin, userId, gate.rp.rpId),
       readBridgeRow(admin, userId),
     ]);
     if (rows === null || bridge === 'unreadable') return null;
