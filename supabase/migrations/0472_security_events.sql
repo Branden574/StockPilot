@@ -265,11 +265,13 @@ begin
     -- The organization, when it is the uuid of an organization that exists.
     -- FOR KEY SHARE is the lock the insert's own foreign key check takes a
     -- moment later: taken here, the organization cannot be deleted between
-    -- this read and the insert. SKIP LOCKED: only a delete of the
-    -- organization (or a change of its id) holds a lock that conflicts, so a
-    -- skipped row is an organization being deleted. The event is then stored
-    -- with no organization, and this call, which holds the one writer lock,
-    -- never waits on that delete.
+    -- this read and the insert. SKIP LOCKED: what holds a lock that
+    -- conflicts is a delete of the organization, or an update of one of its
+    -- unique columns (its id, its slug, its billing customer id), until that
+    -- statement's transaction ends. An ordinary update does not conflict.
+    -- For a skipped row the event is stored with no organization, and this
+    -- call, which holds the one writer lock, never waits on the other
+    -- transaction.
     v_org := null;
     if coalesce(pg_catalog.jsonb_typeof(v_el -> 'organization_id'), '') = 'string' then
       v_text := pg_catalog.lower(v_el ->> 'organization_id');

@@ -147,8 +147,10 @@ select ok(
   not has_function_privilege('anon', 'public.security_events_for_organization(uuid, integer)', 'execute')
   and has_function_privilege('authenticated', 'public.security_events_for_organization(uuid, integer)', 'execute')
   and not has_function_privilege('anon', 'public.security_event_totals_for_organization(uuid, timestamptz, timestamptz)', 'execute')
-  and has_function_privilege('authenticated', 'public.security_event_totals_for_organization(uuid, timestamptz, timestamptz)', 'execute'),
-  '0472/15: authenticated may call the two read functions, anon neither');
+  and has_function_privilege('authenticated', 'public.security_event_totals_for_organization(uuid, timestamptz, timestamptz)', 'execute')
+  and not has_function_privilege('service_role', 'public.security_events_for_organization(uuid, integer)', 'execute')
+  and not has_function_privilege('service_role', 'public.security_event_totals_for_organization(uuid, timestamptz, timestamptz)', 'execute'),
+  '0472/15: authenticated may call the two read functions; anon and service_role neither');
 select is(
   (select array_agg(p.proname || ':' || p.prosecdef::text || ':' || array_to_string(p.proconfig, ',')
                     order by p.proname)

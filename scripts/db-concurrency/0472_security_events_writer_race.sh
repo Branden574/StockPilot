@@ -15,6 +15,8 @@
 #   4. An organization that is being deleted (its row locked by an open
 #      DELETE): a writer call that names it does not wait. It returns at
 #      once and stores the event with no organization.
+#   5. An organization with an open ordinary update (its name): the writer
+#      does not skip it. The event is stored under the organization, at once.
 #
 # LOCAL stack only (docker container supabase_db_stockpilot by default;
 # CONTAINER=<name> for another local stack, the migration scratch stack is
@@ -140,6 +142,26 @@ else
   fi
 fi
 wait "$H4"
+
+# ── 5. An organization with an open ordinary update ────────────────────────
+printf "set application_name = 'race-holder-5';\nbegin;\nupdate public.organizations set name = name where id = '%s';\nselect pg_sleep(3);\nrollback;\n" "$ORG" \
+  | "${PSQL[@]}" > "$TMP/5.h.out" 2>&1 &
+H5=$!
+if ! wait_sleeping race-holder-5; then
+  bad "5: the updating session never reached pg_sleep"
+else
+  EV="[{\"category\":\"bots\",\"outcome\":\"blocked\",\"reason\":\"race_upd\",\"source\":\"web\",\"organization_id\":\"$ORG\"}]"
+  T0="$(now_ms)"
+  OUT="$(q "set role service_role; select public.record_security_events('$EV'::jsonb);")"
+  T1="$(now_ms)"
+  ROW="$(q "select coalesce(string_agg((organization_id = '$ORG')::text || ':' || event_count, ','), 'none') from public.security_events where reason = 'race_upd'")"
+  if [ "$OUT" = "1" ] && [ $((T1 - T0)) -lt 1000 ] && [ "$ROW" = "true:1" ]; then
+    ok "5: an open ordinary update did not make the writer skip or wait ($((T1 - T0)) ms); the event is under the organization"
+  else
+    bad "5: answered '$(printf '%s' "$OUT" | tr '\n' ' ' | cut -c1-120)' after $((T1 - T0)) ms; row: $ROW (expected true:1)"
+  fi
+fi
+wait "$H5"
 
 if [ "$FAILS" -eq 0 ]; then
   echo "all checks passed"
