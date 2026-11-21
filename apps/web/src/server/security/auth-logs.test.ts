@@ -37,8 +37,12 @@ import {
  *   - our own server is its exact client string AND a hosting network; its
  *     lines are not stored one by one, but their count is reconciled with
  *     what our own server recorded (every row of it, however many; overflow
- *     rows cover nothing), and 10 or more refusals it has no record of in an
- *     hour are stored as a flagged count;
+ *     rows cover nothing), and 3 or more refusals it has no record of in an
+ *     hour are stored as a flagged count; refusals at an hour's edge, which
+ *     our server records in the next hour's first minute, are carried and
+ *     not flagged, and the carry cannot cover a refusal our server did not
+ *     make;
+ *   - a flagged count that is stored is also reported, once for the run;
  *   - every returned field is checked before use, and a row that fails is
  *     dropped and counted; a network class that is not exactly `hosting` is
  *     `other` (fail closed);
@@ -65,7 +69,15 @@ const MADE_UP_LOGS_VALUE = ['made', 'up', 'logs', 'value', '0451', 'never', 'rea
 const PROJECT_URL = 'https://madeupprojectref0000.supabase.co';
 const PROJECT_REF = 'madeupprojectref0000';
 
-type RecordedRow = { hour: string; source: string; category: string; reason: string; n: number };
+type RecordedRow = {
+  hour: string;
+  /** The minute of the hour the row is on (30 when not said). */
+  minute?: number;
+  source: string;
+  category: string;
+  reason: string;
+  n: number;
+};
 type ReadQuery = {
   table: string;
   select?: string;
@@ -169,10 +181,16 @@ vi.mock('@/lib/supabase/admin', () => ({
                   error: null,
                 };
           } else {
+            // A row matches by its own minute, inside the window the read asks for.
+            const windowFrom = Date.parse(String(filter('gte', 'minute')?.[2]));
+            const windowTo = Date.parse(String(filter('lt', 'minute')?.[2]));
+            const minuteOfRow = (row: RecordedRow) =>
+              Date.parse(row.hour) + (row.minute ?? 30) * 60_000;
             const rows = h.recorded
               .filter(
                 (row) =>
-                  row.hour === hourRead() &&
+                  minuteOfRow(row) >= windowFrom &&
+                  minuteOfRow(row) < windowTo &&
                   row.source === filter('eq', 'source')?.[2] &&
                   row.category === filter('eq', 'category')?.[2] &&
                   listed('reason').includes(row.reason),
@@ -216,6 +234,7 @@ const {
   AUTH_LOGS_REPORTS_MAX_MS,
   buildHourElements,
   classifyAuthLogLine,
+  hourEdgeCarry,
   hoursToRead,
   isGroupRowOfNextHour,
   parseGroupRow,
@@ -1186,6 +1205,97 @@ describe("one hour's elements for the writer", () => {
         ['unrecorded_server_form_code', 10],
         ['unrecorded_server_form_password', 15],
       ]);
+    });
+
+    describe("the hour's edge: a refusal the gateway stamps in one hour and our server records in the next", () => {
+      const none = { password: 0, code: 0 };
+
+      it('the carry is what the next hour recorded in its first minute, and no more than that hour has beyond its own gateway lines', () => {
+        expect(
+          hourEdgeCarry({
+            firstMinute: { password: 3, code: 0 },
+            recorded: { password: 3, code: 0 },
+            gateway: none,
+          }),
+        ).toEqual({ password: 3, code: 0 });
+        // The first minute is the limit: later rows of the next hour carry nothing.
+        expect(
+          hourEdgeCarry({
+            firstMinute: { password: 2, code: 1 },
+            recorded: { password: 50, code: 9 },
+            gateway: none,
+          }),
+        ).toEqual({ password: 2, code: 1 });
+        // What the next hour's own gateway lines account for is not carried:
+        // a recorded row is counted for one hour only.
+        expect(
+          hourEdgeCarry({
+            firstMinute: { password: 5, code: 4 },
+            recorded: { password: 8, code: 4 },
+            gateway: { password: 6, code: 4 },
+          }),
+        ).toEqual({ password: 2, code: 0 });
+        // Never below zero.
+        expect(
+          hourEdgeCarry({
+            firstMinute: { password: 5, code: 5 },
+            recorded: { password: 5, code: 5 },
+            gateway: { password: 9, code: 30 },
+          }),
+        ).toEqual(none);
+        expect(hourEdgeCarry({ firstMinute: none, recorded: none, gateway: none })).toEqual(none);
+      });
+
+      const withCarry = (password: number, code: number, carry: { password: number; code: number }) =>
+        buildHourElements({
+          hour,
+          groups: [],
+          groupsCapped: false,
+          groupsDropped: 0,
+          totals: totalsOf(hourOf(password, code)),
+          recorded: { password: 0, code: 0, overflow: 0, complete: true },
+          carry,
+        });
+
+      it('three refusals recorded on the other side of the edge raise no flag', () => {
+        const out = withCarry(3, 0, { password: 3, code: 0 });
+        expect(unrecordedOf(out)).toEqual([]);
+        expect(out.reconcile).toEqual({
+          gateway: { password: 3, code: 0 },
+          recorded: { password: 0, code: 0, overflow: 0, complete: true },
+          excess: { password: 0, code: 0 },
+          carried: { password: 3, code: 0 },
+        });
+      });
+
+      it('a carry takes off only what it is: the rest of the excess is still flagged, with its true count', () => {
+        const out = withCarry(9, 5, { password: 3, code: 1 });
+        expect(unrecordedOf(out).map((e) => [e.reason, e.count])).toEqual([
+          ['unrecorded_server_form_code', 4],
+          ['unrecorded_server_form_password', 6],
+        ]);
+        expect(out.reconcile.carried).toEqual({ password: 3, code: 1 });
+        // The threshold is unchanged: two left over are not flagged, three are.
+        expect(unrecordedOf(withCarry(5, 0, { password: 3, code: 0 }))).toEqual([]);
+        expect(unrecordedOf(withCarry(6, 0, { password: 3, code: 0 }))).toEqual([
+          expect.objectContaining({ count: 3 }),
+        ]);
+      });
+
+      it('a carry larger than the excess takes off no more than the excess; each kind has its own', () => {
+        const out = withCarry(4, 4, { password: 50, code: 0 });
+        expect(out.reconcile.excess).toEqual({ password: 0, code: 4 });
+        expect(out.reconcile.carried).toEqual({ password: 4, code: 0 });
+        expect(unrecordedOf(out)).toEqual([
+          expect.objectContaining({ reason: 'unrecorded_server_form_code', count: 4 }),
+        ]);
+      });
+
+      it('with no carry worked out, nothing is taken off and none is shown', () => {
+        const out = build([], hourOf(5, 0), { password: 0, code: 0, overflow: 0, complete: true });
+        expect(out.reconcile.carried).toBeUndefined();
+        expect(unrecordedOf(out)).toEqual([expect.objectContaining({ count: 5 })]);
+      });
     });
 
     it('codes are reconciled on their own: recorded passwords do not cover them', () => {
@@ -2694,7 +2804,7 @@ describe('a run: six hours, oldest first, each written once', () => {
     }
 
     it('what our own server recorded for the hour: read by reason, a page at a time in a fixed order, with the count of rows', async () => {
-      serverHour(H(5), 3);
+      serverHour(H(5), 2);
       await run();
       expect(reconcileReads()).toEqual([
         {
@@ -2855,6 +2965,204 @@ describe('a run: six hours, oldest first, each written once', () => {
       expect(summary.unrecordedFlags).toBe(2);
     });
 
+    describe("the hour's edge: refusals stamped in one hour and recorded in the next are carried, and nothing else is", () => {
+      const flagsOf = (call = 0) =>
+        written(call).filter((e) => String(e.reason).startsWith('unrecorded_server_form_'));
+      /** The reads of our own record, as [window start, window end]. */
+      const windows = () =>
+        reconcileReads().map((q) => [
+          q.filters.find((f) => f[0] === 'gte')![2],
+          q.filters.find((f) => f[0] === 'lt')![2],
+        ]);
+
+      it('three wrong passwords in the last moments of an hour, recorded in the first minute of the next: no flag', async () => {
+        // The gateway stamps the request; our server stamps its record after
+        // the answer. Posted through our own sign-in page just before 06:00,
+        // the three are hour 05 at the gateway and 06:00 in our record.
+        serverHour(H(5), 3);
+        recordWeb(H(6), 'wrong_password', 3, { minute: 0 });
+        const summary = full(await run());
+        expect(h.rpc).not.toHaveBeenCalled();
+        expect(h.report).not.toHaveBeenCalled();
+        expect(summary.hours[1]).toMatchObject({
+          outcome: 'nothing_to_store',
+          reconcile: {
+            gateway: { password: 3, code: 0 },
+            recorded: { password: 0, code: 0, overflow: 0, complete: true },
+            excess: { password: 0, code: 0 },
+            carried: { password: 3, code: 0 },
+          },
+        });
+        // Our record of hour 05, then of hour 06, then of its first minute.
+        expect(windows()).toEqual([
+          [iso(H(5)), iso(H(6))],
+          [iso(H(6)), iso(H(7))],
+          [iso(H(6)), iso(H(6) + MIN)],
+        ]);
+        // The next hour's totals are asked for once, and used again for that hour itself.
+        expect(
+          fetches.filter((f) => sqlOf(f) === AUTH_LOGS_TOTALS_SQL && startOf(f) === iso(H(6))),
+        ).toHaveLength(1);
+        expect(fetches).toHaveLength(12);
+      });
+
+      it('the rule cannot hide a real excess: what the next hour did not record at its edge is still flagged', async () => {
+        // Three at the edge through our own page, and three more in our
+        // server's form that our server never sent.
+        serverHour(H(5), 6);
+        recordWeb(H(6), 'wrong_password', 3, { minute: 0 });
+        const summary = full(await run());
+        expect(flagsOf()).toEqual([
+          expect.objectContaining({ reason: 'unrecorded_server_form_password', count: 3 }),
+        ]);
+        expect(summary.hours[1]).toMatchObject({
+          outcome: 'stored',
+          reconcile: { excess: { password: 3, code: 0 }, carried: { password: 3, code: 0 } },
+        });
+      });
+
+      it("the next hour's record is spent on its own gateway lines first: one recorded row never covers two refusals", async () => {
+        // Hour 06 holds three refusals of its own in our server's form and
+        // three recorded rows in its first minute. Those rows account for
+        // hour 06; they cannot also take hour 05's three away.
+        serverHour(H(5), 3);
+        serverHour(H(6), 3);
+        recordWeb(H(6), 'wrong_password', 3, { minute: 0 });
+        const summary = full(await run());
+        expect(h.rpc).toHaveBeenCalledTimes(1);
+        expect(flagsOf()).toEqual([
+          expect.objectContaining({
+            reason: 'unrecorded_server_form_password',
+            count: 3,
+            at_ms: H(5) + 59 * MIN,
+          }),
+        ]);
+        expect(summary.hours[1]).toMatchObject({
+          reconcile: { excess: { password: 3, code: 0 }, carried: { password: 0, code: 0 } },
+        });
+        expect(summary.hours[2]).toMatchObject({
+          outcome: 'nothing_to_store',
+          reconcile: { excess: { password: 0, code: 0 } },
+        });
+      });
+
+      it('only the first minute of the next hour carries: a later record does not', async () => {
+        serverHour(H(5), 3);
+        recordWeb(H(6), 'wrong_password', 3, { minute: 1 });
+        recordWeb(H(6), 'wrong_password', 40, { minute: 30 });
+        await run();
+        expect(flagsOf()).toEqual([expect.objectContaining({ count: 3 })]);
+      });
+
+      it('only rows whose reason names the kind carry: overflow rows and refusals that never reach the sign-in service do not', async () => {
+        serverHour(H(5), 4, 3);
+        recordWeb(H(6), 'over_buffer_cap', 500, { minute: 0 });
+        recordWeb(H(6), 'over_minute_cap', 500, { minute: 0 });
+        recordWeb(H(6), 'sign_in_paused', 500, { minute: 0 });
+        // Passwords carry passwords; codes need rows of their own.
+        recordWeb(H(6), 'wrong_current_password', 4, { minute: 0 });
+        const summary = full(await run());
+        expect(flagsOf()).toEqual([
+          expect.objectContaining({ reason: 'unrecorded_server_form_code', count: 3 }),
+        ]);
+        expect(summary.hours[1]).toMatchObject({
+          reconcile: { excess: { password: 0, code: 3 }, carried: { password: 4, code: 0 } },
+        });
+      });
+
+      it('codes at the edge are carried the same way', async () => {
+        serverHour(H(5), 0, 3);
+        recordWeb(H(6), 'wrong_code', 2, { minute: 0 });
+        recordWeb(H(6), 'wrong_setup_code', 1, { minute: 0 });
+        const summary = full(await run());
+        expect(h.rpc).not.toHaveBeenCalled();
+        expect(summary.hours[1]).toMatchObject({
+          reconcile: { excess: { password: 0, code: 0 }, carried: { password: 0, code: 3 } },
+        });
+      });
+
+      it('an excess below the threshold never looks at the next hour', async () => {
+        serverHour(H(5), 2);
+        recordWeb(H(6), 'wrong_password', 2, { minute: 0 });
+        const summary = full(await run());
+        expect(windows()).toEqual([[iso(H(5)), iso(H(6))]]);
+        expect(summary.hours[1]!.reconcile?.carried).toBeUndefined();
+      });
+
+      it("the next hour's totals not whole: nothing is carried (its gateway count could be short), and the flag is stored", async () => {
+        serverHour(H(5), 3);
+        hourAnswers(H(6), [], [totalsRow({ kind: 'mystery' }, H(6))]);
+        recordWeb(H(6), 'wrong_password', 3, { minute: 0 });
+        const summary = full(await run());
+        expect(flagsOf()).toEqual([expect.objectContaining({ count: 3, at_ms: H(5) + 59 * MIN })]);
+        expect(summary.hours[1]!.reconcile?.carried).toBeUndefined();
+      });
+
+      it("the newest hour waits one run when it would be flagged: the hour after it is not complete yet", async () => {
+        // 09:00 to 10:00 is the newest complete hour at 10:10. Its edge
+        // refusals are recorded in hour 10, which is still running.
+        hourAnswers(
+          H(9),
+          [groupRow({ n: 2 }, H(9))],
+          [totalsRow({ n: 2 }, H(9)), totalsRow({ ...ours, n: 3 }, H(9))],
+        );
+        recordWeb(H(10), 'wrong_password', 3, { minute: 0 });
+        const first = full(await run());
+        expect(h.rpc).not.toHaveBeenCalled();
+        expect(h.report).not.toHaveBeenCalled();
+        expect(first).toMatchObject({ ok: true, hoursWaiting: 1, hoursStored: 0 });
+        expect(first.hours[5]).toMatchObject({
+          hour: '2026-11-21T09:00Z',
+          outcome: 'waiting',
+          events: 0,
+          reconcile: { gateway: { password: 3, code: 0 }, excess: { password: 3, code: 0 } },
+        });
+        // An hour later the hour after it is complete: the three are carried,
+        // and the hour's ordinary counts are stored, once.
+        const next = full(await run({ nowMs: NOW + HOUR }));
+        expect(written()).toEqual([expect.objectContaining({ reason: 'wrong_password', count: 2 })]);
+        expect(next).toMatchObject({ hoursWaiting: 0, hoursStored: 1 });
+        expect(next.hours[4]).toMatchObject({
+          hour: '2026-11-21T09:00Z',
+          outcome: 'stored',
+          reconcile: { excess: { password: 0, code: 0 }, carried: { password: 3, code: 0 } },
+        });
+      });
+
+      it('the newest hour that would be flagged and has no record at its edge is flagged by the next run', async () => {
+        serverHour(H(9), 5);
+        const first = full(await run());
+        expect(h.rpc).not.toHaveBeenCalled();
+        expect(first.hours[5]!.outcome).toBe('waiting');
+        await run({ nowMs: NOW + HOUR });
+        expect(flagsOf()).toEqual([
+          expect.objectContaining({ reason: 'unrecorded_server_form_password', count: 5 }),
+        ]);
+      });
+
+      it('the newest hour with nothing to flag is stored at once, as before', async () => {
+        hourAnswers(
+          H(9),
+          [groupRow({ n: 2 }, H(9))],
+          [totalsRow({ n: 2 }, H(9)), totalsRow({ ...ours, n: 2 }, H(9))],
+        );
+        const summary = full(await run());
+        expect(summary).toMatchObject({ hoursWaiting: 0, hoursStored: 1 });
+        expect(summary.hours[5]!.outcome).toBe('stored');
+      });
+
+      it("a read for the carry that fails leaves the hour for the next run: no flag is stored on a guess", async () => {
+        serverHour(H(5), 3);
+        answers.set(`totals@${iso(H(6))}`, status(503));
+        const summary = full(await run());
+        expect(h.rpc).not.toHaveBeenCalled();
+        expect(summary.hours[1]).toMatchObject({
+          outcome: 'failed',
+          failure: { cause: 'logs_unavailable', status: 503 },
+        });
+      });
+    });
+
     describe('many recorded rows: read in pages, never skipped', () => {
       const manyRows = (startMs: number, rows: number) => {
         for (let i = 0; i < rows; i++) recordWeb(startMs, 'wrong_password', 1);
@@ -2864,7 +3172,10 @@ describe('a run: six hours, oldest first, each written once', () => {
         serverHour(H(5), 1_020);
         manyRows(H(5), 1_001);
         const summary = full(await run());
-        const pages = reconcileReads();
+        // The pages of hour 05 (the hour after it is read too, for the edge).
+        const pages = reconcileReads().filter((q) =>
+          q.filters.some((f) => f[0] === 'gte' && f[2] === iso(H(5))),
+        );
         expect(pages.map((q) => q.range)).toEqual([
           [0, 999],
           [1000, 1999],
@@ -2973,9 +3284,9 @@ describe('a run: six hours, oldest first, each written once', () => {
           [totalsRow({ n: 2 }, H(5)), totalsRow({ ...ours, n: 500 }, H(5))],
         );
         h.recordedAnswer = (q) =>
-          q.range?.[0] === 0
+          q.range?.[0] === 0 && q.filters.some((f) => f[0] === 'gte' && f[2] === iso(H(5)))
             ? { data: [{ reason: 'wrong_password', event_count: 3 }], error: null, count: 5000 }
-            : { data: [], error: null, count: null };
+            : { data: [], error: null, count: q.count === 'exact' ? 0 : null };
         const summary = full(await run());
         expect(written()).toEqual([
           expect.objectContaining({ reason: 'wrong_password', count: 2 }),

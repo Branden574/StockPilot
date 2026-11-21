@@ -110,6 +110,13 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * for every password and every code it sends there, so the expected excess
  * is zero and the threshold is small. Only rows whose reason names a refused
  * password or code count as recorded; overflow rows cover nothing.
+ * AT AN HOUR'S EDGE the gateway stamps a refusal in one hour and our server
+ * records it in the next. Before an hour is flagged, its excess is reduced
+ * by a carry: at most what our server recorded in the first minute of the
+ * next hour, and at most what that hour's record holds beyond its own
+ * gateway count, so one recorded row never covers two refusals
+ * (hourEdgeCarry). The newest hour, when it would be flagged, waits one run
+ * for the hour after it to be complete, with nothing written.
  * Our client strings from any other network, or any string that only
  * contains their words, are not ours, and are stored as api. A network class
  * that is not exactly `hosting` is `other` (fail closed), and the queries
@@ -214,10 +221,12 @@ export const AUTH_LOGS_UNCLASSIFIED_FLAG_AT = 1;
  * a refusal for every password and every code it sends to the sign-in
  * service (the reasons listed at RECORDED_PASSWORD_REASONS below), so the
  * expected number is zero. One or two can still be missing with nobody at
- * fault: a server instance that stopped before its record was saved, a
- * refusal on one side of an hour's edge and recorded on the other, or a
+ * fault: a server instance that stopped before its record was saved, or a
  * code check the service answered 422 without judging the code (a challenge
- * that had expired). Those must not raise a flag; three do.
+ * that had expired). Those must not raise a flag; three do. A refusal on
+ * one side of an hour's edge and recorded on the other is not one of them:
+ * it is carried (hourEdgeCarry), so it neither raises a flag nor uses up
+ * this allowance.
  */
 export const AUTH_LOGS_UNRECORDED_FLAG_AT = 3;
 /** Rows of our own record one page of the reconciliation read asks for. */
@@ -595,8 +604,23 @@ export interface AuthLogsReconcile {
   gateway: { password: number; code: number };
   /** What our own server recorded, or null when it was not read. */
   recorded: AuthLogsRecorded | null;
-  /** gateway - recorded per kind, never below 0; null when not reconciled. */
+  /**
+   * gateway - recorded per kind, less what was carried, never below 0; null
+   * when not reconciled.
+   */
   excess: { password: number; code: number } | null;
+  /**
+   * What the hour's edge took off the excess, per kind: refusals the gateway
+   * stamped in this hour and our server recorded in the first minute of the
+   * next (hourEdgeCarry). Present only when a carry was worked out.
+   */
+  carried?: { password: number; code: number };
+}
+
+/** The most an hour's excess may be reduced by for its edge, per kind. */
+export interface AuthLogsCarry {
+  password: number;
+  code: number;
 }
 
 export type AuthLogsFailureCause =
@@ -621,7 +645,12 @@ interface AuthLogsFailure {
 export interface AuthLogsHourReport {
   /** The hour's start, e.g. 2026-11-21T04:00Z. */
   hour: string;
-  outcome: 'stored' | 'already_stored' | 'nothing_to_store' | 'failed' | 'not_tried';
+  /**
+   * `waiting`: the newest hour, left for the next run because it would be
+   * flagged and the hour after it, which may hold our record of refusals at
+   * its edge, is not complete yet. Nothing of it is written.
+   */
+  outcome: 'stored' | 'already_stored' | 'nothing_to_store' | 'waiting' | 'failed' | 'not_tried';
   /** Events stored for the hour by this run. */
   events: number;
   /** Our server's form of the hour, reconciled; present once the hour was read. */
@@ -644,6 +673,8 @@ export interface AuthLogsRunSummary {
   /** Hours skipped because they were already stored. */
   hoursSkipped: number;
   hoursStored: number;
+  /** Hours left for the next run with nothing written (see the `waiting` outcome). */
+  hoursWaiting: number;
   /** Group rows that passed the checks. */
   groups: number;
   /** Rows (of either query) dropped by the checks. */
@@ -977,24 +1008,69 @@ function compareElements(a: AuthLogsElement, b: AuthLogsElement): number {
   return 0;
 }
 
-/** Our server's form of an hour against what it recorded (pure). */
+/**
+ * THE HOUR'S EDGE. The gateway stamps a request when it arrives; our server
+ * stamps its record after the answer (and after the organization is looked
+ * up). A refusal in the last moments of an hour is therefore in that hour at
+ * the gateway and in the next hour in our record, and without a rule three
+ * of them would be flagged as refusals our server has no record of.
+ *
+ * The rule is a CARRY, not a tolerance: an hour's excess may be reduced, per
+ * kind, by at most the smaller of
+ *   - the events our server recorded in the FIRST MINUTE of the next hour,
+ *   - what the next hour's own record holds BEYOND the next hour's own
+ *     gateway count.
+ * The second limit is what keeps one recorded row from covering two
+ * refusals: a row of the next hour that one of that hour's own gateway
+ * lines accounts for is not carried back. Only rows whose reason names the
+ * kind count (as everywhere in the reconciliation), so the carry is exactly
+ * the refusals our server made at the edge. Refusals in our server's form
+ * that our server did not make leave no record on either side of the edge,
+ * so the carry never covers them. The threshold is unchanged.
+ */
+export function hourEdgeCarry(next: {
+  /** What our server recorded in the first minute of the next hour. */
+  firstMinute: { password: number; code: number };
+  /** What our server recorded in the whole next hour. */
+  recorded: { password: number; code: number };
+  /** The gateway's refusals of our server's form in the next hour. */
+  gateway: { password: number; code: number };
+}): AuthLogsCarry {
+  const of = (kind: 'password' | 'code') =>
+    Math.max(0, Math.min(next.firstMinute[kind], next.recorded[kind] - next.gateway[kind]));
+  return { password: of('password'), code: of('code') };
+}
+
+/**
+ * Our server's form of an hour against what it recorded (pure), less the
+ * carry of the hour's edge when one was worked out.
+ */
 export function reconcileServerForm(
   gateway: { password: number; code: number },
   recorded: AuthLogsRecorded | null,
+  carry: AuthLogsCarry | null = null,
 ): AuthLogsReconcile {
   if (!recorded) {
     // Nothing of our server's form: nothing to reconcile. Otherwise unknown.
     const none = gateway.password === 0 && gateway.code === 0;
     return { gateway, recorded: null, excess: none ? { password: 0, code: 0 } : null };
   }
+  // Only rows whose reason names the kind: overflow rows cover nothing.
+  const before = {
+    password: Math.max(0, gateway.password - recorded.password),
+    code: Math.max(0, gateway.code - recorded.code),
+  };
+  if (!carry) return { gateway, recorded, excess: before };
+  // A carry takes off no more than it is, and no more than the excess.
+  const carried = {
+    password: Math.max(0, Math.min(before.password, carry.password)),
+    code: Math.max(0, Math.min(before.code, carry.code)),
+  };
   return {
     gateway,
     recorded,
-    excess: {
-      // Only rows whose reason names the kind: overflow rows cover nothing.
-      password: Math.max(0, gateway.password - recorded.password),
-      code: Math.max(0, gateway.code - recorded.code),
-    },
+    excess: { password: before.password - carried.password, code: before.code - carried.code },
+    carried,
   };
 }
 
@@ -1025,6 +1101,8 @@ export function buildHourElements(input: {
    */
   totalsIncomplete?: boolean;
   recorded: AuthLogsRecorded | null;
+  /** The carry of the hour's edge (hourEdgeCarry), when one was worked out. */
+  carry?: AuthLogsCarry | null;
 }): AuthLogsHourElements {
   const listed = new Map<string, AuthLogsElement>();
   const listedByKind = new Map<string, number>();
@@ -1147,7 +1225,11 @@ export function buildHourElements(input: {
   }
   // Refusals of our server's form that our server has no record of: from
   // AUTH_LOGS_UNRECORDED_FLAG_AT in an hour, one count per kind, at the hour's last minute.
-  const reconcile = reconcileServerForm(serverFormRefusals(input.totals), input.recorded);
+  const reconcile = reconcileServerForm(
+    serverFormRefusals(input.totals),
+    input.recorded,
+    input.carry ?? null,
+  );
   const lastMinute = input.hour.endMs - MINUTE_MS;
   if (reconcile.excess) {
     if (reconcile.excess.password >= AUTH_LOGS_UNRECORDED_FLAG_AT)
@@ -1231,6 +1313,10 @@ interface RunContext {
   /** When the run must end, in ms since 1970. */
   deadline: number;
   admin: () => ReturnType<typeof createAdminClient>;
+  /** The start of the hour that is still running: every hour that ends by it is complete. */
+  completeUntil: number;
+  /** The totals answers of this run, by the hour's start: an hour's totals are asked for once. */
+  totalsAnswers: Map<number, unknown[]>;
 }
 
 /** The time a call may take: its own limit, or what is left of the run (`cut`); null when too little is left. */
@@ -1480,6 +1566,7 @@ async function writeHour(
  */
 async function readRecorded(
   ctx: RunContext,
+  /** An hour, or a part of one (the carry reads an hour's first minute). */
   hour: AuthLogsHour,
 ): Promise<Outcome<AuthLogsRecorded>> {
   const failed = (code: string): Outcome<AuthLogsRecorded> => ({
@@ -1560,6 +1647,7 @@ function emptySummary(hours: AuthLogsHour[]): AuthLogsRunSummary {
     hoursRead: 0,
     hoursSkipped: 0,
     hoursStored: 0,
+    hoursWaiting: 0,
     groups: 0,
     dropped: 0,
     capped: 0,
@@ -1594,7 +1682,61 @@ function emptySummary(hours: AuthLogsHour[]): AuthLogsRunSummary {
   };
 }
 
-/** Reads, maps and stores one hour. Null when done (stored, already stored or nothing to store). */
+/** The totals answer of an hour: asked for once in a run, then kept. */
+async function readTotals(ctx: RunContext, hour: AuthLogsHour): Promise<Outcome<unknown[]>> {
+  const kept = ctx.totalsAnswers.get(hour.startMs);
+  if (kept) return { ok: true, value: kept };
+  const answer = await queryLogs(ctx, AUTH_LOGS_TOTALS_SQL, hour);
+  if (answer.ok) ctx.totalsAnswers.set(hour.startMs, answer.value);
+  return answer;
+}
+
+/**
+ * The carry of an hour's edge (hourEdgeCarry), read from the hour after it:
+ * that hour's gateway count of our server's form, what our server recorded
+ * in it, and what it recorded in its first minute. Null when that hour's
+ * totals were not whole: its gateway count could then be short, which would
+ * make the carry too large, so nothing is carried (fail closed). A record
+ * that could not all be read gives lower bounds, so the carry can only be
+ * too small. A read that fails is the caller's failure: the hour is left
+ * for the next run, and no flag is stored on a guess.
+ */
+async function readEdgeCarry(
+  ctx: RunContext,
+  next: AuthLogsHour,
+): Promise<Outcome<AuthLogsCarry | null>> {
+  const answer = await readTotals(ctx, next);
+  if (!answer.ok) return answer;
+  if (answer.value.length >= AUTH_LOGS_ROW_LIMIT) return { ok: true, value: null };
+  const totals: AuthLogsTotalsRow[] = [];
+  for (const raw of answer.value) {
+    const row = parseTotalsRow(raw, next);
+    if (!row) return { ok: true, value: null };
+    totals.push(row);
+  }
+  const recorded = await readRecorded(ctx, next);
+  if (!recorded.ok) return recorded;
+  const gateway = serverFormRefusals(totals);
+  const beyond = (kind: 'password' | 'code') => recorded.value[kind] - gateway[kind];
+  // Nothing beyond its own gateway lines: nothing to carry, whatever its first minute holds.
+  if (beyond('password') <= 0 && beyond('code') <= 0) {
+    return { ok: true, value: { password: 0, code: 0 } };
+  }
+  const firstMinute = await readRecorded(ctx, {
+    startMs: next.startMs,
+    endMs: next.startMs + MINUTE_MS,
+  });
+  if (!firstMinute.ok) return firstMinute;
+  return {
+    ok: true,
+    value: hourEdgeCarry({ firstMinute: firstMinute.value, recorded: recorded.value, gateway }),
+  };
+}
+
+/**
+ * Reads, maps and stores one hour. Null when done (stored, already stored,
+ * nothing to store, or waiting for the hour after it).
+ */
 async function runHour(
   ctx: RunContext,
   hour: AuthLogsHour,
@@ -1626,7 +1768,7 @@ async function runHour(
 
   // Every kind of the hour: always read (the log line, the flagged counts,
   // our server's form, and the remainder when the groups were full).
-  const totalsAnswer = await queryLogs(ctx, AUTH_LOGS_TOTALS_SQL, hour);
+  const totalsAnswer = await readTotals(ctx, hour);
   if (!totalsAnswer.ok) return totalsAnswer.failure;
   const totals: AuthLogsTotalsRow[] = [];
   let totalsDropped = 0;
@@ -1656,8 +1798,33 @@ async function runHour(
     const read = await readRecorded(ctx, hour);
     if (!read.ok) return read.failure;
     recorded = read.value;
-    if (!recorded.complete) summary.reconcileIncomplete += 1;
   }
+
+  // THE HOUR'S EDGE. Before an hour is flagged for refusals our server has
+  // no record of, the hour after it is read: refusals our server made in
+  // this hour's last moments are recorded there (hourEdgeCarry). Only an
+  // hour that would be flagged costs these reads. When the hour after it is
+  // still running, its record is not complete, so the flag cannot be decided
+  // yet: the whole hour waits for the next run, with nothing written (an
+  // hour is written once, so its ordinary counts wait with it).
+  let carry: AuthLogsCarry | null = null;
+  const before = reconcileServerForm(gateway, recorded).excess;
+  if (
+    before &&
+    (before.password >= AUTH_LOGS_UNRECORDED_FLAG_AT || before.code >= AUTH_LOGS_UNRECORDED_FLAG_AT)
+  ) {
+    const next: AuthLogsHour = { startMs: hour.endMs, endMs: hour.endMs + HOUR_MS };
+    if (next.endMs > ctx.completeUntil) {
+      report.outcome = 'waiting';
+      report.reconcile = reconcileServerForm(gateway, recorded);
+      summary.hoursWaiting += 1;
+      return null;
+    }
+    const read = await readEdgeCarry(ctx, next);
+    if (!read.ok) return read.failure;
+    carry = read.value;
+  }
+  if (recorded && !recorded.complete) summary.reconcileIncomplete += 1;
 
   if (totalsFull) summary.totalsCapped += 1;
   summary.totalsRowsDropped += totalsDropped;
@@ -1676,6 +1843,7 @@ async function runHour(
     totals,
     totalsIncomplete,
     recorded,
+    carry,
   });
   report.reconcile = built.reconcile;
   if (totalsIncomplete) report.totalsIncomplete = true;
@@ -1863,6 +2031,8 @@ export async function readAuthLogs(options: {
     fetch: options.fetch ?? fetch,
     deadline: started + AUTH_LOGS_RUN_DEADLINE_MS,
     admin: () => (admin ??= createAdminClient()),
+    completeUntil: Math.floor((options.nowMs ?? started) / HOUR_MS) * HOUR_MS,
+    totalsAnswers: new Map(),
   };
 
   // Each distinct failure of the run (its cause, status and code), with the
