@@ -1849,6 +1849,88 @@ describe('the SQL is two constants that return classes and counts only', () => {
       expect(bothOn(gatewayLine({ client })).totals.values.caller).toBe('other');
     });
 
+    describe('the two exact strings are the ones the installed libraries really send from our server', () => {
+      // An upgrade of either library that changes the form of its client
+      // string would make our own server's lines `other`: stored one by one
+      // as outside traffic, and no longer compared with our own record. These
+      // tests send a sign-in through the INSTALLED libraries to a fake
+      // sign-in service and class the header they really sent, so such an
+      // upgrade fails here first. Nothing leaves this process.
+      const versionOf = (pkg: string) =>
+        (
+          JSON.parse(
+            readFileSync(
+              path.join(__dirname, '../../../node_modules', pkg, 'package.json'),
+              'utf8',
+            ),
+          ) as { version: string }
+        ).version;
+      /** A sign-in service that refuses every password, and keeps each client string it was sent. */
+      function refusingService() {
+        const sent: string[] = [];
+        const serviceFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+          const headers = new Headers(
+            input instanceof Request ? input.headers : (init?.headers ?? undefined),
+          );
+          if (init?.headers) new Headers(init.headers).forEach((v, k) => headers.set(k, v));
+          if (String(input instanceof Request ? input.url : input).includes('/auth/v1/token')) {
+            sent.push(headers.get('x-client-info') ?? '');
+          }
+          return new Response(
+            JSON.stringify({
+              code: 400,
+              error_code: 'invalid_credentials',
+              msg: 'Invalid login credentials',
+            }),
+            { status: 400, headers: { 'content-type': 'application/json' } },
+          );
+        }) as typeof fetch;
+        return { sent, serviceFetch };
+      }
+      const TYPED_VALUE = 'the-typed-value';
+      const classOf = (client: string) =>
+        bothOn(gatewayLine({ client, owner: 'Amazon Example Hosting' })).totals.values.caller;
+
+      it('@supabase/supabase-js (the current-password check): `supabase-js/<version>; runtime=node; runtime-version=<node>`', async () => {
+        const { createClient } = await import('@supabase/supabase-js');
+        const { sent, serviceFetch } = refusingService();
+        const client = createClient(PROJECT_URL, 'made-up-public-value', {
+          auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+          global: { fetch: serviceFetch },
+        });
+        const { error } = await client.auth.signInWithPassword({
+          email: 'ada@example.com',
+          password: TYPED_VALUE,
+        });
+        expect(error).not.toBeNull();
+        expect(sent).toEqual([
+          `supabase-js/${versionOf('@supabase/supabase-js')}; runtime=node; runtime-version=${process.version.replace(/^v/, '')}`,
+        ]);
+        expect(classOf(sent[0]!)).toBe('server');
+      });
+
+      it('@supabase/ssr createServerClient (the sign-in page and the code checks): `supabase-ssr/<version> createServerClient`', async () => {
+        const { createServerClient } = await import('@supabase/ssr');
+        const { sent, serviceFetch } = refusingService();
+        const client = createServerClient(PROJECT_URL, 'made-up-public-value', {
+          cookies: { getAll: () => [], setAll: () => undefined },
+          global: { fetch: serviceFetch },
+        });
+        const { error } = await client.auth.signInWithPassword({
+          email: 'ada@example.com',
+          password: TYPED_VALUE,
+        });
+        expect(error).not.toBeNull();
+        expect(sent).toEqual([`supabase-ssr/${versionOf('@supabase/ssr')} createServerClient`]);
+        expect(classOf(sent[0]!)).toBe('server');
+      });
+
+      it('the strings the tests above use are of those two forms', () => {
+        expect(classOf(SERVER_SSR)).toBe('server');
+        expect(classOf(SERVER_NODE)).toBe('server');
+      });
+    });
+
     it('a line with no client string is none', () => {
       expect(bothOn(gatewayLine({ client: null })).totals.values.caller).toBe('none');
     });
