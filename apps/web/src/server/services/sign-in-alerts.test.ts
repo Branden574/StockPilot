@@ -14,13 +14,17 @@ import { makeServiceContext } from '@/test/supabase-mock';
  *     client; an unreadable answer is null, not an empty list.
  *   - "This was me": refused while the session owes the authenticator step,
  *     then one update of the member's own OPEN alert that sets the answer and
- *     its resolved_at together.
+ *     its resolved_at together. Another member's alert and a made-up id are
+ *     both "not found", the same answer (lab walk 3, L9).
  */
 
 const h = vi.hoisted(() => ({
   report: vi.fn(async (..._a: unknown[]) => undefined),
   updates: [] as Array<{ patch: Record<string, unknown>; filters: Array<[string, string, unknown]> }>,
   updateAnswer: { data: [{ id: 'x' }] as unknown, error: null as unknown },
+  /** The read that follows an update that changed no row: the caller's own alert, by id and account. */
+  reads: [] as Array<{ filters: Array<[string, string, unknown]>; limit: number | null }>,
+  readAnswer: { data: [] as unknown, error: null as unknown },
 }));
 
 vi.mock('@/lib/error-reporter', () => ({ reportError: h.report }));
@@ -29,7 +33,8 @@ vi.mock('@/lib/supabase/admin', () => ({
     from: (table: string) => {
       if (table !== 'sign_in_alerts') throw new Error(`unexpected table ${table}`);
       const filters: Array<[string, string, unknown]> = [];
-      let patch: Record<string, unknown> = {};
+      let patch: Record<string, unknown> | null = null;
+      let limit: number | null = null;
       const b: Record<string, unknown> = {
         update: (p: Record<string, unknown>) => {
           patch = p;
@@ -39,8 +44,16 @@ vi.mock('@/lib/supabase/admin', () => ({
           filters.push(['eq', c, v]);
           return b;
         },
+        limit: (n: number) => {
+          limit = n;
+          return b;
+        },
         select: () => b,
         then: (ok: (v: unknown) => unknown, bad: (e: unknown) => unknown) => {
+          if (patch === null) {
+            h.reads.push({ filters, limit });
+            return Promise.resolve(h.readAnswer).then(ok, bad);
+          }
           h.updates.push({ patch, filters });
           return Promise.resolve(h.updateAnswer).then(ok, bad);
         },
@@ -102,6 +115,9 @@ function service(
 beforeEach(() => {
   h.updates = [];
   h.updateAnswer = { data: [{ id: ALERT }], error: null };
+  h.reads = [];
+  h.readAnswer = { data: [], error: null };
+  h.report.mockClear();
 });
 
 describe('forOrganization', () => {
@@ -219,9 +235,61 @@ describe('confirm ("This was me")', () => {
     ]);
   });
 
-  it('an alert already answered, or not the member’s, changes nothing: the same unchanged answer', async () => {
+  it('the member’s own alert, already answered: nothing changes, and the answer is unchanged', async () => {
     h.updateAnswer = { data: [], error: null };
+    h.readAnswer = { data: [{ id: ALERT }], error: null };
     expect(await service(client({ data: null, error: null })).confirm(ALERT)).toBe('unchanged');
+    // Told apart from "not found" by one read of the caller's OWN alert: by id and by the caller's id.
+    expect(h.reads).toEqual([
+      {
+        filters: [
+          ['eq', 'id', ALERT],
+          ['eq', 'user_id', ME],
+        ],
+        limit: 1,
+      },
+    ]);
+  });
+
+  it('another member’s alert and a made-up id are both "not found", the same answer, and nothing changes', async () => {
+    // For either, the update changes no row and the read of the caller's own
+    // alert finds none: the service cannot tell them apart, and does not try.
+    h.updateAnswer = { data: [], error: null };
+    h.readAnswer = { data: [], error: null };
+    const answers = [];
+    for (const id of [ALERT, 'a1e27000-0000-4000-8000-00000000ffff']) {
+      answers.push(
+        await service(client({ data: null, error: null }))
+          .confirm(id)
+          .then(
+            () => 'answered',
+            (e: unknown) => ({ code: (e as ServiceError).code, message: (e as ServiceError).message }),
+          ),
+      );
+    }
+    expect(answers[0]).toEqual({ code: 'not_found', message: 'That sign-in alert was not found.' });
+    expect(answers[1]).toEqual(answers[0]);
+    // The same words as an id that is not a uuid at all.
+    await expect(service(client({ data: null, error: null })).confirm('nope')).rejects.toMatchObject(answers[0]!);
+  });
+
+  it('when the read that tells them apart fails, the answer is an internal error, never "unchanged"', async () => {
+    h.updateAnswer = { data: [], error: null };
+    h.readAnswer = { data: null, error: { code: '57014' } };
+    await expect(service(client({ data: null, error: null })).confirm(ALERT)).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+    expect(h.report).toHaveBeenCalledTimes(1);
+    h.report.mockClear();
+    h.readAnswer = { data: {}, error: null };
+    await expect(service(client({ data: null, error: null })).confirm(ALERT)).rejects.toMatchObject({
+      code: 'internal_error',
+    });
+  });
+
+  it('an alert that changed is confirmed without a second read', async () => {
+    await service(client({ data: null, error: null })).confirm(ALERT);
+    expect(h.reads).toEqual([]);
   });
 
   it('refused while the session owes the authenticator step, before any write', async () => {

@@ -31,9 +31,12 @@ import { mfaGateError, ServiceError, type ServiceContext } from './context';
  * "THIS WAS ME". Refused while the session still owes the authenticator step
  * (a password alone must not be enough to quiet an alert), then ONE update,
  * with the service role, of the member's own alert while it is still open:
- * the answer and its resolved_at together, as the table requires. An alert
- * already answered, or not the member's, changes nothing and gets the same
- * 'unchanged' answer.
+ * the answer and its resolved_at together, as the table requires. When that
+ * changes no row, one read of the caller's OWN alert (by id and by the
+ * caller's id) says which it was: the member's own alert, already answered,
+ * is 'unchanged'; anything else is "not found". Another member's alert and a
+ * made-up id are the same read and the same answer, so nothing tells them
+ * apart, and the answer is true for both (lab walk 3, L9).
  */
 
 /**
@@ -219,6 +222,29 @@ export class SignInAlertsService {
       });
       throw new ServiceError('internal_error', `sign_in_alerts confirm failed (${code || 'no code'})`);
     }
-    return data.length > 0 ? 'confirmed' : 'unchanged';
+    if (data.length > 0) return 'confirmed';
+
+    // No row changed. The caller's own alert, already answered, is
+    // 'unchanged'; an alert that is not theirs, or is not there, is not
+    // found. One read keyed by the id AND the caller's id answers both of
+    // those the same way.
+    const own = await createAdminClient()
+      .from('sign_in_alerts')
+      .select('id')
+      .eq('id', alertId.toLowerCase())
+      .eq('user_id', this.ctx.userId)
+      .limit(1);
+    if (own.error || !Array.isArray(own.data)) {
+      const code = (own.error as RpcError | null)?.code ?? null;
+      void reportError(new Error(`sign_in_alerts confirm read failed (${code || 'no code'})`), {
+        tag: 'sign-in-alerts.confirm',
+        extra: { code: code || null },
+      });
+      throw new ServiceError('internal_error', `sign_in_alerts confirm read failed (${code || 'no code'})`);
+    }
+    if (own.data.length === 0) {
+      throw new ServiceError('not_found', 'That sign-in alert was not found.');
+    }
+    return 'unchanged';
   }
 }
