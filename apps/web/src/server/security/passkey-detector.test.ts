@@ -8,12 +8,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * sessions raised through a passkey bridge. A raise is explained only by its
  * own passkey.bridge_raise row near its raised_at (the ceremony writes it
  * before answering and refuses without it, passkeys.test.ts "10.4"). An
- * unexplained raise gets an error report, the end of THAT ONE session
- * (0475's passkey_end_bridge_session), the devices told, a security event,
- * and at most one email a day; never a factor deleted or a passkey removed.
- * Doubt of any kind acts on nothing; the caps hold. The session list is given
- * in the shape 0475's passkey_bridge_sessions returns; the audit rows are
- * filtered by a fake of the query builder.
+ * unexplained raise gets an error report and a security event. It STARTS IN
+ * REPORT-ONLY MODE (review 3, A7): only while
+ * platform_settings.passkey_check_ends_sessions is true does it also end THAT
+ * ONE session (0475's passkey_end_bridge_session), tell the devices and send
+ * at most one email a day; off, missing or unreadable, it ends nothing. Never
+ * a factor deleted or a passkey removed. Doubt of any kind acts on nothing;
+ * the caps hold. The session list is given in the shape 0475's
+ * passkey_bridge_sessions returns; the audit rows are filtered by a fake of
+ * the query builder. Most blocks below run with ending ON (ENDS_ON), to pin
+ * what an end does; the "report only" block pins the default.
  */
 
 interface Row {
@@ -29,7 +33,12 @@ const h = vi.hoisted(() => ({
     rpId: string;
     origins: string[];
   } | null,
-  settings: { data: { passkeys_on: true }, error: null } as { data: unknown; error: unknown },
+  settings: { data: { passkeys_on: true, passkey_check_ends_sessions: true }, error: null } as {
+    data: unknown;
+    error: unknown;
+  },
+  /** The columns the settings read asked for. */
+  settingsColumns: [] as string[],
   sessions: { data: [], error: null } as { data: unknown; error: unknown },
   audit: [] as Row[],
   auditFails: false,
@@ -107,7 +116,10 @@ vi.mock('@/lib/supabase/admin', () => ({
       const filters: Array<(r: Row) => boolean> = [];
       let range: [number, number] = [0, Infinity];
       const q = {
-        select: () => q,
+        select: (columns: string) => {
+          if (table === 'platform_settings') h.settingsColumns.push(columns);
+          return q;
+        },
         limit: () => q,
         order: () => q,
         maybeSingle: async () => {
@@ -135,7 +147,12 @@ vi.mock('@/lib/supabase/admin', () => ({
   }),
 }));
 
-import { MAX_FINDINGS, MAX_SESSIONS, runPasskeyDetector } from './passkey-detector';
+import {
+  AUTH_DB_CLOCK_SKEW_MS,
+  MAX_FINDINGS,
+  MAX_SESSIONS,
+  runPasskeyDetector,
+} from './passkey-detector';
 
 const MIN = 60_000;
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
@@ -166,12 +183,14 @@ function row(event: string, at: string, sessionId = S, userId = U): Row {
 }
 const raiseRow = (at: string, sessionId = S, userId = U) =>
   row('passkey.bridge_raise', at, sessionId, userId);
+const ENDS_ON = { passkeys_on: true, passkey_check_ends_sessions: true };
 const tags = () => h.reports.map((r) => r.tag);
 const flagged = () => h.reports.filter((r) => r.tag === 'passkeys.bridge_session_unexplained');
 
 beforeEach(() => {
   h.rp = { rpId: 'localhost', origins: ['http://localhost:3000'] };
-  h.settings = { data: { passkeys_on: true }, error: null };
+  h.settings = { data: { ...ENDS_ON }, error: null };
+  h.settingsColumns = [];
   h.sessions = { data: [], error: null };
   h.audit = [];
   h.auditFails = false;
@@ -223,6 +242,50 @@ describe('a raise is explained by its own row', () => {
     }
   });
 
+  it('the clock skew allowed between Auth and the database is a named 5 seconds: a row up to it after the raise explains, past it does not', async () => {
+    expect(AUTH_DB_CLOCK_SKEW_MS).toBe(5_000);
+    h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
+    h.audit = [raiseRow(ago(20 * MIN - AUTH_DB_CLOCK_SKEW_MS + 100))];
+    expect(await runPasskeyDetector()).toMatchObject({ explained: 1, unexplained: 0 });
+    h.audit = [
+      raiseRow(ago(20 * MIN - AUTH_DB_CLOCK_SKEW_MS - 1_000)),
+      row('passkey.used', ago(90 * MIN)),
+    ];
+    expect(await runPasskeyDetector()).toMatchObject({ explained: 0, unexplained: 1 });
+  });
+
+  it('the two clocks are compared on every run: explained raises give the spread of row minus raise, an unexplained one its nearest raise row', async () => {
+    h.sessions = {
+      data: [
+        session({ raised_at: ago(20 * MIN) }),
+        { ...session({ raised_at: ago(30 * MIN) }), session_id: 'explained-2' },
+        { ...session({ raised_at: ago(40 * MIN) }), session_id: 'late-row' },
+      ],
+      error: null,
+    };
+    h.audit = [
+      raiseRow(ago(20 * MIN + 1_500)),
+      raiseRow(ago(30 * MIN - 3_000), 'explained-2'),
+      raiseRow(ago(40 * MIN - 9_000), 'late-row'),
+    ];
+    const s = await runPasskeyDetector();
+    expect(s).toMatchObject({ explained: 2, unexplained: 1 });
+    expect(s.rowMinusRaiseMs.min).toBeGreaterThanOrEqual(-1_600);
+    expect(s.rowMinusRaiseMs.min).toBeLessThanOrEqual(-1_400);
+    expect(s.rowMinusRaiseMs.max).toBeGreaterThanOrEqual(2_900);
+    expect(s.rowMinusRaiseMs.max).toBeLessThanOrEqual(3_100);
+    const late = flagged()[0]!.extra!.nearestRaiseRowMs as number;
+    expect(late).toBeGreaterThanOrEqual(8_900);
+    expect(late).toBeLessThanOrEqual(9_100);
+
+    h.reports = [];
+    h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
+    h.audit = [row('passkey.used', ago(90 * MIN))];
+    const none = await runPasskeyDetector();
+    expect(none.rowMinusRaiseMs).toEqual({ min: null, max: null });
+    expect(flagged()[0]!.extra!.nearestRaiseRowMs).toBeNull();
+  });
+
   it('another kind of row, or the raise row of another session, explains nothing', async () => {
     h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
     h.audit = [
@@ -232,13 +295,24 @@ describe('a raise is explained by its own row', () => {
     expect((await runPasskeyDetector()).unexplained).toBe(1);
   });
 
-  it('a session without a raise time is not settled: nothing is done', async () => {
-    h.sessions = { data: [session()], error: null };
-    h.audit = [row('passkey.used', ago(90 * MIN))];
-    const s = await runPasskeyDetector();
-    expect(s).toMatchObject({ examined: 0, unexplained: 0, notSettled: { times: 1 } });
+  it('a session without a raise time is reported at error level and ends nothing, even with ending on', async () => {
+    for (const missing of [session(), session({ raised_at: null })]) {
+      h.reports = [];
+      h.sessions = { data: [missing], error: null };
+      h.audit = [row('passkey.used', ago(90 * MIN))];
+      const s = await runPasskeyDetector();
+      expect(s).toMatchObject({ examined: 0, unexplained: 0, notSettled: { times: 1 } });
+      const r = h.reports.find((x) => x.tag === 'passkeys.detector_times_unreadable');
+      expect(r?.level).toBe('error');
+      expect(r?.extra).toMatchObject({
+        count: 1,
+        accounts: expect.stringMatching(/^[0-9a-f]{16}$/),
+      });
+      expect(JSON.stringify(h.reports)).not.toContain(U);
+    }
     expect(h.endAsked).toEqual([]);
     expect(h.events).toEqual([]);
+    expect(h.emails).toEqual([]);
   });
 });
 
@@ -254,16 +328,17 @@ describe('a raise with no row: that one session ended, a report, a security even
     h.audit = [row('passkey.used', ago(90 * MIN)), raiseRow(ago(25 * MIN + 1000), 'explained-1')];
     const s = await runPasskeyDetector();
     expect(s).toMatchObject({
+      mode: 'end',
       unexplained: 1,
       explained: 1,
-      ending: { ended: 1, alreadyGone: 0, refused: 0, failed: 0 },
+      ending: { ended: 1, alreadyGone: 0, refused: 0, failed: 0, reportOnly: 0 },
       emailed: 1,
     });
     expect(h.endAsked).toEqual([S]);
     expect(h.broadcasts).toEqual([{ userId: U, listed: [S], stays: '' }]);
     expect(flagged()).toHaveLength(1);
     expect(flagged()[0]!.level).toBe('error');
-    expect(flagged()[0]!.extra).toMatchObject({ ending: 'ended', recorded: true });
+    expect(flagged()[0]!.extra).toMatchObject({ ending: 'ended', ended: true, recorded: true });
     expect(flagged()[0]!.extra!.userIdHash).toMatch(/^[0-9a-f]{16}$/);
     expect(JSON.stringify(h.reports)).not.toContain(U);
     expect(h.events).toEqual([
@@ -305,13 +380,17 @@ describe('a raise with no row: that one session ended, a report, a security even
     expect(tags()).toContain('passkeys.detector_email_no_address');
   });
 
-  it('the database refuses (not raised by a recorded bridge now): reported, the event recorded, nobody told, no email', async () => {
-    h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
+  it('the database refuses (22023: a session on a reserved-name factor that is not the recorded bridge): report only, the event recorded, nobody told, no email', async () => {
+    h.sessions = { data: [session({ raised_at: ago(20 * MIN), recorded: false })], error: null };
     h.audit = [row('passkey.used', ago(90 * MIN))];
-    h.endAnswer = { data: null, error: { code: '22023', message: 'passkey_session_not_bridge_raised' } };
+    h.endAnswer = {
+      data: null,
+      error: { code: '22023', message: 'passkey_session_not_bridge_raised' },
+    };
     const s = await runPasskeyDetector();
     expect(s).toMatchObject({ unexplained: 1, ending: { ended: 0, refused: 1 }, emailed: 0 });
-    expect(flagged()[0]!.extra).toMatchObject({ ending: 'refused' });
+    expect(flagged()[0]!.level).toBe('error');
+    expect(flagged()[0]!.extra).toMatchObject({ ending: 'refused', ended: false, recorded: false });
     expect(h.events).toHaveLength(1);
     expect(h.broadcasts).toEqual([]);
     expect(h.emails).toEqual([]);
@@ -322,10 +401,11 @@ describe('a raise with no row: that one session ended, a report, a security even
     h.audit = [row('passkey.used', ago(90 * MIN))];
     h.endAnswer = { data: false, error: null };
     expect(await runPasskeyDetector()).toMatchObject({ ending: { alreadyGone: 1 }, emailed: 0 });
+    expect(flagged()[0]!.extra).toMatchObject({ ending: 'already_gone', ended: false });
     h.reports = [];
     h.endAnswer = { data: null, error: { code: '55P03' } };
     expect(await runPasskeyDetector()).toMatchObject({ ending: { failed: 1 }, emailed: 0 });
-    expect(flagged()[0]!.extra).toMatchObject({ ending: 'failed' });
+    expect(flagged()[0]!.extra).toMatchObject({ ending: 'failed', ended: false });
     expect(h.broadcasts).toEqual([]);
     expect(h.emails).toEqual([]);
   });
@@ -367,6 +447,92 @@ describe('a raise with no row: that one session ended, a report, a security even
     expect([...code.matchAll(/auth\.admin\.([A-Za-z]+)/g)].map((m) => m[1])).toEqual([
       'getUserById',
     ]);
+  });
+});
+
+describe('report only first (review 3, A7): ending is a setting, off by default', () => {
+  const reportOnly = () => {
+    expect(h.endAsked).toEqual([]);
+    expect(h.rpcNames).toEqual(['passkey_bridge_sessions']);
+    expect(h.broadcasts).toEqual([]);
+    expect(h.paceKeys).toEqual([]);
+    expect(h.emails).toEqual([]);
+  };
+
+  it('the setting is read with the switch, in the one settings read', async () => {
+    h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
+    h.audit = [row('passkey.used', ago(90 * MIN))];
+    await runPasskeyDetector();
+    expect(h.settingsColumns).toHaveLength(1);
+    expect(
+      h.settingsColumns[0]!.split(',')
+        .map((c) => c.trim())
+        .sort(),
+    ).toEqual(['passkey_check_ends_sessions', 'passkeys_on']);
+  });
+
+  it('off (the column default): an unexplained raise is reported at error level and recorded, and nothing is ended, nobody told, no email', async () => {
+    h.settings = { data: { passkeys_on: true, passkey_check_ends_sessions: false }, error: null };
+    h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
+    h.audit = [row('passkey.used', ago(90 * MIN))];
+    const s = await runPasskeyDetector();
+    expect(s).toMatchObject({
+      mode: 'report_only',
+      unexplained: 1,
+      ending: { ended: 0, alreadyGone: 0, refused: 0, failed: 0, reportOnly: 1 },
+      emailed: 0,
+    });
+    expect(flagged()).toHaveLength(1);
+    expect(flagged()[0]!.level).toBe('error');
+    expect(flagged()[0]!.extra).toMatchObject({ ending: 'report_only', ended: false });
+    expect(h.events).toEqual([
+      expect.objectContaining({ reason: 'passkey_unexplained_sign_in', outcome: 'flagged' }),
+    ]);
+    reportOnly();
+  });
+
+  it('missing or not a yes: report only, and a value that is not a yes or no is reported', async () => {
+    for (const value of [undefined, null, 'true', 1]) {
+      h.reports = [];
+      h.rpcNames = [];
+      h.settings = {
+        data:
+          value === undefined
+            ? { passkeys_on: true }
+            : { passkeys_on: true, passkey_check_ends_sessions: value },
+        error: null,
+      };
+      h.sessions = { data: [session({ raised_at: ago(20 * MIN) })], error: null };
+      h.audit = [row('passkey.used', ago(90 * MIN))];
+      const s = await runPasskeyDetector();
+      expect(s, String(value)).toMatchObject({
+        mode: 'report_only',
+        ending: { ended: 0, reportOnly: 1 },
+      });
+      expect(tags(), String(value)).toContain('passkeys.detector_end_setting_unreadable');
+      reportOnly();
+    }
+  });
+
+  it('the stop report counts only sessions really ended: none in report-only mode', async () => {
+    h.settings = { data: { passkeys_on: true, passkey_check_ends_sessions: false }, error: null };
+    const many = [];
+    for (let i = 0; i < MAX_FINDINGS + 1; i += 1) {
+      many.push({
+        ...session({ raised_at: ago(20 * MIN) }),
+        session_id: `s-${i}`,
+        user_id: `user-${i}`,
+      });
+      h.audit.push(row('passkey.used', ago(90 * MIN), `old-${i}`, `user-${i}`));
+    }
+    h.sessions = { data: many, error: null };
+    const s = await runPasskeyDetector();
+    expect(s).toMatchObject({ stop: 'finding_cap', unexplained: MAX_FINDINGS });
+    expect(s.ending).toMatchObject({ ended: 0, reportOnly: MAX_FINDINGS });
+    expect(h.reports.find((r) => r.tag === 'passkeys.detector_stopped')).toMatchObject({
+      extra: { ended: 0, mode: 'report_only' },
+    });
+    reportOnly();
   });
 });
 
@@ -415,7 +581,9 @@ describe('it never acts on doubt', () => {
     h.audit = [row('passkey.used', ago(90 * MIN))];
     const s = await runPasskeyDetector();
     expect(s.notSettled.times).toBe(2);
-    expect(tags()).toContain('passkeys.detector_times_unreadable');
+    expect(h.reports.find((r) => r.tag === 'passkeys.detector_times_unreadable')?.level).toBe(
+      'error',
+    );
     noAction();
   });
 

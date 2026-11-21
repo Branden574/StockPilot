@@ -77,9 +77,10 @@ function secretsEqual(a: string, b: string): boolean {
  *
  * The passkey detector (server/security/passkey-detector.ts: sessions
  * raised by a passkey bridge with no raise row of ours; it reports and
- * records a security event, and changes nothing else) runs alongside,
- * started after the secret check. It never throws and never changes this
- * answer.
+ * records a security event, and only while
+ * platform_settings.passkey_check_ends_sessions is on (off by default) ends
+ * that one session) runs alongside, started after the secret check. It never
+ * throws and never changes this answer.
  *
  * Schedule: "0 *\/1 * * *" (hourly) — see apps/web/vercel.json.
  * Auth: Bearer ${CRON_SECRET} — fail-closed.

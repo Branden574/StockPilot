@@ -368,6 +368,9 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
   // A sign-in ended by the hourly passkey check (integrator decision C,
   // 2026-11-21): its second step was answered by a code our server did not
   // send. At most one a day per account (server/security/passkey-detector.ts).
+  // Sent only when the check really ended the sign-in, which it does only
+  // while platform_settings.passkey_check_ends_sessions is on (off by
+  // default: report only, review 3 A7).
   d({
     id: 'passkey-sign-in-ended',
     family: 'security',

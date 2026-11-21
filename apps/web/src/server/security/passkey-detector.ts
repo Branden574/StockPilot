@@ -23,37 +23,46 @@ import { PASSKEY_RAISE_EVENT, timeNanos } from './passkey-state';
  * the time of its raise, was not raised by us.
  *
  * WHAT IT DOES on such a session (integrator decision C, 2026-11-21): an
- * error report (the account as a hash of its id); it ENDS THAT ONE SESSION
- * through 0475's passkey_end_bridge_session, which ends only a session whose
- * second step is held now by the account's recorded bridge (any other is
- * refused by the database, and that refusal is reported); the account's
- * devices learn through the sessions broadcast, as for any ended session; a
- * security event (passkey_unexplained_sign_in, outcome flagged); and, when
- * the session was ended, at most one email a day to the account (the
- * security family: a sign-in was ended, reset your password). It deletes no
- * factor and removes no passkey, ever (pinned by passkey-detector.test.ts,
- * which reads this file): the bridge factor stays, so the member's own
- * passkey keeps working.
+ * error report (the account as a hash of its id) and a security event
+ * (passkey_unexplained_sign_in, outcome flagged). It STARTS IN REPORT-ONLY
+ * MODE (review 3, A7): only while platform_settings.passkey_check_ends_sessions
+ * is true (0475; default false) does it also END THAT ONE SESSION through
+ * passkey_end_bridge_session, which ends only a session whose second step is
+ * held now by the account's recorded bridge (any other is refused, 22023, and
+ * that refusal is report only); then the account's devices learn through the
+ * sessions broadcast, and at most one email a day goes to the account (the
+ * security family: a sign-in was ended, reset your password). Off, missing,
+ * or not a yes or no: report only, nothing ended, nobody told, no email; so
+ * the first production runs can be compared with known-honest raises, and the
+ * two clocks compared, before anything is ended. The report and the email say
+ * "ended" only when the database answered that it ended the session. It
+ * deletes no factor and removes no passkey, ever (pinned by
+ * passkey-detector.test.ts, which reads this file): the bridge factor stays,
+ * so the member's own passkey keeps working.
  *
  * WHICH RAISE: passkey_bridge_sessions gives each session's raised_at, the
  * time of its TOTP method row at Auth (auth.mfa_amr_claims, upserted with
  * Auth's clock on every TOTP answer; read from the Auth source, not measured
  * for a bridge raise). The row of that raise must lie in [raised_at - 2 min,
- * raised_at + 5 s]: a second raise of the same session needs its own row.
+ * raised_at + AUTH_DB_CLOCK_SKEW_MS]: a second raise of the same session
+ * needs its own row. Every run logs the spread of (row time - raise time)
+ * over the raises it explained, and each unexplained raise is reported with
+ * its nearest raise row, so the two clocks can be compared.
  *
  * IT NEVER ACTS ON DOUBT. Each of these is "not settled", skipped and
  * reported: the passkey switch could not be read (error; never read as off);
  * the session list could not be read (error); the audit rows could not all be
  * read (error, every session of the run); a session's raise time is missing
- * or cannot be read; a raise in the last two minutes (our row may not be
+ * or cannot be read (error: the list should always carry it; nothing is
+ * ended); a raise in the last two minutes (our row may not be
  * committed yet; the next hourly run still sees it, the window is two hours);
  * an account with no passkey audit row at all in the two-hour window (or
  * since its raise bound began, when that is earlier): the audit stream may be
  * unreliable for it; reported with the account hashes.
  *
  * BOUNDS (like the retention route): at most MAX_SESSIONS sessions examined
- * a run, at most MAX_FINDINGS sessions flagged (and so at most MAX_FINDINGS
- * ended) a run (past that the run stops and one error report says a person
+ * a run, at most MAX_FINDINGS sessions flagged (and so, with ending on, at
+ * most MAX_FINDINGS ended) a run (past that the run stops and one error report says a person
  * must look: the detector is wrong or there is a real wave), no new session
  * started after RUN_BUDGET_MS. An early stop is reported with the counts.
  *
@@ -67,8 +76,17 @@ type Admin = ReturnType<typeof createAdminClient>;
 const WINDOW_MS = 2 * 60 * 60_000;
 /** Our row is written before the answer; an answer takes at most a few Auth calls of 8 s. */
 const ROW_BEFORE_RAISE_MS = 2 * 60_000;
-/** The row is committed before the answer starts: only clock jitter after. */
-const ROW_AFTER_RAISE_MS = 5_000;
+/**
+ * The clock skew allowed between Auth (raised_at is Auth's clock) and the
+ * database (the raise row's created_at is the database's now()). Our row is
+ * committed before the answer starts, so with equal clocks it is always
+ * before raised_at; it may read as later only by the skew. Beyond it (Auth's
+ * clock more than this behind the database's), an honest raise's own row
+ * reads as after the raise, so the raise is reported as unexplained, and with
+ * ending on, that honest session would be ended. That is why ending starts
+ * off: compare the reported spread first.
+ */
+export const AUTH_DB_CLOCK_SKEW_MS = 5_000;
 /** A raise this recent waits for the next run. */
 const SETTLE_MS = 2 * 60_000;
 export const MAX_SESSIONS = 500;
@@ -124,9 +142,19 @@ export interface PasskeyDetectorSummary {
   unexplained: number;
   waiting: number;
   notSettled: { times: number; auditRead: number; noRows: number };
-  /** What became of the unexplained sessions (decision C). */
-  ending: { ended: number; alreadyGone: number; refused: number; failed: number };
+  /** Whether an unexplained raise is ended (platform_settings.passkey_check_ends_sessions). */
+  mode: 'report_only' | 'end' | null;
+  /** What became of the unexplained sessions (decision C; report only by default, A7). */
+  ending: {
+    ended: number;
+    alreadyGone: number;
+    refused: number;
+    failed: number;
+    reportOnly: number;
+  };
   emailed: number;
+  /** The two clocks compared: (raise row time - raised_at) over the explained raises. */
+  rowMinusRaiseMs: { min: number | null; max: number | null };
   usedButNotListed: number;
   stop: Stop | null;
 }
@@ -135,12 +163,24 @@ interface Checked {
   session: BridgeSession;
   lo: bigint;
   hi: bigint;
+  raised: bigint;
 }
 
-type Ending = 'ended' | 'already_gone' | 'refused' | 'failed';
+type Ending = 'ended' | 'already_gone' | 'refused' | 'failed' | 'report_only';
 
 const MS = 1_000_000n;
 const isoOf = (nanos: bigint) => new Date(Number(nanos / MS)).toISOString();
+/** Row time minus raise time, in whole milliseconds (negative: the row came first). */
+const offsetMs = (at: bigint, raised: bigint) => Number((at - raised) / MS);
+/** The time in `list` nearest to `to`, or null for an empty list. */
+function nearest(list: bigint[], to: bigint): bigint | null {
+  let best: bigint | null = null;
+  for (const at of list) {
+    const d = at > to ? at - to : to - at;
+    if (best === null || d < (best > to ? best - to : to - best)) best = at;
+  }
+  return best;
+}
 
 function push(map: Map<string, bigint[]>, key: string, at: bigint) {
   const list = map.get(key);
@@ -175,8 +215,8 @@ export async function recordUnexplainedBridgeSession(userId: string): Promise<vo
 
 /**
  * Ends ONE session raised through a recorded bridge (0475's
- * passkey_end_bridge_session refuses any other, 22023) and tells the
- * account's devices.
+ * passkey_end_bridge_session refuses any other, 22023: report only) and
+ * tells the account's devices. 'ended' only when the database said true.
  */
 async function endBridgeSession(admin: Admin, s: BridgeSession): Promise<Ending> {
   try {
@@ -222,9 +262,9 @@ async function emailOnceADay(admin: Admin, userId: string): Promise<boolean> {
 }
 
 /**
- * Never throws. Changes nothing but reports, security events, the ending of
- * an unexplained bridge-raised session (at most MAX_FINDINGS a run) and its
- * email.
+ * Never throws. Changes nothing but reports, security events, and, only with
+ * ending on, the ending of an unexplained bridge-raised session (at most
+ * MAX_FINDINGS a run) and its email.
  */
 export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
   const started = Date.now();
@@ -237,8 +277,10 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
     unexplained: 0,
     waiting: 0,
     notSettled: { times: 0, auditRead: 0, noRows: 0 },
-    ending: { ended: 0, alreadyGone: 0, refused: 0, failed: 0 },
+    mode: null,
+    ending: { ended: 0, alreadyGone: 0, refused: 0, failed: 0, reportOnly: 0 },
     emailed: 0,
+    rowMinusRaiseMs: { min: null, max: null },
     usedButNotListed: 0,
     stop: null,
   };
@@ -246,10 +288,11 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
     if (!passkeyRelyingParty()) return summary;
     const admin = createAdminClient();
 
-    // The switch: read, never assumed. A failed read settles nothing.
+    // The switch and the ending setting: read, never assumed. A failed read
+    // settles nothing.
     const settings = await admin
       .from('platform_settings')
-      .select('passkeys_on')
+      .select('passkeys_on, passkey_check_ends_sessions')
       .limit(1)
       .maybeSingle();
     if (settings.error) {
@@ -257,12 +300,24 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
       report('detector_settings_unreadable', 'error', { code: codeOf(settings.error) });
       return summary;
     }
-    const on = (settings.data as { passkeys_on?: unknown } | null)?.passkeys_on;
+    const row = settings.data as {
+      passkeys_on?: unknown;
+      passkey_check_ends_sessions?: unknown;
+    } | null;
+    const on = row?.passkeys_on;
     if (typeof on !== 'boolean') {
       report('detector_settings_unreadable', 'error', { code: 'no_value' });
       return summary;
     }
     summary.switchOn = on;
+    // Ending is on only for a stored true; anything else is report only.
+    const ends = row?.passkey_check_ends_sessions;
+    if (typeof ends !== 'boolean') {
+      report('detector_end_setting_unreadable', 'warning', {
+        type: ends === null ? 'null' : typeof ends,
+      });
+    }
+    summary.mode = ends === true ? 'end' : 'report_only';
 
     const nowNs = BigInt(Date.now()) * MS;
     const since = new Date(Date.now() - WINDOW_MS).toISOString();
@@ -284,11 +339,13 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
     // Each session's bound, or why it is not settled.
     const checked: Checked[] = [];
     const settledBefore = nowNs - BigInt(SETTLE_MS) * MS;
+    const noTimeAccounts: string[] = [];
     for (const s of sessions) {
       // The raise this check is about: its time at Auth, or not settled.
       const raised = timeNanos(s.raised_at);
       if (raised === null) {
         summary.notSettled.times += 1;
+        if (noTimeAccounts.length < 10) noTimeAccounts.push(accountIdHash(s.user_id));
         continue;
       }
       if (raised > settledBefore) {
@@ -298,7 +355,8 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
       checked.push({
         session: s,
         lo: raised - BigInt(ROW_BEFORE_RAISE_MS) * MS,
-        hi: raised + BigInt(ROW_AFTER_RAISE_MS) * MS,
+        hi: raised + BigInt(AUTH_DB_CLOCK_SKEW_MS) * MS,
+        raised,
       });
     }
 
@@ -329,8 +387,13 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
         }
         summary.examined += 1;
         const raises = raisesBySession.get(c.session.session_id) ?? [];
-        if (raises.some((at) => at >= c.lo && at <= c.hi)) {
+        const inBound = raises.filter((at) => at >= c.lo && at <= c.hi);
+        if (inBound.length > 0) {
           summary.explained += 1;
+          const offset = offsetMs(nearest(inBound, c.raised)!, c.raised);
+          const spread = summary.rowMinusRaiseMs;
+          if (spread.min === null || offset < spread.min) spread.min = offset;
+          if (spread.max === null || offset > spread.max) spread.max = offset;
           continue;
         }
         // The audit stream must be seen working for this account: some
@@ -347,15 +410,20 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
           break;
         }
         summary.unexplained += 1;
-        const ending = await endBridgeSession(admin, c.session);
+        const ending: Ending =
+          summary.mode === 'end' ? await endBridgeSession(admin, c.session) : 'report_only';
         if (ending === 'ended') summary.ending.ended += 1;
         else if (ending === 'already_gone') summary.ending.alreadyGone += 1;
         else if (ending === 'refused') summary.ending.refused += 1;
+        else if (ending === 'report_only') summary.ending.reportOnly += 1;
         else summary.ending.failed += 1;
+        const near = nearest(raises, c.raised);
         report('bridge_session_unexplained', 'error', {
           userIdHash: accountIdHash(c.session.user_id),
           recorded: c.session.recorded === true,
           ending,
+          ended: ending === 'ended',
+          nearestRaiseRowMs: near === null ? null : offsetMs(near, c.raised),
         });
         await recordUnexplainedBridgeSession(c.session.user_id);
         if (ending === 'ended' && (await emailOnceADay(admin, c.session.user_id))) {
@@ -389,11 +457,17 @@ export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
     }
 
     if (summary.notSettled.times > 0) {
-      report('detector_times_unreadable', 'warning', { count: summary.notSettled.times });
+      // The list should always carry the raise time (0475): its absence is an
+      // error, and such a session is never ended.
+      report('detector_times_unreadable', 'error', {
+        count: summary.notSettled.times,
+        accounts: noTimeAccounts.join(','),
+      });
     }
     if (summary.stop !== null) {
       report('detector_stopped', summary.stop === 'finding_cap' ? 'error' : 'warning', {
         stop: summary.stop,
+        mode: summary.mode,
         listed: summary.listed,
         examined: summary.examined,
         unexplained: summary.unexplained,
