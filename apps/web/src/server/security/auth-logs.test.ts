@@ -12,47 +12,70 @@ import {
 
 /**
  * Security invariant: the reader of refused sign-ins from Supabase's gateway
- * log (server/security/auth-logs.ts) keeps the logs token to one place and
- * stores counts only.
+ * log (server/security/auth-logs.ts) keeps the logs token to one place,
+ * stores counts only, and lets no refusal disappear.
  *
  *   - the token is sent only as the Authorization header of a GET to
  *     https://api.supabase.com, and appears in no report, no answer and no
  *     log line, even when the logs service answers with a body that repeats
  *     the header;
  *   - the SQL is two constants with no value in them; the hour travels in the
- *     two timestamp parameters; the query returns a minute, a kind, a status,
- *     a caller class, a network class, a country and a count, never an
- *     address, a raw log line, a path, a query string, a network owner's name
- *     or the raw client string;
+ *     two timestamp parameters; the query returns a minute, a kind, a form, a
+ *     status, a caller class, a network class, a country and a count, never
+ *     an address, a raw log line, a path, a query string, a network owner's
+ *     name or the raw client string;
  *   - the kind is read the way the sign-in service reads the request: the
- *     path and the grant decoded; anything of an unusual form is never stored
- *     as an attack, and only many of them in one hour are stored, as one
- *     flagged count;
+ *     path decoded, the FIRST decoded grant_type; known grants that are not a
+ *     password are counted only; anything of an unknown form is stored as a
+ *     flagged count, even one, and never taken for our own server;
+ *   - our own server is its exact client string AND a hosting network; its
+ *     lines are not stored one by one, but their count is reconciled with
+ *     what our own server recorded, and 10 or more refusals it did not make
+ *     in an hour are stored as a flagged count;
  *   - every returned field is checked before use, and a row that fails is
  *     dropped and counted; a network class that is not exactly `hosting` is
  *     `other` (fail closed);
  *   - an hour is written once: an hour with rows of this job is not read
- *     again, and an hour with nothing to store is read again by the next run;
- *   - our own server's lines (its client string AND a hosting network) are
- *     not stored; our server's client string from any other network is stored
- *     as `api`;
+ *     again, an hour with nothing to store is read again by the next run, and
+ *     an hour whose reconciliation could not be read is not written;
  *   - each failure is reported once, in plain words and codes.
  *
  * Every value here is made up: the project ref, the token, the network owner
  * names (but the one prefix the query compares with), the ids and the counts.
+ * The client strings are the public forms of the Supabase libraries.
  */
 
 const MADE_UP_LOGS_VALUE = ['made', 'up', 'logs', 'value', '0451', 'never', 'real'].join('-');
 const PROJECT_URL = 'https://madeupprojectref0000.supabase.co';
 const PROJECT_REF = 'madeupprojectref0000';
 
+type RecordedRow = { hour: string; source: string; category: string; reason: string; n: number };
+type ReadQuery = {
+  table: string;
+  select?: string;
+  count?: string;
+  filters: unknown[][];
+  limit?: number;
+};
+
 const h = vi.hoisted(() => ({
   report: vi.fn(async (_err: unknown, _ctx: unknown) => undefined),
   /** Rows the fake writer stored: the hour start (ISO), the reason and the source. */
   stored: [] as Array<{ hour: string; reason: string; source: string }>,
-  /** Every read of security_events, as the filters it was built with. */
-  reads: [] as Array<{ table: string; select?: string; filters: unknown[][]; limit?: number }>,
-  readAnswer: null as null | ((q: { filters: unknown[][] }) => { data: unknown; error: unknown }),
+  /** Rows our own server's recorder stored, for the reconciliation read. */
+  recorded: [] as RecordedRow[],
+  /** Every read of security_events, as it was built. */
+  reads: [] as ReadQuery[],
+  /** Replaces the answer of the "already stored" check. */
+  readAnswer: null as null | ((q: ReadQuery) => { data: unknown; error: unknown }),
+  /** Replaces the answer of the reconciliation read. */
+  recordedAnswer: null as
+    | null
+    | ((q: ReadQuery) => {
+        data: unknown;
+        error: unknown;
+        count: number | null;
+      }),
   rpc: vi.fn(),
 }));
 
@@ -60,15 +83,15 @@ vi.mock('@/lib/error-reporter', () => ({ reportError: h.report }));
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => ({
     from(table: string) {
-      const q = { table, filters: [] as unknown[][] } as {
-        table: string;
-        select?: string;
-        filters: unknown[][];
-        limit?: number;
-      };
+      const q: ReadQuery = { table, filters: [] };
+      const filter = (op: string, col: string) =>
+        q.filters.find((f) => f[0] === op && f[1] === col);
+      const listed = (col: string) => (filter('in', col)?.[2] as unknown[] | undefined) ?? [];
+      const hourRead = () => String(filter('gte', 'minute')?.[2]);
       const builder = {
-        select(cols: string) {
+        select(cols: string, options?: { count?: string }) {
           q.select = cols;
+          if (options?.count) q.count = options.count;
           return builder;
         },
         is(col: string, value: unknown) {
@@ -81,10 +104,6 @@ vi.mock('@/lib/supabase/admin', () => ({
         },
         eq(col: string, value: unknown) {
           q.filters.push(['eq', col, value]);
-          return builder;
-        },
-        or(text: string) {
-          q.filters.push(['or', text]);
           return builder;
         },
         gte(col: string, value: unknown) {
@@ -104,25 +123,37 @@ vi.mock('@/lib/supabase/admin', () => ({
         },
         then(resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) {
           h.reads.push(q);
-          const answer = h.readAnswer
-            ? h.readAnswer(q)
-            : {
-                // A row matches the way the database would: its hour, and its
-                // reason and source among the ones the read lists.
-                data: h.stored.some((row) => {
-                  const listed = (col: string) =>
-                    (q.filters.find((f) => f[0] === 'in' && f[1] === col)?.[2] as
-                      unknown[] | undefined) ?? [];
-                  return (
-                    row.hour === String(q.filters.find((f) => f[0] === 'gte')?.[2]) &&
-                    listed('reason').includes(row.reason) &&
-                    listed('source').includes(row.source)
-                  );
-                })
-                  ? [{ id: '5eed0000-0000-4000-8000-00000000000a' }]
-                  : [],
-                error: null,
-              };
+          let answer: unknown;
+          if (q.select === 'id') {
+            // A row matches the way the database would: its hour, and its
+            // reason and source among the ones the read lists.
+            answer = h.readAnswer
+              ? h.readAnswer(q)
+              : {
+                  data: h.stored.some(
+                    (row) =>
+                      row.hour === hourRead() &&
+                      listed('reason').includes(row.reason) &&
+                      listed('source').includes(row.source),
+                  )
+                    ? [{ id: '5eed0000-0000-4000-8000-00000000000a' }]
+                    : [],
+                  error: null,
+                };
+          } else {
+            const rows = h.recorded
+              .filter(
+                (row) =>
+                  row.hour === hourRead() &&
+                  row.source === filter('eq', 'source')?.[2] &&
+                  row.category === filter('eq', 'category')?.[2] &&
+                  listed('reason').includes(row.reason),
+              )
+              .map((row) => ({ reason: row.reason, event_count: row.n }));
+            answer = h.recordedAnswer
+              ? h.recordedAnswer(q)
+              : { data: rows, error: null, count: rows.length };
+          }
           return Promise.resolve(answer).then(resolve, reject);
         },
       };
@@ -145,6 +176,8 @@ const {
   AUTH_LOGS_MAX_COUNT,
   AUTH_LOGS_HOURS_PER_RUN,
   AUTH_LOGS_UNCLASSIFIED_FLAG_AT,
+  AUTH_LOGS_UNRECORDED_FLAG_AT,
+  AUTH_LOGS_RECONCILE_ROW_LIMIT,
   buildHourElements,
   classifyAuthLogLine,
   hoursToRead,
@@ -152,6 +185,7 @@ const {
   parseLogsTime,
   parseTotalsRow,
   readAuthLogs,
+  serverFormRefusals,
   supabaseProjectRef,
 } = logs;
 
@@ -167,6 +201,10 @@ const chTime = (ms: number) => iso(ms).replace('T', ' ').slice(0, 19);
 /** The minute `m` of the hour starting at `startMs`, as the query prints it. */
 const minuteOf = (startMs: number, m: number) => chTime(startMs + m * MIN);
 
+/** The two client strings our own server sends (the public forms of the Supabase libraries). */
+const SERVER_SSR = 'supabase-ssr/0.12.7 createServerClient';
+const SERVER_NODE = 'supabase-js/2.116.0; runtime=node; runtime-version=24.22.3';
+
 type Raw = Record<string, unknown>;
 const groupRow = (over: Raw = {}, startMs = H04): Raw => ({
   minute: minuteOf(startMs, 5),
@@ -180,6 +218,7 @@ const groupRow = (over: Raw = {}, startMs = H04): Raw => ({
 });
 const totalsRow = (over: Raw = {}, startMs = H04): Raw => ({
   kind: 'password',
+  form: 'plain',
   status: '400',
   caller: 'phone',
   network: 'other',
@@ -188,6 +227,8 @@ const totalsRow = (over: Raw = {}, startMs = H04): Raw => ({
   n: 3,
   ...over,
 });
+/** Lines of our own server's form (its client string from a hosting network). */
+const ours = { caller: 'server', network: 'hosting' };
 /** The totals rows the groups add up to (the service's second answer for the same lines). */
 function totalsFrom(groups: Raw[], startMs = H04): Raw[] {
   const by = new Map<string, Raw>();
@@ -205,6 +246,17 @@ function totalsFrom(groups: Raw[], startMs = H04): Raw[] {
       );
   }
   return [...by.values()];
+}
+/** A row our own server's recorder stored for the hour starting at `startMs`. */
+function recordWeb(startMs: number, reason: string, n: number, over: Partial<RecordedRow> = {}) {
+  h.recorded.push({
+    hour: iso(startMs),
+    source: 'web',
+    category: 'password_guessing',
+    reason,
+    n,
+    ...over,
+  });
 }
 
 // ── The logs service, faked ─────────────────────────────────────────────────
@@ -278,6 +330,7 @@ function writerStores() {
 }
 const written = (call = 0) =>
   (h.rpc.mock.calls[call]![1] as { p_events: Array<Record<string, unknown>> }).p_events;
+const reconcileReads = () => h.reads.filter((q) => q.select !== 'id');
 
 const run = (over: Partial<Parameters<typeof readAuthLogs>[0]> = {}) =>
   readAuthLogs({
@@ -302,8 +355,10 @@ function everythingSaid(summary: unknown): string {
 beforeEach(() => {
   h.report.mockClear();
   h.stored.length = 0;
+  h.recorded.length = 0;
   h.reads.length = 0;
   h.readAnswer = null;
+  h.recordedAnswer = null;
   h.rpc.mockReset();
   writerStores();
   fetches.length = 0;
@@ -381,7 +436,7 @@ describe('the mapping from a log line to an event', () => {
     // A hosting network makes only our server's client string ours.
     ['password', '400', 'phone', 'hosting', 'password_guessing', 'wrong_password', 'phone'],
     ['password', '400', 'browser', 'hosting', 'password_guessing', 'wrong_password', 'api'],
-    ['password', '400', 'none', 'hosting', 'password_guessing', 'wrong_password', 'api'],
+    ['password', '400', 'other', 'hosting', 'password_guessing', 'wrong_password', 'api'],
     // Our server's client string from any other network: dressed up as our server.
     ['password', '400', 'server', 'other', 'password_guessing', 'wrong_password', 'api'],
     ['verify', '422', 'phone', 'other', 'password_guessing', 'wrong_code', 'phone'],
@@ -436,23 +491,41 @@ describe('the mapping from a log line to an event', () => {
   );
 
   it.each([
-    ['token_other', '400', 'phone'],
-    ['token_other', '429', 'browser'],
-    ['token_other', '401', 'none'],
-    ['verify_other', '422', 'phone'],
-    ['verify_other', '429', 'other'],
+    ['400', 'phone', 'other'],
+    ['429', 'browser', 'other'],
+    ['401', 'server', 'other'],
   ])(
-    '%s %s from %s is of an unusual form: counted as unclassified, not stored as an attack',
-    (kind, st, caller) => {
-      expect(classifyAuthLogLine(line(kind, st, caller))).toEqual({
+    'a known grant that is not a password, answered %s from %s: counted, never stored',
+    (st, caller, network) => {
+      expect(classifyAuthLogLine(line('token_known_other', st, caller, network))).toEqual({
         store: false,
-        why: 'unclassified',
+        why: 'known_other',
       });
     },
   );
 
-  it('our own server is its client string AND a hosting network: none of its lines is stored or unclassified', () => {
-    for (const kind of ['password', 'verify', 'refresh', 'token_other', 'verify_other'])
+  it.each([
+    ['token_other', '400', 'phone', 'other', 'phone'],
+    ['token_other', '429', 'browser', 'other', 'api'],
+    ['token_other', '401', 'none', 'other', 'api'],
+    ['verify_other', '422', 'phone', 'other', 'phone'],
+    ['verify_other', '429', 'other', 'other', 'api'],
+    // Never taken for our own server.
+    ['token_other', '400', 'server', 'hosting', 'api'],
+    ['verify_other', '422', 'server', 'hosting', 'api'],
+  ])(
+    '%s %s from %s on a %s network is of an unknown form: counted for a flagged count from %s',
+    (kind, st, caller, network, source) => {
+      expect(classifyAuthLogLine(line(kind, st, caller, network))).toEqual({
+        store: false,
+        why: 'unclassified',
+        source,
+      });
+    },
+  );
+
+  it('our own server is its client string AND a hosting network: its known kinds are not stored one by one', () => {
+    for (const kind of ['password', 'verify', 'refresh', 'token_known_other'])
       for (const st of ['400', '422', '429', '401']) {
         expect(classifyAuthLogLine(line(kind, st, 'server', 'hosting')), `${kind} ${st}`).toEqual({
           store: false,
@@ -461,24 +534,25 @@ describe('the mapping from a log line to an event', () => {
       }
     // The same client string from another network is not ours.
     expect(classifyAuthLogLine(line('password', '400', 'server', 'other')).store).toBe(true);
-    expect(classifyAuthLogLine(line('token_other', '400', 'server', 'other'))).toEqual({
-      store: false,
-      why: 'unclassified',
-    });
   });
 
   it('nothing the mapping answers is outside the job reasons and the two sources', () => {
     const reasons = new Set<string>();
     const sources = new Set<string>();
-    for (const kind of ['password', 'refresh', 'token_other', 'verify', 'verify_other'])
+    for (const kind of [
+      'password',
+      'refresh',
+      'token_known_other',
+      'token_other',
+      'verify',
+      'verify_other',
+    ])
       for (const st of ['400', '401', '403', '404', '422', '429', '499'])
         for (const caller of ['phone', 'server', 'browser', 'other', 'none'])
           for (const network of ['hosting', 'other']) {
             const v = classifyAuthLogLine(line(kind, st, caller, network));
-            if (v.store) {
-              reasons.add(v.reason);
-              sources.add(v.source);
-            }
+            if (v.store) reasons.add(v.reason);
+            if (v.store || v.why === 'unclassified') sources.add(v.source);
           }
     expect([...reasons].every((r) => (AUTH_LOGS_REASONS as readonly string[]).includes(r))).toBe(
       true,
@@ -561,6 +635,16 @@ describe('every returned field is checked before use', () => {
   });
 
   it.each([
+    ['ambiguous', 'ambiguous'],
+    ['plain', 'plain'],
+    ['Ambiguous', 'plain'],
+    ['', 'plain'],
+    [undefined, 'plain'],
+  ])('a form %j is read as %s (it is counted in the log line only)', (form, read) => {
+    expect(parseTotalsRow(totalsRow({ form }), hour)?.form).toBe(read);
+  });
+
+  it.each([
     ['not an object', 'row'],
     ['null', null],
     ['an array', [1, 2]],
@@ -595,12 +679,20 @@ describe('every returned field is checked before use', () => {
   it('a totals row: every kind the query answers, first and last inside the hour, or dropped', () => {
     expect(parseTotalsRow(totalsRow(), hour)).toEqual({
       kind: 'password',
+      form: 'plain',
       status: '400',
       caller: 'phone',
       network: 'other',
       n: 3,
     });
-    for (const kind of ['password', 'refresh', 'token_other', 'verify', 'verify_other'])
+    for (const kind of [
+      'password',
+      'refresh',
+      'token_known_other',
+      'token_other',
+      'verify',
+      'verify_other',
+    ])
       expect(parseTotalsRow(totalsRow({ kind }), hour)?.kind).toBe(kind);
     expect(
       parseTotalsRow(totalsRow({ first_seen: '2026-11-21 04:00:00.000001' }), hour),
@@ -627,13 +719,18 @@ describe("one hour's elements for the writer", () => {
   const parsed = (rows: Raw[]) => rows.map((r) => parseGroupRow(r, hour)!);
   const totalsOf = (rows: Raw[]) => rows.map((r) => parseTotalsRow(r, hour)!);
   /** The elements of an hour whose groups were complete. */
-  const build = (groups: Raw[], totals: Raw[] = totalsFrom(groups)) =>
+  const build = (
+    groups: Raw[],
+    totals: Raw[] = totalsFrom(groups),
+    recorded: logs.AuthLogsRecorded | null = null,
+  ) =>
     buildHourElements({
       hour,
       groups: parsed(groups),
       groupsCapped: false,
       groupsDropped: 0,
       totals: totalsOf(totals),
+      recorded,
     });
 
   it('counts, a minute, a country when known; never an organization, a city or a source hash', () => {
@@ -680,105 +777,207 @@ describe("one hour's elements for the writer", () => {
     expect(elements[0]).toMatchObject({ source: 'api', count: 10, country: 'NL' });
   });
 
-  it("our own server's lines, refreshes and statuses with no known meaning are counted, not stored", () => {
+  it("our own server's lines, refreshes, known grants and statuses with no known meaning are counted, not stored", () => {
     const out = build(
       [
-        groupRow({ caller: 'server', network: 'hosting', n: 11 }),
+        groupRow({ ...ours, n: 4 }),
         groupRow({ status: '404', n: 2 }),
         groupRow({ caller: 'phone', n: 1 }),
       ],
       [
-        totalsRow({ caller: 'server', network: 'hosting', n: 11 }),
+        totalsRow({ ...ours, n: 4 }),
         totalsRow({ status: '404', n: 2 }),
         totalsRow({ caller: 'phone', n: 1 }),
         totalsRow({ kind: 'refresh', caller: 'browser', n: 40 }),
-        totalsRow({ kind: 'token_other', caller: 'server', network: 'hosting', n: 30 }),
+        totalsRow({ kind: 'token_known_other', caller: 'phone', n: 30 }),
+        totalsRow({ kind: 'token_known_other', ...ours, n: 6 }),
       ],
+      { password: 4, code: 0, overflow: 0 },
     );
     expect(out.elements.map((e) => [e.source, e.count])).toEqual([['phone', 1]]);
     expect(out.notStored).toEqual({
-      our_server: 41,
+      our_server: 10,
       other_status: 2,
       refresh: 40,
-      unclassified: 0,
+      known_other: 30,
     });
     expect(out.seen).toEqual({
       'password 400 phone other': 1,
-      'password 400 server hosting': 11,
+      'password 400 server hosting': 4,
       'password 404 phone other': 2,
       'refresh 400 browser other': 40,
-      'token_other 400 server hosting': 30,
+      'token_known_other 400 phone other': 30,
+      'token_known_other 400 server hosting': 6,
     });
   });
 
   it("our server's client string from another network is stored as api; from a hosting network it is ours", () => {
-    const out = build([
-      groupRow({ caller: 'server', network: 'hosting', n: 4 }),
-      groupRow({ caller: 'server', network: 'other', n: 6, country: 'US' }),
-    ]);
+    const out = build(
+      [
+        groupRow({ ...ours, n: 4 }),
+        groupRow({ caller: 'server', network: 'other', n: 6, country: 'US' }),
+      ],
+      undefined,
+      { password: 4, code: 0, overflow: 0 },
+    );
     expect(out.elements).toEqual([
       expect.objectContaining({ reason: 'wrong_password', source: 'api', count: 6, country: 'US' }),
     ]);
     expect(out.notStored.our_server).toBe(4);
   });
 
-  describe('requests of an unusual form: one flagged count when an hour has 20 or more', () => {
+  it('several grant_type values: classed by the first, and counted as of an ambiguous form', () => {
+    const out = build(
+      [groupRow({ n: 2 })],
+      [totalsRow({ n: 2, form: 'ambiguous' }), totalsRow({ kind: 'refresh', form: 'ambiguous' })],
+    );
+    expect(out.elements).toEqual([expect.objectContaining({ reason: 'wrong_password', count: 2 })]);
+    expect(out.ambiguousForm).toBe(5);
+  });
+
+  describe('requests of an unknown form: never invisible, one flagged count per source, even for one', () => {
     const flaggedOf = (out: logs.AuthLogsHourElements) =>
       out.elements.filter((e) => e.reason === 'unclassified_sign_in_refusals');
 
-    it('19 stores nothing; they are counted in the log line', () => {
-      expect(AUTH_LOGS_UNCLASSIFIED_FLAG_AT).toBe(20);
-      const out = build(
-        [],
-        [
-          totalsRow({ kind: 'token_other', n: 12 }),
-          totalsRow({ kind: 'verify_other', status: '422', caller: 'browser', n: 7 }),
-        ],
-      );
-      expect(out.elements).toEqual([]);
-      expect(out.notStored.unclassified).toBe(19);
-      expect(out.flagged).toBe(0);
-    });
-
-    it('20 stores one flagged element: password_guessing, flagged, the count, source api, no country', () => {
-      const out = build(
-        [groupRow({ n: 2 })],
-        [
-          totalsRow({ n: 2 }),
-          totalsRow({ kind: 'token_other', n: 12 }),
-          totalsRow({ kind: 'verify_other', status: '422', caller: 'browser', n: 7 }),
-          // Dressed up as our server: counted.
-          totalsRow({ kind: 'token_other', caller: 'server', network: 'other', n: 1 }),
-          // Our own server, refreshes and other statuses: never counted here.
-          totalsRow({ kind: 'token_other', caller: 'server', network: 'hosting', n: 500 }),
-          totalsRow({ kind: 'refresh', n: 500 }),
-          totalsRow({ status: '401', n: 500 }),
-        ],
-      );
-      expect(flaggedOf(out)).toEqual([
+    it('one line stores one flagged element of count 1', () => {
+      expect(AUTH_LOGS_UNCLASSIFIED_FLAG_AT).toBe(1);
+      const out = build([], [totalsRow({ kind: 'token_other', caller: 'browser', n: 1 })]);
+      expect(out.elements).toEqual([
         {
           category: 'password_guessing',
           outcome: 'flagged',
           reason: 'unclassified_sign_in_refusals',
           source: 'api',
-          count: 20,
+          count: 1,
           at_ms: H04,
         },
       ]);
-      expect(out.flagged).toBe(20);
-      expect(out.notStored.unclassified).toBe(20);
+      expect(out.unclassified).toBe(1);
+    });
+
+    it('the source is the caller class as usual; our own server form is never suppressed', () => {
+      const out = build(
+        [groupRow({ n: 2 })],
+        [
+          totalsRow({ n: 2 }),
+          totalsRow({ kind: 'token_other', caller: 'phone', n: 12 }),
+          totalsRow({ kind: 'verify_other', status: '422', caller: 'phone', n: 3 }),
+          totalsRow({ kind: 'token_other', caller: 'browser', n: 7 }),
+          totalsRow({ kind: 'token_other', ...ours, n: 5 }),
+        ],
+      );
+      expect(flaggedOf(out)).toEqual([
+        expect.objectContaining({ outcome: 'flagged', source: 'api', count: 12, at_ms: H04 }),
+        expect.objectContaining({ outcome: 'flagged', source: 'phone', count: 15, at_ms: H04 }),
+      ]);
+      expect(out.unclassified).toBe(27);
       // The ordinary elements are unchanged.
       expect(out.elements.filter((e) => e.outcome === 'blocked')).toEqual([
         expect.objectContaining({ reason: 'wrong_password', count: 2 }),
       ]);
     });
 
-    it('the flagged count from phone lines is still source api, and is cut to 999,999', () => {
+    it('a flagged count past what the writer reads is cut to 999,999', () => {
       const out = build([], [totalsRow({ kind: 'token_other', caller: 'phone', n: 2_000_000 })]);
       expect(flaggedOf(out)).toEqual([
-        expect.objectContaining({ source: 'api', count: AUTH_LOGS_MAX_COUNT }),
+        expect.objectContaining({ source: 'phone', count: AUTH_LOGS_MAX_COUNT }),
       ]);
       expect(out.clamped).toBe(1);
+    });
+  });
+
+  describe("lines of our server's form: reconciled with what our own server recorded", () => {
+    const hourOf = (password: number, code: number, extra: Raw[] = []) => [
+      ...(password ? [totalsRow({ ...ours, n: password })] : []),
+      ...(code ? [totalsRow({ kind: 'verify', status: '422', ...ours, n: code })] : []),
+      ...extra,
+    ];
+    const unrecordedOf = (out: logs.AuthLogsHourElements) =>
+      out.elements.filter((e) => e.reason.startsWith('unrecorded_server_form_'));
+
+    it('the gateway counts of our server form: its password 400s and code 422s only', () => {
+      expect(
+        serverFormRefusals(
+          totalsOf(
+            hourOf(7, 3, [
+              totalsRow({ ...ours, status: '429', n: 50 }),
+              totalsRow({ caller: 'server', network: 'other', n: 40 }),
+              totalsRow({ kind: 'verify', status: '400', ...ours, n: 30 }),
+              totalsRow({ kind: 'refresh', ...ours, n: 20 }),
+              totalsRow({ kind: 'token_other', ...ours, n: 10 }),
+              totalsRow({ caller: 'phone', n: 9 }),
+            ]),
+          ),
+        ),
+      ).toEqual({ password: 7, code: 3 });
+    });
+
+    it('an excess of 9 stores nothing, and is in the log line', () => {
+      expect(AUTH_LOGS_UNRECORDED_FLAG_AT).toBe(10);
+      const out = build([], hourOf(21, 0), { password: 12, code: 0, overflow: 0 });
+      expect(unrecordedOf(out)).toEqual([]);
+      expect(out.reconcile).toEqual({
+        gateway: { password: 21, code: 0 },
+        recorded: { password: 12, code: 0, overflow: 0 },
+        excess: { password: 9, code: 0 },
+      });
+    });
+
+    it('an excess of 10 stores one flagged element of count 10, source api, at the hour last minute', () => {
+      const out = build([], hourOf(22, 0), { password: 12, code: 0, overflow: 0 });
+      expect(unrecordedOf(out)).toEqual([
+        {
+          category: 'password_guessing',
+          outcome: 'flagged',
+          reason: 'unrecorded_server_form_password',
+          source: 'api',
+          count: 10,
+          at_ms: H04 + 59 * MIN,
+        },
+      ]);
+      expect(out.reconcile.excess).toEqual({ password: 10, code: 0 });
+    });
+
+    it('recorded at or above the gateway count stores nothing; the excess is never below zero', () => {
+      const out = build([], hourOf(21, 4), { password: 40, code: 25, overflow: 0 });
+      expect(unrecordedOf(out)).toEqual([]);
+      expect(out.reconcile.excess).toEqual({ password: 0, code: 0 });
+      const even = build([], hourOf(21, 4), { password: 21, code: 4, overflow: 0 });
+      expect(unrecordedOf(even)).toEqual([]);
+    });
+
+    it("overflow rows carry no kind, so they widen both kinds' allowance", () => {
+      const covered = build([], hourOf(25, 15), { password: 10, code: 0, overflow: 6 });
+      expect(unrecordedOf(covered)).toEqual([]);
+      expect(covered.reconcile.excess).toEqual({ password: 9, code: 9 });
+      const short = build([], hourOf(25, 15), { password: 10, code: 0, overflow: 5 });
+      expect(unrecordedOf(short).map((e) => [e.reason, e.count])).toEqual([
+        ['unrecorded_server_form_code', 10],
+        ['unrecorded_server_form_password', 10],
+      ]);
+    });
+
+    it('codes are reconciled on their own: recorded passwords do not cover them', () => {
+      const out = build([], hourOf(0, 14), { password: 500, code: 4, overflow: 0 });
+      expect(unrecordedOf(out)).toEqual([
+        expect.objectContaining({ reason: 'unrecorded_server_form_code', count: 10 }),
+      ]);
+    });
+
+    it('not reconciled (nothing read) stores no flag, and says so with no excess', () => {
+      const out = build([], hourOf(50, 0), null);
+      expect(unrecordedOf(out)).toEqual([]);
+      expect(out.reconcile).toEqual({
+        gateway: { password: 50, code: 0 },
+        recorded: null,
+        excess: null,
+      });
+      // With nothing of our server form there is nothing to reconcile.
+      expect(build([], [], null).reconcile).toEqual({
+        gateway: { password: 0, code: 0 },
+        recorded: null,
+        excess: { password: 0, code: 0 },
+      });
     });
   });
 
@@ -804,25 +1003,31 @@ describe("one hour's elements for the writer", () => {
       capped = parsed(cappedRows);
       listedSum = capped.reduce((s, r) => s + r.n, 0);
     });
-
-    it('the remainder is one element per category and source, and the call holds at most 200', () => {
-      expect(AUTH_LOGS_ROW_LIMIT).toBe(199);
-      expect(AUTH_LOGS_MAX_ELEMENTS).toBe(200);
-      const totals = totalsOf([
-        totalsRow({ n: listedSum + 50 }),
-        totalsRow({ status: '429', caller: 'browser', n: 7 }),
-        // Not stored kinds never reach the remainder.
-        totalsRow({ caller: 'server', network: 'hosting', n: 900 }),
-        totalsRow({ status: '401', n: 300 }),
-        totalsRow({ kind: 'refresh', n: 80 }),
-      ]);
-      const out = buildHourElements({
+    const buildCapped = (
+      totals: Raw[],
+      over: Partial<Parameters<typeof buildHourElements>[0]> = {},
+    ) =>
+      buildHourElements({
         hour,
         groups: capped,
         groupsCapped: true,
         groupsDropped: 0,
-        totals,
+        totals: totalsOf(totals),
+        recorded: null,
+        ...over,
       });
+
+    it('the remainder is one element per category and source, and the call holds at most 200', () => {
+      expect(AUTH_LOGS_ROW_LIMIT).toBe(199);
+      expect(AUTH_LOGS_MAX_ELEMENTS).toBe(200);
+      const out = buildCapped([
+        totalsRow({ n: listedSum + 50 }),
+        totalsRow({ status: '429', caller: 'browser', n: 7 }),
+        // Not stored kinds never reach the remainder.
+        totalsRow({ ...ours, status: '429', n: 900 }),
+        totalsRow({ status: '401', n: 300 }),
+        totalsRow({ kind: 'refresh', n: 80 }),
+      ]);
       expect(out.elements.length).toBeLessThanOrEqual(200);
       const over = out.elements.filter((e) => e.reason === 'auth_log_over_cap');
       expect(over).toEqual([
@@ -852,35 +1057,31 @@ describe("one hour's elements for the writer", () => {
         our_server: 900,
         other_status: 300,
         refresh: 80,
-        unclassified: 0,
+        known_other: 0,
       });
     });
 
-    it('with a flagged count as well, the call still holds at most 200', () => {
-      const out = buildHourElements({
-        hour,
-        groups: capped,
-        groupsCapped: true,
-        groupsDropped: 0,
-        totals: totalsOf([
+    it('with every flagged count as well, the call still holds at most 200', () => {
+      const out = buildCapped(
+        [
           totalsRow({ n: listedSum + 50 }),
           totalsRow({ status: '429', caller: 'browser', n: 7 }),
           totalsRow({ kind: 'token_other', n: 25 }),
-        ]),
-      });
+          totalsRow({ kind: 'token_other', caller: 'browser', n: 5 }),
+          totalsRow({ ...ours, n: 40 }),
+          totalsRow({ kind: 'verify', status: '422', ...ours, n: 30 }),
+        ],
+        { recorded: { password: 0, code: 0, overflow: 0 } },
+      );
       expect(out.elements).toHaveLength(200);
-      expect(out.elements.filter((e) => e.outcome === 'flagged')).toHaveLength(1);
-      expect(out.elements.reduce((s, e) => s + e.count, 0)).toBe(listedSum + 50 + 7 + 25);
+      expect(out.elements.filter((e) => e.outcome === 'flagged')).toHaveLength(4);
+      expect(out.elements.reduce((s, e) => s + e.count, 0)).toBe(
+        listedSum + 50 + 7 + 25 + 5 + 40 + 30,
+      );
     });
 
     it('a remainder is never below zero, and none is added under the limit', () => {
-      const out = buildHourElements({
-        hour,
-        groups: capped,
-        groupsCapped: true,
-        groupsDropped: 0,
-        totals: totalsOf([totalsRow({ n: 10 })]),
-      });
+      const out = buildCapped([totalsRow({ n: 10 })]);
       expect(out.elements.some((e) => e.reason === 'auth_log_over_cap')).toBe(false);
       const under = buildHourElements({
         hour,
@@ -888,18 +1089,13 @@ describe("one hour's elements for the writer", () => {
         groupsCapped: false,
         groupsDropped: 0,
         totals: totalsOf([totalsRow({ n: 1_000_000 })]),
+        recorded: null,
       });
       expect(under.elements.some((e) => e.reason === 'auth_log_over_cap')).toBe(false);
     });
 
     it('no remainder when a group row of the hour was dropped (its count would come back through the totals)', () => {
-      const out = buildHourElements({
-        hour,
-        groups: capped,
-        groupsCapped: true,
-        groupsDropped: 1,
-        totals: totalsOf([totalsRow({ n: listedSum + 50 })]),
-      });
+      const out = buildCapped([totalsRow({ n: listedSum + 50 })], { groupsDropped: 1 });
       expect(out.elements.some((e) => e.reason === 'auth_log_over_cap')).toBe(false);
       expect(out.remainderSkipped).toBe(true);
     });
@@ -922,13 +1118,14 @@ describe('the SQL is two constants that return classes and counts only', () => {
     return m![1]!;
   }
 
-  it('each is one template literal with no placeholder, and the value sent is that text', () => {
+  it('each is one template literal with no placeholder and no backslash, and the value sent is that text', () => {
     for (const [name, value] of [
       ['AUTH_LOGS_GROUPS_SQL', AUTH_LOGS_GROUPS_SQL],
       ['AUTH_LOGS_TOTALS_SQL', AUTH_LOGS_TOTALS_SQL],
     ] as const) {
       const text = declared(name);
       expect(text, name).not.toContain('${');
+      expect(text, name).not.toContain('\\');
       expect(value, name).toBe(text);
     }
   });
@@ -947,6 +1144,7 @@ describe('the SQL is two constants that return classes and counts only', () => {
     ]);
     expect(aliases(parseReaderQuery(AUTH_LOGS_TOTALS_SQL).selectItems)).toEqual([
       'kind',
+      'form',
       'status',
       'caller',
       'network',
@@ -969,6 +1167,7 @@ describe('the SQL is two constants that return classes and counts only', () => {
       'raw_search',
       'decoded_search',
       'first_grant',
+      'client',
     ]);
     for (const [name, sql] of BOTH) {
       expect(sql.match(/Amazon/g), name).toHaveLength(1);
@@ -1041,10 +1240,10 @@ describe('the SQL is two constants that return classes and counts only', () => {
   /** What each query makes of one line: kept or not, and the classes it returns. */
   function bothOn(line: ModelLogLine) {
     const groups = runReaderQueryOnLine(AUTH_LOGS_GROUPS_SQL, line, [...ROW_ALIASES, 'country']);
-    const totals = runReaderQueryOnLine(AUTH_LOGS_TOTALS_SQL, line, ROW_ALIASES);
+    const totals = runReaderQueryOnLine(AUTH_LOGS_TOTALS_SQL, line, [...ROW_ALIASES, 'form']);
     // Both class every line the same way.
     for (const a of ROW_ALIASES) expect(groups.values[a], a).toBe(totals.values[a]);
-    return { groups, totals, kind: totals.values.kind };
+    return { groups, totals, kind: totals.values.kind, form: totals.values.form };
   }
   /** The kind of a line the totals query keeps; null when it is not read at all. */
   const kindOf = (line: ModelLogLine) => {
@@ -1052,8 +1251,9 @@ describe('the SQL is two constants that return classes and counts only', () => {
     return totals.kept ? kind : null;
   };
 
-  describe('the grant is read the way the sign-in service reads it: decoded, exactly one', () => {
+  describe('the grant is read the way the sign-in service reads it: decoded, the first value', () => {
     const ofSearch = (search: string) => kindOf(gatewayLine({ search }));
+    const formOf = (search: string) => bothOn(gatewayLine({ search })).form;
 
     it.each([
       ['?grant_type=password', 'password'],
@@ -1062,8 +1262,9 @@ describe('the SQL is two constants that return classes and counts only', () => {
       ['?grant_type=password&scope=x', 'password'],
       ['?grant_type=refresh_token', 'refresh'],
       ['?scope=x&grant_type=refresh_token', 'refresh'],
-    ])('%j -> %s', (search, kind) => {
+    ])('%j -> %s, of a plain form', (search, kind) => {
       expect(ofSearch(search)).toBe(kind);
+      expect(formOf(search)).toBe('plain');
     });
 
     it.each([
@@ -1073,28 +1274,42 @@ describe('the SQL is two constants that return classes and counts only', () => {
       ['?grant%5Ftype=password', 'password'],
       ['?grant%5ftype=pass%77ord', 'password'],
       ['?grant_type=refresh%5Ftoken', 'refresh'],
+      ['?grant_type=%70kce', 'token_known_other'],
     ])('an encoded grant %j is decoded as the service decodes it -> %s', (search, kind) => {
       expect(ofSearch(search)).toBe(kind);
     });
 
     it.each([
-      ['?grant_type=password&grant_type=password'],
-      ['?grant_type=refresh_token&grant_type=password'],
-      ['?grant_type=password&grant_type=refresh_token'],
-      ['?grant_type=password&scope=x&grant_type=pkce'],
-      ['?grant_type=password&grant%5Ftype=refresh_token'],
-      ['?grant_type=password&grant_type='],
-    ])('two grant_type values %j -> token_other', (search) => {
-      expect(ofSearch(search)).toBe('token_other');
-    });
+      ['?grant_type=password&grant_type=refresh_token', 'password'],
+      ['?grant_type=password&grant_type=password', 'password'],
+      ['?grant_type=password&scope=x&grant_type=pkce', 'password'],
+      ['?grant_type=password&grant%5Ftype=refresh_token', 'password'],
+      ['?grant_type=refresh_token&grant_type=password', 'refresh'],
+      ['?grant_type=pkce&grant_type=password', 'token_known_other'],
+      ['?grant_type=&grant_type=password', 'token_other'],
+    ])(
+      'several grant_type values %j: the first decides (%s), and the form is ambiguous',
+      (search, kind) => {
+        expect(ofSearch(search)).toBe(kind);
+        expect(formOf(search)).toBe('ambiguous');
+      },
+    );
+
+    it.each([['?grant_type=pkce'], ['?grant_type=id_token'], ['?grant_type=web3']])(
+      'a known grant that is not a password (%j) -> token_known_other',
+      (search) => {
+        expect(ofSearch(search)).toBe('token_known_other');
+      },
+    );
 
     it.each([
       ['no grant', ''],
       ['an empty query', '?'],
       ['an empty grant', '?grant_type='],
       ['a grant with no value', '?grant_type'],
-      ['another grant', '?grant_type=pkce'],
-      ['another grant', '?grant_type=id_token'],
+      ['an unknown grant', '?grant_type=magic'],
+      ['a known grant in capitals', '?grant_type=PKCE'],
+      ['a longer known grant', '?grant_type=pkce_x'],
       ['a longer value', '?grant_type=password_x'],
       ['capitals in the value', '?grant_type=PASSWORD'],
       ['capitals in the name', '?GRANT_TYPE=password'],
@@ -1193,7 +1408,8 @@ describe('the SQL is two constants that return classes and counts only', () => {
       [gatewayLine(), 'password', true],
       [gatewayLine({ path: `/auth/v1/factors/${UUID}/verify`, status: '422' }), 'verify', true],
       [gatewayLine({ search: '?grant_type=refresh_token' }), 'refresh', false],
-      [gatewayLine({ search: '?grant_type=pkce' }), 'token_other', false],
+      [gatewayLine({ search: '?grant_type=pkce' }), 'token_known_other', false],
+      [gatewayLine({ search: '?grant_type=magic' }), 'token_other', false],
       [gatewayLine({ path: '/auth/v1/factors/not-an-id/verify' }), 'verify_other', false],
     ];
     for (const [line, kind, listed] of cases) {
@@ -1235,20 +1451,43 @@ describe('the SQL is two constants that return classes and counts only', () => {
     });
   });
 
-  it.each([
-    ['supabase-js-react-native/2.50.0', 'phone'],
-    ['supabase-ssr/0.6.1 createServerClient', 'server'],
-    ['supabase-js/2.50.0; runtime=node', 'server'],
-    ['supabase-ssr/0.6.1 createBrowserClient', 'browser'],
-    ['supabase-js-web/2.50.0', 'other'],
-    ['curl/8.4.0', 'other'],
-    ['', 'none'],
-  ])('the query classes the client string %j as %s, the same in both', (client, cls) => {
-    expect(bothOn(gatewayLine({ client })).totals.values.caller).toBe(cls);
-  });
+  describe('the caller class: our server only for its two exact client strings', () => {
+    it.each([
+      [SERVER_SSR, 'server'],
+      [SERVER_NODE, 'server'],
+      ['supabase-ssr/0.6.1 createServerClient', 'server'],
+      ['supabase-js/2.50.0; runtime=node; runtime-version=22.1.0', 'server'],
+      ['supabase-js-react-native/2.50.0', 'phone'],
+      ['supabase-ssr/0.12.7 createBrowserClient', 'browser'],
+      ['supabase-js-web/2.50.0', 'other'],
+      ['curl/8.4.0', 'other'],
+      ['', 'none'],
+    ])('%j -> %s', (client, cls) => {
+      expect(bothOn(gatewayLine({ client })).totals.values.caller).toBe(cls);
+    });
 
-  it('a line with no client string is none', () => {
-    expect(bothOn(gatewayLine({ client: null })).totals.values.caller).toBe('none');
+    it.each([
+      [`x ${SERVER_SSR}`],
+      [`${SERVER_SSR} x`],
+      [`${SERVER_SSR}\t`],
+      ['createServerClient'],
+      ['supabase-ssr createServerClient'],
+      ['supabase-ssr/0.12 createServerClient'],
+      ['supabase-ssr/0.12.7  createServerClient'],
+      ['supabase-ssr/0a12b7 createServerClient'],
+      ['Supabase-ssr/0.12.7 createServerClient'],
+      ['supabase-js/2.116.0; runtime=node'],
+      ['runtime=node'],
+      ['supabase-js/2.116.0; runtime=node; runtime-version=v24.22.3'],
+      [`${SERVER_NODE}; extra`],
+      [`${SERVER_NODE.replace('runtime=node', 'runtime=deno')}`],
+    ])('%j only contains words of our server: other (stored as api)', (client) => {
+      expect(bothOn(gatewayLine({ client })).totals.values.caller).toBe('other');
+    });
+
+    it('a line with no client string is none', () => {
+      expect(bothOn(gatewayLine({ client: null })).totals.values.caller).toBe('none');
+    });
   });
 
   it.each([
@@ -1271,16 +1510,26 @@ describe('the SQL is two constants that return classes and counts only', () => {
       gatewayLine({ path: `/auth/v1/factors/${marker}/verify`, owner: `${marker} Telecom` }),
       gatewayLine({ path: '/auth/v1/%74oken', search: `?${marker}%zz`, client: '' }),
       gatewayLine({
+        search: `?grant_type=password&grant_type=${marker}`,
+        client: `supabase-ssr/0.1.2 createServerClient`,
+      }),
+      gatewayLine({
         path: `/auth/v1/factors/${UUID}/verify`,
         client: `createServerClient ${marker}`,
       }),
     ];
     for (const line of lines) {
-      const { groups } = bothOn(line);
-      expect(JSON.stringify(groups.values)).not.toContain(marker);
-      expect(['password', 'refresh', 'token_other', 'verify', 'verify_other']).toContain(
-        groups.values.kind,
-      );
+      const { groups, totals } = bothOn(line);
+      expect(JSON.stringify([groups.values, totals.values])).not.toContain(marker);
+      expect([
+        'password',
+        'refresh',
+        'token_known_other',
+        'token_other',
+        'verify',
+        'verify_other',
+      ]).toContain(groups.values.kind);
+      expect(['plain', 'ambiguous']).toContain(totals.values.form);
       expect(['phone', 'server', 'browser', 'other', 'none']).toContain(groups.values.caller);
       expect(['hosting', 'other']).toContain(groups.values.network);
       expect(groups.values.status).toMatch(/^4[0-9][0-9]$/);
@@ -1365,7 +1614,7 @@ describe('a run: six hours, oldest first, each written once', () => {
 
   it('the "already stored" check: one read of rows only this job writes, inside the hour', async () => {
     await run();
-    const checks = h.reads.filter((q) => q.table === 'security_events');
+    const checks = h.reads.filter((q) => q.select === 'id');
     expect(checks).toHaveLength(6);
     expect(checks[0]).toEqual({
       table: 'security_events',
@@ -1382,6 +1631,8 @@ describe('a run: six hours, oldest first, each written once', () => {
             'auth_rate_limited',
             'auth_log_over_cap',
             'unclassified_sign_in_refusals',
+            'unrecorded_server_form_password',
+            'unrecorded_server_form_code',
           ],
         ],
         ['gte', 'minute', iso(H(4))],
@@ -1408,55 +1659,28 @@ describe('a run: six hours, oldest first, each written once', () => {
       hoursStored: 0,
       eventsStored: 0,
     });
-    expect(full(second).hours.find((x) => x.hour === '2026-11-21T07:00Z')).toEqual({
+    expect(full(second).hours.find((x) => x.hour === '2026-11-21T07:00Z')).toMatchObject({
       hour: '2026-11-21T07:00Z',
       outcome: 'already_stored',
       events: 0,
     });
   });
 
-  describe('requests of an unusual form through a run', () => {
-    it('19 in an hour: nothing stored, counted in the log line, the hour read again next run', async () => {
-      hourAnswers(H(5), [], [totalsRow({ kind: 'token_other', n: 19 }, H(5))]);
+  describe('requests of an unknown form and known grants through a run', () => {
+    it('a single refusal of an unknown form stores one flagged element; the hour is then already stored', async () => {
+      hourAnswers(H(5), [], [totalsRow({ kind: 'token_other', n: 1 }, H(5))]);
       const summary = full(await run());
-      expect(h.rpc).not.toHaveBeenCalled();
-      expect(summary.notStored.unclassified).toBe(19);
-      expect(summary.flaggedHours).toBe(0);
-      expect(summary.seen).toEqual({ 'token_other 400 phone other': 19 });
-      expect(summary.hours[1]).toEqual({
-        hour: '2026-11-21T05:00Z',
-        outcome: 'nothing_to_store',
-        events: 0,
-      });
-      fetches.length = 0;
-      await run();
-      expect(fetches.map(startOf)).toContain(iso(H(5)));
-    });
-
-    it('20 in an hour: one flagged element, and the hour is then already stored (the check counts its reason as the job own)', async () => {
-      hourAnswers(
-        H(5),
-        [],
-        [
-          totalsRow({ kind: 'token_other', n: 13 }, H(5)),
-          totalsRow({ kind: 'verify_other', status: '422', caller: 'browser', n: 7 }, H(5)),
-        ],
-      );
-      const summary = full(await run());
-      expect(h.rpc).toHaveBeenCalledTimes(1);
       expect(written()).toEqual([
         {
           category: 'password_guessing',
           outcome: 'flagged',
           reason: 'unclassified_sign_in_refusals',
-          source: 'api',
-          count: 20,
+          source: 'phone',
+          count: 1,
           at_ms: H(5),
         },
       ]);
-      expect(summary).toMatchObject({ flaggedHours: 1, hoursStored: 1, eventsStored: 20 });
-
-      // The next run: the check's reasons include the flagged one, so the hour is not written again.
+      expect(summary).toMatchObject({ unclassified: 1, hoursStored: 1, eventsStored: 1 });
       fetches.length = 0;
       const next = full(await run());
       expect(h.rpc).toHaveBeenCalledTimes(1);
@@ -1464,15 +1688,198 @@ describe('a run: six hours, oldest first, each written once', () => {
       expect(next.hours[1]!.outcome).toBe('already_stored');
     });
 
-    it('our own server is never counted toward it', async () => {
-      hourAnswers(
-        H(5),
-        [],
-        [totalsRow({ kind: 'token_other', caller: 'server', network: 'hosting', n: 400 }, H(5))],
-      );
+    it('known grants that are not a password are counted in the log line only', async () => {
+      hourAnswers(H(5), [], [totalsRow({ kind: 'token_known_other', n: 50 }, H(5))]);
       const summary = full(await run());
       expect(h.rpc).not.toHaveBeenCalled();
-      expect(summary.notStored).toMatchObject({ our_server: 400, unclassified: 0 });
+      expect(summary.notStored.known_other).toBe(50);
+      expect(summary.seen).toEqual({ 'token_known_other 400 phone other': 50 });
+    });
+
+    it('several grant_type values: classed by the first, counted as ambiguous in the log line', async () => {
+      hourAnswers(H(5), [groupRow({ n: 2 }, H(5))], [totalsRow({ n: 2, form: 'ambiguous' }, H(5))]);
+      const summary = full(await run());
+      expect(written()).toEqual([expect.objectContaining({ reason: 'wrong_password', count: 2 })]);
+      expect(summary.ambiguousForm).toBe(2);
+    });
+  });
+
+  describe("lines of our server's form, reconciled with our own record", () => {
+    /** An hour whose lines of our server form are `password` 400s and `code` 422s. */
+    function serverHour(startMs: number, password: number, code = 0, extra: Raw[] = []) {
+      hourAnswers(
+        startMs,
+        [],
+        [
+          ...(password ? [totalsRow({ ...ours, n: password }, startMs)] : []),
+          ...(code
+            ? [totalsRow({ kind: 'verify', status: '422', ...ours, n: code }, startMs)]
+            : []),
+          ...extra,
+        ],
+      );
+    }
+
+    it('one read of what our own server recorded for the hour, by reason, with the count of rows', async () => {
+      serverHour(H(5), 3);
+      await run();
+      expect(reconcileReads()).toEqual([
+        {
+          table: 'security_events',
+          select: 'reason, event_count',
+          count: 'exact',
+          filters: [
+            ['eq', 'source', 'web'],
+            ['eq', 'category', 'password_guessing'],
+            [
+              'in',
+              'reason',
+              [
+                'wrong_password',
+                'repeated_wrong_password',
+                'wrong_code',
+                'repeated_wrong_code',
+                'over_minute_cap',
+                'over_buffer_cap',
+              ],
+            ],
+            ['gte', 'minute', iso(H(5))],
+            ['lt', 'minute', iso(H(6))],
+          ],
+          limit: AUTH_LOGS_RECONCILE_ROW_LIMIT,
+        },
+      ]);
+      expect(AUTH_LOGS_RECONCILE_ROW_LIMIT).toBe(1000);
+    });
+
+    it('no read for an hour with no line of our server form', async () => {
+      hourAnswers(H(5), [groupRow({}, H(5))]);
+      await run();
+      expect(reconcileReads()).toEqual([]);
+    });
+
+    it('an excess of 10 stores one flagged element; the next run skips the hour', async () => {
+      serverHour(H(5), 25, 2);
+      recordWeb(H(5), 'wrong_password', 12);
+      recordWeb(H(5), 'repeated_wrong_password', 3);
+      recordWeb(H(5), 'wrong_code', 2);
+      // Not ours to count: another source, another category, another hour.
+      recordWeb(H(5), 'wrong_password', 50, { source: 'api' });
+      recordWeb(H(5), 'wrong_password', 50, { category: 'bots' });
+      recordWeb(H(4), 'wrong_password', 50);
+      const summary = full(await run());
+      expect(written()).toEqual([
+        {
+          category: 'password_guessing',
+          outcome: 'flagged',
+          reason: 'unrecorded_server_form_password',
+          source: 'api',
+          count: 10,
+          at_ms: H(5) + 59 * MIN,
+        },
+      ]);
+      expect(summary.hours[1]).toMatchObject({
+        outcome: 'stored',
+        reconcile: {
+          gateway: { password: 25, code: 2 },
+          recorded: { password: 15, code: 2, overflow: 0 },
+          excess: { password: 10, code: 0 },
+        },
+      });
+      expect(summary.unrecordedFlags).toBe(1);
+      fetches.length = 0;
+      await run();
+      expect(h.rpc).toHaveBeenCalledTimes(1);
+      expect(fetches.map(startOf)).not.toContain(iso(H(5)));
+    });
+
+    it('an excess of 9 stores nothing and is in the log line; overflow rows widen the allowance', async () => {
+      serverHour(H(5), 21);
+      recordWeb(H(5), 'wrong_password', 12);
+      const nine = full(await run());
+      expect(h.rpc).not.toHaveBeenCalled();
+      expect(nine.hours[1]).toMatchObject({ reconcile: { excess: { password: 9, code: 0 } } });
+
+      serverHour(H(5), 30);
+      recordWeb(H(5), 'over_buffer_cap', 9);
+      const widened = full(await run());
+      expect(h.rpc).not.toHaveBeenCalled();
+      expect(widened.hours[1]).toMatchObject({
+        reconcile: {
+          recorded: { password: 12, code: 0, overflow: 9 },
+          excess: { password: 9, code: 0 },
+        },
+      });
+    });
+
+    it('a failed reconciliation read: reported, nothing of the hour is written, and the hour is read again next run', async () => {
+      hourAnswers(
+        H(5),
+        [groupRow({ n: 2 }, H(5))],
+        [totalsRow({ n: 2 }, H(5)), totalsRow({ ...ours, n: 40 }, H(5))],
+      );
+      h.recordedAnswer = () => ({
+        data: null,
+        error: { code: '57014', message: 'canceling statement' },
+        count: null,
+      });
+      const summary = full(await run());
+      expect(h.rpc).not.toHaveBeenCalled();
+      expect(summary).toMatchObject({
+        ok: false,
+        hoursStored: 0,
+        failure: { cause: 'reconcile_read_failed', code: '57014', hour: '2026-11-21T05:00Z' },
+      });
+      expect(h.report).toHaveBeenCalledTimes(1);
+      expect(String(h.report.mock.calls[0]![0])).toContain('could not be read');
+
+      h.recordedAnswer = null;
+      recordWeb(H(5), 'wrong_password', 40);
+      fetches.length = 0;
+      const next = full(await run());
+      expect(fetches.map(startOf)).toContain(iso(H(5)));
+      expect(written()).toEqual([expect.objectContaining({ reason: 'wrong_password', count: 2 })]);
+      expect(next.hours[1]!.outcome).toBe('stored');
+    });
+
+    it.each([
+      ['no count of rows', () => ({ data: [], error: null, count: null })],
+      [
+        'a row of another reason',
+        () => ({ data: [{ reason: 'sign_in_paused', event_count: 1 }], error: null, count: 1 }),
+      ],
+      [
+        'a row with no whole count',
+        () => ({ data: [{ reason: 'wrong_password', event_count: 'x' }], error: null, count: 1 }),
+      ],
+      ['no rows list', () => ({ data: null, error: null, count: 0 })],
+    ])('%s: a failed reconciliation read', async (_what, answer) => {
+      serverHour(H(5), 40);
+      h.recordedAnswer = answer;
+      const summary = full(await run());
+      expect(h.rpc).not.toHaveBeenCalled();
+      expect(summary.failure).toMatchObject({ cause: 'reconcile_read_failed' });
+    });
+
+    it('more recorded rows than one read holds: the hour is stored without a reconciliation flag, said once', async () => {
+      hourAnswers(
+        H(5),
+        [groupRow({ n: 2 }, H(5))],
+        [totalsRow({ n: 2 }, H(5)), totalsRow({ ...ours, n: 500 }, H(5))],
+      );
+      h.recordedAnswer = () => ({
+        data: [{ reason: 'wrong_password', event_count: 3 }],
+        error: null,
+        count: 5000,
+      });
+      const summary = full(await run());
+      expect(written()).toEqual([expect.objectContaining({ reason: 'wrong_password', count: 2 })]);
+      expect(summary).toMatchObject({ ok: true, reconcileIncomplete: 1 });
+      expect(summary.hours[1]).toMatchObject({
+        reconcile: { gateway: { password: 500, code: 0 }, recorded: null, excess: null },
+      });
+      expect(h.report).toHaveBeenCalledTimes(1);
+      expect(String(h.report.mock.calls[0]![0])).toContain('too many to add up');
     });
   });
 
@@ -1513,9 +1920,10 @@ describe('a run: six hours, oldest first, each written once', () => {
 
   it("our server's client string: ours from a hosting network, stored as api from any other", async () => {
     hourAnswers(H(4), [
-      groupRow({ caller: 'server', network: 'hosting', n: 5 }),
+      groupRow({ ...ours, n: 5 }),
       groupRow({ caller: 'server', network: 'other', n: 2, country: 'US' }),
     ]);
+    recordWeb(H(4), 'wrong_password', 5);
     const summary = full(await run());
     expect(written()).toEqual([
       expect.objectContaining({ reason: 'wrong_password', source: 'api', count: 2, country: 'US' }),

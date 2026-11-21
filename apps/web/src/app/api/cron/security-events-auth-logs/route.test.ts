@@ -45,13 +45,13 @@ let answer: (url: URL) => Response = () =>
   new Response(JSON.stringify({ result: [], error: null }));
 const fetchSpy = vi.fn(async (input: string | URL | Request) => answer(new URL(String(input))));
 
-/** An admin client whose reads find nothing and whose writer takes everything. */
+/** An admin client whose reads find nothing (with a count of none) and whose writer takes everything. */
 function adminClient() {
   const builder: Record<string, unknown> = {};
-  for (const m of ['select', 'is', 'in', 'gte', 'lt', 'limit', 'abortSignal'])
+  for (const m of ['select', 'is', 'eq', 'in', 'gte', 'lt', 'limit', 'abortSignal'])
     builder[m] = () => builder;
   builder.then = (resolve: (v: unknown) => unknown) =>
-    Promise.resolve({ data: [], error: null }).then(resolve);
+    Promise.resolve({ data: [], error: null, count: 0 }).then(resolve);
   return {
     from: () => builder,
     rpc: (name: string, args: unknown) => ({ abortSignal: () => h.rpc(name, args) }),
@@ -164,6 +164,7 @@ describe('the run', () => {
         : totals
           ? lines.map(({ country: _c, ...l }) => ({
               ...l,
+              form: 'plain',
               first_seen: '2026-11-21 04:05:00',
               last_seen: '2026-11-21 04:05:00',
             }))
@@ -180,11 +181,20 @@ describe('the run', () => {
     const logged = JSON.parse(line.slice(line.indexOf(' ') + 1)) as Record<string, unknown>;
     expect(logged).toEqual(body);
     expect(logged).toMatchObject({
-      notStored: { our_server: 9, other_status: 0, refresh: 0, unclassified: 0 },
+      notStored: { our_server: 9, other_status: 0, refresh: 0, known_other: 0 },
       seen: {
         'password 400 phone other': 3,
         'password 400 server hosting': 9,
         'password 400 server other': 2,
+      },
+    });
+    // Our server's 9 are reconciled with what it recorded (nothing here): an
+    // excess of 9 is in the log line, and below 10 nothing is stored for it.
+    expect((logged.hours as unknown[])[0]).toMatchObject({
+      reconcile: {
+        gateway: { password: 9, code: 0 },
+        recorded: { password: 0, code: 0, overflow: 0 },
+        excess: { password: 9, code: 0 },
       },
     });
     // Counts and codes only: every text in it is a code, a status or an hour.
