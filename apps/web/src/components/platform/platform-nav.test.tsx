@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * The console nav (P5.3): the same four destinations and the marker, the
+ * The console nav (P5.3): the same five destinations and the marker, the
  * current one announced (aria-current) as well as drawn, and Organizations
  * kept lit inside one organization's page (it used to light nothing there).
  */
@@ -24,7 +24,7 @@ function current() {
 }
 
 describe('PlatformNav', () => {
-  it('links the four destinations and shows the Platform admin marker', () => {
+  it('links the five destinations and shows the Platform admin marker', () => {
     render(<PlatformNav />);
     expect(screen.getAllByRole('link').map((a) => [a.textContent, a.getAttribute('href')])).toEqual(
       [
@@ -32,6 +32,7 @@ describe('PlatformNav', () => {
         ['Provision', '/platform/provision'],
         ['Support', '/platform/support'],
         ['Audit', '/platform/audit'],
+        ['Security', '/platform/security'],
       ],
     );
     expect(screen.getByText('Platform admin')).toBeInTheDocument();
@@ -43,6 +44,7 @@ describe('PlatformNav', () => {
     ['/platform/provision', 'Provision'],
     ['/platform/support', 'Support'],
     ['/platform/audit', 'Audit'],
+    ['/platform/security', 'Security'],
   ])('marks %s as %s', (path, label) => {
     nav.pathname = path;
     render(<PlatformNav />);
@@ -52,7 +54,7 @@ describe('PlatformNav', () => {
   it('draws every link focus ring inside its own edge, so no container clips it', () => {
     render(<PlatformNav />);
     const links = screen.getAllByRole('link');
-    expect(links).toHaveLength(4);
+    expect(links).toHaveLength(5);
     for (const a of links) {
       expect(a).toHaveClass('focus-visible:ring-inset', 'focus-visible:ring-offset-0');
     }
@@ -66,7 +68,7 @@ describe('PlatformNav', () => {
     const marker = nav.querySelector('[data-slot="platform-admin-marker"]');
     expect(marker).not.toBeNull();
     expect(marker).toHaveTextContent('Platform admin');
-    // On a phone the marker starts its own line under the four links.
+    // On a phone the marker starts its own line under the links.
     expect(marker).toHaveClass('max-sm:ml-0');
   });
 
