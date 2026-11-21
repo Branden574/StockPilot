@@ -52,7 +52,7 @@ export const PASSKEYS_PANEL_WORDS = {
   useRecoveryCode: 'Use a recovery code',
   recoveryTitle: 'Use a recovery code',
   recoveryBody:
-    'Enter one of the recovery codes you saved and your password. The code is used up, and every second step of your account is removed, passkeys included. Then set up a new one.',
+    'Enter one of the recovery codes you saved and your password. The code is used up, every second step of your account is removed, passkeys included, and your other devices are signed out. You stay signed in here. Then set up a new one.',
   recoveryMissing: 'Enter a recovery code and your password.',
   /** Decision A: the panel with only the list and Remove (the kill switch off). */
   turnedOff: 'Passkeys are turned off right now.',

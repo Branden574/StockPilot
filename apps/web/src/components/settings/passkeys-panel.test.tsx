@@ -10,6 +10,8 @@ import { describe, expect, it, vi } from 'vitest';
  */
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
+const toastSuccess = vi.hoisted(() => vi.fn());
+vi.mock('sonner', () => ({ toast: { success: toastSuccess, error: vi.fn() } }));
 vi.mock('@simplewebauthn/browser', () => ({
   browserSupportsWebAuthn: () => true,
   startAuthentication: vi.fn(),
@@ -181,6 +183,24 @@ describe('review 4 finding 4: an unfinished passkey that is the only method', ()
         code: 'SAMPLE-CODE',
         password: 'sample-password-not-real',
       }),
+    );
+  });
+
+  it('stage 5: the dialog says the other devices are signed out, and a used code says what happened', async () => {
+    render(<PasskeysPanel data={onlyMethod()} />);
+    fireEvent.click(screen.getByRole('button', { name: PASSKEYS_PANEL_WORDS.useRecoveryCode }));
+    expect(screen.getByRole('dialog')).toHaveTextContent(
+      'Enter one of the recovery codes you saved and your password. The code is used up, every second step of your account is removed, passkeys included, and your other devices are signed out. You stay signed in here. Then set up a new one.',
+    );
+    fireEvent.change(screen.getByLabelText('Recovery code'), { target: { value: 'sample-code' } });
+    fireEvent.change(screen.getByLabelText('Your password'), {
+      target: { value: 'sample-password-not-real' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Use recovery code' }));
+    await waitFor(() =>
+      expect(toastSuccess).toHaveBeenCalledWith(
+        'Your sign-in methods were removed and your other devices were signed out. Set up a new one now.',
+      ),
     );
   });
 
