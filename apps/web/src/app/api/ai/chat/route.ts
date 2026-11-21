@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { can } from '@/lib/auth/permissions';
 import {
   answerModuleState,
@@ -156,7 +156,9 @@ const MAX_HISTORY_TURNS = 40;
  * so the client can branch on Content-Type.
  */
 export async function POST(req: Request) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req, 'read');
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   // Module gate — the AI Assistant is an optional module. Enforce it here

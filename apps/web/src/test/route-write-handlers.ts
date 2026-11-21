@@ -38,12 +38,16 @@ const WEB_SRC = path.resolve(__dirname, '..');
  * them): the returns routes' shared plumbing, and the API context gate, which
  * answers a refusal made before any write as the phone's retryable 503 (docket
  * S26).
+ *
+ * The /api/v1 read wrapper is one too: it answers a read by a member who must
+ * set up an authenticator first (authenticator-read.guard.test.ts).
  */
 export const GATE_MODULES: Readonly<Record<string, string>> = {
   withApiContext: 'lib/auth/api-context',
   returnsContext: 'app/api/v1/returns/http',
   memberRequesterGate: 'app/api/v1/orders/[id]/return-request/http',
   apiContextGate: 'server/lib/api-context-gate',
+  apiReadContext: 'server/lib/api-read-context',
 };
 
 export interface WriteHandler {

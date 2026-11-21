@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { lookupIsbn, normalizeIsbn } from '@/lib/books/lookup';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
@@ -17,7 +17,9 @@ export const dynamic = 'force-dynamic';
  * Query: ?isbn=<isbn-10 or isbn-13>
  */
 export async function GET(req: NextRequest) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
   }

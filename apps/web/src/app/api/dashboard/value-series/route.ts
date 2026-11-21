@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { serviceErrorResponse } from '@/server/lib/service-error-response';
 import {
@@ -37,7 +37,9 @@ const BASES: ValueBasis[] = ['cost', 'retail'];
  */
 export async function GET(request: Request) {
   try {
-    const ctx = await withApiContext(request);
+    const read = await apiReadContext(request);
+    if ('response' in read) return read.response;
+    const ctx = read.ctx;
     if (!ctx) {
       return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     }

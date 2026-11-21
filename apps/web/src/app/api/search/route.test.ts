@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ModuleId } from '@stockpilot/core';
+import { AUTHENTICATOR_SET_UP_OWED_COPY, type ModuleId } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
@@ -54,6 +54,27 @@ describe('GET /api/search', () => {
       mfaRequired: true,
       mfaSatisfied: false,
       mfaEnrolled: false,
+    });
+
+    const res = await GET(new Request('https://test.local/api/search?q=kettle'));
+    expect(res.status).toBe(403);
+    // The answer every API read gives such a member (server/lib/api-read-context.ts).
+    expect(await res.json()).toEqual({
+      error: 'forbidden',
+      message: AUTHENTICATOR_SET_UP_OWED_COPY,
+      details: { reason: 'mfa_required' },
+    });
+    expect(stub.fromCalls).toEqual([]);
+    expect(getWarehouseAccess).not.toHaveBeenCalled();
+  });
+
+  it('a requirement that is not met by an account with an authenticator keeps the route own refusal', async () => {
+    const stub = makeSupabaseStub({});
+    vi.mocked(withApiContext).mockResolvedValueOnce({
+      ...buildCtx(stub.client),
+      mfaRequired: true,
+      mfaSatisfied: false,
+      mfaEnrolled: true,
     });
 
     const res = await GET(new Request('https://test.local/api/search?q=kettle'));

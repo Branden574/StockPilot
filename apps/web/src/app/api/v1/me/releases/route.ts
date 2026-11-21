@@ -1,4 +1,4 @@
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { answerModuleState } from '@/server/lib/api-error-response';
 import { listReleasesFor } from '@/server/services/releases';
 
@@ -23,7 +23,9 @@ const NO_STORE = { 'Cache-Control': 'private, no-store' } as const;
  * modules and read state.
  */
 export async function GET(req: Request): Promise<Response> {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return Response.json({ error: 'unauthorized' }, { status: 401, headers: NO_STORE });
   try {
     return Response.json(await listReleasesFor(ctx), { headers: NO_STORE });

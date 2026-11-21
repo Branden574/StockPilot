@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import {
   BOOK_REPORT_NO_STORE,
   bookReportErrorResponse,
@@ -23,7 +23,9 @@ export const dynamic = 'force-dynamic';
  * bar and the phone, never awaited with the numbers.
  */
 export async function GET(req: NextRequest) {
-  const ctx = await withApiContext(req);
+  const read = await apiReadContext(req);
+  if ('response' in read) return read.response;
+  const ctx = read.ctx;
   if (!ctx) return bookReportUnauthenticatedResponse();
   try {
     const result = await new BookOrderTotalsService(ctx).options();

@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { isUuid } from '@stockpilot/core';
 
-import { withApiContext } from '@/lib/auth/api-context';
+import { apiReadContext } from '@/server/lib/api-read-context';
 import { reportError } from '@/lib/error-reporter';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
@@ -32,7 +32,9 @@ export async function GET(
     const type = url.searchParams.get('type') ?? 'code128';
     const valueOverride = url.searchParams.get('value');
 
-    const ctx = await withApiContext(req);
+    const read = await apiReadContext(req);
+    if ('response' in read) return read.response;
+    const ctx = read.ctx;
     if (!ctx) return new NextResponse('unauthenticated', { status: 401 });
     // A malformed id is a 400 before anything is read with it (B63).
     if (!isUuid(id)) return new NextResponse('That item id is not valid.', { status: 400 });
