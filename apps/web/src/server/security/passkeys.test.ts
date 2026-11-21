@@ -1116,6 +1116,62 @@ describe('states: the server branches on the facts (2.7)', () => {
     expect(JSON.stringify(vi.mocked(reportError).mock.calls)).not.toContain(userId);
   });
 
+  describe('a removal the member started is finished only on a session that signed in with the password (review of stage 5, finding 2)', () => {
+    const later = () => new Date(Date.now() + 1000).toISOString();
+    const factorsOf = (userId: string) => world.factors.filter((f) => f.user_id === userId);
+    const REMOVALS: Array<[string, (userId: string) => void]> = [
+      [
+        'S7 (its bridge row and factor no newer)',
+        () => {
+          world.passkeys[0]!.removed_at = later();
+          world.passkeys[0]!.removed_reason = 'member';
+        },
+      ],
+      [
+        'S13 (its factor left, its row gone)',
+        (userId) => {
+          world.passkeys[0]!.removed_at = later();
+          world.passkeys[0]!.removed_reason = 'member';
+          world.bridges.delete(userId);
+        },
+      ],
+    ];
+
+    it.each(REMOVALS)(
+      '%s on a session an emailed link made: not offered; the start deletes nothing',
+      async (_s, make) => {
+        const { userId } = await memberWithPasskey();
+        make(userId);
+        const hadBridge = world.bridges.has(userId);
+        world.openResetLink(userId);
+        world.calls.fns.length = 0;
+        expect(await pk.passkeyStepFor(userId, factorsOf(userId))).toBe('none');
+        const r = await pk.startSecondStep();
+        expect(r).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.noPasskey });
+        expect(world.calls.deleteFactor).toEqual([]);
+        expect(world.calls.fns.map((c) => c.name)).not.toContain('passkey_drop_bridge');
+        expect(world.bridges.has(userId)).toBe(hadBridge);
+        expect(factorsOf(userId).some((f) => f.status === 'verified')).toBe(true);
+      },
+    );
+
+    it.each(REMOVALS)(
+      '%s on a password sign-in: offered, and the start finishes it',
+      async (_s, make) => {
+        const { userId } = await memberWithPasskey();
+        make(userId);
+        world.signIn(userId, 'aal1');
+        expect(await pk.passkeyStepFor(userId, factorsOf(userId))).toBe('ready');
+        expect(await pk.startSecondStep()).toMatchObject({
+          ok: true,
+          start: { kind: 'removal_finished' },
+        });
+        expect(world.calls.deleteFactor).toHaveLength(1);
+        expect(world.bridges.has(userId)).toBe(false);
+      },
+    );
+  });
+
   it('S8 (a bridge with no passkey row ever) fails closed', async () => {
     const { userId } = await memberWithPasskey();
     world.passkeys.length = 0;

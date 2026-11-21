@@ -1313,6 +1313,25 @@ function finishesRemoval(p: AccountPicture): boolean {
   return p.state === 'bridge_row_without_passkey' && p.facts.bridgeStatus === 'verified';
 }
 
+/**
+ * A removal the member started is finished only on a session that signed in
+ * with the password: its verified `amr` holds `password` (review of stage 5,
+ * finding 2). Never on a session an emailed link made (`otp`): the link alone
+ * must not turn an account that lists a verified factor into one with none.
+ */
+function signedInWithPassword(held: Held): boolean {
+  const amr = held.claims.amr;
+  return (
+    Array.isArray(amr) &&
+    amr.some(
+      (entry: unknown) =>
+        !!entry &&
+        typeof entry === 'object' &&
+        (entry as { method?: unknown }).method === 'password',
+    )
+  );
+}
+
 /** Deletes the reserved-name factors of a removal the member started, then the row. */
 async function finishMemberRemoval(
   admin: Admin,
@@ -1407,15 +1426,17 @@ async function finishSecondStep(input: {
 
 /**
  * The second step's start: a removal the member started (S7, S13) is
- * finished here, deleting the reserved-name factors at Auth and then the
- * bridge row (finishMemberRemoval); otherwise the ceremony starts. The only
- * start that can delete.
+ * finished here, on a session that signed in with the password
+ * (signedInWithPassword), deleting the reserved-name factors at Auth and then
+ * the bridge row (finishMemberRemoval); otherwise the ceremony starts. The
+ * only start that can delete. On a session an emailed link made it deletes
+ * nothing ("This account has no passkey.").
  */
 export async function startSecondStep(): Promise<Result<{ start: SecondStepStart }>> {
   const started = await readForStart('use');
   if (!started.ok) return started;
   const { admin, held, picture } = started;
-  if (finishesRemoval(picture)) {
+  if (finishesRemoval(picture) && signedInWithPassword(held)) {
     const done = await finishMemberRemoval(admin, held.claims.userId, picture);
     return done
       ? { ok: true, start: { kind: 'removal_finished' } }
@@ -2233,7 +2254,7 @@ async function stepOf(
   const read = await readPicture(createAdminClient(), held, gate.rp);
   if (!read.ok) return 'none';
   const picture = read.picture;
-  if (finishesRemoval(picture)) return 'ready';
+  if (finishesRemoval(picture)) return signedInWithPassword(held) ? 'ready' : 'none';
   if (servesAsSecondStep(picture, userId, gate.keys)) return 'ready';
   const fault = failClosedFault(picture, userId, gate.keys);
   if (fault) await reportStepFault(userId, fault);

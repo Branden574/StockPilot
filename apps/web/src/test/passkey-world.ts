@@ -30,6 +30,12 @@ export interface FakeSession {
   id: string;
   userId: string;
   aal: 'aal1' | 'aal2';
+  /**
+   * The session's `amr` (stage 5): a password sign-in by default; a session
+   * made by an emailed link carries `otp` with the time it was opened. Auth
+   * keeps every entry and adds `totp` when a factor is answered (proof B1).
+   */
+  amr?: Array<{ method: string; timestamp: number }>;
 }
 export interface FakeFactor {
   id: string;
@@ -182,7 +188,7 @@ export function makeWorld() {
         sub: session.userId,
         session_id: session.id,
         aal: session.aal,
-        amr: [{ method: 'password', timestamp: 1 }],
+        amr: session.amr ?? [{ method: 'password', timestamp: 1 }],
         email: w.emails.get(session.userId) ?? null,
         exp: Math.floor(Date.now() / 1000) + 3600,
       }),
@@ -213,11 +219,26 @@ export function makeWorld() {
     w.emails.set(id, email);
     return id;
   }
-  function signIn(userId: string, aal: 'aal1' | 'aal2' = 'aal1'): FakeSession {
-    const s = { id: randomUUID(), userId, aal };
+  function signIn(
+    userId: string,
+    aal: 'aal1' | 'aal2' = 'aal1',
+    opts: { amr?: FakeSession['amr'] } = {},
+  ): FakeSession {
+    const s: FakeSession = {
+      id: randomUUID(),
+      userId,
+      aal,
+      ...(opts.amr ? { amr: opts.amr } : {}),
+    };
     w.sessions.set(s.id, s);
     w.cookieToken = signToken(s);
     return s;
+  }
+  /** A session made by an emailed reset link opened `ageS` seconds ago (lib/auth/reset-link-session). */
+  function openResetLink(userId: string, ageS = 60): FakeSession {
+    return signIn(userId, 'aal1', {
+      amr: [{ method: 'otp', timestamp: Math.floor(Date.now() / 1000) - ageS }],
+    });
   }
   function addApp(userId: string): FakeFactor {
     const f: FakeFactor = {
@@ -700,6 +721,7 @@ export function makeWorld() {
     claimsOf,
     addAccount,
     signIn,
+    openResetLink,
     addApp,
     fetch: fetchFake,
     admin,
