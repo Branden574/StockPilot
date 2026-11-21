@@ -422,6 +422,15 @@ describe("4. the server's own factor list reaches the gate wherever the app alre
     expect(live).toContain('PROBE_TIMEOUT_MS, null,');
   });
 
+  it("the passkey-only notice's Check again is the same bounded user read, handed to the same reconcile, and nothing else", () => {
+    expect(auth).toContain(
+      "const recheckCodeGate: AuthState['recheckCodeGate'] = async () => { const live = await readLiveUser(); if (!live) return 'no_answer'; await reconcileCodeGate(live); return 'answered'; };",
+    );
+    // Declared, defined and handed to the context once each: no second path.
+    expect(auth.match(/\brecheckCodeGate\b/g)).toHaveLength(4);
+    expect(auth).toContain('biometricEnabled, mfaRequired, verifyMfa, recheckCodeGate, signIn,');
+  });
+
   it('the reconcile reads the session auth-js holds and refreshes with a bound; a failure is null', () => {
     expect(auth).toContain(
       'const reconcileCodeGate = createStepUpReconciler({ currentSession: () => supabase.auth.getSession().then( ({ data }) => data.session, () => null, ), refreshSession: () => withTimeout( supabase.auth.refreshSession().then(({ data, error }) => (error ? null : data.session)), PROBE_TIMEOUT_MS, null, ), });',
