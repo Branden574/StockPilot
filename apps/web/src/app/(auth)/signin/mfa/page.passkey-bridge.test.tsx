@@ -79,6 +79,10 @@ vi.mock('@/lib/supabase/admin', () => ({
   },
 }));
 vi.mock('@/components/auth/mfa-challenge-form', () => ({ MfaChallengeForm: () => null }));
+// Stage 4: the passkey step answers as for an account whose passkeys are not
+// open, the stage 2 page these tests pin (page.passkeys.test.tsx covers 'ready').
+vi.mock('@/server/security/passkeys', () => ({ passkeyStepFor: vi.fn(async () => 'none') }));
+vi.mock('@/components/auth/passkey-step', () => ({ PasskeyStep: () => null }));
 
 import { MfaChallengeForm } from '@/components/auth/mfa-challenge-form';
 

@@ -3,6 +3,7 @@ import { Suspense } from 'react';
 
 import { AuthCard } from '@/components/auth/auth-card';
 import { MfaChallengeForm } from '@/components/auth/mfa-challenge-form';
+import { PasskeyStep } from '@/components/auth/passkey-step';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
   appFactorsForCode,
@@ -10,6 +11,7 @@ import {
   readPasskeyBridge,
 } from '@/lib/auth/passkey-bridge';
 import { createClient } from '@/lib/supabase/server';
+import { passkeyStepFor } from '@/server/security/passkeys';
 
 export const metadata = {
   title: 'Two-factor authentication',
@@ -63,7 +65,27 @@ export default async function MfaChallengePage() {
       (f.friendly_name as string | null) ?? null,
   }));
 
-  // Only a passkey, which this page cannot take yet: the recovery code is
+  // Stage 4: the passkey step, offered only when every condition of
+  // server/security/passkeys.ts holds for this member and the passkey's
+  // bridge is healthy. Read only when a reserved-name factor is listed;
+  // otherwise this page is exactly as before.
+  const passkey = await passkeyStepFor(user.id, verifiedTotp);
+  if (passkey === 'ready') {
+    return (
+      <AuthCard
+        eyebrow="Two-factor"
+        title="Two-factor authentication"
+        description="One more step. Confirm it's you with your passkey."
+      >
+        <Suspense fallback={<ChallengeSkeleton />}>
+          <PasskeyStep hasApps={factors.length > 0} />
+          <MfaChallengeForm factors={factors} />
+        </Suspense>
+      </AuthCard>
+    );
+  }
+
+  // Only a passkey, which this page cannot take now: the recovery code is
   // the way in (the form shows no code box without an app).
   if (factors.length === 0) {
     // The bridge record could not be read (a failed read, or the table

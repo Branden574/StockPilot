@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { PasskeyButton } from '@/components/auth/passkey-button';
 import { carriesBridgeName } from '@/lib/auth/passkey-bridge-name';
 import { isControlFlow } from '@/lib/control-flow';
 import { createClient } from '@/lib/supabase/client';
@@ -77,6 +78,10 @@ const FACTORS_UNREADABLE_COPY = 'Could not load your authenticator. Try again.';
  * method, too much for one confirmation. The passkey replaces it later.
  */
 const BRIDGE_ONLY_TITLE = "Confirm it's you";
+/** Stage 4: the account's passkey answers here (plan section 4). */
+const PASSKEY_ONLY_COPY = 'This action needs a fresh check. Use your passkey.';
+const PASSKEY_AND_APP_COPY =
+  'This action needs a fresh check. Use your passkey, or enter the 6-digit code from your authenticator app.';
 const BRIDGE_ONLY_COPY =
   "This confirmation can't be done here yet, so close this and ask your organization's owner or StockPilot support for help.";
 
@@ -96,6 +101,8 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
   const [error, setError] = React.useState<string | null>(null);
   /** The server answered that the account's only authenticator is the passkey's bridge. */
   const [bridgeOnly, setBridgeOnly] = React.useState(false);
+  /** The server answered that the account's passkey answers here (stage 4). */
+  const [passkey, setPasskey] = React.useState(false);
 
   /** Every way out clears the typed code and the last error, so the next
    *  opening starts clean. */
@@ -103,6 +110,7 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
     setCode('');
     setError(null);
     setBridgeOnly(false);
+    setPasskey(false);
     onDone(ok);
   }
 
@@ -144,6 +152,14 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
           if (cancelled) return;
           if (methods?.ok) {
             totp = methods.data.apps;
+            if (methods.data.passkey) {
+              // The passkey answers here: its button, and the apps' code box
+              // beside it when there are apps (no "nothing enrolled" line).
+              setPasskey(true);
+              setFactors(totp);
+              setFactorId(totp[0]?.id ?? '');
+              return;
+            }
             if (totp.length === 0) {
               if (methods.data.recordsUnread) {
                 // The bridge record could not be read just now: a passing
@@ -228,10 +244,14 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
         <DialogHeader data-glass="step-up-head">
           <DialogTitle className="flex items-center gap-2">
             <ShieldCheck className="text-muted-foreground h-5 w-5" />
-            {bridgeOnly ? BRIDGE_ONLY_TITLE : <>Confirm with your authenticator</>}
+            {bridgeOnly || passkey ? BRIDGE_ONLY_TITLE : <>Confirm with your authenticator</>}
           </DialogTitle>
           {bridgeOnly ? (
             <DialogDescription>{BRIDGE_ONLY_COPY}</DialogDescription>
+          ) : passkey ? (
+            <DialogDescription>
+              {factors && factors.length > 0 ? PASSKEY_AND_APP_COPY : PASSKEY_ONLY_COPY}
+            </DialogDescription>
           ) : (
             <DialogDescription>
               This action needs a fresh two-factor check. Enter the current 6-digit code from your
@@ -240,6 +260,7 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
           )}
         </DialogHeader>
         <form data-glass="step-up-form" onSubmit={submit} className="space-y-3">
+          {passkey ? <PasskeyButton onPassed={() => done(true)} showHint={false} /> : null}
           {factors && factors.length > 1 ? (
             <div data-glass="step-up-field" className="space-y-1.5">
               <Label htmlFor="stepup-factor">Authenticator</Label>
@@ -260,7 +281,7 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
               </select>
             </div>
           ) : null}
-          {bridgeOnly ? null : (
+          {bridgeOnly || (passkey && !factors?.length) ? null : (
             <div data-glass="step-up-field" className="space-y-1.5">
               <Label htmlFor="stepup-code">Authentication code</Label>
               <Input
@@ -286,7 +307,7 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
             <Button type="button" variant="outline" onClick={() => done(false)} disabled={pending}>
               Cancel
             </Button>
-            {bridgeOnly ? null : (
+            {bridgeOnly || (passkey && !factors?.length) ? null : (
               <Button type="submit" disabled={pending || code.length !== 6 || !factorId}>
                 {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Verify'}
               </Button>

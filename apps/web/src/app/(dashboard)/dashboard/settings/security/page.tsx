@@ -7,6 +7,8 @@ import { ChangePasswordForm } from '@/components/settings/change-password-form';
 import { MfaEnrollment } from '@/components/settings/mfa-enrollment';
 import { MfaPolicyEditor } from '@/components/settings/mfa-policy-editor';
 import { MfaRecoveryCodes } from '@/components/settings/mfa-recovery-codes';
+import { PasskeysPanel } from '@/components/settings/passkeys-panel';
+import { PASSKEYS_PANEL_WORDS } from '@/components/settings/passkeys-copy';
 import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
 import { Button } from '@/components/ui/button';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
@@ -15,6 +17,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { getVerifiedSessionClaimsForRequest } from '@/lib/auth/verified-claims';
 import { createClient } from '@/lib/supabase/server';
 import { getMfaRecoveryCodeStatus } from '@/server/actions/mfa-recovery';
+import { passkeysPanelFor } from '@/server/security/passkeys';
 import { withContext } from '@/server/services/context';
 import { SessionsService } from '@/server/services/sessions';
 import { SignInAlertsService } from '@/server/services/sign-in-alerts';
@@ -59,10 +62,14 @@ export default async function SecuritySettingsPage({
     new SignInAlertsService(serviceContext).mine().catch(() => null),
   ]);
 
-  const [factorsRes, orgRow, recoveryStatus] = await Promise.all([
+  const [factorsRes, orgRow, recoveryStatus, passkeys] = await Promise.all([
     supabase.auth.mfa.listFactors(),
     supabase.from('organizations').select('mfa_policy').eq('id', ctx.organizationId).maybeSingle(),
     getMfaRecoveryCodeStatus(),
+    // Stage 4: the Passkeys panel, or null when it must be ABSENT (any of
+    // the conditions of server/security/passkeys.ts passkeyGate false). With
+    // no site or no bridge key nothing is read.
+    passkeysPanelFor(ctx.userId).catch(() => null),
   ]);
 
   // Display only (every action on this page re-checks server-side), but an
@@ -183,6 +190,12 @@ export default async function SecuritySettingsPage({
           <MfaEnrollment verifiedFactors={appFactors} policyRequired={policyRequired} />
         )}
       </SettingsPanel>
+
+      {passkeys ? (
+        <SettingsPanel title="Passkeys" description={PASSKEYS_PANEL_WORDS.description}>
+          <PasskeysPanel data={passkeys} />
+        </SettingsPanel>
+      ) : null}
 
       <SettingsPanel
         title="Active sessions"
