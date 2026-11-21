@@ -570,6 +570,10 @@ describe('every returned field is checked before use', () => {
     expect(parseLogsTime('2026-11-21 04:05:00')).toBe(H04 + 5 * MIN);
     expect(parseLogsTime('2026-11-21 04:05:00.000')).toBe(H04 + 5 * MIN);
     expect(parseLogsTime('2026-11-21 04:05:07.250000')).toBe(H04 + 5 * MIN + 7_250);
+    // The form the logs service printed on 2026-11-21: nine digits after the second.
+    expect(parseLogsTime('2026-11-21 18:39:35.412000000')).toBe(
+      Date.UTC(2026, 10, 21, 18, 39, 35, 412),
+    );
     for (const bad of [
       '2026-11-21T04:05:00Z',
       '2026-11-21T04:05:00',
@@ -1130,6 +1134,54 @@ describe('the SQL is two constants that return classes and counts only', () => {
     }
   });
 
+  /** A query's text with its comments and its quoted strings taken out. */
+  const statementWords = (sql: string) =>
+    sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/'[^']*'/g, "''");
+
+  it("each is nested selects, the form the logs service's own parser accepts: never a WITH list", () => {
+    for (const [name, sql] of BOTH) {
+      // The service refuses `WITH <expression> AS <name>` (it answers 200 with an error).
+      expect(statementWords(sql), name).not.toMatch(/\bwith\b/i);
+      expect(sql, name).not.toContain('${');
+      expect(sql, name).not.toContain('\\');
+      // One leading block comment (a form the service was seen to accept), then the statement.
+      expect(sql, name).toMatch(/^\/\*[^*']*\*\/\nSELECT /);
+      expect(sql.match(/\/\*/g), name).toHaveLength(1);
+      const { levels } = parseReaderQuery(sql);
+      expect(levels, name).toHaveLength(3);
+      // Only the outermost select filters by a computed class, groups, orders and limits.
+      expect(levels[0]!.limit, name).toBe(AUTH_LOGS_ROW_LIMIT);
+      expect(levels[0]!.orderBy[0], name).toEqual({ name: 'n', desc: true });
+      expect(levels[1]!.where, name).toBeNull();
+      for (const inner of levels.slice(1)) {
+        expect(inner.groupBy, name).toEqual([]);
+        expect(inner.orderBy, name).toEqual([]);
+        expect(inner.limit, name).toBeNull();
+      }
+      expect(levels[2]!.where, name).not.toBeNull();
+    }
+  });
+
+  it('the model refuses a WITH list, a name defined beside its use, and anything it does not know', () => {
+    const line = { source: 'edge_logs', attributes: {} };
+    expect(() => parseReaderQuery("WITH 'a' AS b SELECT b AS c FROM logs")).toThrow(/SELECT/);
+    expect(() =>
+      runReaderQueryOnLine("SELECT 'a' AS b, b AS c FROM logs WHERE source = 'edge_logs'", line, [
+        'c',
+      ]),
+    ).toThrow(/unknown name b/);
+    expect(() =>
+      runReaderQueryOnLine("SELECT source AS s FROM logs WHERE s = 'edge_logs'", line, ['s']),
+    ).toThrow(/unknown name s/);
+    expect(() => runReaderQueryOnLine('SELECT upper(source) AS s FROM logs', line, ['s'])).toThrow(
+      /not modelled/,
+    );
+    expect(() => parseReaderQuery('SELECT source AS s FROM logs GROUP BY t')).toThrow(/no column/);
+    expect(() =>
+      parseReaderQuery('SELECT source AS s FROM logs; SELECT 1 AS n FROM logs'),
+    ).toThrow();
+  });
+
   const aliases = (items: Array<{ alias: string }>) => items.map((i) => i.alias);
 
   it('the groups query returns a minute, a kind, a status, a caller class, a network class, a country and a count', () => {
@@ -1153,27 +1205,36 @@ describe('the SQL is two constants that return classes and counts only', () => {
       'n',
     ]);
     expect(AUTH_LOGS_GROUPS_SQL).toContain('toString(toStartOfMinute(timestamp)) AS minute');
-    expect(AUTH_LOGS_TOTALS_SQL).toContain('toString(min(timestamp)) AS first_seen');
-    expect(AUTH_LOGS_TOTALS_SQL).toContain('toString(max(timestamp)) AS last_seen');
+    expect(AUTH_LOGS_TOTALS_SQL).toContain('timestamp AS ts');
+    expect(AUTH_LOGS_TOTALS_SQL).toContain('toString(min(ts)) AS first_seen');
+    expect(AUTH_LOGS_TOTALS_SQL).toContain('toString(max(ts)) AS last_seen');
   });
 
-  it('both start from the same named values, and the hosting prefix is written once, with when it was measured', () => {
-    const head = (sql: string) => sql.slice(0, sql.indexOf('\nSELECT\n'));
-    expect(head(AUTH_LOGS_TOTALS_SQL)).toBe(head(AUTH_LOGS_GROUPS_SQL));
-    expect(aliases(parseReaderQuery(AUTH_LOGS_GROUPS_SQL).withItems)).toEqual([
-      'hosting_owner_prefix',
-      'raw_path',
-      'decoded_path',
-      'raw_search',
-      'decoded_search',
-      'first_grant',
-      'client',
-    ]);
+  /** The definition of each alias of one select, as its syntax tree. */
+  const definitions = (items: Array<{ alias: string; node: unknown }>) =>
+    new Map(items.map((i) => [i.alias, JSON.stringify(i.node)]));
+
+  it('both class a line by the same definitions, and the hosting prefix is written once, with when it was measured', () => {
+    const groups = parseReaderQuery(AUTH_LOGS_GROUPS_SQL).levels;
+    const totals = parseReaderQuery(AUTH_LOGS_TOTALS_SQL).levels;
+    // The raw fields (innermost) and the classes (middle): a name both queries
+    // define is defined the same way in both.
+    for (const depth of [1, 2]) {
+      const g = definitions(groups[depth]!.items);
+      const t = definitions(totals[depth]!.items);
+      const shared = [...g.keys()].filter((alias) => t.has(alias));
+      for (const alias of shared) expect(g.get(alias), alias).toBe(t.get(alias));
+      if (depth === 1) expect(shared).toEqual(['kind', 'status', 'caller', 'network']);
+      else {
+        expect(shared).toEqual(
+          expect.arrayContaining(['raw_search', 'first_grant', 'client', 'status', 'owner']),
+        );
+      }
+    }
     for (const [name, sql] of BOTH) {
       expect(sql.match(/Amazon/g), name).toHaveLength(1);
-      expect(sql, name).toContain("'Amazon' AS hosting_owner_prefix");
-      expect(head(sql), name).toMatch(/\/\*[^*]*measured on 2026-11-21[^*]*\*\//);
-      expect(sql.match(/hosting_owner_prefix/g), name).toHaveLength(2);
+      expect(sql, name).toContain("startsWith(owner, 'Amazon')");
+      expect(sql, name).toMatch(/^\/\*[^*]*measured on 2026-11-21[^*]*\*\//);
     }
   });
 
@@ -1421,10 +1482,13 @@ describe('the SQL is two constants that return classes and counts only', () => {
   });
 
   it('both read the same lines; the groups query keeps only the kinds that can be stored', () => {
-    const where = (sql: string) => sql.slice(sql.indexOf('\nWHERE '), sql.indexOf('\nGROUP BY'));
-    expect(where(AUTH_LOGS_GROUPS_SQL)).toBe(
-      `${where(AUTH_LOGS_TOTALS_SQL)}\n  AND kind IN ('password', 'verify')`,
-    );
+    const groups = parseReaderQuery(AUTH_LOGS_GROUPS_SQL).levels;
+    const totals = parseReaderQuery(AUTH_LOGS_TOTALS_SQL).levels;
+    // The innermost WHERE (which lines are read at all) is the same in both.
+    expect(JSON.stringify(groups[2]!.where)).toBe(JSON.stringify(totals[2]!.where));
+    // Only the groups query filters again, by the computed kind.
+    expect(totals[0]!.where).toBeNull();
+    expect(AUTH_LOGS_GROUPS_SQL).toContain("\nWHERE kind IN ('password', 'verify')");
     for (const [, sql] of BOTH) {
       expect(sql.trimEnd().endsWith(`LIMIT ${AUTH_LOGS_ROW_LIMIT}`)).toBe(true);
       expect(sql).toMatch(/ORDER BY n DESC/);
