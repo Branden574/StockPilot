@@ -40,18 +40,24 @@ function countOf(value: unknown): number | null {
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
- * SECURITY EVENTS RETENTION, every day at 04:30 UTC (vercel.json): calls
- * purge_security_events() (migration security_events), which deletes rows
- * older than 90 days and clears the source hash from rows older than 24
- * hours, at most 5,000 of each per call, until both counts come back under
- * 5,000: at most MAX_CALLS calls and RUN_BUDGET_MS a run, whichever comes
- * first. What a run leaves, the next one takes.
+ * SECURITY EVENTS RETENTION, four times a day at half past the hour, every
+ * sixth hour UTC (vercel.json): calls purge_security_events() (migration
+ * security_events), which deletes rows older than 90 days and clears the
+ * source hash from rows older than 24 hours, at most 5,000 of each per call,
+ * until both counts come back under 5,000: at most MAX_CALLS calls and
+ * RUN_BUDGET_MS a run, whichever comes first. What a run leaves, the next one
+ * takes. With nothing to do, a run is one cheap call.
+ *
+ * Four runs a day clear up to 800,000 hashes, more than the writer admits
+ * with no organization in a day (200 rows a minute). A run that stops on
+ * MAX_CALLS or RUN_BUDGET_MS still had work left, which means the purge is
+ * being outrun; that stop is reported (warning), once per run.
  *
  * The function runs one call at a time with the recorder (an advisory lock);
  * a call that waits 2 s for its turn ends with 55P03. One such call is tried
  * again on the next turn of the loop, BUSY_RETRY_MS later; BUSY_STOP_AFTER in
- * a row end the run, and that stop is reported (warning). Any other error is
- * reported and answered 500.
+ * a row end the run, and that stop is reported the same way. Any other error
+ * is reported and answered 500.
  *
  * The answer: the summed counts, the number of calls, and whether the run
  * stopped before the work was done, and why. Never a row.
@@ -120,11 +126,21 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
 
-  if (stop === 'busy') {
-    await reportError(new Error('Security events retention stopped: the table stayed busy'), {
+  if (stop !== null) {
+    // The run ended with work left: the table stayed busy, or there was more
+    // to purge than one run takes (a sustained flood can write faster than
+    // this job removes). Said once per run, with counts only, so a purge
+    // that is being outrun is seen before the 24-hour rule stops holding.
+    const why =
+      stop === 'busy'
+        ? 'the table stayed busy'
+        : stop === 'call_limit'
+          ? 'more was left than one run takes'
+          : 'the run reached its time limit';
+    await reportError(new Error(`Security events retention stopped: ${why}`), {
       tag: TAG,
       level: 'warning',
-      extra: { calls, deleted, hashesCleared },
+      extra: { calls, deleted, hashesCleared, stop },
     });
   }
 

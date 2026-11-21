@@ -6,9 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 /**
  * The security events retention cron: CRON_SECRET fail-closed, then
  * purge_security_events() in a loop until both counts are under 5,000, at
- * most 40 calls and 45 s a run. A busy call (55P03) is tried again 500 ms
- * later; three in a row end the run, reported as a warning. Any other error
- * is reported and answered 500.
+ * most 40 calls and 45 s a run, four runs a day. A busy call (55P03) is tried
+ * again 500 ms later; three in a row end the run. A run that stops before its
+ * work is done (40 calls, 45 s, or busy) is reported once, as a warning, with
+ * its counts and why. Any other error is reported and answered 500.
  */
 
 const h = vi.hoisted(() => ({
@@ -99,7 +100,7 @@ describe('the loop', () => {
     });
   });
 
-  it('stops after 40 calls, saying so', async () => {
+  it('stops after 40 calls, saying so, and reports that it could not finish', async () => {
     h.rpc.mockResolvedValue(counts(5000, 5000));
     expect((await run()).body).toEqual({
       ok: true,
@@ -110,16 +111,36 @@ describe('the loop', () => {
       stop: 'call_limit',
     });
     expect(h.rpc).toHaveBeenCalledTimes(40);
-    expect(h.report).not.toHaveBeenCalled();
+    // The purge was outrun: more is left than one run takes. Once, as a warning, counts only.
+    expect(h.report).toHaveBeenCalledTimes(1);
+    const [error, context] = h.report.mock.calls[0] as unknown as [Error, Record<string, unknown>];
+    expect(error).toBeInstanceOf(Error);
+    expect(context).toEqual({
+      tag: 'cron.security-events-retention',
+      level: 'warning',
+      extra: { calls: 40, deleted: 200000, hashesCleared: 200000, stop: 'call_limit' },
+    });
   });
 
-  it('starts no call 45 s into the run', async () => {
+  it('starts no call 45 s into the run, and reports that it could not finish', async () => {
     // Each call takes 10 s: calls start at 0, 10, 20, 30 and 40 s.
     h.rpc.mockImplementation(async () => {
       await new Promise((resolve) => setTimeout(resolve, 10_000));
       return counts(5000, 0);
     });
     expect((await run()).body).toMatchObject({ calls: 5, deleted: 25000, stoppedEarly: true, stop: 'time_limit' });
+    expect(h.report).toHaveBeenCalledTimes(1);
+    expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'cron.security-events-retention',
+      level: 'warning',
+      extra: { calls: 5, deleted: 25000, hashesCleared: 0, stop: 'time_limit' },
+    });
+  });
+
+  it('a run that finishes its work reports nothing', async () => {
+    h.rpc.mockResolvedValueOnce(counts(5000, 5000)).mockResolvedValueOnce(counts(1, 2));
+    expect((await run()).body).toMatchObject({ stoppedEarly: false, stop: null });
+    expect(h.report).not.toHaveBeenCalled();
   });
 
   it('a busy call is tried again 500 ms later, and the streak ends at the next answer', async () => {
@@ -155,7 +176,7 @@ describe('the loop', () => {
     expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
       tag: 'cron.security-events-retention',
       level: 'warning',
-      extra: { calls: 4, deleted: 5000, hashesCleared: 5000 },
+      extra: { calls: 4, deleted: 5000, hashesCleared: 5000, stop: 'busy' },
     });
   });
 
@@ -181,12 +202,20 @@ describe('the loop', () => {
 });
 
 describe('the schedule', () => {
-  it('vercel.json runs it once a day at 04:30 UTC', () => {
+  it('vercel.json runs it four times a day, at half past every sixth hour (UTC)', () => {
     const vercel = JSON.parse(
       readFileSync(path.resolve(__dirname, '../../../../../vercel.json'), 'utf8'),
     ) as { crons: Array<{ path: string; schedule: string }> };
     expect(vercel.crons.filter((c) => c.path === '/api/cron/security-events-retention')).toEqual([
-      { path: '/api/cron/security-events-retention', schedule: '30 4 * * *' },
+      { path: '/api/cron/security-events-retention', schedule: '30 */6 * * *' },
     ]);
+  });
+
+  it('four runs a day take more than the writer can admit with no organization in a day', () => {
+    // A run clears at most 40 x 5,000 hashes; the writer admits at most 200
+    // ordinary rows a minute with no organization (migration security_events).
+    const clearedADay = 4 * 40 * 5000;
+    const admittedADay = 200 * 60 * 24;
+    expect(clearedADay).toBeGreaterThan(admittedADay);
   });
 });
