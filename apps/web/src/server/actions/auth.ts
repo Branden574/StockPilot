@@ -18,10 +18,10 @@ import {
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
 import { openedFromResetLink } from '@/lib/auth/reset-link-session';
 import { sessionAccountNow, type SessionAccountNow } from '@/lib/auth/session-account';
-import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
+import { readVerifiedSessionClaims, readVerifiedTokenClaims } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { broadcastToChannel } from '@/lib/realtime/broadcast';
-import { clientIpForRecord, clientIpFromHeaders } from '@/lib/client-ip';
+import { clientIpForRecord, clientIpFromHeaders, clientPlaceFromHeaders } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createClient } from '@/lib/supabase/server';
@@ -88,6 +88,26 @@ export async function signUpAction(
     'forbidden',
     'Public sign-up is disabled. Ask your administrator to send you an invite.',
   );
+}
+
+/**
+ * The Auth session a sign-in just made: the `session_id` claim of its access
+ * token, once the token verifies (lib/auth/verified-claims) and names this
+ * account. Null otherwise; never throws. For the sign-in alert's record
+ * (lib/auth/login-device.ts), read after the response.
+ */
+async function sessionIdOfNewSession(
+  supabase: Parameters<typeof readVerifiedTokenClaims>[0],
+  accessToken: string | null,
+  userId: string,
+): Promise<string | null> {
+  if (!accessToken) return null;
+  try {
+    const claims = await readVerifiedTokenClaims(supabase, accessToken);
+    return claims && claims.userId === userId ? claims.sessionId : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function signInAction(input: SignInInput): Promise<ActionResult<{ next: string }>> {
@@ -238,14 +258,28 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
   // on an account that already has known devices (first device = silent
   // baseline). Fires here on the password step — i.e. even before TOTP — so a
   // stolen password used from a new device still alerts the real owner.
+  //
+  // Part 3 (sign-in alerts): the note also gets the place (Vercel's headers,
+  // only on Vercel), the session this sign-in made and the client. The session
+  // id is read from the new session's own token, verified, inside the after()
+  // callback, so nothing new runs before the answer.
   if (userId) {
     const h = requestHeaders;
     const ua = h.get('user-agent');
     // The device row and the email take the address only as an IP literal,
     // never the limiter's 'unknown' bucket.
     const deviceIp = clientIpForRecord(h);
-    after(() =>
-      noteLoginDevice({ userId, email: parsed.data.email, userAgent: ua, ip: deviceIp }),
+    const accessToken = signInData.session?.access_token ?? null;
+    after(async () =>
+      noteLoginDevice({
+        userId,
+        email: parsed.data.email,
+        userAgent: ua,
+        ip: deviceIp,
+        place: clientPlaceFromHeaders(h),
+        sessionId: await sessionIdOfNewSession(supabase, accessToken, userId),
+        client: 'web',
+      }),
     );
   }
 

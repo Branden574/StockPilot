@@ -244,7 +244,36 @@ describe('POST /api/v1/auth/signed-in — the row', () => {
       deviceKey: INSTALL,
       deviceLabel: 'StockPilot app on iPhone 15 Pro (iOS 18.1)',
       deviceFamily: 'StockPilot app on iPhone',
+      // Part 3: the place (none without Vercel's headers), the session the
+      // token belongs to, and the client.
+      place: { country: null, city: null },
+      sessionId: SESSION,
+      client: 'phone',
     });
+  });
+
+  it('part 3: the place comes from Vercel’s headers, read after the response like everything else here', async () => {
+    await POST(
+      req(BODY, {
+        authorization: 'Bearer token-1',
+        'x-vercel-ip-country': 'BR',
+        'x-vercel-ip-city': 'S%C3%A3o%20Paulo',
+      }),
+    );
+    expect(h.noteLoginDevice).not.toHaveBeenCalled();
+    await runAfter();
+    expect(h.noteLoginDevice.mock.calls[0]![0]).toMatchObject({
+      place: { country: 'BR', city: 'São Paulo' },
+      sessionId: SESSION,
+      client: 'phone',
+    });
+  });
+
+  it('part 3: off Vercel the same headers give no place', async () => {
+    vi.stubEnv('VERCEL', '');
+    await POST(req(BODY, { authorization: 'Bearer token-1', 'x-vercel-ip-country': 'BR' }));
+    await runAfter();
+    expect(h.noteLoginDevice.mock.calls[0]![0]).toMatchObject({ place: { country: null, city: null } });
   });
 
   it('off Vercel, x-forwarded-for is not the address: x-real-ip, else none', async () => {

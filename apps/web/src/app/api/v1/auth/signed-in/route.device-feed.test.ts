@@ -26,6 +26,8 @@ const h = vi.hoisted(() => ({
   dispatched: [] as Array<{ org: string; type: string; data: Record<string, unknown> }>,
   emails: [] as Array<Record<string, unknown>>,
   stored: [] as Array<Record<string, unknown>>,
+  /** The sign_in_alerts rows written (part 3). */
+  alerts: [] as Array<Record<string, unknown>>,
   sessions: 0,
 }));
 
@@ -93,6 +95,19 @@ vi.mock('@/lib/supabase/admin', () => {
             error: null,
           });
         }
+        if (table === 'sign_in_alerts') {
+          // Part 3: the alert's record, written before its email.
+          return {
+            insert: (row: Record<string, unknown>) => {
+              h.alerts.push(row);
+              return {
+                select: () => ({
+                  single: async () => ({ data: { id: '0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d' }, error: null }),
+                }),
+              };
+            },
+          };
+        }
         const devices = chain({ data: null, error: null, count: 1 });
         devices.insert = async (row: Record<string, unknown>) => {
           h.stored.push(row);
@@ -138,6 +153,7 @@ beforeEach(() => {
   h.dispatched.length = 0;
   h.emails.length = 0;
   h.stored.length = 0;
+  h.alerts.length = 0;
 });
 
 describe('POST /api/v1/auth/signed-in: the organization’s activity', () => {
@@ -159,6 +175,11 @@ describe('POST /api/v1/auth/signed-in: the organization’s activity', () => {
       expect(h.emails[0]!.deviceLabel).toBe('StockPilot app');
       expect(h.stored).toHaveLength(1);
       expect(h.stored[0]!.user_agent).toBe('StockPilot app');
+      // Part 3: the alert's record names the device in the same fixed words,
+      // and the agent reaches it nowhere.
+      expect(h.alerts).toHaveLength(1);
+      expect(h.alerts[0]).toMatchObject({ device_label: 'StockPilot app', device_family: 'StockPilot app' });
+      expect(JSON.stringify(h.alerts)).not.toContain('marker');
     },
   );
 
@@ -184,6 +205,8 @@ describe('POST /api/v1/auth/signed-in: the organization’s activity', () => {
       expect(text).not.toContain('marker');
       expect(h.emails[0]!.deviceLabel).toBe(label);
       expect(h.stored[0]!.user_agent).toBe(label);
+      // Part 3: the member's label and the organization's family, both sent.
+      expect(h.alerts[0]).toMatchObject({ device_label: label, device_family: family });
     },
   );
 });
