@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { createHash } from 'node:crypto';
+
 import { createAdminClient } from '@/lib/supabase/admin';
 import { resolveDefaultOrgAndRole } from '@/server/services/auth-audit';
 import { defer } from '@/server/services/lib/defer';
@@ -28,6 +30,39 @@ export type SignInBlockedReason = 'sign_in_paused' | 'wrong_password' | 'auth_se
 /** The code refusals that are recorded, for an account already past its password. */
 export type AccountCodeBlockedReason = 'wrong_code' | 'code_checks_paused' | 'wrong_recovery_code';
 
+/** How long the organization found for an email is remembered. */
+export const SIGN_IN_ORGANIZATION_MEMORY_MS = 60_000;
+/** How many emails are remembered at once; the oldest is dropped first. */
+export const SIGN_IN_ORGANIZATION_MEMORY_MAX = 500;
+
+/**
+ * The last lookups of this server instance: a SHA-256 of the lower-cased
+ * email (never the email itself) -> when it was looked up, and the lookup
+ * (still running, or answered: an organization id, or null for none). A Map
+ * keeps insertion order, so its first key is the oldest.
+ */
+let signInOrganizationMemory = new Map<string, { at: number; lookup: Promise<string | null> }>();
+
+/** The organization of a live account with this address: read now, never remembered here. */
+async function lookUpOrganization(address: string): Promise<{ organizationId: string | null; answered: boolean }> {
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin
+      .from('user_profiles')
+      .select('id')
+      .eq('email', address)
+      .is('deleted_at', null)
+      .limit(2);
+    if (error || !Array.isArray(data)) return { organizationId: null, answered: false };
+    if (data.length !== 1) return { organizationId: null, answered: true };
+    const id = (data[0] as { id?: unknown }).id;
+    if (typeof id !== 'string') return { organizationId: null, answered: true };
+    return { organizationId: (await resolveDefaultOrgAndRole(id)).organizationId, answered: true };
+  } catch {
+    return { organizationId: null, answered: false };
+  }
+}
+
 /**
  * The organization of the account a typed sign-in email belongs to, or null.
  *
@@ -40,25 +75,61 @@ export type AccountCodeBlockedReason = 'wrong_code' | 'code_checks_paused' | 'wr
  * (resolveDefaultOrgAndRole: the default organization when it is an accepted
  * membership, else the oldest). Never throws: a read that fails is no
  * organization.
+ *
+ * REMEMBERED FOR A MINUTE. A host that keeps posting sign-ins for one email
+ * after it is paused would otherwise cost one to three service-role reads per
+ * refused request. The answer for an email (an organization, or none) is kept
+ * in this instance's memory for SIGN_IN_ORGANIZATION_MEMORY_MS, and refusals
+ * that arrive together share the one lookup. At most
+ * SIGN_IN_ORGANIZATION_MEMORY_MAX emails, the oldest dropped first. A read
+ * that failed is not remembered. The memory is read only here, and this
+ * function runs only after the response (the callers below), so what it
+ * holds can change no answer's timing. For up to a minute an event can be
+ * filed under the organization an account has just left.
  */
 export async function organizationForSignInEmail(email: string): Promise<string | null> {
   const address = typeof email === 'string' ? email.trim().toLowerCase() : '';
   if (!address) return null;
+  let key: string;
   try {
-    const admin = createAdminClient();
-    const { data, error } = await admin
-      .from('user_profiles')
-      .select('id')
-      .eq('email', address)
-      .is('deleted_at', null)
-      .limit(2);
-    if (error || !Array.isArray(data) || data.length !== 1) return null;
-    const id = (data[0] as { id?: unknown }).id;
-    if (typeof id !== 'string') return null;
-    return (await resolveDefaultOrgAndRole(id)).organizationId;
+    key = createHash('sha256').update(address).digest('hex');
   } catch {
-    return null;
+    return (await lookUpOrganization(address)).organizationId;
   }
+  const now = Date.now();
+  const remembered = signInOrganizationMemory.get(key);
+  if (remembered) {
+    const age = now - remembered.at;
+    if (age >= 0 && age < SIGN_IN_ORGANIZATION_MEMORY_MS) return remembered.lookup;
+    signInOrganizationMemory.delete(key);
+  }
+  const entry = {
+    at: now,
+    lookup: lookUpOrganization(address).then(({ organizationId, answered }) => {
+      // A read that failed is forgotten, so the next refusal reads again.
+      if (!answered && signInOrganizationMemory.get(key) === entry) {
+        signInOrganizationMemory.delete(key);
+      }
+      return organizationId;
+    }),
+  };
+  signInOrganizationMemory.set(key, entry);
+  while (signInOrganizationMemory.size > SIGN_IN_ORGANIZATION_MEMORY_MAX) {
+    const oldest = signInOrganizationMemory.keys().next().value;
+    if (oldest === undefined) break;
+    signInOrganizationMemory.delete(oldest);
+  }
+  return entry.lookup;
+}
+
+/** Test only: nothing remembered. */
+export function __resetSignInOrganizationCacheForTests(): void {
+  signInOrganizationMemory = new Map();
+}
+
+/** Test only: the keys held, oldest first. */
+export function __signInOrganizationCacheKeysForTests(): string[] {
+  return [...signInOrganizationMemory.keys()];
 }
 
 /**

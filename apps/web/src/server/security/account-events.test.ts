@@ -8,6 +8,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *     lower-cased address in user_profiles (never a pattern match), a live
  *     account only, exactly one row, then resolveDefaultOrgAndRole; anything
  *     else is no organization, and nothing throws;
+ *   - the answer for an email is remembered for 60 seconds in this instance,
+ *     under a SHA-256 of the lower-cased address (never the address), at most
+ *     500 of them, the oldest dropped first; a read that failed is not
+ *     remembered;
  *   - recordSignInBlocked and recordAccountCodeBlocked look the organization
  *     up AFTER the response: they register their work with after() and read
  *     nothing before it runs, so a refusal takes the same time for an email
@@ -48,6 +52,7 @@ vi.mock('@/lib/supabase/admin', () => ({
 
 import { recordSecurityEvent } from '@/server/security/events';
 
+import * as accountEvents from './account-events';
 import {
   organizationForSignInEmail,
   recordAccountCodeBlocked,
@@ -63,7 +68,12 @@ async function runAfterResponse() {
   for (const [task] of h.after.mock.calls) await (task as () => Promise<unknown>)();
 }
 
+/** How many times user_profiles was read. */
+const profileReads = () => h.calls.filter(([m, table]) => m === 'from' && table === 'user_profiles').length;
+
 beforeEach(() => {
+  vi.useRealTimers();
+  accountEvents.__resetSignInOrganizationCacheForTests();
   h.after.mockReset();
   h.resolve.mockReset();
   h.resolve.mockResolvedValue({ organizationId: ORG, role: 'staff' });
@@ -115,6 +125,95 @@ describe('organizationForSignInEmail', () => {
   });
 });
 
+describe('organizationForSignInEmail: the same email is not looked up again within 60 seconds', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ now: new Date('2026-11-21T10:15:00Z') });
+  });
+
+  it('a second refusal for the same email reads nothing', async () => {
+    await expect(organizationForSignInEmail('ada@example.com')).resolves.toBe(ORG);
+    await expect(organizationForSignInEmail('ada@example.com')).resolves.toBe(ORG);
+    await expect(organizationForSignInEmail('  ADA@Example.com ')).resolves.toBe(ORG);
+    expect(profileReads()).toBe(1);
+    expect(h.resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it('an email that is no account is remembered as none, and is not read again either', async () => {
+    h.profiles = { data: [], error: null };
+    await expect(organizationForSignInEmail('nobody@example.com')).resolves.toBeNull();
+    await expect(organizationForSignInEmail('nobody@example.com')).resolves.toBeNull();
+    expect(profileReads()).toBe(1);
+  });
+
+  it('an account in no organization is remembered as none', async () => {
+    h.resolve.mockResolvedValue({ organizationId: null, role: null });
+    await expect(organizationForSignInEmail('ada@example.com')).resolves.toBeNull();
+    await expect(organizationForSignInEmail('ada@example.com')).resolves.toBeNull();
+    expect(profileReads()).toBe(1);
+    expect(h.resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it('after 60 seconds it is looked up again', async () => {
+    await organizationForSignInEmail('ada@example.com');
+    vi.advanceTimersByTime(59_999);
+    await organizationForSignInEmail('ada@example.com');
+    expect(profileReads()).toBe(1);
+    vi.advanceTimersByTime(1);
+    h.resolve.mockResolvedValue({ organizationId: null, role: null });
+    await expect(organizationForSignInEmail('ada@example.com')).resolves.toBeNull();
+    expect(profileReads()).toBe(2);
+  });
+
+  it('refusals for one email that arrive together share one lookup', async () => {
+    const answers = await Promise.all(
+      Array.from({ length: 20 }, () => organizationForSignInEmail('ada@example.com')),
+    );
+    expect(answers).toEqual(Array.from({ length: 20 }, () => ORG));
+    expect(profileReads()).toBe(1);
+  });
+
+  it('a read that failed is not remembered: the next refusal reads again', async () => {
+    h.profiles = { data: null, error: { code: '57014' } };
+    await expect(organizationForSignInEmail('ada@example.com')).resolves.toBeNull();
+    h.throwOnFrom = true;
+    await expect(organizationForSignInEmail('ada@example.com')).resolves.toBeNull();
+    h.throwOnFrom = false;
+    h.profiles = { data: [{ id: USER }], error: null };
+    h.resolve.mockRejectedValueOnce(new Error('down'));
+    await expect(organizationForSignInEmail('ada@example.com')).resolves.toBeNull();
+    await expect(organizationForSignInEmail('ada@example.com')).resolves.toBe(ORG);
+    await expect(organizationForSignInEmail('ada@example.com')).resolves.toBe(ORG);
+    // Two failed reads, one thrown resolver, one that answered; the last is from memory.
+    expect(profileReads()).toBe(3);
+  });
+
+  it('holds at most 500 emails, and drops the oldest first', async () => {
+    for (let i = 0; i < 500; i++) await organizationForSignInEmail(`member-${i}@example.com`);
+    expect(profileReads()).toBe(500);
+    expect(accountEvents.__signInOrganizationCacheKeysForTests()).toHaveLength(500);
+
+    // One more: the first is dropped, the second is still remembered.
+    await organizationForSignInEmail('member-500@example.com');
+    expect(accountEvents.__signInOrganizationCacheKeysForTests()).toHaveLength(500);
+    await organizationForSignInEmail('member-1@example.com');
+    expect(profileReads()).toBe(501);
+    await organizationForSignInEmail('member-0@example.com');
+    expect(profileReads()).toBe(502);
+    expect(accountEvents.__signInOrganizationCacheKeysForTests()).toHaveLength(500);
+  });
+
+  it('never holds an email: every key is a SHA-256 of the lower-cased address', async () => {
+    await organizationForSignInEmail('Ada.Lovelace@Example.com');
+    await organizationForSignInEmail('nobody@example.com');
+    const keys = accountEvents.__signInOrganizationCacheKeysForTests();
+    expect(keys).toHaveLength(2);
+    for (const key of keys) expect(key).toMatch(/^[0-9a-f]{64}$/);
+    const { createHash } = await import('node:crypto');
+    expect(keys[0]).toBe(createHash('sha256').update('ada.lovelace@example.com').digest('hex'));
+    expect(JSON.stringify(keys)).not.toMatch(/ada|lovelace|example|@/i);
+  });
+});
+
 describe('recordSignInBlocked', () => {
   it('reads nothing before the response; after it, records in the email’s organization', async () => {
     recordSignInBlocked('wrong_password', 'ada@example.com', request);
@@ -143,6 +242,26 @@ describe('recordSignInBlocked', () => {
     await runAfterResponse();
     expect(recordSecurityEvent).toHaveBeenCalledWith(
       expect.objectContaining({ reason: 'sign_in_paused', organizationId: null }),
+      request,
+    );
+  });
+});
+
+describe('recordSignInBlocked and the memory of the last lookups', () => {
+  it('a remembered email is still only used after the response, and still reads nothing before it', async () => {
+    recordSignInBlocked('wrong_password', 'ada@example.com', request);
+    await runAfterResponse();
+    expect(profileReads()).toBe(1);
+    h.after.mockReset();
+    vi.mocked(recordSecurityEvent).mockClear();
+
+    recordSignInBlocked('sign_in_paused', 'ada@example.com', request);
+    expect(h.after).toHaveBeenCalledTimes(1);
+    expect(recordSecurityEvent).not.toHaveBeenCalled();
+    await runAfterResponse();
+    expect(profileReads()).toBe(1);
+    expect(recordSecurityEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'sign_in_paused', organizationId: ORG }),
       request,
     );
   });
