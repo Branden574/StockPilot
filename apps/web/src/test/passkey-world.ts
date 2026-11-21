@@ -167,6 +167,8 @@ export function makeWorld() {
       unenrol: [] as string[],
       setSession: 0,
       cookieSignOut: [] as string[],
+      /** Every new password set through the cookie client (stage 5: the reset), by account. */
+      passwordSets: [] as string[],
       /** Every service-role table read, by table (finding 6 counts them). */
       reads: [] as string[],
       /** Every read of the cookie session (the page's own session read is not here). */
@@ -361,6 +363,10 @@ export function makeWorld() {
       f.status = 'verified';
       session.aal = 'aal2';
       session.factorId = f.id;
+      session.amr = [
+        ...(session.amr ?? [{ method: 'password', timestamp: 1 }]),
+        { method: 'totp', timestamp: Math.floor(Date.now() / 1000) },
+      ];
       const raisedFor = w.knobs.verifyAnswersOtherSession
         ? { ...session, id: randomUUID() }
         : session;
@@ -695,8 +701,51 @@ export function makeWorld() {
       },
       signOut: async ({ scope }: { scope: string }) => {
         w.calls.cookieSignOut.push(scope);
+        const s = w.cookieToken ? sessionOf(w.cookieToken) : null;
+        if (s && scope === 'global') {
+          for (const [id, other] of w.sessions)
+            if (other.userId === s.userId) w.sessions.delete(id);
+        }
         w.cookieToken = null;
         return { error: null };
+      },
+      mfa: {
+        /** auth-js's listFactors: the cookie session's account; `totp` is the verified TOTP factors. */
+        listFactors: async () => {
+          const s = w.cookieToken ? sessionOf(w.cookieToken) : null;
+          if (!s)
+            return { data: null, error: { name: 'AuthSessionMissingError', message: 'missing' } };
+          const all = w.factors
+            .filter((f) => f.user_id === s.userId)
+            .map(({ secret: _s, user_id: _u, ...f }) => f);
+          return {
+            data: { all, totp: all.filter((f) => f.status === 'verified'), phone: [] },
+            error: null,
+          };
+        },
+      },
+      /** A new password: Auth asks aal2 when the account has a verified factor. */
+      updateUser: async ({ password }: { password?: string }) => {
+        const s = w.cookieToken ? sessionOf(w.cookieToken) : null;
+        if (!s || typeof password !== 'string')
+          return { data: { user: null }, error: { name: 'AuthSessionMissingError', status: 401 } };
+        const enrolled = w.factors.some((f) => f.user_id === s.userId && f.status === 'verified');
+        if (enrolled && s.aal !== 'aal2') {
+          return {
+            data: { user: null },
+            error: {
+              name: 'AuthApiError',
+              status: 401,
+              code: 'insufficient_aal',
+              message: 'AAL2 session is required to update email or password when MFA is enabled.',
+            },
+          };
+        }
+        w.calls.passwordSets.push(s.userId);
+        return {
+          data: { user: { id: s.userId, email: w.emails.get(s.userId) ?? null } },
+          error: null,
+        };
       },
     },
   };
@@ -740,6 +789,7 @@ export function makeWorld() {
     w.calls.unenrol.length = 0;
     w.calls.setSession = 0;
     w.calls.cookieSignOut.length = 0;
+    w.calls.passwordSets.length = 0;
     w.calls.reads.length = 0;
     w.calls.sessionReads = 0;
     requestHeaders.delete('x-real-ip');
