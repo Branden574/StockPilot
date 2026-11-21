@@ -15,7 +15,7 @@ import {
   MFA_CODE_REFUSED,
   signOutThisSession,
 } from '@/lib/auth/mfa-code-attempts';
-import { readPasskeyBridge, withoutPasskeyBridge } from '@/lib/auth/passkey-bridge';
+import { appFactorsForCode, readPasskeyBridge } from '@/lib/auth/passkey-bridge';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
 import { openedFromResetLink } from '@/lib/auth/reset-link-session';
 import { sessionAccountNow, type SessionAccountNow } from '@/lib/auth/session-account';
@@ -592,7 +592,10 @@ export async function completePasswordResetAction(
   // The first verified authenticator that is not the account's recorded
   // passkey bridge (lib/auth/passkey-bridge): Auth puts the factor used last
   // at the END of its list, so the bridge is listed first after each use of
-  // the member's app (proof B7), and no app shows its code. An account whose
+  // the member's app (proof B7), and no app shows its code. Once the records
+  // are read, a factor carrying the bridge's reserved name that no record
+  // names is no app either (appFactorsForCode; S12, S13, S14, S17 with no
+  // row): its code is one no member has. An account whose
   // only factor is the bridge is asked for no code here: GoTrue still refuses
   // the new password at aal1 below, and the answer then says plainly that a
   // reset is not available for this account yet and whom to ask, with no
@@ -603,7 +606,7 @@ export async function completePasswordResetAction(
   // reserved name.
   const verifiedTotp = (factorsData?.totp ?? []).filter((f) => f.status === 'verified');
   const bridge = await readPasskeyBridge(accountId, verifiedTotp, 'password_reset');
-  const totpFactorId = withoutPasskeyBridge(verifiedTotp, bridge)[0]?.id ?? null;
+  const totpFactorId = appFactorsForCode(verifiedTotp, bridge)[0]?.id ?? null;
   const bridgeOnly = verifiedTotp.length > 0 && totpFactorId === null;
   if (totpFactorId) {
     // The session as it verifies AFTER the factor list (a read that can

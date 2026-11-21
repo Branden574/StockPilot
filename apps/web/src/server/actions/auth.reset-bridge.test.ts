@@ -15,8 +15,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * password without the second step, and the answer says, in plain words, that
  * a reset is not available for this account yet and whom to ask (review 2-3
  * finding 9, review B finding 6: never "sign in with your password", which
- * the reader of a reset page most often does not know). Before the records
- * exist, the pick is today's. The record read is the account's own.
+ * the reader of a reset page most often does not know). Once the records are
+ * read, a factor that carries the bridge's reserved name and that no record
+ * names (S12, S13, S14, S17 with no row) is not an app either: its code is
+ * one no member has, so it is never asked for (the stage 5 fix). Before the
+ * records exist, and while they cannot be read, the pick is today's. The
+ * record read is the account's own.
  */
 
 vi.hoisted(() => {
@@ -219,5 +223,87 @@ describe('the reset picks an authenticator app, never the bridge', () => {
     });
     await completePasswordResetAction(INPUT);
     expect(challenge.mock.calls).toEqual([[{ factorId: BRIDGE.id }]]);
+  });
+});
+
+describe('a reserved-name factor that no record names is not an app the member has a code for (stage 5 fix)', () => {
+  const UNRECORDED = {
+    id: 'other-1',
+    status: 'verified',
+    factor_type: 'totp',
+    friendly_name: 'sp-passkey-bridge-zzz',
+  };
+  const RECORDS: Array<[string, () => void]> = [
+    [
+      'no record for the account (S12, S13, S17 with no row)',
+      () => bridgeRecord.mockResolvedValue({ data: null, error: null }),
+    ],
+    [
+      'a record whose factor is gone (S14)',
+      () => bridgeRecord.mockResolvedValue({ data: { factor_id: 'gone-1' }, error: null }),
+    ],
+  ];
+
+  it.each(RECORDS)(
+    '%s, and no app: no code box, no code checked, the plain answer',
+    async (_name, record) => {
+      record();
+      listed(UNRECORDED);
+      updateUser.mockResolvedValue({
+        data: { user: null },
+        error: {
+          name: 'AuthApiError',
+          status: 401,
+          code: 'insufficient_aal',
+          message: 'AAL2 session is required to update email or password when MFA is enabled.',
+        },
+      });
+      for (const input of [INPUT, { password: RESET_VALUE, confirmPassword: RESET_VALUE }]) {
+        expect(await completePasswordResetAction(input)).toEqual({
+          ok: false,
+          error: {
+            code: 'forbidden',
+            message:
+              "A password reset isn't available for this account yet. Ask your organization's owner or StockPilot support for help.",
+          },
+        });
+      }
+      expect(challenge).not.toHaveBeenCalled();
+      expect(verify).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(RECORDS)(
+    '%s, with an app: the code of the app, whatever the order',
+    async (_name, record) => {
+      record();
+      for (const order of [
+        [UNRECORDED, APP],
+        [APP, UNRECORDED],
+      ]) {
+        challenge.mockClear();
+        listed(...order);
+        const res = await completePasswordResetAction(INPUT);
+        expect(res.ok).toBe(true);
+        expect(challenge.mock.calls).toEqual([[{ factorId: APP.id }]]);
+      }
+    },
+  );
+
+  it('a recorded bridge beside a second reserved-name factor (S15): the app is asked for, never the second factor', async () => {
+    listed(UNRECORDED, BRIDGE, APP);
+    const res = await completePasswordResetAction(INPUT);
+    expect(res.ok).toBe(true);
+    expect(challenge.mock.calls).toEqual([[{ factorId: APP.id }]]);
+  });
+
+  it('a record that cannot be read: the pick is today’s (nothing hidden; reported by the read)', async () => {
+    bridgeRecord.mockResolvedValue({
+      data: null,
+      error: { code: '57014', message: 'canceling statement due to statement timeout' },
+    });
+    listed(UNRECORDED, APP);
+    await completePasswordResetAction(INPUT);
+    expect(challenge.mock.calls).toEqual([[{ factorId: UNRECORDED.id }]]);
   });
 });
