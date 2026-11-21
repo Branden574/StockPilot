@@ -36,8 +36,14 @@ import { mfaGateError, ServiceError, type ServiceContext } from './context';
  * 'unchanged' answer.
  */
 
-/** Rows the organization's list shows, newest first. */
-export const SIGN_IN_ALERTS_ROW_LIMIT = 100;
+/**
+ * Rows the organization's list asks for, newest first: the most
+ * sign_in_alerts_for_organization gives (500). One account can write up to
+ * 50 alert rows a day, so a shorter page could be filled by one member and
+ * push everyone else's alerts off it (review 2, finding 3). The page says so
+ * when it shows this many.
+ */
+export const SIGN_IN_ALERTS_ROW_LIMIT = 500;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

@@ -122,14 +122,14 @@ describe('forOrganization', () => {
     expect(db.rpc).not.toHaveBeenCalled();
   });
 
-  it.each(['owner', 'admin'] as const)('a %s reads the context organization’s list, newest 100', async (role) => {
+  it.each(['owner', 'admin'] as const)('a %s reads the context organization’s list, the newest 500 (the most the database gives)', async (role) => {
     const db = client({ data: [ORG_ROW], error: null });
     const rows = await service(db, { role }).forOrganization();
     expect(db.rpc).toHaveBeenCalledWith('sign_in_alerts_for_organization', {
       p_organization_id: ORG,
       p_limit: SIGN_IN_ALERTS_ROW_LIMIT,
     });
-    expect(SIGN_IN_ALERTS_ROW_LIMIT).toBe(100);
+    expect(SIGN_IN_ALERTS_ROW_LIMIT).toBe(500);
     expect(rows).toEqual([
       {
         id: ALERT,

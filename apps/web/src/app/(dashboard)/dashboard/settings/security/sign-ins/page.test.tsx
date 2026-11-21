@@ -66,7 +66,7 @@ vi.mock('@/server/services/context', async (importOriginal) => {
 vi.mock('@/server/services/sign-in-alerts', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/server/services/sign-in-alerts')>();
   return {
-    SIGN_IN_ALERTS_ROW_LIMIT: 100,
+    SIGN_IN_ALERTS_ROW_LIMIT: real.SIGN_IN_ALERTS_ROW_LIMIT,
     assertMaySeeSignInAlerts: real.assertMaySeeSignInAlerts,
     SignInAlertsService: class {
       constructor(ctx: unknown) {
@@ -237,6 +237,20 @@ describe('what an owner or admin sees', () => {
         'Member confirmed',
       ],
     ]);
+  });
+
+  it('fewer alerts than the list can hold: it does not say any are left out', async () => {
+    h.forOrganization.mockResolvedValueOnce(ROWS);
+    render(await SignInAlertsPage());
+    expect(screen.queryByText(/newest 500/)).toBeNull();
+  });
+
+  it('as many alerts as the list can hold: it says it shows the newest 500 only', async () => {
+    const many = Array.from({ length: 500 }, (_, i) => ({ ...ROWS[1]!, id: `row-${i}` }));
+    h.forOrganization.mockResolvedValueOnce(many);
+    render(await SignInAlertsPage());
+    expect(screen.getAllByRole('row')).toHaveLength(501);
+    expect(screen.getByText(/Showing the newest 500 alerts only\. Older ones are not listed here\./)).toBeTruthy();
   });
 
   it('nothing recorded: says so, with no table', async () => {

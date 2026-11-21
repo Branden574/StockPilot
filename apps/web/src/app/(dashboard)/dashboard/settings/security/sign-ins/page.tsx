@@ -101,7 +101,13 @@ export default async function SignInAlertsPage() {
         headingId="sign-in-alerts-heading"
         landmark={rows.length === 0}
         title="Most recent"
-        description={`The newest ${SIGN_IN_ALERTS_ROW_LIMIT} alerts. When a member says a sign-in was not them, every session of their account ends.`}
+        description={
+          // The read gives at most SIGN_IN_ALERTS_ROW_LIMIT rows: a full page
+          // may be leaving older alerts out, and says so.
+          rows.length >= SIGN_IN_ALERTS_ROW_LIMIT
+            ? `Showing the newest ${SIGN_IN_ALERTS_ROW_LIMIT} alerts only. Older ones are not listed here. When a member says a sign-in was not them, every session of their account is ended.`
+            : 'Newest first. When a member says a sign-in was not them, every session of their account is ended.'
+        }
         flush
       >
         {rows.length === 0 ? (
