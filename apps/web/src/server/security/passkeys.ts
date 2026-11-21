@@ -1052,31 +1052,36 @@ async function recordRaise(
 export type SecondStepStart =
   { kind: 'options'; challengeId: string; optionsJSON: unknown } | { kind: 'removal_finished' };
 
+/** What a ceremony start has read: the session, the open gate, the account. */
+type CeremonyStart = { held: Held; gate: OpenGate; admin: Admin; picture: AccountPicture };
+
 /**
- * Starts a ceremony of `purpose` for a member whose passkey answers (S6),
- * finishing a removal the member started instead (S7, S13).
+ * The prologue and the account's picture for a ceremony start. Decision A:
+ * the confirm_add proof belongs to adding; the second step and Finish setup
+ * start at the USE level (Finish setup of a passkey that never served asks
+ * the ADD level once the picture is read).
+ */
+async function readForStart(level: 'add' | 'use'): Promise<Result<CeremonyStart>> {
+  const p = await prologue('start', level);
+  if (!p.ok) return p;
+  const admin = createAdminClient();
+  const read = await readPicture(admin, p.held, p.gate.rp);
+  if (!read.ok) return read;
+  return { ok: true, held: p.held, gate: p.gate, admin, picture: read.picture };
+}
+
+/**
+ * Starts a ceremony of `purpose` for a member whose passkey answers (S6).
+ * It writes one challenge and nothing else: finishing a removal the member
+ * started (S7, S13) is startSecondStep's alone (review 4 finding 3), so the
+ * confirm_add and finish_setup starts cannot reach a delete.
  */
 async function startCeremony(
   purpose: 'second_step' | 'confirm_add' | 'finish_setup',
+  started: CeremonyStart,
 ): Promise<Result<{ start: SecondStepStart }>> {
-  // Decision A: the confirm_add proof belongs to adding; the second step and
-  // Finish setup start at the USE level (Finish setup of a passkey that never
-  // served asks the ADD level below, once the picture is read).
-  const p = await prologue('start', purpose === 'confirm_add' ? 'add' : 'use');
-  if (!p.ok) return p;
-  const { held, gate } = p;
+  const { held, gate, admin, picture } = started;
   const userId = held.claims.userId;
-  const admin = createAdminClient();
-  const read = await readPicture(admin, held, gate.rp);
-  if (!read.ok) return read;
-  const picture = read.picture;
-
-  if (purpose === 'second_step' && finishesRemoval(picture)) {
-    const done = await finishMemberRemoval(admin, userId, picture);
-    return done
-      ? { ok: true, start: { kind: 'removal_finished' } }
-      : fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'removal_not_finished');
-  }
   if (picture.active.length === 0)
     return fail('validation_error', PASSKEY_WORDS.noPasskey, 'no_passkey');
   if (purpose === 'finish_setup') {
@@ -1256,8 +1261,23 @@ async function finishSecondStep(input: {
   return { ok: true };
 }
 
+/**
+ * The second step's start: a removal the member started (S7, S13) is
+ * finished here, deleting the reserved-name factors at Auth and then the
+ * bridge row (finishMemberRemoval); otherwise the ceremony starts. The only
+ * start that can delete.
+ */
 export async function startSecondStep(): Promise<Result<{ start: SecondStepStart }>> {
-  return startCeremony('second_step');
+  const started = await readForStart('use');
+  if (!started.ok) return started;
+  const { admin, held, picture } = started;
+  if (finishesRemoval(picture)) {
+    const done = await finishMemberRemoval(admin, held.claims.userId, picture);
+    return done
+      ? { ok: true, start: { kind: 'removal_finished' } }
+      : fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'removal_not_finished');
+  }
+  return startCeremony('second_step', started);
 }
 
 export async function completeSecondStep(input: {
@@ -1269,12 +1289,16 @@ export async function completeSecondStep(input: {
 
 /** The confirm_add ceremony's start (its answer is spent inside startAddPasskey only). */
 export async function startConfirmAdd(): Promise<Result<{ start: SecondStepStart }>> {
-  return startCeremony('confirm_add');
+  const started = await readForStart('add');
+  if (!started.ok) return started;
+  return startCeremony('confirm_add', started);
 }
 
 /** The finish_setup ceremony's start (its answer is spent inside finishPasskeySetup only). */
 export async function startFinishSetup(): Promise<Result<{ start: SecondStepStart }>> {
-  return startCeremony('finish_setup');
+  const started = await readForStart('use');
+  if (!started.ok) return started;
+  return startCeremony('finish_setup', started);
 }
 
 // ── C. D. Adding a passkey ─────────────────────────────────────────────

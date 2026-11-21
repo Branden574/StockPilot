@@ -1661,6 +1661,35 @@ function leftoverFactor(userId: string) {
   return f;
 }
 
+describe('review 4 finding 3: only the second step can finish a removal the member started', () => {
+  it('the removal is reached from startSecondStep alone (so the other starts cannot delete)', () => {
+    const src = readFileSync(path.join(__dirname, 'passkeys.ts'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+    const callers = [...src.matchAll(/^(?:export )?(?:async )?function (\w+)[\s\S]*?^\}$/gm)]
+      .filter((m) => m[1] !== 'finishMemberRemoval' && /\bfinishMemberRemoval\(/.test(m[0]))
+      .map((m) => m[1]);
+    expect(callers).toEqual(['startSecondStep']);
+  });
+
+  it('in S7 the confirm_add and finish_setup starts delete nothing; the second step finishes it', async () => {
+    const { userId } = await memberWithPasskey();
+    const bridge = world.bridges.get(userId)!;
+    world.passkeys[0]!.removed_at = new Date(Date.now() + 1000).toISOString();
+    world.passkeys[0]!.removed_reason = 'member';
+    world.signIn(userId, 'aal2');
+    expect(await pk.startConfirmAdd()).toMatchObject({ ok: false });
+    expect(await pk.startFinishSetup()).toMatchObject({ ok: false });
+    expect(world.calls.deleteFactor).toEqual([]);
+    expect(world.bridges.has(userId)).toBe(true);
+    expect(await pk.startSecondStep()).toMatchObject({
+      ok: true,
+      start: { kind: 'removal_finished' },
+    });
+    expect(world.calls.deleteFactor).toEqual([bridge.factor_id]);
+  });
+});
+
 describe('review 4 finding 5: active rows are read on their own, never cut off by removed history', () => {
   it('600 removed rows (newer removals than the bridge) and one active: the passkey still serves, nothing is finished or deleted', async () => {
     const { soft, userId, passkeyId } = await memberWithPasskey();
