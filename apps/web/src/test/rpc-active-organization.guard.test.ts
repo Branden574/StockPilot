@@ -274,9 +274,17 @@ const REGISTRY: Record<string, Entry> = {
     'not_org_data',
     "The caller's own MFA recovery codes.",
   ],
+  'server/actions/mfa-recovery.ts::consume_recovery_code_with_passkeys': [
+    'not_org_data',
+    "The caller's own MFA recovery codes and passkeys, keyed on the validated account; no organization.",
+  ],
   'server/actions/mfa-recovery.ts::generate_mfa_recovery_codes': [
     'not_org_data',
     "The caller's own MFA recovery codes.",
+  ],
+  'server/actions/mfa-recovery.ts::passkey_remove_all': [
+    'not_org_data',
+    "The caller's own passkeys, removed after a recovery code; no organization.",
   ],
   'server/actions/movements.ts::edit_movement_note': S39('11 (web movement note)'),
   'server/actions/team.ts::auth_user_exists_by_email': RO(),
@@ -393,7 +401,7 @@ const REGISTRY: Record<string, Entry> = {
   ],
   'server/services/exception-occurrences.ts::exception_recount_facts': [
     'takes_org',
-    'Passes the active organization; reads only (0460, STABLE), only that organization\'s exceptions.',
+    "Passes the active organization; reads only (0460, STABLE), only that organization's exceptions.",
   ],
   'server/services/exception-occurrences.ts::exceptions_sync': [
     'takes_org',

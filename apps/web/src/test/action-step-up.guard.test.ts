@@ -107,6 +107,11 @@ const REVIEWED: Record<string, Reviewed> = {
     reason:
       'Sets the new password on the recovery session the emailed link created; it asks an enrolled account for its code itself.',
   },
+  'server/actions/mfa.ts#stepUpMethodsAction': {
+    kind: 'before-the-code',
+    reason:
+      "Lists the account's own verified authenticator apps, without the passkey bridge, for the step-up modal; it reads the account from the verified token and changes nothing.",
+  },
   'server/actions/mfa.ts#challengeFactorAction': {
     kind: 'before-the-code',
     reason:
