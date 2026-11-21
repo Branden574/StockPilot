@@ -9,9 +9,13 @@ import {
   type ConfirmRecipientAccount,
 } from '@/lib/auth/confirm-link';
 import { fetchSiteIsElsewhere } from '@/lib/auth/cross-site-request';
+import { noteLoginDevice } from '@/lib/auth/login-device';
+import { newSessionIdOf } from '@/lib/auth/new-session-id';
+import { clientIpForRecord, clientPlaceFromHeaders } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
 import { createClient } from '@/lib/supabase/server';
 import { completeEmailChange, EMAIL_CHANGE_RETURN_PATH } from '@/server/services/email-change';
+import { defer } from '@/server/services/lib/defer';
 
 import {
   PRESS_GATE_FORM_ATTR,
@@ -642,9 +646,53 @@ export async function POST(request: NextRequest) {
     }
 
     if (!error) {
+      if (data?.session && SIGN_IN_LINK_TYPES.has(type)) {
+        noteEmailedLinkSignIn(request, supabase, data.session);
+      }
       return NextResponse.redirect(`${origin}${landingFor(type, next)}`, 303);
     }
   }
 
   return failureRedirect(origin, type);
+}
+
+/**
+ * The emailed links that sign an existing account in (part 3, sign-in alerts):
+ * a magic link and a password-reset link. Each makes a session without the
+ * password step, so it is a sign-in the account's owner should hear about from
+ * a new device or a new country, the same as a password sign-in. An invite
+ * makes the account (its first device is the silent baseline anyway) and an
+ * email change is not a sign-in, so neither is noted.
+ */
+const SIGN_IN_LINK_TYPES: ReadonlySet<string> = new Set(['magiclink', 'recovery']);
+
+/**
+ * Notes the device, the place and the session of a sign-in by emailed link,
+ * AFTER the response (defer): the redirect and its timing are the same as
+ * before. The request's headers are read now, since they are the sign-in's;
+ * the session id is read from the new session's own token, verified, inside
+ * the deferred work. The note never throws (lib/auth/login-device.ts).
+ */
+function noteEmailedLinkSignIn(
+  request: NextRequest,
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  session: { access_token: string; user: { id: string; email?: string | null } },
+): void {
+  const userId = session.user.id;
+  const email = session.user.email ?? null;
+  const accessToken = session.access_token;
+  const userAgent = request.headers.get('user-agent');
+  const ip = clientIpForRecord(request.headers);
+  const place = clientPlaceFromHeaders(request.headers);
+  defer(async () =>
+    noteLoginDevice({
+      userId,
+      email,
+      userAgent,
+      ip,
+      place,
+      sessionId: await newSessionIdOf(supabase, accessToken, userId),
+      client: 'web',
+    }),
+  );
 }

@@ -15,10 +15,11 @@ import {
   MFA_CODE_REFUSED,
   signOutThisSession,
 } from '@/lib/auth/mfa-code-attempts';
+import { newSessionIdOf } from '@/lib/auth/new-session-id';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
 import { openedFromResetLink } from '@/lib/auth/reset-link-session';
 import { sessionAccountNow, type SessionAccountNow } from '@/lib/auth/session-account';
-import { readVerifiedSessionClaims, readVerifiedTokenClaims } from '@/lib/auth/verified-claims';
+import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { broadcastToChannel } from '@/lib/realtime/broadcast';
 import { clientIpForRecord, clientIpFromHeaders, clientPlaceFromHeaders } from '@/lib/client-ip';
@@ -88,26 +89,6 @@ export async function signUpAction(
     'forbidden',
     'Public sign-up is disabled. Ask your administrator to send you an invite.',
   );
-}
-
-/**
- * The Auth session a sign-in just made: the `session_id` claim of its access
- * token, once the token verifies (lib/auth/verified-claims) and names this
- * account. Null otherwise; never throws. For the sign-in alert's record
- * (lib/auth/login-device.ts), read after the response.
- */
-async function sessionIdOfNewSession(
-  supabase: Parameters<typeof readVerifiedTokenClaims>[0],
-  accessToken: string | null,
-  userId: string,
-): Promise<string | null> {
-  if (!accessToken) return null;
-  try {
-    const claims = await readVerifiedTokenClaims(supabase, accessToken);
-    return claims && claims.userId === userId ? claims.sessionId : null;
-  } catch {
-    return null;
-  }
 }
 
 export async function signInAction(input: SignInInput): Promise<ActionResult<{ next: string }>> {
@@ -277,7 +258,7 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
         userAgent: ua,
         ip: deviceIp,
         place: clientPlaceFromHeaders(h),
-        sessionId: await sessionIdOfNewSession(supabase, accessToken, userId),
+        sessionId: await newSessionIdOf(supabase, accessToken, userId),
         client: 'web',
       }),
     );
