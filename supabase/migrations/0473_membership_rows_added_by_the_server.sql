@@ -40,8 +40,8 @@
 --   matter for the outcome: neither trigger changes the row, this one reads
 --   nothing of it, and each refuses on its own. It only decides whose message
 --   is seen when both refuse (the guard's, for an owner row or an act-as
---   seat). The trg_zz_ name keeps it after any trigger added later, as the
---   table's other trg_zz_ triggers are.
+--   seat). trg_zz_ is the prefix this schema gives a trigger that is meant
+--   to fire late (the table's other two triggers carry it).
 --
 -- WHAT IT DOES NOT CHANGE
 --   - An existing row's account, organization and acceptance are not written
