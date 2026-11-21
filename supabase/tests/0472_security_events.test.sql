@@ -17,8 +17,8 @@
 --      call the writer or the purge.
 --   4. The writer: skips an element whose required fields are not valid
 --      strings, clears or defaults an optional field that fails its rule
---      (an address, an email, an id, a path or a user agent sent as a city is
---      never stored), folds repeats into one row, marks repeats from one
+--      (the usual shapes of an address, an email, an id, a path or a user
+--      agent sent as a city are not stored), folds repeats into one row, marks repeats from one
 --      source, applies the two minute caps, and takes a time only from the
 --      last 26 hours.
 --   5. Retention: rows older than 90 days go; a hash older than 24 hours is
@@ -31,7 +31,7 @@
 
 begin;
 
-select plan(91);
+select plan(108);
 
 \set orgA '\'a0472000-0000-0000-0000-0000000000a1\''
 \set orgB '\'a0472000-0000-0000-0000-0000000000b1\''
@@ -39,20 +39,27 @@ select plan(91);
 \set adminA '\'a0472000-0000-0000-0000-0000000000c2\''
 \set managerA '\'a0472000-0000-0000-0000-0000000000c3\''
 \set ownerB '\'a0472000-0000-0000-0000-0000000000c4\''
+\set orgC '\'a0472000-0000-0000-0000-0000000000d1\''
+\set ownerC '\'a0472000-0000-0000-0000-0000000000c5\''
 
 insert into auth.users (id, email, raw_user_meta_data) values
   (:ownerA,   'a-owner-events@test.local',   '{}'::jsonb),
   (:adminA,   'a-admin-events@test.local',   '{}'::jsonb),
   (:managerA, 'a-manager-events@test.local', '{}'::jsonb),
-  (:ownerB,   'b-owner-events@test.local',   '{}'::jsonb);
-insert into public.organizations (id, name, slug) values
-  (:orgA, 'Events Org A', 'a0472000-org-a'),
-  (:orgB, 'Events Org B', 'a0472000-org-b');
+  (:ownerB,   'b-owner-events@test.local',   '{}'::jsonb),
+  (:ownerC,   'c-owner-events@test.local',   '{}'::jsonb);
+-- A and B do not ask for an authenticator, so sections 1 to 9 read with a
+-- password-only session; C asks its owners and admins for one (section 10).
+insert into public.organizations (id, name, slug, mfa_policy) values
+  (:orgA, 'Events Org A', 'a0472000-org-a', 'optional'),
+  (:orgB, 'Events Org B', 'a0472000-org-b', 'optional'),
+  (:orgC, 'Events Org C', 'a0472000-org-c', 'admins_required');
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   (:orgA, :ownerA,   'owner',   now()),
   (:orgA, :adminA,   'admin',   now()),
   (:orgA, :managerA, 'manager', now()),
-  (:orgB, :ownerB,   'owner',   now());
+  (:orgB, :ownerB,   'owner',   now()),
+  (:orgC, :ownerC,   'owner',   now());
 
 -- Times, in milliseconds, readable by every role below (floor keeps each in
 -- its own minute).
@@ -149,12 +156,14 @@ select is(
     where n.nspname = 'public'
       and p.proname in ('record_security_events', 'purge_security_events',
                         'security_events_for_organization',
-                        'security_event_totals_for_organization')),
+                        'security_event_totals_for_organization',
+                        'security_events_reader_check')),
   array['purge_security_events:true:search_path="",lock_timeout=2s',
         'record_security_events:true:search_path="",lock_timeout=2s',
         'security_event_totals_for_organization:true:search_path=""',
-        'security_events_for_organization:true:search_path=""'],
-  '0472/16: the four functions are SECURITY DEFINER with an empty search_path; the writer and the purge give up a lock wait after 2 s');
+        'security_events_for_organization:true:search_path=""',
+        'security_events_reader_check:true:search_path=""'],
+  '0472/16: the five functions are SECURITY DEFINER with an empty search_path; the writer and the purge give up a lock wait after 2 s');
 
 -- ── 3. The table's own checks, written to as its owner ──────────────────────
 select lives_ok($$ select pg_temp.raw_insert('{}') $$, '0472/17: a well-formed row is accepted');
@@ -688,6 +697,116 @@ select results_eq(
               where organization_id = 'a0472000-0000-0000-0000-0000000000a1') $$,
   $$ values (0, 1, 1, 3, 0, true) $$,
   '0472/91: the row past 90 days is gone and the one at 89 days stays; the hash past 24 hours is cleared with its row key and its row stays; newer hashes stay; a deleted organization''s rows go with it and the other''s stay');
+
+-- ── 10. The reader check, and the rest of what the second review asked for ──
+select has_index('public', 'security_events', 'security_events_no_organization_minute_idx',
+  '0472/92: rows with no organization are indexed by minute, for their cap');
+select ok(
+  not has_function_privilege('anon', 'public.security_events_reader_check(uuid)', 'execute')
+  and not has_function_privilege('authenticated', 'public.security_events_reader_check(uuid)', 'execute')
+  and not has_function_privilege('service_role', 'public.security_events_reader_check(uuid)', 'execute'),
+  '0472/93: no API role may call the reader check itself');
+select ok(
+  (select prosrc like '%pg_catalog.pg_advisory_xact_lock(4720001)%' from pg_proc
+    where oid = 'public.record_security_events(jsonb)'::regprocedure)
+  and (select prosrc like '%pg_catalog.pg_advisory_xact_lock(4720001)%' from pg_proc
+        where oid = 'public.purge_security_events()'::regprocedure),
+  '0472/94: the writer and the purge take the same advisory lock');
+select ok(
+  (select prosrc like '%for key share skip locked%' from pg_proc
+    where oid = 'public.record_security_events(jsonb)'::regprocedure),
+  '0472/95: the writer does not wait for an organization that is being deleted');
+select is(
+  (select count(*)::int
+     from unnest(array[
+            $p$[[:cntrl:]]$p$,
+            $p$[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]$p$,
+            $p$[@/\\:;<>(){}\[\]=?&%#"|$*+^~`]$p$,
+            $p$[0-9].*[0-9].*[0-9].*[0-9]$p$,
+            $p$[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-$p$]) as t(pat)
+    where position(t.pat in (select prosrc from pg_proc
+                              where oid = 'public.record_security_events(jsonb)'::regprocedure)) > 0
+      and position(t.pat in (select pg_get_constraintdef(c.oid) from pg_constraint c
+                              where c.conrelid = 'public.security_events'::regclass
+                                and c.conname = 'security_events_city')) > 0),
+  5,
+  '0472/96: the five city patterns are the same text in the table''s rule and in the writer');
+
+-- An owner of an organization that asks owners and admins for an
+-- authenticator, with none set up.
+set local role authenticated;
+select set_config('request.jwt.claims',
+  json_build_object('sub', 'a0472000-0000-0000-0000-0000000000c5', 'role', 'authenticated')::text, true);
+select throws_ok(
+  $$ select * from public.security_events_for_organization('a0472000-0000-0000-0000-0000000000d1', 10) $$,
+  '42501', 'mfa_required', '0472/97: where the policy asks for an authenticator, an owner without one cannot read the rows');
+select throws_ok(
+  $$ select * from public.security_event_totals_for_organization('a0472000-0000-0000-0000-0000000000d1') $$,
+  '42501', 'mfa_required', '0472/98: or the totals');
+reset role;
+
+-- The same owner and organization A's admin each with a verified authenticator.
+insert into auth.mfa_factors (id, user_id, friendly_name, factor_type, status, created_at, updated_at) values
+  (gen_random_uuid(), :ownerC, '0472 authenticator c', 'totp', 'verified', now(), now()),
+  (gen_random_uuid(), :adminA, '0472 authenticator a', 'totp', 'verified', now(), now());
+select set_config('t.n_a2', (select count(*) from public.security_events
+  where organization_id = 'a0472000-0000-0000-0000-0000000000a1')::text, true);
+
+set local role authenticated;
+select throws_ok(
+  $$ select * from public.security_events_for_organization('a0472000-0000-0000-0000-0000000000d1', 10) $$,
+  '42501', 'aal2_required', '0472/99: with an authenticator set up, a password-only session cannot read the rows');
+select throws_ok(
+  $$ select * from public.security_event_totals_for_organization('a0472000-0000-0000-0000-0000000000d1') $$,
+  '42501', 'aal2_required', '0472/100: or the totals');
+select set_config('request.jwt.claims',
+  json_build_object('sub', 'a0472000-0000-0000-0000-0000000000c5', 'role', 'authenticated', 'aal', 'aal2')::text, true);
+select is(
+  (select count(*)::int from public.security_events_for_organization('a0472000-0000-0000-0000-0000000000d1', 10)),
+  0, '0472/101: a session that holds the second step reads the rows (none here)');
+select lives_ok(
+  $$ select * from public.security_event_totals_for_organization('a0472000-0000-0000-0000-0000000000d1') $$,
+  '0472/102: and the totals');
+
+-- An admin who has an authenticator, in an organization that does not ask for one.
+select set_config('request.jwt.claims',
+  json_build_object('sub', 'a0472000-0000-0000-0000-0000000000c2', 'role', 'authenticated')::text, true);
+select throws_ok(
+  $$ select * from public.security_events_for_organization('a0472000-0000-0000-0000-0000000000a1', 10) $$,
+  '42501', 'aal2_required', '0472/103: a member who has an authenticator owes the second step whatever the policy');
+select set_config('request.jwt.claims',
+  json_build_object('sub', 'a0472000-0000-0000-0000-0000000000c2', 'role', 'authenticated', 'aal', 'aal2')::text, true);
+select is(
+  (select count(*)::text from public.security_events_for_organization('a0472000-0000-0000-0000-0000000000a1', 500)),
+  current_setting('t.n_a2'),
+  '0472/104: and reads once the session holds it');
+
+-- An owner with no authenticator, in an organization that does not ask for one.
+select set_config('request.jwt.claims',
+  json_build_object('sub', 'a0472000-0000-0000-0000-0000000000c1', 'role', 'authenticated')::text, true);
+select is(
+  (select count(*)::int from public.security_event_totals_for_organization(
+     p_organization_id => 'a0472000-0000-0000-0000-0000000000a1')),
+  (select count(*)::int from public.security_event_totals_for_organization(
+     'a0472000-0000-0000-0000-0000000000a1', null, null)),
+  '0472/105: the totals can be asked for with the organization alone');
+select is(
+  (select count(*)::int from public.security_event_totals_for_organization(
+     'a0472000-0000-0000-0000-0000000000a1', now() - interval '6 hours',
+     date_trunc('minute', now() - interval '5 hours', 'UTC'))
+    where reason = 'over_minute_cap'),
+  0, '0472/106: a row at the very end of the window is left out');
+select is(
+  (select count(*)::int from public.security_events_for_organization('a0472000-0000-0000-0000-0000000000a1', null)),
+  least(current_setting('t.n_a2')::int, 100),
+  '0472/107: a null limit reads the default 100');
+reset role;
+
+select is(
+  (select proargnames from pg_proc
+    where oid = 'public.security_event_totals_for_organization(uuid, timestamptz, timestamptz)'::regprocedure),
+  array['p_organization_id', 'p_from', 'p_to', 'category', 'outcome', 'reason', 'source', 'country', 'events'],
+  '0472/108: the totals return counts by category, outcome, reason, source and country, and nothing else');
 
 select * from finish();
 rollback;

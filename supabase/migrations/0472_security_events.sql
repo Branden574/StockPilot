@@ -3,11 +3,10 @@
 -- One shared record of security events: what the app refused, allowed or
 -- flagged, by category, with a country and city when known. The sign-in
 -- alerts, the admin security pages and the scheduled reports read it; the
--- detectors write it through one function. The number is a placeholder fixed
--- at push time to the next free number: this file's name and first line, its
--- test's name and labels and the advisory lock key below carry it.
+-- detectors write it through one function. The advisory lock key below
+-- (4720001) carries this file's number.
 --
--- WHAT IT ADDS (tier A: a new table, two indexes, four functions and grants.
+-- WHAT IT ADDS (tier A: a new table, three indexes, five functions and grants.
 -- No stored row and no existing function, policy, trigger or grant changes.
 -- The one existing object touched is public.organizations, which gains the
 -- foreign key's two internal triggers: deleting an organization also deletes
@@ -37,13 +36,15 @@
 --          repeated_wrong_password or repeated_wrong_code when the events of
 --          its source in the ten minutes up to its own, counted with it,
 --          reach five. A source is one address on one UTC day;
---        - the minute caps: in one minute, at most 200 rows with no
---          organization and at most 60 rows for each organization. Past a
---          cap, an event that would need a new row is counted on an overflow
---          row instead (reason over_minute_cap, no place and no hash), one
---          per category, outcome and source, which keeps its organization.
---          So one organization's rows cannot be crowded out by events that
---          are not about it;
+--        - the minute caps: in one minute, at most 200 ordinary rows with no
+--          organization and at most 60 ordinary rows for each organization.
+--          Past a cap, an event that would need a new row is counted on an
+--          overflow row instead (reason over_minute_cap, no place and no
+--          hash), one per category, outcome and source, which keeps its
+--          organization: up to 75 more rows each. So a minute holds at most
+--          275 rows with no organization and 135 for each organization, and
+--          one organization's rows cannot be crowded out by events that are
+--          not about it;
 --        - one row per minute and kind: a repeat adds to event_count.
 --      One call runs at a time (a transaction advisory lock), so two calls
 --      never wait on each other's rows and the rules above are exact. A call
@@ -58,9 +59,14 @@
 --      public.security_events_for_organization(uuid, integer), the newest
 --      rows, and public.security_event_totals_for_organization(uuid,
 --      timestamptz, timestamptz), counts by category, outcome, reason, source
---      and country. Each checks the caller with has_org_role(organization,
---      'admin') before it reads anything and refuses with 42501 otherwise.
---      Neither returns source_hash or the row key.
+--      and country. Each calls public.security_events_reader_check(uuid)
+--      before it reads anything. That check refuses with 42501 unless the
+--      caller is an admin or owner of the organization (has_org_role), and
+--      then applies the app's authenticator rule for a call made straight
+--      to the API (0413's block): where the organization's policy asks
+--      admins for an authenticator, or the caller has one, the session must
+--      hold the second step. Neither function returns source_hash or the
+--      row key. No API role may call the check itself.
 --
 -- WHO CAN READ AND WRITE
 --   - RLS is on with NO policy, and anon and authenticated have no privilege
@@ -82,6 +88,7 @@
 --   migration. Leave it in place. If it ever has to go:
 --     drop function public.security_event_totals_for_organization(uuid, timestamptz, timestamptz);
 --     drop function public.security_events_for_organization(uuid, integer);
+--     drop function public.security_events_reader_check(uuid);
 --     drop function public.purge_security_events();
 --     drop function public.record_security_events(jsonb);
 --     drop table public.security_events;
@@ -92,7 +99,9 @@
 -- ANALYZE or an autovacuum of that table. That is the only lock this file
 -- takes on a table that exists: it creates no policy, so supautils takes
 -- nothing on the auth, storage and realtime tables. lock_timeout 900ms ends
--- the wait with 55P03 and nothing applied; the push can be run again.
+-- the wait with 55P03 and nothing applied; the push can be run again. It is
+-- not reset at the end of the file, so the push's own last write, made in
+-- the same transaction, has the same limit.
 set lock_timeout = '900ms';
 
 create table public.security_events (
@@ -123,10 +132,11 @@ create table public.security_events (
     check (source in ('web', 'phone', 'api', 'email', 'edge')),
   constraint security_events_country
     check (country is null or country ~ '^[A-Z]{2}$'),
-  -- A place name: no control or invisible character, none of the characters
-  -- an address, an email, a path, a query or markup needs, fewer than four
-  -- digits, and not the start of an id. record_security_events applies the
-  -- same rule before it writes.
+  -- A place name. The rule refuses the usual shapes of other things: control
+  -- characters and the common invisible ones, the characters an address, an
+  -- email, a path, a query or markup needs, four or more digits, and the
+  -- start of an id. It is not a proof that the text is a place.
+  -- record_security_events applies the same rule before it writes.
   constraint security_events_city
     check (city is null or (
       char_length(city) between 1 and 80
@@ -154,6 +164,11 @@ create index security_events_organization_minute_idx
 create index security_events_source_hash_minute_idx
   on public.security_events (source_hash, minute)
   where source_hash is not null;
+
+-- The cap on rows with no organization counts them by minute.
+create index security_events_no_organization_minute_idx
+  on public.security_events (minute)
+  where organization_id is null;
 
 comment on table public.security_events is
   'Security events by minute: category, outcome, reason code, coarse source, organization when known, country and city, a count. No column for an address, an email or an account. No API role writes a row except through record_security_events(jsonb); rows older than 90 days are removed by purge_security_events(). Admins and owners read their organization''s rows through security_events_for_organization and security_event_totals_for_organization.';
@@ -249,12 +264,16 @@ begin
     -- The organization, when it is the uuid of an organization that exists.
     -- FOR KEY SHARE is the lock the insert's own foreign key check takes a
     -- moment later: taken here, the organization cannot be deleted between
-    -- this read and the insert.
+    -- this read and the insert. SKIP LOCKED: only a delete of the
+    -- organization (or a change of its id) holds a lock that conflicts, so a
+    -- skipped row is an organization being deleted. The event is then stored
+    -- with no organization, and this call, which holds the one writer lock,
+    -- never waits on that delete.
     v_org := null;
     if coalesce(pg_catalog.jsonb_typeof(v_el -> 'organization_id'), '') = 'string' then
       v_text := pg_catalog.lower(v_el ->> 'organization_id');
       if v_text ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
-        select o.id into v_org from public.organizations o where o.id = v_text::uuid for key share;
+        select o.id into v_org from public.organizations o where o.id = v_text::uuid for key share skip locked;
       end if;
     end if;
 
@@ -270,7 +289,7 @@ begin
       v_city := pg_catalog.btrim(v_el ->> 'city');
       if pg_catalog.char_length(v_city) not between 1 and 80
          or v_city ~ '[[:cntrl:]]'
-         or v_city ~ '[​-‏‪-‮⁦-⁩﻿]'
+         or v_city ~ '[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]'
          or v_city ~ '[@/\\:;<>(){}\[\]=?&%#"|$*+^~`]'
          or v_city ~ '[0-9].*[0-9].*[0-9].*[0-9]'
          or v_city ~ '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-' then
@@ -324,9 +343,11 @@ begin
       coalesce(v_org::text, ''), coalesce(v_country, ''), coalesce(v_city, ''),
       coalesce(v_hash, '')));
 
-    -- The minute caps: 200 rows with no organization, 60 rows for each
+    -- The minute caps: 200 ordinary rows with no organization, 60 for each
     -- organization. A new row past its cap is counted on the overflow row of
-    -- its category, outcome and source instead, which keeps the organization.
+    -- its category, outcome and source instead, which keeps the organization
+    -- (up to 75 overflow rows each; they are counted with the rest here,
+    -- which changes nothing: they exist only once the cap is reached).
     if not exists (select 1 from public.security_events s
                     where s.minute = v_minute and s.dedupe_key = v_key) then
       if v_org is null then
@@ -371,7 +392,7 @@ revoke all on function public.record_security_events(jsonb) from public, anon, a
 grant execute on function public.record_security_events(jsonb) to service_role;
 
 comment on function public.record_security_events(jsonb) is
-  'Stores security events (an array of up to 200 objects: category, outcome, reason, source, and optionally organization_id, country, city, source_hash, count, at_ms). An element whose four required fields are not valid strings is skipped; an optional field that fails its rule is left empty or defaulted. Never raises for bad input. Applies the repeats rule and the minute caps (200 rows with no organization, 60 for each organization). One call at a time; a call that waits 2 s ends with 55P03. Returns how many elements were stored. service_role only.';
+  'Stores security events (an array of up to 200 objects: category, outcome, reason, source, and optionally organization_id, country, city, source_hash, count, at_ms). An element whose four required fields are not valid strings is skipped; an optional field that fails its rule is left empty or defaulted. Never raises for bad input. Applies the repeats rule and the minute caps (200 ordinary rows with no organization and 60 for each organization, then overflow rows). One call at a time; a call that waits 2 s ends with 55P03. Returns how many elements were stored. service_role only.';
 
 -- ── Retention ────────────────────────────────────────────────────────────────
 create function public.purge_security_events()
@@ -426,10 +447,54 @@ comment on function public.purge_security_events() is
   'Deletes security_events rows older than 90 days and clears source_hash (and the row key made from it) on rows older than 24 hours, at most 5,000 of each a call. Returns {deleted, hashes_cleared}; the scheduled job calls it until both are under 5,000. service_role only.';
 
 -- ── Reading, for an organization's admins and owners ─────────────────────────
--- Each function checks the caller before it reads: has_org_role answers for
--- the signed-in account (auth.uid()), false for nobody signed in, for a
--- disabled account, for an invitation not accepted and for a null
--- organization. The answer never includes source_hash or the row key.
+-- Each read function calls this check before it reads. has_org_role answers
+-- for the signed-in account (auth.uid()): false for nobody signed in, for a
+-- disabled account, for an invitation not accepted, for an act-as seat that
+-- has expired and for a null organization. (A live act-as seat is an owner
+-- seat and reads, as it does everywhere else.) Then the app's authenticator
+-- rule, for a call made straight to the API with a password-only session
+-- (0413's block; the caller is an admin or owner here, so both
+-- 'admins_required' and 'all_required' ask them for one, and a policy value
+-- this function does not know is read as the strictest).
+create function public.security_events_reader_check(p_organization_id uuid)
+returns void
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid      uuid := auth.uid();
+  v_policy   text;
+  v_enrolled boolean;
+begin
+  if p_organization_id is null or v_uid is null
+     or not coalesce(public.has_org_role(p_organization_id, 'admin'), false) then
+    raise exception 'security_events_not_allowed' using errcode = '42501';
+  end if;
+
+  select o.mfa_policy::text into v_policy
+    from public.organizations o where o.id = p_organization_id;
+  v_enrolled := exists (select 1 from auth.mfa_factors f
+                         where f.user_id = v_uid and f.status = 'verified');
+  if coalesce(v_policy, '') <> 'optional' or v_enrolled then
+    if not v_enrolled then
+      raise exception 'mfa_required' using errcode = '42501', hint = 'mfa_required';
+    end if;
+    if coalesce(auth.jwt() ->> 'aal', 'aal1') <> 'aal2' then
+      raise exception 'aal2_required' using errcode = '42501', hint = 'aal2_required';
+    end if;
+  end if;
+end;
+$$;
+
+-- Called only from the two read functions below, which run as their owner.
+revoke all on function public.security_events_reader_check(uuid) from public, anon, authenticated, service_role;
+
+comment on function public.security_events_reader_check(uuid) is
+  'The check both security-events read functions make first: 42501 unless the caller is an admin or owner of the organization, and, where the organization''s policy asks them for an authenticator or they have one, unless the session holds the second step (hint mfa_required or aal2_required). No API role may call it.';
+
+-- The answer of a read function never includes source_hash or the row key.
 create function public.security_events_for_organization(
   p_organization_id uuid,
   p_limit integer default 100
@@ -452,10 +517,7 @@ security definer
 set search_path = ''
 as $$
 begin
-  if p_organization_id is null
-     or not coalesce(public.has_org_role(p_organization_id, 'admin'), false) then
-    raise exception 'security_events_not_allowed' using errcode = '42501';
-  end if;
+  perform public.security_events_reader_check(p_organization_id);
 
   return query
     select s.id, s.minute, s.category, s.outcome, s.reason, s.source,
@@ -471,12 +533,12 @@ revoke all on function public.security_events_for_organization(uuid, integer) fr
 grant execute on function public.security_events_for_organization(uuid, integer) to authenticated;
 
 comment on function public.security_events_for_organization(uuid, integer) is
-  'The newest security_events rows of one organization (1 to 500, default 100), for its admins and owners only: 42501 for anyone else. Never returns source_hash or the row key.';
+  'The newest security_events rows of one organization (1 to 500, default 100), for its admins and owners only, with the second step held where it is owed: 42501 for anyone else. Never returns source_hash or the row key.';
 
 create function public.security_event_totals_for_organization(
   p_organization_id uuid,
-  p_from timestamptz,
-  p_to   timestamptz
+  p_from timestamptz default null,
+  p_to   timestamptz default null
 )
 returns table (
   category  text,
@@ -495,10 +557,7 @@ declare
   v_to   timestamptz;
   v_from timestamptz;
 begin
-  if p_organization_id is null
-     or not coalesce(public.has_org_role(p_organization_id, 'admin'), false) then
-    raise exception 'security_events_not_allowed' using errcode = '42501';
-  end if;
+  perform public.security_events_reader_check(p_organization_id);
 
   -- From p_from (default: 7 days before the end) up to, not including, p_to
   -- (default: now); never more than the 90 days rows are kept.
@@ -522,6 +581,5 @@ revoke all on function public.security_event_totals_for_organization(uuid, times
 grant execute on function public.security_event_totals_for_organization(uuid, timestamptz, timestamptz) to authenticated;
 
 comment on function public.security_event_totals_for_organization(uuid, timestamptz, timestamptz) is
-  'Event counts of one organization by category, outcome, reason, source and country, from p_from (default 7 days before the end) up to p_to (default now), at most 90 days, for its admins and owners only: 42501 for anyone else.';
+  'Event counts of one organization by category, outcome, reason, source and country, from p_from (default 7 days before the end) up to p_to (default now), at most 90 days, for its admins and owners only, with the second step held where it is owed: 42501 for anyone else.';
 
-reset lock_timeout;
