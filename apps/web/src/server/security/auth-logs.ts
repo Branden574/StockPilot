@@ -307,7 +307,7 @@ FROM (
            OR startsWith(replaceRegexpAll(lower(decodeURLComponent(log_attributes['request.path'])), '/+', '/'), '/auth/v1/verify'))
   )
 )
-WHERE kind IN ('password', 'verify')
+WHERE kind IN ('password', 'verify') AND (caller != 'server' OR network != 'hosting')
 GROUP BY minute, kind, status, caller, network, country
 ORDER BY n DESC, minute, kind, status, caller, network, country
 LIMIT 199`;

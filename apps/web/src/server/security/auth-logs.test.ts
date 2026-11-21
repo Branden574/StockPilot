@@ -1708,10 +1708,39 @@ describe('the SQL is two constants that return classes and counts only', () => {
     expect(JSON.stringify(groups[2]!.where)).toBe(JSON.stringify(totals[2]!.where));
     // Only the groups query filters again, by the computed kind.
     expect(totals[0]!.where).toBeNull();
-    expect(AUTH_LOGS_GROUPS_SQL).toContain("\nWHERE kind IN ('password', 'verify')\n");
+    expect(AUTH_LOGS_GROUPS_SQL).toContain(
+      "\nWHERE kind IN ('password', 'verify') AND (caller != 'server' OR network != 'hosting')\n",
+    );
     for (const [, sql] of BOTH) {
       expect(sql.trimEnd().endsWith(`LIMIT ${AUTH_LOGS_ROW_LIMIT}`)).toBe(true);
       expect(sql).toMatch(/ORDER BY n DESC/);
+    }
+  });
+
+  it("our own server's lines take no row of the groups query from other callers (they are counted in the totals)", () => {
+    const hosted = { owner: 'Amazon Example Hosting' };
+    const cases: Array<[string, ModelLogLine, boolean]> = [
+      ['our server, ssr', gatewayLine({ client: SERVER_SSR, ...hosted }), false],
+      ['our server, node', gatewayLine({ client: SERVER_NODE, ...hosted }), false],
+      [
+        'our server, a code',
+        gatewayLine({
+          client: SERVER_SSR,
+          ...hosted,
+          path: `/auth/v1/factors/${UUID}/verify`,
+          status: '422',
+        }),
+        false,
+      ],
+      // Its client string from any other network is listed, as any caller is.
+      ['its string, another network', gatewayLine({ client: SERVER_SSR }), true],
+      ['the phone app on a hosting network', gatewayLine(hosted), true],
+      ['no client string on a hosting network', gatewayLine({ client: '', ...hosted }), true],
+    ];
+    for (const [what, line, listed] of cases) {
+      const { groups, totals } = bothOn(line);
+      expect(totals.kept, what).toBe(true);
+      expect(groups.kept, what).toBe(listed);
     }
   });
 
