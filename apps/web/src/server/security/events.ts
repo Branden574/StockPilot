@@ -11,7 +11,10 @@ import {
   isSecurityEventCategory,
   isSecurityEventOutcome,
   isSecurityEventSource,
+  SECURITY_EVENT_CATEGORIES,
+  SECURITY_EVENT_OUTCOMES,
   SECURITY_EVENT_REASON_RE,
+  SECURITY_EVENT_SOURCES,
   type SecurityEventCategory,
   type SecurityEventOutcome,
   type SecurityEventSource,
@@ -27,44 +30,63 @@ import {
  * the event to an in-memory buffer of this server instance, and returns. The
  * first event into an empty buffer schedules ONE flush about two seconds
  * later, kept alive past the response (keepAlive, server/services/lib/
- * defer.ts); the flush sends everything waiting in ONE call to
- * record_security_events(jsonb). So a flood costs at most one database call
- * per instance every two seconds, and an ordinary request costs none.
+ * defer.ts); the flush sends everything waiting to
+ * record_security_events(jsonb). An ordinary request costs no database call.
  *
  * THE BUFFER is keyed like the row (category, outcome, reason, source,
  * organization, country, city, source hash, and the UTC minute), with a count.
- * Events ABOUT AN ORGANIZATION and events about none wait in two separate
- * budgets of distinct keys (MAX_WAITING_KEYS_WITH_ORGANIZATION and
- * MAX_WAITING_KEYS_WITHOUT_ORGANIZATION), so traffic that is about no
- * organization (scanner paths, bots) can never push an organization's events
- * out of the list its admins read. The database's writer keeps the same
- * promise one step later (its two minute caps). An event whose key already
- * waits always adds to it. Past a budget, a new key is counted, not listed, on
- * an over_buffer_cap entry with no place and no hash:
- *   - with no organization: one entry per category, outcome and source;
- *   - about an organization: one entry per category, outcome, source AND
- *     organization, so the count stays on that organization's page. At most
- *     MAX_ORGANIZATION_OVERFLOW_ENTRIES of those wait; past that ceiling, and
- *     only then, the event is counted on the entry with no organization.
- * With 5 categories, 3 outcomes and 5 sources there are at most 75 entries
- * with no organization, so a flush is at most 50 + 50 + 25 + 75 = 200
- * elements: exactly what the writer reads of one call (MAX_FLUSH_ELEMENTS).
- * Events about an organization are sent first.
+ * An event whose key already waits always adds to it. Who may take room from
+ * whom is the point of its shape:
+ *   - EVENTS ABOUT NO ORGANIZATION (scanner paths, bots, an unknown email)
+ *     wait in one budget of their own, MAX_WAITING_KEYS_WITHOUT_ORGANIZATION
+ *     distinct keys. Past it, a new key is counted, not listed, on an
+ *     over_buffer_cap entry for its category, outcome and source, with no
+ *     place and no hash.
+ *   - EACH ORGANIZATION HAS ITS OWN SLICE, MAX_WAITING_KEYS_PER_ORGANIZATION
+ *     distinct keys. Past its slice, an organization's events are counted on
+ *     that organization's OWN over_buffer_cap entry (category, outcome,
+ *     source and the organization). So neither traffic about no organization
+ *     nor a flood aimed at one organization can push another organization's
+ *     events out of the list its admins read, or onto an entry they cannot
+ *     see. The database's writer keeps the same promise one step later (its
+ *     minute caps).
+ *   - AT MOST MAX_ORGANIZATIONS_PER_WINDOW organizations are tracked between
+ *     two flushes, which is what bounds memory. Only an event of one more
+ *     organization in the same window is counted on the entry with no
+ *     organization. That is not expected to happen, so it is reported (tag
+ *     security.events_organization_ceiling, warning, at most once per
+ *     FAILURE_REPORT_INTERVAL_MS, the ceiling only: never an organization).
+ * THE WORST CASE, with 5 categories, 3 outcomes and 5 sources (75 kinds of
+ * overflow entry): 100 organizations x (8 keys + 75 entries) + 50 keys + 75
+ * entries = 8,425 small entries (MAX_WAITING_ENTRIES). The organizations'
+ * events that detectors write today are all of one kind, which makes the
+ * real ceiling 100 x 9 + 125 = 1,025.
  *
- * ONE FLUSH CALL AT A TIME per instance, with a time limit of its own
- * (FLUSH_CALL_TIMEOUT_MS): a flush that finds the last call still out leaves
- * its events in the buffer for the next one, and a call that has not answered
- * in time is aborted. So a slow or busy database holds at most one connection
- * per instance for this, for at most that long.
+ * A FULL SLICE OR BUDGET FLUSHES EARLY: when an organization's slice, the
+ * budget of events with no organization, or the tracked organizations fill,
+ * the flush is brought forward instead of waiting out the two seconds, so a
+ * flood shortens the window instead of stacking events behind it. Two limits
+ * keep a flood from setting the database's call rate: never while a call is
+ * out, and no sooner than EARLY_FLUSH_MIN_GAP_MS after the last flush began.
  *
- * A FAILED FLUSH drops its batch: these are counts for admins to read, not
- * records anything depends on, and a retry would hold a growing buffer during
- * an outage. The writer runs one call at a time across every instance (and
- * the retention cron); a call that waits 2 s for its turn ends with 55P03,
- * which is an ordinary failure here, as is a call aborted at its time limit:
- * dropped, and reported by the same rule as any other. It is reported at most once per FAILURE_REPORT_INTERVAL_MS per
- * instance (tag security.events_flush_failed, warning), with the database's
- * error code and the number of rows only: never an event's content.
+ * ONE FLUSH CALL AT A TIME per instance, each with a time limit of its own
+ * (FLUSH_CALL_TIMEOUT_MS). The writer reads at most MAX_FLUSH_CALL_ELEMENTS
+ * of one call, so a larger flush is sent as several calls of at most that
+ * many, one after another, organizations first (the worst case is 43). A
+ * flush that finds a call still out leaves its events in the buffer for the
+ * next one, and a call that has not answered in time is aborted. So a slow or
+ * busy database holds at most one connection per instance for this.
+ *
+ * A FAILED FLUSH drops its batch, and with it the calls of that flush not yet
+ * made: these are counts for admins to read, not records anything depends on,
+ * and a retry would hold a growing buffer during an outage. The writer runs
+ * one call at a time across every instance (and the retention cron); a call
+ * that waits 2 s for its turn ends with 55P03, which is an ordinary failure
+ * here, as is a call aborted at its time limit: dropped, and reported by the
+ * same rule as any other. It is reported at most once per
+ * FAILURE_REPORT_INTERVAL_MS per instance (tag security.events_flush_failed,
+ * warning), with the database's error code and the number of rows only: never
+ * an event's content.
  *
  * SERVER CODE ONLY: `import 'server-only'` and never 'use server'. Exported
  * from a 'use server' module, recordSecurityEvent would be a Server Action:
@@ -88,18 +110,37 @@ export type SecurityEventHeaders = { get(name: string): string | null };
 
 /** Delay between the first event into an empty buffer and its flush. */
 export const SECURITY_EVENT_FLUSH_DELAY_MS = 2_000;
-/** Distinct keys about an organization that may wait for a flush. */
-export const MAX_WAITING_KEYS_WITH_ORGANIZATION = 50;
+/** Distinct keys ONE organization may have waiting; each organization has its own. */
+export const MAX_WAITING_KEYS_PER_ORGANIZATION = 8;
+/** Organizations tracked between two flushes; what bounds the buffer's memory. */
+export const MAX_ORGANIZATIONS_PER_WINDOW = 100;
 /** Distinct keys about no organization that may wait for a flush. */
 export const MAX_WAITING_KEYS_WITHOUT_ORGANIZATION = 50;
-/** Entries that count an organization's events past its budget, and keep the organization. */
-export const MAX_ORGANIZATION_OVERFLOW_ENTRIES = 25;
+/** The kinds an overflow entry can be of: one per category, outcome and source (75). */
+const OVERFLOW_KINDS =
+  SECURITY_EVENT_CATEGORIES.length * SECURITY_EVENT_OUTCOMES.length * SECURITY_EVENT_SOURCES.length;
+/**
+ * The most entries the buffer can ever hold: every tracked organization with
+ * a full slice and every kind of overflow entry, the full budget of events
+ * with no organization, and every kind of entry with no organization.
+ * 100 x (8 + 75) + 50 + 75 = 8,425.
+ */
+export const MAX_WAITING_ENTRIES =
+  MAX_ORGANIZATIONS_PER_WINDOW * (MAX_WAITING_KEYS_PER_ORGANIZATION + OVERFLOW_KINDS) +
+  MAX_WAITING_KEYS_WITHOUT_ORGANIZATION +
+  OVERFLOW_KINDS;
 /**
  * What record_security_events reads of one call (`limit 200` on its array); a
- * longer array would lose its tail without a word. The three numbers above
- * and the 75 possible entries with no organization add up to it.
+ * longer array would lose its tail without a word, so a flush is sent in
+ * calls of at most this many.
  */
-export const MAX_FLUSH_ELEMENTS = 200;
+export const MAX_FLUSH_CALL_ELEMENTS = 200;
+/**
+ * An early flush (a slice or budget filled) starts no sooner than this after
+ * the last flush began. Without it a flood would set the call rate: every
+ * few keys a new call, as fast as the database answers.
+ */
+export const EARLY_FLUSH_MIN_GAP_MS = 500;
 /** A flush call still out after this long is aborted and counted as failed. */
 export const FLUSH_CALL_TIMEOUT_MS = 3_000;
 /** A failed flush is reported at most this often per instance. */
@@ -124,21 +165,34 @@ interface PendingEvent {
   at_ms: number;
 }
 
-/** Listed events about an organization, by row key. */
-let waitingWithOrganization = new Map<string, PendingEvent>();
+/** What one organization has waiting: its slice of listed keys, and its own overflow entries. */
+interface OrganizationSlice {
+  /** Listed events, by row key; at most MAX_WAITING_KEYS_PER_ORGANIZATION. */
+  waiting: Map<string, PendingEvent>;
+  /** Counted events past the slice, by category, outcome and source. */
+  overflow: Map<string, PendingEvent>;
+}
+
+/** The organizations with events waiting; at most MAX_ORGANIZATIONS_PER_WINDOW. */
+let organizations = new Map<string, OrganizationSlice>();
 /** Listed events about no organization, by row key. */
 let waitingWithoutOrganization = new Map<string, PendingEvent>();
-/** Counted events about an organization: category, outcome, source, organization. */
-let organizationOverflow = new Map<string, PendingEvent>();
 /** Counted events with no organization (and the last resort): category, outcome, source. */
 let overflow = new Map<string, PendingEvent>();
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
+/** When the armed timer fires, in ms since 1970; null with no timer. */
+let flushDueAt: number | null = null;
 /** Settles the kept-alive promise of the events now waiting; null when none is held. */
 let settleScheduledFlush: (() => void) | null = null;
-/** Whether a record_security_events call of this instance has not answered yet. */
+/** Whether a flush of this instance still has a record_security_events call to answer or make. */
 let flushCallOut = false;
+/** When the last flush that sent anything began; null before the first. */
+let lastFlushStartedAt: number | null = null;
+/** Whether a slice or budget filled since the buffer was last emptied. */
+let earlyFlushWanted = false;
 let flushDelayMs = SECURITY_EVENT_FLUSH_DELAY_MS;
-let lastFailureReportAt: number | null = null;
+/** When each kind of report was last sent, by tag. */
+let lastReportAt = new Map<string, number>();
 
 /** The request's headers, or null outside a request (a script, a cron worker, a test). */
 async function headersOfThisRequest(): Promise<SecurityEventHeaders | null> {
@@ -215,7 +269,7 @@ function foldInto(into: PendingEvent, e: PendingEvent): void {
   into.at_ms = Math.max(into.at_ms, e.at_ms);
 }
 
-/** A new entry that counts events past a budget: no place and no hash. */
+/** A new entry that counts events past a slice or budget: no place and no hash. */
 function overflowEntryFor(e: PendingEvent, organizationId: string | null): PendingEvent {
   return {
     category: e.category,
@@ -231,64 +285,83 @@ function overflowEntryFor(e: PendingEvent, organizationId: string | null): Pendi
   };
 }
 
+/** Counts `e` on the entry of its category, outcome and source in `entries`. */
+function countOn(entries: Map<string, PendingEvent>, e: PendingEvent, organizationId: string | null): void {
+  const kind = [e.category, e.outcome, e.source].join('\u001f');
+  const counted = entries.get(kind);
+  if (counted) foldInto(counted, e);
+  else entries.set(kind, overflowEntryFor(e, organizationId));
+}
+
 function add(e: PendingEvent): void {
-  const aboutAnOrganization = e.organization_id !== null;
-  const waiting = aboutAnOrganization ? waitingWithOrganization : waitingWithoutOrganization;
-  const budget = aboutAnOrganization
-    ? MAX_WAITING_KEYS_WITH_ORGANIZATION
-    : MAX_WAITING_KEYS_WITHOUT_ORGANIZATION;
-  const key = keyOf(e);
-  const same = waiting.get(key);
-  if (same) {
-    foldInto(same, e);
-  } else if (waiting.size < budget) {
-    waiting.set(key, e);
-  } else {
-    countPastBudget(e);
-  }
+  const full =
+    e.organization_id === null ? addWithoutOrganization(e) : addForOrganization(e, e.organization_id);
   scheduleFlush();
+  if (full) flushEarly();
+}
+
+/** An event about no organization. True when its budget is now full. */
+function addWithoutOrganization(e: PendingEvent): boolean {
+  const key = keyOf(e);
+  const same = waitingWithoutOrganization.get(key);
+  if (same) foldInto(same, e);
+  else if (waitingWithoutOrganization.size < MAX_WAITING_KEYS_WITHOUT_ORGANIZATION) {
+    waitingWithoutOrganization.set(key, e);
+  } else {
+    countOn(overflow, e, null);
+  }
+  return waitingWithoutOrganization.size >= MAX_WAITING_KEYS_WITHOUT_ORGANIZATION;
 }
 
 /**
- * An event whose budget is full. About an organization, it is counted on that
- * organization's own entry while there is room for one; otherwise, and for an
- * event about no organization, on the entry of its category, outcome and
- * source with no organization.
+ * An event about an organization: into that organization's own slice, or past
+ * it onto that organization's own overflow entry. Nothing here reads or
+ * changes another organization's slice. True when the slice, or the number of
+ * tracked organizations, is now full.
  */
-function countPastBudget(e: PendingEvent): void {
-  const kind = [e.category, e.outcome, e.source].join('\u001f');
-  if (e.organization_id !== null) {
-    const ownKey = `${kind}\u001f${e.organization_id}`;
-    const own = organizationOverflow.get(ownKey);
-    if (own) {
-      foldInto(own, e);
-      return;
+function addForOrganization(e: PendingEvent, organizationId: string): boolean {
+  let slice = organizations.get(organizationId);
+  if (!slice) {
+    if (organizations.size >= MAX_ORGANIZATIONS_PER_WINDOW) {
+      // The last resort, and the only way an organization's event loses its
+      // organization: more organizations in one window than are tracked.
+      countOn(overflow, e, null);
+      reportOrganizationCeiling();
+      return true;
     }
-    if (organizationOverflow.size < MAX_ORGANIZATION_OVERFLOW_ENTRIES) {
-      organizationOverflow.set(ownKey, overflowEntryFor(e, e.organization_id));
-      return;
-    }
+    slice = { waiting: new Map(), overflow: new Map() };
+    organizations.set(organizationId, slice);
   }
-  const counted = overflow.get(kind);
-  if (counted) foldInto(counted, e);
-  else overflow.set(kind, overflowEntryFor(e, null));
+  const key = keyOf(e);
+  const same = slice.waiting.get(key);
+  if (same) foldInto(same, e);
+  else if (slice.waiting.size < MAX_WAITING_KEYS_PER_ORGANIZATION) slice.waiting.set(key, e);
+  else countOn(slice.overflow, e, organizationId);
+  return (
+    slice.waiting.size >= MAX_WAITING_KEYS_PER_ORGANIZATION ||
+    organizations.size >= MAX_ORGANIZATIONS_PER_WINDOW
+  );
 }
 
 /** Everything waiting, in the order it is sent: events about an organization first. */
 function pendingEvents(): PendingEvent[] {
-  return [
-    ...waitingWithOrganization.values(),
-    ...organizationOverflow.values(),
-    ...waitingWithoutOrganization.values(),
-    ...overflow.values(),
-  ];
+  const pending: PendingEvent[] = [];
+  for (const slice of organizations.values()) {
+    pending.push(...slice.waiting.values(), ...slice.overflow.values());
+  }
+  pending.push(...waitingWithoutOrganization.values(), ...overflow.values());
+  return pending;
+}
+
+function hasPendingEvents(): boolean {
+  return organizations.size > 0 || waitingWithoutOrganization.size > 0 || overflow.size > 0;
 }
 
 function emptyBuffer(): void {
-  waitingWithOrganization = new Map();
+  organizations = new Map();
   waitingWithoutOrganization = new Map();
-  organizationOverflow = new Map();
   overflow = new Map();
+  earlyFlushWanted = false;
 }
 
 /**
@@ -306,16 +379,37 @@ function scheduleFlush(): void {
     });
     keepAlive(flushed);
   }
-  armFlushTimer();
+  armFlushTimer(flushDelayMs);
 }
 
-function armFlushTimer(): void {
+/** Arms the one flush timer, in place of any already armed. */
+function armFlushTimer(delayMs: number): void {
+  if (flushTimer !== null) clearTimeout(flushTimer);
+  flushDueAt = Date.now() + delayMs;
   flushTimer = setTimeout(() => {
     flushTimer = null;
+    flushDueAt = null;
     void flushSecurityEvents();
-  }, flushDelayMs);
+  }, delayMs);
   // A script is not held open for a flush; a request is, through keepAlive.
   (flushTimer as { unref?: () => void }).unref?.();
+}
+
+/**
+ * A slice or budget is full: bring the flush forward. Not while a call is out
+ * (the flush that owns it brings the next one forward when it ends), and no
+ * sooner than EARLY_FLUSH_MIN_GAP_MS after the last flush began. Never later
+ * than the timer already armed.
+ */
+function flushEarly(): void {
+  earlyFlushWanted = true;
+  if (flushCallOut) return;
+  const now = Date.now();
+  const sinceLast = lastFlushStartedAt === null ? Infinity : now - lastFlushStartedAt;
+  // A clock that stepped back must not hold the flush longer than the gap.
+  const wait = sinceLast < 0 ? EARLY_FLUSH_MIN_GAP_MS : Math.max(0, EARLY_FLUSH_MIN_GAP_MS - sinceLast);
+  if (flushTimer !== null && flushDueAt !== null && flushDueAt <= now + wait) return;
+  armFlushTimer(wait);
 }
 
 /** The flush call did not answer within FLUSH_CALL_TIMEOUT_MS. */
@@ -328,43 +422,50 @@ class FlushTimeout extends Error {
 }
 
 /**
- * Sends everything waiting in one record_security_events call, now. Never
- * throws. The timer calls it; a test calls it to flush at once.
+ * Sends everything waiting to record_security_events, now, in calls of at
+ * most MAX_FLUSH_CALL_ELEMENTS. Never throws. The timer calls it; a test
+ * calls it to flush at once.
  *
- * ONE CALL AT A TIME per instance. A flush that finds the last call still
- * out sends nothing: its events stay in the buffer (inside the same budgets)
- * and the timer is armed again, so they go with the next flush and their
- * kept-alive promise is still held. So a slow database holds at most one
- * connection per instance for this, however many requests arrive.
+ * ONE CALL AT A TIME per instance. A flush that finds a call still out sends
+ * nothing: its events stay in the buffer (inside the same slices and
+ * budgets) and the timer is armed again, so they go with the next flush and
+ * their kept-alive promise is still held. So a slow database holds at most
+ * one connection per instance for this, however many requests arrive.
  *
- * THE CALL HAS A TIME LIMIT of its own, FLUSH_CALL_TIMEOUT_MS: the writer
+ * EACH CALL HAS A TIME LIMIT of its own, FLUSH_CALL_TIMEOUT_MS: the writer
  * waits at most 2 s for its turn, so a call still out after 3 s is aborted
  * (the request is cancelled, and the wait here ends whether or not the
- * cancel is honoured). That is an ordinary failed flush: the batch is dropped
- * and counted in the same once-per-interval report.
+ * cancel is honoured). That is an ordinary failed flush: what was not stored
+ * is dropped and counted in the same once-per-interval report.
  */
 export async function flushSecurityEvents(): Promise<void> {
   if (flushTimer !== null) {
     clearTimeout(flushTimer);
     flushTimer = null;
+    flushDueAt = null;
   }
   if (flushCallOut) {
     // Leave the events for the next flush; with nothing waiting, nothing is held.
-    if (pendingEvents().length > 0) scheduleFlush();
+    if (hasPendingEvents()) scheduleFlush();
     else settleScheduled();
     return;
   }
-  // Never more than the writer reads; the budgets already add up to that.
-  const batch = pendingEvents().slice(0, MAX_FLUSH_ELEMENTS);
+  const batch = pendingEvents();
   emptyBuffer();
   // This flush answers for the promise of the events it took; events that
-  // arrive while its call is out get a new one.
+  // arrive while its calls are out get a new one.
   const settle = settleScheduledFlush;
   settleScheduledFlush = null;
   try {
-    if (batch.length > 0) await sendBatch(batch);
+    if (batch.length > 0) {
+      lastFlushStartedAt = Date.now();
+      await sendBatch(batch);
+    }
   } finally {
     settle?.();
+    // A slice or budget that filled while the calls were out could not bring
+    // its flush forward then; it does now.
+    if (earlyFlushWanted && hasPendingEvents()) flushEarly();
   }
 }
 
@@ -374,9 +475,28 @@ function settleScheduled(): void {
   settle?.();
 }
 
-/** One record_security_events call with a time limit. Never throws. */
+/**
+ * One flush: calls of at most MAX_FLUSH_CALL_ELEMENTS, one after another.
+ * The first call that fails ends it: that call's elements and every element
+ * not yet sent are dropped, in one report. Never throws.
+ */
 async function sendBatch(batch: PendingEvent[]): Promise<void> {
   flushCallOut = true;
+  try {
+    for (let from = 0; from < batch.length; from += MAX_FLUSH_CALL_ELEMENTS) {
+      const failure = await sendCall(batch.slice(from, from + MAX_FLUSH_CALL_ELEMENTS));
+      if (failure !== null) {
+        reportFlushFailure(failure.cause, batch.length - from);
+        return;
+      }
+    }
+  } finally {
+    flushCallOut = false;
+  }
+}
+
+/** One record_security_events call with a time limit: null, or why it failed. Never throws. */
+async function sendCall(elements: PendingEvent[]): Promise<{ cause: unknown } | null> {
   const controller = new AbortController();
   const deadline = new Promise<never>((_, reject) => {
     controller.signal.addEventListener('abort', () => reject(new FlushTimeout()), { once: true });
@@ -391,26 +511,30 @@ async function sendBatch(batch: PendingEvent[]): Promise<void> {
     // supabase-js sends the request each time its builder is awaited, so it
     // is turned into ONE promise here and only that promise is used after.
     const request = Promise.resolve(
-      admin.rpc('record_security_events', { p_events: batch }).abortSignal(controller.signal),
+      admin.rpc('record_security_events', { p_events: elements }).abortSignal(controller.signal),
     );
     request.catch(() => undefined);
     const { error } = await Promise.race([request, deadline]);
-    if (error) reportFlushFailure(error, batch.length);
+    return error ? { cause: error } : null;
   } catch (e) {
-    reportFlushFailure(e, batch.length);
+    return { cause: e };
   } finally {
     clearTimeout(timer);
-    flushCallOut = false;
   }
+}
+
+/** True at most once per FAILURE_REPORT_INTERVAL_MS for each tag. */
+function mayReport(tag: string): boolean {
+  const now = Date.now();
+  const last = lastReportAt.get(tag);
+  if (last !== undefined && now - last >= 0 && now - last < FAILURE_REPORT_INTERVAL_MS) return false;
+  lastReportAt.set(tag, now);
+  return true;
 }
 
 /** At most once per FAILURE_REPORT_INTERVAL_MS: the code and the row count, never the events. */
 function reportFlushFailure(failure: unknown, rows: number): void {
-  const now = Date.now();
-  if (lastFailureReportAt !== null && now - lastFailureReportAt < FAILURE_REPORT_INTERVAL_MS) {
-    return;
-  }
-  lastFailureReportAt = now;
+  if (!mayReport('security.events_flush_failed')) return;
   const code =
     failure && typeof failure === 'object' && 'code' in failure
       ? String((failure as { code: unknown }).code ?? '') || null
@@ -424,14 +548,31 @@ function reportFlushFailure(failure: unknown, rows: number): void {
   });
 }
 
+/**
+ * More organizations had events in one window than the buffer tracks, so an
+ * organization's event was counted with no organization. At most once per
+ * FAILURE_REPORT_INTERVAL_MS, on its own clock: the ceiling only, never an
+ * organization or an event.
+ */
+function reportOrganizationCeiling(): void {
+  if (!mayReport('security.events_organization_ceiling')) return;
+  void reportError(new Error('Security events of more organizations than one flush window tracks'), {
+    tag: 'security.events_organization_ceiling',
+    level: 'warning',
+    extra: { organizations: MAX_ORGANIZATIONS_PER_WINDOW },
+  });
+}
+
 /** Test only: an empty buffer, no timer, no call out, no failure reported yet, the default delay. */
 export function __resetSecurityEventsForTests(): void {
   if (flushTimer !== null) clearTimeout(flushTimer);
   flushTimer = null;
+  flushDueAt = null;
   settleScheduled();
   flushCallOut = false;
+  lastFlushStartedAt = null;
   emptyBuffer();
-  lastFailureReportAt = null;
+  lastReportAt = new Map();
   flushDelayMs = SECURITY_EVENT_FLUSH_DELAY_MS;
 }
 
