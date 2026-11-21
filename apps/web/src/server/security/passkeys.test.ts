@@ -1172,6 +1172,113 @@ describe('states: the server branches on the facts (2.7)', () => {
     );
   });
 
+  describe('"signed in with the password" is an allow-list: only an `amr` entry whose method is exactly `password` counts', () => {
+    const later = () => new Date(Date.now() + 1000).toISOString();
+    const factorsOf = (userId: string) => world.factors.filter((f) => f.user_id === userId);
+    const at = () => Math.floor(Date.now() / 1000) - 60;
+    /** A removal the member started: S7 (the row and factor left) or S13 (the factor left). */
+    const REMOVALS: Array<[string, (userId: string) => void]> = [
+      [
+        'S7',
+        () => {
+          world.passkeys[0]!.removed_at = later();
+          world.passkeys[0]!.removed_reason = 'member';
+        },
+      ],
+      [
+        'S13',
+        (userId) => {
+          world.passkeys[0]!.removed_at = later();
+          world.passkeys[0]!.removed_reason = 'member';
+          world.bridges.delete(userId);
+        },
+      ],
+    ];
+    /** The `amr` claim of sessions that did NOT sign in with the password. */
+    const NOT_PASSWORD: Array<[string, { claim: unknown }]> = [
+      ['an emailed one-time link (otp)', { claim: [{ method: 'otp', timestamp: at() }] }],
+      ['a recovery link (recovery)', { claim: [{ method: 'recovery', timestamp: at() }] }],
+      ['an invitation (invite)', { claim: [{ method: 'invite', timestamp: at() }] }],
+      ['a magic link (magiclink)', { claim: [{ method: 'magiclink', timestamp: at() }] }],
+      [
+        'a link session that later answered a factor (otp, totp)',
+        {
+          claim: [
+            { method: 'otp', timestamp: at() },
+            { method: 'totp', timestamp: at() },
+          ],
+        },
+      ],
+      ['a method this build does not know', { claim: [{ method: 'sso/saml', timestamp: at() }] }],
+      ['an empty list', { claim: [] }],
+      ['no amr claim at all', { claim: undefined }],
+      ['a null claim', { claim: null }],
+      ['the bare-string list form', { claim: ['password'] }],
+      ['a bare string', { claim: 'password' }],
+      ['one entry that is not in a list', { claim: { method: 'password', timestamp: at() } }],
+      ['an entry with no method', { claim: [{ timestamp: at() }] }],
+      ['a method in another case', { claim: [{ method: 'Password', timestamp: at() }] }],
+      ['a method that only starts with the word', { claim: [{ method: 'password_reset' }] }],
+      ['a method that is not a string', { claim: [{ method: ['password'] }] }],
+    ];
+    const CASES = REMOVALS.flatMap(([state, make]) =>
+      NOT_PASSWORD.map(([session, amrClaim]) => [state, session, make, amrClaim] as const),
+    );
+
+    it.each(CASES)(
+      '%s on a session of %s: no passkey offered, and the start deletes nothing',
+      async (_state, _session, make, amrClaim) => {
+        const { userId } = await memberWithPasskey();
+        make(userId);
+        const hadBridge = world.bridges.has(userId);
+        world.signIn(userId, 'aal1', { amrClaim });
+        world.calls.fns.length = 0;
+        expect(await pk.passkeyStepFor(userId, factorsOf(userId))).toBe('none');
+        expect(await pk.startSecondStep()).toMatchObject({
+          ok: false,
+          message: pk.PASSKEY_WORDS.noPasskey,
+        });
+        expect(world.calls.deleteFactor).toEqual([]);
+        expect(world.calls.fns.map((c) => c.name)).not.toContain('passkey_drop_bridge');
+        expect(world.bridges.has(userId)).toBe(hadBridge);
+        expect(factorsOf(userId).some((f) => f.status === 'verified')).toBe(true);
+      },
+    );
+
+    it.each(
+      REMOVALS.flatMap(([state, make]) =>
+        (
+          [
+            ['password', { claim: [{ method: 'password', timestamp: at() }] }],
+            [
+              'password, then an answered factor',
+              {
+                claim: [
+                  { method: 'password', timestamp: at() },
+                  { method: 'totp', timestamp: at() },
+                ],
+              },
+            ],
+          ] as Array<[string, { claim: unknown }]>
+        ).map(([session, amrClaim]) => [state, session, make, amrClaim] as const),
+      ),
+    )(
+      '%s on a session whose amr holds %s: offered, and the start finishes the removal',
+      async (_state, _session, make, amrClaim) => {
+        const { userId } = await memberWithPasskey();
+        make(userId);
+        world.signIn(userId, 'aal1', { amrClaim });
+        expect(await pk.passkeyStepFor(userId, factorsOf(userId))).toBe('ready');
+        expect(await pk.startSecondStep()).toMatchObject({
+          ok: true,
+          start: { kind: 'removal_finished' },
+        });
+        expect(world.calls.deleteFactor).toHaveLength(1);
+        expect(world.bridges.has(userId)).toBe(false);
+      },
+    );
+  });
+
   it('S8 (a bridge with no passkey row ever) fails closed', async () => {
     const { userId } = await memberWithPasskey();
     world.passkeys.length = 0;

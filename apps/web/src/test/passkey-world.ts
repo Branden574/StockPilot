@@ -36,6 +36,12 @@ export interface FakeSession {
    * keeps every entry and adds `totp` when a factor is answered (proof B1).
    */
   amr?: Array<{ method: string; timestamp: number }>;
+  /**
+   * The token's `amr` claim exactly as given, whatever its shape, for the
+   * tests of how a claim is read: `{ claim: undefined }` signs a token with
+   * no `amr` claim at all. When set, `amr` above is not used.
+   */
+  amrClaim?: { claim: unknown };
 }
 export interface FakeFactor {
   id: string;
@@ -188,7 +194,9 @@ export function makeWorld() {
         sub: session.userId,
         session_id: session.id,
         aal: session.aal,
-        amr: session.amr ?? [{ method: 'password', timestamp: 1 }],
+        amr: session.amrClaim
+          ? session.amrClaim.claim
+          : (session.amr ?? [{ method: 'password', timestamp: 1 }]),
         email: w.emails.get(session.userId) ?? null,
         exp: Math.floor(Date.now() / 1000) + 3600,
       }),
@@ -222,13 +230,14 @@ export function makeWorld() {
   function signIn(
     userId: string,
     aal: 'aal1' | 'aal2' = 'aal1',
-    opts: { amr?: FakeSession['amr'] } = {},
+    opts: { amr?: FakeSession['amr']; amrClaim?: FakeSession['amrClaim'] } = {},
   ): FakeSession {
     const s: FakeSession = {
       id: randomUUID(),
       userId,
       aal,
       ...(opts.amr ? { amr: opts.amr } : {}),
+      ...(opts.amrClaim ? { amrClaim: opts.amrClaim } : {}),
     };
     w.sessions.set(s.id, s);
     w.cookieToken = signToken(s);
