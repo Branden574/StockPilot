@@ -51,12 +51,18 @@ import {
  * elements: exactly what the writer reads of one call (MAX_FLUSH_ELEMENTS).
  * Events about an organization are sent first.
  *
+ * ONE FLUSH CALL AT A TIME per instance, with a time limit of its own
+ * (FLUSH_CALL_TIMEOUT_MS): a flush that finds the last call still out leaves
+ * its events in the buffer for the next one, and a call that has not answered
+ * in time is aborted. So a slow or busy database holds at most one connection
+ * per instance for this, for at most that long.
+ *
  * A FAILED FLUSH drops its batch: these are counts for admins to read, not
  * records anything depends on, and a retry would hold a growing buffer during
  * an outage. The writer runs one call at a time across every instance (and
  * the retention cron); a call that waits 2 s for its turn ends with 55P03,
- * which is an ordinary failure here: dropped, and reported by the same rule
- * as any other. It is reported at most once per FAILURE_REPORT_INTERVAL_MS per
+ * which is an ordinary failure here, as is a call aborted at its time limit:
+ * dropped, and reported by the same rule as any other. It is reported at most once per FAILURE_REPORT_INTERVAL_MS per
  * instance (tag security.events_flush_failed, warning), with the database's
  * error code and the number of rows only: never an event's content.
  *
@@ -94,6 +100,8 @@ export const MAX_ORGANIZATION_OVERFLOW_ENTRIES = 25;
  * and the 75 possible entries with no organization add up to it.
  */
 export const MAX_FLUSH_ELEMENTS = 200;
+/** A flush call still out after this long is aborted and counted as failed. */
+export const FLUSH_CALL_TIMEOUT_MS = 3_000;
 /** A failed flush is reported at most this often per instance. */
 export const FAILURE_REPORT_INTERVAL_MS = 10 * 60_000;
 /** The writer reads a count of at most six digits. */
@@ -125,6 +133,10 @@ let organizationOverflow = new Map<string, PendingEvent>();
 /** Counted events with no organization (and the last resort): category, outcome, source. */
 let overflow = new Map<string, PendingEvent>();
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
+/** Settles the kept-alive promise of the events now waiting; null when none is held. */
+let settleScheduledFlush: (() => void) | null = null;
+/** Whether a record_security_events call of this instance has not answered yet. */
+let flushCallOut = false;
 let flushDelayMs = SECURITY_EVENT_FLUSH_DELAY_MS;
 let lastFailureReportAt: number | null = null;
 
@@ -283,42 +295,112 @@ function emptyBuffer(): void {
  * One flush per buffer: the first event into an empty buffer starts the
  * timer, and every later event joins it. The flush's promise is handed to
  * keepAlive, so the request that started it keeps the instance running until
- * the events are sent (outside a request there is nothing to outlive).
+ * the events are sent or dropped (outside a request there is nothing to
+ * outlive). flushSecurityEvents settles it, whoever calls it.
  */
 function scheduleFlush(): void {
   if (flushTimer !== null) return;
-  let settle!: () => void;
-  const flushed = new Promise<void>((resolve) => {
-    settle = resolve;
-  });
+  if (settleScheduledFlush === null) {
+    const flushed = new Promise<void>((resolve) => {
+      settleScheduledFlush = resolve;
+    });
+    keepAlive(flushed);
+  }
+  armFlushTimer();
+}
+
+function armFlushTimer(): void {
   flushTimer = setTimeout(() => {
     flushTimer = null;
-    flushSecurityEvents().then(settle, settle);
+    void flushSecurityEvents();
   }, flushDelayMs);
   // A script is not held open for a flush; a request is, through keepAlive.
   (flushTimer as { unref?: () => void }).unref?.();
-  keepAlive(flushed);
+}
+
+/** The flush call did not answer within FLUSH_CALL_TIMEOUT_MS. */
+class FlushTimeout extends Error {
+  readonly code = 'flush_timeout';
+  constructor() {
+    super('record_security_events did not answer in time');
+    this.name = 'FlushTimeout';
+  }
 }
 
 /**
  * Sends everything waiting in one record_security_events call, now. Never
  * throws. The timer calls it; a test calls it to flush at once.
+ *
+ * ONE CALL AT A TIME per instance. A flush that finds the last call still
+ * out sends nothing: its events stay in the buffer (inside the same budgets)
+ * and the timer is armed again, so they go with the next flush and their
+ * kept-alive promise is still held. So a slow database holds at most one
+ * connection per instance for this, however many requests arrive.
+ *
+ * THE CALL HAS A TIME LIMIT of its own, FLUSH_CALL_TIMEOUT_MS: the writer
+ * waits at most 2 s for its turn, so a call still out after 3 s is aborted
+ * (the request is cancelled, and the wait here ends whether or not the
+ * cancel is honoured). That is an ordinary failed flush: the batch is dropped
+ * and counted in the same once-per-interval report.
  */
 export async function flushSecurityEvents(): Promise<void> {
   if (flushTimer !== null) {
     clearTimeout(flushTimer);
     flushTimer = null;
   }
+  if (flushCallOut) {
+    // Leave the events for the next flush; with nothing waiting, nothing is held.
+    if (pendingEvents().length > 0) scheduleFlush();
+    else settleScheduled();
+    return;
+  }
   // Never more than the writer reads; the budgets already add up to that.
   const batch = pendingEvents().slice(0, MAX_FLUSH_ELEMENTS);
   emptyBuffer();
-  if (batch.length === 0) return;
+  // This flush answers for the promise of the events it took; events that
+  // arrive while its call is out get a new one.
+  const settle = settleScheduledFlush;
+  settleScheduledFlush = null;
+  try {
+    if (batch.length > 0) await sendBatch(batch);
+  } finally {
+    settle?.();
+  }
+}
+
+function settleScheduled(): void {
+  const settle = settleScheduledFlush;
+  settleScheduledFlush = null;
+  settle?.();
+}
+
+/** One record_security_events call with a time limit. Never throws. */
+async function sendBatch(batch: PendingEvent[]): Promise<void> {
+  flushCallOut = true;
+  const controller = new AbortController();
+  const deadline = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener('abort', () => reject(new FlushTimeout()), { once: true });
+  });
+  // The request may never settle once it is abandoned; neither promise may
+  // become an unhandled rejection.
+  deadline.catch(() => undefined);
+  const timer = setTimeout(() => controller.abort(), FLUSH_CALL_TIMEOUT_MS);
+  (timer as { unref?: () => void }).unref?.();
   try {
     const admin = createAdminClient();
-    const { error } = await admin.rpc('record_security_events', { p_events: batch });
+    // supabase-js sends the request each time its builder is awaited, so it
+    // is turned into ONE promise here and only that promise is used after.
+    const request = Promise.resolve(
+      admin.rpc('record_security_events', { p_events: batch }).abortSignal(controller.signal),
+    );
+    request.catch(() => undefined);
+    const { error } = await Promise.race([request, deadline]);
     if (error) reportFlushFailure(error, batch.length);
   } catch (e) {
     reportFlushFailure(e, batch.length);
+  } finally {
+    clearTimeout(timer);
+    flushCallOut = false;
   }
 }
 
@@ -342,10 +424,12 @@ function reportFlushFailure(failure: unknown, rows: number): void {
   });
 }
 
-/** Test only: an empty buffer, no timer, no failure reported yet, the default delay. */
+/** Test only: an empty buffer, no timer, no call out, no failure reported yet, the default delay. */
 export function __resetSecurityEventsForTests(): void {
   if (flushTimer !== null) clearTimeout(flushTimer);
   flushTimer = null;
+  settleScheduled();
+  flushCallOut = false;
   emptyBuffer();
   lastFailureReportAt = null;
   flushDelayMs = SECURITY_EVENT_FLUSH_DELAY_MS;

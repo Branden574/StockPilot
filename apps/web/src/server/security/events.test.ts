@@ -15,8 +15,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  *     never push an organization's events out; past a budget, events are
  *     counted on an over_buffer_cap entry with no place or hash, which keeps
  *     the organization up to a ceiling of such entries;
- *   - a failed flush drops its batch and is reported at most once per 10
- *     minutes, with no event content;
+ *   - one flush call at a time: a flush that finds one still out leaves its
+ *     events for the next; a call still out after 3 seconds is aborted;
+ *     flushSecurityEvents settles the kept-alive promise, whoever calls it;
+ *   - a failed flush (an aborted one too) drops its batch and is reported at
+ *     most once per 10 minutes, with no event content;
  *   - the place and the source hash come from the request's headers
  *     (lib/client-ip.ts); the address itself is never sent.
  *
@@ -29,6 +32,8 @@ const h = vi.hoisted(() => ({
   reportError: vi.fn(async () => undefined),
   keepAlive: vi.fn(),
   headers: vi.fn(),
+  /** The abort signal each record_security_events call was given, in order. */
+  signals: [] as AbortSignal[],
   env: { CRON_SECRET: 'test-cron-secret' } as { CRON_SECRET?: string },
 }));
 
@@ -83,6 +88,48 @@ const wrongPassword = {
   source: 'web',
 } as const;
 
+/**
+ * The service client as the recorder uses it: rpc() answers supabase-js's
+ * builder, which takes an abort signal and sends the request EACH time it is
+ * awaited (its `then`), so the recorder must await it exactly once.
+ */
+function adminClient() {
+  return {
+    rpc: (...args: unknown[]) => {
+      const builder = {
+        abortSignal(signal: AbortSignal) {
+          h.signals.push(signal);
+          return builder;
+        },
+        then(ok?: (value: unknown) => unknown, bad?: (reason: unknown) => unknown) {
+          let answer: Promise<unknown>;
+          try {
+            answer = Promise.resolve(h.rpc(...args));
+          } catch (e) {
+            answer = Promise.reject(e);
+          }
+          return answer.then(ok, bad);
+        },
+      };
+      return builder;
+    },
+  };
+}
+
+/** Whether a promise has settled, without waiting for it. */
+function settledFlag(p: Promise<unknown>): { settled: boolean } {
+  const flag = { settled: false };
+  void p.then(
+    () => {
+      flag.settled = true;
+    },
+    () => {
+      flag.settled = true;
+    },
+  );
+  return flag;
+}
+
 beforeEach(async () => {
   vi.useFakeTimers({ now: new Date('2026-11-21T10:15:05Z') });
   vi.stubEnv('VERCEL', '1');
@@ -90,7 +137,8 @@ beforeEach(async () => {
   h.rpc.mockReset();
   h.rpc.mockResolvedValue({ data: 1, error: null });
   h.createAdminClient.mockReset();
-  h.createAdminClient.mockImplementation(() => ({ rpc: h.rpc }));
+  h.createAdminClient.mockImplementation(adminClient);
+  h.signals = [];
   h.reportError.mockClear();
   h.keepAlive.mockReset();
   h.headers.mockReset();
@@ -430,6 +478,146 @@ describe('the flush', () => {
   });
 });
 
+describe('flushSecurityEvents called by hand', () => {
+  it('settles the kept-alive promise of the flush it replaced', async () => {
+    await events.recordSecurityEvent(wrongPassword, requestFrom());
+    const kept = settledFlag(h.keepAlive.mock.calls[0]![0] as Promise<unknown>);
+    await events.flushSecurityEvents();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.rpc).toHaveBeenCalledTimes(1);
+    expect(kept.settled).toBe(true);
+    // And no timer is left behind to hold anything.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('settles it when the call fails, too', async () => {
+    h.rpc.mockRejectedValue(new Error('down'));
+    await events.recordSecurityEvent(wrongPassword, requestFrom());
+    const kept = settledFlag(h.keepAlive.mock.calls[0]![0] as Promise<unknown>);
+    await events.flushSecurityEvents();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(kept.settled).toBe(true);
+  });
+});
+
+describe('one flush call at a time, with a time limit', () => {
+  const paused = { ...wrongPassword, reason: 'sign_in_paused' } as const;
+
+  it('a flush that finds one still out leaves its events in the buffer for the next', async () => {
+    let answer!: (value: unknown) => void;
+    h.rpc.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    await events.recordSecurityEvent(wrongPassword, requestFrom());
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.rpc).toHaveBeenCalledTimes(1);
+
+    // New events while the first call is out: their flush comes due and sends nothing.
+    await events.recordSecurityEvent(paused, requestFrom());
+    const kept = settledFlag(h.keepAlive.mock.calls[1]![0] as Promise<unknown>);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.rpc).toHaveBeenCalledTimes(1);
+    expect(events.__pendingSecurityEventsForTests()).toEqual([
+      expect.objectContaining({ reason: 'sign_in_paused', count: 1 }),
+    ]);
+    // Their invocation is still held: they have not been sent.
+    expect(kept.settled).toBe(false);
+
+    // The first call answers; the waiting events go out with the next flush.
+    answer({ data: 1, error: null });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.rpc).toHaveBeenCalledTimes(2);
+    expect(sent(1)).toEqual([expect.objectContaining({ reason: 'sign_in_paused', count: 1 })]);
+    expect(events.__pendingSecurityEventsForTests()).toEqual([]);
+    expect(kept.settled).toBe(true);
+    expect(h.reportError).not.toHaveBeenCalled();
+  });
+
+  it('by hand too: a flush while one is out sends nothing and keeps the events', async () => {
+    let answer!: (value: unknown) => void;
+    h.rpc.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    await events.recordSecurityEvent(wrongPassword, requestFrom());
+    const first = events.flushSecurityEvents();
+    await events.recordSecurityEvent(paused, requestFrom());
+    await events.flushSecurityEvents();
+    expect(h.rpc).toHaveBeenCalledTimes(1);
+    expect(events.__pendingSecurityEventsForTests()).toHaveLength(1);
+    answer({ data: 1, error: null });
+    await first;
+    await events.flushSecurityEvents();
+    expect(h.rpc).toHaveBeenCalledTimes(2);
+    expect(events.__pendingSecurityEventsForTests()).toEqual([]);
+  });
+
+  it('events that wait behind a call still fold and stay inside the budgets', async () => {
+    h.rpc.mockReturnValueOnce(new Promise(() => undefined));
+    await events.recordSecurityEvent(wrongPassword, requestFrom());
+    await vi.advanceTimersByTimeAsync(2_000);
+    for (let i = 0; i < 500; i++) {
+      await events.recordSecurityEvent(wrongPassword, requestFrom(address(i)));
+      await events.recordSecurityEvent({ ...wrongPassword, organizationId: organization(i) }, requestFrom());
+    }
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.rpc).toHaveBeenCalledTimes(1);
+    expect(events.__pendingSecurityEventsForTests().length).toBeLessThanOrEqual(200);
+  });
+
+  it('a call that has not answered after 3 seconds is aborted: an ordinary failed flush', async () => {
+    h.rpc.mockReturnValue(new Promise(() => undefined));
+    await events.recordSecurityEvent({ ...wrongPassword, organizationId: ORG }, requestFrom());
+    const kept = settledFlag(h.keepAlive.mock.calls[0]![0] as Promise<unknown>);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.rpc).toHaveBeenCalledTimes(1);
+    expect(h.signals).toHaveLength(1);
+    expect(h.signals[0]!.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(h.signals[0]!.aborted).toBe(false);
+    expect(h.reportError).not.toHaveBeenCalled();
+    expect(kept.settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.signals[0]!.aborted).toBe(true);
+    expect(kept.settled).toBe(true);
+    // Dropped and reported like any other failure: a code and a row count.
+    expect(events.__pendingSecurityEventsForTests()).toEqual([]);
+    expect(h.reportError).toHaveBeenCalledTimes(1);
+    expect((h.reportError.mock.calls[0] as unknown[])[1]).toEqual({
+      tag: 'security.events_flush_failed',
+      level: 'warning',
+      extra: { code: 'flush_timeout', rows: 1 },
+    });
+
+    // The next flush is not held up by the one that was aborted, and a second
+    // abort inside the 10 minutes is not reported again.
+    await events.recordSecurityEvent(wrongPassword, requestFrom());
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.rpc).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(h.signals[1]!.aborted).toBe(true);
+    expect(h.reportError).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a call that answers in time is sent once, is not aborted, and leaves no timer behind', async () => {
+    await events.recordSecurityEvent(wrongPassword, requestFrom());
+    await vi.advanceTimersByTimeAsync(2_000);
+    // h.rpc runs each time the builder is awaited: once.
+    expect(h.rpc).toHaveBeenCalledTimes(1);
+    expect(h.signals).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(h.signals[0]!.aborted).toBe(false);
+    expect(h.reportError).not.toHaveBeenCalled();
+  });
+});
+
 describe('a failed flush', () => {
   it('drops the batch and reports once, with the code and the row count only', async () => {
     h.rpc.mockResolvedValue({
@@ -498,7 +686,7 @@ describe('a failed flush', () => {
     });
 
     events.__resetSecurityEventsForTests();
-    h.createAdminClient.mockImplementation(() => ({ rpc: h.rpc }));
+    h.createAdminClient.mockImplementation(adminClient);
     h.rpc.mockRejectedValue(new TypeError('fetch failed'));
     await events.recordSecurityEvent(wrongPassword, requestFrom());
     await expect(events.flushSecurityEvents()).resolves.toBeUndefined();
