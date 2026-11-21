@@ -36,15 +36,24 @@ function deviceHash(userId: string, ua: string, deviceKey: string | null): strin
 }
 
 /**
- * Sign-in alerts (a new device, a new country or both: the alert row, the
- * email and the organizations' events together) per account in a window.
- * Past it the device and the country are still recorded (the sign-in
- * monitor, app/api/cron/auth-anomalies, counts devices) and the sign-in still
- * appears among the account's active sessions; no alert row, no email and no
- * event. The email that reaches the count says so.
+ * Sign-in alert EMAILS (a new device, a new country or both) per account in a
+ * window. Past it only the email is held: the device and the country are
+ * still recorded (the sign-in monitor, app/api/cron/auth-anomalies, counts
+ * devices), and the alert's row is still written, so the sign-in shows with
+ * its alert in Active sessions and in the organization's list and the member
+ * can still answer it there (review 1, finding 6). The email that reaches the
+ * count says no more will come.
  */
 export const NEW_DEVICE_ALERTS_PER_ACCOUNT = 5;
 export const NEW_DEVICE_ALERT_WINDOW_MS = 24 * 60 * 60_000;
+/**
+ * Sign-in alert ROWS per account in the same window: a hard ceiling, so the
+ * rows one account can write in a day have an end. Past it nothing is
+ * learned and nothing is written: the device row and the country row this
+ * sign-in added are taken back (they are still new at the next sign-in), and
+ * the first sign-in turned away in a window is reported once.
+ */
+export const SIGN_IN_ALERT_ROWS_PER_ACCOUNT = 50;
 /** security.new_device_login events per organization in a window. */
 export const NEW_DEVICE_EVENTS_PER_ORGANIZATION = 30;
 export const NEW_DEVICE_EVENT_WINDOW_MS = 60 * 60_000;
@@ -148,65 +157,112 @@ const NO_COUNTRY: CountryNote = { insertedNow: false, alerts: false };
  * recorded silently, as the first device is (so nobody is alerted at rollout).
  * The count is read AFTER the insert, so two first sign-ins racing from two
  * countries both alert rather than both staying silent. A count that cannot
- * be read takes the row back (the country is still new at the next sign-in),
- * and nothing alerts for it. Any other refusal is reported with its code,
- * and the sign-in is judged by its device alone.
+ * be read is reported and takes the row back (the country is still new at
+ * the next sign-in), and nothing alerts for it. Any other refusal is reported
+ * with its code, and the sign-in is judged by its device alone.
  */
 async function noteCountry(
   admin: AdminClient,
   userId: string,
   country: string,
 ): Promise<CountryNote> {
-  const { error } = await admin.from('user_sign_in_countries').insert({ user_id: userId, country });
-  if (error) {
-    if (error.code === '23505') {
-      await admin
-        .from('user_sign_in_countries')
-        .update({ last_seen_at: new Date().toISOString() })
-        .eq('user_id', userId)
-        .eq('country', country);
+  // NEVER THROWS (review 1, finding 5): the device row is already recorded
+  // when this runs, and the alert it is owed must not be lost to anything
+  // that happens here. Whatever fails, the answer is "no country" and the
+  // sign-in is judged by its device alone.
+  let inserted = false;
+  try {
+    const { error } = await admin
+      .from('user_sign_in_countries')
+      .insert({ user_id: userId, country });
+    if (error) {
+      if (error.code === '23505') {
+        await admin
+          .from('user_sign_in_countries')
+          .update({ last_seen_at: new Date().toISOString() })
+          .eq('user_id', userId)
+          .eq('country', country);
+        return NO_COUNTRY;
+      }
+      void reportError(new Error('A sign-in country could not be noted'), {
+        tag: 'auth.sign_in_country_note_failed',
+        level: 'warning',
+        extra: { code: codeOf(error) },
+      });
       return NO_COUNTRY;
     }
+    inserted = true;
+    const { count, error: countError } = await admin
+      .from('user_sign_in_countries')
+      .select('country', { count: 'exact', head: true })
+      .eq('user_id', userId);
+    if (countError || typeof count !== 'number') {
+      void reportError(new Error('A sign-in country could not be noted'), {
+        tag: 'auth.sign_in_country_note_failed',
+        level: 'warning',
+        extra: { code: codeOf(countError), step: 'count' },
+      });
+      // A take-back that fails is reported there, and still answers "no country".
+      await takeBack('country', () => forgetCountry(admin, userId, country));
+      return NO_COUNTRY;
+    }
+    return { insertedNow: true, alerts: count > 1 };
+  } catch {
+    // Something threw (the network, not a refusal). Reported with no text of
+    // the failure; a row this call inserted is taken back, so the country is
+    // not learned without its alert.
     void reportError(new Error('A sign-in country could not be noted'), {
       tag: 'auth.sign_in_country_note_failed',
       level: 'warning',
-      extra: { code: codeOf(error) },
+      extra: { code: null, step: inserted ? 'count' : 'insert' },
     });
+    if (inserted) await takeBack('country', () => forgetCountry(admin, userId, country));
     return NO_COUNTRY;
   }
-  const { count, error: countError } = await admin
-    .from('user_sign_in_countries')
-    .select('country', { count: 'exact', head: true })
-    .eq('user_id', userId);
-  if (countError || typeof count !== 'number') {
-    await forgetCountry(admin, userId, country);
-    return NO_COUNTRY;
-  }
-  return { insertedNow: true, alerts: count > 1 };
 }
 
-async function forgetDevice(admin: AdminClient, userId: string, hash: string): Promise<void> {
+/** Removes a device row this call inserted. The refusal's code, or null when it worked. */
+async function forgetDevice(admin: AdminClient, userId: string, hash: string): Promise<string | null> {
   const { error } = await admin
     .from('user_login_devices')
     .delete()
     .eq('user_id', userId)
     .eq('device_hash', hash);
-  if (error) {
-    throw new Error(
-      `user_login_devices delete after an uncounted alert refused (${error.code ?? 'no code'})`,
-    );
-  }
+  return error ? (codeOf(error) ?? 'no code') : null;
 }
 
-async function forgetCountry(admin: AdminClient, userId: string, country: string): Promise<void> {
+/** Removes a country row this call inserted. The refusal's code, or null when it worked. */
+async function forgetCountry(admin: AdminClient, userId: string, country: string): Promise<string | null> {
   const { error } = await admin
     .from('user_sign_in_countries')
     .delete()
     .eq('user_id', userId)
     .eq('country', country);
-  if (error) {
-    throw new Error(`user_sign_in_countries delete refused (${error.code ?? 'no code'})`);
+  return error ? (codeOf(error) ?? 'no code') : null;
+}
+
+/**
+ * ONE take-back, on its own (review 1, finding 5): whether it is refused or
+ * throws, it is reported once (which row, and the refusal's code only) and
+ * nothing is thrown, so the other take-back and everything after it still
+ * run. A row that could not be taken back stays recorded as seen.
+ */
+async function takeBack(
+  row: 'device' | 'country',
+  forget: () => Promise<string | null>,
+): Promise<void> {
+  let code: string | null = null;
+  try {
+    code = await forget();
+    if (code === null) return;
+  } catch {
+    // Reported below with no code: the failure's own text is never carried.
   }
+  void reportError(new Error('A row a sign-in added could not be taken back'), {
+    tag: 'auth.sign_in_note_undo_failed',
+    level: 'warning',
+    extra: { row, code },
+  });
 }
 
 /**
@@ -278,18 +334,30 @@ async function insertAlertRow(
  * never recorded. A 23505 means another sign-in recorded it first, and that
  * call alerts; any other refusal is reported, and nothing is sent.
  *
- * Alerts are counted (S79), both buckets closed: nothing is sent without a
- * count.
- *   - per account: NEW_DEVICE_ALERTS_PER_ACCOUNT a day, for the alert as a
- *     whole (a new country counts as a new device does). The email that
- *     reaches the count says that no more will come for 24 hours. Past it the
- *     rows are recorded with no alert row, no email and no event; the first
- *     alert held in a window is reported once (auth.new_device_alerts_held)
- *     with the first 16 hex characters of the SHA-256 of the account id, which
- *     the operator matches by hashing account ids. When the limiter cannot
- *     answer, the device row AND the country row this call inserted are
- *     removed, so both are still new at the next sign-in, and nothing is
- *     sent.
+ * Alerts are counted (S79), every bucket closed: nothing is written or sent
+ * without a count.
+ *   - per account, the alert's ROW: SIGN_IN_ALERT_ROWS_PER_ACCOUNT a day, a
+ *     hard ceiling asked first. Past it nothing is learned and nothing is
+ *     written or sent: the device row and the country row this call inserted
+ *     are removed, so both are still new at the next sign-in, and the first
+ *     sign-in turned away in a window is reported once
+ *     (auth.sign_in_alert_rows_ceiling).
+ *   - per account, the alert's EMAIL: NEW_DEVICE_ALERTS_PER_ACCOUNT a day (a
+ *     new country counts as a new device does). The email that reaches the
+ *     count says that no more will come for 24 hours. Past it ONLY THE EMAIL
+ *     IS HELD (review 1, finding 6): the alert's row is still written, so
+ *     the sign-in shows with its alert in Active sessions and in the
+ *     organization's list, the device and the country are learned as before
+ *     (the row stands for them, and a "This was not me" on it forgets them),
+ *     and the organizations' events below still go, paced by their own
+ *     count. The first email held in a window is reported once
+ *     (auth.new_device_alerts_held) with the first 16 hex characters of the
+ *     SHA-256 of the account id, which the operator matches by hashing
+ *     account ids. A held email whose row could not be written either
+ *     would leave no trace, so its notes are taken back instead.
+ *   - when either bucket cannot answer, the device row AND the country row
+ *     this call inserted are removed, each on its own (takeBack), so both
+ *     are still new at the next sign-in, and nothing is written or sent.
  *   - per organization: NEW_DEVICE_EVENTS_PER_ORGANIZATION
  *     security.new_device_login events an hour, so the organization's
  *     channels are not flooded; the person's own email is not held by it.
@@ -347,6 +415,31 @@ export async function noteLoginDevice(args: {
     const newCountry = countryNote.alerts;
     if (!(newDevice || newCountry) || !args.email) return;
 
+    // Neither row this sign-in added is left recorded as seen, so its next
+    // sign-in is still new. Each take-back runs whatever the other one did.
+    const undoNotes = async () => {
+      if (device.insertedNow) await takeBack('device', () => forgetDevice(admin, args.userId, hash));
+      if (countryNote.insertedNow && country) {
+        await takeBack('country', () => forgetCountry(admin, args.userId, country));
+      }
+    };
+
+    // The ceiling on alert rows first: past it, or without a count, nothing
+    // is learned and nothing is written.
+    const rows = await checkRateLimit(
+      `sign-in-alert-rows:user:${args.userId}`,
+      SIGN_IN_ALERT_ROWS_PER_ACCOUNT,
+      NEW_DEVICE_ALERT_WINDOW_MS,
+      'closed',
+    );
+    if (!rows.allowed) {
+      await undoNotes();
+      if (!rows.failed) await reportRowsCeiling(args.userId);
+      return;
+    }
+
+    // Then the count of alert emails. Could not count: nothing is written or
+    // sent. Over the count: only the email is held.
     const alert = await checkRateLimit(
       `new-device-alert:user:${args.userId}`,
       NEW_DEVICE_ALERTS_PER_ACCOUNT,
@@ -354,16 +447,11 @@ export async function noteLoginDevice(args: {
       'closed',
     );
     if (alert.failed) {
-      // Could not count: nothing is sent, and neither row this sign-in added
-      // is left recorded as seen, so its next sign-in is still new.
-      if (device.insertedNow) await forgetDevice(admin, args.userId, hash);
-      if (countryNote.insertedNow && country) await forgetCountry(admin, args.userId, country);
+      await undoNotes();
       return;
     }
-    if (!alert.allowed) {
-      await reportAlertsHeld(args.userId);
-      return;
-    }
+    const emailHeld = !alert.allowed;
+    if (emailHeld) await reportAlertsHeld(args.userId);
 
     const alertId = await insertAlertRow(admin, {
       user_id: args.userId,
@@ -381,17 +469,26 @@ export async function noteLoginDevice(args: {
       city: place.city,
     });
 
-    await sendNewDeviceLoginEmail({
-      to: args.email,
-      userAgent: ua,
-      ip: args.ip,
-      deviceLabel: label,
-      lastForADay: alert.count === NEW_DEVICE_ALERTS_PER_ACCOUNT,
-      place,
-      newDevice,
-      newCountry,
-      notMeUrl: alertId ? signInAlertLinkUrl({ alertId, userId: args.userId }) : null,
-    });
+    if (emailHeld && alertId === null) {
+      // No email and no row: this sign-in would leave no trace of its alert.
+      // Nothing is learned from it, so its next sign-in is still new.
+      await undoNotes();
+      return;
+    }
+
+    if (!emailHeld) {
+      await sendNewDeviceLoginEmail({
+        to: args.email,
+        userAgent: ua,
+        ip: args.ip,
+        deviceLabel: label,
+        lastForADay: alert.count === NEW_DEVICE_ALERTS_PER_ACCOUNT,
+        place,
+        newDevice,
+        newCountry,
+        notMeUrl: alertId ? signInAlertLinkUrl({ alertId, userId: args.userId }) : null,
+      });
+    }
 
     if (newDevice) {
       // Security feed: also surface the new device in each of the user's orgs'
@@ -450,7 +547,29 @@ export async function noteLoginDevice(args: {
 }
 
 /**
- * One report per account per window when its new-device alerts are held: a
+ * One report per account per window when its sign-in alerts meet the ceiling
+ * on rows: a hash of the account id only, never the email, the address, the
+ * device or the place. Its own bucket, closed, so a limiter that cannot
+ * answer reports nothing here (lib/rate-limit logs the failure).
+ */
+async function reportRowsCeiling(userId: string): Promise<void> {
+  const first = await checkRateLimit(
+    `sign-in-alert-rows-held:user:${userId}`,
+    1,
+    NEW_DEVICE_ALERT_WINDOW_MS,
+    'closed',
+  );
+  if (!first.allowed) return;
+  void reportError(new Error('Sign-in alerts for an account met the daily ceiling on alert rows'), {
+    tag: 'auth.sign_in_alert_rows_ceiling',
+    level: 'warning',
+    userIdHash: createHash('sha256').update(userId).digest('hex').slice(0, 16),
+    extra: { limit: SIGN_IN_ALERT_ROWS_PER_ACCOUNT, window_hours: 24 },
+  });
+}
+
+/**
+ * One report per account per window when its alert emails are held: a
  * hash of the account id only, never the email, the address or the device.
  * Its own bucket, closed, so a limiter that cannot answer reports nothing
  * here (lib/rate-limit logs the failure).
