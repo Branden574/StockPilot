@@ -1893,6 +1893,36 @@ describe('review 4 finding 5: active rows are read on their own, never cut off b
     expect(world.bridges.has(userId)).toBe(true);
     expect((await panelFor(userId))?.passkeys.map((p) => p.id)).toEqual([passkeyId]);
   });
+
+  it('the newest removal decides: an older removal beside it does not turn a removal to finish (S7) into S17', async () => {
+    const { userId, passkeyId } = await memberWithPasskey();
+    const row = world.passkeys.find((p) => p.id === passkeyId)!;
+    const bridge = world.bridges.get(userId)!;
+    row.removed_at = new Date(Date.now() + 1_000).toISOString();
+    row.removed_reason = 'member';
+    world.passkeys.push({
+      ...row,
+      id: crypto.randomUUID(),
+      credential_id: 'sample-removed-long-ago',
+      removed_at: new Date(Date.now() - 24 * 60 * 60_000).toISOString(),
+    });
+    expect(await pk.startSecondStep()).toMatchObject({
+      ok: true,
+      start: { kind: 'removal_finished' },
+    });
+    expect(world.calls.deleteFactor).toEqual([bridge.factor_id]);
+  });
+
+  it('a full page of active rows is not believed: closed, nothing finished', async () => {
+    const { userId, passkeyId } = await memberWithPasskey();
+    const active = world.passkeys.find((p) => p.id === passkeyId)!;
+    for (let i = 0; i < 24; i += 1) {
+      world.passkeys.push({ ...active, id: crypto.randomUUID(), credential_id: `sample-active-${i}` });
+    }
+    expect(await pk.passkeyStepFor(userId, factorsOfAccount(userId))).toBe('none');
+    expect(await pk.startSecondStep()).toMatchObject({ ok: false, reason: 'records_unreadable' });
+    expect(world.calls.deleteFactor).toEqual([]);
+  });
 });
 
 describe('review 4 finding 6: truly dark (no site, no key, or the kill switch off, and no reserved-name factor)', () => {
@@ -1994,6 +2024,9 @@ describe('review 4 finding 8: a failed Add leaves nothing that blocks the next o
   it('a verified reserved-name factor is never deleted by the clean-up (a second passkey beside a leftover)', async () => {
     const { soft, userId } = await memberWithPasskey();
     const bridge = world.bridges.get(userId)!;
+    // S15 beside it: a verified reserved-name factor that is not the bridge.
+    const verifiedOther = { ...leftoverFactor(userId), status: 'verified' as const };
+    world.factors = world.factors.map((f) => (f.id === verifiedOther.id ? verifiedOther : f));
     const leftover = leftoverFactor(userId);
     world.signIn(userId, 'aal2');
     const confirm = optionsOf(await pk.startConfirmAdd());
@@ -2003,6 +2036,7 @@ describe('review 4 finding 8: a failed Add leaves nothing that blocks the next o
     expect(start.ok).toBe(true);
     expect(world.calls.deleteFactor).toEqual([leftover.id]);
     expect(world.calls.deleteFactor).not.toContain(bridge.factor_id);
+    expect(world.calls.deleteFactor).not.toContain(verifiedOther.id);
   });
 
   it('the finish clears a leftover made after the start, before it enrols', async () => {
