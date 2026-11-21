@@ -30,6 +30,7 @@ import { rejectAllPending } from './queue';
 import { getRememberedIdentity } from './remembered-identity';
 import { abortAllInFlight } from './request-cancellation';
 import { lastSeenSessionUserId } from './session-scope';
+import { forgetSetUpInputs } from './set-up-inputs';
 import { readDeviceAuthSession, supabase } from './supabase';
 
 import { isDisableRevocation } from '@stockpilot/core';
@@ -298,6 +299,9 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
           } catch (e) {
             console.warn('[account-gate] could not hold the order requests on this device', e);
           }
+          // The authenticator policy inputs held this run go first, so
+          // nothing saves them back after the keys are removed.
+          await forgetSetUpInputs();
           const keys = accountScopedStorageKeys(await AsyncStorage.getAllKeys());
           if (keys.length > 0) await AsyncStorage.multiRemove(keys);
         },

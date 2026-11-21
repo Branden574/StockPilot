@@ -1,8 +1,9 @@
 import { isRefusedBeforeAnyWrite } from '@stockpilot/core';
 
-import { classifyDrainFailure } from './drain-failure';
+import { classifyDrainFailure, keptForSetUpCheck } from './drain-failure';
 import { UNCONFIRMED_SETTLE_MS } from './unconfirmed-stock';
 
+import type { SetUpAnswer } from './set-up-inputs';
 import type { AdjustStockBody } from './stock-api';
 
 /**
@@ -26,8 +27,9 @@ import type { AdjustStockBody } from './stock-api';
  * the phone can prove about the attempt, never retried on hope:
  *
  *   • ok (2xx): written; the row is deleted.
- *   • REJECTED: the server evaluated it and refused (400, 403, 409, 422, a
- *     404 carrying our JSON code, a 401 on a disabled account — the rule
+ *   • REJECTED: the server evaluated it and refused (400, 409, 422, a 403
+ *     judged not about the authenticator, a 404 carrying our JSON code, a 401 on
+ *     a disabled account — the rule
  *     drain-failure.ts applies to every kind), or the row is malformed.
  *     Nothing was written. Parked in Settings > Unsent work with the item
  *     and the server's reason.
@@ -37,6 +39,11 @@ import type { AdjustStockBody } from './stock-api';
  *     401 on a live account (withApiContext refuses first), a 429 (the rate
  *     limit runs first, and an edge 429 never reaches the route) or a
  *     framework 404 with no JSON code (no such route on that server).
+ *   • HELD FOR SET-UP (retried, see below): a 403 that is not final yet
+ *     (drain-failure.ts: the authenticator answer, or any 403 before a check
+ *     of the workspace's authenticator policy). The route refuses at its
+ *     permission check, before it writes, so the row stays queued and this
+ *     scope's later adjustments wait, as for REFUSED BEFORE ANY WRITE.
  *   • REFUSED BEFORE ANY WRITE (retried next pass, see below): the 503 the
  *     server marks as such because it could not check the caller's access
  *     (docket S26), recognised only by core's isRefusedBeforeAnyWrite. Not
@@ -161,7 +168,12 @@ export function parseQueuedAdjust(payload: Record<string, unknown>): QueuedAdjus
   };
 }
 
-export type AdjustDrainVerdict = 'rejected' | 'failed' | 'refused-before-write' | 'unconfirmed';
+export type AdjustDrainVerdict =
+  | 'rejected'
+  | 'failed'
+  | 'held-for-set-up'
+  | 'refused-before-write'
+  | 'unconfirmed';
 
 /**
  * What one failed send of an `adjust_stock` row means. See the header for
@@ -170,16 +182,22 @@ export type AdjustDrainVerdict = 'rejected' | 'failed' | 'refused-before-write' 
  */
 export function adjustDrainVerdict(
   err: unknown,
-  opts: { accountDisabled: boolean; handedOff: boolean },
+  opts: { accountDisabled: boolean; handedOff: boolean; setUp: SetUpAnswer },
 ): AdjustDrainVerdict {
   if (err instanceof QueuedAdjustInvalidError) return 'rejected';
   if (!opts.handedOff) return 'failed';
   // Whatever the account's state: a disabled account's rows are rejected in
   // bulk by the eviction, and this answer proves only that nothing was written.
   if (isRefusedBeforeAnyWrite(err)) return 'refused-before-write';
-  if (classifyDrainFailure(err, { accountDisabled: opts.accountDisabled }) === 'rejected') {
+  if (
+    classifyDrainFailure(err, { accountDisabled: opts.accountDisabled, setUp: opts.setUp }) ===
+    'rejected'
+  ) {
     return 'rejected';
   }
+  // A 403 that was not final: refused at the permission check, before any
+  // write, and kept for the authenticator check (drain-failure.ts).
+  if (keptForSetUpCheck(err)) return 'held-for-set-up';
   const e = err as { status?: unknown } | null | undefined;
   const status = typeof e?.status === 'number' ? e.status : null;
   // Answered before the route could write (a 404 WITH our code was a verdict

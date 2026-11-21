@@ -36,11 +36,16 @@ const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*
 /** Collapse formatting so a prettier line-break cannot fail a wiring pin. */
 const flat = (src: string) => code(src).replace(/\s+/g, ' ');
 
-/** The one call both engines must make, however the formatter wraps it. */
-const CLASSIFY_CALL = 'classifyDrainFailure(e, { accountDisabled: getAccountDisabled(), })';
-const classifies = (src: string) =>
-  flat(src).includes(CLASSIFY_CALL) ||
-  flat(src).includes('classifyDrainFailure(e, { accountDisabled: getAccountDisabled() })');
+/**
+ * The one call both engines must make, however the formatter wraps it: the
+ * live account state, and the row workspace's authenticator set-up answer
+ * from reads that started after this row's own kept 403 (set-up-inputs.ts).
+ */
+const CLASSIFY_CALL = (rowName: string) =>
+  `classifyDrainFailure(e, { accountDisabled: getAccountDisabled(), setUp: setUpAnswerAfterRefusal(decision.userId, decision.orgId, ${rowName}.idempotencyKey), })`;
+const classifies = (src: string, rowName: string) =>
+  flat(src).includes(CLASSIFY_CALL(rowName)) ||
+  flat(src).includes(CLASSIFY_CALL(rowName).replace(', })', ' })'));
 
 const sync = read('./sync.ts');
 const cycleSync = read('./cycle-count-sync.ts');
@@ -65,9 +70,11 @@ const drainOutbox = (() => {
 
 describe('engine 1 — sync.ts drainQueue', () => {
   it('classifies every drain failure against the live account state', () => {
-    expect(sync).toContain("import { classifyDrainFailure } from './drain-failure'");
+    expect(sync).toContain(
+      "import { classifyDrainFailure, keptForSetUpCheck, keptRowDue } from './drain-failure'",
+    );
     expect(sync).toContain("import { getAccountDisabled } from './account-disabled-state'");
-    expect(classifies(sync)).toBe(true);
+    expect(classifies(sync, 'action')).toBe(true);
   });
 
   it('writes the TERMINAL status on a rejection, not another retryable failure', () => {
@@ -89,9 +96,11 @@ describe('engine 1 — sync.ts drainQueue', () => {
 
 describe('engine 2 — CycleCountSyncEngine (the flagship offline flow)', () => {
   it('classifies its failures with the SAME predicate as engine 1', () => {
-    expect(cycleSync).toContain("import { classifyDrainFailure } from './drain-failure'");
+    expect(cycleSync).toContain(
+      "import { classifyDrainFailure, keptForSetUpCheck } from './drain-failure'",
+    );
     expect(cycleSync).toContain("import { getAccountDisabled } from './account-disabled-state'");
-    expect(classifies(cycleSync)).toBe(true);
+    expect(classifies(cycleSync, 'row')).toBe(true);
   });
 
   it('does NOT bump the retry counter on a rejection — that is the forever-retry path', () => {

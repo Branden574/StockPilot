@@ -86,6 +86,10 @@ vi.mock('./cycle-count-sync', () => ({ cycleCountSync: { forceSync: drains.force
 
 /** A membership read a test holds open (a slow connection), or none. */
 const membershipRead = vi.hoisted(() => ({ gate: null as Promise<void> | null }));
+/** What the warehouse read answers (none unless a test sets some). */
+const warehouseRead = vi.hoisted(() => ({
+  rows: [] as { id: string; name: string; status: string }[],
+}));
 
 vi.mock('./supabase', () => {
   // u1 is a member of A, B and C; its default is A.
@@ -94,11 +98,28 @@ vi.mock('./supabase', () => {
     eq: () => members,
     not: async () => {
       if (membershipRead.gate) await membershipRead.gate;
+      // Each organization embedded as the real read selects it (name,
+      // mfa_policy). 'optional' asks nothing of staff, so the authenticator
+      // set-up hold (set-up-hold.ts) never holds these loads; a row whose
+      // policy cannot be read is its could-not-check, which reads no
+      // warehouses and pulls nothing.
       return {
         data: [
-          { role: 'staff', organization_id: 'org-a', organizations: { name: 'A' } },
-          { role: 'staff', organization_id: 'org-b', organizations: { name: 'B' } },
-          { role: 'staff', organization_id: 'org-c', organizations: { name: 'C' } },
+          {
+            role: 'staff',
+            organization_id: 'org-a',
+            organizations: { name: 'A', mfa_policy: 'optional' },
+          },
+          {
+            role: 'staff',
+            organization_id: 'org-b',
+            organizations: { name: 'B', mfa_policy: 'optional' },
+          },
+          {
+            role: 'staff',
+            organization_id: 'org-c',
+            organizations: { name: 'C', mfa_policy: 'optional' },
+          },
         ],
         error: null,
       };
@@ -112,7 +133,7 @@ vi.mock('./supabase', () => {
   const warehouses = {
     select: () => warehouses,
     eq: () => warehouses,
-    order: async () => ({ data: [], error: null }),
+    order: async () => ({ data: warehouseRead.rows, error: null }),
   };
   return {
     supabase: {
@@ -167,6 +188,7 @@ beforeEach(() => {
     .mockReset()
     .mockImplementation(async () => {});
   membershipRead.gate = null;
+  warehouseRead.rows = [];
 });
 
 describe("the workspace load uses only this account's saved workspace", () => {
@@ -307,7 +329,7 @@ describe('the workspace and its owner are saved as one value, in one write (inte
     expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-b', ownerId: 'u1' });
   });
 
-  it('a switch with no account known saves nothing and fails: the previous workspace stays on screen and in storage', async () => {
+  it('a switch with no account known saves nothing, shows nothing and fails: the previous workspace stays in storage', async () => {
     put({ orgId: 'org-a', ownerId: 'u1' });
     useWorkspace();
     await settled();
@@ -316,12 +338,15 @@ describe('the workspace and its owner are saved as one value, in one write (inte
     storage.removeItem.mockClear();
 
     emitAuth(null); // nobody known (the first version removed the owner here)
+    // The sign-out itself clears the workspace in memory; the switch shows nothing after it.
+    const before = published.length;
     try {
       await expect(setActiveOrg('org-c')).rejects.toThrow();
       expect(storage.setItem).not.toHaveBeenCalled();
       expect(storage.removeItem).not.toHaveBeenCalled();
       expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-a', ownerId: 'u1' });
-      expect(shown()).toBe('org-a');
+      expect(published.length).toBe(before);
+      expect(shown()).toBeNull();
     } finally {
       emitAuth('u1');
     }
@@ -613,9 +638,10 @@ describe('a cache repair that did not finish is still owed', () => {
     );
     useWorkspace();
     await vi.waitFor(() => expect(deleteOrgData).toHaveBeenCalledTimes(1));
-    const before = published.length;
     emitAuth('u2'); // "Use a different account": u1's load is abandoned
     auth.user = { id: 'u2' };
+    // The account change itself clears the workspace in memory; the abandoned load shows nothing after it.
+    const before = published.length;
     try {
       wipeDone(); // the wipe runs after all
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -835,8 +861,9 @@ describe('a cache repair that did not finish is still owed', () => {
         try {
           useWorkspace(); // u1's load records the repair, and waits for the write
           await vi.waitFor(() => expect(writes.asked()).toBe(1));
-          const before = published.length;
           emitAuth(next);
+          // The account change itself clears the workspace in memory; nothing is shown after it.
+          const before = published.length;
           writes.release(0);
           await new Promise((resolve) => setTimeout(resolve, 30));
           expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-z', ownerId: 'u1' });
@@ -863,14 +890,15 @@ describe('a cache repair that did not finish is still owed', () => {
         try {
           const switching = setActiveOrg('org-c');
           await vi.waitFor(() => expect(writes.asked()).toBe(1));
-          const before = published.length;
           emitAuth(next);
+          // The account change itself clears the workspace in memory; nothing is shown after it.
+          const before = published.length;
           writes.release(0);
           await switching;
           expect(savedWorkspaceIn(store)).toEqual({ orgId: 'org-a', ownerId: 'u1' });
           expect(deleteOrgData).not.toHaveBeenCalled();
           expect(published.length).toBe(before);
-          expect(shown()).toBe('org-a');
+          expect(shown()).toBeNull();
         } finally {
           writes.releaseAll();
           emitAuth('u1');
@@ -891,8 +919,9 @@ describe('a cache repair that did not finish is still owed', () => {
           await vi.waitFor(() => expect(writes.asked()).toBe(1));
           const switching = setActiveOrg('org-c'); // the person picks C
           await vi.waitFor(() => expect(writes.asked()).toBe(2));
-          const before = published.length;
           emitAuth(next);
+          // The account change itself clears the workspace in memory; nothing is shown after it.
+          const before = published.length;
           writes.release(0);
           writes.release(1);
           await switching;
@@ -1111,5 +1140,132 @@ describe("today's phones: the upgrade from the older single workspace key", () =
       send: true,
       orgId: 'org-a',
     });
+  });
+});
+
+/**
+ * WHEN THE ACCOUNT CHANGES, the workspace held in memory goes with it, whether
+ * or not a screen is mounted. The set-up holding screen and the sign-in
+ * screens mount none, so a sign-out from the holding screen reaches the next
+ * account's first screen with no screen in between. That screen starts from
+ * no workspace (loading: its own load is still to run), never from the
+ * previous account's name, organizations or warehouses, however long its own
+ * membership read takes. The same account (a token refresh, its user read
+ * again) keeps what it has.
+ */
+describe('an account change clears the workspace in memory, with no screen mounted', () => {
+  type Shown = {
+    loading: boolean;
+    orgs: unknown[];
+    activeOrgId: string | null;
+    activeOrgName: string | null;
+    activeRole: string | null;
+    warehouses: unknown[];
+    activeWarehouseId: string | null;
+    activeWarehouseName: string | null;
+  };
+  const nothingShown = {
+    orgs: [],
+    activeOrgId: null,
+    activeOrgName: null,
+    activeRole: null,
+    warehouses: [],
+    activeWarehouseId: null,
+    activeWarehouseName: null,
+  };
+
+  /** u1, a member of A whose warehouse North Depot is the one chosen. */
+  function u1InA() {
+    warehouseRead.rows = [{ id: 'wh-1', name: 'North Depot', status: 'active' }];
+    store.set('workspace.activeWarehouseId.org-a', 'wh-1');
+    auth.user = { id: 'u1' };
+  }
+
+  /** What u1's load shows; the passes that load asked for are forgotten. */
+  function expectU1ShownInA() {
+    expect(published.at(-1)).toMatchObject({
+      activeOrgId: 'org-a',
+      activeOrgName: 'A',
+      activeWarehouseId: 'wh-1',
+      activeWarehouseName: 'North Depot',
+    });
+    drains.syncNow.mockClear();
+    drains.syncAfterRunning.mockClear();
+    drains.forceSync.mockClear();
+  }
+
+  it("a sign-out, then the next account: its first screen reads no workspace, and nothing of the previous account's is published while its own read is out", async () => {
+    u1InA();
+    useWorkspace(); // u1's screen: its workspace load
+    await settled();
+    expectU1ShownInA();
+    let answer!: () => void;
+    membershipRead.gate = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    try {
+      const before = published.length;
+      // Signed out from a screen that mounts no workspace (the holding screen).
+      auth.user = null;
+      emitAuth(null);
+      const atSignOut = published.at(-1);
+      // The next account signs in.
+      auth.user = { id: 'u2' };
+      emitAuth('u2');
+      const atSignIn = published.at(-1);
+
+      // Its first screen mounts while its membership read is out.
+      const first = useWorkspace() as Shown;
+      expect(first).toEqual({ loading: true, ...nothingShown });
+      // Nobody signed in: no workspace, not loading (as a mounted screen's own reset).
+      expect(atSignOut).toEqual({ loading: false, ...nothingShown });
+      expect(atSignIn).toEqual({ loading: true, ...nothingShown });
+      // The account change itself asks for no pull and no pass.
+      expect(drains.syncNow).not.toHaveBeenCalled();
+      expect(drains.syncAfterRunning).not.toHaveBeenCalled();
+      expect(drains.forceSync).not.toHaveBeenCalled();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const since = published.slice(before) as unknown as Shown[];
+      expect(since.length).toBeGreaterThan(0);
+      for (const state of since) expect(state).toMatchObject(nothingShown);
+      expect(published.at(-1)?.loading).toBe(true);
+    } finally {
+      answer();
+      await settled();
+      auth.user = { id: 'u1' };
+      emitAuth('u1');
+    }
+  });
+
+  it('the same account (a token refresh, its user read again) keeps its workspace, publishes nothing and pulls nothing', async () => {
+    u1InA();
+    useWorkspace(); // u1's screen: its workspace load
+    await settled();
+    expectU1ShownInA();
+    const before = published.length;
+    auth.listener?.('TOKEN_REFRESHED', { user: { id: 'u1' } });
+    auth.listener?.('USER_UPDATED', { user: { id: 'u1' } });
+    expect(published.length).toBe(before);
+
+    // The next screen that mounts starts from what is shown.
+    const first = useWorkspace() as Shown;
+    expect(first).toMatchObject({
+      loading: false,
+      activeOrgId: 'org-a',
+      activeOrgName: 'A',
+      activeWarehouseId: 'wh-1',
+      activeWarehouseName: 'North Depot',
+    });
+    expect(first.orgs).toHaveLength(3);
+    expect(first.warehouses).toEqual([{ id: 'wh-1', name: 'North Depot' }]);
+    await settled();
+    expect(
+      (published.slice(before) as unknown as Shown[]).some(
+        (state) => state.activeOrgId !== 'org-a' || state.activeOrgName !== 'A',
+      ),
+    ).toBe(false);
+    expect(drains.syncNow).not.toHaveBeenCalled();
+    expect(drains.syncAfterRunning).not.toHaveBeenCalled();
+    expect(drains.forceSync).not.toHaveBeenCalled();
   });
 });

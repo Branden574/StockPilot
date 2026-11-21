@@ -219,6 +219,30 @@ describe("counters see the live account's rows only (the critic's correction 4)"
   });
 });
 
+describe("the holding screen's tally: this account's rows sent under one workspace", () => {
+  beforeEach(() => {
+    seed({ id: 1, user: 'u1', org: 'org-a' }); // mine, the held workspace
+    seed({ id: 2, user: 'u1', org: 'org-a', status: 'failed' }); // mine, waiting to retry
+    seed({ id: 3, user: 'u1', org: 'org-b' }); // mine, another workspace
+    seed({ id: 4, user: null, org: null }); // legacy, no workspace of its own
+    seed({ id: 5, user: 'u2', org: 'org-a' }); // another account's
+    seed({ id: 6, user: 'u1', org: 'org-a', status: 'rejected' }); // a record, not waiting
+  });
+
+  it('counts the held workspace only, and rows with none of their own when it is the saved one', async () => {
+    expect(await cache.pendingCountInWorkspace('org-a')).toBe(3);
+    expect(await cache.pendingCountInWorkspace('org-b')).toBe(1);
+    // The badge's tally is every workspace's.
+    expect(await cache.totalPendingCount()).toBe(4);
+  });
+
+  it('rows with no workspace of their own are sent under the saved workspace, so only it counts them', async () => {
+    live.orgId = 'org-b';
+    expect(await cache.pendingCountInWorkspace('org-a')).toBe(2);
+    expect(await cache.pendingCountInWorkspace('org-b')).toBe(2);
+  });
+});
+
 describe('Unsent work: rejected rows are per account', () => {
   it('countRejected / listRejected / clearRejected touch only the live account’s record (and legacy rows)', async () => {
     seed({ id: 1, user: 'u1', status: 'rejected' });

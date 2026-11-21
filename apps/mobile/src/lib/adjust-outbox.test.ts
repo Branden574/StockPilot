@@ -92,7 +92,7 @@ describe('the queued row carries the online body, plus what the operator needs',
 });
 
 describe('adjustDrainVerdict — AT MOST ONCE', () => {
-  const live = { accountDisabled: false, handedOff: true };
+  const live = { accountDisabled: false, handedOff: true, setUp: 'clear' as const };
 
   it('a request never handed to fetch is retried, whatever the error', () => {
     expect(adjustDrainVerdict(new Error('Network request failed'), { ...live, handedOff: false })).toBe(
@@ -109,6 +109,20 @@ describe('adjustDrainVerdict — AT MOST ONCE', () => {
 
   it.each([400, 403, 409, 422])('a definitive %i refusal is rejected (nothing was written)', (s) => {
     expect(adjustDrainVerdict(httpError(s, 'forbidden'), live)).toBe('rejected');
+  });
+
+  it('a 403 that is not final is kept for set-up, never "Not confirmed": the route refused before writing', () => {
+    const setUp = Object.assign(httpError(403, 'forbidden'), { details: { reason: 'mfa_required' } });
+    for (const answer of ['clear', 'owed', 'unknown'] as const) {
+      expect(adjustDrainVerdict(setUp, { ...live, setUp: answer })).toBe('held-for-set-up');
+    }
+    for (const answer of ['owed', 'unknown'] as const) {
+      expect(adjustDrainVerdict(httpError(403, 'forbidden'), { ...live, setUp: answer })).toBe(
+        'held-for-set-up',
+      );
+    }
+    // Before the hand-off nothing left the phone: an ordinary retry.
+    expect(adjustDrainVerdict(setUp, { ...live, handedOff: false })).toBe('failed');
   });
 
   it("a 404 carrying our code (the item is gone) is rejected; a framework 404 is retried", () => {
@@ -149,7 +163,7 @@ describe('adjustDrainVerdict — AT MOST ONCE', () => {
 // provably not written, so it stays queued and is sent again, where a bare
 // 5xx is parked as not confirmed.
 describe('adjustDrainVerdict: a refusal marked as before any write', () => {
-  const live = { accountDisabled: false, handedOff: true };
+  const live = { accountDisabled: false, handedOff: true, setUp: 'clear' as const };
   const body = contextUnavailableBody();
   const marker = (o: { status?: number; code?: unknown; details?: unknown } = {}) =>
     Object.assign(new Error(body.message), {

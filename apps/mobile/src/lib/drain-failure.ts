@@ -13,8 +13,9 @@
  *   1. A 401 raised while the client already knows the account is disabled
  *      (the original rule): that write must never land when the account is
  *      re-enabled.
- *   2. A DEFINITIVE refusal from our own route — 400, 403, 409, 422, or a 404
- *      that carries a JSON error code. The server evaluated this exact
+ *   2. A DEFINITIVE refusal from our own route — 400, 409, 422, a 404 that
+ *      carries a JSON error code, or a 403 on evidence that it is not about
+ *      the authenticator (below). The server evaluated this exact
  *      request and said no: the count was posted or reassigned, the bundle
  *      is archived, the quantity is invalid, the permission is gone. Before
  *      this rule those rows stayed 'failed' and were re-sent every 60 s
@@ -36,12 +37,41 @@
  * arrives with no JSON body and stays retryable; a route's own
  * `{ error: 'not_found' }` is a verdict about the resource.
  *
+ * A 403 IS FINAL ONLY ON EVIDENCE THAT IT IS NOT ABOUT THE AUTHENTICATOR,
+ * and it is decided in one place (the 403 branch below). While a workspace's
+ * policy requires an authenticator the account has not set up, the server
+ * refuses every queued change there with a 403 (its answer has
+ * `details.reason` 'mfa_required' on the routes that forward details; some
+ * send the same sentence without them). That refusal says nothing about the
+ * change itself: the same row lands once the account has an authenticator.
+ * So a 403 is 'rejected' only when
+ *   - it names a reason, in `details.reason`, that is not the authenticator
+ *     one, or its code is 'module_disabled' (the organization has that
+ *     module off, which no authenticator set-up changes): the route judged
+ *     the change itself; or
+ *   - it names no reason, and the phone, from a read that STARTED after this
+ *     row's own kept refusal and returned the row's workspace, finds this
+ *     account owes no set-up there (`setUp` 'clear': set-up-inputs.ts
+ *     setUpAnswerAfterRefusal; a row with no kept refusal, and a workspace
+ *     missing from a read, answer 'unknown', never 'clear'). So each row's
+ *     first such refusal is kept.
+ * Anything else keeps the row ('failed'): the drain notes the refusal and the
+ * inputs are read again (keptForSetUpCheck, set-up-inputs.ts
+ * noteKeptRefusal), and while the row's workspace owes set-up the send
+ * decision holds it (outbox-scope.ts). A row kept this way is sent again
+ * only once its backoff has passed (keptRowDue). The authenticator answer itself
+ * ('mfa_required' or 'aal2_required', in `details.reason` or as the code) is
+ * never final, even when the phone's read says nothing is owed: the server
+ * holds a member whose policy it could not read to the strictest one.
+ *
  * Note on ordering: the disabled flag is raised asynchronously by the auth
  * probe that `notifyUnauthorized` kicks off, so the FIRST 401 of a drain can
  * still classify as 'failed'. That is deliberate and safe — the row stays
  * retryable, the next tick re-reads it, and by then the probe has resolved and
  * the row goes terminal. It converges toward rejection, never away from it.
  */
+import type { SetUpAnswer } from './set-up-inputs';
+
 export type DrainOutcome = 'rejected' | 'failed';
 
 /**
@@ -56,18 +86,72 @@ export type DrainOutcome = 'rejected' | 'failed';
 export const ACCOUNT_DISABLED_REJECTION =
   'Account disabled: this queued change was never sent.';
 
-/** Statuses that are a verdict on THIS request, from our own route. */
-const DEFINITIVE_REFUSALS: ReadonlySet<number> = new Set([400, 403, 409, 422]);
+/**
+ * Statuses that are a verdict on THIS request, from our own route. A 403 is
+ * not among them: it is decided in its own branch of classifyDrainFailure.
+ */
+const DEFINITIVE_REFUSALS: ReadonlySet<number> = new Set([400, 409, 422]);
+
+/** The reasons a 403 carries when it is the authenticator answer, not one about the change. */
+const AUTHENTICATOR_REASONS: ReadonlySet<string> = new Set(['mfa_required', 'aal2_required']);
+
+/** The route's app-authored `details.reason`, or null. */
+function detailsReason(details: unknown): string | null {
+  if (!details || typeof details !== 'object') return null;
+  const reason = (details as { reason?: unknown }).reason;
+  return typeof reason === 'string' ? reason : null;
+}
 
 export function classifyDrainFailure(
   err: unknown,
-  opts: { accountDisabled: boolean },
+  opts: {
+    accountDisabled: boolean;
+    /** The row workspace's answer from reads that started after this row's kept refusal. */
+    setUp: SetUpAnswer;
+  },
 ): DrainOutcome {
-  const e = err as { status?: unknown; code?: unknown } | null | undefined;
+  const e = err as { status?: unknown; code?: unknown; details?: unknown } | null | undefined;
   const status = typeof e?.status === 'number' ? e.status : null;
   if (status === null) return 'failed';
   if (status === 401) return opts.accountDisabled ? 'rejected' : 'failed';
+  if (status === 403) {
+    const reason = detailsReason(e?.details);
+    if (reason !== null && AUTHENTICATOR_REASONS.has(reason)) return 'failed';
+    if (typeof e?.code === 'string' && AUTHENTICATOR_REASONS.has(e.code)) return 'failed';
+    if (reason !== null || e?.code === 'module_disabled') return 'rejected';
+    return opts.setUp === 'clear' ? 'rejected' : 'failed';
+  }
   if (DEFINITIVE_REFUSALS.has(status)) return 'rejected';
   if (status === 404 && typeof e?.code === 'string' && e.code.length > 0) return 'rejected';
   return 'failed';
+}
+
+/**
+ * Whether a failure classifyDrainFailure did NOT reject was a 403 kept for a
+ * check of the authenticator policy (a 403 it did not keep is rejected). The drain
+ * then notes it and asks for the inputs to be read again
+ * (set-up-inputs.ts noteKeptRefusal).
+ */
+export function keptForSetUpCheck(err: unknown): boolean {
+  return (err as { status?: unknown } | null | undefined)?.status === 403;
+}
+
+/** The longest wait between two sends of a row kept for that check. */
+export const KEPT_ROW_MAX_BACKOFF_MS = 5 * 60 * 1000;
+
+/**
+ * Whether a row kept for the authenticator check may be sent again: the
+ * delay the count drain gives every retried row (cycle-count-cache.ts isDue),
+ * 2^attempts seconds after its last attempt, at most KEPT_ROW_MAX_BACKOFF_MS.
+ * The count drain applies that to its own rows; sync.ts applies this to its
+ * kept rows, so a long refusal sends each at most once per that cap.
+ */
+export function keptRowDue(
+  attempts: number | null | undefined,
+  lastAttemptAt: number | null | undefined,
+  now: number,
+): boolean {
+  if (!lastAttemptAt) return true;
+  const delay = Math.min(2 ** (attempts ?? 0) * 1000, KEPT_ROW_MAX_BACKOFF_MS);
+  return now - lastAttemptAt >= delay;
 }

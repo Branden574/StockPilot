@@ -83,7 +83,7 @@ function readings(err: unknown) {
   return {
     predicate: isRefusedBeforeAnyWrite(err),
     online: classifyAdjustFailure(err).kind,
-    queued: adjustDrainVerdict(err, { accountDisabled: false, handedOff: true }),
+    queued: adjustDrainVerdict(err, { accountDisabled: false, handedOff: true, setUp: 'clear' }),
     checkout: rentalCheckoutFailure(err, true).title,
     escalation: describeEscalateError(err).retryable,
   };
