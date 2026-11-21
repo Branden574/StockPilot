@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { headers } from 'next/headers';
 import { z } from 'zod';
 
+import { signOutThisSession } from '@/lib/auth/mfa-code-attempts';
 import { clientIpForRecord } from '@/lib/client-ip';
 import { actionErrorResult } from '@/server/lib/action-error-result';
 import { withContext } from '@/server/services/context';
@@ -80,12 +81,10 @@ export async function reportSignInAlertAction(input: {
         'We could not sign you out everywhere just now. Press the button again in a minute.',
       );
     }
-    // Every session of the account has ended; this browser's cookies go too.
-    try {
-      await ctx.supabase.auth.signOut({ scope: 'local' });
-    } catch {
-      // The session is already ended; the next page asks this browser to sign in.
-    }
+    // Every session of the account has ended; this browser's cookies go too
+    // (scope 'local': auth-js removes them even when GoTrue does not answer,
+    // and the helper never throws).
+    await signOutThisSession(ctx.supabase);
     return ok({ signedOut: true });
   } catch (e) {
     return actionErrorResult(e, 'actions.sign_in_alerts.report');
