@@ -141,38 +141,38 @@ describe('the token', () => {
 
 describe('the run', () => {
   it('answers 200 with counts, and writes one log line of counts and codes', async () => {
-    answer = (url) =>
-      new Response(
-        JSON.stringify({
-          result:
-            url.searchParams.get('iso_timestamp_start') === new Date(H04).toISOString()
-              ? [
-                  {
-                    minute: H04 / 1000 + 300,
-                    kind: 'token',
-                    status: '400',
-                    caller: 'phone',
-                    asn: '',
-                    country: 'NL',
-                    n: 3,
-                  },
-                  {
-                    minute: H04 / 1000 + 300,
-                    kind: 'token',
-                    status: '400',
-                    caller: 'server',
-                    asn: '64500',
-                    country: 'US',
-                    n: 9,
-                  },
-                ]
-              : [],
-          error: null,
-        }),
-      );
+    const lines = [
+      // The phone app: stored.
+      { kind: 'password', status: '400', caller: 'phone', network: 'other', country: 'NL', n: 3 },
+      // Our own server (its client string from a hosting network): not stored.
+      {
+        kind: 'password',
+        status: '400',
+        caller: 'server',
+        network: 'hosting',
+        country: 'US',
+        n: 9,
+      },
+      // Its client string from another network: stored as api.
+      { kind: 'password', status: '400', caller: 'server', network: 'other', country: 'US', n: 2 },
+    ];
+    answer = (url) => {
+      const totals = url.searchParams.get('sql')!.includes(' AS first_seen');
+      const inHour = url.searchParams.get('iso_timestamp_start') === new Date(H04).toISOString();
+      const result = !inHour
+        ? []
+        : totals
+          ? lines.map(({ country: _c, ...l }) => ({
+              ...l,
+              first_seen: '2026-11-21 04:05:00',
+              last_seen: '2026-11-21 04:05:00',
+            }))
+          : lines.map((l) => ({ ...l, minute: '2026-11-21 04:05:00' }));
+      return new Response(JSON.stringify({ result, error: null }));
+    };
     const { status, text, body } = await call();
     expect(status).toBe(200);
-    expect(body).toMatchObject({ ok: true, hoursRead: 6, hoursStored: 1, eventsStored: 3 });
+    expect(body).toMatchObject({ ok: true, hoursRead: 6, hoursStored: 1, eventsStored: 5 });
     expect(h.rpc).toHaveBeenCalledTimes(1);
 
     const line = logLine();
@@ -180,8 +180,12 @@ describe('the run', () => {
     const logged = JSON.parse(line.slice(line.indexOf(' ') + 1)) as Record<string, unknown>;
     expect(logged).toEqual(body);
     expect(logged).toMatchObject({
-      notStored: { our_server: 9, other_status: 0, unknown_network: 0 },
-      seen: { 'token 400 phone -': 3, 'token 400 server 64500': 9 },
+      notStored: { our_server: 9, other_status: 0, refresh: 0, unclassified: 0 },
+      seen: {
+        'password 400 phone other': 3,
+        'password 400 server hosting': 9,
+        'password 400 server other': 2,
+      },
     });
     // Counts and codes only: every text in it is a code, a status or an hour.
     const texts: string[] = [];

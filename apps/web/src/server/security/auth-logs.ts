@@ -17,31 +17,45 @@ import { createAdminClient } from '@/lib/supabase/admin';
  *
  * WHAT LEAVES SUPABASE. Two constant queries (AUTH_LOGS_GROUPS_SQL and
  * AUTH_LOGS_TOTALS_SQL) answer, for each group of lines: the minute, the kind
- * of request (a password sign-in or an authenticator code check), the
- * status, the caller's class (the client string reduced INSIDE the query to
- * phone, server, browser, other or none), the network number for
- * server-class lines only, the country (two capital letters, or empty) and a
- * count. Never an address, an email, an account, a path with an id, the
- * client string itself or a raw log line. The hour travels in the two
- * timestamp parameters; nothing is ever put into the SQL text. Every field
- * that comes back is checked before use (parseGroupRow, parseTotalsRow); a
- * row that fails is dropped and counted in the run's log line.
+ * of request, the status, the caller's class (the client string reduced
+ * INSIDE the query to phone, server, browser, other or none), the network's
+ * class (hosting or other, worked out inside the query from the network
+ * owner's name, which never leaves), the country (two capital letters, or
+ * empty) and a count. Never an address, an email, an account, a path, a query
+ * string, an id, the client string itself or a raw log line. The hour travels
+ * in the two timestamp parameters; nothing is ever put into the SQL text.
+ * Every field that comes back is checked before use (parseGroupRow,
+ * parseTotalsRow); a row that fails is dropped and counted in the run's log
+ * line.
+ *
+ * THE KIND is read the way the sign-in service reads the request: from the
+ * DECODED path, with the case it routes, and from the decoded grant_type of
+ * the query string. A sign-in with exactly one grant_type, `password`, is
+ * `password`; exactly one, `refresh_token`, is `refresh` (an ordinary expired
+ * session); anything else sent to the sign-in path is `token_other`. A code
+ * check on `/auth/v1/factors/<id>/verify` with a well-formed id is `verify`;
+ * any other form of it is `verify_other`. The id never leaves the query.
  *
  * WHAT IS STORED (classifyAuthLogLine):
  *   - a password sign-in answered 400: password_guessing / wrong_password;
- *   - a code check answered 422 or 400: password_guessing / wrong_code;
+ *   - a code check answered 422: password_guessing / wrong_code;
  *   - either answered 429, Supabase's own limit: bots / auth_rate_limited;
- *   - any other refusal is counted in the log line and not stored: a status
- *     whose meaning is not known is not shown as an attack.
+ *   - any other status of those two is counted in the log line and not
+ *     stored: a status whose meaning is not known is not shown as an attack;
+ *   - refreshes are counted, never stored;
+ *   - requests of an unusual form (token_other, verify_other) are counted and
+ *     not stored as attacks; when an hour has AUTH_LOGS_UNCLASSIFIED_FLAG_AT
+ *     or more of them, ONE flagged element carries their count
+ *     (unclassified_sign_in_refusals, source api, no country).
  *   The source is phone for the phone app's client string and api for
  *   everything else (a browser, anything unknown, none). OUR OWN SERVER's
  *   lines are not stored: part 1 recorded those refusals already, with the
  *   member's real place (the gateway's country for them is the server's).
- *   Our own server is its client string AND, once OUR_SERVER_NETWORKS has
- *   been measured, one of its hosting networks: the same client string from
- *   any other network is someone dressing up as our server, and is stored as
- *   api. Every element has no organization (the line names no account), no
- *   city and no source hash.
+ *   Our own server is its client string AND a hosting network. The same
+ *   client string from any other network is someone dressing up as our
+ *   server, and is stored as api: a network class that is not exactly
+ *   `hosting` is `other` (fail closed). Every element has no organization
+ *   (the line names no account), no city and no source hash.
  *
  * AN HOUR IS WRITTEN ONCE (the writer ADDS on a repeat). Each run handles the
  * last six complete UTC hours, oldest first, so a missed run heals. An hour
@@ -54,18 +68,20 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * over_minute_cap rows, which the check does not read), the check cannot see
  * the hour, and that is reported.
  *
- * PAST 199 GROUPS. The groups query returns at most AUTH_LOGS_ROW_LIMIT
- * groups, largest first. When it is full, the totals query (the same lines,
- * grouped by kind, status, caller and network only) gives the rest, mapped
- * the same way, so our own server's lines and unknown statuses never enter
- * it. What the groups did not list is stored on one auth_log_over_cap
- * element per category and source (a reason no other code writes), at the
- * hour's first minute, with no country; the smallest groups are folded into
- * those elements until the call holds at most AUTH_LOGS_MAX_ELEMENTS.
+ * TWO QUERIES AN HOUR. The groups query lists the lines that can be stored
+ * (kinds password and verify) by minute and country, at most
+ * AUTH_LOGS_ROW_LIMIT groups, largest first. The totals query counts every
+ * kind by kind, status, caller and network only: it gives the log line, the
+ * unusual-form count and, when the groups query was full, the rest. What the
+ * groups did not list is stored on one auth_log_over_cap element per category
+ * and source (a reason no other code writes), at the hour's first minute,
+ * with no country; the smallest groups are folded into those elements until
+ * the call holds at most AUTH_LOGS_MAX_ELEMENTS.
  *
  * FAILURES. The run stops at its first failure and reports it once, in plain
  * words with a status or a code: a refused token (401 or 403: the owner makes
- * a new one), a logs answer that is late (20 s), refused (429, 5xx) or not
+ * a new one), a query the logs service did not run (it answers 200 with an
+ * error), a logs answer that is late (20 s), refused (another status) or not
  * readable, a read or a write of the record that failed. The hour is left for
  * the next run. The run has a deadline (AUTH_LOGS_RUN_DEADLINE_MS) inside the
  * route's 60 s limit; a run that reaches it stops and says so once.
@@ -91,6 +107,8 @@ export const AUTH_LOGS_ROW_LIMIT = 199;
 export const AUTH_LOGS_MAX_ELEMENTS = 200;
 /** The writer reads a count of at most six digits (anything longer is stored as 1). */
 export const AUTH_LOGS_MAX_COUNT = 999_999;
+/** Requests of an unusual form in one hour from which one flagged count is stored. */
+export const AUTH_LOGS_UNCLASSIFIED_FLAG_AT = 20;
 /** One logs call: one try, this long at most. */
 export const AUTH_LOGS_CALL_TIMEOUT_MS = 20_000;
 /** One read or write of the record, this long at most (the writer waits 2 s for its turn). */
@@ -107,21 +125,13 @@ const MAX_ANSWER_CHARS = 2_000_000;
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
 
-/**
- * The network numbers (request.cf.asn) of the hosting our own server's
- * requests come from. EMPTY UNTIL MEASURED: while it is empty, every line
- * with our server's client string is treated as ours and not stored. It is
- * set from the first runs' log lines (the `seen` counts list the network of
- * every server-class line), never guessed.
- */
-export const OUR_SERVER_NETWORKS: readonly string[] = [];
-
 /** Every reason this job writes. No other code may write one with source phone or api. */
 export const AUTH_LOGS_REASONS = [
   'wrong_password',
   'wrong_code',
   'auth_rate_limited',
   'auth_log_over_cap',
+  'unclassified_sign_in_refusals',
 ] as const;
 export type AuthLogsReason = (typeof AUTH_LOGS_REASONS)[number];
 
@@ -129,24 +139,55 @@ export type AuthLogsReason = (typeof AUTH_LOGS_REASONS)[number];
 export const AUTH_LOGS_SOURCES = ['phone', 'api'] as const;
 export type AuthLogsSource = (typeof AUTH_LOGS_SOURCES)[number];
 
-const KINDS = ['token', 'verify'] as const;
+const KINDS = ['password', 'refresh', 'token_other', 'verify', 'verify_other'] as const;
 type AuthLogsKind = (typeof KINDS)[number];
 const CALLERS = ['phone', 'server', 'browser', 'other', 'none'] as const;
 type AuthLogsCaller = (typeof CALLERS)[number];
+type AuthLogsNetwork = 'hosting' | 'other';
 
 /**
- * The refused lines of one hour, by minute, kind, status, caller class,
- * network (server-class lines only) and country, largest groups first.
+ * The refused lines of one hour that can be stored (kinds password and
+ * verify), by minute, kind, status, caller class, network class and country,
+ * largest groups first.
  *
  * Read from Supabase's single `logs` table (ClickHouse), gateway lines only
  * (source edge_logs), where every field is a string in log_attributes. Only
- * POSTs answered 400 to 499 to `/auth/v1/token` with grant_type=password in
- * the query string, or to `/auth/v1/factors/<uuid>/verify`. The client string
- * is reduced to a class here; the path is compared, never returned.
+ * POSTs answered 400 to 499 whose decoded path is `/auth/v1/token` or
+ * `/auth/v1/factors/<one segment>/verify`. The named values at the top are
+ * shared with AUTH_LOGS_TOTALS_SQL, word for word:
+ *   - hosting_owner_prefix: the start of the network owner's name that makes
+ *     a line's network `hosting` (measured; see the comment in the query);
+ *   - the path and the query string, raw and decoded;
+ *   - first_grant: the first decoded grant_type value.
+ * The kind is `token_other` when the query string holds an escape that does
+ * not decode, an encoded `&` or `=` (which the sign-in service keeps inside a
+ * value, so reading the whole decoded string would read it differently) or
+ * an encoded control character, or when it holds two grant_type values.
+ * The client string and the owner's name are reduced to a class here; the
+ * path and the query string are compared, never returned.
  */
-export const AUTH_LOGS_GROUPS_SQL = `SELECT
-  toUnixTimestamp(toStartOfMinute(timestamp)) AS minute,
-  if(log_attributes['request.path'] = '/auth/v1/token', 'token', 'verify') AS kind,
+export const AUTH_LOGS_GROUPS_SQL = `WITH
+  /* The hosting of our own server, measured on 2026-11-21 from 24 hours of gateway lines: every
+     line with the client string of our own server came from a network owner whose name starts
+     with this, and no line of the phone app or of a browser did. */
+  'Amazon' AS hosting_owner_prefix,
+  log_attributes['request.path'] AS raw_path,
+  decodeURLComponent(raw_path) AS decoded_path,
+  log_attributes['request.search'] AS raw_search,
+  decodeURLComponent(raw_search) AS decoded_search,
+  extract(decoded_search, '(?:^[?]?|&)grant_type=([^&]*)') AS first_grant
+SELECT
+  toString(toStartOfMinute(timestamp)) AS minute,
+  multiIf(
+    match(raw_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/verify$'), 'verify',
+    decoded_path != '/auth/v1/token', 'verify_other',
+    raw_path != '/auth/v1/token', 'token_other',
+    match(raw_search, '%([^0-9A-Fa-f]|[0-9A-Fa-f][^0-9A-Fa-f]|[0-9A-Fa-f]?$|26|3[Dd]|[01][0-9A-Fa-f]|7[Ff])'), 'token_other',
+    match(decoded_search, '(^[?]?|&)grant_type=.*&grant_type='), 'token_other',
+    first_grant = 'password', 'password',
+    first_grant = 'refresh_token', 'refresh',
+    'token_other'
+  ) AS kind,
   log_attributes['response.status_code'] AS status,
   multiIf(
     position(log_attributes['request.headers.x_client_info'], 'supabase-js-react-native') > 0, 'phone',
@@ -156,29 +197,46 @@ export const AUTH_LOGS_GROUPS_SQL = `SELECT
     log_attributes['request.headers.x_client_info'] = '', 'none',
     'other'
   ) AS caller,
-  if(caller = 'server' AND match(log_attributes['request.cf.asn'], '^[0-9]{1,10}$'), log_attributes['request.cf.asn'], '') AS asn,
+  if(startsWith(log_attributes['request.cf.asOrganization'], hosting_owner_prefix), 'hosting', 'other') AS network,
   if(match(log_attributes['request.cf.country'], '^[A-Z]{2}$') AND log_attributes['request.cf.country'] != 'XX', log_attributes['request.cf.country'], '') AS country,
-  toUInt32(count()) AS n
+  count() AS n
 FROM logs
 WHERE source = 'edge_logs'
   AND log_attributes['request.method'] = 'POST'
   AND match(log_attributes['response.status_code'], '^4[0-9][0-9]$')
-  AND (
-    (log_attributes['request.path'] = '/auth/v1/token'
-      AND match(log_attributes['request.search'], '(^|[?&])grant_type=password(&|$)'))
-    OR match(log_attributes['request.path'], '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/verify$')
-  )
-GROUP BY minute, kind, status, caller, asn, country
-ORDER BY n DESC, minute, kind, status, caller, asn, country
+  AND (decoded_path = '/auth/v1/token' OR match(decoded_path, '^/auth/v1/factors/[^/]+/verify$'))
+  AND kind IN ('password', 'verify')
+GROUP BY minute, kind, status, caller, network, country
+ORDER BY n DESC, minute, kind, status, caller, network, country
 LIMIT 199`;
 
 /**
- * The same lines of the same hour, by kind, status, caller class and network
- * only, with the first and last instant of each group (seconds): read only
- * when the groups query was full, to count what it did not list.
+ * Every refused line of the same hour, of every kind, by kind, status, caller
+ * class and network class only, with the first and last instant of each
+ * group: the log line's counts, the unusual-form count and, when the groups
+ * query was full, what it did not list.
  */
-export const AUTH_LOGS_TOTALS_SQL = `SELECT
-  if(log_attributes['request.path'] = '/auth/v1/token', 'token', 'verify') AS kind,
+export const AUTH_LOGS_TOTALS_SQL = `WITH
+  /* The hosting of our own server, measured on 2026-11-21 from 24 hours of gateway lines: every
+     line with the client string of our own server came from a network owner whose name starts
+     with this, and no line of the phone app or of a browser did. */
+  'Amazon' AS hosting_owner_prefix,
+  log_attributes['request.path'] AS raw_path,
+  decodeURLComponent(raw_path) AS decoded_path,
+  log_attributes['request.search'] AS raw_search,
+  decodeURLComponent(raw_search) AS decoded_search,
+  extract(decoded_search, '(?:^[?]?|&)grant_type=([^&]*)') AS first_grant
+SELECT
+  multiIf(
+    match(raw_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/verify$'), 'verify',
+    decoded_path != '/auth/v1/token', 'verify_other',
+    raw_path != '/auth/v1/token', 'token_other',
+    match(raw_search, '%([^0-9A-Fa-f]|[0-9A-Fa-f][^0-9A-Fa-f]|[0-9A-Fa-f]?$|26|3[Dd]|[01][0-9A-Fa-f]|7[Ff])'), 'token_other',
+    match(decoded_search, '(^[?]?|&)grant_type=.*&grant_type='), 'token_other',
+    first_grant = 'password', 'password',
+    first_grant = 'refresh_token', 'refresh',
+    'token_other'
+  ) AS kind,
   log_attributes['response.status_code'] AS status,
   multiIf(
     position(log_attributes['request.headers.x_client_info'], 'supabase-js-react-native') > 0, 'phone',
@@ -188,21 +246,17 @@ export const AUTH_LOGS_TOTALS_SQL = `SELECT
     log_attributes['request.headers.x_client_info'] = '', 'none',
     'other'
   ) AS caller,
-  if(caller = 'server' AND match(log_attributes['request.cf.asn'], '^[0-9]{1,10}$'), log_attributes['request.cf.asn'], '') AS asn,
-  toUnixTimestamp(min(timestamp)) AS first_seen,
-  toUnixTimestamp(max(timestamp)) AS last_seen,
-  toUInt32(count()) AS n
+  if(startsWith(log_attributes['request.cf.asOrganization'], hosting_owner_prefix), 'hosting', 'other') AS network,
+  toString(min(timestamp)) AS first_seen,
+  toString(max(timestamp)) AS last_seen,
+  count() AS n
 FROM logs
 WHERE source = 'edge_logs'
   AND log_attributes['request.method'] = 'POST'
   AND match(log_attributes['response.status_code'], '^4[0-9][0-9]$')
-  AND (
-    (log_attributes['request.path'] = '/auth/v1/token'
-      AND match(log_attributes['request.search'], '(^|[?&])grant_type=password(&|$)'))
-    OR match(log_attributes['request.path'], '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/verify$')
-  )
-GROUP BY kind, status, caller, asn
-ORDER BY n DESC, kind, status, caller, asn
+  AND (decoded_path = '/auth/v1/token' OR match(decoded_path, '^/auth/v1/factors/[^/]+/verify$'))
+GROUP BY kind, status, caller, network
+ORDER BY n DESC, kind, status, caller, network
 LIMIT 199`;
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -218,8 +272,8 @@ export interface AuthLogsLine {
   kind: AuthLogsKind;
   status: string;
   caller: AuthLogsCaller;
-  /** The network number of a server-class line; '' for every other line or when unknown. */
-  asn: string;
+  /** `hosting` only when the query said exactly that; anything else is `other`. */
+  network: AuthLogsNetwork;
 }
 
 /** One checked row of the groups query. */
@@ -235,13 +289,13 @@ export interface AuthLogsTotalsRow extends AuthLogsLine {
   n: number;
 }
 
-export type AuthLogsNotStored = 'our_server' | 'other_status' | 'unknown_network';
+export type AuthLogsNotStored = 'our_server' | 'other_status' | 'refresh' | 'unclassified';
 
 export type AuthLogsVerdict =
   | {
       store: true;
       category: 'password_guessing' | 'bots';
-      reason: Exclude<AuthLogsReason, 'auth_log_over_cap'>;
+      reason: 'wrong_password' | 'wrong_code' | 'auth_rate_limited';
       source: AuthLogsSource;
     }
   | { store: false; why: AuthLogsNotStored };
@@ -249,7 +303,8 @@ export type AuthLogsVerdict =
 /** One element of record_security_events' array, as this job sends it. */
 export interface AuthLogsElement {
   category: 'password_guessing' | 'bots';
-  outcome: 'blocked';
+  /** `flagged` only on the count of requests of an unusual form. */
+  outcome: 'blocked' | 'flagged';
   reason: AuthLogsReason;
   source: AuthLogsSource;
   count: number;
@@ -261,6 +316,7 @@ export interface AuthLogsElement {
 
 export type AuthLogsFailureCause =
   | 'token_refused'
+  | 'logs_query_error'
   | 'logs_unavailable'
   | 'logs_timeout'
   | 'logs_unreachable'
@@ -295,11 +351,11 @@ export interface AuthLogsRunSummary {
   hoursStored: number;
   /** Group rows that passed the checks. */
   groups: number;
-  /** Rows dropped by the checks. */
+  /** Rows (of either query) dropped by the checks. */
   dropped: number;
   /** Hours whose groups query was full (199 rows). */
   capped: number;
-  /** Hours whose totals query was full too: their remainder is an undercount. */
+  /** Hours whose totals query was full too: their counts and remainder are undercounts. */
   totalsCapped: number;
   /** Full hours given no remainder because a group row was dropped. */
   remainderSkipped: number;
@@ -309,8 +365,11 @@ export interface AuthLogsRunSummary {
   eventsStored: number;
   /** Elements whose count was cut to AUTH_LOGS_MAX_COUNT. */
   clamped: number;
+  /** Lines not stored one by one, by why (the unusual-form ones may be in a flagged count). */
   notStored: Record<AuthLogsNotStored, number>;
-  /** `<kind> <status> <caller> <network or ->` -> lines, for the hours read. */
+  /** Hours that stored one flagged count of requests of an unusual form. */
+  flaggedHours: number;
+  /** `<kind> <status> <caller> <network>` -> lines, for the hours read. */
   seen: Record<string, number>;
   /** Lines of the kinds past AUTH_LOGS_SEEN_LIMIT. */
   seenOther: number;
@@ -365,37 +424,34 @@ export function hoursToRead(nowMs: number): AuthLogsHour[] {
   return hours;
 }
 
-/**
- * What a refused line stands for: the event to store, or why it is not
- * stored. `networks` is OUR_SERVER_NETWORKS (a test passes its own).
- */
-export function classifyAuthLogLine(
-  line: AuthLogsLine,
-  networks: readonly string[] = OUR_SERVER_NETWORKS,
-): AuthLogsVerdict {
-  let source: AuthLogsSource;
-  if (line.caller === 'phone') {
-    source = 'phone';
-  } else if (line.caller === 'server') {
-    // Ours: already recorded by part 1, with the member's real place.
-    if (networks.length === 0 || networks.includes(line.asn))
-      return { store: false, why: 'our_server' };
-    // No network to compare: unknown, so not shown as an attack.
-    if (line.asn === '') return { store: false, why: 'unknown_network' };
-    // Our client string from another network: someone dressing up as our server.
-    source = 'api';
-  } else {
-    source = 'api';
+/** What a refused line stands for: the event to store, or why it is not stored. */
+export function classifyAuthLogLine(line: AuthLogsLine): AuthLogsVerdict {
+  // Ours: already recorded by part 1, with the member's real place. Our
+  // client string from any other network is someone dressing up as our
+  // server, and is read as any other caller (source api).
+  if (line.caller === 'server' && line.network === 'hosting') {
+    return { store: false, why: 'our_server' };
   }
-  if (line.status === '429')
-    return { store: true, category: 'bots', reason: 'auth_rate_limited', source };
-  if (line.kind === 'token' && line.status === '400') {
-    return { store: true, category: 'password_guessing', reason: 'wrong_password', source };
+  const source: AuthLogsSource = line.caller === 'phone' ? 'phone' : 'api';
+  switch (line.kind) {
+    case 'refresh':
+      return { store: false, why: 'refresh' };
+    case 'token_other':
+    case 'verify_other':
+      return { store: false, why: 'unclassified' };
+    case 'password':
+      if (line.status === '429')
+        return { store: true, category: 'bots', reason: 'auth_rate_limited', source };
+      if (line.status === '400')
+        return { store: true, category: 'password_guessing', reason: 'wrong_password', source };
+      return { store: false, why: 'other_status' };
+    case 'verify':
+      if (line.status === '429')
+        return { store: true, category: 'bots', reason: 'auth_rate_limited', source };
+      if (line.status === '422')
+        return { store: true, category: 'password_guessing', reason: 'wrong_code', source };
+      return { store: false, why: 'other_status' };
   }
-  if (line.kind === 'verify' && (line.status === '422' || line.status === '400')) {
-    return { store: true, category: 'password_guessing', reason: 'wrong_code', source };
-  }
-  return { store: false, why: 'other_status' };
 }
 
 function isRecord(raw: unknown): raw is Record<string, unknown> {
@@ -416,14 +472,22 @@ function wholeNumber(value: unknown, digits: number): number | null {
   return null;
 }
 
-/** The fields both queries return, checked; null when one fails. */
+/**
+ * The fields both queries return, checked; null when one fails. The network
+ * class is never a reason to drop a row: anything but exactly `hosting` is
+ * `other`, so a line is never taken for our own server by mistake.
+ */
 function lineOf(raw: Record<string, unknown>): AuthLogsLine | null {
-  const { kind, status, caller, asn } = raw;
+  const { kind, status, caller } = raw;
   if (typeof kind !== 'string' || !(KINDS as readonly string[]).includes(kind)) return null;
   if (typeof status !== 'string' || !/^[0-9]{3}$/.test(status)) return null;
   if (typeof caller !== 'string' || !(CALLERS as readonly string[]).includes(caller)) return null;
-  if (typeof asn !== 'string' || !/^([0-9]{1,10})?$/.test(asn)) return null;
-  return { kind: kind as AuthLogsKind, status, caller: caller as AuthLogsCaller, asn };
+  return {
+    kind: kind as AuthLogsKind,
+    status,
+    caller: caller as AuthLogsCaller,
+    network: raw.network === 'hosting' ? 'hosting' : 'other',
+  };
 }
 
 /** A count: a whole number from 1 up. */
@@ -432,20 +496,50 @@ function countOf(value: unknown): number | null {
   return n !== null && n >= 1 ? n : null;
 }
 
+const LOGS_TIME_RE =
+  /^([0-9]{4})-([0-9]{2})-([0-9]{2}) ([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]{1,9}))?$/;
+
 /**
- * One row of the groups query, checked: the minute is whole seconds on a
- * minute inside the hour, the kind and caller are ones the query answers,
- * the status is three digits, the network digits or empty, the country two
- * capital letters (not XX) or empty, the count a whole number from 1. Null
- * for anything else: the row is dropped.
+ * A time as the queries print it (toString of a UTC time, e.g.
+ * `2026-11-21 18:42:00`, with or without a fraction of a second), read as
+ * UTC, in ms (a fraction below a millisecond is dropped). Null for any other
+ * form and for a date that does not exist.
+ */
+export function parseLogsTime(value: unknown): number | null {
+  if (typeof value !== 'string') return null;
+  const m = LOGS_TIME_RE.exec(value);
+  if (!m) return null;
+  const [y, mo, d, hh, mi, ss] = m.slice(1, 7).map(Number) as [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  const ms = Date.UTC(y, mo - 1, d, hh, mi, ss);
+  // Date.UTC carries an impossible date over (2026-11-31 becomes 2026-12-01): refuse it.
+  if (
+    !Number.isFinite(ms) ||
+    new Date(ms).toISOString().slice(0, 19) !== value.slice(0, 19).replace(' ', 'T')
+  ) {
+    return null;
+  }
+  return ms + (m[7] ? Math.floor(Number(`0.${m[7]}`) * 1000) : 0);
+}
+
+/**
+ * One row of the groups query, checked: the minute is a time on a minute
+ * inside the hour, the kind and caller are ones the query answers, the status
+ * is three digits, the country two capital letters (not XX) or empty, the
+ * count a whole number from 1. Null for anything else: the row is dropped.
  */
 export function parseGroupRow(raw: unknown, hour: AuthLogsHour): AuthLogsGroupRow | null {
   if (!isRecord(raw)) return null;
   const line = lineOf(raw);
   if (!line) return null;
-  const seconds = wholeNumber(raw.minute, 11);
-  if (seconds === null) return null;
-  const minuteMs = seconds * 1000;
+  const minuteMs = parseLogsTime(raw.minute);
+  if (minuteMs === null) return null;
   if (minuteMs % MINUTE_MS !== 0 || minuteMs < hour.startMs || minuteMs >= hour.endMs) return null;
   const country = raw.country;
   if (typeof country !== 'string' || !/^([A-Z]{2})?$/.test(country) || country === 'XX')
@@ -460,10 +554,10 @@ export function parseTotalsRow(raw: unknown, hour: AuthLogsHour): AuthLogsTotals
   if (!isRecord(raw)) return null;
   const line = lineOf(raw);
   if (!line) return null;
-  const first = wholeNumber(raw.first_seen, 11);
-  const last = wholeNumber(raw.last_seen, 11);
+  const first = parseLogsTime(raw.first_seen);
+  const last = parseLogsTime(raw.last_seen);
   if (first === null || last === null) return null;
-  if (first * 1000 < hour.startMs || last * 1000 >= hour.endMs || first > last) return null;
+  if (first < hour.startMs || last >= hour.endMs || first > last) return null;
   const n = countOf(raw.n);
   if (n === null) return null;
   return { ...line, n };
@@ -482,10 +576,12 @@ export interface AuthLogsHourElements {
   remainder: number;
   /** The groups were full but a row was dropped, so no remainder was added. */
   remainderSkipped: boolean;
+  /** The count on the flagged element of requests of an unusual form; 0 when there is none. */
+  flagged: number;
 }
 
 const seenKey = (line: AuthLogsLine) =>
-  `${line.kind} ${line.status} ${line.caller} ${line.asn || '-'}`;
+  `${line.kind} ${line.status} ${line.caller} ${line.network}`;
 
 function compareElements(a: AuthLogsElement, b: AuthLogsElement): number {
   const ka = [a.category, a.reason, a.source, a.country ?? ''];
@@ -500,27 +596,27 @@ function compareElements(a: AuthLogsElement, b: AuthLogsElement): number {
 
 /**
  * The writer's elements for one hour (pure). Lines that land on the same row
- * are one element. `totals` is read only when the groups were full
- * (`groupsCapped`); the remainder is then counted per category, reason and
- * source (never below zero) and stored on one auth_log_over_cap element per
- * category and source, unless a group row was dropped (`groupsDropped`):
- * its count would come back through the totals. The smallest groups are
- * folded into those elements until the call fits.
+ * are one element. `totals` (every kind of the hour) gives the counts that
+ * are not stored, the log line and the count of requests of an unusual form:
+ * AUTH_LOGS_UNCLASSIFIED_FLAG_AT or more store one flagged element. When the
+ * groups were full (`groupsCapped`), the remainder is counted per category,
+ * reason and source (never below zero) and stored on one auth_log_over_cap
+ * element per category and source, unless a group row was dropped
+ * (`groupsDropped`): its count would come back through the totals. The
+ * smallest groups are folded into those elements until the call fits.
  */
 export function buildHourElements(input: {
   hour: AuthLogsHour;
   groups: readonly AuthLogsGroupRow[];
   groupsCapped: boolean;
   groupsDropped: number;
-  totals: readonly AuthLogsTotalsRow[] | null;
-  networks?: readonly string[];
+  totals: readonly AuthLogsTotalsRow[];
 }): AuthLogsHourElements {
-  const networks = input.networks ?? OUR_SERVER_NETWORKS;
   const listed = new Map<string, AuthLogsElement>();
   const listedByKind = new Map<string, number>();
 
   for (const g of input.groups) {
-    const v = classifyAuthLogLine(g, networks);
+    const v = classifyAuthLogLine(g);
     if (!v.store) continue;
     const key = [g.minuteMs, v.category, v.reason, v.source, g.country].join('\u001f');
     const same = listed.get(key);
@@ -541,22 +637,24 @@ export function buildHourElements(input: {
     listedByKind.set(kind, (listedByKind.get(kind) ?? 0) + g.n);
   }
 
-  // The complete counts of the hour, for the log line and what is not
-  // stored: the totals when the groups were full, else the groups.
+  // The complete counts of the hour, every kind, from the totals: the log
+  // line, what is not stored, and the requests of an unusual form (never
+  // our own server's: classifyAuthLogLine answers our_server first).
   const notStored: Record<AuthLogsNotStored, number> = {
     our_server: 0,
     other_status: 0,
-    unknown_network: 0,
+    refresh: 0,
+    unclassified: 0,
   };
   const seen: Record<string, number> = {};
-  const complete: readonly AuthLogsTotalsRow[] =
-    input.groupsCapped && input.totals ? input.totals : input.groups;
-  for (const row of complete) {
+  for (const row of input.totals) {
     const key = seenKey(row);
     seen[key] = (seen[key] ?? 0) + row.n;
-    const v = classifyAuthLogLine(row, networks);
+    const v = classifyAuthLogLine(row);
     if (!v.store) notStored[v.why] += row.n;
   }
+  const flagged =
+    notStored.unclassified >= AUTH_LOGS_UNCLASSIFIED_FLAG_AT ? notStored.unclassified : 0;
 
   // The remainder, one element per category and source.
   const overCap = new Map<string, AuthLogsElement>();
@@ -583,13 +681,13 @@ export function buildHourElements(input: {
   if (input.groupsCapped) {
     if (input.groupsDropped > 0) {
       remainderSkipped = true;
-    } else if (input.totals) {
+    } else {
       const totalByKind = new Map<
         string,
         { category: AuthLogsElement['category']; source: AuthLogsSource; n: number }
       >();
       for (const t of input.totals) {
-        const v = classifyAuthLogLine(t, networks);
+        const v = classifyAuthLogLine(t);
         if (!v.store) continue;
         const kind = [v.category, v.reason, v.source].join('\u001f');
         const same = totalByKind.get(kind);
@@ -603,15 +701,34 @@ export function buildHourElements(input: {
     }
   }
 
+  // Many requests of an unusual form: one flagged count for the hour, never
+  // shown as blocked attacks, with no country (they come from every caller).
+  const flaggedElements: AuthLogsElement[] =
+    flagged > 0
+      ? [
+          {
+            category: 'password_guessing',
+            outcome: 'flagged',
+            reason: 'unclassified_sign_in_refusals',
+            source: 'api',
+            count: flagged,
+            at_ms: input.hour.startMs,
+          },
+        ]
+      : [];
+
   // Fit the call: the smallest listed elements are folded into their remainder element.
   const list = [...listed.values()].sort((a, b) => b.count - a.count || compareElements(a, b));
-  while (list.length > 0 && list.length + overCap.size > AUTH_LOGS_MAX_ELEMENTS) {
+  while (
+    list.length > 0 &&
+    list.length + overCap.size + flaggedElements.length > AUTH_LOGS_MAX_ELEMENTS
+  ) {
     const smallest = list.pop()!;
     countOnOverCap(smallest.category, smallest.source, smallest.count);
   }
 
   let clamped = 0;
-  const elements = [...list, ...overCap.values()]
+  const elements = [...list, ...overCap.values(), ...flaggedElements]
     .map((e) => {
       if (e.count <= AUTH_LOGS_MAX_COUNT) return e;
       clamped += 1;
@@ -621,7 +738,7 @@ export function buildHourElements(input: {
   const remainder = elements
     .filter((e) => e.reason === 'auth_log_over_cap')
     .reduce((s, e) => s + e.count, 0);
-  return { elements, notStored, seen, clamped, remainder, remainderSkipped };
+  return { elements, notStored, seen, clamped, remainder, remainderSkipped, flagged };
 }
 
 // ── Calls ───────────────────────────────────────────────────────────────────
@@ -665,7 +782,6 @@ interface RunContext {
   token: string;
   projectRef: string;
   fetch: typeof fetch;
-  networks: readonly string[];
   /** When the run must end, in ms since 1970. */
   deadline: number;
   admin: () => ReturnType<typeof createAdminClient>;
@@ -698,8 +814,14 @@ type Outcome<T> = { ok: true; value: T } | { ok: false; failure: AuthLogsFailure
 const timedOut = (cut: boolean, own: AuthLogsFailure): AuthLogsFailure =>
   cut ? { cause: 'out_of_time' } : own;
 
-/** The rows of a logs answer, or null when it is not `{ result: [...] }` with no error. */
-function rowsOf(text: string): unknown[] | null {
+/**
+ * The rows of a successful logs answer: `{ "result": [...], "error": null }`
+ * (an answer with no error field is read the same). The logs service answers
+ * a query it did not run with status 200 and an error: that is
+ * `query_error`, whatever else the body holds. Anything else that is not a
+ * result list is null. The error's own text is never read.
+ */
+function rowsOf(text: string): unknown[] | 'query_error' | null {
   if (text.length > MAX_ANSWER_CHARS) return null;
   let parsed: unknown;
   try {
@@ -708,8 +830,7 @@ function rowsOf(text: string): unknown[] | null {
     return null;
   }
   if (!isRecord(parsed)) return null;
-  if (parsed.error !== undefined && parsed.error !== null) return null;
-  if (parsed.result === null) return [];
+  if (parsed.error !== undefined && parsed.error !== null) return 'query_error';
   if (!Array.isArray(parsed.result) || parsed.result.length > AUTH_LOGS_ROW_LIMIT) return null;
   return parsed.result;
 }
@@ -755,6 +876,7 @@ async function queryLogs(
         };
       }
       const rows = rowsOf(await res.text());
+      if (rows === 'query_error') return { ok: false, failure: { cause: 'logs_query_error' } };
       return rows
         ? { ok: true, value: rows }
         : { ok: false, failure: { cause: 'logs_bad_answer' } };
@@ -846,7 +968,8 @@ function emptySummary(hours: AuthLogsHour[]): AuthLogsRunSummary {
     elements: 0,
     eventsStored: 0,
     clamped: 0,
-    notStored: { our_server: 0, other_status: 0, unknown_network: 0 },
+    notStored: { our_server: 0, other_status: 0, refresh: 0, unclassified: 0 },
+    flaggedHours: 0,
     seen: {},
     seenOther: 0,
     landedPastMinuteCaps: 0,
@@ -881,19 +1004,18 @@ async function runHour(
   const groupsDropped = dropped;
   const capped = groupsAnswer.value.length >= AUTH_LOGS_ROW_LIMIT;
 
-  let totals: AuthLogsTotalsRow[] | null = null;
-  if (capped) {
-    const totalsAnswer = await queryLogs(ctx, AUTH_LOGS_TOTALS_SQL, hour);
-    if (!totalsAnswer.ok) return totalsAnswer.failure;
-    totals = [];
-    for (const raw of totalsAnswer.value) {
-      const row = parseTotalsRow(raw, hour);
-      if (row) totals.push(row);
-      else dropped += 1;
-    }
-    if (totalsAnswer.value.length >= AUTH_LOGS_ROW_LIMIT) summary.totalsCapped += 1;
-    summary.capped += 1;
+  // Every kind of the hour: always read (the log line, refreshes, the
+  // unusual-form count, and the remainder when the groups were full).
+  const totalsAnswer = await queryLogs(ctx, AUTH_LOGS_TOTALS_SQL, hour);
+  if (!totalsAnswer.ok) return totalsAnswer.failure;
+  const totals: AuthLogsTotalsRow[] = [];
+  for (const raw of totalsAnswer.value) {
+    const row = parseTotalsRow(raw, hour);
+    if (row) totals.push(row);
+    else dropped += 1;
   }
+  if (totalsAnswer.value.length >= AUTH_LOGS_ROW_LIMIT) summary.totalsCapped += 1;
+  if (capped) summary.capped += 1;
   summary.hoursRead += 1;
   summary.groups += groups.length;
   summary.dropped += dropped;
@@ -904,7 +1026,6 @@ async function runHour(
     groupsCapped: capped,
     groupsDropped,
     totals,
-    networks: ctx.networks,
   });
   for (const why of Object.keys(built.notStored) as AuthLogsNotStored[])
     summary.notStored[why] += built.notStored[why];
@@ -918,6 +1039,7 @@ async function runHour(
   }
   summary.clamped += built.clamped;
   if (built.remainderSkipped) summary.remainderSkipped += 1;
+  if (built.flagged > 0) summary.flaggedHours += 1;
 
   if (built.elements.length === 0) {
     report.outcome = 'nothing_to_store';
@@ -945,6 +1067,8 @@ async function runHour(
 const FAILURE_WORDS: Record<AuthLogsFailureCause, (f: AuthLogsFailure) => string> = {
   token_refused: () =>
     "Refused sign-ins were not read from Supabase's logs: the logs token was refused (expired or deleted): the owner makes a new one",
+  logs_query_error: () =>
+    "Supabase's logs did not run this job's query (it answered with an error); the hour is left for the next run",
   logs_unavailable: (f) =>
     `Supabase's logs could not be read (status ${f.status ?? 'unknown'}); the hour is left for the next run`,
   logs_timeout: () =>
@@ -984,7 +1108,6 @@ export async function readAuthLogs(options: {
   supabaseUrl: string;
   nowMs?: number;
   fetch?: typeof fetch;
-  networks?: readonly string[];
 }): Promise<AuthLogsRunSummary | AuthLogsSkipped> {
   const projectRef = supabaseProjectRef(options.supabaseUrl);
   if (!projectRef) {
@@ -1012,7 +1135,6 @@ export async function readAuthLogs(options: {
     token: options.token,
     projectRef,
     fetch: options.fetch ?? fetch,
-    networks: options.networks ?? OUR_SERVER_NETWORKS,
     deadline: started + AUTH_LOGS_RUN_DEADLINE_MS,
     admin: () => (admin ??= createAdminClient()),
   };
@@ -1040,7 +1162,8 @@ export async function readAuthLogs(options: {
     const { cause, status, code, hour } = summary.failure;
     await report(
       FAILURE_WORDS[cause](summary.failure),
-      cause === 'token_refused' ? 'error' : 'warning',
+      // Both need someone to act: a new token, or a fix to the query.
+      cause === 'token_refused' || cause === 'logs_query_error' ? 'error' : 'warning',
       {
         cause,
         ...(status !== undefined ? { status } : {}),
