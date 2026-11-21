@@ -36,6 +36,18 @@ import { verifiedSessionAuth } from '@/test/verified-session-stub';
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+// Stage 5 (answers Q6 and Q7 of the passkey plan): a used code also ends the
+// account's other sessions as the held token and emails the account
+// (mfa-recovery.other-sessions.test.ts covers both). Here Auth's sign-out
+// answers, so nothing reaches a network, and no email is sent.
+vi.mock('@/server/security/passkey-auth', () => ({
+  signOutAs: vi.fn(async () => ({ ok: true, status: 204, code: null, body: null })),
+}));
+vi.mock('@/server/security/recovery-code-email', () => ({ sendRecoveryCodeUsedEmail: vi.fn() }));
+vi.mock('@/server/services/sessions', () => ({
+  listMySessionIds: vi.fn(async () => []),
+  broadcastEndedSessions: vi.fn(async () => undefined),
+}));
 vi.mock('next/headers', () => ({ headers: vi.fn(async () => new Headers()) }));
 vi.mock('@/server/security/account-events', () => ({ recordAccountCodeBlocked: vi.fn() }));
 vi.mock('@/lib/auth/session', () => ({
@@ -179,8 +191,9 @@ describe('the recovery code with passkey records (0475 live)', () => {
       p_user_id: 'user-1',
       p_code: CODE,
     });
-    // Never through the member's token, and the member's own consume is not called.
-    expect(createAccessTokenClient).not.toHaveBeenCalled();
+    // Never through the member's token: the member's own consume is not
+    // called. (Since stage 5 the held token's client lists and ends the other
+    // sessions after the factors: mfa-recovery.other-sessions.test.ts.)
     expect(h.member && rpcNames(h.member as Stub)).toEqual([]);
     expect(deleteFactorOf(admin).mock.calls.map((c) => (c[0] as { id: string }).id)).toEqual([
       'app-1',

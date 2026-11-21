@@ -56,6 +56,14 @@ vi.mock('@/lib/env', async () => {
   };
 });
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+// Stage 5 (answers Q6 and Q7 of the passkey plan): a used code also ends the
+// account's other sessions as the held token and emails the account
+// (mfa-recovery.other-sessions.test.ts covers both). Here Auth's sign-out
+// answers, so nothing reaches a network, and no email is sent.
+vi.mock('@/server/security/passkey-auth', () => ({
+  signOutAs: vi.fn(async () => ({ ok: true, status: 204, code: null, body: null })),
+}));
+vi.mock('@/server/security/recovery-code-email', () => ({ sendRecoveryCodeUsedEmail: vi.fn() }));
 vi.mock('next/navigation', () => ({
   redirect: vi.fn((to: string) => {
     throw new Error(`REDIRECT:${to}`);

@@ -6,7 +6,7 @@ import { headers } from 'next/headers';
 import { accountIdHash, reportPasskeyRecordsMissing } from '@/lib/auth/passkey-bridge';
 import { carriesBridgeName } from '@/lib/auth/passkey-bridge-name';
 import { requireSession } from '@/lib/auth/session';
-import { readVerifiedSessionTokenOf } from '@/lib/auth/verified-claims';
+import { readVerifiedSessionTokenOf, type VerifiedSessionToken } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { clientIpFromHeaders } from '@/lib/client-ip';
 import { rethrowControlFlow } from '@/lib/control-flow';
@@ -16,8 +16,11 @@ import { createAccessTokenClient } from '@/lib/supabase/access-token-client';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { recordAccountCodeBlocked } from '@/server/security/account-events';
+import { signOutAs } from '@/server/security/passkey-auth';
+import { sendRecoveryCodeUsedEmail } from '@/server/security/recovery-code-email';
 import { emitAuthAudit, resolveDefaultOrgAndRole } from '@/server/services/auth-audit';
 import { ServiceError } from '@/server/services/context';
+import { broadcastEndedSessions, listMySessionIds } from '@/server/services/sessions';
 import { SESSION_CHANGED } from '@/server/services/step-up-held';
 import {
   actionErrorResult,
@@ -228,17 +231,74 @@ function reportPasskeyRemoval(
  */
 const RECOVERY_NOT_CHECKED = 'Could not check your recovery code just now. Try again.';
 
+/** The client that acts as the held token alone (made once per press, when first needed). */
+type MemberClient = ReturnType<typeof createAccessTokenClient>;
+
+/**
+ * Answers Q6 (stage 5 of the passkey plan): a used code ends every OTHER
+ * session of the account, and the session that used it stays signed in.
+ *   1. The sessions are listed first, as the member (they cannot be listed
+ *      once ended), for the devices' message below.
+ *   2. Auth's sign-out of scope `others`, AS the held token (never the cookie
+ *      session, never `global` or `local`).
+ *   3. When Auth's sign-out fails, the database ends them instead
+ *      (revoke_my_other_sessions, 0213, as the member), keeping THIS
+ *      session's id; only with an id, since null would end this one too.
+ *   4. Once they ended, the devices hear which sessions ended, never the one
+ *      that stays (services/sessions.ts broadcastEndedSessions).
+ * A sign-out that could not be confirmed is reported: a warning when the
+ * database ended them, an error when nothing did. The calls it makes answer
+ * a failure rather than throw (a throw would reach the action's catch, after
+ * the code is spent and the factors removed). Returns whether every other
+ * session ended.
+ */
+async function endOtherSessions(
+  held: VerifiedSessionToken,
+  member: () => MemberClient,
+  userId: string,
+): Promise<boolean> {
+  const keep = held.claims.sessionId;
+  // Never throws: unreadable is null, and nothing is named to the devices.
+  const listed = await listMySessionIds(member());
+  const signedOut = await signOutAs(held.token, 'others');
+  if (signedOut.ok) {
+    if (keep) await broadcastEndedSessions(userId, listed, keep);
+    return true;
+  }
+  let databaseRevoke: 'ok' | 'failed' | 'no_session_id' = 'no_session_id';
+  if (keep) {
+    // supabase-js answers a failed call (the network included) as `error`.
+    const { error } = await member().rpc('revoke_my_other_sessions', {
+      p_keep_session_id: keep,
+    });
+    databaseRevoke = error ? 'failed' : 'ok';
+  }
+  // Never the token, the code or a session id: Auth's code and status only.
+  void reportError(new Error('A recovery code could not confirm that the other sessions ended'), {
+    tag: 'actions.mfa_recovery.other_sessions_not_ended',
+    level: databaseRevoke === 'ok' ? 'warning' : 'error',
+    userIdHash: accountIdHash(userId),
+    extra: { code: signedOut.code, status: signedOut.status, database_revoke: databaseRevoke },
+  });
+  if (databaseRevoke !== 'ok' || !keep) return false;
+  await broadcastEndedSessions(userId, listed, keep);
+  return true;
+}
+
 /**
  * Used by /signin/mfa when the user can't reach their TOTP device.
  * Verifies one of their unused recovery codes, and on success removes their
  * passkeys (0475) and unenrolls every TOTP factor on the account using the
- * admin client (RLS on auth.mfa requires service-role for this). The user can
- * then sign in normally and re-enroll a fresh device.
+ * admin client (RLS on auth.mfa requires service-role for this), then ends
+ * the account's OTHER sessions (this one stays) and emails the account
+ * (answers Q6 and Q7). The user then sets up a new method on this session.
+ * `otherSessionsLeft` is there only when the other sessions could not be
+ * ended, so the form says so.
  */
 export async function consumeMfaRecoveryCodeAction(input: {
   code: string;
   password?: string;
-}): Promise<ActionResult<{ unenrolled: number }>> {
+}): Promise<ActionResult<{ unenrolled: number; otherSessionsLeft?: true }>> {
   try {
     const session = await requireSession();
 
@@ -328,6 +388,10 @@ export async function consumeMfaRecoveryCodeAction(input: {
     const supabase = await createClient();
     const held = await readVerifiedSessionTokenOf(supabase, session.userId);
     if (!held) return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
+    // One client of the held token for this press, made when first needed
+    // (today's consume, the session list, the database revoke).
+    let asMember: MemberClient | null = null;
+    const member = () => (asMember ??= createAccessTokenClient(held.token));
 
     if (
       !(await allowRecoveryPress(
@@ -376,10 +440,9 @@ export async function consumeMfaRecoveryCodeAction(input: {
       consumed = spent.consumed;
       passkeysRemoved = spent.passkeysRemoved;
     } else {
-      const { data: ok_, error } = await createAccessTokenClient(held.token).rpc(
-        'consume_mfa_recovery_code',
-        { p_code: input.code },
-      );
+      const { data: ok_, error } = await member().rpc('consume_mfa_recovery_code', {
+        p_code: input.code,
+      });
       if (error) throw new ServiceError('internal_error', error.message);
       consumed = Boolean(ok_);
       if (spent.kind === 'failed' && !consumed) {
@@ -444,6 +507,9 @@ export async function consumeMfaRecoveryCodeAction(input: {
       reportPasskeyRemoval(spent.code, removed === null ? 'unknown' : false, session.userId);
     }
 
+    // Q6: every OTHER session of the account ends; this one stays.
+    const othersEnded = await endOtherSessions(held, member, session.userId);
+
     // A used code removes every authenticator of the account: the person's
     // own act, recorded in their default organization. Never the code.
     const { organizationId } = await resolveDefaultOrgAndRole(session.userId);
@@ -456,8 +522,17 @@ export async function consumeMfaRecoveryCodeAction(input: {
           ? { unenrolled }
           : { unenrolled, passkeys_removed: passkeysRemoved },
     });
+    // Q7: the security email, after the response. It names passkeys only for
+    // an account that had one (a passkey removed, or a factor carrying the
+    // bridge's reserved name).
+    if (session.email) {
+      sendRecoveryCodeUsedEmail(session.email, session.userId, {
+        passkeys: (passkeysRemoved ?? 0) > 0 || (factors?.factors ?? []).some(carriesBridgeName),
+        othersSignedOut: othersEnded,
+      });
+    }
     revalidatePath('/dashboard', 'layout');
-    return ok({ unenrolled });
+    return ok(othersEnded ? { unenrolled } : { unenrolled, otherSessionsLeft: true as const });
   } catch (e) {
     return actionErrorResult(e, 'actions.mfa_recovery.consume_mfa_recovery_code');
   }
