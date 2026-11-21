@@ -131,20 +131,6 @@ describe('a session with an open alert', () => {
     expect(words).not.toMatch(/owners and admins/);
   });
 
-  it('an alert already reported elsewhere: says so, stays on the page and reloads the list', async () => {
-    h.report.mockResolvedValue({
-      ok: false,
-      error: { code: 'conflict', message: 'You already reported this sign-in. If you have not reset your password yet, reset it now.' },
-    });
-    render(<ActiveSessions sessions={SESSIONS as never} alerts={[alert()]} />);
-    fireEvent.click(screen.getByRole('button', { name: 'This was not me' }));
-    const dialog = await screen.findByRole('dialog');
-    fireEvent.click(within(dialog).getByRole('button', { name: 'End every session' }));
-    expect(await within(dialog).findByText(/You already reported this sign-in/)).toBeTruthy();
-    expect(h.assign).not.toHaveBeenCalled();
-    await waitFor(() => expect(h.refresh).toHaveBeenCalled());
-  });
-
   it('a report that could not finish stays on the page and says why', async () => {
     h.report.mockResolvedValue({
       ok: false,

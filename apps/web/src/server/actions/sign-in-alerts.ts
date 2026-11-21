@@ -31,8 +31,8 @@ import { err, ok, type ActionResult } from '@stockpilot/core';
  * per alert, which is what the real owner wants when the password is known
  * to someone else. A report that could not finish says so, and this browser
  * stays signed in so the member can press again. An alert that was already
- * reported says so and nothing more happens: no session is ended again and
- * nobody is told again (review 1, finding 2).
+ * reported behaves the same way: the report ends every session again (and
+ * tells nobody again), so this browser signs out too.
  */
 
 const SECURITY_PAGE = '/dashboard/settings/security';
@@ -78,18 +78,11 @@ export async function reportSignInAlertAction(input: {
         userAgent: requestHeaders.get('user-agent'),
       },
     });
-    if (answer.outcome === 'already_reported') {
-      // Reported from the email's link or another tab: the list is stale.
-      revalidatePath(SECURITY_PAGE);
-      return err(
-        'conflict',
-        'You already reported this sign-in. If you have not reset your password yet, reset it now.',
-      );
-    }
-    if (answer.outcome !== 'done') {
+    if (answer.outcome === 'failed') {
       return err('internal_error', 'We could not finish this just now. Press the button again in a minute.');
     }
-    // Every session of the account has been ended; this browser's cookies go too
+    // Every session of the account has been ended, by a first report and by a
+    // repeat press alike ('already_reported'); this browser's cookies go too
     // (scope 'local': auth-js removes them even when GoTrue does not answer,
     // and the helper never throws).
     await signOutThisSession(ctx.supabase);

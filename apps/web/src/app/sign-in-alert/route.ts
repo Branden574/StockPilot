@@ -52,10 +52,13 @@ export const dynamic = 'force-dynamic';
  * cross-site-request rule /auth/confirm uses; this page's own form is always
  * same-origin), then the address is counted, then the link is checked, then
  * the alert is counted, all failing CLOSED. A bad link never gets a bucket
- * of its own. An alert already reported gets the "already reported" page and
- * nothing more: the link signs nobody out a second time. A press that could
- * not finish (some session did not end, or the alert could not be marked)
- * gets a try-again page, and the same link works again.
+ * of its own. A press on an alert already reported runs the report again,
+ * behind the same two counts: every session of the account is ended again
+ * (the member may press again because whoever signed in came back before the
+ * password was reset) and nobody is told a second time; GET keeps the button
+ * on that page for it. A press that could not finish (some session did not
+ * end, or the alert could not be marked) gets a try-again page, and the same
+ * link works again.
  *
  * A LIMITER THAT CANNOT COUNT is not "too many tries": the caller did nothing
  * wrong and an hour's wait would be untrue. It answers "Please try again in a
@@ -104,6 +107,9 @@ dd:last-child{margin-bottom:0}
 .btn{display:inline-flex;align-items:center;justify-content:center;width:100%;min-height:44px;box-sizing:border-box;padding:10px 20px;border:1px solid transparent;border-radius:6px;background:#b42318;color:#ffffff;font:inherit;font-weight:500;font-size:15px;text-decoration:none;cursor:pointer}
 .btn:hover{background:#9a1d14}
 .btn:focus-visible{outline:2px solid #0e0f0d;outline-offset:2px}
+.btn.quiet{background:transparent;color:#b42318;border-color:#b42318}
+.btn.quiet:hover{background:#fdf1ef}
+p.again{margin:24px 0 12px}
 a.link{color:#0e0f0d;font-weight:500;text-underline-offset:2px}
 @media (prefers-color-scheme:dark){
 body{background:#0c0d0a;color:#f0efe8}
@@ -114,6 +120,8 @@ dd{color:#f0efe8}
 .btn{background:#f2675a;color:#140504}
 .btn:hover{background:#f48277}
 .btn:focus-visible{outline-color:#f0efe8}
+.btn.quiet{background:transparent;color:#f2675a;border-color:#f2675a}
+.btn.quiet:hover{background:#241512}
 a.link{color:#f0efe8}
 }`;
 
@@ -222,10 +230,38 @@ function donePage(adminsTold: boolean): NextResponse {
   );
 }
 
-function alreadyReportedPage(): NextResponse {
+/** The link's three values, as the page's own form posts them back. Every value is escaped. */
+function linkFields(link: { a: string; i: string; t: string }): string {
+  return `<input type="hidden" name="a" value="${escapeHtml(link.a)}">
+      <input type="hidden" name="i" value="${escapeHtml(link.i)}">
+      <input type="hidden" name="t" value="${escapeHtml(link.t)}">`;
+}
+
+/**
+ * GET of an alert already reported. It keeps a button: a second press ends
+ * every session again, for a member whose password is not reset yet and who
+ * sees the account in use again.
+ */
+function alreadyReportedPage(link: { a: string; i: string; t: string }): NextResponse {
   return htmlPage(
     'You already reported this sign-in',
     `<p>Every session of your account was ended then. If you have not reset your password yet, reset it now. That is what closes the door.</p>
+    ${RESET_BUTTON}
+    <p class="again">If someone is using your account again, you can end every session once more.</p>
+    <form method="post" action="/sign-in-alert">
+      ${linkFields(link)}
+      <button type="submit" class="btn quiet">End every session again</button>
+    </form>`,
+    200,
+  );
+}
+
+/** POST on an alert already reported: this press ended every session again, and told nobody again. */
+function endedAgainPage(): NextResponse {
+  return htmlPage(
+    'You already reported this sign-in',
+    `<p>Every session of your account has been ended again. ${NOT_ME_WORDS.openDevice}</p>
+    <p>${NOT_ME_WORDS.resetNow}</p>
     ${RESET_BUTTON}`,
     200,
   );
@@ -254,9 +290,7 @@ function confirmPage(alert: SignInAlertRecord, link: { a: string; i: string; t: 
     <p>If it was not you, press the button. ${NOT_ME_WORDS.whatItDoes} ${NOT_ME_WORDS.openDevice}</p>
     <p>${NOT_ME_WORDS.thenReset}</p>
     <form method="post" action="/sign-in-alert">
-      <input type="hidden" name="a" value="${escapeHtml(link.a)}">
-      <input type="hidden" name="i" value="${escapeHtml(link.i)}">
-      <input type="hidden" name="t" value="${escapeHtml(link.t)}">
+      ${linkFields(link)}
       <button type="submit" class="btn">This was not me: end every session</button>
     </form>`,
     200,
@@ -319,7 +353,7 @@ export async function GET(request: NextRequest) {
     },
   );
   if (checked instanceof NextResponse) return checked;
-  if (checked.alert.status === 'not_me') return alreadyReportedPage();
+  if (checked.alert.status === 'not_me') return alreadyReportedPage(checked.link);
   return confirmPage(checked.alert, checked.link);
 }
 
@@ -353,10 +387,9 @@ export async function POST(request: NextRequest) {
     t: formString(form, 't'),
   });
   if (checked instanceof NextResponse) return checked;
-  // Reported already: every session was ended then, and this link ends none
-  // again. (The report refuses it too; this saves the count.)
-  if (checked.alert.status === 'not_me') return alreadyReportedPage();
 
+  // Counted for every press, a repeat on a reported alert too: the report
+  // ends every session each time, and this count is what bounds it.
   const byAlert = await checkRateLimit(
     `sign-in-alert:alert:${checked.alert.id}`,
     POSTS_PER_ALERT_PER_HOUR,
@@ -375,6 +408,6 @@ export async function POST(request: NextRequest) {
     },
   });
   if (answer.outcome === 'done') return donePage(answer.adminsTold);
-  if (answer.outcome === 'already_reported') return alreadyReportedPage();
+  if (answer.outcome === 'already_reported') return endedAgainPage();
   return tryAgainPage();
 }

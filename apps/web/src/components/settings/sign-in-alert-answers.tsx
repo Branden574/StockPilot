@@ -85,8 +85,6 @@ function AnswerButtons({ alert }: { alert: MySignInAlert }) {
     if (!res.ok) {
       setReporting(false);
       setError(res.error.message);
-      // Reported already, from the email's link or another tab: show it so.
-      if (res.error.code === 'conflict') router.refresh();
       return;
     }
     leaveAfterReport.go('/reset');

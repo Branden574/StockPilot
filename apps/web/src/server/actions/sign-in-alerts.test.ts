@@ -11,7 +11,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *     refused alike), runs the same report the emailed link runs, and then
  *     signs this browser out too. A report that could not finish is said so,
  *     and this browser stays signed in to try again. An alert already
- *     reported is said so, and nothing more happens (review 1, finding 2).
+ *     reported behaves the same way: its report ends every session again, so
+ *     this browser signs out too.
  */
 
 const h = vi.hoisted(() => ({
@@ -154,19 +155,15 @@ describe('reportSignInAlertAction', () => {
     }
   });
 
-  it('an alert already reported: said so, nothing more happens, and this browser stays signed in', async () => {
-    h.report.mockResolvedValue({ outcome: 'already_reported' });
+  it('an alert already reported: the report runs again (it ends every session again), and this browser signs out too', async () => {
+    const reported = { ...alert(), status: 'not_me' };
+    h.read.mockResolvedValue({ kind: 'found', alert: reported });
+    h.report.mockResolvedValue({ outcome: 'already_reported', sessionsEnded: true });
     const res = await reportSignInAlertAction({ alertId: ALERT });
-    expect(res).toEqual({
-      ok: false,
-      error: {
-        code: 'conflict',
-        message:
-          'You already reported this sign-in. If you have not reset your password yet, reset it now.',
-      },
-    });
-    expect(h.signOut).not.toHaveBeenCalled();
-    expect(h.revalidate).toHaveBeenCalledWith('/dashboard/settings/security');
+    expect(res).toEqual({ ok: true, data: { signedOut: true } });
+    expect(h.report).toHaveBeenCalledWith(expect.objectContaining({ alert: reported, via: 'signed_in' }));
+    expect(h.signOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(h.report.mock.invocationCallOrder[0]!).toBeLessThan(h.signOut.mock.invocationCallOrder[0]!);
   });
 
   it('an id that is not a uuid is refused before any read', async () => {

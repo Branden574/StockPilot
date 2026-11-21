@@ -5,10 +5,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * Part 3 (sign-in alerts): the member's "This was not me". One function, used
  * by the emailed link's page and by the signed-in action. The order (review
  * 1, finding 2):
- *   - an alert already not_me does nothing more: no sign-out, no telling;
- *   a. every session of the account is ended first. If that fails the answer
- *      is "try again", nothing else changes and nobody is told, so the retry
- *      is a full first report;
+ *   a. every session of the account is ended first, on EVERY press, also of
+ *      an alert already reported: the member may press again because whoever
+ *      signed in came back before the password was reset. If that fails the
+ *      answer is "try again", nothing else changes and nobody is told, so
+ *      the retry is a full first report;
  *   b. the alert is marked not_me, with its resolved_at, in one update that
  *      only changes an alert not already not_me;
  *   c. only when (b) changed the row: the device row is forgotten (by its
@@ -17,7 +18,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *      member belongs to (accepted, not a support act-as seat, at most 5) get
  *      an in-app notice and an email naming the device FAMILY; the member is
  *      emailed; one audit row per organization; one security event. Managers
- *      and staff are never told; nor is the member twice.
+ *      and staff are never told; nor is the member twice. A press that
+ *      changes no row has ended the sessions again and tells nobody again.
  * The emails go one after another, the member's first (finding 3). The
  * member's name never leads a title or a subject (finding 7). The answer says
  * whether an owner or admin was told, so the words claim it only then
@@ -666,19 +668,62 @@ describe('reportSignInAlertNotMe: "the owners and admins were told" only when on
 });
 
 describe('reportSignInAlertNotMe: again, and half-finished (finding 2)', () => {
-  it('an alert already reported does nothing more: no sign-out, nothing forgotten, nobody told', async () => {
-    const alert = await readAlert();
-    await report(alert);
+  it('a second press ends every session again, and tells nobody again', async () => {
+    await report(await readAlert());
     vi.clearAllMocks();
     h.order = [];
     const devices = h.tables.user_login_devices!.length;
 
+    // The alert is read again, as each caller does: it is not_me now.
     const again = await report(await readAlert());
-    expect(again).toEqual({ outcome: 'already_reported' });
-    expect(h.revoke).not.toHaveBeenCalled();
-    expect(h.order).toEqual(['select:sign_in_alerts']);
+    expect(again).toEqual({ outcome: 'already_reported', sessionsEnded: true });
+    expect(h.revoke).toHaveBeenCalledTimes(1);
+    expect(h.revoke).toHaveBeenCalledWith(MEMBER);
+    // The sign-out, then the update that changes no row, and nothing else.
+    expect(h.order.filter((step) => !step.startsWith('select:'))).toEqual(['revoke', 'update:sign_in_alerts']);
     expect(h.tables.user_login_devices).toHaveLength(devices);
     nobodyWasTold();
+  });
+
+  it('a third and a fourth press each end the sessions again', async () => {
+    await report(await readAlert());
+    vi.clearAllMocks();
+    for (let press = 0; press < 3; press++) {
+      expect(await report(await readAlert())).toEqual({ outcome: 'already_reported', sessionsEnded: true });
+    }
+    expect(h.revoke).toHaveBeenCalledTimes(3);
+    nobodyWasTold();
+  });
+
+  it('a second press whose sign-out fails says "try again", not "ended again"', async () => {
+    await report(await readAlert());
+    vi.clearAllMocks();
+    h.revoke.mockResolvedValue({ ok: false, sessionIds: [] });
+    expect(await report(await readAlert())).toEqual({ outcome: 'failed' });
+    nobodyWasTold();
+  });
+
+  it('a second press after the first one’s sign-out failed completes the report, once', async () => {
+    h.revoke.mockResolvedValue({ ok: false, sessionIds: [] });
+    expect(await report(await readAlert())).toEqual({ outcome: 'failed' });
+    nobodyWasTold();
+
+    h.revoke.mockResolvedValue({ ok: true, sessionIds: ['s1'] });
+    expect(await report(await readAlert())).toEqual({ outcome: 'done', adminsTold: true });
+    expect(h.memberEmail).toHaveBeenCalledTimes(1);
+    expect(h.adminEmail).toHaveBeenCalledTimes(2);
+    expect(h.notify).toHaveBeenCalledTimes(2);
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(h.event).toHaveBeenCalledTimes(1);
+
+    // A third press: the sessions again, the telling not again.
+    expect(await report(await readAlert())).toEqual({ outcome: 'already_reported', sessionsEnded: true });
+    expect(h.revoke).toHaveBeenCalledTimes(3);
+    expect(h.memberEmail).toHaveBeenCalledTimes(1);
+    expect(h.adminEmail).toHaveBeenCalledTimes(2);
+    expect(h.notify).toHaveBeenCalledTimes(2);
+    expect(h.audit).toHaveBeenCalledTimes(1);
+    expect(h.event).toHaveBeenCalledTimes(1);
   });
 
   it('two presses at once: the one whose update changes no row has ended the sessions too, and tells nobody', async () => {
@@ -686,7 +731,7 @@ describe('reportSignInAlertNotMe: again, and half-finished (finding 2)', () => {
     const alert = await readAlert();
     Object.assign(h.tables.sign_in_alerts![0]!, { status: 'not_me', resolved_at: '2026-11-20T15:40:00Z' });
     const answer = await report(alert);
-    expect(answer).toEqual({ outcome: 'already_reported' });
+    expect(answer).toEqual({ outcome: 'already_reported', sessionsEnded: true });
     expect(h.revoke).toHaveBeenCalledTimes(1);
     expect(h.tables.user_login_devices).toHaveLength(2);
     nobodyWasTold();
