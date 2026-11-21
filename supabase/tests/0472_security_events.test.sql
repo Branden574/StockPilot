@@ -1,31 +1,37 @@
 -- supabase/tests/0472_security_events.test.sql
 -- Proves migration 0472: public.security_events, its writer
--- record_security_events(jsonb) and its retention purge_security_events().
+-- record_security_events(jsonb), its retention purge_security_events() and the
+-- two read functions for an organization's admins and owners.
 --
 -- WHAT IS WORTH PINNING
---   1. Shape: exactly the columns the design names, none that could hold an
---      address, an email or an account; the checks on each field; the cascade
---      from organizations.
---   2. Who reads: an organization's admin and owner read their organization's
---      rows and nobody else's; a manager, another organization's owner and a
---      signed-out caller read nothing; a row with no organization is read by
---      no member. source_hash and dedupe_key are not readable by any member.
---   3. Who writes: nobody but the two functions. service_role itself cannot
---      insert, update or delete; authenticated and anon cannot call either
---      function.
---   4. The writer: skips a malformed element without raising, clears a field
---      that fails its rule, folds repeats into one row, marks repeats from one
---      source, applies the minute cap, and takes a time only from the last 26
---      hours.
---   5. Retention: rows older than 90 days go; source_hash older than 24 hours
---      is cleared and the row stays.
+--   1. Shape: exactly the designed columns, none that could hold an address,
+--      an email or an account; every CHECK refuses a bad row even when the
+--      table's owner writes it; the cascade from organizations, by behaviour.
+--   2. Who reads: no API role reads the table directly. An organization's
+--      owner and admin read their organization's rows through the read
+--      functions; a manager, another organization's owner and a signed-out
+--      caller are refused; a row with no organization is returned to nobody.
+--      No function returns source_hash or the row key.
+--   3. Who writes: no API role but through the two functions. service_role
+--      itself cannot insert, update or delete; authenticated and anon cannot
+--      call the writer or the purge.
+--   4. The writer: skips an element whose required fields are not valid
+--      strings, clears or defaults an optional field that fails its rule
+--      (an address, an email, an id, a path or a user agent sent as a city is
+--      never stored), folds repeats into one row, marks repeats from one
+--      source, applies the two minute caps, and takes a time only from the
+--      last 26 hours.
+--   5. Retention: rows older than 90 days go; a hash older than 24 hours is
+--      cleared with its row key and the row stays.
 --
+-- now() is fixed for the whole transaction and the writer uses it, so every
+-- minute below is computed from now() and no assertion depends on the clock.
 -- Namespace a0472000. Every value is made up. Wrapped in begin/rollback:
 -- nothing leaks. Run via `supabase test db` after `supabase db reset`.
 
 begin;
 
-select plan(47);
+select plan(91);
 
 \set orgA '\'a0472000-0000-0000-0000-0000000000a1\''
 \set orgB '\'a0472000-0000-0000-0000-0000000000b1\''
@@ -48,6 +54,31 @@ insert into public.organization_members (organization_id, user_id, role, accepte
   (:orgA, :managerA, 'manager', now()),
   (:orgB, :ownerB,   'owner',   now());
 
+-- Times, in milliseconds, readable by every role below (floor keeps each in
+-- its own minute).
+select set_config('t.m2',  (floor(extract(epoch from now() - interval '2 hours') * 1000))::bigint::text, true);
+select set_config('t.m2a', (floor(extract(epoch from now() - interval '2 hours 10 minutes') * 1000))::bigint::text, true);
+select set_config('t.m2b', (floor(extract(epoch from now() - interval '2 hours 11 minutes') * 1000))::bigint::text, true);
+select set_config('t.m5',  (floor(extract(epoch from now() - interval '5 hours') * 1000))::bigint::text, true);
+select set_config('t.m7',  (floor(extract(epoch from now() - interval '7 hours') * 1000))::bigint::text, true);
+select set_config('t.h25', (floor(extract(epoch from now() - interval '25 hours') * 1000))::bigint::text, true);
+select set_config('t.h27', (floor(extract(epoch from now() - interval '27 hours') * 1000))::bigint::text, true);
+select set_config('t.s30', (floor(extract(epoch from now() + interval '30 seconds') * 1000))::bigint::text, true);
+select set_config('t.f2',  (floor(extract(epoch from now() + interval '2 hours') * 1000))::bigint::text, true);
+
+-- A direct insert as the table's owner, for the CHECK constraints.
+create function pg_temp.raw_insert(p jsonb) returns void language sql as $$
+  insert into public.security_events
+    (minute, category, outcome, reason, source, country, city, source_hash, event_count, dedupe_key)
+  values
+    (coalesce((p ->> 'minute')::timestamptz, date_trunc('minute', now(), 'UTC')),
+     coalesce(p ->> 'category', 'bots'), coalesce(p ->> 'outcome', 'blocked'),
+     coalesce(p ->> 'reason', 'raw'), coalesce(p ->> 'source', 'web'),
+     p ->> 'country', p ->> 'city', p ->> 'source_hash',
+     coalesce((p ->> 'event_count')::integer, 1),
+     coalesce(p ->> 'dedupe_key', md5(random()::text)));
+$$;
+
 -- ── 1. Shape ────────────────────────────────────────────────────────────────
 select has_table('public', 'security_events', '0472/1: table exists');
 select columns_are('public', 'security_events',
@@ -65,47 +96,93 @@ select ok(
     where n.nspname = 'public' and c.relname = 'security_events'),
   '0472/4: RLS is enabled');
 select is(
-  (select array_agg(policyname || ':' || cmd order by policyname) from pg_policies
+  (select count(*)::int from pg_policies
     where schemaname = 'public' and tablename = 'security_events'),
-  array['security_events_admin_read:SELECT'],
-  '0472/5: the only policy is the admin read');
+  0,
+  '0472/5: there is no policy');
+select has_index('public', 'security_events', 'security_events_organization_minute_idx',
+  '0472/6: an organization''s rows are indexed by minute');
+select has_index('public', 'security_events', 'security_events_source_hash_minute_idx',
+  '0472/7: rows are indexed by source');
+select is(
+  (select array_agg(conname::text order by conname) from pg_constraint
+    where conrelid = 'public.security_events'::regclass and contype = 'c'),
+  array['security_events_category', 'security_events_city', 'security_events_count_positive',
+        'security_events_country', 'security_events_dedupe_key',
+        'security_events_minute_is_a_minute', 'security_events_outcome',
+        'security_events_reason', 'security_events_source', 'security_events_source_hash'],
+  '0472/8: the ten CHECK constraints are there by name');
 
 -- ── 2. Privileges ───────────────────────────────────────────────────────────
 select table_privs_are('public', 'security_events', 'anon', array[]::text[],
-  '0472/6: anon has no table privilege');
+  '0472/9: anon has no table privilege');
 select table_privs_are('public', 'security_events', 'authenticated', array[]::text[],
-  '0472/7: authenticated has no table-wide privilege (its read is by column)');
+  '0472/10: authenticated has no table privilege');
+select is(
+  (select count(*)::int from information_schema.column_privileges
+    where table_schema = 'public' and table_name = 'security_events'
+      and grantee in ('anon', 'authenticated', 'PUBLIC')),
+  0,
+  '0472/11: no column of the table is granted to anon, authenticated or PUBLIC');
 select table_privs_are('public', 'security_events', 'service_role', array['SELECT'],
-  '0472/8: service_role has SELECT only');
-select ok(
-  has_column_privilege('authenticated', 'public.security_events', 'minute', 'select')
-  and has_column_privilege('authenticated', 'public.security_events', 'category', 'select')
-  and has_column_privilege('authenticated', 'public.security_events', 'city', 'select')
-  and has_column_privilege('authenticated', 'public.security_events', 'event_count', 'select'),
-  '0472/9: authenticated may read the event columns');
-select ok(
-  not has_column_privilege('authenticated', 'public.security_events', 'source_hash', 'select')
-  and not has_column_privilege('authenticated', 'public.security_events', 'dedupe_key', 'select'),
-  '0472/10: authenticated may not read source_hash or dedupe_key');
+  '0472/12: service_role has SELECT only');
 select ok(
   not has_function_privilege('anon', 'public.record_security_events(jsonb)', 'execute')
   and not has_function_privilege('authenticated', 'public.record_security_events(jsonb)', 'execute')
   and has_function_privilege('service_role', 'public.record_security_events(jsonb)', 'execute'),
-  '0472/11: only service_role may call the writer');
+  '0472/13: only service_role may call the writer');
 select ok(
   not has_function_privilege('anon', 'public.purge_security_events()', 'execute')
   and not has_function_privilege('authenticated', 'public.purge_security_events()', 'execute')
   and has_function_privilege('service_role', 'public.purge_security_events()', 'execute'),
-  '0472/12: only service_role may call the purge');
+  '0472/14: only service_role may call the purge');
+select ok(
+  not has_function_privilege('anon', 'public.security_events_for_organization(uuid, integer)', 'execute')
+  and has_function_privilege('authenticated', 'public.security_events_for_organization(uuid, integer)', 'execute')
+  and not has_function_privilege('anon', 'public.security_event_totals_for_organization(uuid, timestamptz, timestamptz)', 'execute')
+  and has_function_privilege('authenticated', 'public.security_event_totals_for_organization(uuid, timestamptz, timestamptz)', 'execute'),
+  '0472/15: authenticated may call the two read functions, anon neither');
 select is(
   (select array_agg(p.proname || ':' || p.prosecdef::text || ':' || array_to_string(p.proconfig, ',')
                     order by p.proname)
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'public' and p.proname in ('record_security_events', 'purge_security_events')),
-  array['purge_security_events:true:search_path=""', 'record_security_events:true:search_path=""'],
-  '0472/13: both functions are SECURITY DEFINER with an empty search_path');
+    where n.nspname = 'public'
+      and p.proname in ('record_security_events', 'purge_security_events',
+                        'security_events_for_organization',
+                        'security_event_totals_for_organization')),
+  array['purge_security_events:true:search_path="",lock_timeout=2s',
+        'record_security_events:true:search_path="",lock_timeout=2s',
+        'security_event_totals_for_organization:true:search_path=""',
+        'security_events_for_organization:true:search_path=""'],
+  '0472/16: the four functions are SECURITY DEFINER with an empty search_path; the writer and the purge give up a lock wait after 2 s');
 
--- ── 3. The writer, as the app calls it ──────────────────────────────────────
+-- ── 3. The table's own checks, written to as its owner ──────────────────────
+select lives_ok($$ select pg_temp.raw_insert('{}') $$, '0472/17: a well-formed row is accepted');
+delete from public.security_events where reason = 'raw';
+select throws_ok($$ select pg_temp.raw_insert(jsonb_build_object('minute', date_trunc('minute', now(), 'UTC') + interval '7 seconds')) $$,
+  '23514', null, '0472/18: a minute that is not the start of a minute is refused');
+select throws_ok($$ select pg_temp.raw_insert('{"category": "weather"}') $$,
+  '23514', null, '0472/19: an unknown category is refused');
+select throws_ok($$ select pg_temp.raw_insert('{"outcome": "stopped"}') $$,
+  '23514', null, '0472/20: an unknown outcome is refused');
+select throws_ok($$ select pg_temp.raw_insert('{"reason": "Has Spaces"}') $$,
+  '23514', null, '0472/21: a reason that is not a short code is refused');
+select throws_ok($$ select pg_temp.raw_insert('{"source": "fax"}') $$,
+  '23514', null, '0472/22: an unknown source is refused');
+select throws_ok($$ select pg_temp.raw_insert('{"country": "usa"}') $$,
+  '23514', null, '0472/23: a country that is not two capital letters is refused');
+select throws_ok($$ select pg_temp.raw_insert('{"city": "someone@example.test"}') $$,
+  '23514', null, '0472/24: an email as a city is refused');
+select throws_ok($$ select pg_temp.raw_insert('{"city": "203.0.113.9"}') $$,
+  '23514', null, '0472/25: an address as a city is refused');
+select throws_ok($$ select pg_temp.raw_insert('{"event_count": 0}') $$,
+  '23514', null, '0472/26: a count below one is refused');
+select throws_ok($$ select pg_temp.raw_insert('{"source_hash": "203.0.113.9"}') $$,
+  '23514', null, '0472/27: a source_hash that is not 32 hex is refused');
+select throws_ok($$ select pg_temp.raw_insert('{"dedupe_key": "short"}') $$,
+  '23514', null, '0472/28: a row key that is not 32 hex is refused');
+
+-- ── 4. The writer, as the app calls it ──────────────────────────────────────
 set local role service_role;
 
 select is(
@@ -120,7 +197,7 @@ select is(
       'reason', 'public_order_paused', 'source', 'web',
       'organization_id', 'a0472000-0000-0000-0000-0000000000b1', 'count', 7))),
   3,
-  '0472/14: three well-formed events are stored');
+  '0472/29: three well-formed events are stored');
 
 select is(
   public.record_security_events(jsonb_build_array(
@@ -129,15 +206,17 @@ select is(
       'organization_id', 'a0472000-0000-0000-0000-0000000000a1',
       'country', 'US', 'city', 'Fresno', 'source_hash', repeat('a', 32), 'count', 2))),
   1,
-  '0472/15: a repeat of the same kind in the same minute is stored');
+  '0472/30: a repeat of the same kind in the same minute is stored');
+reset role;
 
 select results_eq(
-  $$ select reason, event_count from public.security_events
-      where organization_id = 'a0472000-0000-0000-0000-0000000000a1' order by reason $$,
-  $$ values ('wrong_password'::text, 3) $$,
-  '0472/16: the repeat added to the row''s count, with no second row');
+  $$ select reason, event_count, minute, last_seen_at from public.security_events
+      where organization_id = 'a0472000-0000-0000-0000-0000000000a1' $$,
+  $$ values ('wrong_password'::text, 3, date_trunc('minute', now(), 'UTC'), now()) $$,
+  '0472/31: the repeat added to the row''s count, with no second row, in this minute');
 
 -- Malformed elements: skipped, never raised.
+set local role service_role;
 select is(
   public.record_security_events(jsonb_build_array(
     'a string'::text,
@@ -146,14 +225,18 @@ select is(
     jsonb_build_object('category', 'bots', 'outcome', 'stopped', 'reason', 'x', 'source', 'web'),
     jsonb_build_object('category', 'bots', 'outcome', 'blocked', 'reason', 'Has Spaces', 'source', 'web'),
     jsonb_build_object('category', 'bots', 'outcome', 'blocked', 'reason', 'x', 'source', 'fax'),
-    jsonb_build_object('outcome', 'blocked', 'reason', 'x', 'source', 'web'))),
+    jsonb_build_object('outcome', 'blocked', 'reason', 'x', 'source', 'web'),
+    jsonb_build_object('category', 'bots', 'outcome', 'blocked', 'reason', true, 'source', 'web'),
+    jsonb_build_object('category', null, 'outcome', 'blocked', 'reason', 'x', 'source', 'web'),
+    jsonb_build_object('category', 'bots', 'outcome', 'blocked', 'reason', 'x',
+      'source', jsonb_build_array('web')))),
   0,
-  '0472/17: an element that fails a rule is skipped');
+  '0472/32: an element whose required fields are missing, unknown or not strings is skipped');
 select is(public.record_security_events('{"category": "bots"}'::jsonb), 0,
-  '0472/18: an input that is not an array stores nothing');
-select is(public.record_security_events(null), 0, '0472/19: a null input stores nothing');
+  '0472/33: an input that is not an array stores nothing');
+select is(public.record_security_events(null), 0, '0472/34: a null input stores nothing');
 
--- A field that fails its rule is cleared; the event is still stored.
+-- A field that fails its rule is cleared or defaulted; the event is stored.
 select is(
   public.record_security_events(jsonb_build_array(
     jsonb_build_object('category', 'exploit', 'outcome', 'blocked',
@@ -162,206 +245,449 @@ select is(
       'country', 'usa', 'city', repeat('x', 81), 'source_hash', '203.0.113.9',
       'count', '0', 'at_ms', 'yesterday'))),
   1,
-  '0472/20: an event with unusable optional fields is still stored');
+  '0472/35: an event with unusable optional fields is still stored');
 reset role;
 select results_eq(
-  $$ select organization_id is null, country is null, city is null, source_hash is null, event_count
+  $$ select organization_id is null, country is null, city is null, source_hash is null,
+            event_count, minute
        from public.security_events where reason = 'git_dir' $$,
-  $$ values (true, true, true, true, 1) $$,
-  '0472/21: the unusable organization, country, city, hash and count were cleared or defaulted');
+  $$ values (true, true, true, true, 1, date_trunc('minute', now(), 'UTC')) $$,
+  '0472/36: its organization, country, city and hash are empty, its count is 1 and its time is now');
+
+-- What must never be stored as a city.
+set local role service_role;
+select is(
+  public.record_security_events(jsonb_build_array(
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'city_address', 'source', 'web', 'city', '203.0.113.9'),
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'city_address6', 'source', 'web', 'city', '2001:db8::1'),
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'city_email', 'source', 'web', 'city', 'someone@example.test'),
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'city_id', 'source', 'web', 'city', 'a0472000-0000-0000-0000-0000000000c1'),
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'city_hexid', 'source', 'web', 'city', 'abcdefab-abcd-abcd-abcd-abcdefabcdef'),
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'city_path', 'source', 'web', 'city', '/wp-admin/setup.php'),
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'city_agent', 'source', 'web', 'city', 'curl/8.4.0'),
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'city_markup', 'source', 'web', 'city', '<b>Fresno</b>'),
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'city_newline', 'source', 'web', 'city', 'Ber' || chr(10) || 'lin'),
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'city_hidden', 'source', 'web', 'city', 'Fres' || chr(8238) || 'no'),
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'city_spaces', 'source', 'web', 'city', '   '),
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'city_object', 'source', 'web', 'city', jsonb_build_object('name', 'Fresno')),
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'city_number', 'source', 'web', 'city', 12))),
+  13,
+  '0472/37: events whose city is an address, an email, an id, a path, a user agent, markup, hidden characters or not a string are stored');
+reset role;
+select is(
+  (select count(*)::int from public.security_events where reason like 'city\_%' and city is null),
+  13,
+  '0472/38: each with no city');
 
 set local role service_role;
--- An organization that does not exist: stored with none.
+select is(
+  public.record_security_events(jsonb_build_array(
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'place_a', 'source', 'web', 'country', 'CA', 'city', 'St. John''s'),
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'place_b', 'source', 'web', 'country', 'FR', 'city', 'Saint-Denis'),
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'place_c', 'source', 'web', 'country', 'EG', 'city', '6th of October City'),
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'place_d', 'source', 'web', 'country', 'BR', 'city', '  São Paulo '),
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'place_e', 'source', 'web', 'country', 'de', 'city', repeat('y', 80)))),
+  5,
+  '0472/39: events with real place names are stored');
+reset role;
+select results_eq(
+  $$ select reason, country, city from public.security_events where reason like 'place\_%' order by reason $$,
+  $$ values ('place_a'::text, 'CA'::text, 'St. John''s'::text),
+            ('place_b', 'FR', 'Saint-Denis'),
+            ('place_c', 'EG', '6th of October City'),
+            ('place_d', 'BR', 'São Paulo'),
+            ('place_e', null, repeat('y', 80)) $$,
+  '0472/40: with their names kept and trimmed, 80 characters accepted, and a lower-case country left empty');
+
+-- The organization: one that does not exist is left empty; capitals are read.
+set local role service_role;
 select is(
   public.record_security_events(jsonb_build_array(
     jsonb_build_object('category', 'exploit', 'outcome', 'blocked',
       'reason', 'wordpress', 'source', 'web',
-      'organization_id', 'a0472000-0000-0000-0000-00000000dead'))),
-  1,
-  '0472/22: an event naming an organization that does not exist is stored');
-reset role;
-select is(
-  (select organization_id from public.security_events where reason = 'wordpress'),
-  null::uuid,
-  '0472/23: with no organization');
-
--- A city with a control character is cleared.
-set local role service_role;
-select is(
-  public.record_security_events(jsonb_build_array(
-    jsonb_build_object('category', 'exploit', 'outcome', 'blocked',
-      'reason', 'php_file', 'source', 'web', 'country', 'DE',
-      'city', 'Ber' || chr(10) || 'lin'))),
-  1,
-  '0472/24: an event whose city holds a control character is stored');
+      'organization_id', 'a0472000-0000-0000-0000-00000000dead'),
+    jsonb_build_object('category', 'bots', 'outcome', 'flagged',
+      'reason', 'upper_org', 'source', 'phone',
+      'organization_id', 'A0472000-0000-0000-0000-0000000000A1'))),
+  2,
+  '0472/41: events naming an organization that does not exist, and one in capitals, are stored');
 reset role;
 select results_eq(
-  $$ select country, city from public.security_events where reason = 'php_file' $$,
-  $$ values ('DE'::text, null::text) $$,
-  '0472/25: with its country and no city');
+  $$ select reason, organization_id from public.security_events
+      where reason in ('wordpress', 'upper_org') order by reason $$,
+  $$ values ('upper_org'::text, 'a0472000-0000-0000-0000-0000000000a1'::uuid),
+            ('wordpress', null) $$,
+  '0472/42: the unknown organization is empty; the one in capitals is found');
 
--- The time: taken from the last 26 hours, otherwise now.
+-- The count.
 set local role service_role;
 select is(
   public.record_security_events(jsonb_build_array(
-    jsonb_build_object('category', 'phishing', 'outcome', 'flagged',
-      'reason', 'recent_report', 'source', 'email',
-      'at_ms', (floor(extract(epoch from clock_timestamp() - interval '3 hours') * 1000))::bigint),
-    jsonb_build_object('category', 'phishing', 'outcome', 'flagged',
-      'reason', 'old_report', 'source', 'email',
-      'at_ms', (floor(extract(epoch from clock_timestamp() - interval '3 days') * 1000))::bigint),
-    jsonb_build_object('category', 'phishing', 'outcome', 'flagged',
-      'reason', 'future_report', 'source', 'email',
-      'at_ms', (floor(extract(epoch from clock_timestamp() + interval '2 hours') * 1000))::bigint))),
-  3,
-  '0472/26: events carrying a time are stored');
+    jsonb_build_object('category', 'bots', 'outcome', 'blocked', 'reason', 'count_big', 'source', 'web', 'count', 1000000),
+    jsonb_build_object('category', 'bots', 'outcome', 'blocked', 'reason', 'count_part', 'source', 'web', 'count', 2.5),
+    jsonb_build_object('category', 'bots', 'outcome', 'blocked', 'reason', 'count_minus', 'source', 'web', 'count', -3),
+    jsonb_build_object('category', 'bots', 'outcome', 'blocked', 'reason', 'count_most', 'source', 'web', 'count', 999999),
+    jsonb_build_object('category', 'bots', 'outcome', 'blocked', 'reason', 'count_text', 'source', 'web', 'count', '12'))),
+  5,
+  '0472/43: events with every kind of count are stored');
 reset role;
-select ok(
-  (select minute between clock_timestamp() - interval '3 hours 2 minutes'
-                     and clock_timestamp() - interval '2 hours 58 minutes'
-     from public.security_events where reason = 'recent_report'),
-  '0472/27: a time three hours ago is kept');
-select ok(
-  (select bool_and(minute > clock_timestamp() - interval '2 minutes'
-                   and minute <= clock_timestamp())
-     from public.security_events where reason in ('old_report', 'future_report')),
-  '0472/28: a time three days ago or in the future is stored as now');
+select results_eq(
+  $$ select reason, event_count from public.security_events where reason like 'count\_%' order by reason $$,
+  $$ values ('count_big'::text, 1), ('count_minus', 1), ('count_most', 999999),
+            ('count_part', 1), ('count_text', 12) $$,
+  '0472/44: a count over six digits, a fraction and a negative become 1; 999999 and digits in a string are kept');
+
+-- The time: taken from the last 26 hours and at most a minute ahead.
+set local role service_role;
+select is(
+  public.record_security_events(jsonb_build_array(
+    jsonb_build_object('category', 'phishing', 'outcome', 'flagged', 'reason', 'time_h25', 'source', 'email',
+      'at_ms', current_setting('t.h25')::bigint),
+    jsonb_build_object('category', 'phishing', 'outcome', 'flagged', 'reason', 'time_h27', 'source', 'email',
+      'at_ms', current_setting('t.h27')::bigint),
+    jsonb_build_object('category', 'phishing', 'outcome', 'flagged', 'reason', 'time_s30', 'source', 'email',
+      'at_ms', current_setting('t.s30')::bigint),
+    jsonb_build_object('category', 'phishing', 'outcome', 'flagged', 'reason', 'time_f2', 'source', 'email',
+      'at_ms', current_setting('t.f2')::bigint))),
+  4,
+  '0472/45: events carrying a time are stored');
+reset role;
+select results_eq(
+  $$ select reason, minute from public.security_events where reason like 'time\_%' order by reason $$,
+  $$ values ('time_f2'::text,  date_trunc('minute', now(), 'UTC')),
+            ('time_h25', date_trunc('minute', now() - interval '25 hours', 'UTC')),
+            ('time_h27', date_trunc('minute', now(), 'UTC')),
+            ('time_s30', date_trunc('minute', now() + interval '30 seconds', 'UTC')) $$,
+  '0472/46: 25 hours ago and 30 seconds ahead are kept; 27 hours ago and 2 hours ahead are stored as now');
 select ok(
   (select bool_and(minute = date_trunc('minute', minute, 'UTC')) from public.security_events),
-  '0472/29: every row sits on the start of a minute');
+  '0472/47: every row sits on the start of a minute');
 
--- ── 4. Repeats from one source ──────────────────────────────────────────────
--- Source b: four wrong passwords, then a fifth. The fifth is a repeat.
+-- At most 200 elements of one call are read.
+set local role service_role;
+select is(
+  public.record_security_events((
+    select jsonb_agg(jsonb_build_object('category', 'bots', 'outcome', 'blocked',
+      'reason', 'many_' || g, 'source', 'web', 'at_ms', current_setting('t.m7')::bigint))
+      from generate_series(1, 201) g)),
+  200, '0472/48: of 201 elements in one call, 200 are stored');
+reset role;
+select results_eq(
+  $$ select count(*)::int, (count(*) filter (where reason = 'over_minute_cap'))::int
+       from public.security_events
+      where minute = date_trunc('minute', now() - interval '7 hours', 'UTC') $$,
+  $$ values (200, 0) $$,
+  '0472/49: as 200 rows, the 201st not read at all');
+
+-- ── 5. Repeats from one source ──────────────────────────────────────────────
 set local role service_role;
 select is(
   public.record_security_events(jsonb_build_array(
     jsonb_build_object('category', 'password_guessing', 'outcome', 'blocked',
-      'reason', 'wrong_password', 'source', 'web', 'source_hash', repeat('b', 32), 'count', 4))),
-  1, '0472/30: four wrong passwords from one source are stored');
+      'reason', 'wrong_password', 'source', 'web', 'source_hash', repeat('b', 32), 'count', 4,
+      'at_ms', current_setting('t.m2')::bigint))),
+  1, '0472/50: four wrong passwords from one source are stored');
 select is(
   public.record_security_events(jsonb_build_array(
     jsonb_build_object('category', 'password_guessing', 'outcome', 'blocked',
-      'reason', 'wrong_password', 'source', 'web', 'source_hash', repeat('b', 32)),
+      'reason', 'wrong_password', 'source', 'web', 'source_hash', repeat('b', 32),
+      'at_ms', current_setting('t.m2')::bigint),
     jsonb_build_object('category', 'password_guessing', 'outcome', 'blocked',
-      'reason', 'wrong_code', 'source', 'web', 'source_hash', repeat('b', 32)),
+      'reason', 'wrong_code', 'source', 'web', 'source_hash', repeat('b', 32),
+      'at_ms', current_setting('t.m2')::bigint),
     jsonb_build_object('category', 'password_guessing', 'outcome', 'blocked',
-      'reason', 'wrong_password', 'source', 'web'))),
-  3, '0472/31: a fifth, a wrong code from the same source, and one with no source are stored');
+      'reason', 'wrong_password', 'source', 'web',
+      'at_ms', current_setting('t.m2')::bigint))),
+  3, '0472/51: a fifth, a wrong code from the same source, and one with no source are stored');
 reset role;
 select results_eq(
   $$ select reason, event_count from public.security_events
       where source_hash = repeat('b', 32) order by reason $$,
   $$ values ('repeated_wrong_code'::text, 1), ('repeated_wrong_password'::text, 1),
             ('wrong_password'::text, 4) $$,
-  '0472/32: the fifth password and the code after it are stored as repeats');
+  '0472/52: the fifth password and the code after it are stored as repeats');
 select is(
   (select count(*)::int from public.security_events
-    where reason = 'wrong_password' and source_hash is null and organization_id is null),
+    where reason = 'wrong_password' and source_hash is null
+      and minute = date_trunc('minute', now() - interval '2 hours', 'UTC')),
   1,
-  '0472/33: a wrong password with no source is never a repeat');
+  '0472/53: a wrong password with no source is never a repeat');
+
+-- Only password events count, and only wrong passwords and codes are renamed.
+set local role service_role;
+select is(
+  public.record_security_events(jsonb_build_array(
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'env_probe', 'source', 'web',
+      'source_hash', repeat('c', 32), 'count', 4, 'at_ms', current_setting('t.m2')::bigint),
+    jsonb_build_object('category', 'password_guessing', 'outcome', 'blocked', 'reason', 'wrong_password', 'source', 'web',
+      'source_hash', repeat('c', 32), 'at_ms', current_setting('t.m2')::bigint),
+    jsonb_build_object('category', 'password_guessing', 'outcome', 'blocked', 'reason', 'sign_in_paused', 'source', 'web',
+      'source_hash', repeat('d', 32), 'count', 9, 'at_ms', current_setting('t.m2')::bigint),
+    jsonb_build_object('category', 'password_guessing', 'outcome', 'blocked', 'reason', 'wrong_password', 'source', 'web',
+      'source_hash', repeat('d', 32), 'at_ms', current_setting('t.m2')::bigint))),
+  4, '0472/54: events of another category and of another password reason are stored');
+reset role;
+select results_eq(
+  $$ select source_hash, reason from public.security_events
+      where source_hash in (repeat('c', 32), repeat('d', 32)) order by source_hash, reason $$,
+  $$ values (repeat('c', 32), 'env_probe'::text), (repeat('c', 32), 'wrong_password'),
+            (repeat('d', 32), 'repeated_wrong_password'), (repeat('d', 32), 'sign_in_paused') $$,
+  '0472/55: another category from the source does not make a repeat; a paused sign-in counts toward one and keeps its own name');
+
+-- The ten minutes include the tenth; the eleventh is outside.
+set local role service_role;
+select is(
+  public.record_security_events(jsonb_build_array(
+    jsonb_build_object('category', 'password_guessing', 'outcome', 'blocked', 'reason', 'wrong_password', 'source', 'web',
+      'source_hash', repeat('e', 32), 'count', 4, 'at_ms', current_setting('t.m2a')::bigint),
+    jsonb_build_object('category', 'password_guessing', 'outcome', 'blocked', 'reason', 'wrong_password', 'source', 'web',
+      'source_hash', repeat('e', 32), 'at_ms', current_setting('t.m2')::bigint),
+    jsonb_build_object('category', 'password_guessing', 'outcome', 'blocked', 'reason', 'wrong_password', 'source', 'web',
+      'source_hash', repeat('f', 32), 'count', 4, 'at_ms', current_setting('t.m2b')::bigint),
+    jsonb_build_object('category', 'password_guessing', 'outcome', 'blocked', 'reason', 'wrong_password', 'source', 'web',
+      'source_hash', repeat('f', 32), 'at_ms', current_setting('t.m2')::bigint),
+    jsonb_build_object('category', 'password_guessing', 'outcome', 'blocked', 'reason', 'wrong_password', 'source', 'web',
+      'source_hash', repeat('9', 32), 'count', 5, 'at_ms', current_setting('t.m2')::bigint))),
+  5, '0472/56: wrong passwords ten and eleven minutes apart, and five in one element, are stored');
+reset role;
+select results_eq(
+  $$ select source_hash, reason, event_count from public.security_events
+      where source_hash in (repeat('e', 32), repeat('f', 32), repeat('9', 32))
+        and minute = date_trunc('minute', now() - interval '2 hours', 'UTC')
+      order by source_hash $$,
+  $$ values (repeat('9', 32), 'repeated_wrong_password'::text, 5),
+            (repeat('e', 32), 'repeated_wrong_password', 1),
+            (repeat('f', 32), 'wrong_password', 1) $$,
+  '0472/57: four ten minutes earlier make the fifth a repeat, four eleven minutes earlier do not, and five counted in one element are a repeat');
 select is(
   (select reason from public.security_events where source_hash = repeat('a', 32)),
   'wrong_password',
-  '0472/34: three wrong passwords from another source are not repeats');
+  '0472/58: three wrong passwords from another source are not repeats');
 
--- ── 5. The minute cap ───────────────────────────────────────────────────────
--- 230 different events in one past minute: 200 rows, the rest on one overflow row.
+-- ── 6. The minute caps ──────────────────────────────────────────────────────
+-- No organization: 200 rows, the rest on overflow rows.
 set local role service_role;
 select is(
   public.record_security_events((
     select jsonb_agg(jsonb_build_object('category', 'bots', 'outcome', 'blocked',
-      'reason', 'cap_' || g, 'source', 'web',
-      'at_ms', (floor(extract(epoch from date_trunc('minute', clock_timestamp() - interval '5 hours')) * 1000))::bigint))
+      'reason', 'cap_' || g, 'source', 'web', 'at_ms', current_setting('t.m5')::bigint))
       from generate_series(1, 200) g)),
-  200, '0472/35: 200 different events in one minute are stored');
+  200, '0472/59: 200 different events with no organization in one minute are stored');
 select is(
   public.record_security_events((
     select jsonb_agg(jsonb_build_object('category', 'bots', 'outcome', 'blocked',
-      'reason', 'late_' || g, 'source', 'web', 'country', 'US',
-      'organization_id', 'a0472000-0000-0000-0000-0000000000a1',
-      'at_ms', (floor(extract(epoch from date_trunc('minute', clock_timestamp() - interval '5 hours')) * 1000))::bigint))
+      'reason', 'late_' || g, 'source', 'web', 'country', 'US', 'city', 'Fresno',
+      'source_hash', repeat('1', 32), 'at_ms', current_setting('t.m5')::bigint))
       from generate_series(1, 30) g)),
-  30, '0472/36: 30 more in the same minute are accepted');
+  30, '0472/60: 30 more in the same minute are accepted');
 select is(
   public.record_security_events(jsonb_build_array(
     jsonb_build_object('category', 'bots', 'outcome', 'blocked',
-      'reason', 'cap_1', 'source', 'web',
-      'at_ms', (floor(extract(epoch from date_trunc('minute', clock_timestamp() - interval '5 hours')) * 1000))::bigint))),
-  1, '0472/37: an event whose row exists is accepted past the cap');
+      'reason', 'cap_1', 'source', 'web', 'at_ms', current_setting('t.m5')::bigint))),
+  1, '0472/61: an event whose row exists is accepted past the cap');
 reset role;
 select results_eq(
   $$ select count(*)::int,
-            (count(*) filter (where reason like 'late_%'))::int,
+            (count(*) filter (where reason like 'late\_%'))::int,
             (sum(event_count) filter (where reason = 'over_minute_cap'))::int,
-            (count(*) filter (where reason = 'over_minute_cap'
-                                and organization_id is null and country is null))::int,
+            (count(*) filter (where reason = 'over_minute_cap' and country is null
+                                and city is null and source_hash is null))::int,
             (max(event_count) filter (where reason = 'cap_1'))::int
        from public.security_events
-      where minute = date_trunc('minute', clock_timestamp() - interval '5 hours') $$,
+      where minute = date_trunc('minute', now() - interval '5 hours', 'UTC')
+        and organization_id is null $$,
   $$ values (201, 0, 30, 1, 2) $$,
-  '0472/38: the minute holds its 200 rows and one overflow row counting the other 30, with no organization or place; the existing row took its repeat');
+  '0472/62: the minute holds its 200 rows and one overflow row counting the other 30 with no place and no hash; the existing row took its repeat');
 
--- ── 6. Who writes: only the functions ───────────────────────────────────────
+-- An organization: its own 60 rows, whatever the rows with no organization
+-- did to that minute; its overflow rows keep the organization.
+set local role service_role;
+select is(
+  public.record_security_events((
+    select jsonb_agg(jsonb_build_object('category', 'bots', 'outcome', 'blocked',
+      'reason', 'a_cap_' || g, 'source', 'web',
+      'organization_id', 'a0472000-0000-0000-0000-0000000000a1',
+      'at_ms', current_setting('t.m5')::bigint))
+      from generate_series(1, 60) g)),
+  60, '0472/63: 60 different events of one organization are stored in a minute that is full for rows with no organization');
+select is(
+  public.record_security_events(jsonb_build_array(
+    jsonb_build_object('category', 'bots', 'outcome', 'blocked', 'reason', 'a_late_1', 'source', 'web',
+      'organization_id', 'a0472000-0000-0000-0000-0000000000a1', 'country', 'US', 'city', 'Fresno',
+      'source_hash', repeat('2', 32), 'at_ms', current_setting('t.m5')::bigint),
+    jsonb_build_object('category', 'bots', 'outcome', 'blocked', 'reason', 'a_late_2', 'source', 'web',
+      'organization_id', 'a0472000-0000-0000-0000-0000000000a1', 'at_ms', current_setting('t.m5')::bigint),
+    jsonb_build_object('category', 'bots', 'outcome', 'blocked', 'reason', 'a_late_3', 'source', 'web',
+      'organization_id', 'a0472000-0000-0000-0000-0000000000a1', 'at_ms', current_setting('t.m5')::bigint),
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'a_late_4', 'source', 'api',
+      'organization_id', 'a0472000-0000-0000-0000-0000000000a1', 'at_ms', current_setting('t.m5')::bigint),
+    jsonb_build_object('category', 'exploit', 'outcome', 'blocked', 'reason', 'a_late_5', 'source', 'api',
+      'organization_id', 'a0472000-0000-0000-0000-0000000000a1', 'at_ms', current_setting('t.m5')::bigint),
+    jsonb_build_object('category', 'bots', 'outcome', 'blocked', 'reason', 'b_event', 'source', 'web',
+      'organization_id', 'a0472000-0000-0000-0000-0000000000b1', 'country', 'MX', 'city', 'Tijuana',
+      'at_ms', current_setting('t.m5')::bigint))),
+  6, '0472/64: five more of that organization and one of another are accepted');
+reset role;
+select results_eq(
+  $$ select category, source, reason, event_count, country is null and city is null and source_hash is null
+       from public.security_events
+      where minute = date_trunc('minute', now() - interval '5 hours', 'UTC')
+        and organization_id = 'a0472000-0000-0000-0000-0000000000a1'
+        and reason not like 'a\_cap\_%'
+      order by category $$,
+  $$ values ('bots'::text, 'web'::text, 'over_minute_cap'::text, 3, true),
+            ('exploit', 'api', 'over_minute_cap', 2, true) $$,
+  '0472/65: past its 60 rows the organization''s events are counted on overflow rows that keep the organization, one per category and source, with no place and no hash');
+select results_eq(
+  $$ select reason, country, city from public.security_events
+      where organization_id = 'a0472000-0000-0000-0000-0000000000b1'
+        and minute = date_trunc('minute', now() - interval '5 hours', 'UTC') $$,
+  $$ values ('b_event'::text, 'MX'::text, 'Tijuana'::text) $$,
+  '0472/66: another organization''s event in that minute is stored as it came');
+
+-- ── 7. Who writes: no API role but through the functions ────────────────────
 set local role service_role;
 select throws_ok(
   $$ insert into public.security_events (minute, category, outcome, reason, source, dedupe_key)
        values (date_trunc('minute', now(), 'UTC'), 'bots', 'blocked', 'direct', 'web', repeat('0', 32)) $$,
-  '42501', null, '0472/39: service_role cannot insert a row directly');
+  '42501', null, '0472/67: service_role cannot insert a row directly');
 select throws_ok(
   $$ update public.security_events set event_count = 999 $$,
-  '42501', null, '0472/40: service_role cannot update a row directly');
+  '42501', null, '0472/68: service_role cannot update a row directly');
 select throws_ok(
   $$ delete from public.security_events $$,
-  '42501', null, '0472/41: service_role cannot delete a row directly');
+  '42501', null, '0472/69: service_role cannot delete a row directly');
+select lives_ok(
+  $$ select count(*) from public.security_events $$,
+  '0472/70: service_role can read the table');
 reset role;
 
--- ── 7. Who reads ────────────────────────────────────────────────────────────
+-- ── 8. Who reads ────────────────────────────────────────────────────────────
+select set_config('t.n_a', (select count(*) from public.security_events
+  where organization_id = 'a0472000-0000-0000-0000-0000000000a1')::text, true);
+select set_config('t.n_b', (select count(*) from public.security_events
+  where organization_id = 'a0472000-0000-0000-0000-0000000000b1')::text, true);
+
 set local role authenticated;
 select set_config('request.jwt.claims',
   json_build_object('sub', 'a0472000-0000-0000-0000-0000000000c1', 'role', 'authenticated')::text, true);
-select results_eq(
-  $$ select distinct organization_id from public.security_events $$,
-  $$ values ('a0472000-0000-0000-0000-0000000000a1'::uuid) $$,
-  '0472/42: an owner reads only their organization''s rows, never one with no organization');
+select is(
+  (select count(*)::text from public.security_events_for_organization('a0472000-0000-0000-0000-0000000000a1', 500)),
+  current_setting('t.n_a'),
+  '0472/71: an owner reads every row of their organization through the read function');
+select is(
+  (select count(*)::int from public.security_events_for_organization('a0472000-0000-0000-0000-0000000000a1', 3)),
+  3, '0472/72: the limit is applied');
+select is(
+  (select count(*)::int from public.security_events_for_organization('a0472000-0000-0000-0000-0000000000a1', 0)),
+  1, '0472/73: a limit below one reads one row');
+select is(
+  (select minute from public.security_events_for_organization('a0472000-0000-0000-0000-0000000000a1', 1)),
+  date_trunc('minute', now(), 'UTC'),
+  '0472/74: the newest row comes first');
 select throws_ok(
-  $$ select source_hash from public.security_events $$,
-  '42501', null, '0472/43: an owner cannot read source_hash');
+  $$ select * from public.security_events_for_organization('a0472000-0000-0000-0000-0000000000b1', 10) $$,
+  '42501', null, '0472/75: an owner cannot read another organization''s rows');
+select throws_ok(
+  $$ select * from public.security_events_for_organization(null, 10) $$,
+  '42501', null, '0472/76: nobody reads the rows with no organization through it');
+select is(
+  (select events from public.security_event_totals_for_organization('a0472000-0000-0000-0000-0000000000a1', null, null)
+    where reason = 'wrong_password' and country = 'US'),
+  3::bigint,
+  '0472/77: the totals add up an organization''s events by reason and country');
+select is(
+  (select count(*)::int from public.security_event_totals_for_organization(
+     'a0472000-0000-0000-0000-0000000000a1', now() - interval '30 minutes', now() + interval '1 minute')
+    where reason = 'over_minute_cap'),
+  0, '0472/78: the totals leave out what is before the window');
+select is(
+  (select sum(events)::int from public.security_event_totals_for_organization(
+     'a0472000-0000-0000-0000-0000000000a1', now() - interval '6 hours', null)
+    where reason = 'over_minute_cap'),
+  5, '0472/79: and count what is inside it');
+select throws_ok(
+  $$ select * from public.security_event_totals_for_organization('a0472000-0000-0000-0000-0000000000b1', null, null) $$,
+  '42501', null, '0472/80: an owner cannot read another organization''s totals');
+select throws_ok(
+  $$ select count(*) from public.security_events $$,
+  '42501', null, '0472/81: an owner cannot read the table directly');
 select throws_ok(
   $$ select public.record_security_events('[]'::jsonb) $$,
-  '42501', null, '0472/44: an owner cannot call the writer');
+  '42501', null, '0472/82: an owner cannot call the writer');
+select throws_ok(
+  $$ select public.purge_security_events() $$,
+  '42501', null, '0472/83: an owner cannot call the purge');
 
 select set_config('request.jwt.claims',
   json_build_object('sub', 'a0472000-0000-0000-0000-0000000000c2', 'role', 'authenticated')::text, true);
 select is(
-  (select count(distinct organization_id)::int from public.security_events),
-  1, '0472/45: an admin reads their organization''s rows');
+  (select count(*)::text from public.security_events_for_organization('a0472000-0000-0000-0000-0000000000a1', 500)),
+  current_setting('t.n_a'),
+  '0472/84: an admin reads every row of their organization');
 
 select set_config('request.jwt.claims',
   json_build_object('sub', 'a0472000-0000-0000-0000-0000000000c3', 'role', 'authenticated')::text, true);
+select throws_ok(
+  $$ select * from public.security_events_for_organization('a0472000-0000-0000-0000-0000000000a1', 10) $$,
+  '42501', null, '0472/85: a manager cannot read the rows');
+select throws_ok(
+  $$ select * from public.security_event_totals_for_organization('a0472000-0000-0000-0000-0000000000a1', null, null) $$,
+  '42501', null, '0472/86: a manager cannot read the totals');
+
+select set_config('request.jwt.claims',
+  json_build_object('sub', 'a0472000-0000-0000-0000-0000000000c4', 'role', 'authenticated')::text, true);
 select is(
-  (select count(id)::int from public.security_events),
-  0, '0472/46: a manager reads no row');
+  (select count(*)::text from public.security_events_for_organization('a0472000-0000-0000-0000-0000000000b1', 500)),
+  current_setting('t.n_b'),
+  '0472/87: the other organization''s owner reads that organization''s rows, and only those');
 reset role;
 
--- ── 8. Retention ────────────────────────────────────────────────────────────
--- Age two rows as the table owner: one past 90 days, one past 24 hours.
+set local role anon;
+select set_config('request.jwt.claims', json_build_object('role', 'anon')::text, true);
+select throws_ok(
+  $$ select * from public.security_events_for_organization('a0472000-0000-0000-0000-0000000000a1', 10) $$,
+  '42501', null, '0472/88: a signed-out caller cannot call the read function');
+reset role;
+
+select is(
+  (select proargnames from pg_proc
+    where oid = 'public.security_events_for_organization(uuid, integer)'::regprocedure),
+  array['p_organization_id', 'p_limit', 'id', 'minute', 'category', 'outcome', 'reason', 'source',
+        'country', 'city', 'event_count', 'last_seen_at'],
+  '0472/89: the read function returns neither source_hash nor the row key');
+
+-- ── 9. Retention and the cascade ────────────────────────────────────────────
+-- Age three rows as the table's owner: one past 90 days, one just inside, one
+-- hashed row past 24 hours.
 update public.security_events
    set minute = date_trunc('minute', now() - interval '91 days', 'UTC')
  where reason = 'env_file';
 update public.security_events
-   set minute = date_trunc('minute', now() - interval '25 hours', 'UTC')
+   set minute = date_trunc('minute', now() - interval '89 days', 'UTC')
+ where reason = 'git_dir';
+update public.security_events
+   set minute = date_trunc('minute', now() - interval '25 hours 30 minutes', 'UTC')
  where source_hash = repeat('a', 32);
 set local role service_role;
-select public.purge_security_events();
+select is(public.purge_security_events(), '{"deleted": 1, "hashes_cleared": 1}'::jsonb,
+  '0472/90: the purge reports one row removed and one hash cleared');
 reset role;
+delete from public.organizations where id = :orgB;
 select results_eq(
   $$ select (select count(*)::int from public.security_events where reason = 'env_file'),
+            (select count(*)::int from public.security_events where reason = 'git_dir'),
             (select count(*)::int from public.security_events
               where organization_id = 'a0472000-0000-0000-0000-0000000000a1'
-                and reason = 'wrong_password' and source_hash is null),
-            (select count(*)::int from public.security_events where source_hash = repeat('b', 32)) $$,
-  $$ values (0, 1, 3) $$,
-  '0472/47: the purge removed the row past 90 days, cleared the hash past 24 hours and kept its row, and left today''s hashes');
+                and reason = 'wrong_password' and source_hash is null
+                and dedupe_key = md5(id::text)),
+            (select count(*)::int from public.security_events where source_hash = repeat('b', 32)),
+            (select count(*)::int from public.security_events
+              where organization_id = 'a0472000-0000-0000-0000-0000000000b1'),
+            (select (count(*) > 0) from public.security_events
+              where organization_id = 'a0472000-0000-0000-0000-0000000000a1') $$,
+  $$ values (0, 1, 1, 3, 0, true) $$,
+  '0472/91: the row past 90 days is gone and the one at 89 days stays; the hash past 24 hours is cleared with its row key and its row stays; newer hashes stay; a deleted organization''s rows go with it and the other''s stay');
 
 select * from finish();
 rollback;

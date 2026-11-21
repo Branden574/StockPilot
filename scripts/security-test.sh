@@ -939,6 +939,14 @@ PGTAP_TESTS=(
   # authenticated (a signed-in owner cannot read or write it), service_role
   # only, and the rows go with the organization.
   supabase/tests/0469_cron_sweep_attempts.test.sql
+  # Security events (0472): no API role reads or writes the table directly
+  # (RLS on, no policy, service_role may only SELECT); rows are written by
+  # record_security_events and removed by purge_security_events, service_role
+  # only; an organization's admin and owner read their own organization's rows
+  # through the two read functions, and a manager, another organization's
+  # owner and a signed-out caller are refused; an address, an email, an id, a
+  # path or a user agent sent as a city is never stored.
+  supabase/tests/0472_security_events.test.sql
   # The request context reads the caller's own rows by index (0471): the same
   # answer as 0413's body for every kind of caller (several organizations, an
   # invitation not accepted, a disabled account, live and expired Act-as
