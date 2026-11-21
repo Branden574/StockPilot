@@ -71,8 +71,13 @@ import { createAdminClient } from '@/lib/supabase/admin';
  *     `/auth/v1/factors/<id>/challenge` (asking for a challenge) check no
  *     secret: `factors_known_other`. The id never leaves the query.
  *   - `/auth/v1/verify`: `emailed_code`, a check of an emailed code or link.
- *     It is COUNTED in the log line (by status and caller class), NOT STORED,
- *     until its refused statuses are measured.
+ *     A wrong emailed code is answered 403 (measured 2026-11-21: 403;
+ *     counted, not stored, until our own server's emailed-code refusals are
+ *     recorded). Our own server checks emailed codes there too and records
+ *     nothing for a refusal, so storing these would first need its lines
+ *     told apart and compared, as passwords and authenticator codes are.
+ *     Until then every refusal there is COUNTED in the log line (by caller
+ *     class; a 403 is in the status class `other`), NOT STORED.
  *   - anything else in the net is an unknown form: `verify_other` (the
  *     path holds `factors`), `emailed_code_other` (it holds `verify`) or
  *     `token_other`.
@@ -84,7 +89,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
  *   - any other status of those two is counted in the log line and not
  *     stored: a status whose meaning is not known is not shown as an attack;
  *   - refreshes, the other known grants, factor enrolments, challenge
- *     requests and checks of an emailed code are counted, never stored;
+ *     requests and checks of an emailed code are counted, not stored;
  *   - requests of an unknown form, even one, are stored as ONE flagged count
  *     per source for the hour (unclassified_sign_in_refusals), never taken
  *     for our own server. The one exception: an unknown form answered 404
@@ -572,8 +577,9 @@ export interface AuthLogsTotalsRow extends AuthLogsLine {
  * form (reconciled), a status whose meaning is not known, a refresh, a known
  * request that checks no password and no code (another grant, enrolling a
  * factor, asking for a challenge), a check of an emailed code (not stored
- * until its statuses are measured), or a request of an unknown form that the
- * service routed nowhere (404: nothing was checked).
+ * until our own server's emailed-code refusals are recorded), or a request
+ * of an unknown form that the service routed nowhere (404: nothing was
+ * checked).
  */
 export type AuthLogsNotStored =
   'our_server' | 'other_status' | 'refresh' | 'known_other' | 'emailed_code' | 'not_routed';
@@ -808,7 +814,11 @@ export function classifyAuthLogLine(line: AuthLogsLine): AuthLogsVerdict {
   // An unknown form is never taken for our own server: nothing of it is
   // hidden. Answered 404, the service routed it nowhere and checked nothing
   // (measured: a trailing slash, capitals, an encoded letter): counted only.
-  // Any other refused status of it is flagged.
+  // Any other refused status of it is flagged. THIS RESTS ON ONE FACT: a
+  // wrong secret is never answered 404 (measured on 2026-11-21: a wrong
+  // password is 400, a wrong authenticator code 422, a wrong emailed code
+  // 403). If the sign-in service ever answers a checked secret with 404,
+  // this rule must go.
   if (
     line.kind === 'token_other' ||
     line.kind === 'verify_other' ||
