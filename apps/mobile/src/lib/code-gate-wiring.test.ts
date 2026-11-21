@@ -129,9 +129,7 @@ describe('1. the gate is worked out from the session, in render', () => {
   });
 
   it('every auth event sets the session it carries first, so the gate follows each one', () => {
-    expect(auth).toContain(
-      'supabase.auth.onAuthStateChange(async (event, s) => { setSession(s);',
-    );
+    expect(auth).toContain('supabase.auth.onAuthStateChange(async (event, s) => { setSession(s);');
   });
 
   it('the code is checked against the factor the session lists, else the one the server lists', () => {
@@ -163,9 +161,13 @@ describe('2. RootGate: the code screen before anything else, and no data hook be
     expect(gate.indexOf('<Stack screenOptions=')).toBeGreaterThan(mfa);
     // Still under the disabled-account gate and above the biometric lock.
     expect(mfa).toBeGreaterThan(
-      gate.indexOf("if (!loading && accountGate.state === 'disabled') { return <AccountDisabledScreen />;"),
+      gate.indexOf(
+        "if (!loading && accountGate.state === 'disabled') { return <AccountDisabledScreen />;",
+      ),
     );
-    expect(gate.indexOf('if (!loading && session && locked) { return <BiometricLockScreen />;')).toBeGreaterThan(mfa);
+    expect(
+      gate.indexOf('if (!loading && session && locked) { return <BiometricLockScreen />;'),
+    ).toBeGreaterThan(mfa);
   });
 
   it('the data hooks are handed nobody until the code is entered', () => {
@@ -184,7 +186,12 @@ describe('2. RootGate: the code screen before anything else, and no data hook be
       expect(gate.indexOf(hook), hook).toBeGreaterThan(dataUser);
     }
     // Each of them once, and what it is handed starts from dataUser.
-    for (const name of ['usePushNotifications', 'useSync', 'useHeldOrderSubmissions', 'useActivityBeacon']) {
+    for (const name of [
+      'usePushNotifications',
+      'useSync',
+      'useHeldOrderSubmissions',
+      'useActivityBeacon',
+    ]) {
       const calls = gate.match(new RegExp(`\\b${name}\\([^;]*;`, 'g')) ?? [];
       expect(calls, name).toHaveLength(1);
       expect(calls[0], name).toMatch(new RegExp(`^${name}\\(dataUser\\b`));
@@ -209,6 +216,12 @@ describe('2. RootGate: the code screen before anything else, and no data hook be
       'const dataUser = session && !mfaRequired && !setUpHold ? session.user : null;',
       'useSessionRevocation(session?.user?.id ?? null, onForcedSignOut, revocationOptions);',
     ]);
+    // The whole session is handed to one function only, and only while the
+    // second step is owed: passkeyOnly (app/_layout.tsx), which asks
+    // mfa-level's passkeyOnlySession, a pure read of the factor names (both
+    // texts pinned by passkey-only-notice-structure.test.ts).
+    expect(gate.match(/\b\w+\((?:[^()]*,\s*)?session\s*[,)]/g)).toEqual(['passkeyOnly(session)']);
+    expect(gate).toContain('if (session && mfaRequired && passkeyOnly(session))');
     // And every hook RootGate calls is one this test knows about.
     expect([...new Set(gate.match(/(?<!React\.)\buse[A-Z]\w*(?=\()/g))].sort()).toEqual([
       'useAccountGate',
@@ -235,7 +248,9 @@ describe('2. RootGate: the code screen before anything else, and no data hook be
   });
 
   it("What's New and the update pop-up stay in the signed-in shell only", () => {
-    expect(gate).toContain('{session && !loading && !mfaRequired && !locked ? <WhatsNew /> : null}');
+    expect(gate).toContain(
+      '{session && !loading && !mfaRequired && !locked ? <WhatsNew /> : null}',
+    );
     expect(gate).toContain(
       '{session && !loading && !mfaRequired && !locked ? ( <UpdatePromptHost segments={segments} /> ) : null}',
     );
@@ -243,7 +258,10 @@ describe('2. RootGate: the code screen before anything else, and no data hook be
 
   it('inside AuthProvider, the root layout mounts only the appearance bridge and RootGate', () => {
     const layout = functionText(LAYOUT, 'RootLayout');
-    const provider = layout.slice(layout.indexOf('<AuthProvider>'), layout.indexOf('</AuthProvider>'));
+    const provider = layout.slice(
+      layout.indexOf('<AuthProvider>'),
+      layout.indexOf('</AuthProvider>'),
+    );
     expect(provider.match(/<[A-Z]\w*/g)).toEqual([
       '<AuthProvider',
       '<AppearanceSessionBridge',
@@ -284,8 +302,12 @@ describe('3. the sync and both outbox drains hold on the same answer', () => {
 
   it('the send decision holds every row while it is owed, before it looks at whose row it is', () => {
     const decision = functionText('src/lib/outbox-scope.ts', 'outboxSendDecision');
-    const signedOut = decision.indexOf("if (!live.userId) return { send: false, reason: 'signed-out' };");
-    const owed = decision.indexOf("if (live.stepUpOwed) return { send: false, reason: 'step-up-owed' };");
+    const signedOut = decision.indexOf(
+      "if (!live.userId) return { send: false, reason: 'signed-out' };",
+    );
+    const owed = decision.indexOf(
+      "if (live.stepUpOwed) return { send: false, reason: 'step-up-owed' };",
+    );
     const owner = decision.indexOf('isOwnedBy(row, live.userId)');
     expect(signedOut).toBeGreaterThan(-1);
     expect(owed).toBeGreaterThan(signedOut);
@@ -302,7 +324,9 @@ describe('3. the sync and both outbox drains hold on the same answer', () => {
 
   it('the snapshot pull returns before it reads, resets or asks for anything', () => {
     const pull = functionText('src/lib/sync.ts', 'pullSnapshot');
-    const scope = pull.indexOf('const { userId: liveUserId, stepUpOwed } = await liveOutboxScope();');
+    const scope = pull.indexOf(
+      'const { userId: liveUserId, stepUpOwed } = await liveOutboxScope();',
+    );
     const hold = pull.indexOf('if (stepUpOwed) return null;');
     expect(scope).toBeGreaterThan(-1);
     expect(hold).toBeGreaterThan(scope);
@@ -310,14 +334,26 @@ describe('3. the sync and both outbox drains hold on the same answer', () => {
     expect(pull.slice(scope, hold)).toBe(
       'const { userId: liveUserId, stepUpOwed } = await liveOutboxScope(); ',
     );
-    for (const later of ['cacheOwnerAction(', 'deleteOrgData', 'getMeta(', 'isOnline()', 'api<SnapshotResponse>(']) {
+    for (const later of [
+      'cacheOwnerAction(',
+      'deleteOrgData',
+      'getMeta(',
+      'isOnline()',
+      'api<SnapshotResponse>(',
+    ]) {
       expect(pull.indexOf(later), later).toBeGreaterThan(hold);
     }
     // The authenticator set-up hold right after it, before the same reads.
     const setUp = pull.indexOf('if (setUpHoldIn(liveUserId)) return null;');
     expect(setUp).toBeGreaterThan(hold);
     expect(pull.slice(hold, setUp)).toBe('if (stepUpOwed) return null; ');
-    for (const later of ['cacheOwnerAction(', 'deleteOrgData', 'getMeta(', 'isOnline()', 'api<SnapshotResponse>(']) {
+    for (const later of [
+      'cacheOwnerAction(',
+      'deleteOrgData',
+      'getMeta(',
+      'isOnline()',
+      'api<SnapshotResponse>(',
+    ]) {
       expect(pull.indexOf(later), later).toBeGreaterThan(setUp);
     }
     // The one snapshot request in the app is this pull's.
@@ -330,7 +366,9 @@ describe('3. the sync and both outbox drains hold on the same answer', () => {
 
   it('the count drain settles nothing and sends nothing through the same module', () => {
     const engine = code('src/lib/cycle-count-sync.ts');
-    expect(engine).toContain('for (const stale of canSettleOutbox(staleScope) ? superseded : []) {');
+    expect(engine).toContain(
+      'for (const stale of canSettleOutbox(staleScope) ? superseded : []) {',
+    );
     expect(engine).toContain('const decision = outboxSendDecision(row, await liveOutboxScope());');
     expect(functionText('src/lib/outbox-scope.ts', 'canSettleOutbox')).toContain(
       'return Boolean(live.userId) && !live.stepUpOwed;',
@@ -391,9 +429,7 @@ describe("4. the server's own factor list reaches the gate wherever the app alre
   });
 
   it('a verified code and a sign-out settle the note; nothing else in the provider touches it', () => {
-    expect(auth).toContain(
-      "if (event === 'MFA_CHALLENGE_VERIFIED') { setStepUpForcedFor(null); }",
-    );
+    expect(auth).toContain("if (event === 'MFA_CHALLENGE_VERIFIED') { setStepUpForcedFor(null); }");
     const signedOut = auth.slice(
       auth.indexOf("if (event === 'SIGNED_OUT' || !s?.user) {"),
       auth.indexOf("if (event === 'SIGNED_IN') {"),
@@ -410,10 +446,12 @@ describe('5. the whole set: every place the phone reads the level, the factors o
 
   /** The set, and what each file does with the answer. */
   const KNOWN: Record<string, string> = {
-    'app/_layout.tsx': 'RootGate: shows the code screen and hands the data hooks nobody (section 2)',
+    'app/_layout.tsx':
+      'RootGate: shows the code screen (or, for an account whose only second step is a passkey, the notice in its place) and hands the data hooks nobody (section 2)',
     'src/lib/appearance/account.ts':
       'peekSignedInUser: the first-paint appearance read is not made for a session that owes its code',
-    'src/lib/appearance/session-bridge.tsx': 'reports nobody to the appearance controller while the code is owed',
+    'src/lib/appearance/session-bridge.tsx':
+      'reports nobody to the appearance controller while the code is owed',
     'src/components/authenticator-set-up-screen.tsx':
       "the set-up screen's words, from the same decision the provider reads (section 7)",
     'src/lib/auth-context.tsx':
@@ -421,8 +459,10 @@ describe('5. the whole set: every place the phone reads the level, the factors o
     'src/lib/auth-storage.ts': 'the stored session says whether the code is owed (section 3)',
     'src/lib/mfa-level.ts': 'the rule, read from a session (mfa-level.test.ts)',
     'src/lib/mfa-reconcile.ts': "the gate against the server's list (mfa-reconcile.test.ts)",
-    'src/lib/outbox-scope.ts': 'the send decision holds every row while the code is owed (section 3)',
-    'src/lib/session-scope.ts': 'the live scope carries the answer to both drains and the pull (section 3)',
+    'src/lib/outbox-scope.ts':
+      'the send decision holds every row while the code is owed (section 3)',
+    'src/lib/session-scope.ts':
+      'the live scope carries the answer to both drains and the pull (section 3)',
     'src/lib/set-up-hold.ts':
       "the set-up hold: the server's factor list read this run, else the stored session's copy, for the screen only (section 7)",
     'src/lib/sync.ts': 'the snapshot pull holds, for the code and for the set-up hold (section 3)',
@@ -466,7 +506,9 @@ describe('5. the whole set: every place the phone reads the level, the factors o
 
   it('the first-paint appearance read is not made for a session that owes its code', () => {
     const peek = functionText('src/lib/appearance/account.ts', 'peekSignedInUser');
-    const level = peek.indexOf("if (aal?.currentLevel === 'aal1' && aal?.nextLevel === 'aal2') return null;");
+    const level = peek.indexOf(
+      "if (aal?.currentLevel === 'aal1' && aal?.nextLevel === 'aal2') return null;",
+    );
     expect(level).toBeGreaterThan(-1);
     expect(peek.indexOf('return userId;')).toBeGreaterThan(level);
     expect(peek).toContain('} catch { return null; }');
@@ -495,32 +537,38 @@ describe('6. the server-backed note is read by one rule', () => {
     );
   });
 
-  it('every reader of the note outside the reconcile asks that rule, with a level', { timeout: 60_000 }, () => {
-    const readers: Record<string, string[]> = {};
-    for (const rel of [...sourceFiles('app'), ...sourceFiles('src')]) {
-      if (rel === 'src/lib/mfa-reconcile.ts') continue;
-      const text = flat(codeOnly(read(rel)));
-      // Every mention that is not the name inside an import list.
-      const uses = (text.replace(/import \{[^}]*\} from '[^']*';/g, '').match(/[^;{}]*\bstepUpForcedFor\b[^;]*;/g) ?? []).map(
-        (use) => use.trim(),
-      );
-      if (uses.length) readers[rel] = uses;
-    }
-    expect(readers).toEqual({
-      // The provider subscribes to it and hands it to codeGateUp (section 1).
-      'src/lib/auth-context.tsx': [
-        'const stepUpForced = React.useSyncExternalStore(subscribeStepUpForced, stepUpForcedFor);',
-      ],
-      // The outbox hold: the stored session's level.
-      'src/lib/session-scope.ts': [
-        'orgId: ownSavedWorkspace(saved, userId ?? lastSeenUserId), userId, stepUpOwed: stepUpOwed || stepUpNoteHolds(stepUpForcedFor(), userId, level), };',
-      ],
-      // Push registration: the level it just read.
-      'src/lib/use-push-notifications.ts': [
-        'if (stepUpNoteHolds(stepUpForcedFor(), userId, data.currentLevel)) return true;',
-      ],
-    });
-  });
+  it(
+    'every reader of the note outside the reconcile asks that rule, with a level',
+    { timeout: 60_000 },
+    () => {
+      const readers: Record<string, string[]> = {};
+      for (const rel of [...sourceFiles('app'), ...sourceFiles('src')]) {
+        if (rel === 'src/lib/mfa-reconcile.ts') continue;
+        const text = flat(codeOnly(read(rel)));
+        // Every mention that is not the name inside an import list.
+        const uses = (
+          text
+            .replace(/import \{[^}]*\} from '[^']*';/g, '')
+            .match(/[^;{}]*\bstepUpForcedFor\b[^;]*;/g) ?? []
+        ).map((use) => use.trim());
+        if (uses.length) readers[rel] = uses;
+      }
+      expect(readers).toEqual({
+        // The provider subscribes to it and hands it to codeGateUp (section 1).
+        'src/lib/auth-context.tsx': [
+          'const stepUpForced = React.useSyncExternalStore(subscribeStepUpForced, stepUpForcedFor);',
+        ],
+        // The outbox hold: the stored session's level.
+        'src/lib/session-scope.ts': [
+          'orgId: ownSavedWorkspace(saved, userId ?? lastSeenUserId), userId, stepUpOwed: stepUpOwed || stepUpNoteHolds(stepUpForcedFor(), userId, level), };',
+        ],
+        // Push registration: the level it just read.
+        'src/lib/use-push-notifications.ts': [
+          'if (stepUpNoteHolds(stepUpForcedFor(), userId, data.currentLevel)) return true;',
+        ],
+      });
+    },
+  );
 
   it('the reconcile raises the note in one place, then reads the session again and withdraws it at aal2', () => {
     const reconcile = code('src/lib/mfa-reconcile.ts');
@@ -541,7 +589,9 @@ describe('6. the server-backed note is read by one rule', () => {
     expect(atAal2).toBeGreaterThan(-1);
     expect(run.indexOf('deps.refreshSession()')).toBeGreaterThan(atAal2);
     // Whether to refresh is mfa-level.ts's comparison, not a second copy.
-    expect(run).toContain("if (reconcileStepUp(session, liveUser) === 'none' && !staleNote) return 'none';");
+    expect(run).toContain(
+      "if (reconcileStepUp(session, liveUser) === 'none' && !staleNote) return 'none';",
+    );
   });
 });
 
@@ -574,8 +624,12 @@ describe('7. the authenticator set-up hold', () => {
   });
 
   it('RootGate: the set-up screen after the lock, before the navigator, without waiting for `loading`', () => {
-    expect(gate).toContain('const { session, loading, locked, mfaRequired, setUpHold } = useAuth();');
-    const lock = gate.indexOf('if (!loading && session && locked) { return <BiometricLockScreen />; }');
+    expect(gate).toContain(
+      'const { session, loading, locked, mfaRequired, setUpHold } = useAuth();',
+    );
+    const lock = gate.indexOf(
+      'if (!loading && session && locked) { return <BiometricLockScreen />; }',
+    );
     const held = gate.indexOf(
       "if (session && setUpHold) { const { AuthenticatorSetUpScreen } = require('@/components/authenticator-set-up-screen') as typeof import('@/components/authenticator-set-up-screen'); return <AuthenticatorSetUpScreen state={setUpHold} />; }",
     );
@@ -588,7 +642,9 @@ describe('7. the authenticator set-up hold', () => {
   });
 
   it('the data hooks are handed nobody while held, and the push hook registers again on release', () => {
-    expect(gate).toContain('const dataUser = session && !mfaRequired && !setUpHold ? session.user : null;');
+    expect(gate).toContain(
+      'const dataUser = session && !mfaRequired && !setUpHold ? session.user : null;',
+    );
     expect(gate).toContain('usePushNotifications(dataUser);');
     const hook = functionText('src/lib/use-push-notifications.ts', 'usePushNotifications');
     expect(hook).toContain('void registerThisDevice(user, { isCancelled: () => cancelled });');
@@ -669,7 +725,9 @@ describe('7. the authenticator set-up hold', () => {
     const probe = api.indexOf('notifyUnauthorized({ status: res.status });');
     const ask = api.indexOf('askForSetUpReadOnRefusal(res.status, details);');
     expect(ask).toBeGreaterThan(probe);
-    expect(api.indexOf('throw new ApiError(message, res.status, code, details);')).toBeGreaterThan(ask);
+    expect(api.indexOf('throw new ApiError(message, res.status, code, details);')).toBeGreaterThan(
+      ask,
+    );
     // Screens never touch the queue's refusal marks.
     for (const rel of [...sourceFiles('app'), ...sourceFiles('src/components')]) {
       expect(code(rel), rel).not.toMatch(/noteKeptRefusal|setUpAnswerAfterRefusal/);
