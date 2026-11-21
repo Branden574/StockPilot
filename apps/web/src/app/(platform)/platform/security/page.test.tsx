@@ -15,8 +15,18 @@ const h = vi.hoisted(() => ({ order: [] as string[], list: vi.fn(), gate: vi.fn(
 vi.mock('next/link', async () => {
   const React = await import('react');
   return {
-    default: ({ href, children, className }: { href: string; children: React.ReactNode; className?: string }) =>
-      React.createElement('a', { href, className }, children),
+    default: ({
+      href,
+      prefetch,
+      children,
+      className,
+    }: {
+      href: string;
+      prefetch?: boolean | null;
+      children: React.ReactNode;
+      className?: string;
+    }) =>
+      React.createElement('a', { href, className, 'data-prefetch': String(prefetch) }, children),
   };
 });
 vi.mock('@/lib/auth/platform-admin', () => ({
@@ -104,13 +114,46 @@ describe('the table', () => {
     render(await PlatformSecurityEventsPage());
     const table = screen.getByRole('region', { name: 'Security events' });
     const rows = within(table).getAllByRole('row').slice(1);
-    expect(rows.map((r) => within(r).getAllByRole('cell').map((c) => c.textContent))).toEqual([
-      ['20 Nov 2026, 10:15 UTC', 'Request for a settings fileExploit attempts · Blocked', 'No organization', 'Leipzig, DE', 'Website', '12'],
-      ['20 Nov 2026, 10:15 UTC', 'Wrong password at sign-inPassword guessing · Blocked', 'Example School District', 'Fresno, US', 'Website', '3'],
-      ['20 Nov 2026, 10:15 UTC', 'More events than could be listedPassword guessing · Blocked', ORG, '—', 'Website', '4,100'],
+    expect(
+      rows.map((r) =>
+        within(r)
+          .getAllByRole('cell')
+          .map((c) => c.textContent),
+      ),
+    ).toEqual([
+      [
+        '20 Nov 2026, 10:15 UTC',
+        'Request for a settings fileExploit attempts · Blocked',
+        'No organization',
+        'Leipzig, DE',
+        'Website',
+        '12',
+      ],
+      [
+        '20 Nov 2026, 10:15 UTC',
+        'Wrong password at sign-inPassword guessing · Blocked',
+        'Example School District',
+        'Fresno, US',
+        'Website',
+        '3',
+      ],
+      [
+        '20 Nov 2026, 10:15 UTC',
+        'More events than could be listedPassword guessing · Blocked',
+        ORG,
+        '—',
+        'Website',
+        '4,100',
+      ],
     ]);
     const links = within(table).getAllByRole('link');
-    expect(links.map((a) => a.getAttribute('href'))).toEqual([`/platform/orgs/${ORG}`, `/platform/orgs/${ORG}`]);
+    expect(links.map((a) => a.getAttribute('href'))).toEqual([
+      `/platform/orgs/${ORG}`,
+      `/platform/orgs/${ORG}`,
+    ]);
+    // Opening an organization's page writes an audit row, so its link is
+    // never prefetched.
+    expect(links.map((a) => a.getAttribute('data-prefetch'))).toEqual(['false', 'false']);
   });
 
   it('nothing recorded: the empty words', async () => {

@@ -98,12 +98,30 @@ describe('listPlatformSecurityEvents', () => {
     h.answers.security_events = {
       data: [
         ROW,
-        { ...ROW, id: 'e2', category: 'password_guessing', reason: 'wrong_password', organization_id: ORG_A, event_count: '3' },
-        { ...ROW, id: 'e3', category: 'password_guessing', reason: 'over_minute_cap', organization_id: ORG_A, country: null, city: null },
+        {
+          ...ROW,
+          id: 'e2',
+          category: 'password_guessing',
+          reason: 'wrong_password',
+          organization_id: ORG_A,
+          event_count: '3',
+        },
+        {
+          ...ROW,
+          id: 'e3',
+          category: 'password_guessing',
+          reason: 'over_minute_cap',
+          organization_id: ORG_A,
+          country: null,
+          city: null,
+        },
       ],
       error: null,
     };
-    h.answers.organizations = { data: [{ id: ORG_A, name: 'Example School District' }], error: null };
+    h.answers.organizations = {
+      data: [{ id: ORG_A, name: 'Example School District' }],
+      error: null,
+    };
     const rows = await listPlatformSecurityEvents();
     expect(rows.map((r) => [r.id, r.organizationId, r.organizationName, r.count])).toEqual([
       ['e1', null, null, 12],
@@ -117,8 +135,13 @@ describe('listPlatformSecurityEvents', () => {
   });
 
   it('a failed read of the rows throws with the code only', async () => {
-    h.answers.security_events = { data: null, error: { code: '57014', message: 'timeout reading for 198.51.100.7' } };
-    await expect(listPlatformSecurityEvents()).rejects.toThrow('security_events read failed (57014)');
+    h.answers.security_events = {
+      data: null,
+      error: { code: '57014', message: 'timeout reading for 198.51.100.7' },
+    };
+    await expect(listPlatformSecurityEvents()).rejects.toThrow(
+      /^security_events read failed \(57014\)$/,
+    );
   });
 
   it('a failed read of the names shows the rows without names, reported as degraded', async () => {
@@ -127,8 +150,12 @@ describe('listPlatformSecurityEvents', () => {
     const rows = await listPlatformSecurityEvents();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ organizationId: ORG_A, organizationName: null });
-    expect(h.degraded).toHaveBeenCalledWith('platform-security-events.org-names', expect.anything(), {
-      count: 1,
-    });
+    expect(h.degraded).toHaveBeenCalledWith(
+      'platform-security-events.org-names',
+      expect.anything(),
+      {
+        count: 1,
+      },
+    );
   });
 });

@@ -86,7 +86,8 @@ export default async function PlatformSecurityEventsPage() {
                 <TableCell>
                   <span className="text-foreground">{securityEventReasonLabel(r.reason)}</span>
                   <span className="text-muted-foreground block text-[12px]">
-                    {securityEventCategoryLabel(r.category)} · {securityEventOutcomeLabel(r.outcome)}
+                    {securityEventCategoryLabel(r.category)} ·{' '}
+                    {securityEventOutcomeLabel(r.outcome)}
                   </span>
                 </TableCell>
                 <TableCell>
@@ -95,6 +96,9 @@ export default async function PlatformSecurityEventsPage() {
                   ) : (
                     <Link
                       href={`/platform/orgs/${r.organizationId}`}
+                      // Never prefetched: rendering an organization's page
+                      // writes a viewed_org row to the audit trail.
+                      prefetch={false}
                       className={
                         r.organizationName
                           ? 'text-ink-2 hover:text-foreground'

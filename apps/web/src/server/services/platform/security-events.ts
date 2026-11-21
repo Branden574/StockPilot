@@ -63,10 +63,9 @@ export async function listPlatformSecurityEvents(
   if (error) throw new Error(`security_events read failed (${error.code ?? 'no code'})`);
 
   const rows = (data ?? []) as Array<Record<string, unknown>>;
-  const names = await organizationNames(
-    admin,
-    [...new Set(rows.map((r) => text(r.organization_id)).filter((id): id is string => id !== null))],
-  );
+  const names = await organizationNames(admin, [
+    ...new Set(rows.map((r) => text(r.organization_id)).filter((id): id is string => id !== null)),
+  ]);
 
   return rows.flatMap((r) => {
     const id = text(r.id);
