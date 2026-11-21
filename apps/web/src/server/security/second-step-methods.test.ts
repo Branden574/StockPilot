@@ -23,6 +23,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 type Row = Record<string, unknown>;
 
 const h = vi.hoisted(() => ({
+  rp: { rpId: 'localhost', origins: ['http://localhost:3000'] } as {
+    rpId: string;
+    origins: string[];
+  } | null,
+  passkeys: [] as Row[],
   memberships: [] as Row[],
   organizations: [] as Row[],
   fail: new Set<string>(),
@@ -30,6 +35,7 @@ const h = vi.hoisted(() => ({
   clients: 0,
 }));
 
+vi.mock('@/lib/auth/passkey-relying-party', () => ({ passkeyRelyingParty: () => h.rp }));
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => {
     h.clients += 1;
@@ -38,9 +44,19 @@ vi.mock('@/lib/supabase/admin', () => ({
         h.reads.push(table);
         const filters: Array<(r: Row) => boolean> = [];
         let single = false;
-        const rows = () => (table === 'organization_members' ? h.memberships : h.organizations);
+        const rows = () =>
+          table === 'member_passkeys'
+            ? h.passkeys
+            : table === 'organization_members'
+              ? h.memberships
+              : h.organizations;
         const answer = () => {
           if (h.fail.has(table)) return { data: null, error: { code: '57014' } };
+          if (h.fail.has(`${table}:missing`))
+            return {
+              data: null,
+              error: { code: 'PGRST205', message: `Could not find the table 'public.${table}'` },
+            };
           const out = rows().filter((r) => filters.every((f) => f(r)));
           return { data: single ? (out[0] ?? null) : out, error: null };
         };
@@ -62,9 +78,11 @@ vi.mock('@/lib/supabase/admin', () => ({
 import { FACTOR_CHECK_RETRY } from '@/lib/auth/passkey-bridge';
 
 import {
+  appRemovalVerdict,
   LAST_METHOD_RETRY_WORDS,
   LAST_METHOD_WORDS,
   lastMethodVerdict,
+  passkeyHolder,
   secondStepPolicy,
   type RemovingMethod,
 } from './second-step-methods';
@@ -112,6 +130,8 @@ function verdict(
 }
 
 beforeEach(() => {
+  h.rp = { rpId: 'localhost', origins: ['http://localhost:3000'] };
+  h.passkeys = [];
   h.memberships = [];
   h.organizations = [];
   h.fail = new Set();
@@ -120,7 +140,7 @@ beforeEach(() => {
 });
 
 describe('decision B: the last-method rule', () => {
-  it('one plain sentence for both kinds, and one retry sentence (the bridge check\'s own)', () => {
+  it("one plain sentence for both kinds, and one retry sentence (the bridge check's own)", () => {
     expect(LAST_METHOD_WORDS).toBe(
       'Your organization requires a second step. Add another authenticator app or passkey before you remove this one.',
     );
@@ -215,7 +235,7 @@ describe('decision B: the last-method rule', () => {
 });
 
 describe('correction 2: unknown is never fine', () => {
-  it('an unknown factor list (unread, or another account\'s): the passkeys are never asked, and a requiring policy answers try again', async () => {
+  it("an unknown factor list (unread, or another account's): the passkeys are never asked, and a requiring policy answers try again", async () => {
     member('all_required');
     for (const removing of [APP_A, passkeyOf('p1')]) {
       const passkeys = serving(['p1', 'p2']);
@@ -261,7 +281,7 @@ describe('correction 2: unknown is never fine', () => {
     expect(await lastApp()).toBe('unreadable');
   });
 
-  it('one organization unread and another that requires: refused with the rule\'s own words', async () => {
+  it("one organization unread and another that requires: refused with the rule's own words", async () => {
     member('optional');
     member('all_required');
     // The first organization's row is gone (read as nothing): unread.
@@ -290,5 +310,112 @@ describe('secondStepPolicy: required, not required, or unreadable', () => {
     h.fail = new Set();
     h.organizations = [];
     expect(await secondStepPolicy(admin, U)).toBe('unreadable');
+  });
+});
+
+describe('the no-change rule: the unified rule is for an account that holds an active passkey of this site', () => {
+  const row = (extra: Row = {}) => ({
+    id: 'p1',
+    user_id: U,
+    rp_id: 'localhost',
+    removed_at: null,
+    ...extra,
+  });
+
+  it('an unread list, or a list without the reserved name: none, and nothing is read', async () => {
+    h.passkeys = [row()];
+    expect(await passkeyHolder(U, null)).toBe('none');
+    expect(await passkeyHolder(U, [app('a'), app('b', { status: 'unverified' })])).toBe('none');
+    expect(h.clients).toBe(0);
+  });
+
+  it('the reserved name and an active row of this site: a holder, told by one row read', async () => {
+    h.passkeys = [row()];
+    expect(await passkeyHolder(U, [app('a'), BRIDGE])).toBe('holder');
+    expect(h.reads).toEqual(['member_passkeys']);
+  });
+
+  it("a removed row, another site's row or another account's row: none", async () => {
+    for (const extra of [
+      { removed_at: '2026-11-20T00:00:00Z' },
+      { rp_id: 'other.example.test' },
+      { user_id: 'user-2' },
+    ]) {
+      h.passkeys = [row(extra)];
+      expect(await passkeyHolder(U, [BRIDGE])).toBe('none');
+    }
+  });
+
+  it('with no site no passkey is held here, and nothing is read', async () => {
+    h.rp = null;
+    h.passkeys = [row()];
+    expect(await passkeyHolder(U, [BRIDGE])).toBe('none');
+    expect(h.clients).toBe(0);
+  });
+
+  it('a row read that fails is unreadable; a table that is not there yet holds nothing', async () => {
+    h.passkeys = [row()];
+    h.fail = new Set(['member_passkeys']);
+    expect(await passkeyHolder(U, [BRIDGE])).toBe('unreadable');
+    h.fail = new Set(['member_passkeys:missing']);
+    expect(await passkeyHolder(U, [BRIDGE])).toBe('none');
+  });
+
+  it('appRemovalVerdict for no passkey: the base rule on the active policy only; nothing else asked', async () => {
+    member('all_required');
+    const passkeys = serving(['p1']);
+    const base = (activeRequired: boolean, factors: Row[] | null) =>
+      appRemovalVerdict({
+        userId: U,
+        factorId: 'a',
+        factors,
+        activeRequired,
+        servingPasskeys: passkeys,
+      });
+    expect(await base(true, [app('a'), app('b')])).toBe('policy');
+    expect(await base(true, null)).toBe('policy');
+    expect(await base(false, [app('a')])).toBe('allowed');
+    expect(await base(false, null)).toBe('allowed');
+    expect(passkeys).not.toHaveBeenCalled();
+    expect(h.clients).toBe(0);
+  });
+
+  it('appRemovalVerdict for a holder: the unified rule', async () => {
+    h.passkeys = [row()];
+    const unified = (activeRequired: boolean, factors: Row[], answer: string[] | null) =>
+      appRemovalVerdict({
+        userId: U,
+        factorId: 'a',
+        factors,
+        activeRequired,
+        servingPasskeys: serving(answer),
+      });
+    expect(await unified(true, [app('a'), app('b'), BRIDGE], [])).toBe('allowed');
+    expect(await unified(true, [app('a'), BRIDGE], ['p1'])).toBe('allowed');
+    expect(await unified(true, [app('a'), BRIDGE], [])).toBe('last_method');
+    expect(await unified(true, [app('a'), BRIDGE], null)).toBe('unreadable');
+    expect(await unified(false, [app('a'), BRIDGE], [])).toBe('allowed');
+    member('all_required');
+    expect(await unified(false, [app('a'), BRIDGE], [])).toBe('last_method');
+  });
+
+  it('appRemovalVerdict when the row read fails: try again under the active policy; otherwise the unified rule with the passkeys unknown', async () => {
+    h.passkeys = [row()];
+    h.fail = new Set(['member_passkeys']);
+    const passkeys = serving(['p1']);
+    const unknown = (activeRequired: boolean, factors: Row[]) =>
+      appRemovalVerdict({
+        userId: U,
+        factorId: 'a',
+        factors,
+        activeRequired,
+        servingPasskeys: passkeys,
+      });
+    expect(await unknown(true, [app('a'), app('b'), BRIDGE])).toBe('unreadable');
+    expect(await unknown(false, [app('a'), app('b'), BRIDGE])).toBe('allowed');
+    expect(await unknown(false, [app('a'), BRIDGE])).toBe('allowed');
+    member('all_required');
+    expect(await unknown(false, [app('a'), BRIDGE])).toBe('unreadable');
+    expect(passkeys).not.toHaveBeenCalled();
   });
 });

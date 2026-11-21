@@ -2,7 +2,8 @@ import 'server-only';
 
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { FACTOR_CHECK_RETRY } from '@/lib/auth/passkey-bridge';
-import { PASSKEY_BRIDGE_NAME_PREFIX } from '@/lib/auth/passkey-bridge-name';
+import { carriesBridgeName, PASSKEY_BRIDGE_NAME_PREFIX } from '@/lib/auth/passkey-bridge-name';
+import { passkeyRelyingParty } from '@/lib/auth/passkey-relying-party';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 /**
@@ -40,8 +41,18 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * policy read while a method remains or the caller already read a requiring
  * policy.
  *
- * Callers: unenrollFactorAction (server/actions/mfa.ts) and removePasskey
- * (server/security/passkeys.ts). The same words for both.
+ * Callers: removePasskey (server/security/passkeys.ts), and
+ * unenrollFactorAction (server/actions/mfa.ts) through appRemovalVerdict
+ * below, for an account that holds a passkey. The same words for both.
+ *
+ * THE NO-CHANGE RULE (integrator, 2026-11-21): stage 4 changes nothing for
+ * today's members while passkeys are dark. Removing an authenticator app
+ * from an account that holds no passkey is decided exactly as before this
+ * work (appRemovalVerdict 'policy': refused while the ACTIVE organization's
+ * policy requires a second step of the member, with the base's words, which
+ * name no passkey), and no passkey table is read for it. The unified rule
+ * above is for an account that holds an active passkey of this site
+ * (passkeyHolder).
  */
 
 export const LAST_METHOD_WORDS =
@@ -51,8 +62,7 @@ export const LAST_METHOD_WORDS =
 export const LAST_METHOD_RETRY_WORDS = FACTOR_CHECK_RETRY;
 
 export type RemovingMethod =
-  | { kind: 'app'; factorId: string }
-  | { kind: 'passkey'; passkeyId: string };
+  { kind: 'app'; factorId: string } | { kind: 'passkey'; passkeyId: string };
 
 /**
  * 'allowed'; 'last_method' (refuse with LAST_METHOD_WORDS); 'unreadable'
@@ -60,7 +70,12 @@ export type RemovingMethod =
  */
 export type LastMethodVerdict = 'allowed' | 'last_method' | 'unreadable';
 
-type FactorLike = { id?: unknown; factor_type?: unknown; status?: unknown; friendly_name?: unknown };
+type FactorLike = {
+  id?: unknown;
+  factor_type?: unknown;
+  status?: unknown;
+  friendly_name?: unknown;
+};
 type Admin = ReturnType<typeof createAdminClient>;
 
 /** A verified TOTP factor, with an id, without the reserved bridge name. */
@@ -126,6 +141,80 @@ async function servingOf(
   }
 }
 
+/**
+ * Whether the account holds an active passkey of this site: 'holder', 'none'
+ * or 'unreadable'. ACTIVE, of THIS site: the passkeys the member sees on the
+ * Security page and can use here; a member who removed theirs, or whose only
+ * passkey belongs to another site, is back to the base rule and its words.
+ *
+ * Names first (as lib/auth/passkey-bridge reads the bridge record): a
+ * passkey that can serve, or be finished, leaves a factor with the reserved
+ * bridge name at Auth, so only a factor list that carries that name leads to
+ * the one row read that tells. A list that cannot be read (or is another
+ * account's), or one without the name, is 'none' with nothing read: every
+ * account without a passkey (all of today's) is decided as before, with no
+ * new read. An account whose passkey row has lost its bridge factor (a setup
+ * not finished, no passkey that can serve) is 'none' too. No site: 'none'
+ * (no passkey is held here). A table that does not exist yet holds nothing.
+ */
+export async function passkeyHolder(
+  userId: string,
+  factors: ReadonlyArray<{ friendly_name?: unknown }> | null,
+): Promise<'holder' | 'none' | 'unreadable'> {
+  if (factors === null || !factors.some(carriesBridgeName)) return 'none';
+  const rp = passkeyRelyingParty();
+  if (!rp) return 'none';
+  try {
+    const { data, error } = await createAdminClient()
+      .from('member_passkeys')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('rp_id', rp.rpId)
+      .is('removed_at', null)
+      .limit(1);
+    if (error) {
+      const code = (error as { code?: unknown }).code;
+      return code === 'PGRST205' || code === '42P01' ? 'none' : 'unreadable';
+    }
+    if (!Array.isArray(data)) return 'unreadable';
+    return data.length > 0 ? 'holder' : 'none';
+  } catch {
+    return 'unreadable';
+  }
+}
+
+/**
+ * Removing an authenticator app (unenrollFactorAction): 'policy' (the base
+ * rule: refuse with the base's words), 'last_method', 'unreadable' (try
+ * again) or 'allowed'.
+ *   - No passkey held: the base rule exactly, on the active organization's
+ *     policy the caller read; nothing else is asked.
+ *   - A holder: the unified rule (lastMethodVerdict, both corrections).
+ *   - Whether the account holds one could not be read: try again under the
+ *     active organization's requiring policy (either rule could hold);
+ *     otherwise the unified rule with the passkeys unknown.
+ */
+export async function appRemovalVerdict(input: {
+  userId: string;
+  factorId: string;
+  /** The account's factor list, or null when it could not be read (or was another account's). */
+  factors: ReadonlyArray<FactorLike> | null;
+  /** The active organization's policy requires a second step of the member. */
+  activeRequired: boolean;
+  servingPasskeys: () => Promise<ReadonlyArray<string> | null>;
+}): Promise<LastMethodVerdict | 'policy'> {
+  const holder = await passkeyHolder(input.userId, input.factors);
+  if (holder === 'none') return input.activeRequired ? 'policy' : 'allowed';
+  if (holder === 'unreadable' && input.activeRequired) return 'unreadable';
+  return lastMethodVerdict({
+    userId: input.userId,
+    removing: { kind: 'app', factorId: input.factorId },
+    factors: input.factors,
+    servingPasskeys: holder === 'holder' ? input.servingPasskeys : async () => null,
+    requiredKnown: input.activeRequired,
+  });
+}
+
 /** The rule's verdict on removing `removing`. */
 export async function lastMethodVerdict(input: {
   userId: string;
@@ -161,8 +250,9 @@ export async function lastMethodVerdict(input: {
     } else {
       // Correction 1: a passkey that cannot serve is no method.
       if (removing.kind === 'passkey' && !serving.includes(removing.passkeyId)) return 'allowed';
-      left = serving.filter((id) => !(removing.kind === 'passkey' && id === removing.passkeyId))
-        .length;
+      left = serving.filter(
+        (id) => !(removing.kind === 'passkey' && id === removing.passkeyId),
+      ).length;
       if (left > 0) return 'allowed';
     }
   }

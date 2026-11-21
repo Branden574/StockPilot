@@ -109,13 +109,14 @@ vi.mock('@/server/security/passkeys', () => ({
   passkeyStepFor: vi.fn(async () => 'none'),
   servingPasskeyIds: vi.fn(async () => []),
 }));
-// Stage 4 decision B: the last-method rule has its own tests
-// (server/security/second-step-methods.test.ts); here a removal is allowed
-// unless a test says otherwise, so what is pinned is the bridge's own
-// refusal, and how the action asks the rule and answers its verdict.
+// Stage 4: the app removal rule has its own tests
+// (server/security/second-step-methods.test.ts and
+// mfa.unenroll-no-change.test.ts); here a removal is allowed unless a test
+// says otherwise, so what is pinned is the bridge's own refusal, and how the
+// action asks the rule and answers its verdict.
 vi.mock('@/server/security/second-step-methods', () => ({
   LAST_METHOD_WORDS: 'last method',
-  lastMethodVerdict: vi.fn(async () => 'allowed'),
+  appRemovalVerdict: vi.fn(async () => 'allowed'),
 }));
 
 type Factor = {
@@ -211,7 +212,7 @@ import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { audit } from '@/server/services/audit';
 import { servingPasskeyIds } from '@/server/security/passkeys';
-import { lastMethodVerdict } from '@/server/security/second-step-methods';
+import { appRemovalVerdict } from '@/server/security/second-step-methods';
 
 import {
   challengeFactorAction,
@@ -594,42 +595,52 @@ describe('unenrollFactorAction and the passkey bridge', () => {
   });
 });
 
-describe('unenrollFactorAction and the last-method rule (decision B, with the corrections of 2026-11-21)', () => {
+describe('unenrollFactorAction and the app removal rule (the no-change rule of 2026-11-21)', () => {
   it("asks the rule with the list the context read, the active organization's policy, and the passkeys judged by the page's own rule, only when asked", async () => {
     h.factors = [APP, BRIDGE];
     await unenrollFactorAction({ factorId: APP.id });
-    expect(lastMethodVerdict).toHaveBeenCalledOnce();
-    const input = vi.mocked(lastMethodVerdict).mock.calls[0]![0];
-    expect(input).toMatchObject({
-      userId: 'user-1',
-      removing: { kind: 'app', factorId: APP.id },
-      requiredKnown: false,
-    });
+    expect(appRemovalVerdict).toHaveBeenCalledOnce();
+    const input = vi.mocked(appRemovalVerdict).mock.calls[0]![0];
+    expect(input).toMatchObject({ userId: 'user-1', factorId: APP.id, activeRequired: false });
     expect(input.factors?.map((f) => f.id)).toEqual([APP.id, BRIDGE.id]);
     expect(servingPasskeyIds).not.toHaveBeenCalled();
     await input.servingPasskeys();
     expect(servingPasskeyIds).toHaveBeenCalledWith('user-1', input.factors);
   });
 
-  it('an unread factor list, or another account\'s, reaches the rule as unknown (null), never as an empty list', async () => {
+  it("an unread factor list, or another account's, reaches the rule as unknown (null), never as an empty list", async () => {
     h.contextListFails = true;
     await unenrollFactorAction({ factorId: APP.id });
     h.contextListFails = false;
     h.accountId = 'user-2';
     await unenrollFactorAction({ factorId: APP.id });
-    expect(vi.mocked(lastMethodVerdict).mock.calls.map((c) => c[0].factors)).toEqual([null, null]);
+    expect(vi.mocked(appRemovalVerdict).mock.calls.map((c) => c[0].factors)).toEqual([null, null]);
   });
 
-  it("the last method: refused with the rule's words, nothing removed", async () => {
-    vi.mocked(lastMethodVerdict).mockResolvedValueOnce('last_method');
+  it("the base rule: refused with the base's words, nothing removed", async () => {
+    vi.mocked(appRemovalVerdict).mockResolvedValueOnce('policy');
+    const res = await unenrollFactorAction({ factorId: APP.id });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'forbidden',
+        message: 'Your organization requires MFA. Ask an admin to lower the policy before disabling.',
+      },
+    });
+    expect(mfaStub.unenroll).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("the last method (a passkey holder): refused with the rule's words, nothing removed", async () => {
+    vi.mocked(appRemovalVerdict).mockResolvedValueOnce('last_method');
     const res = await unenrollFactorAction({ factorId: APP.id });
     expect(res).toEqual({ ok: false, error: { code: 'forbidden', message: 'last method' } });
     expect(mfaStub.unenroll).not.toHaveBeenCalled();
     expect(audit).not.toHaveBeenCalled();
   });
 
-  it('correction 2: what could not be read answers try again in a moment, never a removal', async () => {
-    vi.mocked(lastMethodVerdict).mockResolvedValueOnce('unreadable');
+  it('what could not be read answers try again in a moment, never a removal', async () => {
+    vi.mocked(appRemovalVerdict).mockResolvedValueOnce('unreadable');
     const res = await unenrollFactorAction({ factorId: APP.id });
     expect(res).toEqual({ ok: false, error: { code: 'internal_error', message: TRY_AGAIN } });
     expect(mfaStub.unenroll).not.toHaveBeenCalled();

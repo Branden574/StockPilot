@@ -2488,7 +2488,10 @@ WEB_TESTS=(
   # back; the raised session must be the same session and account; a use
   # that cannot be stored refuses. The last second-step method (apps, and
   # passkeys that can serve now) stays while a policy requires one; what
-  # cannot be read is "try again", never allowed. The account states
+  # cannot be read is "try again", never allowed. Removing an authenticator
+  # app from an account with no passkey is exactly the rule from before
+  # passkeys (the active organization's policy, the same words), with no
+  # passkey table read. The account states
   # read times to the microsecond. The console refuses a bridge holder. The
   # Security page has no trace of passkeys unless the server allows them.
   # The scheduled sweep never finishes a fail-closed state; the bridge
@@ -2499,6 +2502,7 @@ WEB_TESTS=(
   src/server/security/passkey-maintenance.test.ts
   src/server/security/passkey-detector.test.ts
   src/server/security/second-step-methods.test.ts
+  src/server/actions/mfa.unenroll-no-change.test.ts
   src/lib/auth/platform-admin.passkeys.test.ts
   'src/app/(auth)/signin/mfa/page.passkeys.test.tsx'
   'src/app/(dashboard)/dashboard/settings/security/page.passkeys.test.tsx'

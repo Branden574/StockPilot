@@ -12,7 +12,7 @@ import { assertCurrentAal2, ServiceError, withContext } from '@/server/services/
 import { dispatchEvent } from '@/server/services/integration-events';
 import { SESSION_CHANGED } from '@/server/services/step-up-held';
 import { passkeyStepFor, servingPasskeyIds } from '@/server/security/passkeys';
-import { LAST_METHOD_WORDS, lastMethodVerdict } from '@/server/security/second-step-methods';
+import { appRemovalVerdict, LAST_METHOD_WORDS } from '@/server/security/second-step-methods';
 import {
   checkMfaCode,
   MFA_CHALLENGE_NOT_STARTED,
@@ -418,25 +418,29 @@ export async function unenrollFactorAction(input: {
     // The factor list withContext() already read (lib/auth/context-factor-
     // list): null when it could not be read, or was another account's.
     const listed = await contextFactorsOf(svcCtx, session.userId);
-    // Decision B (2026-11-21), "the last method": the account's LAST
-    // second-step method (verified authenticator apps, never the bridge, and
-    // passkeys that can actually serve as the second step now) cannot be
-    // removed while a policy of an organization the member belongs to
-    // requires one; removing one of two is allowed. The active
-    // organization's policy is the one read above; the others are read only
-    // when no method would be left. The passkeys are judged by the
-    // second-step page's own rule, only when no app would remain, and never
-    // with an unknown list. Unknown is never fine: a list or a judgement that
-    // cannot be read, under a policy that requires a second step, is "try
-    // again in a moment". The same words as a passkey's removal
-    // (server/security/second-step-methods.ts).
-    const verdict = await lastMethodVerdict({
+    // The no-change rule (stage 4, 2026-11-21): for an account that holds no
+    // passkey, exactly the rule from before passkeys: refused while the
+    // ACTIVE organization's policy requires a second step, in the same
+    // words, with no passkey table read (names first). For an account that
+    // holds an active passkey of this site, the last-method rule shared with
+    // a passkey's removal: the LAST second-step method (verified apps, never
+    // the bridge, and passkeys that can serve now, judged by the second-step
+    // page's own rule only when no app would remain) cannot be removed while
+    // a policy of any organization of the member requires one; what cannot
+    // be read is "try again" (server/security/second-step-methods.ts).
+    const verdict = await appRemovalVerdict({
       userId: session.userId,
-      removing: { kind: 'app', factorId: parsed.data.factorId },
+      factorId: parsed.data.factorId,
       factors: listed,
+      activeRequired: required,
       servingPasskeys: () => servingPasskeyIds(session.userId, listed),
-      requiredKnown: required,
     });
+    if (verdict === 'policy') {
+      return err(
+        'forbidden',
+        'Your organization requires MFA. Ask an admin to lower the policy before disabling.',
+      );
+    }
     if (verdict === 'last_method') return err('forbidden', LAST_METHOD_WORDS);
     if (verdict === 'unreadable') return err('internal_error', FACTOR_CHECK_RETRY);
 

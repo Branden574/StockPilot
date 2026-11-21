@@ -81,7 +81,7 @@ const { emitAuthAudit } = await import('@/server/services/auth-audit');
 const { recordSecurityEvent } = await import('./events');
 const { sendPasskeyAddedEmail, sendPasskeyRemovedEmail } = await import('./passkey-emails');
 const pk = await import('./passkeys');
-const { LAST_METHOD_RETRY_WORDS, LAST_METHOD_WORDS, lastMethodVerdict } = await import(
+const { appRemovalVerdict, LAST_METHOD_RETRY_WORDS, LAST_METHOD_WORDS } = await import(
   './second-step-methods'
 );
 
@@ -1521,10 +1521,11 @@ describe('correction 1: servingPasskeyIds, the passkeys that can serve as the se
     });
     const verdict = () => {
       const factors = factorsOf(userId);
-      return lastMethodVerdict({
+      return appRemovalVerdict({
         userId,
-        removing: { kind: 'app', factorId: app.id },
+        factorId: app.id,
         factors,
+        activeRequired: false,
         servingPasskeys: () => pk.servingPasskeyIds(userId, factors),
       });
     };
@@ -1544,6 +1545,11 @@ describe('correction 1: servingPasskeyIds, the passkeys that can serve as the se
     world.addAllowed = 'ok';
     world.knobs.failReads = ['passkey_bridges'];
     expect(await verdict()).toBe('unreadable');
+    // The passkey removed (its row marked, the bridge factor gone): the base
+    // rule again, on the active organization's policy only.
+    world.knobs.failReads = [];
+    world.passkeys[0]!.removed_at = new Date().toISOString();
+    expect(await verdict()).toBe('allowed');
   });
 
   it('a gate read that answers an error is closed at every level, and the passkeys cannot be told (null)', async () => {
