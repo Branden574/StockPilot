@@ -103,8 +103,20 @@ vi.mock('@/lib/auth/verified-claims', () => ({
 vi.mock('next/headers', () => ({ headers: vi.fn(async () => new Headers()) }));
 vi.mock('@/server/services/auth-audit', () => ({ emitAuthAudit: vi.fn(async () => {}) }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+// Stage 4: the passkey reads answer as for an account whose passkeys are not
+// open (the stage 2 behaviour these tests pin); passkeys.test.ts covers them.
+vi.mock('@/server/security/passkeys', () => ({
+  passkeyStepFor: vi.fn(async () => 'none'),
+  passkeyKeepsSecondStep: vi.fn(async () => false),
+}));
 
-type Factor = { id: string; status: string; factor_type?: string; friendly_name?: string | null };
+type Factor = {
+  id: string;
+  status: string;
+  factor_type?: string;
+  friendly_name?: string | null;
+  created_at?: string;
+};
 
 const h = vi.hoisted(() => ({
   /** The account's factors, as GoTrue lists them (getUser and listFactors). */
@@ -113,6 +125,7 @@ const h = vi.hoisted(() => ({
     status: string;
     factor_type?: string;
     friendly_name?: string | null;
+    created_at?: string;
   }>,
   accountId: 'user-1',
   getUserFails: false,
@@ -611,10 +624,22 @@ describe('enrollFactorAction and the passkey bridge', () => {
   });
 
   it('the clean-up removes an unfinished reserved-name factor that is not recorded, like any set-up', async () => {
-    h.factors = [{ ...IMPOSTOR, status: 'unverified' }];
+    const old = new Date(Date.now() - 3 * 60_000).toISOString();
+    h.factors = [{ ...IMPOSTOR, status: 'unverified', created_at: old }];
     h.record = { data: null, error: null };
     await enrollFactorAction();
     expect(mfaStub.unenroll.mock.calls).toEqual([[{ factorId: IMPOSTOR.id }]]);
+  });
+
+  it('stage 4: an unfinished reserved-name factor younger than two minutes (a registration in flight) is left alone', async () => {
+    const young = new Date(Date.now() - 30_000).toISOString();
+    for (const created_at of [young, undefined, 'not a time']) {
+      mfaStub.unenroll.mockClear();
+      h.factors = [{ ...IMPOSTOR, status: 'unverified', created_at }];
+      h.record = { data: null, error: null };
+      await enrollFactorAction();
+      expect(mfaStub.unenroll).not.toHaveBeenCalled();
+    }
   });
 
   it('the name it gives a new authenticator never carries the reserved prefix', async () => {
@@ -644,6 +669,7 @@ describe('stepUpMethodsAction', () => {
           { id: APP.id, friendlyName: 'Phone' },
           { id: 'app-2', friendlyName: null },
         ],
+        passkey: false,
       },
     });
     expect(h.recordFilters).toEqual(READ_OWN_RECORD);
@@ -708,13 +734,16 @@ describe('stepUpMethodsAction', () => {
       const withApp = await stepUpMethodsAction();
       expect(withApp).toMatchObject({
         ok: true,
-        data: { apps: [{ id: APP.id, friendlyName: 'Phone' }], recordsUnread: true },
+        data: { apps: [{ id: APP.id, friendlyName: 'Phone' }], recordsUnread: true, passkey: false },
       });
       expect(withApp.ok && withApp.data.apps).toHaveLength(1);
 
       h.factors = [IMPOSTOR];
       const alone = await stepUpMethodsAction();
-      expect(alone).toMatchObject({ ok: true, data: { apps: [], recordsUnread: true } });
+      expect(alone).toMatchObject({
+        ok: true,
+        data: { apps: [], recordsUnread: true, passkey: false },
+      });
     },
   );
 

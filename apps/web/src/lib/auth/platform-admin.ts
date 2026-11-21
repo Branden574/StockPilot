@@ -6,11 +6,13 @@ import { notFound } from 'next/navigation';
 
 import { env } from '@/lib/env';
 import { SESSION_HEADER_USER_EMAIL } from '@/lib/supabase/middleware';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 
 import { stepUpOwed } from '@stockpilot/core';
 
 import { requireSession, type ServerSession } from './session';
+import { carriesBridgeName } from './passkey-bridge-name';
 import { readVerifiedSessionClaimsOf, type VerifiedSessionClaims } from './verified-claims';
 
 /**
@@ -36,7 +38,7 @@ interface VerifiedUser {
   id: string;
   email: string | null;
   /** GoTrue's own list for this user, from the same answer that named it. */
-  factors: ReadonlyArray<{ status?: string | null }>;
+  factors: ReadonlyArray<{ status?: string | null; friendly_name?: string | null }>;
 }
 
 /**
@@ -82,11 +84,46 @@ export async function currentUserIsPlatformAdmin(): Promise<boolean> {
   return admin !== null && !(await owesStepUp(admin));
 }
 
-/** The verified user when its email is on the allowlist, else null. */
+/**
+ * The verified user when its email is on the allowlist, else null.
+ *
+ * Never an account that holds a passkey bridge (plan 2.1 rule 21, review
+ * 9.7): a bridge answer is a fresh `totp` entry and would pass the console's
+ * step-up rule. Refused when Auth lists a factor carrying the reserved name
+ * (any status), when our table records a bridge for the account, and when the
+ * table cannot be read. A table that does not exist yet (before migration
+ * 0475) records no bridge, and no bridge can exist then: our server makes one
+ * only after 0475, and a bridge is always a reserved-name factor, which the
+ * first check refuses on its own.
+ */
 async function verifiedPlatformAdmin(): Promise<VerifiedUser | null> {
   const user = await getVerifiedUser();
-  return user && isPlatformAdmin(user.email) ? user : null;
+  if (!user || !isPlatformAdmin(user.email)) return null;
+  if (user.factors.some((f) => carriesBridgeName(f))) return null;
+  if ((await consoleBridgeRecord(user.id)) !== 'none') return null;
+  return user;
 }
+
+/**
+ * Whether our table records a passkey bridge for `userId`: 'none', 'recorded'
+ * or 'unreadable'. Read once per render (cache), like getVerifiedUser.
+ */
+const consoleBridgeRecord = cache(async (userId: string): Promise<'none' | 'recorded' | 'unreadable'> => {
+  try {
+    const { data, error } = await createAdminClient()
+      .from('passkey_bridges')
+      .select('factor_id')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) {
+      const code = (error as { code?: unknown }).code;
+      return code === 'PGRST205' || code === '42P01' ? 'none' : 'unreadable';
+    }
+    return data === null ? 'none' : 'recorded';
+  } catch {
+    return 'unreadable';
+  }
+});
 
 /**
  * LINK-VISIBILITY-ONLY variant of {@link currentUserIsPlatformAdmin} that

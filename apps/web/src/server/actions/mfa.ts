@@ -11,6 +11,7 @@ import { audit } from '@/server/services/audit';
 import { assertCurrentAal2, ServiceError, withContext } from '@/server/services/context';
 import { dispatchEvent } from '@/server/services/integration-events';
 import { SESSION_CHANGED } from '@/server/services/step-up-held';
+import { passkeyKeepsSecondStep, passkeyStepFor } from '@/server/security/passkeys';
 import {
   checkMfaCode,
   MFA_CHALLENGE_NOT_STARTED,
@@ -27,6 +28,7 @@ import {
   signOutThisSession,
 } from '@/lib/auth/mfa-code-attempts';
 import { contextFactorsOf } from '@/lib/auth/context-factor-list';
+import { carriesBridgeName } from '@/lib/auth/passkey-bridge-name';
 import { factorsOf, readMfaFactorList, type MfaFactorList } from '@/lib/auth/mfa-factors';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import {
@@ -53,6 +55,16 @@ import { err, ok, type ActionResult } from '@stockpilot/core';
 type GoTrueError = { code?: unknown; name?: unknown; status?: unknown; message?: unknown };
 
 /** GoTrue's structured code for a report, never its message. */
+/** How long a reserved-name factor is a registration in flight (plan review 12). */
+const RESERVED_FACTOR_IN_FLIGHT_MS = 2 * 60_000;
+
+/** Whether an unverified reserved-name factor made at `createdAt` is younger than two minutes (unreadable: yes). */
+function reservedFactorInFlight(createdAt: unknown): boolean {
+  const made = typeof createdAt === 'string' ? Date.parse(createdAt) : Number.NaN;
+  if (!Number.isFinite(made)) return true;
+  return Date.now() - made < RESERVED_FACTOR_IN_FLIGHT_MS;
+}
+
 function goTrueCode(error: GoTrueError | null | undefined): { code?: string } {
   return typeof error?.code === 'string' ? { code: error.code } : {};
 }
@@ -152,11 +164,17 @@ export async function enrollFactorAction(): Promise<
     // factor that carries the reserved name (factorChangeRefusal: left for a
     // later clean-up; the failed read is reported). A reserved-name factor
     // that is not the recorded one goes like any unfinished set-up.
+    // Stage 4 (review 2-3 finding 13, plan review 12): an unverified factor
+    // that carries the reserved name and is younger than two minutes is a
+    // passkey registration in flight in another tab (enrolled, not yet
+    // stored): left alone; its own clean-up, the sweep or Auth's 300-second
+    // rule takes it. A time that cannot be read is treated as young.
     const { data: existing } = await supabase.auth.mfa.listFactors();
     const unfinished = (existing?.all ?? []).filter((f) => f.status !== 'verified');
     const bridge = await readPasskeyBridge(session.userId, unfinished, 'enroll_cleanup');
     for (const f of unfinished) {
       if (factorChangeRefusal(bridge, f)) continue;
+      if (carriesBridgeName(f) && reservedFactorInFlight(f.created_at)) continue;
       await supabase.auth.mfa.unenroll({ factorId: f.id });
     }
 
@@ -395,7 +413,11 @@ export async function unenrollFactorAction(input: {
     const required =
       policy === 'all_required' ||
       (policy === 'admins_required' && (role === 'owner' || role === 'admin'));
-    if (required) {
+    // Review 13, "last method": an app is not the account's last method when
+    // an active passkey with a verified, recorded bridge remains (and
+    // passkeys are open to the member). Asked only under a policy that
+    // requires a second step; for a member without a passkey nothing changes.
+    if (required && !(await passkeyKeepsSecondStep(session.userId))) {
       return err(
         'forbidden',
         'Your organization requires MFA. Ask an admin to lower the policy before disabling.',
@@ -674,6 +696,7 @@ export async function challengeFactorAction(input: {
 export async function stepUpMethodsAction(): Promise<
   ActionResult<{
     apps: Array<{ id: string; friendlyName: string | null }>;
+    passkey: boolean;
     /** Present only when the bridge record could not be read. */
     recordsUnread?: true;
   }>
@@ -713,6 +736,10 @@ export async function stepUpMethodsAction(): Promise<
         f.status === 'verified' && f.factor_type === 'totp' && typeof f.id === 'string',
     );
     const bridge = await readPasskeyBridge(claims.userId, verified, 'step_up_methods');
+    // Stage 4: whether the account's passkey answers here (every condition of
+    // server/security/passkeys.ts passkeyGate, and a healthy bridge). False
+    // keeps the modal exactly as stage 2 left it.
+    const passkey = (await passkeyStepFor(claims.userId, verified)) === 'ready';
     return ok({
       // Never the recorded bridge, nor any other factor that carries the
       // reserved name, whatever the record read answered (appFactorsForCode).
@@ -720,6 +747,7 @@ export async function stepUpMethodsAction(): Promise<
         id: f.id,
         friendlyName: f.friendly_name ?? null,
       })),
+      passkey,
       ...(passkeyRecordsUnread(bridge) ? { recordsUnread: true as const } : {}),
     });
   } catch (e) {
