@@ -1,22 +1,32 @@
 import { render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { OrganizationRowUnavailableError } from '@/lib/auth/organization-row-unavailable';
 import type { SecurityActivity } from '@/server/services/security-events';
 
 /**
  * Blocked activity (dashboard/settings/security/activity): owners and admins
- * only. A member who is not one is sent to Settings before anything is read;
- * a refusal from the service's own gate is sent to the Security page (or to
- * set-up, or to the code page, by its reason); a policy that could not be
- * read is never caught, so the dashboard shows its "couldn't check your
- * access" card. The page lists totals by kind for the last 7 days (a kind
- * with none is not shown) and the newest entries with when, what, where,
- * source and count; an entry that counts events past a cap has no place.
+ * only. The page asks in the service's own order: the authenticator gate
+ * first, then the role. So a member who owes an authenticator is sent to
+ * set-up (or to the code page, with a factor), and one whose policy could not
+ * be read reaches the dashboard's "couldn't check your access" card, whatever
+ * their role; only then is a member who is not an owner or admin sent to
+ * Settings. All of that happens before anything is read. A refusal from the
+ * service's own reads is sent to the Security page (or to set-up, or to the
+ * code page, by its reason). The page lists totals by kind for the last 7
+ * days (a kind with none is not shown) and the newest entries with when,
+ * what, where, source and count; an entry that counts events past a cap has
+ * no place.
  */
 
 const h = vi.hoisted(() => ({
   role: 'admin' as string,
+  /** The authenticator gate's inputs, as the context carries them. */
+  mfaRequired: false,
+  mfaSatisfied: true,
+  mfaEnrolled: false,
+  /** The context was built from a policy that could not be read. */
+  policyUnread: false,
   activity: vi.fn(),
   constructed: vi.fn(),
 }));
@@ -39,23 +49,43 @@ vi.mock('@/components/admin/audit-time', async () => {
 });
 vi.mock('@/server/services/context', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/server/services/context')>();
+  const { OrganizationRowUnavailableError: Unavailable } = await import(
+    '@/lib/auth/organization-row-unavailable'
+  );
   return {
     ServiceError: real.ServiceError,
-    withContext: vi.fn(async () => ({ organizationId: 'org-1', userId: 'u1', role: h.role })),
+    // The real gate error, and its real refusal for a policy that was not read.
+    mfaGateError: (ctx: { mfaEnrolled: boolean }) => {
+      if (h.policyUnread && !ctx.mfaEnrolled) throw new Unavailable();
+      return real.mfaGateError(ctx);
+    },
+    withContext: vi.fn(async () => ({
+      organizationId: 'org-1',
+      userId: 'u1',
+      role: h.role,
+      mfaRequired: h.mfaRequired,
+      mfaSatisfied: h.mfaSatisfied,
+      mfaEnrolled: h.mfaEnrolled,
+    })),
   };
 });
-vi.mock('@/server/services/security-events', () => ({
-  SECURITY_ACTIVITY_ROW_LIMIT: 100,
-  SECURITY_ACTIVITY_TOTALS_DAYS: 7,
-  SecurityEventsService: class {
-    constructor(ctx: unknown) {
-      h.constructed(ctx);
-    }
-    activity() {
-      return h.activity();
-    }
-  },
-}));
+// The service's reads are replaced; its gate (assertMaySeeSecurityActivity) is the real one.
+vi.mock('@/server/services/security-events', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/server/services/security-events')>();
+  return {
+    SECURITY_ACTIVITY_ROW_LIMIT: 100,
+    SECURITY_ACTIVITY_TOTALS_DAYS: 7,
+    assertMaySeeSecurityActivity: real.assertMaySeeSecurityActivity,
+    SecurityEventsService: class {
+      constructor(ctx: unknown) {
+        h.constructed(ctx);
+      }
+      activity() {
+        return h.activity();
+      }
+    },
+  };
+});
 
 import { ServiceError } from '@/server/services/context';
 
@@ -122,12 +152,70 @@ async function renderPage() {
   render(await BlockedActivityPage());
 }
 
+beforeEach(() => {
+  h.role = 'admin';
+  h.mfaRequired = false;
+  h.mfaSatisfied = true;
+  h.mfaEnrolled = false;
+  h.policyUnread = false;
+  h.activity.mockReset();
+  h.constructed.mockReset();
+});
+
 describe('who may see it', () => {
   it.each(['manager', 'staff', 'viewer'])('a %s is sent to Settings before anything is read', async (role) => {
     h.role = role;
     await expect(BlockedActivityPage()).rejects.toThrow('REDIRECT /dashboard/settings');
     expect(h.constructed).not.toHaveBeenCalled();
     expect(h.activity).not.toHaveBeenCalled();
+  });
+
+  describe('the authenticator gate is asked before the role, as the service asks it', () => {
+    it.each(['manager', 'staff', 'admin', 'owner'])(
+      'a %s who owes an authenticator is sent to set-up, before anything is read',
+      async (role) => {
+        h.role = role;
+        h.mfaRequired = true;
+        h.mfaSatisfied = false;
+        await expect(BlockedActivityPage()).rejects.toThrow(/^REDIRECT \/dashboard\/settings\/security\?enroll=1$/);
+        expect(h.constructed).not.toHaveBeenCalled();
+        expect(h.activity).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['manager', 'admin'])(
+      'a %s with an authenticator whose session has not given its code is sent to the code page',
+      async (role) => {
+        h.role = role;
+        h.mfaRequired = true;
+        h.mfaSatisfied = false;
+        h.mfaEnrolled = true;
+        await expect(BlockedActivityPage()).rejects.toThrow(
+          'REDIRECT /signin/mfa?redirect=/dashboard/settings/security/activity',
+        );
+        expect(h.constructed).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['manager', 'admin'])(
+      'a %s whose policy could not be read reaches "couldn’t check your access", not Settings',
+      async (role) => {
+        h.role = role;
+        h.mfaRequired = true;
+        h.mfaSatisfied = false;
+        h.policyUnread = true;
+        await expect(BlockedActivityPage()).rejects.toBeInstanceOf(OrganizationRowUnavailableError);
+        expect(h.constructed).not.toHaveBeenCalled();
+      },
+    );
+
+    it('a manager past the gate is still sent to Settings', async () => {
+      h.role = 'manager';
+      h.mfaRequired = true;
+      h.mfaSatisfied = true;
+      await expect(BlockedActivityPage()).rejects.toThrow(/^REDIRECT \/dashboard\/settings$/);
+      expect(h.constructed).not.toHaveBeenCalled();
+    });
   });
 
   it.each([

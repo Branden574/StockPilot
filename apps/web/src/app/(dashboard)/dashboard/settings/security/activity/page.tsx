@@ -15,6 +15,7 @@ import {
 import { AUTHENTICATOR_SET_UP_URL } from '@/lib/auth/authenticator-set-up';
 import { ServiceError, withContext } from '@/server/services/context';
 import {
+  assertMaySeeSecurityActivity,
   SECURITY_ACTIVITY_ROW_LIMIT,
   SECURITY_ACTIVITY_TOTALS_DAYS,
   SecurityEventsService,
@@ -22,7 +23,6 @@ import {
 } from '@/server/services/security-events';
 
 import {
-  isAdminRole,
   securityEventCategoryLabel,
   securityEventOutcomeLabel,
   securityEventPlaceLabel,
@@ -44,30 +44,50 @@ const OVER_CAP = new Set(['over_minute_cap', 'over_buffer_cap']);
 const THIS_PAGE = '/dashboard/settings/security/activity';
 
 /**
+ * A refusal, turned into where the member is sent: to set-up when an
+ * authenticator is owed, to the code page when this session has not given
+ * its code, otherwise to `elsewhere`. Anything that is not a refusal is
+ * thrown on: a policy that could not be read
+ * (OrganizationRowUnavailableError) reaches the dashboard's "couldn't check
+ * your access" card.
+ */
+function sendAway(e: unknown, elsewhere: string): never {
+  if (e instanceof ServiceError && e.code === 'forbidden') {
+    const reason = e.details?.reason;
+    if (reason === 'mfa_required') redirect(AUTHENTICATOR_SET_UP_URL);
+    if (reason === 'aal2_required') redirect(`/signin/mfa?redirect=${THIS_PAGE}`);
+    redirect(elsewhere);
+  }
+  throw e;
+}
+
+/**
  * BLOCKED ACTIVITY: what the app refused that was about this organization,
  * for its owners and admins (server/services/security-events.ts holds the
- * gate and the reads). A member who is not an owner or admin is sent to
- * Settings; a refusal from the service's own gate (the authenticator step-up,
- * or the database's role check) is sent to the Security page, or to set-up
- * when an authenticator is owed. A policy that could not be read reaches the
- * dashboard's "couldn't check your access" card (the service's MFA gate
- * throws OrganizationRowUnavailableError, which is never caught here).
+ * gate and the reads).
+ *
+ * The page asks in the service's own order, with the service's own gate
+ * (assertMaySeeSecurityActivity), before anything is read: the authenticator
+ * step first, then the role. So a member who owes an authenticator is sent to
+ * set-up, and one whose policy could not be read reaches the "couldn't check
+ * your access" card, whatever their role; a member past that step who is not
+ * an owner or admin is sent to Settings. A refusal from the reads themselves
+ * (the database's own role and authenticator checks) is sent to the Security
+ * page, or by its reason as above.
  */
 export default async function BlockedActivityPage() {
   const ctx = await withContext();
-  if (!isAdminRole(ctx.role)) redirect('/dashboard/settings');
+  try {
+    assertMaySeeSecurityActivity(ctx);
+  } catch (e) {
+    sendAway(e, '/dashboard/settings');
+  }
 
   let activity: SecurityActivity;
   try {
     activity = await new SecurityEventsService(ctx).activity();
   } catch (e) {
-    if (e instanceof ServiceError && e.code === 'forbidden') {
-      const reason = e.details?.reason;
-      if (reason === 'mfa_required') redirect(AUTHENTICATOR_SET_UP_URL);
-      if (reason === 'aal2_required') redirect(`/signin/mfa?redirect=${THIS_PAGE}`);
-      redirect('/dashboard/settings/security');
-    }
-    throw e;
+    sendAway(e, '/dashboard/settings/security');
   }
 
   const { totals, rows } = activity;
