@@ -51,8 +51,18 @@ const lowCriticalRead = {
 // Added by docs/whats-new-2026-11-19-errors (2026-11-19): the count start access check release (a manager or above who can assign counts, where Cycle Counts is on), published later, at the top, below the Liquid Glass draft.
 const COUNT_START_ACCESS_ID = 'count-start-access-check-2026-11';
 // Added by docs/whats-new-2026-11-21-phone (2026-11-21): the phone authenticator set-up release (every member: three of its five entries have no audience), published later, at the top, below the Liquid Glass draft.
+// Added by docs/whats-new-blocked-activity (2026-11-21): the Blocked activity release (owners and Super Admins), published later, at the top, below the Liquid Glass draft.
+const BLOCKED_ID = 'blocked-activity-2026-11';
+const blockedRead = {
+  release_id: BLOCKED_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-21T18:20:00Z',
+  read_at: '2026-11-21T18:20:00Z',
+};
 const PHONE_SET_UP_ID = 'phone-authenticator-set-up-2026-11';
-const PHONE_SET_UP_AT = '2026-11-21T02:31:00Z';
+// Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: PHONE_SET_UP_AT = '2026-11-21T02:31:00Z'): the Liquid Glass draft placeholder is now the minute of the Blocked activity release, published later, above the phone authenticator set-up release.
+const BLOCKED_AT = '2026-11-21T18:19:00Z';
 const phoneSetUpRead = {
   release_id: PHONE_SET_UP_ID,
   revision: 1,
@@ -148,9 +158,12 @@ describe('the emptied fields and schedule completion release: order, status and 
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(0, 6)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so the list takes one more.
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(0, 7)): the count start access check release is published at the top, below the Liquid Glass draft, so the list takes one more.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES.slice(0, 8)): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so the list takes one more.
-    expect(RELEASES.slice(0, 9).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES.slice(0, 9)): the Blocked activity release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    expect(RELEASES.slice(0, 10).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
       // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, directly below the Liquid Glass draft.
+      // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, directly below the Liquid Glass draft.
+      [BLOCKED_ID, 'published'],
       [PHONE_SET_UP_ID, 'published'],
       // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, directly below the Liquid Glass draft.
       [COUNT_START_ACCESS_ID, 'published'],
@@ -169,7 +182,8 @@ describe('the emptied fields and schedule completion release: order, status and 
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: the receiving release): the export, receipt and access release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: the export, receipt and access release): the count start access check release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: COUNT_START_ACCESS_ID): the phone authenticator set-up release is published after it, at the top, the newest published release.
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(PHONE_SET_UP_ID);
+    // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: PHONE_SET_UP_ID): the Blocked activity release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(BLOCKED_ID);
   });
 
   // Added by bundles/hand-out-follows-the-manager-rule (2026-11-16): revision 2 is told again.
@@ -188,9 +202,11 @@ describe('the emptied fields and schedule completion release: order, status and 
     const newestRead = { ...readAt(1), release_id: EXPORT_RECEIPT_ACCESS_ID };
     for (const v of [owner, admin, manager, scheduleOnly, suppliersOnly]) {
       // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
-      expect(buildReleaseList(RELEASES, v, [readAt(1), newerRead, newestRead, phoneSetUpRead], null).latestUnread?.id, v.role).toBe(ID);
+      // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+      expect(buildReleaseList(RELEASES, v, [readAt(1), newerRead, newestRead, blockedRead, phoneSetUpRead], null).latestUnread?.id, v.role).toBe(ID);
       // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
-      expect(buildReleaseList(RELEASES, v, [readAt(2), newerRead, newestRead, phoneSetUpRead], null).latestUnread?.id, v.role).not.toBe(
+      // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+      expect(buildReleaseList(RELEASES, v, [readAt(2), newerRead, newestRead, blockedRead, phoneSetUpRead], null).latestUnread?.id, v.role).not.toBe(
         ID,
       );
     }
@@ -211,14 +227,16 @@ describe('the emptied fields and schedule completion release: order, status and 
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: the minute of the receiving release, '2026-11-19T05:20:00Z'): the placeholder is the minute of the export, receipt and access release, published later, above this one.
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: the minute of the export, receipt and access release, '2026-11-19T16:00:00Z'): the placeholder is the minute of the count start access check release, published later, above this one.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: COUNT_START_ACCESS_AT): the placeholder is the minute of the phone authenticator set-up release, published later, above this one.
-    expect(RELEASES[0]!.publishedAt).toBe(PHONE_SET_UP_AT);
+    // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: PHONE_SET_UP_AT): the placeholder is the minute of the Blocked activity release, published later, above this one.
+    expect(RELEASES[0]!.publishedAt).toBe(BLOCKED_AT);
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: RELEASES.slice(2)): the Low + critical pages and list value release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(3)): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(4)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(5)): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES.slice(6)): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(7)) {
+    // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES.slice(7)): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(8)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -429,19 +447,23 @@ describe('the emptied fields and schedule completion release: who is told', () =
     for (const [v, after] of next) {
       // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
-      expect(buildReleaseList(RELEASES, v, [phoneSetUpRead, exportReceiptAccessRead, lowCriticalRead], null).latestUnread?.id, v.role).toBe(ID);
+      // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+      expect(buildReleaseList(RELEASES, v, [blockedRead, phoneSetUpRead, exportReceiptAccessRead, lowCriticalRead], null).latestUnread?.id, v.role).toBe(ID);
       // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
-      expect(buildReleaseList(RELEASES, v, [phoneSetUpRead, exportReceiptAccessRead, lowCriticalRead, read], null).latestUnread?.id, v.role).toBe(after);
+      // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+      expect(buildReleaseList(RELEASES, v, [blockedRead, phoneSetUpRead, exportReceiptAccessRead, lowCriticalRead, read], null).latestUnread?.id, v.role).toBe(after);
     }
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: nothing read): as above.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
-    expect(buildReleaseList(RELEASES, member, [phoneSetUpRead, exportReceiptAccessRead, lowCriticalRead], null).latestUnread?.id).toBe(DELETE_CONFIRM_ID);
+    // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+    expect(buildReleaseList(RELEASES, member, [blockedRead, phoneSetUpRead, exportReceiptAccessRead, lowCriticalRead], null).latestUnread?.id).toBe(DELETE_CONFIRM_ID);
     // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: nothing seen): the Low + critical pages and list value release is published later and reaches whoever can read items, so the phone has seen it first.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
-    const legacy = (v: ReleaseViewer) => legacyAnnouncementsFor(RELEASES, v, { [PHONE_SET_UP_ID]: true, [EXPORT_RECEIPT_ACCESS_ID]: true, [LOW_CRITICAL_ID]: true })[0];
+    // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+    const legacy = (v: ReleaseViewer) => legacyAnnouncementsFor(RELEASES, v, { [BLOCKED_ID]: true, [PHONE_SET_UP_ID]: true, [EXPORT_RECEIPT_ACCESS_ID]: true, [LOW_CRITICAL_ID]: true })[0];
     const base = { id: ID, date: '2026-11-16', title: release().title, body: release().summary };
     expect(legacy(owner)).toEqual({ ...base, cta: SUPPLIERS_LINK });
     expect(legacy(manager)).toEqual({ ...base, cta: SUPPLIERS_LINK });
