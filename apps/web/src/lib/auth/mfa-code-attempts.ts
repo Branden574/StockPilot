@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { headers } from 'next/headers';
 
 import { SESSION_ENDED_NOTICE } from '@/lib/auth/auth-page-notices';
+import { requestHeadersOrNull } from '@/lib/auth/request-headers';
 import { sessionAccountNow } from '@/lib/auth/session-account';
 import { clientIpFromHeaders } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
@@ -176,15 +177,6 @@ export async function signOutThisSession(supabase: MfaClient): Promise<void> {
     await supabase.auth.signOut({ scope: 'local' });
   } catch {
     // Refused below whatever happened here.
-  }
-}
-
-/** The request's headers, or null outside a request: never a throw. */
-async function requestHeadersOrNull(): Promise<Awaited<ReturnType<typeof headers>> | null> {
-  try {
-    return await headers();
-  } catch {
-    return null;
   }
 }
 

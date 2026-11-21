@@ -1,8 +1,7 @@
 import 'server-only';
 
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
-import { headers } from 'next/headers';
-
+import { requestHeadersOrNull } from '@/lib/auth/request-headers';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import {
@@ -12,15 +11,6 @@ import {
 } from '@/server/security/account-events';
 
 import type { Database } from '@stockpilot/core';
-
-/** The request's headers, or null outside a request: never a throw. */
-async function requestHeadersOrNull(): Promise<Awaited<ReturnType<typeof headers>> | null> {
-  try {
-    return await headers();
-  } catch {
-    return null;
-  }
-}
 
 /**
  * A SECURITY EVENT FOR A PASSWORD THE SIGN-IN SERVICE REFUSED HERE (part 1
