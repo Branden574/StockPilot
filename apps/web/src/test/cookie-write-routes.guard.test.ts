@@ -124,6 +124,13 @@ const EXEMPT: Record<string, Exemption> = {
     reason:
       'The public API unsubscribes a webhook for an sk_live_ key, within its own organization.',
   },
+  'api/security/probe/[kind]/route.ts': {
+    methods: ['POST', 'PUT', 'PATCH', 'DELETE'],
+    auth: 'none',
+    session: 'none',
+    reason:
+      'The scanner-path answer: a plain 404 for every method. It reads no session, writes nothing a member owns and changes nothing a cross-site request could abuse; it only counts the request as a security event with no organization.',
+  },
   'api/v1/auth/password-reset/route.ts': {
     methods: ['POST'],
     auth: 'none',

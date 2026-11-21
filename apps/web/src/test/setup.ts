@@ -57,6 +57,19 @@ vi.mock('@/server/services/lib/exception-sync-schedule', () => ({
   scheduleExceptionSync: vi.fn(),
 }));
 
+// Same reason, same shape: the detectors (sign-in, authenticator and recovery
+// codes, API keys, limiter refusals, probe paths) record security events
+// through server/security/events.ts, which buffers them and flushes two
+// seconds later on a timer with a service-role client. Left real, every test
+// that reaches a detector would leave a timer behind that fires in a later
+// test. The recorder is a no-op vi.fn here; a detector test imports this mock
+// and asserts on it, and server/security/events.test.ts tests the real one
+// through vi.importActual.
+vi.mock('@/server/security/events', () => ({
+  recordSecurityEvent: vi.fn(async () => undefined),
+  flushSecurityEvents: vi.fn(async () => undefined),
+}));
+
 // Most React tests use happy-dom via the environmentMatchGlobs in vitest.config.
 // Only land DOM-flavoured polyfills when a window exists.
 if (typeof window !== 'undefined') {

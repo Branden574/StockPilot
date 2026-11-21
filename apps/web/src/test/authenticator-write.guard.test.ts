@@ -113,6 +113,8 @@ const NOT_WRITES: Record<string, string> = {
     "Counts the caller's own requests in the rate-limit table: bookkeeping about the request, not organization data.",
   'lib/books/lookup.ts#writeBookCache':
     'The shared ISBN cache: book facts from public sources, held for every organization alike, no organization data.',
+  'server/security/events.ts#recordSecurityEvent':
+    'Counts a refused or flagged request in the security-events record: bookkeeping about the request, in fixed words the server chooses, stored through the service-role-only writer. Nothing a member owns or typed is written.',
 };
 
 const ROUTE_WRITE_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];

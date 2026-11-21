@@ -105,6 +105,7 @@ vi.mock('@/lib/supabase/server', () => ({
   }),
 }));
 
+import { requireOrgContext } from '@/lib/auth/session';
 import { withContext } from '@/server/services/context';
 
 import SecuritySettingsPage from './page';
@@ -237,5 +238,30 @@ describe('Security page: the claims read does not hold up the service context', 
     answerClaims();
     await rendering;
     expect(listedWith).toHaveBeenLastCalledWith('sess-verified');
+  });
+});
+
+describe('Security page: the Blocked activity link', () => {
+  it.each(['owner', 'admin'] as const)('an %s is shown the link to Blocked activity', async (role) => {
+    vi.mocked(requireOrgContext).mockResolvedValueOnce({
+      organizationId: 'org-1',
+      userId: 'u1',
+      role,
+    } as Awaited<ReturnType<typeof requireOrgContext>>);
+    await renderPage();
+    expect(
+      screen.getByRole('link', { name: 'View blocked activity' }).getAttribute('href'),
+    ).toBe('/dashboard/settings/security/activity');
+  });
+
+  it.each(['manager', 'staff', 'viewer'] as const)('a %s is not', async (role) => {
+    vi.mocked(requireOrgContext).mockResolvedValueOnce({
+      organizationId: 'org-1',
+      userId: 'u1',
+      role,
+    } as Awaited<ReturnType<typeof requireOrgContext>>);
+    await renderPage();
+    expect(screen.queryByRole('link', { name: 'View blocked activity' })).toBeNull();
+    expect(screen.queryByText('Blocked activity')).toBeNull();
   });
 });

@@ -7,6 +7,7 @@ import {
   liquidGlassRollout,
   marketingRewrites,
 } from './src/components/theme/appearance-flag';
+import { probeRewrites } from './src/lib/security/probe-paths';
 
 // ── Build identity (update detection) ────────────────────────────────────────
 // "Which build is THIS bundle?" has to be answered at BUILD time and baked into
@@ -226,8 +227,14 @@ const nextConfig: NextConfig = {
 
   transpilePackages: ['@stockpilot/core'],
 
-  // The only rewrites are the Liquid Glass marketing twins' (components/theme/
-  // appearance-flag.ts, plans/REVISION-DEFAULT.md R8). /ingest (PostHog) is
+  // Two sets of rewrites, both beforeFiles: the Liquid Glass marketing twins'
+  // first, then the scanner paths' (lib/security/probe-paths.ts), which send
+  // /.env, /wp-login.php and the like to /api/security/probe/<kind>, a 404
+  // that records the request as a security event. No probe rule takes an
+  // address the app serves (lib/security/probe-paths.test.ts).
+  //
+  // The marketing twins: components/theme/appearance-flag.ts,
+  // plans/REVISION-DEFAULT.md R8. /ingest (PostHog) is
   // never rewritten: a route handler that copies no cookie proxies it (see
   // the skipTrailingSlashRedirect note above; src/test/ingest-proxy.guard.
   // test.ts fails on an /ingest rewrite).
@@ -242,7 +249,11 @@ const nextConfig: NextConfig = {
   // both variants stay static, each cached under its own destination. The
   // rollout is read when this file is evaluated, at build time.
   async rewrites() {
-    return { beforeFiles: marketingRewrites(liquidGlassRollout()), afterFiles: [], fallback: [] };
+    return {
+      beforeFiles: [...marketingRewrites(liquidGlassRollout()), ...probeRewrites()],
+      afterFiles: [],
+      fallback: [],
+    };
   },
 
   // Liquid Glass (components/theme/appearance-flag.ts): a direct
