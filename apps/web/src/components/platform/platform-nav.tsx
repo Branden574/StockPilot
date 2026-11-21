@@ -1,6 +1,6 @@
 'use client';
 
-import { Building2, FileLock2, LifeBuoy, PlusCircle, ShieldAlert } from 'lucide-react';
+import { Building2, FileLock2, LifeBuoy, PlusCircle, ShieldAlert, ShieldX } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
@@ -11,13 +11,14 @@ const LINKS = [
   { href: '/platform/provision', label: 'Provision', icon: PlusCircle },
   { href: '/platform/support', label: 'Support', icon: LifeBuoy },
   { href: '/platform/audit', label: 'Audit', icon: FileLock2 },
+  { href: '/platform/security', label: 'Security', icon: ShieldX },
 ];
 
 /**
  * Which console destination a path belongs to. Organizations is the directory
  * AND every organization's own page (`/platform/orgs/[id]`), so it stays lit
- * while an operator works inside one org; the other three match their own
- * path and anything under it.
+ * while an operator works inside one org; the others match their own path
+ * and anything under it.
  */
 export function isPlatformNavActive(pathname: string | null, href: string): boolean {
   if (!pathname) return false;
@@ -31,9 +32,9 @@ export function isPlatformNavActive(pathname: string | null, href: string): bool
  * bar (32 px, the neutral hover fill, ink and weight on the current page),
  * then the "Platform admin" marker. On a phone the links drop their icons and
  * grow to 44 px, and the row WRAPS rather than scrolling or pushing the page
- * wider: the four links share one line (about 319 px of the 358 px row at a
- * 390 px viewport) and the marker starts its own line under them, so it is
- * always drawn whole. The focus ring is drawn inside each link's own edge
+ * wider: a link that does not fit starts the next line, and the marker drops
+ * its left margin there, so every link and the marker are always drawn whole.
+ * The focus ring is drawn inside each link's own edge
  * (ring-inset), as the shared tabs do, so no container can cut it off.
  */
 export function PlatformNav({ className }: { className?: string }) {

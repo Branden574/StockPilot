@@ -349,6 +349,7 @@ describe('styles/liquid-glass scope guard', () => {
         '(platform)/platform/orgs/[id]/page.tsx',
         '(platform)/platform/page.tsx',
         '(platform)/platform/provision/page.tsx',
+        '(platform)/platform/security/page.tsx',
         '(platform)/platform/support/page.tsx',
       ]);
       for (const rel of consolePages) {

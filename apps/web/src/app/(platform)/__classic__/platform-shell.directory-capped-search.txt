@@ -40,6 +40,12 @@
               <path d="M9 17v-2a2 2 0 0 0-4 0v2">
               <rect height="5" rx="1" width="8" x="3" y="17">
             "Audit"
+          <a class="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[13px] transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:h-11 text-ink-2 hover:bg-muted hover:text-foreground" data-prefetch="undefined" href="/platform/security">
+            <svg aria-hidden="true" class="lucide lucide-shield-x lucide-shield-close hidden h-3.5 w-3.5 sm:block" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z">
+              <path d="m14.5 9.5-5 5">
+              <path d="m9.5 9.5 5 5">
+            "Security"
           <span class="border-line-strong text-muted-foreground ml-2 inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded-full border px-2 text-[10.5px] font-medium uppercase tracking-[0.08em] max-sm:ml-0" data-slot="platform-admin-marker">
             <svg aria-hidden="true" class="lucide lucide-shield-alert h-3 w-3" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
               <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z">
