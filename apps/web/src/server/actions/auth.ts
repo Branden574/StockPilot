@@ -35,6 +35,7 @@ import {
   isBannedUserAuthError,
 } from '@/server/actions/auth-error-classify';
 import { unexpectedActionError } from '@/server/lib/action-error-result';
+import { recordSignInBlocked } from '@/server/security/account-events';
 import { audit } from '@/server/services/audit';
 import { emitAuthAudit, resolveDefaultOrgAndRole } from '@/server/services/auth-audit';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
@@ -102,13 +103,21 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
   // door. Return the typed `rate_limited` error (don't throw) so the
   // sign-in form can toast a clean message.
   const emailKey = parsed.data.email.toLowerCase();
-  const ip = await getClientIp();
+  // The request's headers, read once: the address for the limiter's second
+  // key, and the place and source of a refusal recorded as a security event
+  // (server/security/account-events.ts, after the response).
+  const requestHeaders = await headers();
+  const ip = clientIpFromHeaders(requestHeaders);
+  // A refusal by either limiter is a security event; a limiter that could not
+  // count (`failed`, closed mode) is not one.
   const emailRl = await checkRateLimit(`signin:${emailKey}`, 5, 60_000, 'closed');
   if (!emailRl.allowed) {
+    if (!emailRl.failed) recordSignInBlocked('sign_in_paused', emailKey, requestHeaders);
     return err('rate_limited', 'Too many sign-in attempts. Try again in a minute.');
   }
   const ipRl = await checkRateLimit(`signin-ip:${ip}`, 30, 60_000, 'closed');
   if (!ipRl.allowed) {
+    if (!ipRl.failed) recordSignInBlocked('sign_in_paused', emailKey, requestHeaders);
     return err('rate_limited', 'Too many sign-in attempts. Try again in a minute.');
   }
 
@@ -165,6 +174,17 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
         reason: isRateLimit ? 'supabase_rate_limited' : 'invalid_credentials',
       },
     });
+    // A security event for the Auth server's own limit, and for credentials
+    // GoTrue judged wrong (its structured code, the same for an address that
+    // is not an account). Any other refusal (an outage, an answer this does
+    // not know) is not one. The account's organization is looked up after
+    // the response, so the answer takes the same time either way. A disabled
+    // account's sign-in (above) records nothing new.
+    if (isRateLimit) {
+      recordSignInBlocked('auth_server_paused', emailKey, requestHeaders);
+    } else if (errAny.code === 'invalid_credentials') {
+      recordSignInBlocked('wrong_password', emailKey, requestHeaders);
+    }
     if (isRateLimit) {
       return err(
         'rate_limited',
@@ -219,7 +239,7 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
   // baseline). Fires here on the password step — i.e. even before TOTP — so a
   // stolen password used from a new device still alerts the real owner.
   if (userId) {
-    const h = await headers();
+    const h = requestHeaders;
     const ua = h.get('user-agent');
     // The device row and the email take the address only as an IP literal,
     // never the limiter's 'unknown' bucket.

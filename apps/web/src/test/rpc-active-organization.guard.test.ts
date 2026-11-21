@@ -222,6 +222,10 @@ const REGISTRY: Record<string, Entry> = {
     'not_org_data',
     'Scheduled purge of old AI chat history in every organization; no active organization.',
   ],
+  'app/api/cron/security-events-retention/route.ts::purge_security_events': [
+    'not_org_data',
+    'Scheduled purge of old security events in every organization and none; no active organization.',
+  ],
   'app/api/orders/sign/route.ts::confirm_order_signature': [
     'not_org_data',
     'Public sign link: the signature token names the order; no active organization.',
@@ -323,6 +327,18 @@ const REGISTRY: Record<string, Entry> = {
   'server/loaders/orders-new-catalog.ts::rls_inv_read_warehouse_charter_ids': RO(
     "The caller's own scope sets.",
   ),
+  'server/security/events.ts::record_security_events': [
+    'not_org_data',
+    "The security-events recorder's flush: the service client stores counts in fixed words. An event's organization comes from the server (the sign-in email's account, the session's account), never from a row id in a request.",
+  ],
+  'server/services/security-events.ts::security_event_totals_for_organization': [
+    'takes_org',
+    'Passes the active organization.',
+  ],
+  'server/services/security-events.ts::security_events_for_organization': [
+    'takes_org',
+    'Passes the active organization.',
+  ],
   'server/services/bins.ts::set_default_bin': ['takes_org', 'Passes the active organization.'],
   'server/services/book-order-totals.ts::book_order_totals': RO(),
   'server/services/book-order-totals.ts::book_order_totals_options': RO(),

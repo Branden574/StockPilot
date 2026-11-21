@@ -279,6 +279,79 @@ describe('the caller address is read only through lib/client-ip.ts', () => {
   });
 });
 
+/**
+ * The same rule for the caller's PLACE (the security-events record): Vercel's
+ * geolocation headers are trusted only on Vercel, exactly like the address,
+ * so they are read only in lib/client-ip.ts (clientPlaceFromHeaders), behind
+ * the same VERCEL check. Any quoted literal that names one of them, or the
+ * `x-vercel-ip-` stem a name could be built from, outside that file fails.
+ */
+const PLACE_HEADER = /^x-vercel-ip-(?:country|country-region|city|latitude|longitude|postal-code|timezone|continent)$/;
+const PLACE_STEM = /^-?(?:x-)?vercel-ip-?$|^ip-(?:country|city)(?:-region)?$/;
+
+/** The head of a template literal, up to its first `${`. */
+const TEMPLATE_HEAD = /`((?:[^`\\$]|\\.|\$(?!\{))*)\$\{/g;
+
+/**
+ * Every quoted literal (or template head) that names a place header or the
+ * stem of one, as `<line>: <literal>`.
+ */
+function placeHeaderNames(source: string): string[] {
+  const text = code(source);
+  const found: string[] = [];
+  for (const m of text.matchAll(LITERAL)) {
+    const value = m[2]!.toLowerCase();
+    if (PLACE_HEADER.test(value) || PLACE_STEM.test(value)) {
+      found.push(`${lineOf(text, m.index)}: ${m[0]}`);
+    }
+  }
+  for (const m of text.matchAll(TEMPLATE_HEAD)) {
+    if (PLACE_STEM.test(m[1]!.toLowerCase())) found.push(`${lineOf(text, m.index)}: ${m[0]}`);
+  }
+  return found;
+}
+
+describe('the caller place is read only through lib/client-ip.ts', () => {
+  const files = sourceFiles(WEB_SRC)
+    .map((f) => path.relative(WEB_SRC, f).split(path.sep).join('/'))
+    .filter((rel) => !isTestFile(rel));
+  const read = (rel: string) => readFileSync(path.join(WEB_SRC, rel), 'utf8');
+
+  it('no other source file names a Vercel place header', () => {
+    const found: string[] = [];
+    for (const rel of files) {
+      if (ALLOWED.has(rel)) continue;
+      for (const f of placeHeaderNames(read(rel))) found.push(`${rel}:${f}`);
+    }
+    expect(found).toEqual([]);
+  });
+
+  it('lib/client-ip.ts itself names both, behind the VERCEL check (the reading is not blind)', () => {
+    const source = read('lib/client-ip.ts');
+    expect(placeHeaderNames(source)).toHaveLength(2);
+    const place = source.slice(source.indexOf('export function clientPlaceFromHeaders'));
+    expect(place).toMatch(/^[^]*?if \(process\.env\.VERCEL !== '1'\) return \{ country: null, city: null \};/);
+  });
+
+  it.each([
+    ["h.get('x-vercel-ip-country')"],
+    ['h.get("X-Vercel-IP-City")'],
+    ["const H = 'x-vercel-ip-latitude';"],
+    ["h.get('x-vercel-' + 'ip-country')"],
+    ["h.get(`x-vercel-ip-${what}`)"],
+  ])('self-test: finds %s', (src) => {
+    expect(placeHeaderNames(src).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it.each([
+    ["// read 'x-vercel-ip-city' only on Vercel"],
+    ["h.get('x-vercel-id')"],
+    ["import { clientPlaceFromHeaders } from '@/lib/client-ip';"],
+  ])('self-test: does not count %s', (src) => {
+    expect(placeHeaderNames(src)).toEqual([]);
+  });
+});
+
 describe('self-test: the readings find what they must', () => {
   it.each([
     ["req.headers.get('x-forwarded-for')?.split(',')[0]"],

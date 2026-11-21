@@ -130,3 +130,4 @@ export * from './auth/step-up';
 export * from './auth/set-up-copy';
 export * from './account/delete-account-copy';
 export * from './appearance';
+export * from './security/security-events';

@@ -206,6 +206,11 @@ const OPEN_READS: Record<string, Open> = {
     kind: 'no-session',
     reason: 'The health check for the host and monitors: no session is read and no data is served.',
   },
+  'app/api/security/probe/[kind]/route.ts': {
+    kind: 'no-session',
+    reason:
+      'The scanner-path answer: a plain 404 and an exploit event with no organization. No session is read, so there is no member to hold.',
+  },
   'app/api/version/route.ts': {
     kind: 'no-session',
     reason:
