@@ -1,6 +1,7 @@
 'use server';
 
 import { revalidatePath, updateTag } from 'next/cache';
+import { headers } from 'next/headers';
 import { z } from 'zod';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
@@ -25,6 +26,7 @@ import {
 import { factorsOf, readMfaFactorList, type MfaFactorList } from '@/lib/auth/mfa-factors';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { requireOrgContext, requireSession } from '@/lib/auth/session';
+import { recordAccountCodeBlocked } from '@/server/security/account-events';
 import { isSessionEndedError } from '@/lib/auth/session-ended';
 import { sessionAccountNow, type SessionAccountNow } from '@/lib/auth/session-account';
 import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
@@ -74,6 +76,15 @@ function mfaCodeFailure(
     });
   }
   return err('internal_error', MFA_CODE_NOT_CHECKED);
+}
+
+/** The request's headers, or null outside a request: never a throw. */
+async function requestHeadersOrNull(): Promise<Awaited<ReturnType<typeof headers>> | null> {
+  try {
+    return await headers();
+  } catch {
+    return null;
+  }
 }
 
 /** The set-up could not confirm the session's account before the code was checked. */
@@ -215,7 +226,11 @@ export async function verifyEnrollmentAction(input: {
         'Too many enrollment confirmations. Try again in a few minutes.',
       );
     }
-    const pwRes = await verifyPasswordSideChannel(session.email, parsed.data.password);
+    const pwRes = await verifyPasswordSideChannel(
+      session.email,
+      parsed.data.password,
+      session.userId,
+    );
     if (!pwRes.ok) {
       return err(
         pwRes.reason === 'invalid_password' ? 'forbidden' : 'internal_error',
@@ -262,6 +277,24 @@ export async function verifyEnrollmentAction(input: {
       code: parsed.data.code,
     });
     if (vErr) {
+      // A security event for a set-up code the sign-in service judged wrong,
+      // in the account's organization (looked up after the response). Its
+      // own reason, not wrong_code: nothing that protects the account is
+      // being guessed here. It is recorded so that our own record holds
+      // every code our server sent and the service refused
+      // (server/security/auth-logs.ts compares the two). Never the member's
+      // problem: the answer below is the same whatever happens here.
+      if (classifyMfaCodeError(vErr) === 'refused') {
+        try {
+          recordAccountCodeBlocked(
+            'wrong_setup_code',
+            session.userId,
+            await requestHeadersOrNull(),
+          );
+        } catch {
+          // An event that could not be recorded is dropped.
+        }
+      }
       return mfaCodeFailure('verify', vErr, 'actions.mfa.verify_enrollment');
     }
     const afterCode = await sessionAccountNow(supabase, session.userId);

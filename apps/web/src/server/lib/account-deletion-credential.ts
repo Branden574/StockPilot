@@ -214,7 +214,7 @@ export async function confirmDeletionCredential(args: {
       if (!email || password.length > MAX_PASSWORD_LENGTH) {
         return { ok: false, kind: 'password_refused' };
       }
-      const pw = await verifyPasswordSideChannel(email, password);
+      const pw = await verifyPasswordSideChannel(email, password, userId);
       if (pw.ok) return { ok: true, by: 'password' };
       return {
         ok: false,

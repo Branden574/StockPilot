@@ -73,7 +73,7 @@ vi.mock('@/lib/realtime/broadcast', () => ({
 vi.mock('@/lib/auth/verify-password', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/verify-password')>();
   return {
-    verifyPasswordSideChannel: (...args: [string, string]) => {
+    verifyPasswordSideChannel: (...args: [string, string, string]) => {
       const stubbed = verifyPasswordSideChannel(...args);
       return stubbed === undefined ? actual.verifyPasswordSideChannel(...args) : stubbed;
     },
@@ -345,6 +345,7 @@ describe('changePasswordAction — session revocation + shared password check', 
     expect(verifyPasswordSideChannel).toHaveBeenCalledWith(
       'u@example.com',
       INPUT.currentPassword,
+      'u-1',
     );
   });
 

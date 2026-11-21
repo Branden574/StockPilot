@@ -155,6 +155,11 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
     // reason rather than a new org-visible event — org visibility of a platform
     // disable is an open policy question.
     if (isBannedUserAuthError(errAny)) {
+      // A security event with NO organization (the policy question above is
+      // unchanged: the organization's page does not show it): the sign-in
+      // service refused a password our server sent, and our own record holds
+      // every such refusal (server/security/auth-logs.ts compares the two).
+      recordSignInBlocked('sign_in_refused_other', emailKey, requestHeaders);
       noteDisabledAccountBlocked('login');
       await emitAuthAudit({
         event: 'user.sign_in_failed',
@@ -176,14 +181,19 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
     });
     // A security event for the Auth server's own limit, and for credentials
     // GoTrue judged wrong (its structured code, the same for an address that
-    // is not an account). Any other refusal (an outage, an answer this does
-    // not know) is not one. The account's organization is looked up after
-    // the response, so the answer takes the same time either way. A disabled
-    // account's sign-in (above) records nothing new.
+    // is not an account). The account's organization is looked up after
+    // the response, so the answer takes the same time either way. Any other
+    // refusal with the status of a wrong password (an unconfirmed email, a
+    // code this does not know) is recorded with no organization, as a
+    // disabled account's is above: it is not a wrong password, and our own
+    // record holds every password the sign-in service refused from our
+    // server. An outage or no answer judged nothing and is not recorded.
     if (isRateLimit) {
       recordSignInBlocked('auth_server_paused', emailKey, requestHeaders);
     } else if (errAny.code === 'invalid_credentials') {
       recordSignInBlocked('wrong_password', emailKey, requestHeaders);
+    } else if (errAny.status === 400) {
+      recordSignInBlocked('sign_in_refused_other', emailKey, requestHeaders);
     }
     if (isRateLimit) {
       return err(
@@ -832,7 +842,7 @@ export async function changePasswordAction(
   // four flows (MFA enroll-verify, MFA recovery consume, team, email-change)
   // moved on and this one silently would not have followed any hardening
   // applied there. One implementation, one place to harden.
-  const pw = await verifyPasswordSideChannel(user.email, parsed.data.currentPassword);
+  const pw = await verifyPasswordSideChannel(user.email, parsed.data.currentPassword, user.id);
   if (!pw.ok) {
     // Keep the two failure shapes distinct: a wrong password is the user's to
     // fix, a thrown client is ours. (The inline copy let a thrown client
