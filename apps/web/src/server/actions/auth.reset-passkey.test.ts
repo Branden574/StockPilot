@@ -40,7 +40,7 @@ vi.mock('@/lib/supabase/admin', async () => {
 });
 vi.mock('@/lib/supabase/server', async () => {
   const { world: w } = await import('@/test/passkey-world');
-  return { createClient: async () => w.cookieClient };
+  return { createClient: vi.fn(async () => w.cookieClient) };
 });
 vi.mock('next/headers', async () => {
   const { world: w } = await import('@/test/passkey-world');
@@ -103,6 +103,7 @@ vi.mock('@/server/security/account-events', () => ({
 }));
 
 const { checkMfaCode } = await import('@/lib/auth/mfa-code-attempts');
+const { createClient } = await import('@/lib/supabase/server');
 const { emitAuthAudit } = await import('@/server/services/auth-audit');
 const { reportError } = await import('@/lib/error-reporter');
 const { checkRateLimit } = await import('@/lib/rate-limit');
@@ -526,6 +527,169 @@ describe('the ceremony is bound to the reset (rule 20: the purpose is the action
     expect(users).toEqual(['server/actions/auth.ts', 'server/security/passkeys.ts']);
     // The start action takes nothing that could name a purpose.
     expect(startPasswordResetPasskeyAction.length).toBe(0);
+  });
+});
+
+describe('the reset, state by state (2.7): only a passkey that serves now is offered', () => {
+  const later = () => new Date(Date.now() + 1000).toISOString();
+  const earlier = () => new Date(Date.now() - 60_000).toISOString();
+  const rowsOf = (u: string) => world.passkeys.filter((p) => p.user_id === u);
+  const BOTH_ASK = {
+    ok: false,
+    error: {
+      code: 'forbidden',
+      message: PASSKEY_OR_CODE_ASK,
+      details: { reason: 'aal2_required', method: 'both' },
+    },
+  };
+  const BRIDGE_ONLY = { ok: false, error: { code: 'forbidden', message: RESET_BRIDGE_ONLY } };
+  const CODE_ASK = {
+    ok: false,
+    error: { code: 'forbidden', message: RESET_CODE_ASK, details: { reason: 'aal2_required' } },
+  };
+  const STATES: Array<[string, (u: string) => void, unknown]> = [
+    [
+      'S7, a removal the member started (its bridge row and factor no newer)',
+      (u) => {
+        rowsOf(u)[0]!.removed_at = later();
+        rowsOf(u)[0]!.removed_reason = 'member';
+      },
+      BRIDGE_ONLY,
+    ],
+    [
+      'S8, a bridge with no passkey row ever',
+      (u) => {
+        for (const r of rowsOf(u)) world.passkeys.splice(world.passkeys.indexOf(r), 1);
+      },
+      BRIDGE_ONLY,
+    ],
+    // Stage 2 treats a verified reserved-name factor that no record names like
+    // an app, by id only (review finding 5): it asks for a code.
+    [
+      'S12, a verified reserved-name factor with no bridge row',
+      (u) => world.bridges.delete(u),
+      CODE_ASK,
+    ],
+    [
+      'S16, passkeys only for another site',
+      (u) => {
+        for (const r of rowsOf(u)) r.rp_id = 'other.example.test';
+      },
+      BRIDGE_ONLY,
+    ],
+    [
+      'S17, a bridge factor newer than the newest removal',
+      (u) => {
+        rowsOf(u)[0]!.removed_at = earlier();
+        rowsOf(u)[0]!.removed_reason = 'member';
+      },
+      BRIDGE_ONLY,
+    ],
+  ];
+
+  it.each(STATES)(
+    '%s: not offered; stage 2’s answer; the start writes and deletes nothing',
+    async (_s, make, answer) => {
+      const { userId } = await passkeyOnlyMember();
+      make(userId);
+      openLink(userId);
+      expect(await completePasswordResetAction(PASSWORDS)).toEqual(answer);
+      const start = await startPasswordResetPasskeyAction();
+      expect(start.ok).toBe(false);
+      if (!start.ok)
+        expect(start.error.message).not.toMatch(/recovery code|Sign in again|Settings/);
+      expect(fnNames()).not.toContain('issue_passkey_challenge');
+      expect(world.calls.deleteFactor).toEqual([]);
+      expect(fnNames()).not.toContain('passkey_drop_bridge');
+      expect(fnNames()).not.toContain('passkey_replace_bridge');
+      expect(world.calls.passwordSets).toEqual([]);
+    },
+  );
+
+  it('S15, a second verified reserved-name factor beside a serving bridge: offered with the code (that factor is treated like an app, by id)', async () => {
+    const { userId } = await passkeyOnlyMember();
+    world.factors.push({
+      id: '00000000-0000-4000-8000-0000000000f5',
+      user_id: userId,
+      friendly_name: 'sp-passkey-bridge-0000000000000000',
+      factor_type: 'totp',
+      status: 'verified',
+      created_at: new Date().toISOString(),
+      secret: 'AAAAAAAAAAAAAAAA',
+    });
+    openLink(userId);
+    expect(await completePasswordResetAction(PASSWORDS)).toEqual(BOTH_ASK);
+  });
+
+  it('a picture that cannot be read: not offered; stage 2’s words', async () => {
+    const { userId } = await passkeyOnlyMember();
+    openLink(userId);
+    world.knobs.failReads.push('member_passkeys');
+    expect(await completePasswordResetAction(PASSWORDS)).toEqual(BRIDGE_ONLY);
+  });
+});
+
+describe('the offer reads the reset’s own session, at its read', () => {
+  /** The cookie holds `next` from the first session read after the offer asked the switches. */
+  async function pressWhileTheOfferReads(next: (userId: string) => string) {
+    const { userId } = await passkeyOnlyMember();
+    openLink(userId);
+    const linkToken = world.cookieToken;
+    const nextToken = next(userId);
+    world.cookieToken = linkToken;
+    world.calls.fns.length = 0;
+    world.calls.reads.length = 0;
+    const getSession = world.cookieClient.auth.getSession;
+    let readsAtSwitch = -1;
+    const spy = vi.spyOn(world.cookieClient.auth, 'getSession').mockImplementation(async () => {
+      if (readsAtSwitch < 0 && fnNames().includes('passkey_add_allowed')) {
+        readsAtSwitch = world.calls.reads.length;
+        world.cookieToken = nextToken;
+      }
+      return getSession();
+    });
+    const res = await completePasswordResetAction(PASSWORDS);
+    spy.mockRestore();
+    expect(readsAtSwitch).toBeGreaterThanOrEqual(0);
+    // Nothing of the passkeys is read once the session is not this account's link session.
+    expect(world.calls.reads.slice(readsAtSwitch)).not.toContain('member_passkeys');
+    expect(world.calls.passwordSets).toEqual([]);
+    return res;
+  }
+
+  it('a sign-in session of the same account: not offered', async () => {
+    const res = await pressWhileTheOfferReads((userId) =>
+      world.signToken(world.signIn(userId, 'aal1')),
+    );
+    expect(res).toEqual({ ok: false, error: { code: 'forbidden', message: RESET_NEEDS_LINK } });
+  });
+
+  it('another account’s link session: not offered, its passkeys not read', async () => {
+    const res = await pressWhileTheOfferReads(() => {
+      const other = world.addAccount('other@example.test');
+      return world.signToken(world.openResetLink(other));
+    });
+    expect(res).toEqual({
+      ok: false,
+      error: { code: 'unauthenticated', message: RESET_LINK_GONE },
+    });
+  });
+
+  it('the answer reads with the reset’s own client: a press with an answer makes no client of its own', async () => {
+    const { userId, soft } = await passkeyOnlyMember();
+    openLink(userId);
+    vi.mocked(createClient).mockClear();
+    await completePasswordResetAction(PASSWORDS);
+    const clientsWithoutAnswer = vi.mocked(createClient).mock.calls.length;
+    const { challengeId, options } = optionsOf(await startPasswordResetPasskeyAction());
+    const response = soft.get(options);
+    vi.mocked(createClient).mockClear();
+    const res = await completePasswordResetAction({
+      ...PASSWORDS,
+      passkeyAnswer: { challengeId, response },
+    });
+    expect(res.ok).toBe(true);
+    expect(vi.mocked(createClient).mock.calls.length).toBe(clientsWithoutAnswer);
   });
 });
 
