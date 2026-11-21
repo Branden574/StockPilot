@@ -1495,6 +1495,10 @@ export async function startAddPasskey(input: {
     }
   }
 
+  // Review 4 finding 8: a failed Add's leftover goes now, never a verified factor.
+  if ((await clearAddLeftovers(admin, userId, picture)) === null)
+    return fail('internal_error', PASSKEY_WORDS.addFailed, 'leftover_left');
+
   const challenge = newChallenge();
   const label = picture.email ?? userId;
   const optionsJSON = await generateRegistrationOptions({
@@ -1526,6 +1530,40 @@ async function deleteFactor(admin: Admin, userId: string, factorId: string): Pro
   } catch {
     return false;
   }
+}
+
+/** Deletes a factor this request enrolled; one it cannot delete is reported as `tag`. */
+async function deleteOwnFactor(
+  admin: Admin,
+  userId: string,
+  factorId: string,
+  tag: 'add_factor_left' | 'finish_factor_left',
+): Promise<void> {
+  if (!(await deleteFactor(admin, userId, factorId))) reportPasskeys(tag, 'error', userId);
+}
+
+/**
+ * Review 4 finding 8: the leftover of a failed Add is an UNVERIFIED factor
+ * with the reserved name that is not the recorded bridge's (S3). It goes
+ * before an Add enrols, so it never blocks the next one; a verified factor
+ * is never deleted here. The ids deleted, or null when one could not be
+ * deleted (reported at error level; the member gets the Add's own words).
+ */
+async function clearAddLeftovers(
+  admin: Admin,
+  userId: string,
+  picture: AccountPicture,
+): Promise<string[] | null> {
+  const leftovers = picture.factors.filter(
+    (f) => isReservedTotp(f) && f.status !== 'verified' && f.id !== picture.bridge?.factor_id,
+  );
+  for (const f of leftovers) {
+    if (!(await deleteFactor(admin, userId, f.id))) {
+      reportPasskeys('add_leftover_left', 'error', userId);
+      return null;
+    }
+  }
+  return leftovers.map((f) => f.id);
 }
 
 /**
@@ -1607,12 +1645,23 @@ export async function finishAddPasskey(input: {
     sealed: { ciphertext: string; keyVersion: number };
   } | null = null;
   if (!picture.bridge) {
-    if (picture.state !== 'nothing' && picture.state !== 'healthy') {
-      reportPasskeys(picture.state, 'error', userId);
-      return fail('forbidden', PASSKEY_WORDS.cantUse, picture.state);
+    let state = picture.state;
+    if (state === 'unverified_reserved_factor') {
+      // Review 4 finding 8: a leftover made since the start goes before this
+      // Add enrols; the state is judged again without it.
+      const cleared = await clearAddLeftovers(admin, userId, picture);
+      if (cleared === null) return fail('internal_error', PASSKEY_WORDS.addFailed, 'leftover_left');
+      const left = picture.factors.filter((f) => !cleared.includes(f.id));
+      state = judged(picture.rows, null, left, gate.rp).state;
+    }
+    if (state !== 'nothing' && state !== 'healthy') {
+      reportPasskeys(state, 'error', userId);
+      return fail('forbidden', PASSKEY_WORDS.cantUse, state);
     }
     const made = await enrolTotpAs(held.token, bridgeFactorName());
     if (!made.ok) {
+      // An answer with an id and no secret made a factor: it goes at once.
+      if (made.factorId) await deleteOwnFactor(admin, userId, made.factorId, 'add_factor_left');
       if (made.code === 'insufficient_aal')
         return fail('forbidden', PASSKEY_WORDS.stepUpFirst, 'insufficient_aal');
       if (made.code === 'too_many_enrolled_factors') {
@@ -1623,7 +1672,7 @@ export async function finishAddPasskey(input: {
     }
     const sealed = sealBridgeSecret(made.secret, { userId, factorId: made.factorId }, gate.keys);
     if (!sealed) {
-      await deleteFactor(admin, userId, made.factorId);
+      await deleteOwnFactor(admin, userId, made.factorId, 'add_factor_left');
       return fail('internal_error', PASSKEY_WORDS.addFailed, 'not_sealed');
     }
     enrolled = { factorId: made.factorId, secret: made.secret, sealed };
@@ -1648,7 +1697,8 @@ export async function finishAddPasskey(input: {
   });
   const passkeyId = typeof stored.data === 'string' ? stored.data : null;
   if (stored.error || !passkeyId) {
-    if (enrolled) await deleteFactor(admin, userId, enrolled.factorId);
+    // Review 4 finding 8: a factor this Add made and cannot delete is reported.
+    if (enrolled) await deleteOwnFactor(admin, userId, enrolled.factorId, 'add_factor_left');
     const code = (stored.error as { code?: unknown } | null)?.code;
     if (code !== '55000')
       reportPasskeys('register_failed', 'warning', userId, {
@@ -1730,10 +1780,13 @@ export async function finishPasskeySetup(input: {
   const before = new Set(picture.factors.filter((f) => f.status === 'verified').map((f) => f.id));
 
   const made = await enrolTotpAs(held.token, bridgeFactorName());
-  if (!made.ok) return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'enrol_refused');
+  if (!made.ok) {
+    if (made.factorId) await deleteOwnFactor(admin, userId, made.factorId, 'finish_factor_left');
+    return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'enrol_refused');
+  }
   const sealed = sealBridgeSecret(made.secret, { userId, factorId: made.factorId }, gate.keys);
   if (!sealed) {
-    await deleteFactor(admin, userId, made.factorId);
+    await deleteOwnFactor(admin, userId, made.factorId, 'finish_factor_left');
     return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'not_sealed');
   }
   const raise = await recordRaise(userId, held.claims.sessionId, 'finish_setup');

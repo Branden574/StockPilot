@@ -1979,3 +1979,95 @@ describe('review 4 finding 6: truly dark (no site, no key, or the kill switch of
     expect(page).not.toMatch(/With no site or no bridge key nothing is read/);
   });
 });
+
+describe('review 4 finding 8: a failed Add leaves nothing that blocks the next one', () => {
+  it("the next Add start deletes the account's own unverified reserved-name factor, and the Add goes on", async () => {
+    const userId = world.addAccount('leftover@example.test');
+    world.signIn(userId, 'aal1');
+    const leftover = leftoverFactor(userId);
+    const added = await addFirstPasskey(new SoftAuthenticator());
+    expect(added).toMatchObject({ ok: true, firstPasskey: true });
+    expect(world.calls.deleteFactor).toEqual([leftover.id]);
+    expect(passkeyErrorReports()).toEqual([]);
+  });
+
+  it('a verified reserved-name factor is never deleted by the clean-up (a second passkey beside a leftover)', async () => {
+    const { soft, userId } = await memberWithPasskey();
+    const bridge = world.bridges.get(userId)!;
+    const leftover = leftoverFactor(userId);
+    world.signIn(userId, 'aal2');
+    const confirm = optionsOf(await pk.startConfirmAdd());
+    const start = await pk.startAddPasskey({
+      proof: { kind: 'passkey', challengeId: confirm.challengeId, response: soft.get(confirm.options) },
+    });
+    expect(start.ok).toBe(true);
+    expect(world.calls.deleteFactor).toEqual([leftover.id]);
+    expect(world.calls.deleteFactor).not.toContain(bridge.factor_id);
+  });
+
+  it('the finish clears a leftover made after the start, before it enrols', async () => {
+    const userId = world.addAccount('late-leftover@example.test');
+    world.signIn(userId, 'aal1');
+    const soft = new SoftAuthenticator();
+    const start = await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } });
+    if (!start.ok) throw new Error(start.reason);
+    const leftover = leftoverFactor(userId);
+    const done = await pk.finishAddPasskey({
+      challengeId: start.challengeId,
+      response: soft.create(start.optionsJSON as never),
+      name: 'Work laptop',
+    });
+    expect(done).toMatchObject({ ok: true, firstPasskey: true });
+    expect(world.calls.deleteFactor).toEqual([leftover.id]);
+  });
+
+  it("a leftover that cannot be deleted is reported, and the member gets the Add's own words, never the recovery-code words", async () => {
+    const userId = world.addAccount('stuck@example.test');
+    world.signIn(userId, 'aal1');
+    leftoverFactor(userId);
+    world.knobs.deleteFails = true;
+    const r = await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } });
+    expect(r).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.addFailed, reason: 'leftover_left' });
+    expect(reportsTagged('passkeys.add_leftover_left')).toEqual([
+      expect.objectContaining({ level: 'error', extra: hashed }),
+    ]);
+    expect(JSON.stringify(r)).not.toMatch(/recovery code/i);
+  });
+
+  it('a failed store whose new factor cannot be deleted is reported', async () => {
+    const userId = world.addAccount('store-fails@example.test');
+    world.signIn(userId, 'aal1');
+    const soft = new SoftAuthenticator();
+    const start = await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } });
+    if (!start.ok) throw new Error(start.reason);
+    world.knobs.failFns.push('passkey_register');
+    world.knobs.deleteFails = true;
+    const r = await pk.finishAddPasskey({
+      challengeId: start.challengeId,
+      response: soft.create(start.optionsJSON as never),
+      name: 'Work laptop',
+    });
+    expect(r).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.addFailed });
+    expect(world.calls.deleteFactor).toHaveLength(1);
+    expect(reportsTagged('passkeys.add_factor_left')).toEqual([
+      expect.objectContaining({ level: 'error', extra: hashed }),
+    ]);
+  });
+
+  it('an enrol answer with an id and no secret: that factor is deleted at once', async () => {
+    const userId = world.addAccount('no-secret@example.test');
+    world.signIn(userId, 'aal1');
+    const soft = new SoftAuthenticator();
+    const start = await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } });
+    if (!start.ok) throw new Error(start.reason);
+    world.knobs.enrolNoSecret = true;
+    const r = await pk.finishAddPasskey({
+      challengeId: start.challengeId,
+      response: soft.create(start.optionsJSON as never),
+      name: 'Work laptop',
+    });
+    expect(r).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.addFailed });
+    expect(world.calls.deleteFactor).toHaveLength(1);
+    expect(factorsOfAccount(userId)).toEqual([]);
+  });
+});

@@ -118,7 +118,9 @@ export async function readAccountAs(
 export async function enrolTotpAs(
   token: string,
   friendlyName: string,
-): Promise<{ ok: true; factorId: string; secret: string } | { ok: false; code: string }> {
+): Promise<
+  { ok: true; factorId: string; secret: string } | { ok: false; code: string; factorId?: string }
+> {
   const answer = await authCall(token, 'POST', '/factors', {
     factor_type: 'totp',
     friendly_name: friendlyName,
@@ -127,7 +129,10 @@ export async function enrolTotpAs(
   const b = answer.body as { id?: unknown; totp?: { secret?: unknown } } | null;
   const factorId = typeof b?.id === 'string' ? b.id : null;
   const secret = typeof b?.totp?.secret === 'string' ? b.totp.secret : null;
-  if (!factorId || !secret) return { ok: false, code: 'enrol_answer_shape' };
+  // An answer with an id but no secret made a factor all the same: its id is
+  // given back so the caller deletes it (review 4 finding 8).
+  if (!factorId || !secret)
+    return { ok: false, code: 'enrol_answer_shape', ...(factorId ? { factorId } : {}) };
   return { ok: true, factorId, secret };
 }
 
