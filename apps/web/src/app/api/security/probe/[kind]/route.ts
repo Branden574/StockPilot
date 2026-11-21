@@ -22,12 +22,7 @@ export const dynamic = 'force-dynamic';
 type ProbeContext = { params: Promise<{ kind: string }> };
 
 async function answer(req: Request, { params }: ProbeContext): Promise<Response> {
-  let kind: string | undefined;
-  try {
-    ({ kind } = await params);
-  } catch {
-    kind = undefined;
-  }
+  const { kind } = await params;
   if (isSecurityProbeKind(kind)) {
     // recordSecurityEvent never throws and only adds to the instance's
     // buffer; the write happens later, in one call for many events.
