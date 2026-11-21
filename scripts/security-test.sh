@@ -2476,6 +2476,25 @@ WEB_TESTS=(
   src/server/actions/auth.sign-in.security-events.test.ts
   src/lib/auth/verify-password.security-events.test.ts
   src/server/actions/mfa.set-up.security-events.test.ts
+  # Passkeys (stage 4): the ceremonies run the real WebAuthn library against
+  # a software authenticator. Nothing is offered or accepted unless both
+  # switches, the bridge key and every organization of the member allow it
+  # (each condition alone); a challenge is used once, by its own account,
+  # session, purpose, binding cookie and site; the answer must name this
+  # account and come from this site, not from a frame; a passkey's backup
+  # flag and counter may not go back; the raised session must be the same
+  # session and account; a use that cannot be stored refuses. The account
+  # states read times to the microsecond. The console refuses a bridge
+  # holder. The Security page has no trace of passkeys unless the server
+  # allows them. The scheduled sweep never finishes a fail-closed state and
+  # the bridge session check acts only after its own read finds no row.
+  src/server/security/passkeys.test.ts
+  src/server/security/passkey-state.test.ts
+  src/server/security/passkey-maintenance.test.ts
+  src/lib/auth/platform-admin.passkeys.test.ts
+  'src/app/(auth)/signin/mfa/page.passkeys.test.tsx'
+  'src/app/(dashboard)/dashboard/settings/security/page.passkeys.test.tsx'
+  src/components/auth/step-up-modal.passkeys.test.tsx
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

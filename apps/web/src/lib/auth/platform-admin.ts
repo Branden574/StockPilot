@@ -81,7 +81,7 @@ export const getVerifiedEmail = cache(
  */
 export async function currentUserIsPlatformAdmin(): Promise<boolean> {
   const admin = await verifiedPlatformAdmin();
-  return admin !== null && !(await owesStepUp(admin));
+  return admin !== null && !(await owesStepUp(admin)) && (await holdsNoRecordedBridge(admin));
 }
 
 /**
@@ -89,19 +89,25 @@ export async function currentUserIsPlatformAdmin(): Promise<boolean> {
  *
  * Never an account that holds a passkey bridge (plan 2.1 rule 21, review
  * 9.7): a bridge answer is a fresh `totp` entry and would pass the console's
- * step-up rule. Refused when Auth lists a factor carrying the reserved name
- * (any status), when our table records a bridge for the account, and when the
- * table cannot be read. A table that does not exist yet (before migration
- * 0475) records no bridge, and no bridge can exist then: our server makes one
- * only after 0475, and a bridge is always a reserved-name factor, which the
- * first check refuses on its own.
+ * step-up rule. Refused here when Auth lists a factor carrying the reserved
+ * name (any status); refused by holdsNoRecordedBridge, which each gate asks
+ * LAST (after its step-up check, so a refusal for the step-up reads nothing
+ * more), when our table records a bridge for the account or cannot be read.
+ * A table that does not exist yet (before migration 0475) records no bridge,
+ * and no bridge can exist then: our server makes one only after 0475, and a
+ * bridge is always a reserved-name factor, which the first check refuses on
+ * its own.
  */
 async function verifiedPlatformAdmin(): Promise<VerifiedUser | null> {
   const user = await getVerifiedUser();
   if (!user || !isPlatformAdmin(user.email)) return null;
   if (user.factors.some((f) => carriesBridgeName(f))) return null;
-  if ((await consoleBridgeRecord(user.id)) !== 'none') return null;
   return user;
+}
+
+/** Rule 21's table half: true only when our table reads and records no bridge for the account. */
+async function holdsNoRecordedBridge(admin: VerifiedUser): Promise<boolean> {
+  return (await consoleBridgeRecord(admin.id)) === 'none';
 }
 
 /**
@@ -248,6 +254,7 @@ export async function requirePlatformAdmin(): Promise<ServerSession> {
   const admin = await verifiedPlatformAdmin();
   if (!admin) notFound();
   if ((await currentVerifiedClaims(admin.id))?.aal !== 'aal2') notFound();
+  if (!(await holdsNoRecordedBridge(admin))) notFound();
   return session;
 }
 
@@ -284,5 +291,6 @@ export async function checkPlatformAdmin(
   } else if (await owesStepUp(admin)) {
     return { ok: false, reason: 'aal2_required' };
   }
+  if (!(await holdsNoRecordedBridge(admin))) return { ok: false, reason: 'forbidden' };
   return { ok: true, session };
 }

@@ -2,8 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
-import { rethrowControlFlow } from '@/lib/control-flow';
-import { reportError } from '@/lib/error-reporter';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 import {
   completeSecondStep,
   finishAddPasskey,
@@ -35,11 +34,15 @@ function refused(f: PasskeyFailure): ActionResult<never> {
   return err(f.code, f.message);
 }
 
+/**
+ * A thrown error: the shared mapping (server/lib/action-error-result.ts:
+ * Next control flow thrown again, a check of the caller's access that could
+ * not be read answered with its own sentence, anything else reported and
+ * answered with our fixed words, never the error's text: an Auth or library
+ * message can name ids).
+ */
 function unexpected(e: unknown, where: string): ActionResult<never> {
-  rethrowControlFlow(e);
-  // Never the error's text: an Auth or library message can name ids.
-  void reportError(e, { tag: 'passkeys.action', extra: { where } });
-  return err('internal_error', COULD_NOT_FINISH);
+  return actionErrorResult(e, 'passkeys.action', { message: COULD_NOT_FINISH, extra: { where } });
 }
 
 /** The second step's device prompt options (sign-in page, step-up modal). */
@@ -58,7 +61,10 @@ export async function finishSecondStepAction(input: {
   response: unknown;
 }): Promise<ActionResult<void>> {
   try {
-    const r = await completeSecondStep({ challengeId: input?.challengeId, response: input?.response });
+    const r = await completeSecondStep({
+      challengeId: input?.challengeId,
+      response: input?.response,
+    });
     return r.ok ? ok(undefined) : refused(r);
   } catch (e) {
     return unexpected(e, 'finish_second_step');
@@ -81,7 +87,10 @@ export async function startAddPasskeyAction(input: {
   phoneConfirmation?: string;
 }): Promise<ActionResult<{ challengeId: string; optionsJSON: unknown }>> {
   try {
-    const r = await startAddPasskey({ proof: input?.proof, phoneConfirmation: input?.phoneConfirmation });
+    const r = await startAddPasskey({
+      proof: input?.proof,
+      phoneConfirmation: input?.phoneConfirmation,
+    });
     return r.ok ? ok({ challengeId: r.challengeId, optionsJSON: r.optionsJSON }) : refused(r);
   } catch (e) {
     return unexpected(e, 'start_add');
@@ -124,7 +133,10 @@ export async function finishPasskeySetupAction(input: {
   response: unknown;
 }): Promise<ActionResult<void>> {
   try {
-    const r = await finishPasskeySetup({ challengeId: input?.challengeId, response: input?.response });
+    const r = await finishPasskeySetup({
+      challengeId: input?.challengeId,
+      response: input?.response,
+    });
     if (!r.ok) return refused(r);
     revalidatePath('/dashboard/settings/security');
     return ok(undefined);
