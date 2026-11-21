@@ -49,12 +49,20 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * slash is classed exactly as the plain path is, and counted in the log line
  * as of an ambiguous form.
  *   - `/auth/v1/token`: by the FIRST decoded grant_type of the query string
- *     (the value the service acts on). `password` and `refresh_token` (an
- *     ordinary expired session) are named; the other grants Supabase Auth
- *     knows (pkce, id_token, web3) are `token_known_other`; anything else
- *     (no grant, an empty or unknown one, a query string that does not decode
- *     the way the service decodes it) is `token_other`. Several grant_type
- *     values are counted in the log line as of an ambiguous form.
+ *     (the value the service acts on; the whole query string is decoded
+ *     first, so a grant whose name is encoded is read as the service reads
+ *     it). `password` and `refresh_token` (an ordinary expired session) are
+ *     named; the other grants Supabase Auth knows (pkce, id_token, web3) are
+ *     `token_known_other`; anything else (no grant, an empty or unknown one,
+ *     a query string that does not decode the way the service decodes it) is
+ *     `token_other`. So is a query string that holds a raw semicolon
+ *     anywhere: measured on 2026-11-21, the service drops a pair with one
+ *     and acts on the next grant_type, so the first grant read here would
+ *     not be the one it acted on. Several grant_type values are counted in
+ *     the log line as of an ambiguous form. Only the query string is read:
+ *     a grant in a form body cannot carry a password check (measured on
+ *     2026-11-21: the body must be JSON, and the grant of the address wins
+ *     over one inside a JSON body).
  *   - `/auth/v1/factors/<id>/verify` with a well-formed id: `verify`, a code
  *     check. `/auth/v1/factors` (enrolling a factor) and
  *     `/auth/v1/factors/<id>/challenge` (asking for a challenge) check no
@@ -322,8 +330,9 @@ type AuthLogsNetwork = 'hosting' | 'other';
  * prefix written in the query (measured: the leading comment says when). The
  * kind is `token_other` when the query string holds an escape that does not
  * decode, an encoded `&` or `=` (which the sign-in service keeps inside a
- * value, so reading the whole decoded string would read it differently) or
- * an encoded control character. Our server's class is its two client
+ * value, so reading the whole decoded string would read it differently), an
+ * encoded control character, or a raw semicolon (the service drops the pair
+ * that holds one). Our server's class is its two client
  * strings matched whole (a `.` is written `[.]`, so the text holds no
  * backslash). The client string and the owner's name are reduced to a class
  * here; the path and the query string are compared, never returned.
@@ -342,6 +351,7 @@ FROM (
       position(net_path, 'verify') > 0, 'emailed_code_other',
       routed_path != '/auth/v1/token', 'token_other',
       match(raw_search, '%([^0-9A-Fa-f]|[0-9A-Fa-f][^0-9A-Fa-f]|[0-9A-Fa-f]?$|26|3[Dd]|[01][0-9A-Fa-f]|7[Ff])'), 'token_other',
+      position(raw_search, ';') > 0, 'token_other',
       first_grant = 'password', 'password',
       first_grant = 'refresh_token', 'refresh',
       first_grant IN ('pkce', 'id_token', 'web3'), 'token_known_other',
@@ -407,6 +417,7 @@ FROM (
       position(net_path, 'verify') > 0, 'emailed_code_other',
       routed_path != '/auth/v1/token', 'token_other',
       match(raw_search, '%([^0-9A-Fa-f]|[0-9A-Fa-f][^0-9A-Fa-f]|[0-9A-Fa-f]?$|26|3[Dd]|[01][0-9A-Fa-f]|7[Ff])'), 'token_other',
+      position(raw_search, ';') > 0, 'token_other',
       first_grant = 'password', 'password',
       first_grant = 'refresh_token', 'refresh',
       first_grant IN ('pkce', 'id_token', 'web3'), 'token_known_other',

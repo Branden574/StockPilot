@@ -1556,6 +1556,48 @@ describe('the SQL is two constants that return classes and counts only', () => {
       },
     );
 
+    // Measured on 2026-11-21: the sign-in service drops a pair that holds a
+    // raw semicolon and acts on the next grant_type, so the first grant this
+    // query reads is then not the one the service acted on. A query string
+    // with a raw semicolon anywhere is an unknown form whatever its grants
+    // say: never a refresh, never another known grant, never a password.
+    it.each([
+      ['in the first grant, before a password grant', '?grant_type=x;y&grant_type=password'],
+      ['in a refresh grant, before a password grant', '?grant_type=refresh_token;&grant_type=password'],
+      ['in another pair, after a refresh grant', '?grant_type=refresh_token&scope=a;b'],
+      ['in another pair, before a refresh grant', '?scope=a;b&grant_type=refresh_token'],
+      ['in another pair, after a known grant', '?grant_type=pkce&scope=a;b'],
+      ['in another pair, before a password grant', '?a;b&grant_type=password'],
+      ['in another pair, after a password grant', '?grant_type=password&scope=a;b'],
+      ['at the very end', '?grant_type=password;'],
+      ['at the very start', '?;grant_type=refresh_token'],
+      ['alone', '?;'],
+    ])('a raw semicolon %s (%j) -> token_other', (_what, search) => {
+      expect(ofSearch(search)).toBe('token_other');
+    });
+
+    it('a raw semicolon is looked for in the query string as sent: an encoded one is part of a value', () => {
+      for (const [name, sql] of BOTH) {
+        expect(sql, name).toContain("position(raw_search, ';') > 0, 'token_other',");
+      }
+      // The service keeps an encoded semicolon inside the value, and so does
+      // this query: the pair is not dropped, and the grant stays the first.
+      expect(ofSearch('?grant_type=refresh_token&scope=a%3Bb')).toBe('refresh');
+      expect(ofSearch('?grant_type=password&scope=a%3Bb')).toBe('password');
+      expect(ofSearch('?grant_type=password%3Bx')).toBe('token_other');
+    });
+
+    it('a grant whose NAME is encoded is the grant the service acts on (measured: a password was checked)', () => {
+      // The whole query string is decoded before the grant is looked for.
+      expect(ofSearch('?grant%5Ftype=password')).toBe('password');
+      expect(ofSearch('?%67rant_type=password')).toBe('password');
+      for (const [name, sql] of BOTH) {
+        expect(sql, name).toContain(
+          "extract(decodeURLComponent(log_attributes['request.search']), '(?:^[?]?|&)grant_type=([^&]*)(?:&|$)') AS first_grant",
+        );
+      }
+    });
+
     it('a byte that is not text in a later pair leaves the grant as it is', () => {
       expect(ofSearch('?grant_type=password&scope=%FF')).toBe('password');
     });
