@@ -280,6 +280,7 @@ FROM (
       match(client, '^supabase-ssr/[0-9]+[.][0-9]+[.][0-9]+ createServerClient$'), 'server',
       match(client, '^supabase-js/[0-9]+[.][0-9]+[.][0-9]+; runtime=node; runtime-version=[0-9]+[.][0-9]+[.][0-9]+$'), 'server',
       position(client, 'supabase-js-react-native') > 0, 'phone',
+      position(client, '; runtime=react-native') > 0, 'phone',
       position(client, 'createBrowserClient') > 0, 'browser',
       client = '', 'none',
       'other'
@@ -344,6 +345,7 @@ FROM (
       match(client, '^supabase-ssr/[0-9]+[.][0-9]+[.][0-9]+ createServerClient$'), 'server',
       match(client, '^supabase-js/[0-9]+[.][0-9]+[.][0-9]+; runtime=node; runtime-version=[0-9]+[.][0-9]+[.][0-9]+$'), 'server',
       position(client, 'supabase-js-react-native') > 0, 'phone',
+      position(client, '; runtime=react-native') > 0, 'phone',
       position(client, 'createBrowserClient') > 0, 'browser',
       client = '', 'none',
       'other'

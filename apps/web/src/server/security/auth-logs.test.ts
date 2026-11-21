@@ -1717,6 +1717,9 @@ describe('the SQL is two constants that return classes and counts only', () => {
       ['supabase-ssr/0.6.1 createServerClient', 'server'],
       ['supabase-js/2.50.0; runtime=node; runtime-version=22.1.0', 'server'],
       ['supabase-js-react-native/2.50.0', 'phone'],
+      // The form the newer client library sends from the phone app.
+      ['supabase-js/2.116.0; runtime=react-native', 'phone'],
+      ['supabase-js/2.130.0; runtime=react-native; runtime-version=0.81.4', 'phone'],
       ['supabase-ssr/0.12.7 createBrowserClient', 'browser'],
       ['supabase-js-web/2.50.0', 'other'],
       ['curl/8.4.0', 'other'],
@@ -1740,6 +1743,8 @@ describe('the SQL is two constants that return classes and counts only', () => {
       ['supabase-js/2.116.0; runtime=node; runtime-version=v24.22.3'],
       [`${SERVER_NODE}; extra`],
       [`${SERVER_NODE.replace('runtime=node', 'runtime=deno')}`],
+      ['supabase-js/2.116.0; runtime=react-nativ'],
+      ['supabase-js/2.116.0 runtime=react-native'],
     ])('%j only contains words of our server: other (stored as api)', (client) => {
       expect(bothOn(gatewayLine({ client })).totals.values.caller).toBe('other');
     });
