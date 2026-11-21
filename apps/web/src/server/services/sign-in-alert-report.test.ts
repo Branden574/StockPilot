@@ -220,8 +220,6 @@ import { createHash } from 'node:crypto';
 
 import {
   FORGET_RETRY,
-  UNCOUNTED_PRESS_REREAD,
-  alertReportedMeanwhile,
   readSignInAlert,
   reportSignInAlertNotMe,
   type SignInAlertRecord,
@@ -331,7 +329,6 @@ beforeEach(() => {
   h.failuresOnce = {};
   // The wait before a forget's one more try: none here, so no test waits.
   FORGET_RETRY.waitMs = 0;
-  UNCOUNTED_PRESS_REREAD.waitMs = 0;
   h.notList = new Set();
   h.revoke.mockResolvedValue({ ok: true, sessionIds: ['s1', 's2'] });
   h.memberEmail.mockResolvedValue({ ok: true, id: 'dryrun' });
@@ -1013,59 +1010,5 @@ describe('reportSignInAlertNotMe: the forgetting is tried again, and a later pre
     expect(await report(await readAlert())).toEqual({ outcome: 'already_reported' });
     expect(forgetReports()).toHaveLength(1);
     expect(forgetReports()[0]![1]).toMatchObject({ level: 'error', userIdHash: MEMBER_HASH });
-  });
-});
-
-describe('alertReportedMeanwhile: one more read of the alert, for a press the limiter could not count (lab walk 3, L9c)', () => {
-  it('the alert is not_me by now: true', async () => {
-    seed(alertRow({ status: 'not_me', resolved_at: '2026-11-20T15:40:00Z' }));
-    expect(await alertReportedMeanwhile(ALERT)).toBe(true);
-    expect(h.order).toEqual(['select:sign_in_alerts']);
-  });
-
-  it('still open, or answered "this was me": false', async () => {
-    expect(await alertReportedMeanwhile(ALERT)).toBe(false);
-    seed(alertRow({ status: 'was_me', resolved_at: '2026-11-20T15:35:00Z' }));
-    expect(await alertReportedMeanwhile(ALERT)).toBe(false);
-  });
-
-  it('no such alert, an id that is not one, or a read that fails: false, never thrown', async () => {
-    h.tables.sign_in_alerts = [];
-    expect(await alertReportedMeanwhile(ALERT)).toBe(false);
-    expect(await alertReportedMeanwhile('nope')).toBe(false);
-    h.failures.sign_in_alerts = { select: 'throw' };
-    expect(await alertReportedMeanwhile(ALERT)).toBe(false);
-  });
-
-  it('with an account named, another account’s reported alert is false: the same as no alert', async () => {
-    seed(alertRow({ status: 'not_me', resolved_at: '2026-11-20T15:40:00Z' }));
-    expect(await alertReportedMeanwhile(ALERT, MEMBER)).toBe(true);
-    expect(await alertReportedMeanwhile(ALERT, OWNER_A)).toBe(false);
-  });
-
-  it('it reads once, after a short wait: the other press needs a moment to mark the alert', async () => {
-    UNCOUNTED_PRESS_REREAD.waitMs = 800;
-    vi.useFakeTimers();
-    try {
-      const pending = alertReportedMeanwhile(ALERT);
-      await vi.advanceTimersByTimeAsync(799);
-      expect(h.order).toEqual([]);
-      // The other press marks the alert while this one waits.
-      Object.assign(h.tables.sign_in_alerts![0]!, { status: 'not_me', resolved_at: '2026-11-20T15:40:00Z' });
-      await vi.advanceTimersByTimeAsync(1);
-      await vi.runAllTimersAsync();
-      expect(await pending).toBe(true);
-      expect(h.order).toEqual(['select:sign_in_alerts']);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('it changes nothing and ends nothing', async () => {
-    seed(alertRow({ status: 'not_me', resolved_at: '2026-11-20T15:40:00Z' }));
-    await alertReportedMeanwhile(ALERT);
-    expect(h.revoke).not.toHaveBeenCalled();
-    expect(h.order.filter((step) => !step.startsWith('select:'))).toEqual([]);
-    nobodyWasTold();
   });
 });

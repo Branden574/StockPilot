@@ -195,39 +195,6 @@ export async function readSignInAlert(alertId: string): Promise<SignInAlertRead>
   }
 }
 
-/**
- * How long a press the limiter could not count waits before it looks at the
- * alert once more. An object so a test can set the wait to nothing; nothing
- * else writes it.
- */
-export const UNCOUNTED_PRESS_REREAD = { waitMs: 800 };
-
-/**
- * For a press the limiter could NOT COUNT (lab walk 3, L9c): is the alert
- * reported by now? Two presses at the same instant (two tabs) can be the
- * first two hits on a new limiter key, and the limiter then cannot count one
- * of them. That press does nothing (the callers stay closed), but "try again
- * in a moment" is the wrong answer when the other press has reported the
- * alert meanwhile: the true answer is "already reported".
- *
- * One read, after a short wait: the other press ends the sessions before it
- * marks the alert, which takes a moment. With `userId`, only that account's
- * own alert answers true (the signed-in action passes the caller's id;
- * another account's alert is the same as none). It changes nothing. False
- * whenever the alert cannot be read. Never throws.
- */
-export async function alertReportedMeanwhile(alertId: string, userId?: string): Promise<boolean> {
-  try {
-    await new Promise((resolve) => setTimeout(resolve, UNCOUNTED_PRESS_REREAD.waitMs));
-    const read = await readSignInAlert(alertId);
-    if (read.kind !== 'found') return false;
-    if (userId !== undefined && read.alert.userId !== userId) return false;
-    return read.alert.status === 'not_me';
-  } catch {
-    return false;
-  }
-}
-
 type Admin = ReturnType<typeof createAdminClient>;
 
 function reportFailure(tag: string, extra: Record<string, string | number | null>): void {

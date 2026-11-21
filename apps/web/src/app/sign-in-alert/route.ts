@@ -11,7 +11,6 @@ import {
 import { clientIpForRecord, clientIpFromRequest } from '@/lib/client-ip';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
-  alertReportedMeanwhile,
   readSignInAlert,
   reportSignInAlertNotMe,
   type SignInAlertRecord,
@@ -74,16 +73,7 @@ export const dynamic = 'force-dynamic';
  *
  * A LIMITER THAT CANNOT COUNT is not "too many tries": the caller did nothing
  * wrong and an hour's wait would be untrue. It answers "Please try again in a
- * moment" (503, no Retry-After) and nothing is done.
- *
- * On a PRESS, before that answer, the alert is looked at once more (lab walk
- * 3, L9c). Two tabs pressed at the same instant can be the first two hits on
- * a new limiter key, and the limiter then cannot count one of them. If the
- * other press has reported the alert by then, the true answer is "already
- * reported", and that page is shown; the press itself still does nothing
- * (closed). It never opens a bad link: the link is checked first, as on any
- * press, and a link that does not check out gets "try again in a moment"
- * here, which says nothing about it.
+ * moment" (503, no Retry-After) and nothing is read or done.
  *
  * THE WORDS (review 1, findings 1 and 8; NOT_ME_WORDS in
  * lib/auth/sign-in-alert-words.ts) promise what happens and no more: the
@@ -359,31 +349,6 @@ function formString(form: FormData | null, name: string): string | null {
   return typeof value === 'string' ? value : null;
 }
 
-/** The link's three values as the page's own form posted them. */
-async function linkOf(
-  request: NextRequest,
-): Promise<{ a: string | null; i: string | null; t: string | null }> {
-  const form = await request.formData().catch(() => null);
-  return { a: formString(form, 'a'), i: formString(form, 'i'), t: formString(form, 't') };
-}
-
-/**
- * A press whose ADDRESS count could not be read, so nothing has been checked
- * yet. The link is checked as on any press; only a link that checks out can
- * learn that its alert was reported meanwhile. Anything else, a bad link
- * too, gets "try again in a moment". Nothing is done either way.
- */
-async function uncountedPress(params: {
-  a: string | null;
-  i: string | null;
-  t: string | null;
-}): Promise<NextResponse> {
-  const checked = await checkedAlert(params);
-  if (checked instanceof NextResponse) return busyPage();
-  if (checked.alert.status === 'not_me') return alreadyReportedPage();
-  return (await alertReportedMeanwhile(checked.alert.id)) ? alreadyReportedPage() : busyPage();
-}
-
 export async function POST(request: NextRequest) {
   if (fetchSiteIsElsewhere(request)) return refusedPage();
 
@@ -397,11 +362,16 @@ export async function POST(request: NextRequest) {
       ONE_HOUR_MS,
       'closed',
     );
-    if (byAddress.failed) return uncountedPress(await linkOf(request));
+    if (byAddress.failed) return busyPage();
     if (!byAddress.allowed) return tooManyPage(byAddress.resetAt);
   }
 
-  const checked = await checkedAlert(await linkOf(request));
+  const form = await request.formData().catch(() => null);
+  const checked = await checkedAlert({
+    a: formString(form, 'a'),
+    i: formString(form, 'i'),
+    t: formString(form, 't'),
+  });
   if (checked instanceof NextResponse) return checked;
 
   // Counted for every press whose link checks out, a repeat on a reported
@@ -412,9 +382,7 @@ export async function POST(request: NextRequest) {
     ONE_HOUR_MS,
     'closed',
   );
-  if (byAlert.failed) {
-    return (await alertReportedMeanwhile(checked.alert.id)) ? alreadyReportedPage() : busyPage();
-  }
+  if (byAlert.failed) return busyPage();
   if (!byAlert.allowed) return tooManyPage(byAlert.resetAt);
 
   const answer = await reportSignInAlertNotMe({
