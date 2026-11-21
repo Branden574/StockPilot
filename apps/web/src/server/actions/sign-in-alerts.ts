@@ -70,7 +70,7 @@ export async function reportSignInAlertAction(input: {
     const answer = await reportSignInAlertNotMe({
       alert: read.alert,
       via: 'signed_in',
-      request: {
+      auditFrom: {
         ip: clientIpForRecord(requestHeaders),
         userAgent: requestHeaders.get('user-agent'),
       },

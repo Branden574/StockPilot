@@ -298,7 +298,7 @@ export async function POST(request: NextRequest) {
   const answer = await reportSignInAlertNotMe({
     alert: checked.alert,
     via: 'link',
-    request: {
+    auditFrom: {
       ip: clientIpForRecord(request.headers),
       userAgent: request.headers.get('user-agent'),
     },

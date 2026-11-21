@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { placeOnlyHeaders } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
 import { cityForRecord } from '@/lib/place-name';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -26,7 +27,7 @@ import { recordSecurityEvent, type SecurityEventHeaders } from './events';
  * from anywhere, and what matters is where the sign-in came from. It is handed
  * to the recorder as Vercel's two place headers and nothing else, so the
  * recorder reads the place by its usual rule (only on Vercel) and finds no
- * address to hash. A city the tables would refuse is left out
+ * address to hash (lib/client-ip.ts placeOnlyHeaders). A city the tables would refuse is left out
  * (lib/place-name.ts).
  *
  * Runs after the response (its callers do). Never throws.
@@ -37,18 +38,12 @@ export type SignInAlertEventReason = 'sign_in_new_country' | 'sign_in_not_me';
 /** The most organizations one account's event is recorded in. */
 const MAX_ORGANIZATIONS = 5;
 
-/** A header reader that names only the place, as Vercel's edge would send it. */
+/** The sign-in's place as headers (lib/client-ip.ts), with a city the tables would refuse left out. */
 function placeHeaders(place: { country: string | null; city: string | null }): SecurityEventHeaders {
-  const country = typeof place.country === 'string' ? place.country : null;
-  const city = cityForRecord(place.city);
-  return {
-    get(name: string): string | null {
-      const key = name.toLowerCase();
-      if (key === 'x-vercel-ip-country') return country;
-      if (key === 'x-vercel-ip-city') return city === null ? null : encodeURIComponent(city);
-      return null;
-    },
-  };
+  return placeOnlyHeaders({
+    country: typeof place.country === 'string' ? place.country : null,
+    city: cityForRecord(place.city),
+  });
 }
 
 /** The account's real organizations, or null when they could not be read (reported). */

@@ -116,7 +116,7 @@ describe('reportSignInAlertAction', () => {
     expect(h.report).toHaveBeenCalledWith({
       alert: alert(),
       via: 'signed_in',
-      request: { ip: '203.0.113.9', userAgent: 'Mozilla/5.0 (Macintosh) Safari/605.1.15' },
+      auditFrom: { ip: '203.0.113.9', userAgent: 'Mozilla/5.0 (Macintosh) Safari/605.1.15' },
     });
     expect(h.signOut).toHaveBeenCalledWith({ scope: 'local' });
     // The sign-out comes after the report.

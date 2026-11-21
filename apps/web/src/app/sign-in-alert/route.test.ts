@@ -195,7 +195,7 @@ describe('POST /sign-in-alert', () => {
     expect(h.report).toHaveBeenCalledWith({
       alert: alert(),
       via: 'link',
-      request: { ip: '203.0.113.9', userAgent: 'Mozilla/5.0 (Macintosh) Safari/605.1.15' },
+      auditFrom: { ip: '203.0.113.9', userAgent: 'Mozilla/5.0 (Macintosh) Safari/605.1.15' },
     });
   });
 

@@ -163,7 +163,7 @@ const ORG_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const ORG_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const ALERT = 'a1e27000-0000-4000-8000-000000000001';
 const HASH = 'ab'.repeat(20);
-const REQUEST = { ip: '203.0.113.9', userAgent: 'Mozilla/5.0 (Macintosh) Safari/605.1.15' };
+const AUDIT_FROM = { ip: '203.0.113.9', userAgent: 'Mozilla/5.0 (Macintosh) Safari/605.1.15' };
 
 function member(user_id: string, organization_id: string, role: string, extra: Row = {}): Row {
   return {
@@ -291,7 +291,7 @@ describe('readSignInAlert', () => {
 
 describe('reportSignInAlertNotMe: the first report', () => {
   it('marks the alert not_me with its resolved_at in one conditional update, then signs out every session', async () => {
-    const answer = await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', request: REQUEST });
+    const answer = await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
     expect(answer).toEqual({ outcome: 'done', firstReport: true });
 
     const update = h.calls.find((c) => c.table === 'sign_in_alerts' && c.op === 'update')!;
@@ -307,27 +307,27 @@ describe('reportSignInAlertNotMe: the first report', () => {
   });
 
   it('a new-device alert forgets that device row only; the country rows stay', async () => {
-    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', request: REQUEST });
+    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
     expect(h.tables.user_login_devices).toEqual([{ user_id: MEMBER, device_hash: 'cd'.repeat(20) }]);
     expect(h.tables.user_sign_in_countries).toHaveLength(2);
   });
 
   it('a new-country alert forgets that country row only; the device rows stay', async () => {
     seed(alertRow({ new_device: false, new_country: true }));
-    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', request: REQUEST });
+    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
     expect(h.tables.user_sign_in_countries).toEqual([{ user_id: MEMBER, country: 'US' }]);
     expect(h.tables.user_login_devices).toHaveLength(2);
   });
 
   it('both flags: both rows are forgotten', async () => {
     seed(alertRow({ new_device: true, new_country: true }));
-    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'signed_in', request: REQUEST });
+    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'signed_in', auditFrom: AUDIT_FROM });
     expect(h.tables.user_login_devices).toHaveLength(1);
     expect(h.tables.user_sign_in_countries).toEqual([{ user_id: MEMBER, country: 'US' }]);
   });
 
   it('the member is emailed once, with their own device words, the place and the sign-in time', async () => {
-    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', request: REQUEST });
+    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
     expect(h.memberEmail).toHaveBeenCalledTimes(1);
     expect(h.memberEmail.mock.calls[0]![0]).toEqual({
       to: 'member@example.test',
@@ -339,7 +339,7 @@ describe('reportSignInAlertNotMe: the first report', () => {
   });
 
   it('owners and admins are told by email and in the app, naming the device family; managers, staff, act-as seats and invitations are not', async () => {
-    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', request: REQUEST });
+    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
     const emailed = h.adminEmail.mock.calls.map((c) => c[0].to).sort();
     expect(emailed).toEqual(['admin@example.test', 'owner@example.test']);
     for (const [args] of h.adminEmail.mock.calls) {
@@ -366,7 +366,7 @@ describe('reportSignInAlertNotMe: the first report', () => {
   });
 
   it('the members of the organizations are read on the server: accepted, not act-as, owners and admins only', async () => {
-    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', request: REQUEST });
+    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
     const reads = h.calls.filter((c) => c.table === 'organization_members');
     expect(reads[0]!.filters).toEqual([
       ['eq', 'user_id', MEMBER],
@@ -384,7 +384,7 @@ describe('reportSignInAlertNotMe: the first report', () => {
 
   it('a member who is an admin is not told as an admin: only their own email', async () => {
     h.tables.organization_members![0] = member(MEMBER, ORG_A, 'admin');
-    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', request: REQUEST });
+    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
     expect(h.memberEmail).toHaveBeenCalledTimes(1);
     expect(h.adminEmail.mock.calls.map((c) => c[0].to)).not.toContain('member@example.test');
     expect(h.notify.mock.calls.map((c) => c[0].userId)).not.toContain(MEMBER);
@@ -392,7 +392,7 @@ describe('reportSignInAlertNotMe: the first report', () => {
 
   it('an admin of two of the organizations gets one email and a notice in each', async () => {
     h.tables.organization_members!.push(member(MEMBER, ORG_B, 'staff'), member(ADMIN_A, ORG_B, 'admin'));
-    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', request: REQUEST });
+    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
     expect(h.adminEmail.mock.calls.filter((c) => c[0].to === 'admin@example.test')).toHaveLength(1);
     const notices = h.notify.mock.calls.filter((c) => c[0].userId === ADMIN_A).map((c) => c[0].organizationId);
     expect(notices.sort()).toEqual([ORG_A, ORG_B].sort());
@@ -402,13 +402,13 @@ describe('reportSignInAlertNotMe: the first report', () => {
     h.tables.user_profiles = h.tables.user_profiles!.map((p) =>
       p.id === ADMIN_A ? { ...p, disabled_at: '2026-11-01T00:00:00Z' } : p,
     );
-    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', request: REQUEST });
+    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
     expect(h.adminEmail.mock.calls.map((c) => c[0].to)).toEqual(['owner@example.test']);
   });
 
   it('one audit row per organization, as the member, with the request it came from', async () => {
     h.tables.organization_members!.push(member(MEMBER, ORG_B, 'staff'), member(ADMIN_B, ORG_B, 'admin'));
-    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', request: REQUEST });
+    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
     expect(h.audit).toHaveBeenCalledTimes(2);
     expect(h.audit.mock.calls.map((c) => c[0].organization_id).sort()).toEqual([ORG_A, ORG_B].sort());
     expect(h.audit.mock.calls[0]![0]).toEqual({
@@ -431,7 +431,7 @@ describe('reportSignInAlertNotMe: the first report', () => {
 
   it('one security event, with the sign-in’s place and client', async () => {
     seed(alertRow({ client: 'phone' }));
-    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', request: REQUEST });
+    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
     expect(h.event).toHaveBeenCalledTimes(1);
     expect(h.event.mock.calls[0]![0]).toEqual({
       reason: 'sign_in_not_me',
@@ -445,7 +445,7 @@ describe('reportSignInAlertNotMe: the first report', () => {
     for (let i = 0; i < 7; i++) {
       h.tables.organization_members!.push(member(MEMBER, `0000000${i}-0000-4000-8000-000000000000`, 'staff'));
     }
-    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', request: REQUEST });
+    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
     const ids = h.calls.find((c) => c.table === 'organization_members' && c.filters[0]![0] === 'in')!
       .filters[0]![2] as string[];
     expect(ids.length).toBeLessThanOrEqual(5);
@@ -453,7 +453,7 @@ describe('reportSignInAlertNotMe: the first report', () => {
 
   it('a member in no organization: the member is told, one audit row with no organization, nobody else', async () => {
     h.tables.organization_members = [];
-    const answer = await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', request: REQUEST });
+    const answer = await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
     expect(answer).toEqual({ outcome: 'done', firstReport: true });
     expect(h.memberEmail).toHaveBeenCalledTimes(1);
     expect(h.adminEmail).not.toHaveBeenCalled();
@@ -466,9 +466,9 @@ describe('reportSignInAlertNotMe: the first report', () => {
 describe('reportSignInAlertNotMe: again, and half-finished', () => {
   it('a second report of the same alert signs out again and tells nobody again', async () => {
     const alert = await readAlert();
-    await reportSignInAlertNotMe({ alert, via: 'link', request: REQUEST });
+    await reportSignInAlertNotMe({ alert, via: 'link', auditFrom: AUDIT_FROM });
     vi.clearAllMocks();
-    const again = await reportSignInAlertNotMe({ alert, via: 'link', request: REQUEST });
+    const again = await reportSignInAlertNotMe({ alert, via: 'link', auditFrom: AUDIT_FROM });
     expect(again).toEqual({ outcome: 'done', firstReport: false });
     expect(h.revoke).toHaveBeenCalledWith(MEMBER);
     expect(h.memberEmail).not.toHaveBeenCalled();
@@ -481,7 +481,7 @@ describe('reportSignInAlertNotMe: again, and half-finished', () => {
   it('a retry after a report that stopped before the sign-out still signs out', async () => {
     // The alert is already not_me: the first try marked it and stopped there.
     seed(alertRow({ status: 'not_me', resolved_at: '2026-11-20T15:40:00Z' }));
-    const answer = await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', request: REQUEST });
+    const answer = await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
     expect(answer).toEqual({ outcome: 'done', firstReport: false });
     expect(h.revoke).toHaveBeenCalledWith(MEMBER);
     // And the rows the first try did not reach are forgotten now.
@@ -490,14 +490,14 @@ describe('reportSignInAlertNotMe: again, and half-finished', () => {
 
   it('"this was me" earlier does not stop a later "not me"', async () => {
     seed(alertRow({ status: 'was_me', resolved_at: '2026-11-20T15:35:00Z' }));
-    const answer = await reportSignInAlertNotMe({ alert: await readAlert(), via: 'signed_in', request: REQUEST });
+    const answer = await reportSignInAlertNotMe({ alert: await readAlert(), via: 'signed_in', auditFrom: AUDIT_FROM });
     expect(answer).toEqual({ outcome: 'done', firstReport: true });
     expect(h.tables.sign_in_alerts![0]).toMatchObject({ status: 'not_me' });
   });
 
   it('a sign-out that fails: the answer says so, the owners are still told, and the member is not told they were signed out', async () => {
     h.revoke.mockResolvedValue({ ok: false, sessionIds: [] });
-    const answer = await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', request: REQUEST });
+    const answer = await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
     expect(answer).toEqual({ outcome: 'failed' });
     expect(h.memberEmail).not.toHaveBeenCalled();
     expect(h.adminEmail).toHaveBeenCalled();
@@ -505,7 +505,7 @@ describe('reportSignInAlertNotMe: again, and half-finished', () => {
     // The retry signs out; the report is not sent again.
     h.revoke.mockResolvedValue({ ok: true, sessionIds: ['s1'] });
     vi.clearAllMocks();
-    const retry = await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', request: REQUEST });
+    const retry = await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
     expect(retry).toEqual({ outcome: 'done', firstReport: false });
     expect(h.revoke).toHaveBeenCalledTimes(1);
     expect(h.adminEmail).not.toHaveBeenCalled();
@@ -513,7 +513,7 @@ describe('reportSignInAlertNotMe: again, and half-finished', () => {
 
   it('an update that fails: every session still ends, nobody is told, and the answer is failed', async () => {
     h.failures.sign_in_alerts = { update: { code: '57014', message: 'timeout' } };
-    const answer = await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', request: REQUEST });
+    const answer = await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
     expect(answer).toEqual({ outcome: 'failed' });
     expect(h.revoke).toHaveBeenCalledWith(MEMBER);
     expect(h.memberEmail).not.toHaveBeenCalled();
@@ -529,7 +529,7 @@ describe('reportSignInAlertNotMe: again, and half-finished', () => {
   it('a failed email or forget is reported with a code only, and the answer is still done', async () => {
     h.adminEmail.mockResolvedValue({ ok: false, id: undefined } as unknown as { ok: true; id: string });
     h.failures.user_login_devices = { delete: { code: '42501', message: 'refused for member@example.test' } };
-    const answer = await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', request: REQUEST });
+    const answer = await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
     expect(answer).toEqual({ outcome: 'done', firstReport: true });
     const tags = h.reportError.mock.calls.map((c) => (c[1] as { tag: string }).tag);
     expect(tags).toContain('security.sign_in_report_forget_failed');
@@ -539,7 +539,7 @@ describe('reportSignInAlertNotMe: again, and half-finished', () => {
 
   it('a membership read that fails: the member is still told; one audit row with no organization', async () => {
     h.failures.organization_members = { select: { code: '57014', message: 'timeout' } };
-    const answer = await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', request: REQUEST });
+    const answer = await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
     expect(answer).toEqual({ outcome: 'done', firstReport: true });
     expect(h.memberEmail).toHaveBeenCalledTimes(1);
     expect(h.adminEmail).not.toHaveBeenCalled();

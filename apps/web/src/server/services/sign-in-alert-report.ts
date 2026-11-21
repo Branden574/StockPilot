@@ -358,7 +358,7 @@ async function tellEveryone(
   args: {
     signedOut: boolean;
     via: 'link' | 'signed_in';
-    request: { ip: string | null; userAgent: string | null };
+    auditFrom: { ip: string | null; userAgent: string | null };
   },
 ): Promise<void> {
   const place = { country: alert.country, city: alert.city };
@@ -436,8 +436,8 @@ async function tellEveryone(
         organization_id: organizationId,
         user_id: alert.userId,
         event: 'security.sign_in_reported',
-        ip: args.request.ip,
-        user_agent: args.request.userAgent,
+        ip: args.auditFrom.ip,
+        user_agent: args.auditFrom.userAgent,
         metadata: {
           entity_type: 'sign_in_alert',
           entity_id: alert.id,
@@ -471,8 +471,11 @@ export async function reportSignInAlertNotMe(args: {
   alert: SignInAlertRecord;
   /** Which way the member came: the emailed link, or signed in on Active sessions. */
   via: 'link' | 'signed_in';
-  /** The request the report came from, for the audit row only. */
-  request: { ip: string | null; userAgent: string | null };
+  /**
+   * Where the report came from, for the audit row only: the address as
+   * clientIpForRecord read it, and the user agent.
+   */
+  auditFrom: { ip: string | null; userAgent: string | null };
 }): Promise<SignInAlertReportAnswer> {
   const { alert } = args;
   let admin: Admin;
@@ -488,7 +491,7 @@ export async function reportSignInAlertNotMe(args: {
 
   if (marked.changed) {
     try {
-      await tellEveryone(admin, alert, { signedOut, via: args.via, request: args.request });
+      await tellEveryone(admin, alert, { signedOut, via: args.via, auditFrom: args.auditFrom });
     } catch {
       reportFailure('security.sign_in_report_tell_failed', { code: null });
     }
