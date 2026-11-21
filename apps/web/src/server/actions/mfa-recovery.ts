@@ -13,6 +13,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { createAccessTokenClient } from '@/lib/supabase/access-token-client';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
+import { recordAccountCodeBlocked } from '@/server/security/account-events';
 import { emitAuthAudit, resolveDefaultOrgAndRole } from '@/server/services/auth-audit';
 import { ServiceError } from '@/server/services/context';
 import { SESSION_CHANGED } from '@/server/services/step-up-held';
@@ -175,7 +176,8 @@ export async function consumeMfaRecoveryCodeAction(input: {
     // change-password, email-change request/resend) already passes 'closed';
     // this one had been missing it. The trade — a limiter outage blocks
     // recovery-code use for its duration — is the one they all already make.
-    const ip = clientIpFromHeaders(await headers());
+    const requestHeaders = await headers();
+    const ip = clientIpFromHeaders(requestHeaders);
     if (
       !(await allowRecoveryPress(
         `mfa-recovery:${session.userId}:${ip}`,
@@ -245,6 +247,10 @@ export async function consumeMfaRecoveryCodeAction(input: {
         userId: session.userId,
         organizationId: null,
       });
+      // A security event in the account's organization (looked up after the
+      // response): what the organization's admins see is that a recovery
+      // code was refused, from where, never the code.
+      recordAccountCodeBlocked('wrong_recovery_code', session.userId, requestHeaders);
       return err('validation_error', 'That recovery code is invalid or already used.');
     }
 
