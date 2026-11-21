@@ -87,6 +87,13 @@ const TIME_RE =
   /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}(?::?\d{2})?)$/;
 
 /**
+ * The audit event written BEFORE every bridge answer and required by the
+ * ceremony (server/security/passkeys.ts recordRaise), with the session id and
+ * a raise id: the hourly detector's evidence (plan 10.4).
+ */
+export const PASSKEY_RAISE_EVENT = 'passkey.bridge_raise';
+
+/**
  * A timestamp as nanoseconds since 1970 (a bigint), or null when it cannot
  * be read. Reads what PostgREST (`2026-11-21T09:00:00.123456+00:00`) and Auth
  * (`2026-11-21T09:00:00.123456Z`) send, keeping every fractional digit.

@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
 import { cookies, headers } from 'next/headers';
 import {
@@ -60,7 +60,13 @@ import {
   type RaisedSession,
 } from './passkey-auth';
 import { sendPasskeyAddedEmail, sendPasskeyRemovedEmail } from './passkey-emails';
-import { compareTimes, isReservedTotp, judgePasskeyAccount, passkeyFactsOf } from './passkey-state';
+import {
+  compareTimes,
+  isReservedTotp,
+  judgePasskeyAccount,
+  PASSKEY_RAISE_EVENT,
+  passkeyFactsOf,
+} from './passkey-state';
 
 import type { ActionErrorCode } from '@stockpilot/core';
 
@@ -148,7 +154,8 @@ export const PASSKEY_WORDS = {
 } as const;
 
 /** The purposes of a challenge (0475's check). Never read from a browser (rule 20). */
-export type PasskeyPurpose = 'second_step' | 'password_reset' | 'confirm_add' | 'register' | 'finish_setup';
+export type PasskeyPurpose =
+  'second_step' | 'password_reset' | 'confirm_add' | 'register' | 'finish_setup';
 
 export type PasskeyFailure = { ok: false; code: ActionErrorCode; message: string; reason?: string };
 type Result<T> = ({ ok: true } & T) | PasskeyFailure;
@@ -192,10 +199,7 @@ async function allowRemove(userId: string): Promise<boolean> {
 // ── Security events (plan 2.8; organization looked up after the response) ──
 
 type PasskeyEventReason =
-  | 'passkey_refused'
-  | 'passkey_wrong_site'
-  | 'passkey_counter_went_back'
-  | 'passkey_checks_paused';
+  'passkey_refused' | 'passkey_wrong_site' | 'passkey_counter_went_back' | 'passkey_checks_paused';
 
 async function recordPasskeyEvent(reason: PasskeyEventReason, userId: string): Promise<void> {
   let captured: Awaited<ReturnType<typeof headers>> | null = null;
@@ -220,7 +224,12 @@ async function recordPasskeyEvent(reason: PasskeyEventReason, userId: string): P
 }
 
 /** An error report about one account: a hash of its id, never the id. */
-function reportPasskeys(tag: string, level: 'warning' | 'error', userId: string, extra: Record<string, unknown> = {}) {
+function reportPasskeys(
+  tag: string,
+  level: 'warning' | 'error',
+  userId: string,
+  extra: Record<string, unknown> = {},
+) {
   void reportError(new Error(`Passkeys: ${tag}`), {
     tag: `passkeys.${tag}`,
     level,
@@ -267,7 +276,9 @@ export async function passkeyGate(userId: string): Promise<PasskeyGate> {
   if (newestKeyVersion(keys) === null) return { open: false, why: 'no_key' };
   let word: unknown;
   try {
-    const { data, error } = await createAdminClient().rpc('passkey_add_allowed', { p_user_id: userId });
+    const { data, error } = await createAdminClient().rpc('passkey_add_allowed', {
+      p_user_id: userId,
+    });
     if (error) return { open: false, why: 'unreadable' };
     word = data;
   } catch {
@@ -313,16 +324,20 @@ type Step = 'start' | 'finish' | 'register' | 'remove' | 'manage';
  * account not disabled, the gate, then our limiter. A refusal by the limiter
  * is a security event (passkey_checks_paused).
  */
-async function prologue(step: Step): Promise<Result<{ held: Held; gate: Extract<PasskeyGate, { open: true }> }>> {
+async function prologue(
+  step: Step,
+): Promise<Result<{ held: Held; gate: Extract<PasskeyGate, { open: true }> }>> {
   const held = await holdSession();
   if (!held) return fail('unauthenticated', PASSKEY_WORDS.sessionEnded);
   const userId = held.claims.userId;
-  if (!held.claims.sessionId) return fail('unauthenticated', PASSKEY_WORDS.sessionEnded, 'no_session_id');
+  if (!held.claims.sessionId)
+    return fail('unauthenticated', PASSKEY_WORDS.sessionEnded, 'no_session_id');
   // Rule 15: a disabled account, before any limiter counts; a status that
   // cannot be read is closed.
   const status = await loadAccountStatus(held.supabase, userId);
   if (status === 'disabled') return fail('forbidden', PASSKEY_WORDS.disabled, 'disabled');
-  if (status !== 'active') return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'status_unreadable');
+  if (status !== 'active')
+    return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'status_unreadable');
   const gate = await passkeyGate(userId);
   if (!gate.open) {
     return fail(
@@ -354,7 +369,8 @@ async function prologue(step: Step): Promise<Result<{ held: Held; gate: Extract<
 const BIND_VALUE_RE = /^[A-Za-z0-9_-]{43}$/;
 const sha256hex = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex');
 const isLocal = (rp: RelyingParty) => rp.rpId === 'localhost';
-export const bindCookieName = (rp: RelyingParty) => (isLocal(rp) ? 'sp_pk_bind' : '__Host-sp_pk_bind');
+export const bindCookieName = (rp: RelyingParty) =>
+  isLocal(rp) ? 'sp_pk_bind' : '__Host-sp_pk_bind';
 
 async function setBinding(rp: RelyingParty): Promise<string> {
   const value = randomBytes(32).toString('base64url');
@@ -426,7 +442,10 @@ async function readRows(admin: Admin, userId: string): Promise<PasskeyRow[] | nu
   }
 }
 
-async function readBridgeRow(admin: Admin, userId: string): Promise<BridgeRow | null | 'unreadable'> {
+async function readBridgeRow(
+  admin: Admin,
+  userId: string,
+): Promise<BridgeRow | null | 'unreadable'> {
   try {
     const { data, error } = await admin
       .from('passkey_bridges')
@@ -436,10 +455,19 @@ async function readBridgeRow(admin: Admin, userId: string): Promise<BridgeRow | 
     if (error) return 'unreadable';
     if (data === null) return null;
     const b = data as Partial<BridgeRow>;
-    if (typeof b.factor_id !== 'string' || typeof b.secret_ciphertext !== 'string' || typeof b.key_version !== 'number') {
+    if (
+      typeof b.factor_id !== 'string' ||
+      typeof b.secret_ciphertext !== 'string' ||
+      typeof b.key_version !== 'number'
+    ) {
       return 'unreadable';
     }
-    return { factor_id: b.factor_id, secret_ciphertext: b.secret_ciphertext, key_version: b.key_version, created_at: b.created_at ?? null };
+    return {
+      factor_id: b.factor_id,
+      secret_ciphertext: b.secret_ciphertext,
+      key_version: b.key_version,
+      created_at: b.created_at ?? null,
+    };
   } catch {
     return 'unreadable';
   }
@@ -474,7 +502,11 @@ export interface AccountPicture {
   apps: AuthFactor[];
 }
 
-async function readPicture(admin: Admin, held: Held, rp: RelyingParty): Promise<Result<{ picture: AccountPicture }>> {
+async function readPicture(
+  admin: Admin,
+  held: Held,
+  rp: RelyingParty,
+): Promise<Result<{ picture: AccountPicture }>> {
   const userId = held.claims.userId;
   const [rows, bridge, account] = await Promise.all([
     readRows(admin, userId),
@@ -483,8 +515,10 @@ async function readPicture(admin: Admin, held: Held, rp: RelyingParty): Promise<
   ]);
   if (!account) return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'account_unreadable');
   // Rule 3: the account Auth answers for this token is the token's subject.
-  if (account.id !== userId) return fail('unauthenticated', PASSKEY_WORDS.sessionEnded, 'account_changed');
-  if (rows === null || bridge === 'unreadable') return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'records_unreadable');
+  if (account.id !== userId)
+    return fail('unauthenticated', PASSKEY_WORDS.sessionEnded, 'account_changed');
+  if (rows === null || bridge === 'unreadable')
+    return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'records_unreadable');
   const facts = passkeyFactsOf(rows, bridge?.factor_id ?? null, account.factors, rp.rpId);
   const active = rows.filter((r) => r.removed_at === null && r.rp_id === rp.rpId);
   const apps = account.factors.filter(
@@ -517,7 +551,9 @@ function bridgeServes(p: AccountPicture): boolean {
 function setupUnfinished(p: AccountPicture): boolean {
   return (
     p.active.length > 0 &&
-    (p.state === 'no_bridge' || p.state === 'bridge_factor_missing' || p.state === 'bridge_factor_unverified')
+    (p.state === 'no_bridge' ||
+      p.state === 'bridge_factor_missing' ||
+      p.state === 'bridge_factor_unverified')
   );
 }
 
@@ -551,7 +587,8 @@ async function issueChallenge(
     if (code === '42501') return fail('forbidden', PASSKEY_WORDS.off, 'kill_switch_off');
     return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'challenge_not_issued');
   }
-  if (typeof data !== 'string') return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'challenge_not_issued');
+  if (typeof data !== 'string')
+    return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'challenge_not_issued');
   return { ok: true, challengeId: data };
 }
 
@@ -578,14 +615,18 @@ async function takeChallenge(
     p_binding_hash: bindingHash,
   });
   if (error) {
-    if ((error as { code?: unknown }).code === '42501') return fail('forbidden', PASSKEY_WORDS.off, 'kill_switch_off');
+    if ((error as { code?: unknown }).code === '42501')
+      return fail('forbidden', PASSKEY_WORDS.off, 'kill_switch_off');
     return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'challenge_unreadable');
   }
   const row = Array.isArray(data) ? data[0] : data;
-  if (!row || typeof row !== 'object') return fail('validation_error', PASSKEY_WORDS.expired, 'challenge_not_found');
+  if (!row || typeof row !== 'object')
+    return fail('validation_error', PASSKEY_WORDS.expired, 'challenge_not_found');
   const { challenge, rp_id } = row as { challenge?: unknown; rp_id?: unknown };
-  if (typeof challenge !== 'string') return fail('validation_error', PASSKEY_WORDS.expired, 'challenge_not_found');
-  if (rp_id !== rp.rpId) return fail('validation_error', PASSKEY_WORDS.refused, 'challenge_other_site');
+  if (typeof challenge !== 'string')
+    return fail('validation_error', PASSKEY_WORDS.expired, 'challenge_not_found');
+  if (rp_id !== rp.rpId)
+    return fail('validation_error', PASSKEY_WORDS.refused, 'challenge_other_site');
   return { ok: true, challenge };
 }
 
@@ -645,20 +686,27 @@ async function verifyAssertion(
   const userId = held.claims.userId;
   const challengeId = challengeIdSchema.safeParse(input.challengeId);
   const response = authenticationResponseSchema.safeParse(input.response);
-  if (!challengeId.success || !response.success) return fail('validation_error', PASSKEY_WORDS.refused, 'shape');
+  if (!challengeId.success || !response.success)
+    return fail('validation_error', PASSKEY_WORDS.refused, 'shape');
   const taken = await takeChallenge(admin, held, purpose, rp, challengeId.data);
   if (!taken.ok) return taken;
 
   const answer = response.data;
   if (answer.id !== answer.rawId) return refuseByVerdict('refused', userId);
   const rows = await readRows(admin, userId);
-  if (rows === null) return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'records_unreadable');
-  const row = rows.find((r) => r.credential_id === answer.rawId && r.removed_at === null && r.rp_id === rp.rpId);
+  if (rows === null)
+    return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'records_unreadable');
+  const row = rows.find(
+    (r) => r.credential_id === answer.rawId && r.removed_at === null && r.rp_id === rp.rpId,
+  );
   if (!row) {
     await recordPasskeyEvent('passkey_refused', userId);
     return fail('validation_error', PASSKEY_WORDS.notYours, 'not_yours');
   }
-  if (answer.response.userHandle !== undefined && answer.response.userHandle !== userHandleOf(userId)) {
+  if (
+    answer.response.userHandle !== undefined &&
+    answer.response.userHandle !== userHandleOf(userId)
+  ) {
     await recordPasskeyEvent('passkey_refused', userId);
     return fail('validation_error', PASSKEY_WORDS.notYours, 'user_handle');
   }
@@ -702,7 +750,11 @@ async function verifyAssertion(
   try {
     const { data, error } = await admin
       .from('member_passkeys')
-      .update({ counter: info.newCounter, last_used_at: lastUsedAt, backed_up: info.credentialBackedUp })
+      .update({
+        counter: info.newCounter,
+        last_used_at: lastUsedAt,
+        backed_up: info.credentialBackedUp,
+      })
       .eq('id', row.id)
       .eq('user_id', userId)
       .eq('counter', row.counter)
@@ -753,7 +805,10 @@ async function answerBridge(
       case 'over_request_rate_limit':
         return fail('rate_limited', PASSKEY_WORDS.busy, 'auth_limited');
       default:
-        reportPasskeys('bridge_unclassified', 'warning', userId, { code: answer.code, step: answer.step });
+        reportPasskeys('bridge_unclassified', 'warning', userId, {
+          code: answer.code,
+          step: answer.step,
+        });
         return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'bridge_unclassified');
     }
   }
@@ -768,7 +823,12 @@ async function answerBridge(
 async function adoptRaisedSession(held: Held, raised: RaisedSession): Promise<Result<object>> {
   const { userId, sessionId } = held.claims;
   const claims = await readVerifiedTokenClaims(held.supabase, raised.access_token);
-  if (!claims || claims.userId !== userId || claims.sessionId !== sessionId || claims.aal !== 'aal2') {
+  if (
+    !claims ||
+    claims.userId !== userId ||
+    claims.sessionId !== sessionId ||
+    claims.aal !== 'aal2'
+  ) {
     await signOutAs(raised.access_token, 'local');
     return fail('unauthenticated', PASSKEY_WORDS.signInChanged, 'raised_other_session');
   }
@@ -778,7 +838,12 @@ async function adoptRaisedSession(held: Held, raised: RaisedSession): Promise<Re
   });
   if (error) return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'cookie_not_written');
   const after = await readVerifiedSession(held.supabase);
-  if (!after || after.claims.userId !== userId || after.claims.sessionId !== sessionId || after.claims.aal !== 'aal2') {
+  if (
+    !after ||
+    after.claims.userId !== userId ||
+    after.claims.sessionId !== sessionId ||
+    after.claims.aal !== 'aal2'
+  ) {
     try {
       await held.supabase.auth.signOut({ scope: 'local' });
     } catch {
@@ -799,17 +864,52 @@ async function auditPasskey(
   await emitAuthAudit({ event, userId, organizationId, extra });
 }
 
+/**
+ * The row of one bridge raise, written before the bridge is answered and
+ * REQUIRED (plan 10.4, integrator decision 2026-11-21): it carries the
+ * session id and a random id made for this raise, so the hourly detector
+ * (server/security/passkey-detector.ts) can match each raise to its own row.
+ * When the row is not written on the first try the ceremony refuses and the
+ * bridge is not answered: a raise without its row never happens on our side,
+ * so a raise without a row is not ours.
+ */
+async function recordRaise(
+  userId: string,
+  sessionId: string,
+  purpose: 'second_step' | 'add' | 'finish_setup',
+): Promise<Result<{ raiseId: string }>> {
+  const raiseId = randomUUID();
+  let written = false;
+  try {
+    const { organizationId } = await resolveDefaultOrgAndRole(userId);
+    written = await emitAuthAudit({
+      event: PASSKEY_RAISE_EVENT,
+      userId,
+      organizationId,
+      extra: { session_id: sessionId, raise_id: raiseId, purpose },
+    });
+  } catch {
+    written = false;
+  }
+  if (!written) {
+    reportPasskeys('raise_row_unwritten', 'error', userId, { purpose });
+    return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'raise_row_unwritten');
+  }
+  return { ok: true, raiseId };
+}
+
 // ── A. B. The second step (sign-in page and step-up modal) ─────────────
 
 export type SecondStepStart =
-  | { kind: 'options'; challengeId: string; optionsJSON: unknown }
-  | { kind: 'removal_finished' };
+  { kind: 'options'; challengeId: string; optionsJSON: unknown } | { kind: 'removal_finished' };
 
 /**
  * Starts a ceremony of `purpose` for a member whose passkey answers (S6),
  * finishing a removal the member started instead (S7, S13).
  */
-async function startCeremony(purpose: 'second_step' | 'confirm_add' | 'finish_setup'): Promise<Result<{ start: SecondStepStart }>> {
+async function startCeremony(
+  purpose: 'second_step' | 'confirm_add' | 'finish_setup',
+): Promise<Result<{ start: SecondStepStart }>> {
   const p = await prologue('start');
   if (!p.ok) return p;
   const { held, gate } = p;
@@ -821,15 +921,22 @@ async function startCeremony(purpose: 'second_step' | 'confirm_add' | 'finish_se
 
   if (purpose === 'second_step' && finishesRemoval(picture)) {
     const done = await finishMemberRemoval(admin, userId, picture);
-    return done ? { ok: true, start: { kind: 'removal_finished' } } : fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'removal_not_finished');
+    return done
+      ? { ok: true, start: { kind: 'removal_finished' } }
+      : fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'removal_not_finished');
   }
-  if (picture.active.length === 0) return fail('validation_error', PASSKEY_WORDS.noPasskey, 'no_passkey');
+  if (picture.active.length === 0)
+    return fail('validation_error', PASSKEY_WORDS.noPasskey, 'no_passkey');
   if (purpose === 'finish_setup') {
-    if (!setupUnfinished(picture) && !(bridgeServes(picture) && !opens(picture, userId, gate.keys))) {
+    if (
+      !setupUnfinished(picture) &&
+      !(bridgeServes(picture) && !opens(picture, userId, gate.keys))
+    ) {
       return fail('validation_error', PASSKEY_WORDS.couldNotFinish, 'nothing_to_finish');
     }
   } else if (!bridgeServes(picture)) {
-    if (setupUnfinished(picture)) return fail('validation_error', PASSKEY_WORDS.setupNotFinished, 'setup_unfinished');
+    if (setupUnfinished(picture))
+      return fail('validation_error', PASSKEY_WORDS.setupNotFinished, 'setup_unfinished');
     reportPasskeys(picture.state, 'error', userId);
     return fail('forbidden', PASSKEY_WORDS.cantUse, picture.state);
   } else if (!opens(picture, userId, gate.keys)) {
@@ -858,7 +965,11 @@ function opens(picture: AccountPicture, userId: string, keys: BridgeKeys): boole
   const b = picture.bridge;
   if (!b) return false;
   return (
-    openBridgeSecret({ ciphertext: b.secret_ciphertext, keyVersion: b.key_version }, { userId, factorId: b.factor_id }, keys) !== null
+    openBridgeSecret(
+      { ciphertext: b.secret_ciphertext, keyVersion: b.key_version },
+      { userId, factorId: b.factor_id },
+      keys,
+    ) !== null
   );
 }
 
@@ -873,7 +984,11 @@ function finishesRemoval(p: AccountPicture): boolean {
 }
 
 /** Deletes the reserved-name factors of a removal the member started, then the row. */
-async function finishMemberRemoval(admin: Admin, userId: string, p: AccountPicture): Promise<boolean> {
+async function finishMemberRemoval(
+  admin: Admin,
+  userId: string,
+  p: AccountPicture,
+): Promise<boolean> {
   const ids = p.factors.filter((f) => isReservedTotp(f)).map((f) => f.id);
   for (const id of ids) {
     try {
@@ -884,7 +999,10 @@ async function finishMemberRemoval(admin: Admin, userId: string, p: AccountPictu
     }
   }
   if (p.bridge) {
-    const { error } = await admin.rpc('passkey_drop_bridge', { p_user_id: userId, p_factor_id: p.bridge.factor_id });
+    const { error } = await admin.rpc('passkey_drop_bridge', {
+      p_user_id: userId,
+      p_factor_id: p.bridge.factor_id,
+    });
     if (error) return false;
   }
   return true;
@@ -895,7 +1013,10 @@ async function finishMemberRemoval(admin: Admin, userId: string, p: AccountPictu
  * caller's constant): verify, then the state, then the bridge answer, then the
  * session raised in place, then the audit row with the session id (10.4).
  */
-async function finishSecondStep(input: { challengeId: unknown; response: unknown }): Promise<Result<object>> {
+async function finishSecondStep(input: {
+  challengeId: unknown;
+  response: unknown;
+}): Promise<Result<object>> {
   const p = await prologue('finish');
   if (!p.ok) return p;
   const { held, gate } = p;
@@ -908,7 +1029,8 @@ async function finishSecondStep(input: { challengeId: unknown; response: unknown
   if (!read.ok) return read;
   const picture = read.picture;
   if (!bridgeServes(picture) || !picture.bridge) {
-    if (setupUnfinished(picture)) return fail('validation_error', PASSKEY_WORDS.setupNotFinished, 'setup_unfinished');
+    if (setupUnfinished(picture))
+      return fail('validation_error', PASSKEY_WORDS.setupNotFinished, 'setup_unfinished');
     reportPasskeys(picture.state, 'error', userId);
     return fail('forbidden', PASSKEY_WORDS.cantUse, picture.state);
   }
@@ -922,6 +1044,8 @@ async function finishSecondStep(input: { challengeId: unknown; response: unknown
     reportPasskeys('bridge_unopenable', 'error', userId);
     return fail('forbidden', PASSKEY_WORDS.cantUse, 'bridge_unopenable');
   }
+  const raise = await recordRaise(userId, held.claims.sessionId, 'second_step');
+  if (!raise.ok) return raise;
   const answered = await answerBridge(held.token, userId, bridge.factor_id, secret);
   if (!answered.ok) return answered;
   const adopted = await adoptRaisedSession(held, answered.session);
@@ -932,6 +1056,7 @@ async function finishSecondStep(input: { challengeId: unknown; response: unknown
     purpose: 'second_step',
     backed_up: verified.backedUp,
     session_id: held.claims.sessionId,
+    raise_id: raise.raiseId,
   });
   // A newer key: the row is sealed again with it, by the same factor (2.3).
   if (needsNewerKey(bridge.key_version, gate.keys)) {
@@ -954,7 +1079,10 @@ export async function startSecondStep(): Promise<Result<{ start: SecondStepStart
   return startCeremony('second_step');
 }
 
-export async function completeSecondStep(input: { challengeId: unknown; response: unknown }): Promise<Result<object>> {
+export async function completeSecondStep(input: {
+  challengeId: unknown;
+  response: unknown;
+}): Promise<Result<object>> {
   return finishSecondStep(input);
 }
 
@@ -1019,14 +1147,17 @@ export async function startAddPasskey(input: {
   if (!picture.bridge && picture.factors.length >= 10) {
     return fail('validation_error', PASSKEY_WORDS.removeAuthenticatorFirst, 'factor_limit');
   }
-  if (setupUnfinished(picture)) return fail('validation_error', PASSKEY_WORDS.finishFirst, 'setup_unfinished');
+  if (setupUnfinished(picture))
+    return fail('validation_error', PASSKEY_WORDS.finishFirst, 'setup_unfinished');
 
   const anyVerified = picture.factors.some((f) => f.status === 'verified');
   // Rule 19: an account with a verified factor adds only from an aal2 session.
-  if (anyVerified && held.claims.aal !== 'aal2') return fail('forbidden', PASSKEY_WORDS.stepUpFirst, 'aal2_required');
+  if (anyVerified && held.claims.aal !== 'aal2')
+    return fail('forbidden', PASSKEY_WORDS.stepUpFirst, 'aal2_required');
 
   const proof = input.proof as AddProof | null | undefined;
-  if (!proof || typeof proof !== 'object') return fail('validation_error', PASSKEY_WORDS.proofNeeded, 'proof');
+  if (!proof || typeof proof !== 'object')
+    return fail('validation_error', PASSKEY_WORDS.proofNeeded, 'proof');
   if (!anyVerified && picture.active.length === 0) {
     // No method: the password.
     if (proof.kind !== 'password' || typeof proof.password !== 'string' || !proof.password) {
@@ -1052,8 +1183,10 @@ export async function startAddPasskey(input: {
       path: 'add_passkey',
       sessionAal: held.claims.aal,
     });
-    if (check.kind === 'budget_spent') return fail('rate_limited', PASSKEY_WORDS.tooMany, 'code_budget');
-    if (check.kind === 'account_changed') return fail('unauthenticated', PASSKEY_WORDS.sessionEnded, 'account_changed');
+    if (check.kind === 'budget_spent')
+      return fail('rate_limited', PASSKEY_WORDS.tooMany, 'code_budget');
+    if (check.kind === 'account_changed')
+      return fail('unauthenticated', PASSKEY_WORDS.sessionEnded, 'account_changed');
     if (check.kind !== 'verified') return fail('validation_error', PASSKEY_WORDS.codeWrong, 'code');
   } else if (proof.kind === 'passkey' && picture.active.length > 0) {
     const confirmed = await verifyAssertion(admin, held, gate.rp, 'confirm_add', {
@@ -1067,7 +1200,10 @@ export async function startAddPasskey(input: {
 
   // 2.6 C.3a: no authenticator app and the phone app used in 30 days.
   if (picture.apps.length === 0 && (await usedPhoneAppRecently(admin, userId))) {
-    const typed = typeof input.phoneConfirmation === 'string' ? input.phoneConfirmation.trim().toLowerCase() : '';
+    const typed =
+      typeof input.phoneConfirmation === 'string'
+        ? input.phoneConfirmation.trim().toLowerCase()
+        : '';
     if (typed !== PHONE_CONFIRMATION_WORDS) {
       return fail('validation_error', PASSKEY_WORDS.phoneConfirmation, 'phone_confirmation');
     }
@@ -1084,7 +1220,10 @@ export async function startAddPasskey(input: {
     challenge: challenge.bytes,
     attestationType: 'none',
     authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
-    excludeCredentials: picture.active.map((r) => ({ id: r.credential_id, transports: (r.transports ?? []) as never })),
+    excludeCredentials: picture.active.map((r) => ({
+      id: r.credential_id,
+      transports: (r.transports ?? []) as never,
+    })),
     supportedAlgorithmIDs: PASSKEY_ALGORITHMS,
     timeout: PROMPT_TIMEOUT_MS,
   });
@@ -1122,7 +1261,8 @@ export async function finishAddPasskey(input: {
   if (!name.success) return fail('validation_error', PASSKEY_WORDS.nameInvalid, 'name');
   const challengeId = challengeIdSchema.safeParse(input.challengeId);
   const response = registrationResponseSchema.safeParse(input.response);
-  if (!challengeId.success || !response.success) return fail('validation_error', PASSKEY_WORDS.refused, 'shape');
+  if (!challengeId.success || !response.success)
+    return fail('validation_error', PASSKEY_WORDS.refused, 'shape');
   const admin = createAdminClient();
   const taken = await takeChallenge(admin, held, 'register', gate.rp, challengeId.data);
   if (!taken.ok) return taken;
@@ -1151,7 +1291,12 @@ export async function finishAddPasskey(input: {
   const info = verification.registrationInfo;
   if (info.credential.id !== answer.rawId) return refuseByVerdict('refused', userId);
   const publicKey = Buffer.from(info.credential.publicKey);
-  if (publicKey.length < 32 || publicKey.length > 2048 || publicKey[0]! < 0xa0 || publicKey[0]! > 0xbf) {
+  if (
+    publicKey.length < 32 ||
+    publicKey.length > 2048 ||
+    publicKey[0]! < 0xa0 ||
+    publicKey[0]! > 0xbf
+  ) {
     return refuseByVerdict('refused', userId);
   }
 
@@ -1165,11 +1310,16 @@ export async function finishAddPasskey(input: {
   const picture = read.picture;
   if (isPlatformAdmin(picture.email)) return fail('forbidden', PASSKEY_WORDS.console, 'console');
   const anyVerified = picture.factors.some((f) => f.status === 'verified');
-  if (anyVerified && held.claims.aal !== 'aal2') return fail('forbidden', PASSKEY_WORDS.stepUpFirst, 'aal2_required');
+  if (anyVerified && held.claims.aal !== 'aal2')
+    return fail('forbidden', PASSKEY_WORDS.stepUpFirst, 'aal2_required');
 
   // The bridge: a new one when the account has no bridge row; the healthy
   // one otherwise. Any half state is finished first (Finish), never here.
-  let enrolled: { factorId: string; secret: string; sealed: { ciphertext: string; keyVersion: number } } | null = null;
+  let enrolled: {
+    factorId: string;
+    secret: string;
+    sealed: { ciphertext: string; keyVersion: number };
+  } | null = null;
   if (!picture.bridge) {
     if (picture.state !== 'nothing' && picture.state !== 'healthy') {
       reportPasskeys(picture.state, 'error', userId);
@@ -1177,7 +1327,8 @@ export async function finishAddPasskey(input: {
     }
     const made = await enrolTotpAs(held.token, bridgeFactorName());
     if (!made.ok) {
-      if (made.code === 'insufficient_aal') return fail('forbidden', PASSKEY_WORDS.stepUpFirst, 'insufficient_aal');
+      if (made.code === 'insufficient_aal')
+        return fail('forbidden', PASSKEY_WORDS.stepUpFirst, 'insufficient_aal');
       if (made.code === 'too_many_enrolled_factors') {
         return fail('validation_error', PASSKEY_WORDS.removeAuthenticatorFirst, 'factor_limit');
       }
@@ -1213,13 +1364,21 @@ export async function finishAddPasskey(input: {
   if (stored.error || !passkeyId) {
     if (enrolled) await deleteFactor(admin, userId, enrolled.factorId);
     const code = (stored.error as { code?: unknown } | null)?.code;
-    if (code !== '55000') reportPasskeys('register_failed', 'warning', userId, { code: typeof code === 'string' ? code : 'none' });
+    if (code !== '55000')
+      reportPasskeys('register_failed', 'warning', userId, {
+        code: typeof code === 'string' ? code : 'none',
+      });
     return fail('internal_error', PASSKEY_WORDS.addFailed, 'register_failed');
   }
 
+  let raiseId: string | null = null;
   if (enrolled) {
     // Only the id enrolled in THIS registration is answered (stage 2-3 review finding 13).
-    const answered = await answerBridge(held.token, userId, enrolled.factorId, enrolled.secret);
+    const raise = await recordRaise(userId, held.claims.sessionId, 'add');
+    raiseId = raise.ok ? raise.raiseId : null;
+    const answered = raise.ok
+      ? await answerBridge(held.token, userId, enrolled.factorId, enrolled.secret)
+      : raise;
     const adopted = answered.ok ? await adoptRaisedSession(held, answered.session) : answered;
     if (!adopted.ok) {
       const undo = await admin.rpc('passkey_mark_removed', {
@@ -1243,6 +1402,7 @@ export async function finishAddPasskey(input: {
     transports,
     fmt: info.fmt,
     session_id: held.claims.sessionId,
+    raise_id: raiseId,
   });
   if (picture.email) await sendPasskeyAddedEmail(picture.email);
   return { ok: true, passkeyId, firstPasskey: enrolled !== null };
@@ -1256,7 +1416,10 @@ export async function finishAddPasskey(input: {
  * deleted. The new bridge is verified BEFORE the swap (a repair never
  * deletes a verified bridge first) and the swap follows at once.
  */
-export async function finishPasskeySetup(input: { challengeId: unknown; response: unknown }): Promise<Result<object>> {
+export async function finishPasskeySetup(input: {
+  challengeId: unknown;
+  response: unknown;
+}): Promise<Result<object>> {
   const p = await prologue('finish');
   if (!p.ok) return p;
   const { held, gate } = p;
@@ -1268,9 +1431,11 @@ export async function finishPasskeySetup(input: { challengeId: unknown; response
   if (!read.ok) return read;
   const picture = read.picture;
   const repair = bridgeServes(picture) && !opens(picture, userId, gate.keys);
-  if (!setupUnfinished(picture) && !repair) return fail('validation_error', PASSKEY_WORDS.couldNotFinish, 'nothing_to_finish');
+  if (!setupUnfinished(picture) && !repair)
+    return fail('validation_error', PASSKEY_WORDS.couldNotFinish, 'nothing_to_finish');
   const anyVerified = picture.factors.some((f) => f.status === 'verified');
-  if (anyVerified && held.claims.aal !== 'aal2') return fail('forbidden', PASSKEY_WORDS.stepUpFirst, 'aal2_required');
+  if (anyVerified && held.claims.aal !== 'aal2')
+    return fail('forbidden', PASSKEY_WORDS.stepUpFirst, 'aal2_required');
   const before = new Set(picture.factors.filter((f) => f.status === 'verified').map((f) => f.id));
 
   const made = await enrolTotpAs(held.token, bridgeFactorName());
@@ -1280,10 +1445,14 @@ export async function finishPasskeySetup(input: { challengeId: unknown; response
     await deleteFactor(admin, userId, made.factorId);
     return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'not_sealed');
   }
-  const answered = await answerBridge(held.token, userId, made.factorId, made.secret);
+  const raise = await recordRaise(userId, held.claims.sessionId, 'finish_setup');
+  const answered = raise.ok
+    ? await answerBridge(held.token, userId, made.factorId, made.secret)
+    : raise;
   const adopted = answered.ok ? await adoptRaisedSession(held, answered.session) : answered;
   if (!adopted.ok) {
-    if (!(await deleteFactor(admin, userId, made.factorId))) reportPasskeys('finish_factor_left', 'error', userId);
+    if (!(await deleteFactor(admin, userId, made.factorId)))
+      reportPasskeys('finish_factor_left', 'error', userId);
     return adopted;
   }
   const old = picture.bridge?.factor_id ?? null;
@@ -1296,11 +1465,16 @@ export async function finishPasskeySetup(input: { challengeId: unknown; response
   });
   if (swapped.error || swapped.data !== true) {
     // The new factor is verified and not recorded: removed at once.
-    if (!(await deleteFactor(admin, userId, made.factorId))) reportPasskeys('finish_factor_left', 'error', userId);
+    if (!(await deleteFactor(admin, userId, made.factorId)))
+      reportPasskeys('finish_factor_left', 'error', userId);
     if (repair) reportPasskeys('repair_stopped', 'error', userId);
     return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'swap_failed');
   }
-  if (old && picture.factors.some((f) => f.id === old) && !(await deleteFactor(admin, userId, old))) {
+  if (
+    old &&
+    picture.factors.some((f) => f.id === old) &&
+    !(await deleteFactor(admin, userId, old))
+  ) {
     reportPasskeys('old_bridge_left', 'error', userId);
   }
   if (repair) {
@@ -1311,11 +1485,13 @@ export async function finishPasskeySetup(input: { challengeId: unknown; response
       (f) => f.status === 'verified' && f.id !== made.factorId && !before.has(f.id),
     );
     for (const f of extra) await deleteFactor(admin, userId, f.id);
-    if (extra.length > 0) reportPasskeys('repair_found_new_factor', 'error', userId, { count: extra.length });
+    if (extra.length > 0)
+      reportPasskeys('repair_found_new_factor', 'error', userId, { count: extra.length });
   }
   await auditPasskey('passkey.bridge_repaired', userId, {
     state: repair ? 'bridge_unopenable' : picture.state,
     session_id: held.claims.sessionId,
+    raise_id: raise.ok ? raise.raiseId : null,
   });
   return { ok: true };
 }
@@ -1350,12 +1526,15 @@ async function policyRequiresSecondStep(admin: Admin, userId: string): Promise<b
 }
 
 /** E: remove one of the member's passkeys (aal2), then end the other sessions. */
-export async function removePasskey(input: { passkeyId: unknown }): Promise<Result<{ finishing: boolean }>> {
+export async function removePasskey(input: {
+  passkeyId: unknown;
+}): Promise<Result<{ finishing: boolean }>> {
   const p = await prologue('remove');
   if (!p.ok) return p;
   const { held, gate } = p;
   const userId = held.claims.userId;
-  if (held.claims.aal !== 'aal2') return fail('forbidden', PASSKEY_WORDS.stepUpFirst, 'aal2_required');
+  if (held.claims.aal !== 'aal2')
+    return fail('forbidden', PASSKEY_WORDS.stepUpFirst, 'aal2_required');
   const id = challengeIdSchema.safeParse(input.passkeyId);
   if (!id.success) return fail('validation_error', PASSKEY_WORDS.alreadyRemoved, 'id');
   const admin = createAdminClient();
@@ -1379,11 +1558,11 @@ export async function removePasskey(input: { passkeyId: unknown }): Promise<Resu
     p_reason: 'member',
   });
   const answer = (Array.isArray(data) ? data[0] : data) as
-    | { removed?: unknown; bridge_factor_id?: unknown; bridge_dropped?: unknown }
-    | null
-    | undefined;
-  if (error || !answer) return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'remove_failed');
-  if (answer.removed !== true) return fail('not_found', PASSKEY_WORDS.alreadyRemoved, 'not_removed');
+    { removed?: unknown; bridge_factor_id?: unknown; bridge_dropped?: unknown } | null | undefined;
+  if (error || !answer)
+    return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'remove_failed');
+  if (answer.removed !== true)
+    return fail('not_found', PASSKEY_WORDS.alreadyRemoved, 'not_removed');
   let finishing = false;
   if (answer.bridge_dropped === true && typeof answer.bridge_factor_id === 'string') {
     if (!(await deleteFactor(admin, userId, answer.bridge_factor_id))) {
@@ -1413,11 +1592,15 @@ export async function removePasskey(input: { passkeyId: unknown }): Promise<Resu
 }
 
 /** F: rename one of the member's passkeys (aal2; the table's name rule). */
-export async function renamePasskey(input: { passkeyId: unknown; name: unknown }): Promise<Result<object>> {
+export async function renamePasskey(input: {
+  passkeyId: unknown;
+  name: unknown;
+}): Promise<Result<object>> {
   const p = await prologue('manage');
   if (!p.ok) return p;
   const { held } = p;
-  if (held.claims.aal !== 'aal2') return fail('forbidden', PASSKEY_WORDS.stepUpFirst, 'aal2_required');
+  if (held.claims.aal !== 'aal2')
+    return fail('forbidden', PASSKEY_WORDS.stepUpFirst, 'aal2_required');
   const id = challengeIdSchema.safeParse(input.passkeyId);
   const name = passkeyNameSchema.safeParse(input.name);
   if (!id.success) return fail('validation_error', PASSKEY_WORDS.alreadyRemoved, 'id');
@@ -1430,7 +1613,8 @@ export async function renamePasskey(input: { passkeyId: unknown; name: unknown }
     .is('removed_at', null)
     .select('id');
   if (error) return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'rename_failed');
-  if (!Array.isArray(data) || data.length !== 1) return fail('not_found', PASSKEY_WORDS.alreadyRemoved, 'not_found');
+  if (!Array.isArray(data) || data.length !== 1)
+    return fail('not_found', PASSKEY_WORDS.alreadyRemoved, 'not_found');
   return { ok: true };
 }
 
@@ -1497,15 +1681,16 @@ async function panelOf(userId: string): Promise<PasskeysPanel | null> {
     })),
     atLimit: gate.atLimit,
     hasApp,
-    proof: !hasPasskey && !hasApp
-      ? picture.factors.some((f) => f.status === 'verified')
-        ? 'code'
-        : 'password'
-      : hasPasskey && hasApp
-        ? 'passkey_or_code'
-        : hasPasskey
-          ? 'passkey'
-          : 'code',
+    proof:
+      !hasPasskey && !hasApp
+        ? picture.factors.some((f) => f.status === 'verified')
+          ? 'code'
+          : 'password'
+        : hasPasskey && hasApp
+          ? 'passkey_or_code'
+          : hasPasskey
+            ? 'passkey'
+            : 'code',
     apps: picture.apps.map((f) => ({ id: f.id, friendlyName: f.friendly_name })),
     phoneConfirmation: !hasApp && (await usedPhoneAppRecently(admin, userId)),
     aal2: held.claims.aal === 'aal2',
@@ -1535,7 +1720,8 @@ async function stepOf(
   factors: ReadonlyArray<{ friendly_name?: unknown; factor_type?: unknown }>,
 ): Promise<'ready' | 'none'> {
   const named = factors.some(
-    (f) => typeof f.friendly_name === 'string' && f.friendly_name.startsWith(PASSKEY_BRIDGE_NAME_PREFIX),
+    (f) =>
+      typeof f.friendly_name === 'string' && f.friendly_name.startsWith(PASSKEY_BRIDGE_NAME_PREFIX),
   );
   if (!named) return 'none';
   const gate = await passkeyGate(userId);

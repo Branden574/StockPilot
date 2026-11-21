@@ -38,7 +38,7 @@ vi.mock('@/lib/rate-limit', async () => {
 });
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 vi.mock('@/server/services/auth-audit', () => ({
-  emitAuthAudit: vi.fn(async () => undefined),
+  emitAuthAudit: vi.fn(async () => true),
   resolveDefaultOrgAndRole: vi.fn(async () => ({ organizationId: null, role: null })),
 }));
 vi.mock('@/server/services/lib/defer', () => ({
@@ -79,20 +79,29 @@ const SAMPLE_PASSWORD = 'sample-password-not-real';
 type Start = Awaited<ReturnType<typeof pk.startSecondStep>>;
 
 function optionsOf(start: Start) {
-  if (!start.ok || start.start.kind !== 'options') throw new Error(`no options: ${JSON.stringify(start)}`);
-  return { challengeId: start.start.challengeId, options: start.start.optionsJSON as { challenge: string; rpId?: string } };
+  if (!start.ok || start.start.kind !== 'options')
+    throw new Error(`no options: ${JSON.stringify(start)}`);
+  return {
+    challengeId: start.start.challengeId,
+    options: start.start.optionsJSON as { challenge: string; rpId?: string },
+  };
 }
 
 /** A member with no method adds a first passkey with the password (2.6 C, D). */
 async function addFirstPasskey(soft: SoftAuthenticator, name = 'Work laptop') {
-  const start = await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } });
+  const start = await pk.startAddPasskey({
+    proof: { kind: 'password', password: SAMPLE_PASSWORD },
+  });
   if (!start.ok) throw new Error(`start add refused: ${start.reason}`);
   const created = soft.create(start.optionsJSON as never);
   return pk.finishAddPasskey({ challengeId: start.challengeId, response: created, name });
 }
 
 /** A member signed in with the password, then the passkey (2.6 A, B). */
-async function passkeyStep(soft: SoftAuthenticator, knobs: Parameters<SoftAuthenticator['get']>[2] = {}) {
+async function passkeyStep(
+  soft: SoftAuthenticator,
+  knobs: Parameters<SoftAuthenticator['get']>[2] = {},
+) {
   const { challengeId, options } = optionsOf(await pk.startSecondStep());
   return pk.completeSecondStep({ challengeId, response: soft.get(options, undefined, knobs) });
 }
@@ -114,6 +123,8 @@ beforeEach(() => {
   delete process.env.VERCEL_ENV;
   vi.stubGlobal('fetch', world.fetch);
   vi.clearAllMocks();
+  // Every audit row is written unless a test says otherwise.
+  vi.mocked(emitAuthAudit).mockImplementation(async () => true);
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -130,10 +141,22 @@ describe('the whole path with the real library', () => {
     const factor = world.factors.find((f) => f.id === bridge.factor_id)!;
     expect(factor.status).toBe('verified');
     expect(factor.friendly_name).toMatch(/^sp-passkey-bridge-[0-9a-f]{12}$/);
-    expect(world.claimsOf(world.cookieToken!)).toMatchObject({ sub: userId, session_id: session.id, aal: 'aal2' });
-    expect(world.passkeys[0]).toMatchObject({ user_id: userId, rp_id: 'localhost', name: 'Work laptop', backup_eligible: true });
+    expect(world.claimsOf(world.cookieToken!)).toMatchObject({
+      sub: userId,
+      session_id: session.id,
+      aal: 'aal2',
+    });
+    expect(world.passkeys[0]).toMatchObject({
+      user_id: userId,
+      rp_id: 'localhost',
+      name: 'Work laptop',
+      backup_eligible: true,
+    });
     expect(emitAuthAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ event: 'passkey.added', extra: expect.objectContaining({ session_id: session.id, fmt: 'none' }) }),
+      expect.objectContaining({
+        event: 'passkey.added',
+        extra: expect.objectContaining({ session_id: session.id, fmt: 'none' }),
+      }),
     );
     expect(sendPasskeyAddedEmail).toHaveBeenCalledWith('first@example.test');
   });
@@ -143,10 +166,17 @@ describe('the whole path with the real library', () => {
     world.calls.setSession = 0;
     const done = await passkeyStep(soft);
     expect(done).toEqual({ ok: true });
-    expect(world.claimsOf(world.cookieToken!)).toMatchObject({ sub: userId, session_id: session.id, aal: 'aal2' });
+    expect(world.claimsOf(world.cookieToken!)).toMatchObject({
+      sub: userId,
+      session_id: session.id,
+      aal: 'aal2',
+    });
     expect(world.calls.setSession).toBe(1);
     expect(emitAuthAudit).toHaveBeenLastCalledWith(
-      expect.objectContaining({ event: 'passkey.used', extra: expect.objectContaining({ session_id: session.id, purpose: 'second_step' }) }),
+      expect.objectContaining({
+        event: 'passkey.used',
+        extra: expect.objectContaining({ session_id: session.id, purpose: 'second_step' }),
+      }),
     );
     expect(world.passkeys[0]!.counter).toBe(1);
     expect(world.passkeys[0]!.last_used_at).not.toBeNull();
@@ -167,7 +197,12 @@ describe('the gate: each of the four conditions alone closes everything (stage 4
       close();
       try {
         expect(await pk.passkeysPanelFor(userId)).toBeNull();
-        expect(await pk.passkeyStepFor(userId, world.factors.filter((f) => f.user_id === userId))).toBe('none');
+        expect(
+          await pk.passkeyStepFor(
+            userId,
+            world.factors.filter((f) => f.user_id === userId),
+          ),
+        ).toBe('none');
         expect(await pk.passkeyKeepsSecondStep(userId)).toBe(false);
         const refusals = [
           await pk.startSecondStep(),
@@ -196,20 +231,24 @@ describe('the gate: each of the four conditions alone closes everything (stage 4
     process.env.VERCEL_ENV = 'preview';
     expect(await pk.passkeyGate(userId)).toEqual({ open: false, why: 'no_site' });
     expect(await pk.passkeysPanelFor(userId)).toBeNull();
-    expect(world.calls.rpc).toEqual([]);
+    expect(world.calls.fns).toEqual([]);
   });
 
   it('with no key the database is not asked either', async () => {
     const userId = world.addAccount('nokey@example.test');
     world.env.PASSKEY_BRIDGE_KEY_V1 = '';
     expect(await pk.passkeyGate(userId)).toEqual({ open: false, why: 'no_key' });
-    expect(world.calls.rpc).toEqual([]);
+    expect(world.calls.fns).toEqual([]);
   });
 
   it('the panel is absent for a member who cannot use passkeys and present when every condition holds', async () => {
     const userId = world.addAccount('panel@example.test');
     world.signIn(userId, 'aal1');
-    expect(await pk.passkeysPanelFor(userId)).toMatchObject({ passkeys: [], proof: 'password', atLimit: false });
+    expect(await pk.passkeysPanelFor(userId)).toMatchObject({
+      passkeys: [],
+      proof: 'password',
+      atLimit: false,
+    });
     world.addAllowed = 'organization_off';
     expect(await pk.passkeysPanelFor(userId)).toBeNull();
   });
@@ -224,7 +263,9 @@ describe('rule 1: no module-level client, token or session', () => {
       // Top-level statements only: lines that start at column 0.
       const topLevel = src.split('\n').filter((l) => /^(const|let|var) /.test(l));
       for (const line of topLevel) {
-        expect(line, line).not.toMatch(/createAdminClient\(|createClient\(|createAccessTokenClient\(|readVerifiedSession|getSession|access_token|token\s*=/);
+        expect(line, line).not.toMatch(
+          /createAdminClient\(|createClient\(|createAccessTokenClient\(|readVerifiedSession|getSession|access_token|token\s*=/,
+        );
       }
       expect(src).not.toMatch(/^let /m);
     });
@@ -264,7 +305,8 @@ describe('rules 2 and 3: one verified token per action, the account is its subje
     world.calls.auth.length = 0;
     expect(await passkeyStep(soft)).toEqual({ ok: true });
     expect(world.calls.auth.length).toBeGreaterThan(0);
-    for (const c of world.calls.auth) expect(world.claimsOf(c.token)).toMatchObject({ session_id: session.id });
+    for (const c of world.calls.auth)
+      expect(world.claimsOf(c.token)).toMatchObject({ session_id: session.id });
   });
 });
 
@@ -276,32 +318,52 @@ describe('rule 4: the challenge is bound and spent first', () => {
     const bind = new Map(world.cookies);
     expect(await pk.completeSecondStep({ challengeId, response: answer })).toEqual({ ok: true });
     for (const [k, v] of bind) world.cookies.set(k, v);
-    expect(await pk.completeSecondStep({ challengeId, response: answer })).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.expired });
+    expect(await pk.completeSecondStep({ challengeId, response: answer })).toMatchObject({
+      ok: false,
+      message: pk.PASSKEY_WORDS.expired,
+    });
   });
 
   it('a refused answer gets no second try on the same challenge', async () => {
     const { soft } = await memberWithPasskey();
     const { challengeId, options } = optionsOf(await pk.startSecondStep());
     const bind = new Map(world.cookies);
-    expect(await pk.completeSecondStep({ challengeId, response: soft.get(options, undefined, { uv: false }) })).toMatchObject({ ok: false });
+    expect(
+      await pk.completeSecondStep({
+        challengeId,
+        response: soft.get(options, undefined, { uv: false }),
+      }),
+    ).toMatchObject({ ok: false });
     for (const [k, v] of bind) world.cookies.set(k, v);
-    expect(await pk.completeSecondStep({ challengeId, response: soft.get(options) })).toMatchObject({
-      ok: false,
-      message: pk.PASSKEY_WORDS.expired,
-    });
+    expect(await pk.completeSecondStep({ challengeId, response: soft.get(options) })).toMatchObject(
+      {
+        ok: false,
+        message: pk.PASSKEY_WORDS.expired,
+      },
+    );
   });
 
   it('rule 12: without the browser binding cookie, or with another value, the answer is refused', async () => {
     const { soft } = await memberWithPasskey();
     const first = optionsOf(await pk.startSecondStep());
     world.cookies.clear();
-    expect(await pk.completeSecondStep({ challengeId: first.challengeId, response: soft.get(first.options) })).toMatchObject({
+    expect(
+      await pk.completeSecondStep({
+        challengeId: first.challengeId,
+        response: soft.get(first.options),
+      }),
+    ).toMatchObject({
       ok: false,
       reason: 'no_binding',
     });
     const second = optionsOf(await pk.startSecondStep());
     world.cookies.set('sp_pk_bind', 'A'.repeat(43));
-    expect(await pk.completeSecondStep({ challengeId: second.challengeId, response: soft.get(second.options) })).toMatchObject({
+    expect(
+      await pk.completeSecondStep({
+        challengeId: second.challengeId,
+        response: soft.get(second.options),
+      }),
+    ).toMatchObject({
       ok: false,
       message: pk.PASSKEY_WORDS.expired,
     });
@@ -317,12 +379,17 @@ describe('rule 5: the credential is ours and this account', () => {
     const r = await pk.completeSecondStep({ challengeId, response: a.soft.get(options) });
     expect(r).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.notYours });
     expect(b.userId).toBeTruthy();
-    expect(recordSecurityEvent).toHaveBeenCalledWith(expect.objectContaining({ reason: 'passkey_refused' }), expect.anything());
+    expect(recordSecurityEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'passkey_refused' }),
+      expect.anything(),
+    );
   });
 
   it('a user handle of another account is refused', async () => {
     const { soft } = await memberWithPasskey();
-    const r = await passkeyStep(soft, { userHandle: Buffer.from('someone-else').toString('base64url') });
+    const r = await passkeyStep(soft, {
+      userHandle: Buffer.from('someone-else').toString('base64url'),
+    });
     expect(r).toMatchObject({ ok: false, reason: 'user_handle' });
   });
 
@@ -331,17 +398,22 @@ describe('rule 5: the credential is ours and this account', () => {
     const { challengeId, options } = optionsOf(await pk.startSecondStep());
     world.passkeys[0]!.removed_at = new Date().toISOString();
     world.passkeys[0]!.removed_reason = 'member';
-    expect(await pk.completeSecondStep({ challengeId, response: soft.get(options) })).toMatchObject({
-      ok: false,
-      message: pk.PASSKEY_WORDS.notYours,
-    });
+    expect(await pk.completeSecondStep({ challengeId, response: soft.get(options) })).toMatchObject(
+      {
+        ok: false,
+        message: pk.PASSKEY_WORDS.notYours,
+      },
+    );
   });
 });
 
 describe('rule 6: the library decides with our settings, and the checks it leaves to us', () => {
   it('user verification off is refused (sign-in)', async () => {
     const { soft } = await memberWithPasskey();
-    expect(await passkeyStep(soft, { uv: false })).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.noUserVerification });
+    expect(await passkeyStep(soft, { uv: false })).toMatchObject({
+      ok: false,
+      message: pk.PASSKEY_WORDS.noUserVerification,
+    });
   });
 
   it('user verification off is refused (registration)', async () => {
@@ -354,7 +426,10 @@ describe('rule 6: the library decides with our settings, and the checks it leave
 
   it('an answer from another origin is refused as another site, recorded as phishing', async () => {
     const { soft } = await memberWithPasskey();
-    expect(await passkeyStep(soft, { origin: 'http://localhost:4000' })).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.wrongSite });
+    expect(await passkeyStep(soft, { origin: 'http://localhost:4000' })).toMatchObject({
+      ok: false,
+      message: pk.PASSKEY_WORDS.wrongSite,
+    });
     expect(recordSecurityEvent).toHaveBeenCalledWith(
       expect.objectContaining({ category: 'phishing', reason: 'passkey_wrong_site' }),
       expect.anything(),
@@ -363,18 +438,34 @@ describe('rule 6: the library decides with our settings, and the checks it leave
 
   it('an answer for another RP ID is refused as another site', async () => {
     const { soft } = await memberWithPasskey();
-    expect(await passkeyStep(soft, { rpId: 'example.test' })).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.wrongSite });
+    expect(await passkeyStep(soft, { rpId: 'example.test' })).toMatchObject({
+      ok: false,
+      message: pk.PASSKEY_WORDS.wrongSite,
+    });
   });
 
   it('crossOrigin true is refused at sign-in and at registration (review 9.2)', async () => {
     const { soft } = await memberWithPasskey();
-    expect(await passkeyStep(soft, { crossOrigin: true })).toMatchObject({ ok: false, reason: 'wrong_site' });
+    expect(await passkeyStep(soft, { crossOrigin: true })).toMatchObject({
+      ok: false,
+      reason: 'wrong_site',
+    });
     const other = world.addAccount('xo@example.test');
     world.signIn(other);
-    const start = await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } });
+    const start = await pk.startAddPasskey({
+      proof: { kind: 'password', password: SAMPLE_PASSWORD },
+    });
     if (!start.ok) throw new Error('start');
-    const created = new SoftAuthenticator().create(start.optionsJSON as never, { crossOrigin: true });
-    expect(await pk.finishAddPasskey({ challengeId: start.challengeId, response: created, name: 'Frame' })).toMatchObject({
+    const created = new SoftAuthenticator().create(start.optionsJSON as never, {
+      crossOrigin: true,
+    });
+    expect(
+      await pk.finishAddPasskey({
+        challengeId: start.challengeId,
+        response: created,
+        name: 'Frame',
+      }),
+    ).toMatchObject({
       ok: false,
       reason: 'wrong_site',
     });
@@ -389,7 +480,10 @@ describe('rule 6: the library decides with our settings, and the checks it leave
     const { soft } = await memberWithPasskey();
     expect(await passkeyStep(soft)).toEqual({ ok: true });
     world.signIn(world.passkeys[0]!.user_id, 'aal1');
-    expect(await passkeyStep(soft, { signCount: 0 })).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.counterWentBack });
+    expect(await passkeyStep(soft, { signCount: 0 })).toMatchObject({
+      ok: false,
+      message: pk.PASSKEY_WORDS.counterWentBack,
+    });
     expect(recordSecurityEvent).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: 'flagged', reason: 'passkey_counter_went_back' }),
       expect.anything(),
@@ -399,11 +493,20 @@ describe('rule 6: the library decides with our settings, and the checks it leave
   it('the options pin our algorithms and user verification', async () => {
     const userId = world.addAccount('alg@example.test');
     world.signIn(userId);
-    const start = await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } });
+    const start = await pk.startAddPasskey({
+      proof: { kind: 'password', password: SAMPLE_PASSWORD },
+    });
     if (!start.ok) throw new Error('start');
-    const o = start.optionsJSON as { pubKeyCredParams: Array<{ alg: number }>; authenticatorSelection: Record<string, string>; user: { id: string } };
+    const o = start.optionsJSON as {
+      pubKeyCredParams: Array<{ alg: number }>;
+      authenticatorSelection: Record<string, string>;
+      user: { id: string };
+    };
     expect(o.pubKeyCredParams.map((p) => p.alg)).toEqual(pk.PASSKEY_ALGORITHMS);
-    expect(o.authenticatorSelection).toMatchObject({ residentKey: 'required', userVerification: 'required' });
+    expect(o.authenticatorSelection).toMatchObject({
+      residentKey: 'required',
+      userVerification: 'required',
+    });
     expect(Buffer.from(o.user.id, 'base64url').toString('utf8')).toBe(userId);
   });
 });
@@ -429,7 +532,7 @@ describe('rule 7: the bridge is found by id, from our table', () => {
 });
 
 describe('rules 8 and 9: the same session, at aal2, cookies written once and read back', () => {
-  it("a raised token of ANOTHER session is signed out and refused; no cookie is written", async () => {
+  it('a raised token of ANOTHER session is signed out and refused; no cookie is written', async () => {
     const { soft } = await memberWithPasskey();
     world.knobs.verifyAnswersOtherSession = true;
     world.calls.setSession = 0;
@@ -458,7 +561,10 @@ describe('rule 10: local checks before any Auth call', () => {
       const { soft } = await memberWithPasskey();
       const { challengeId, options } = optionsOf(await pk.startSecondStep());
       world.calls.auth.length = 0;
-      const r = await pk.completeSecondStep({ challengeId, response: soft.get(options, undefined, knobs) });
+      const r = await pk.completeSecondStep({
+        challengeId,
+        response: soft.get(options, undefined, knobs),
+      });
       expect(r.ok).toBe(false);
       expect(world.calls.auth).toEqual([]);
     });
@@ -490,7 +596,10 @@ describe('rule 11: the secret and the code never leave answerBridge', () => {
     world.calls.auth.length = 0;
     expect(await passkeyStep(soft)).toMatchObject({ ok: false, reason: 'bridge_refused' });
     expect(world.calls.auth.filter((c) => c.path.endsWith('/verify'))).toHaveLength(2);
-    expect(reportError).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ tag: 'passkeys.bridge_refused', level: 'error' }));
+    expect(reportError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tag: 'passkeys.bridge_refused', level: 'error' }),
+    );
   });
 });
 
@@ -499,16 +608,20 @@ describe('rules 13 to 18', () => {
     const { soft } = await memberWithPasskey();
     const { challengeId, options } = optionsOf(await pk.startSecondStep());
     world.addAllowed = 'kill_switch_off';
-    expect(await pk.completeSecondStep({ challengeId, response: soft.get(options) })).toMatchObject({
-      ok: false,
-      message: pk.PASSKEY_WORDS.off,
-    });
+    expect(await pk.completeSecondStep({ challengeId, response: soft.get(options) })).toMatchObject(
+      {
+        ok: false,
+        message: pk.PASSKEY_WORDS.off,
+      },
+    );
   });
 
   it('rule 14: a platform console account cannot add a passkey', async () => {
     const userId = world.addAccount(CONSOLE_EMAIL);
     world.signIn(userId);
-    expect(await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } })).toMatchObject({
+    expect(
+      await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } }),
+    ).toMatchObject({
       ok: false,
       message: pk.PASSKEY_WORDS.console,
     });
@@ -519,7 +632,10 @@ describe('rules 13 to 18', () => {
     const { userId } = await memberWithPasskey();
     world.accountStatus = 'disabled';
     vi.mocked(checkRateLimit).mockClear();
-    expect(await pk.startSecondStep()).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.disabled });
+    expect(await pk.startSecondStep()).toMatchObject({
+      ok: false,
+      message: pk.PASSKEY_WORDS.disabled,
+    });
     expect(checkRateLimit).not.toHaveBeenCalled();
     expect(userId).toBeTruthy();
   });
@@ -536,7 +652,9 @@ describe('rules 13 to 18', () => {
     const s = world.signIn(userId);
     world.cookieToken = world.signToken({ ...s, id: '' });
     expect(await pk.startSecondStep()).toMatchObject({ ok: false, reason: 'no_session_id' });
-    expect(await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } })).toMatchObject({
+    expect(
+      await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } }),
+    ).toMatchObject({
       ok: false,
       reason: 'no_session_id',
     });
@@ -552,7 +670,10 @@ describe('rules 13 to 18', () => {
     await memberWithPasskey();
     world.limiterAllows = false;
     expect(await pk.startSecondStep()).toMatchObject({ ok: false, code: 'rate_limited' });
-    expect(recordSecurityEvent).toHaveBeenCalledWith(expect.objectContaining({ reason: 'passkey_checks_paused' }), expect.anything());
+    expect(recordSecurityEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'passkey_checks_paused' }),
+      expect.anything(),
+    );
     const keys = vi.mocked(checkRateLimit).mock.calls.map((c) => String(c[0]));
     expect(keys.some((k) => k.startsWith('passkey-start:'))).toBe(true);
   });
@@ -563,7 +684,9 @@ describe('rule 19 and the proof to add', () => {
     const userId = world.addAccount('app@example.test');
     const app = world.addApp(userId);
     world.signIn(userId, 'aal1');
-    expect(await pk.startAddPasskey({ proof: { kind: 'code', factorId: app.id, code: '123456' } })).toMatchObject({
+    expect(
+      await pk.startAddPasskey({ proof: { kind: 'code', factorId: app.id, code: '123456' } }),
+    ).toMatchObject({
       ok: false,
       message: pk.PASSKEY_WORDS.stepUpFirst,
     });
@@ -575,11 +698,18 @@ describe('rule 19 and the proof to add', () => {
     const app = world.addApp(userId);
     world.signIn(userId, 'aal2');
     vi.mocked(checkMfaCode).mockResolvedValue({ kind: 'verified' } as never);
-    const ok = await pk.startAddPasskey({ proof: { kind: 'code', factorId: app.id, code: '123456' } });
+    const ok = await pk.startAddPasskey({
+      proof: { kind: 'code', factorId: app.id, code: '123456' },
+    });
     expect(ok.ok).toBe(true);
-    expect(checkMfaCode).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ factorId: app.id, path: 'add_passkey' }));
+    expect(checkMfaCode).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ factorId: app.id, path: 'add_passkey' }),
+    );
     // A password proof from an account that has an app is not enough.
-    expect(await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } })).toMatchObject({ ok: false, reason: 'proof' });
+    expect(
+      await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } }),
+    ).toMatchObject({ ok: false, reason: 'proof' });
   });
 
   it('2.6 C.3a: no app and the phone app used in 30 days: I understand must be typed', async () => {
@@ -593,9 +723,17 @@ describe('rule 19 and the proof to add', () => {
       created_at: new Date().toISOString(),
     });
     const proof = { kind: 'password', password: SAMPLE_PASSWORD };
-    expect(await pk.startAddPasskey({ proof })).toMatchObject({ ok: false, reason: 'phone_confirmation' });
-    expect(await pk.startAddPasskey({ proof, phoneConfirmation: 'yes' })).toMatchObject({ ok: false, reason: 'phone_confirmation' });
-    expect((await pk.startAddPasskey({ proof, phoneConfirmation: '  I Understand ' })).ok).toBe(true);
+    expect(await pk.startAddPasskey({ proof })).toMatchObject({
+      ok: false,
+      reason: 'phone_confirmation',
+    });
+    expect(await pk.startAddPasskey({ proof, phoneConfirmation: 'yes' })).toMatchObject({
+      ok: false,
+      reason: 'phone_confirmation',
+    });
+    expect((await pk.startAddPasskey({ proof, phoneConfirmation: '  I Understand ' })).ok).toBe(
+      true,
+    );
     expect(await pk.passkeysPanelFor(userId)).toMatchObject({ phoneConfirmation: true });
   });
 });
@@ -605,7 +743,9 @@ describe('rule 20: each action spends only its own purpose', () => {
     const { soft } = await memberWithPasskey();
     for (const start of [pk.startConfirmAdd]) {
       const { challengeId, options } = optionsOf(await start());
-      expect(await pk.completeSecondStep({ challengeId, response: soft.get(options) })).toMatchObject({
+      expect(
+        await pk.completeSecondStep({ challengeId, response: soft.get(options) }),
+      ).toMatchObject({
         ok: false,
         message: pk.PASSKEY_WORDS.expired,
       });
@@ -616,10 +756,18 @@ describe('rule 20: each action spends only its own purpose', () => {
     const { soft, userId } = await memberWithPasskey();
     world.signIn(userId, 'aal2');
     const { challengeId, options } = optionsOf(await pk.startSecondStep());
-    const r = await pk.startAddPasskey({ proof: { kind: 'passkey', challengeId, response: soft.get(options) } });
+    const r = await pk.startAddPasskey({
+      proof: { kind: 'passkey', challengeId, response: soft.get(options) },
+    });
     expect(r).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.expired });
     const confirm = optionsOf(await pk.startConfirmAdd());
-    const ok = await pk.startAddPasskey({ proof: { kind: 'passkey', challengeId: confirm.challengeId, response: soft.get(confirm.options) } });
+    const ok = await pk.startAddPasskey({
+      proof: {
+        kind: 'passkey',
+        challengeId: confirm.challengeId,
+        response: soft.get(confirm.options),
+      },
+    });
     expect(ok.ok).toBe(true);
   });
 
@@ -627,19 +775,27 @@ describe('rule 20: each action spends only its own purpose', () => {
     const { soft, userId } = await memberWithPasskey();
     world.signIn(userId, 'aal2');
     const { challengeId, options } = optionsOf(await pk.startSecondStep());
-    const r = await pk.finishAddPasskey({ challengeId, response: soft.get(options), name: 'Second' });
+    const r = await pk.finishAddPasskey({
+      challengeId,
+      response: soft.get(options),
+      name: 'Second',
+    });
     expect(r.ok).toBe(false);
-    const purposes = world.calls.rpc.filter((c) => c.name === 'take_passkey_challenge').map((c) => c.args.p_purpose);
+    const purposes = world.calls.fns
+      .filter((c) => c.name === 'take_passkey_challenge')
+      .map((c) => c.args.p_purpose);
     expect(purposes.at(-1)).toBe('register');
   });
 
   it('finish_setup refuses a second_step challenge', async () => {
     const { soft } = await memberWithPasskey();
     const { challengeId, options } = optionsOf(await pk.startSecondStep());
-    expect(await pk.finishPasskeySetup({ challengeId, response: soft.get(options) })).toMatchObject({
-      ok: false,
-      message: pk.PASSKEY_WORDS.expired,
-    });
+    expect(await pk.finishPasskeySetup({ challengeId, response: soft.get(options) })).toMatchObject(
+      {
+        ok: false,
+        message: pk.PASSKEY_WORDS.expired,
+      },
+    );
   });
 
   it('no exported action takes a purpose', () => {
@@ -656,10 +812,12 @@ describe('rule 22: every failed use write refuses the sign-in, before any Auth c
     const { challengeId, options } = optionsOf(await pk.startSecondStep());
     world.knobs.useWriteFails = true;
     world.calls.auth.length = 0;
-    expect(await pk.completeSecondStep({ challengeId, response: soft.get(options) })).toMatchObject({
-      ok: false,
-      message: pk.PASSKEY_WORDS.tryAgain,
-    });
+    expect(await pk.completeSecondStep({ challengeId, response: soft.get(options) })).toMatchObject(
+      {
+        ok: false,
+        message: pk.PASSKEY_WORDS.tryAgain,
+      },
+    );
     expect(world.calls.auth).toEqual([]);
   });
 
@@ -694,7 +852,12 @@ describe('states: the server branches on the facts (2.7)', () => {
     expect(r.ok).toBe(false);
     expect(world.calls.deleteFactor).not.toContain(bridge.factor_id);
     expect(world.bridges.has(userId)).toBe(true);
-    expect(await pk.passkeyStepFor(userId, world.factors.filter((f) => f.user_id === userId))).toBe('none');
+    expect(
+      await pk.passkeyStepFor(
+        userId,
+        world.factors.filter((f) => f.user_id === userId),
+      ),
+    ).toBe('none');
   });
 
   it('S8 (a bridge with no passkey row ever) fails closed', async () => {
@@ -707,7 +870,11 @@ describe('states: the server branches on the facts (2.7)', () => {
   it('S9 (the secret cannot be opened: a lost key) fails closed with the recovery-code words', async () => {
     const { soft, userId } = await memberWithPasskey();
     world.env.PASSKEY_BRIDGE_KEY_V1 = Buffer.alloc(32, 7).toString('base64');
-    expect(await pk.startSecondStep()).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.cantUse, reason: 'bridge_unopenable' });
+    expect(await pk.startSecondStep()).toMatchObject({
+      ok: false,
+      message: pk.PASSKEY_WORDS.cantUse,
+      reason: 'bridge_unopenable',
+    });
     expect(soft).toBeTruthy();
     expect(userId).toBeTruthy();
   });
@@ -729,13 +896,119 @@ describe('states: the server branches on the facts (2.7)', () => {
     const old = world.bridges.get(userId)!;
     world.bridges.delete(userId);
     world.factors = world.factors.filter((f) => f.id !== old.factor_id);
-    expect(await pk.startSecondStep()).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.setupNotFinished });
-    expect(await pk.passkeysPanelFor(userId)).toMatchObject({ passkeys: [expect.objectContaining({ unfinished: true })] });
+    expect(await pk.startSecondStep()).toMatchObject({
+      ok: false,
+      message: pk.PASSKEY_WORDS.setupNotFinished,
+    });
+    expect(await pk.passkeysPanelFor(userId)).toMatchObject({
+      passkeys: [expect.objectContaining({ unfinished: true })],
+    });
     const { challengeId, options } = optionsOf(await pk.startFinishSetup());
-    expect(await pk.finishPasskeySetup({ challengeId, response: soft.get(options) })).toEqual({ ok: true });
+    expect(await pk.finishPasskeySetup({ challengeId, response: soft.get(options) })).toEqual({
+      ok: true,
+    });
     const now = world.bridges.get(userId)!;
     expect(world.factors.find((f) => f.id === now.factor_id)?.status).toBe('verified');
-    expect(emitAuthAudit).toHaveBeenLastCalledWith(expect.objectContaining({ event: 'passkey.bridge_repaired' }));
+    expect(emitAuthAudit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ event: 'passkey.bridge_repaired' }),
+    );
+  });
+});
+
+describe('10.4: the raise row is written before every bridge answer, and required', () => {
+  const RAISE = 'passkey.bridge_raise';
+  const verifies = () =>
+    world.calls.auth.filter((c) => /\/factors\/[^/]+\/(challenge|verify)$/.test(c.path)).length;
+  const raiseCalls = () =>
+    vi
+      .mocked(emitAuthAudit)
+      .mock.calls.map((c) => c[0])
+      .filter((a) => a.event === RAISE);
+
+  /** The raise rows fail (false) or are written; Auth calls made before each raise row are counted. */
+  function auditAnswers(raiseWritten: boolean) {
+    const authCallsAtRaise: number[] = [];
+    vi.mocked(emitAuthAudit).mockImplementation(async (a) => {
+      if (a.event !== RAISE) return true;
+      authCallsAtRaise.push(verifies());
+      return raiseWritten;
+    });
+    return authCallsAtRaise;
+  }
+
+  it('second step: the raise row (session id, raise id) comes before any bridge call; passkey.used carries the same raise id', async () => {
+    const { soft, session } = await memberWithPasskey();
+    world.calls.auth.length = 0;
+    vi.mocked(emitAuthAudit).mockClear();
+    const atRaise = auditAnswers(true);
+    expect(await passkeyStep(soft)).toEqual({ ok: true });
+    expect(atRaise).toEqual([0]);
+    const raise = raiseCalls()[0]!;
+    expect(raise.extra).toMatchObject({ session_id: session.id, purpose: 'second_step' });
+    expect(raise.extra!.raise_id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(emitAuthAudit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        event: 'passkey.used',
+        extra: expect.objectContaining({ raise_id: raise.extra!.raise_id }),
+      }),
+    );
+  });
+
+  it('each raise has its own raise id', async () => {
+    const { soft, userId } = await memberWithPasskey();
+    await passkeyStep(soft);
+    world.signIn(userId, 'aal1');
+    await passkeyStep(soft);
+    const ids = raiseCalls().map((a) => a.extra!.raise_id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.length).toBe(3); // the add, then two second steps
+  });
+
+  it('second step: a raise row not written refuses, the bridge is not answered, the session stays aal1', async () => {
+    const { soft, session } = await memberWithPasskey();
+    world.calls.auth.length = 0;
+    auditAnswers(false);
+    expect(await passkeyStep(soft)).toMatchObject({
+      ok: false,
+      message: pk.PASSKEY_WORDS.couldNotFinish,
+    });
+    expect(verifies()).toBe(0);
+    expect(world.sessions.get(session.id)!.aal).toBe('aal1');
+    expect(vi.mocked(emitAuthAudit).mock.calls.map((c) => c[0].event)).not.toContain(
+      'passkey.used',
+    );
+    expect(vi.mocked(reportError).mock.calls.map((c) => (c[1] as { tag?: string }).tag)).toContain(
+      'passkeys.raise_row_unwritten',
+    );
+  });
+
+  it('first passkey: a raise row not written is compensated like a failed answer (marked setup_failed, factor deleted, nothing answered)', async () => {
+    const userId = world.addAccount('raise-add@example.test');
+    const session = world.signIn(userId);
+    auditAnswers(false);
+    const r = await addFirstPasskey(new SoftAuthenticator());
+    expect(r).toMatchObject({ ok: false });
+    expect(verifies()).toBe(0);
+    expect(world.passkeys[0]!.removed_reason).toBe('setup_failed');
+    expect(world.bridges.has(userId)).toBe(false);
+    expect(world.factors.filter((f) => f.user_id === userId)).toEqual([]);
+    expect(world.sessions.get(session.id)!.aal).toBe('aal1');
+  });
+
+  it('finish setup: a raise row not written deletes the new factor and answers nothing', async () => {
+    const { soft, userId } = await memberWithPasskey();
+    const old = world.bridges.get(userId)!;
+    world.bridges.delete(userId);
+    world.factors = world.factors.filter((f) => f.id !== old.factor_id);
+    const { challengeId, options } = optionsOf(await pk.startFinishSetup());
+    world.calls.auth.length = 0;
+    auditAnswers(false);
+    expect(await pk.finishPasskeySetup({ challengeId, response: soft.get(options) })).toMatchObject(
+      { ok: false },
+    );
+    expect(verifies()).toBe(0);
+    expect(world.bridges.has(userId)).toBe(false);
+    expect(world.factors.filter((f) => f.user_id === userId && world.reserved(f))).toEqual([]);
   });
 });
 
@@ -746,10 +1019,10 @@ describe('D.6: a failed answer after the store is compensated in the same reques
     world.knobs.verifyError = 'over_request_rate_limit';
     const r = await addFirstPasskey(new SoftAuthenticator());
     expect(r).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.addNotFinished });
-    const names = world.calls.rpc.map((c) => c.name);
+    const names = world.calls.fns.map((c) => c.name);
     expect(names).toContain('passkey_mark_removed');
     expect(names).not.toContain('passkey_remove_all');
-    const mark = world.calls.rpc.find((c) => c.name === 'passkey_mark_removed')!;
+    const mark = world.calls.fns.find((c) => c.name === 'passkey_mark_removed')!;
     expect(mark.args.p_reason).toBe('setup_failed');
     expect(world.bridges.has(userId)).toBe(false);
     expect(world.factors.filter((f) => f.user_id === userId)).toEqual([]);
@@ -759,7 +1032,9 @@ describe('D.6: a failed answer after the store is compensated in the same reques
   it('another tab stored a bridge first (55000): the factor just enrolled is deleted, nothing of ours stored', async () => {
     const userId = world.addAccount('tabs@example.test');
     world.signIn(userId);
-    const start = await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } });
+    const start = await pk.startAddPasskey({
+      proof: { kind: 'password', password: SAMPLE_PASSWORD },
+    });
     if (!start.ok) throw new Error('start');
     world.bridges.set(userId, {
       user_id: userId,
@@ -769,7 +1044,11 @@ describe('D.6: a failed answer after the store is compensated in the same reques
       created_at: new Date().toISOString(),
     });
     // The other tab's row is in place, so this account no longer reads as "no bridge": refused before enrol.
-    const r = await pk.finishAddPasskey({ challengeId: start.challengeId, response: new SoftAuthenticator().create(start.optionsJSON as never), name: 'Tab' });
+    const r = await pk.finishAddPasskey({
+      challengeId: start.challengeId,
+      response: new SoftAuthenticator().create(start.optionsJSON as never),
+      name: 'Tab',
+    });
     expect(r.ok).toBe(false);
     expect(world.passkeys).toEqual([]);
   });
@@ -778,7 +1057,10 @@ describe('D.6: a failed answer after the store is compensated in the same reques
 describe('E: removal', () => {
   it('needs aal2; marks the row removed, drops the bridge with the last one, deletes its factor, ends the other sessions', async () => {
     const { userId, passkeyId } = await memberWithPasskey();
-    expect(await pk.removePasskey({ passkeyId })).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.stepUpFirst });
+    expect(await pk.removePasskey({ passkeyId })).toMatchObject({
+      ok: false,
+      message: pk.PASSKEY_WORDS.stepUpFirst,
+    });
     world.signIn(userId, 'aal2');
     const bridge = world.bridges.get(userId)!;
     expect(await pk.removePasskey({ passkeyId })).toEqual({ ok: true, finishing: false });
@@ -786,7 +1068,9 @@ describe('E: removal', () => {
     expect(world.bridges.has(userId)).toBe(false);
     expect(world.calls.deleteFactor).toContain(bridge.factor_id);
     expect(world.calls.auth.some((c) => c.path === '/logout?scope=others')).toBe(true);
-    expect(emitAuthAudit).toHaveBeenLastCalledWith(expect.objectContaining({ event: 'passkey.removed' }));
+    expect(emitAuthAudit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ event: 'passkey.removed' }),
+    );
     expect(sendPasskeyRemovedEmail).toHaveBeenCalled();
   });
 
@@ -795,15 +1079,27 @@ describe('E: removal', () => {
     world.signIn(userId, 'aal2');
     const org = crypto.randomUUID();
     world.organizations.push({ id: org, mfa_policy: 'all_required' });
-    world.memberships.push({ user_id: userId, organization_id: org, role: 'member', accepted_at: new Date().toISOString(), impersonation_expires_at: null });
-    expect(await pk.removePasskey({ passkeyId })).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.policyBlocksRemoval });
+    world.memberships.push({
+      user_id: userId,
+      organization_id: org,
+      role: 'member',
+      accepted_at: new Date().toISOString(),
+      impersonation_expires_at: null,
+    });
+    expect(await pk.removePasskey({ passkeyId })).toMatchObject({
+      ok: false,
+      message: pk.PASSKEY_WORDS.policyBlocksRemoval,
+    });
     expect(world.passkeys[0]!.removed_at).toBeNull();
   });
 
   it('rename keeps the table rule (no dot) and needs aal2', async () => {
     const { userId, passkeyId } = await memberWithPasskey();
     world.signIn(userId, 'aal2');
-    expect(await pk.renamePasskey({ passkeyId, name: 'my.key' })).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.nameInvalid });
+    expect(await pk.renamePasskey({ passkeyId, name: 'my.key' })).toMatchObject({
+      ok: false,
+      message: pk.PASSKEY_WORDS.nameInvalid,
+    });
     expect(await pk.renamePasskey({ passkeyId, name: ' Front  desk ' })).toEqual({ ok: true });
     expect(world.passkeys[0]!.name).toBe('Front desk');
   });
@@ -813,14 +1109,21 @@ describe('the page reads', () => {
   it('passkeyStepFor reads nothing for an account with no reserved-name factor', async () => {
     const userId = world.addAccount('plain@example.test');
     world.signIn(userId);
-    expect(await pk.passkeyStepFor(userId, [{ friendly_name: 'StockPilot app', factor_type: 'totp' }])).toBe('none');
-    expect(world.calls.rpc).toEqual([]);
+    expect(
+      await pk.passkeyStepFor(userId, [{ friendly_name: 'StockPilot app', factor_type: 'totp' }]),
+    ).toBe('none');
+    expect(world.calls.fns).toEqual([]);
     expect(world.calls.auth).toEqual([]);
   });
 
   it('passkeyStepFor is ready for a healthy passkey; passkeyKeepsSecondStep too', async () => {
     const { userId } = await memberWithPasskey();
-    expect(await pk.passkeyStepFor(userId, world.factors.filter((f) => f.user_id === userId))).toBe('ready');
+    expect(
+      await pk.passkeyStepFor(
+        userId,
+        world.factors.filter((f) => f.user_id === userId),
+      ),
+    ).toBe('ready');
     expect(await pk.passkeyKeepsSecondStep(userId)).toBe(true);
   });
 

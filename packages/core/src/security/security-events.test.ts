@@ -58,6 +58,7 @@ describe('security events: the lists the database checks', () => {
       'passkey_wrong_site',
       'passkey_counter_went_back',
       'passkey_checks_paused',
+      'passkey_unexplained_sign_in',
       'unknown_api_key',
       'sign_in_new_country',
       'sign_in_not_me',

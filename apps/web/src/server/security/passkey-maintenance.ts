@@ -1,26 +1,25 @@
 import 'server-only';
 
-import { accountIdHash } from '@/lib/auth/passkey-bridge';
 import { passkeyRelyingParty } from '@/lib/auth/passkey-relying-party';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 
 import { compareTimes } from './passkey-state';
 
 /**
- * The scheduled passkey work (plan 10.3 and 10.4), run from two crons that
- * already exist (no new Vercel setting): the daily security-events retention
- * job runs runPasskeyMaintenance (the purge, the sweep, the counts, the Auth
- * version check), the hourly audit-anomalies job runs runPasskeyDetector.
- * Each never throws and never changes its cron's own answer: a failure is
- * reported (counts and codes only, an account as a hash of its id).
+ * The scheduled passkey upkeep (plan 10.3), run from a cron that already
+ * exists (no new Vercel setting): the security-events retention job runs
+ * runPasskeyMaintenance (the purge, the sweep, the counts, the Auth version
+ * check). The hourly check of bridge-raised sessions (10.4) is its own
+ * module, server/security/passkey-detector.ts, which deletes nothing. This
+ * never throws and never changes its cron's own answer: a failure is
+ * reported (counts and codes only).
  *
- * Neither is gated by the switches: they find and close what is unsafe,
- * and the S7/S13 repairs (finishing a removal the member started) run while
- * the kill switch is off (answer B). Without a site (a preview) they do
- * nothing. Before 0475 exists every call answers "missing" and is skipped.
+ * It is not gated by the switches: it closes what is unfinished, and the
+ * S7/S13 repairs (finishing a removal the member started) run while the kill
+ * switch is off (answer B). Without a site (a preview) it does nothing.
+ * Before 0475 exists every call answers "missing" and is skipped.
  */
 
 type Admin = ReturnType<typeof createAdminClient>;
@@ -233,155 +232,4 @@ async function checkAuthVersion(admin: Admin): Promise<PasskeyMaintenanceSummary
 
 function report(tag: string, level: 'warning' | 'error', extra: Record<string, unknown>) {
   void reportError(new Error(`Passkeys: ${tag}`), { tag: `passkeys.${tag}`, level, extra });
-}
-
-// ── The detector (10.4) ────────────────────────────────────────────────
-
-const HONEST_EVENTS = ['passkey.used', 'passkey.added', 'passkey.bridge_repaired'];
-/** A session raised this recently may not have its audit row yet: the next run (two-hour window) checks it. */
-const DETECTOR_GRACE_MS = 2 * 60_000;
-const DETECTOR_CHUNK = 50;
-
-interface BridgeSession {
-  session_id: string;
-  user_id: string;
-  factor_id: string;
-  created_at: string | null;
-  updated_at: string | null;
-}
-
-export interface PasskeyDetectorSummary {
-  ran: boolean;
-  sessions: number;
-  unexplained: number;
-  usedButNotListed: number;
-}
-
-type MetadataRow = { metadata: { session_id?: unknown } | null };
-
-/**
- * Sessions raised by a reserved-name factor (made or refreshed in the last
- * two hours), each matched to an audit row of ours carrying its session id
- * (passkey.used, passkey.added, passkey.bridge_repaired: the three places
- * the server answers a bridge). One with no such row was raised by someone
- * else's code: every session of the account ends, any verified factor made
- * after the session began (not the bridge) is removed, and an error is
- * reported with the account as a hash. A session is acted on only after a
- * read of its own says no row exists; a failed read acts on nothing and is
- * reported. A session changed in the last two minutes waits for the next run
- * (our row is written just after the raise). The other way round (a
- * passkey.used row whose session is not listed: the list is blind, or the
- * session moved) is a warning with a count. An empty list is never read as
- * "all clear" on its own.
- */
-export async function runPasskeyDetector(): Promise<PasskeyDetectorSummary> {
-  const summary: PasskeyDetectorSummary = {
-    ran: false,
-    sessions: 0,
-    unexplained: 0,
-    usedButNotListed: 0,
-  };
-  try {
-    if (!passkeyRelyingParty()) return summary;
-    const admin = createAdminClient();
-    const since = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
-    const listed = await admin.rpc('passkey_bridge_sessions', { p_since: since });
-    if (listed.error) {
-      if (missing(listed.error)) return summary;
-      report('detector_unreadable', 'error', {
-        code: String((listed.error as { code?: unknown }).code ?? 'none'),
-      });
-      return summary;
-    }
-    summary.ran = true;
-    const all = (listed.data ?? []) as BridgeSession[];
-    summary.sessions = all.length;
-    const settled = new Date(Date.now() - DETECTOR_GRACE_MS).toISOString();
-    const sessions = all.filter((s) => compareTimes(s.updated_at ?? s.created_at, settled) !== 1);
-
-    // First pass: our rows for the listed sessions, a chunk at a time.
-    const explained = new Set<string>();
-    for (let i = 0; i < sessions.length; i += DETECTOR_CHUNK) {
-      const chunk = sessions.slice(i, i + DETECTOR_CHUNK).map((s) => s.session_id);
-      const rows = await admin
-        .from('audit_logs')
-        .select('metadata')
-        .in('event', HONEST_EVENTS)
-        .in('metadata->>session_id', chunk)
-        .limit(1000);
-      if (rows.error) continue; // the second pass reads each one again
-      for (const r of (rows.data ?? []) as MetadataRow[]) {
-        if (typeof r.metadata?.session_id === 'string') explained.add(r.metadata.session_id);
-      }
-    }
-    // Second pass: each session still unmatched, read on its own before anything is done.
-    for (const s of sessions) {
-      if (explained.has(s.session_id)) continue;
-      const own = await admin
-        .from('audit_logs')
-        .select('id')
-        .in('event', HONEST_EVENTS)
-        .eq('metadata->>session_id', s.session_id)
-        .limit(1);
-      if (own.error) {
-        report('detector_audit_unreadable', 'error', {});
-        continue;
-      }
-      if (((own.data ?? []) as unknown[]).length > 0) continue;
-      summary.unexplained += 1;
-      await closeUnexplained(admin, s);
-    }
-
-    // The other way round: our own rows whose session the list does not show.
-    const used = await admin
-      .from('audit_logs')
-      .select('metadata')
-      .eq('event', 'passkey.used')
-      .gte('created_at', since)
-      .lte('created_at', settled)
-      .limit(1000);
-    if (!used.error) {
-      const listedIds = new Set(all.map((s) => s.session_id));
-      summary.usedButNotListed = ((used.data ?? []) as MetadataRow[]).filter(
-        (r) => typeof r.metadata?.session_id === 'string' && !listedIds.has(r.metadata.session_id),
-      ).length;
-      if (summary.usedButNotListed > 0) {
-        report('detector_used_not_listed', 'warning', { count: summary.usedButNotListed });
-      }
-    }
-  } catch (e) {
-    report('detector_failed', 'warning', { name: e instanceof Error ? e.name : 'unknown' });
-  }
-  console.info('[passkeys.detector]', JSON.stringify(summary));
-  return summary;
-}
-
-async function closeUnexplained(admin: Admin, s: BridgeSession): Promise<void> {
-  const userIdHash = accountIdHash(s.user_id);
-  void reportError(new Error('Passkeys: a bridge session with no passkey answer of ours'), {
-    tag: 'passkeys.bridge_session_unexplained',
-    level: 'error',
-    extra: { userIdHash },
-  });
-  await revokeAllSessionsForUser(s.user_id);
-  try {
-    const { data } = await admin.auth.admin.mfa.listFactors({ userId: s.user_id });
-    const factors = ((data as { factors?: unknown[] } | null)?.factors ?? []) as Array<{
-      id: string;
-      status?: string;
-      created_at?: string;
-    }>;
-    for (const f of factors) {
-      if (f.id === s.factor_id || f.status !== 'verified') continue;
-      if (s.created_at && compareTimes(f.created_at ?? null, s.created_at) === 1) {
-        await deleteFactor(admin, s.user_id, f.id);
-      }
-    }
-  } catch {
-    void reportError(new Error('Passkeys: factors after an unexplained bridge session not read'), {
-      tag: 'passkeys.bridge_session_factors_unread',
-      level: 'error',
-      extra: { userIdHash },
-    });
-  }
 }

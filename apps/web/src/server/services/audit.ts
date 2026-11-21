@@ -447,13 +447,17 @@ export type AuditEvent =
   // Passkeys (server/security/passkeys.ts, plan 2.8), in the default
   // organization: added (metadata passkey_id, backed_up, transports, fmt,
   // session_id), removed (passkey_id, reason), used (passkey_id, purpose,
-  // backed_up, session_id), bridge_repaired (state, session_id). Never the
-  // credential id, key, counter, code or secret. The session id is what the
-  // hourly check of bridge-raised sessions matches (plan 10.4).
+  // backed_up, session_id, raise_id), bridge_repaired (state, session_id,
+  // raise_id), bridge_raise (session_id, raise_id, purpose: written BEFORE
+  // every bridge answer and required, so the ceremony refuses without it).
+  // Never the credential id, key, counter, code or secret. The bridge_raise
+  // rows are what the hourly check of bridge-raised sessions matches (plan
+  // 10.4).
   | 'passkey.added'
   | 'passkey.removed'
   | 'passkey.used'
   | 'passkey.bridge_repaired'
+  | 'passkey.bridge_raise'
   // Ownership transfer — the action doesn't exist yet but the event
   // type lets the fixer agent emit it when the missing flow lands.
   | 'organization.ownership.transferred'

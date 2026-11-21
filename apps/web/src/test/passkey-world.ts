@@ -111,8 +111,20 @@ export function makeWorld() {
     passkeys: [] as FakePasskeyRow[],
     bridges: new Map<string, FakeBridge>(),
     challenges: [] as FakeChallenge[],
-    auditLogs: [] as Array<{ id: string; user_id: string; event: string; metadata: Record<string, unknown>; created_at: string }>,
-    memberships: [] as Array<{ user_id: string; organization_id: string; role: string; accepted_at: string | null; impersonation_expires_at: string | null }>,
+    auditLogs: [] as Array<{
+      id: string;
+      user_id: string;
+      event: string;
+      metadata: Record<string, unknown>;
+      created_at: string;
+    }>,
+    memberships: [] as Array<{
+      user_id: string;
+      organization_id: string;
+      role: string;
+      accepted_at: string | null;
+      impersonation_expires_at: string | null;
+    }>,
     organizations: [] as Array<{ id: string; mfa_policy: string }>,
     /** passkey_add_allowed's word for every account (the switches and the organization rule). */
     addAllowed: 'ok' as string,
@@ -121,8 +133,15 @@ export function makeWorld() {
     cookieToken: null as string | null,
     cookies: new Map<string, string>(),
     calls: {
-      auth: [] as Array<{ method: string; path: string; cache?: string; signal: boolean; token: string }>,
-      rpc: [] as Array<{ name: string; args: Record<string, unknown> }>,
+      auth: [] as Array<{
+        method: string;
+        path: string;
+        cache?: string;
+        signal: boolean;
+        token: string;
+      }>,
+      /** The database functions called, by name (a list: not a client). */
+      fns: [] as Array<{ name: string; args: Record<string, unknown> }>,
       deleteFactor: [] as string[],
       setSession: 0,
       cookieSignOut: [] as string[],
@@ -203,14 +222,26 @@ export function makeWorld() {
     new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   const pendingChallenges = new Map<string, string>();
 
-  async function fetchFake(input: string | URL | Request, init: RequestInit = {}): Promise<Response> {
-    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
-    if (!url.href.startsWith(`${SUPABASE_URL}/auth/v1`)) throw new Error(`unexpected fetch ${url.href}`);
+  async function fetchFake(
+    input: string | URL | Request,
+    init: RequestInit = {},
+  ): Promise<Response> {
+    const url = new URL(
+      typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
+    );
+    if (!url.href.startsWith(`${SUPABASE_URL}/auth/v1`))
+      throw new Error(`unexpected fetch ${url.href}`);
     const path = url.pathname.replace(/^\/auth\/v1/, '');
     const headers = new Headers(init.headers);
     const token = (headers.get('authorization') ?? '').replace(/^Bearer /, '');
     const method = (init.method ?? 'GET').toUpperCase();
-    w.calls.auth.push({ method, path: `${path}${url.search}`, cache: init.cache, signal: Boolean(init.signal), token });
+    w.calls.auth.push({
+      method,
+      path: `${path}${url.search}`,
+      cache: init.cache,
+      signal: Boolean(init.signal),
+      token,
+    });
     const session = sessionOf(token);
     if (!session) return json(401, { error_code: 'bad_jwt' });
     const body = init.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
@@ -239,7 +270,11 @@ export function makeWorld() {
         secret: newBase32Secret(),
       };
       w.factors.push(f);
-      return json(200, { id: f.id, type: 'totp', totp: { secret: f.secret, qr_code: '', uri: '' } });
+      return json(200, {
+        id: f.id,
+        type: 'totp',
+        totp: { secret: f.secret, qr_code: '', uri: '' },
+      });
     }
     const challengeMatch = /^\/factors\/([^/]+)\/challenge$/.exec(path);
     if (method === 'POST' && challengeMatch) {
@@ -259,10 +294,13 @@ export function makeWorld() {
       const key = base32Decode(f.secret)!;
       const now = Date.now() / 1000;
       const good = [totpAt(key, now), totpAt(key, now + 30), totpAt(key, now - 30)];
-      if (!good.includes(String(body.code))) return json(422, { error_code: 'mfa_verification_failed' });
+      if (!good.includes(String(body.code)))
+        return json(422, { error_code: 'mfa_verification_failed' });
       f.status = 'verified';
       session.aal = 'aal2';
-      const raisedFor = w.knobs.verifyAnswersOtherSession ? { ...session, id: randomUUID() } : session;
+      const raisedFor = w.knobs.verifyAnswersOtherSession
+        ? { ...session, id: randomUUID() }
+        : session;
       return json(200, {
         access_token: signToken(raisedFor, w.knobs.verifyAnswersTampered),
         refresh_token: 'sample-refresh',
@@ -273,7 +311,9 @@ export function makeWorld() {
     }
     const deleteMatch = /^\/factors\/([^/]+)$/.exec(path);
     if (method === 'DELETE' && deleteMatch) {
-      w.factors = w.factors.filter((f) => !(f.id === deleteMatch[1] && f.user_id === session.userId));
+      w.factors = w.factors.filter(
+        (f) => !(f.id === deleteMatch[1] && f.user_id === session.userId),
+      );
       return json(200, {});
     }
     if (method === 'POST' && path === '/logout') return new Response(null, { status: 204 });
@@ -285,7 +325,7 @@ export function makeWorld() {
   const err = (code: string, message = code) => ({ data: null, error: { code, message } });
 
   function rpc(name: string, args: Record<string, unknown>): { data: unknown; error: unknown } {
-    w.calls.rpc.push({ name, args });
+    w.calls.fns.push({ name, args });
     const user = String(args.p_user_id ?? '');
     switch (name) {
       case 'passkey_add_allowed':
@@ -320,7 +360,10 @@ export function makeWorld() {
         );
         if (!c) return { data: [], error: null };
         c.used_at = Date.now();
-        return { data: [{ challenge: c.challenge, rp_id: w.knobs.takeRpId ?? c.rp_id }], error: null };
+        return {
+          data: [{ challenge: c.challenge, rp_id: w.knobs.takeRpId ?? c.rp_id }],
+          error: null,
+        };
       }
       case 'passkey_register': {
         const withBridge = args.p_factor_id !== null;
@@ -357,9 +400,22 @@ export function makeWorld() {
         return { data: row.id, error: null };
       }
       case 'passkey_mark_removed': {
-        const row = w.passkeys.find((p) => p.id === args.p_passkey_id && p.user_id === user && p.removed_at === null);
+        const row = w.passkeys.find(
+          (p) => p.id === args.p_passkey_id && p.user_id === user && p.removed_at === null,
+        );
         const bridge = w.bridges.get(user);
-        if (!row) return { data: [{ removed: false, active_left: 0, bridge_factor_id: bridge?.factor_id ?? null, bridge_dropped: false }], error: null };
+        if (!row)
+          return {
+            data: [
+              {
+                removed: false,
+                active_left: 0,
+                bridge_factor_id: bridge?.factor_id ?? null,
+                bridge_dropped: false,
+              },
+            ],
+            error: null,
+          };
         row.removed_at = new Date().toISOString();
         row.removed_reason = String(args.p_reason);
         const left = w.passkeys.filter((p) => p.user_id === user && p.removed_at === null).length;
@@ -368,10 +424,21 @@ export function makeWorld() {
           w.bridges.delete(user);
           dropped = true;
         }
-        return { data: [{ removed: true, active_left: left, bridge_factor_id: bridge?.factor_id ?? null, bridge_dropped: dropped }], error: null };
+        return {
+          data: [
+            {
+              removed: true,
+              active_left: left,
+              bridge_factor_id: bridge?.factor_id ?? null,
+              bridge_dropped: dropped,
+            },
+          ],
+          error: null,
+        };
       }
       case 'passkey_replace_bridge': {
-        if (!w.passkeys.some((p) => p.user_id === user && p.removed_at === null)) return err('55000', 'passkey_none_active');
+        if (!w.passkeys.some((p) => p.user_id === user && p.removed_at === null))
+          return err('55000', 'passkey_none_active');
         const current = w.bridges.get(user);
         if (args.p_old_factor_id === null) {
           if (current) return { data: false, error: null };
@@ -388,7 +455,8 @@ export function makeWorld() {
         return { data: true, error: null };
       }
       case 'passkey_drop_bridge': {
-        if (w.passkeys.some((p) => p.user_id === user && p.removed_at === null)) return err('55000', 'passkey_still_active');
+        if (w.passkeys.some((p) => p.user_id === user && p.removed_at === null))
+          return err('55000', 'passkey_still_active');
         const b = w.bridges.get(user);
         if (b && b.factor_id === args.p_factor_id) {
           w.bridges.delete(user);
@@ -432,15 +500,24 @@ export function makeWorld() {
     };
     const q = {
       select: () => q,
-      eq: (col: string, v: unknown) => (filters.push((r) => String(valueOf(r, col)) === String(v)), q),
+      eq: (col: string, v: unknown) => (
+        filters.push((r) => String(valueOf(r, col)) === String(v)),
+        q
+      ),
       is: (col: string, v: null) => (filters.push((r) => (valueOf(r, col) ?? null) === v), q),
-      not: (col: string, _op: string, _v: null) => (filters.push((r) => (valueOf(r, col) ?? null) !== null), q),
+      not: (col: string, _op: string, _v: null) => (
+        filters.push((r) => (valueOf(r, col) ?? null) !== null),
+        q
+      ),
       gte: (col: string, v: string) => (filters.push((r) => String(valueOf(r, col)) >= v), q),
       order: () => q,
       limit: (n: number) => ((limit = n), q),
       update: (values: Row) => ((update = values), q),
       maybeSingle: () => ((single = true), q),
-      then(resolve: (v: { data: unknown; error: unknown }) => unknown, reject?: (e: unknown) => unknown) {
+      then(
+        resolve: (v: { data: unknown; error: unknown }) => unknown,
+        reject?: (e: unknown) => unknown,
+      ) {
         try {
           const rows = tableRows(table).filter((r) => filters.every((f) => f(r)));
           if (update) {
@@ -450,7 +527,10 @@ export function makeWorld() {
             for (const r of rows) Object.assign(r, update);
           }
           const out = rows.slice(0, limit).map((r) => ({ ...r }));
-          return Promise.resolve({ data: single ? (out[0] ?? null) : out, error: null }).then(resolve, reject);
+          return Promise.resolve({ data: single ? (out[0] ?? null) : out, error: null }).then(
+            resolve,
+            reject,
+          );
         } catch (e) {
           return Promise.reject(e).then(resolve, reject);
         }
@@ -478,7 +558,10 @@ export function makeWorld() {
   // ── fake cookie client (lib/supabase/server createClient) ───────────
   const cookieClient = {
     auth: {
-      getSession: async () => ({ data: { session: w.cookieToken ? { access_token: w.cookieToken } : null }, error: null }),
+      getSession: async () => ({
+        data: { session: w.cookieToken ? { access_token: w.cookieToken } : null },
+        error: null,
+      }),
       getClaims: async (token: string) => {
         const claims = claimsOf(token);
         return claims
@@ -501,7 +584,8 @@ export function makeWorld() {
 
   // ── next/headers ────────────────────────────────────────────────────
   const cookieStore = {
-    get: (name: string) => (w.cookies.has(name) ? { name, value: w.cookies.get(name)! } : undefined),
+    get: (name: string) =>
+      w.cookies.has(name) ? { name, value: w.cookies.get(name)! } : undefined,
     set: (name: string, value: string, opts: { maxAge?: number } = {}) => {
       if (opts.maxAge === 0) w.cookies.delete(name);
       else w.cookies.set(name, value);
@@ -509,7 +593,10 @@ export function makeWorld() {
     getAll: () => [...w.cookies.entries()].map(([name, value]) => ({ name, value })),
     delete: (name: string) => w.cookies.delete(name),
   };
-  const requestHeaders = new Headers({ 'user-agent': 'Mozilla/5.0 (Macintosh) Chrome/140', 'x-forwarded-for': '203.0.113.7' });
+  const requestHeaders = new Headers({
+    'user-agent': 'Mozilla/5.0 (Macintosh) Chrome/140',
+    'x-forwarded-for': '203.0.113.7',
+  });
 
   function reset() {
     w.env.PASSKEY_BRIDGE_KEY_V1 = randomBytes(32).toString('base64');
@@ -529,7 +616,7 @@ export function makeWorld() {
     w.cookieToken = null;
     w.cookies.clear();
     w.calls.auth.length = 0;
-    w.calls.rpc.length = 0;
+    w.calls.fns.length = 0;
     w.calls.deleteFactor.length = 0;
     w.calls.setSession = 0;
     w.calls.cookieSignOut.length = 0;

@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * The scheduled passkey work (plan 10.3 and 10.4). The database answers are
- * given rows in the shapes 0475 returns (passkey_account_states,
- * passkey_bridge_sessions, purge_passkey_records); what is checked is what
- * the server then deletes, drops, ends and reports. The real functions run
- * in the lab (part-2-web/stage4 report).
+ * The scheduled passkey upkeep (plan 10.3). The database answers are given
+ * rows in the shapes 0475 returns (passkey_account_states,
+ * purge_passkey_records); what is checked is what the server then deletes,
+ * drops and reports. The real functions run in the lab (part-2-web/stage4
+ * report). The hourly bridge session check is passkey-detector.test.ts.
  */
 
 const h = vi.hoisted(() => ({
@@ -16,17 +16,7 @@ const h = vi.hoisted(() => ({
   rpc: {} as Record<string, { data: unknown; error: unknown }>,
   rpcCalls: [] as Array<{ name: string; args: unknown }>,
   settings: { data: { passkeys_on: true }, error: null } as { data: unknown; error: unknown },
-  audit: [] as Array<{
-    id: string;
-    event: string;
-    metadata: { session_id?: string };
-    created_at: string;
-  }>,
-  auditFails: false,
-  auditReads: 0,
-  factorsOf: new Map<string, Array<{ id: string; status: string; created_at: string }>>(),
   deleted: [] as string[],
-  revoked: [] as string[],
   reports: [] as Array<{ tag: string; level?: string; extra?: Record<string, unknown> }>,
   health: { version: 'v2.198.0' } as unknown,
 }));
@@ -46,12 +36,6 @@ vi.mock('@/lib/error-reporter', () => ({
     h.reports.push(ctx);
   },
 }));
-vi.mock('@/server/services/platform/sessions', () => ({
-  revokeAllSessionsForUser: async (userId: string) => {
-    h.revoked.push(userId);
-    return { ok: true, sessionIds: [] };
-  },
-}));
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => ({
     rpc: async (name: string, args?: unknown) => {
@@ -59,34 +43,12 @@ vi.mock('@/lib/supabase/admin', () => ({
       return h.rpc[name] ?? { data: null, error: { code: 'PGRST202' } };
     },
     from: (table: string) => {
-      type Row = (typeof h.audit)[number];
-      const filters: Array<(r: Row) => boolean> = [];
-      const val = (r: Row, col: string) =>
-        col === 'metadata->>session_id'
-          ? r.metadata.session_id
-          : (r as unknown as Record<string, string>)[col];
-      let limit = Infinity;
       const q = {
         select: () => q,
-        limit: (n: number) => ((limit = n), q),
+        limit: () => q,
         maybeSingle: async () => {
           expect(table).toBe('platform_settings');
           return h.settings;
-        },
-        in: (col: string, vs: string[]) => (
-          filters.push((r) => vs.includes(String(val(r, col)))),
-          q
-        ),
-        eq: (col: string, v: string) => (filters.push((r) => val(r, col) === v), q),
-        gte: (col: string, v: string) => (filters.push((r) => String(val(r, col)) >= v), q),
-        lte: (col: string, v: string) => (filters.push((r) => String(val(r, col)) <= v), q),
-        then(resolve: (v: { data: unknown; error: unknown }) => unknown) {
-          expect(table).toBe('audit_logs');
-          h.auditReads += 1;
-          if (h.auditFails)
-            return Promise.resolve({ data: null, error: { code: '57014' } }).then(resolve);
-          const rows = h.audit.filter((r) => filters.every((f) => f(r))).slice(0, limit);
-          return Promise.resolve({ data: rows, error: null }).then(resolve);
         },
       };
       return q;
@@ -98,17 +60,13 @@ vi.mock('@/lib/supabase/admin', () => ({
             h.deleted.push(id);
             return { data: { id }, error: null };
           },
-          listFactors: async ({ userId }: { userId: string }) => ({
-            data: { factors: h.factorsOf.get(userId) ?? [] },
-            error: null,
-          }),
         },
       },
     },
   }),
 }));
 
-import { runPasskeyDetector, runPasskeyMaintenance } from './passkey-maintenance';
+import { runPasskeyMaintenance } from './passkey-maintenance';
 
 const U = '11111111-1111-4111-8111-111111111111';
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
@@ -135,16 +93,10 @@ beforeEach(() => {
     },
     passkey_account_states: { data: [], error: null },
     passkey_drop_bridge: { data: true, error: null },
-    passkey_bridge_sessions: { data: [], error: null },
   };
   h.rpcCalls = [];
   h.settings = { data: { passkeys_on: true }, error: null };
-  h.audit = [];
-  h.auditFails = false;
-  h.auditReads = 0;
-  h.factorsOf = new Map();
   h.deleted = [];
-  h.revoked = [];
   h.reports = [];
   h.health = { version: 'v2.198.0' };
   vi.stubGlobal('fetch', async (url: string) => {
@@ -331,121 +283,5 @@ describe('runPasskeyMaintenance (10.3)', () => {
     const s = await runPasskeyMaintenance();
     expect(s.ran).toBe(true);
     expect(tags()).toContain('passkeys.states_unreadable');
-  });
-});
-
-describe('runPasskeyDetector (10.4)', () => {
-  const S = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-  const session = (created: string, updated: string | null = created) => ({
-    session_id: S,
-    user_id: U,
-    factor_id: 'bridge-1',
-    created_at: created,
-    updated_at: updated,
-  });
-  const ours = (event: string, sessionId: string, at = ago(20 * MIN)) => ({
-    id: `row-${h.audit.length}`,
-    event,
-    metadata: { session_id: sessionId },
-    created_at: at,
-  });
-
-  it('reads the sessions of the last two hours', async () => {
-    const before = Date.now();
-    await runPasskeyDetector();
-    const since = Date.parse(String((h.rpcCalls[0]!.args as { p_since: string }).p_since));
-    expect(before - since).toBeGreaterThanOrEqual(2 * 60 * MIN - 1000);
-    expect(before - since).toBeLessThanOrEqual(2 * 60 * MIN + 1000);
-  });
-
-  for (const event of ['passkey.used', 'passkey.added', 'passkey.bridge_repaired']) {
-    it(`a session matched by our ${event} row is left alone`, async () => {
-      h.rpc.passkey_bridge_sessions = { data: [session(ago(5 * MIN))], error: null };
-      h.audit.push(ours(event, S));
-      const s = await runPasskeyDetector();
-      expect(s).toMatchObject({ ran: true, sessions: 1, unexplained: 0 });
-      expect(h.revoked).toEqual([]);
-    });
-  }
-
-  it('a row of another kind, or of another session, does not explain it', async () => {
-    h.rpc.passkey_bridge_sessions = { data: [session(ago(30 * MIN))], error: null };
-    h.audit.push(ours('user.signed_in', S), ours('passkey.used', 'another-session'));
-    expect((await runPasskeyDetector()).unexplained).toBe(1);
-    expect(h.revoked).toEqual([U]);
-  });
-
-  it('an unexplained session: every session of the account ends, factors made since go, an error with the hash only', async () => {
-    h.rpc.passkey_bridge_sessions = { data: [session(ago(30 * MIN))], error: null };
-    h.factorsOf.set(U, [
-      { id: 'bridge-1', status: 'verified', created_at: ago(90 * MIN) },
-      { id: 'old-app', status: 'verified', created_at: ago(90 * MIN) },
-      { id: 'planted-app', status: 'verified', created_at: ago(10 * MIN) },
-      { id: 'pending', status: 'unverified', created_at: ago(10 * MIN) },
-    ]);
-    const s = await runPasskeyDetector();
-    expect(s.unexplained).toBe(1);
-    expect(h.revoked).toEqual([U]);
-    expect(h.deleted).toEqual(['planted-app']);
-    const report = h.reports.find((r) => r.tag === 'passkeys.bridge_session_unexplained');
-    expect(report?.level).toBe('error');
-    expect(JSON.stringify(report)).not.toContain(U);
-  });
-
-  it('a session changed in the last two minutes waits for the next run', async () => {
-    h.rpc.passkey_bridge_sessions = { data: [session(ago(90 * MIN), ago(30_000))], error: null };
-    const s = await runPasskeyDetector();
-    expect(s).toMatchObject({ sessions: 1, unexplained: 0 });
-    expect(h.revoked).toEqual([]);
-  });
-
-  it('an audit read that fails acts on nothing and is reported', async () => {
-    h.rpc.passkey_bridge_sessions = { data: [session(ago(30 * MIN))], error: null };
-    h.auditFails = true;
-    const s = await runPasskeyDetector();
-    expect(s.unexplained).toBe(0);
-    expect(h.revoked).toEqual([]);
-    expect(tags()).toContain('passkeys.detector_audit_unreadable');
-  });
-
-  it('many sessions are matched a chunk at a time; only the unmatched one is acted on', async () => {
-    const many = Array.from({ length: 120 }, (_, i) => ({
-      ...session(ago(30 * MIN)),
-      session_id: `s-${i}`,
-      user_id: `u-${i}`,
-    }));
-    h.rpc.passkey_bridge_sessions = { data: many, error: null };
-    for (const m of many.slice(0, 119)) h.audit.push(ours('passkey.used', m.session_id));
-    const s = await runPasskeyDetector();
-    expect(s).toMatchObject({ sessions: 120, unexplained: 1 });
-    expect(h.revoked).toEqual(['u-119']);
-    // three chunk reads, one read of the unmatched session, one read of our own rows
-    expect(h.auditReads).toBe(5);
-  });
-
-  it('our own passkey.used row whose session is not listed is a warning count', async () => {
-    h.audit.push(ours('passkey.used', 'not-listed'));
-    const s = await runPasskeyDetector();
-    expect(s.usedButNotListed).toBe(1);
-    expect(h.reports.find((r) => r.tag === 'passkeys.detector_used_not_listed')?.level).toBe(
-      'warning',
-    );
-  });
-
-  it('a list that cannot be read is an error, never "all clear"; a missing function (before 0475) is quiet', async () => {
-    h.rpc.passkey_bridge_sessions = { data: null, error: { code: '57014' } };
-    expect((await runPasskeyDetector()).ran).toBe(false);
-    expect(tags()).toContain('passkeys.detector_unreadable');
-
-    h.reports = [];
-    h.rpc.passkey_bridge_sessions = { data: null, error: { code: 'PGRST202' } };
-    expect((await runPasskeyDetector()).ran).toBe(false);
-    expect(h.reports).toEqual([]);
-  });
-
-  it('without a site it reads nothing', async () => {
-    h.rp = null;
-    await runPasskeyDetector();
-    expect(h.rpcCalls).toEqual([]);
   });
 });

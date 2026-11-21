@@ -109,13 +109,16 @@ const BOT_FAMILY_WORDS: Readonly<Record<SecurityBotFamily, string>> = {
  * The passkey refusals the web records (apps/web server/security/passkeys.ts):
  * an answer refused, an answer from another site (category phishing), a
  * counter that went back (outcome flagged), and the checks paused by the
- * passkey limiter.
+ * passkey limiter. The hourly check (server/security/passkey-detector.ts)
+ * records a session whose passkey step passed with no passkey answer of ours
+ * (outcome flagged).
  */
 export const PASSKEY_SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, string>> = {
   passkey_refused: 'Passkey answer refused',
   passkey_wrong_site: 'Passkey answer from another site',
   passkey_counter_went_back: 'Passkey counter went back (a copied key?)',
   passkey_checks_paused: 'Passkey checks paused after too many attempts',
+  passkey_unexplained_sign_in: 'Passkey step passed without a passkey (found by the hourly check)',
 };
 
 /** The reason codes this build writes, with the words admins read. */

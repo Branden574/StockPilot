@@ -6,7 +6,7 @@ import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
-import { runPasskeyDetector } from '@/server/security/passkey-maintenance';
+import { runPasskeyDetector } from '@/server/security/passkey-detector';
 import {
   detectExportAbuse,
   detectFailedLoginBursts,
@@ -75,8 +75,9 @@ function secretsEqual(a: string, b: string): boolean {
  * Every run that reads the window logs one summary line of counts (never a
  * row), so the logs show the detectors ran also in an hour with no finding.
  *
- * The passkey detector (server/security/passkey-maintenance.ts: sessions
- * raised by a passkey bridge with no audit row of ours) runs alongside,
+ * The passkey detector (server/security/passkey-detector.ts: sessions
+ * raised by a passkey bridge with no raise row of ours; it reports and
+ * records a security event, and changes nothing else) runs alongside,
  * started after the secret check. It never throws and never changes this
  * answer.
  *
