@@ -115,24 +115,121 @@ export function clientPlaceFromHeaders(headers: { get(name: string): string | nu
 const SOURCE_HASH_CONTEXT = 'security-events/source/v1/';
 
 /**
- * A keyed hash of the caller's address (32 hex), to group events from one
- * source within one UTC day: HMAC-SHA256 of the address under the day's key,
- * where the day key is HMAC-SHA256(CRON_SECRET, SOURCE_HASH_CONTEXT +
- * 'YYYY-MM-DD'). The same address on the same day hashes the same; on another
- * day, or under another secret, it does not, and without the secret it cannot
- * be computed back from an address list. Derived from an existing secret so
- * there is no new key to keep; a rotated CRON_SECRET only stops linking across
- * the rotation.
+ * The eight 16-bit groups of an IPv6 address written in any of its forms:
+ * zero compression (`::`, once, standing for one group or more), leading
+ * zeros, either case, and a dotted IPv4 tail in place of the last two groups.
+ * Null for anything else. No zone id and no brackets: the caller removes them.
+ */
+function ipv6Groups(text: string): number[] | null {
+  let address = text;
+  const lastColon = address.lastIndexOf(':');
+  const tail = address.slice(lastColon + 1);
+  if (tail.includes('.')) {
+    if (lastColon === -1 || !/^[0-9]{1,3}(?:\.[0-9]{1,3}){3}$/.test(tail)) return null;
+    const bytes = tail.split('.').map(Number);
+    if (bytes.some((b) => b > 255)) return null;
+    const high = ((bytes[0]! << 8) | bytes[1]!).toString(16);
+    const low = ((bytes[2]! << 8) | bytes[3]!).toString(16);
+    address = `${address.slice(0, lastColon + 1)}${high}:${low}`;
+  }
+  const halves = address.split('::');
+  if (halves.length > 2) return null;
+  const groupsOf = (half: string): number[] | null => {
+    if (half === '') return [];
+    const groups: number[] = [];
+    for (const group of half.split(':')) {
+      if (!/^[0-9a-fA-F]{1,4}$/.test(group)) return null;
+      groups.push(Number.parseInt(group, 16));
+    }
+    return groups;
+  };
+  const head = groupsOf(halves[0]!);
+  const rest = halves.length === 2 ? groupsOf(halves[1]!) : [];
+  if (head === null || rest === null) return null;
+  if (halves.length === 1) return head.length === 8 ? head : null;
+  const compressed = 8 - head.length - rest.length;
+  if (compressed < 1) return null;
+  return [...head, ...new Array<number>(compressed).fill(0), ...rest];
+}
+
+/**
+ * What ONE SOURCE is, for the hash below, from an address as a header gives
+ * it. Null when the text is not an address.
  *
- * Null when there is no CRON_SECRET, or the address (the one rule above) is
- * not an IP literal (the limiter's 'unknown' bucket, a malformed header).
+ *   - IPv4: the whole address.
+ *   - IPv6: the first 64 bits, written one way (`2001:db8:1:2::/64`). One
+ *     IPv6 customer usually holds a whole /64 and can send each request from
+ *     a different address in it; counted per address, such a caller would
+ *     never be seen twice. However the address is written (zero compression,
+ *     leading zeros, capital letters, brackets with or without a port, a
+ *     zone id) the same 64 bits give the same text.
+ *   - An IPv4-mapped IPv6 address (::ffff:a.b.c.d) is its IPv4 address: it is
+ *     the same caller, and every mapped address shares one /64.
+ */
+function sourceOfAddress(raw: string): string | null {
+  let text = raw.trim();
+  let ipv6Only = false;
+  if (text.startsWith('[') || text.endsWith(']')) {
+    // [address] or [address]:port, the form a URL or a proxy gives IPv6.
+    const bracketed = /^\[([^[\]]*)\](?::[0-9]{1,5})?$/.exec(text);
+    if (!bracketed) return null;
+    text = bracketed[1]!;
+    ipv6Only = true;
+  }
+  const zoneAt = text.indexOf('%');
+  if (zoneAt !== -1) {
+    // A zone id names an interface of the machine that saw the address; it
+    // is no part of the address.
+    if (!/^[0-9A-Za-z._-]{1,64}$/.test(text.slice(zoneAt + 1))) return null;
+    text = text.slice(0, zoneAt);
+    ipv6Only = true;
+  }
+  const version = isIP(text);
+  if (version === 4) return ipv6Only ? null : text;
+  if (version !== 6) return null;
+  const groups = ipv6Groups(text);
+  if (groups === null) return null;
+  const mapped = groups.slice(0, 5).every((g) => g === 0) && groups[5] === 0xffff;
+  if (mapped) {
+    const high = groups[6]!;
+    const low = groups[7]!;
+    return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+  }
+  return `${groups
+    .slice(0, 4)
+    .map((g) => g.toString(16))
+    .join(':')}::/64`;
+}
+
+/**
+ * A keyed hash of the caller's source (32 hex), to group events from one
+ * source within one UTC day: HMAC-SHA256 of the source under the day's key,
+ * where the day key is HMAC-SHA256(CRON_SECRET, SOURCE_HASH_CONTEXT +
+ * 'YYYY-MM-DD'). A source is a whole IPv4 address, or the first 64 bits of
+ * an IPv6 address (sourceOfAddress above). The same source on the same day
+ * hashes the same; on another day, or under another secret, it does not.
+ *
+ * THE KEY IS DERIVED FROM A SERVER SECRET, CRON_SECRET, AND THE HASH IS
+ * EXACTLY AS STRONG AS THAT SECRET. It was derived from an existing secret so
+ * there is no new key to keep; a rotated CRON_SECRET only stops linking
+ * across the rotation. There are few enough addresses to try every one, so
+ * what keeps a stored hash from being turned back into an address is the
+ * secret alone: someone who holds a hash and knows the source and day it
+ * came from can test guesses of the secret against it without asking this
+ * server anything. A long random secret makes that hopeless; a short or
+ * guessable one would give away both the addresses behind the hashes and the
+ * credential the cron routes accept. Keep CRON_SECRET long and random.
+ *
+ * Null when there is no CRON_SECRET, or the address (the one rule at the top
+ * of this file) is not an IP address (the limiter's 'unknown' bucket, a
+ * malformed header).
  */
 export function clientSourceHash(
   headers: { get(name: string): string | null },
   now: Date = new Date(),
 ): string | null {
-  const address = ipForRecord(pickClientIp(headers));
-  if (!address || !Number.isFinite(now.getTime())) return null;
+  const source = sourceOfAddress(pickClientIp(headers));
+  if (!source || !Number.isFinite(now.getTime())) return null;
   let secret: string;
   try {
     secret = env.CRON_SECRET ?? '';
@@ -142,5 +239,5 @@ export function clientSourceHash(
   if (!secret) return null;
   const day = now.toISOString().slice(0, 10);
   const dayKey = createHmac('sha256', secret).update(SOURCE_HASH_CONTEXT + day).digest();
-  return createHmac('sha256', dayKey).update(address.toLowerCase()).digest('hex').slice(0, 32);
+  return createHmac('sha256', dayKey).update(source).digest('hex').slice(0, 32);
 }

@@ -9,10 +9,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  *   - the place is read only on Vercel, the same trust rule as the address;
  *     a country is two capital letters, a city is percent-decoded, trimmed,
  *     free of control characters and at most 80 characters, else null;
- *   - the hash is HMAC-SHA256 of the address under a day key derived from
- *     CRON_SECRET: the same address on the same UTC day hashes the same,
+ *   - the hash is HMAC-SHA256 of the source under a day key derived from
+ *     CRON_SECRET: the same source on the same UTC day hashes the same,
  *     another day or another secret differs, no secret or no IP literal is
- *     null, and the hash never contains the address.
+ *     null, and the hash never contains the address;
+ *   - the source is the whole address for IPv4 (an IPv4-mapped IPv6 address
+ *     is its IPv4 address) and the first 64 bits for IPv6, whatever way the
+ *     address is written; an address that does not parse gives no hash.
  *
  * Addresses are from the documentation ranges (RFC 5737, RFC 3849).
  */
@@ -133,8 +136,110 @@ describe('clientSourceHash', () => {
     expect(clientSourceHash(at('2001:DB8::5'), DAY)).toBe(clientSourceHash(at('2001:db8::5'), DAY));
   });
 
+  describe('IPv6: one source is the first 64 bits (a customer\u2019s /64), not one address', () => {
+    const base = () => clientSourceHash(at('2001:db8:1:2::1'), DAY);
+
+    it('is the documented construction over the /64', () => {
+      const dayKey = createHmac('sha256', 'test-cron-secret')
+        .update('security-events/source/v1/2026-11-21')
+        .digest();
+      const expected = createHmac('sha256', dayKey).update('2001:db8:1:2::/64').digest('hex').slice(0, 32);
+      expect(base()).toBe(expected);
+    });
+
+    it.each([
+      ['another address of the same /64', '2001:db8:1:2::2'],
+      ['every later bit different', '2001:db8:1:2:aaaa:bbbb:cccc:dddd'],
+      ['written in full, with leading zeros', '2001:0db8:0001:0002:0000:0000:0000:0001'],
+      ['capital letters', '2001:DB8:1:2::ABCD'],
+      ['zero compression after the prefix', '2001:db8:1:2::'],
+      ['zero compression in the middle', '2001:db8:1:2:0:5::9'],
+      ['in brackets', '[2001:db8:1:2::7]'],
+      ['in brackets with a port', '[2001:db8:1:2::7]:443'],
+      ['with a zone id', '2001:db8:1:2::7%eth0'],
+      ['in brackets with a zone id', '[2001:db8:1:2::7%25eth0]'],
+      ['an embedded dotted tail', '2001:db8:1:2::192.0.2.33'],
+    ])('%s hashes the same: %s', (_what, address) => {
+      expect(clientSourceHash(at(address), DAY)).toBe(base());
+    });
+
+    it.each([
+      ['the next /64', '2001:db8:1:3::1'],
+      ['another site', '2001:db8:2:2::1'],
+      ['the 64th bit differs', '2001:db8:1:8002::1'],
+    ])('%s hashes differently: %s', (_what, address) => {
+      const hash = clientSourceHash(at(address), DAY);
+      expect(hash).toMatch(/^[0-9a-f]{32}$/);
+      expect(hash).not.toBe(base());
+    });
+
+    it('zero compression is expanded where it stands', () => {
+      // 2001:db8::1 is 2001:db8:0:0:0:0:0:1: the /64 2001:db8:0:0.
+      const zero = clientSourceHash(at('2001:db8::1'), DAY);
+      expect(clientSourceHash(at('2001:db8:0:0:5::9'), DAY)).toBe(zero);
+      expect(clientSourceHash(at('2001:db8:0:0::'), DAY)).toBe(zero);
+      expect(clientSourceHash(at('2001:db8::'), DAY)).toBe(zero);
+      // 2001:db8::1:0:0:0:1 is 2001:db8:0:1:0:0:0:1: another /64.
+      expect(clientSourceHash(at('2001:db8::1:0:0:0:1'), DAY)).not.toBe(zero);
+      expect(clientSourceHash(at('2001:db8::1:0:0:0:1'), DAY)).toBe(
+        clientSourceHash(at('2001:db8:0:1::9'), DAY),
+      );
+      // A compression that stands for one group only.
+      expect(clientSourceHash(at('2001:db8:1::3:4:5:6'), DAY)).toBe(
+        clientSourceHash(at('2001:db8:1:0:2::'), DAY),
+      );
+    });
+  });
+
+  describe('IPv4: the whole address', () => {
+    it('two addresses of one network are two sources', () => {
+      expect(clientSourceHash(at('192.0.2.7'), DAY)).not.toBe(clientSourceHash(at('192.0.2.8'), DAY));
+    });
+
+    it.each([
+      ['dotted', '::ffff:192.0.2.7'],
+      ['in hex groups', '::ffff:c000:207'],
+      ['capital letters', '::FFFF:192.0.2.7'],
+      ['written in full', '0:0:0:0:0:ffff:192.0.2.7'],
+      ['in brackets', '[::ffff:192.0.2.7]'],
+    ])('an IPv4-mapped IPv6 address (%s) is its IPv4 address: %s', (_what, address) => {
+      expect(clientSourceHash(at(address), DAY)).toBe(clientSourceHash(at('192.0.2.7'), DAY));
+    });
+
+    it('a mapped address is not hashed as a /64 (which every mapped address would share)', () => {
+      expect(clientSourceHash(at('::ffff:192.0.2.7'), DAY)).not.toBe(
+        clientSourceHash(at('::ffff:198.51.100.7'), DAY),
+      );
+    });
+  });
+
+  it.each([
+    ['three colons', '2001:db8:::1'],
+    ['two compressions', '2001:db8::1::2'],
+    ['nine groups', '2001:db8:1:2:3:4:5:6:7'],
+    ['a compression that stands for no group', '2001:db8:1::2:3:4:5:6'],
+    ['a leading zero in an IPv4 number', '192.0.2.07'],
+    ['seven groups and no compression', '2001:db8:1:2:3:4:5'],
+    ['a group of five digits', '2001:db8:10000::1'],
+    ['a letter that is not hex', '2001:db8:g::1'],
+    ['an opening bracket alone', '[2001:db8::1'],
+    ['a closing bracket alone', '2001:db8::1]'],
+    ['brackets around nothing', '[]'],
+    ['brackets and something that is not a port', '[2001:db8::1]x'],
+    ['a zone id and no address', '%eth0'],
+    ['an empty zone id', '2001:db8::1%'],
+    ['a dotted tail out of range', '::ffff:192.0.2.256'],
+    ['an IPv4 address out of range', '192.0.2.256'],
+    ['an IPv4 address with a port', '192.0.2.7:8080'],
+    ['an IPv4 address in brackets', '[192.0.2.7]'],
+    ['three numbers', '192.0.2'],
+    ['a name', 'gateway.example.com'],
+  ])('an address that does not parse (%s) gives no hash: %j', (_what, address) => {
+    expect(clientSourceHash(at(address), DAY)).toBeNull();
+  });
+
   it('never contains the address, in any form', () => {
-    for (const address of ['203.0.113.7', '2001:db8::5']) {
+    for (const address of ['203.0.113.7', '2001:db8::5', '2001:db8:1:2::9']) {
       const hash = clientSourceHash(at(address), DAY)!;
       expect(hash).not.toContain(address);
       expect(hash).not.toContain(address.replace(/[.:]/g, ''));
@@ -149,10 +254,10 @@ describe('clientSourceHash', () => {
     expect(clientSourceHash(at('203.0.113.7'), DAY)).toBeNull();
   });
 
-  it('no IP literal: null (the limiter bucket, a malformed header, a zone id)', () => {
+  it('no IP literal: null (the limiter bucket, a malformed header)', () => {
     expect(clientSourceHash(bag({}), DAY)).toBeNull();
     expect(clientSourceHash(at('not-an-address'), DAY)).toBeNull();
-    expect(clientSourceHash(at('fe80::1%eth0'), DAY)).toBeNull();
+    expect(clientSourceHash(at('unknown'), DAY)).toBeNull();
   });
 
   it('follows the address rule: off Vercel x-forwarded-for is not read', () => {
