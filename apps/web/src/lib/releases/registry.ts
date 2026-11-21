@@ -148,7 +148,10 @@ export const RELEASES: Release[] = [
     // the real minute at merge), so the placeholder is that same minute.
     // Moved again by docs/whats-new-2026-11-19-errors (2026-11-19; was: '2026-11-19T16:00:00Z'): the count
     // start access check release below is dated 2026-11-19T20:41:00Z, so the placeholder is that same minute.
-    publishedAt: '2026-11-19T20:41:00Z',
+    // Moved again by docs/whats-new-2026-11-21-phone (2026-11-21; was: '2026-11-19T20:41:00Z'): the phone
+    // authenticator set-up release below is dated 2026-11-21T02:31:00Z (a whole minute after its phone
+    // update was launched on a phone), so the placeholder is that same minute.
+    publishedAt: '2026-11-21T02:31:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -233,6 +236,189 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'phone-authenticator-set-up-2026-11',
+    revision: 1,
+    // publishedAt is the whole minute this release was dated, after the phone
+    // update that carries it (an over-the-air update for runtime 1.4.0, built
+    // from f5bdf4f52) was launched on a phone: the integrator's record, not
+    // readable from the code. It goes live as soon as it merges. The Liquid
+    // Glass draft placeholder above takes the same minute.
+    // The phone update of 2026-11-21 and the web change released with it:
+    // - Phone: #604 (squash f5bdf4f52, the set-up screen; it also carries
+    //   #599, the delete-account sheet, and #598, Accounts through the status
+    //   route), #601 (squash 46058e99d, queued changes kept for set-up), #617's
+    //   phone half (squash 50d69df4c), which the release
+    //   'receiving-shown-to-managers-2026-11' said the mobile app does after
+    //   its next update: announced here, that release's revision is not
+    //   bumped. Phones last updated from 60f1bfe48 (#527).
+    // - Web: #626 (squash db3eca293), API reads hold a member who must set up
+    //   an authenticator, with the reason. It changes no web page (the website
+    //   already sends that member to Settings, Security, #582); with #604 it is
+    //   what a member on the phone sees, so it is told in the set-up entry.
+    // Claims checked against main db3eca293 (#626's squash; apps/mobile and
+    // packages are as at #604's squash f5bdf4f52, the phone update's build,
+    // and server/lib/api-read-context.ts as at #626's head 3fd847f9e; phone
+    // paths under apps/mobile, web under apps/web/src, core under
+    // packages/core/src):
+    // - Who is held: core auth/step-up.ts policyRequiresAuthenticator
+    //   (:107-110: everyone under all_required, owner and admin under
+    //   admins_required) and a verified factor (src/lib/set-up-hold.ts
+    //   decideSetUpHold :130-147). The policy labels are the web's
+    //   (components/settings/mfa-policy-editor.tsx :21-31), and the admin
+    //   role is "Super Admin" (core constants/terminology.ts :51), as the
+    //   release 'authenticator-set-up-first-2026-11' says them.
+    // - The screen in place of the app: app/_layout.tsx :359-362 (after the
+    //   code screen and the Face ID lock; the data hooks get nobody, :250).
+    //   Its heading, body and buttons are core's (auth/set-up-copy.ts :24,
+    //   :42-49, :56-59, :70-79; src/components/authenticator-set-up-screen
+    //   .tsx :249-300: Set up on the website for 'owed' only, Switch
+    //   workspace only when another organization is kept, :268). Set up on
+    //   the website opens /dashboard/settings/security?enroll=1 (set-up-copy
+    //   .ts :21; screen :205-207), the website's Settings, Security.
+    // - "shows none of that organization's records": the screen runs no
+    //   workspace load and no snapshot pull while held (set-up-hold.ts
+    //   :45-52), and every API read answers that member 403 mfa_required
+    //   with core's AUTHENTICATOR_SET_UP_OWED_COPY before reading anything
+    //   (#626: server/lib/api-read-context.ts :62-70, :79-106).
+    // - Could not check: the organization's row could not be read, no
+    //   verified factor ('unknown', set-up-hold.ts :139-144); read again every
+    //   30 s while up (SET_UP_RECHECK_INTERVAL_MS :224, setUpRecheckDue
+    //   :232-237; src/lib/auth-context.tsx :259-266), and on each return to
+    //   the app and when the connection comes back (auth-context.tsx
+    //   :237-246).
+    // - "asks you to sign in again": seen on the lab walk of this update, not
+    //   readable from the code. The sign-in service ends the account's other
+    //   sessions when its first authenticator is verified, so the phone lands
+    //   on sign-in, not on the code screen; after signing in, the code screen
+    //   asks for the code (core step-up.ts stepUpOwed), and the changes kept
+    //   on the phone are then sent in order.
+    // - Kept changes (#601): a row whose workspace owes set-up is held, never
+    //   sent (src/lib/outbox-scope.ts :121, heldForSetUp :149-153), and the
+    //   authenticator answer itself is never final (src/lib/drain-failure.ts
+    //   :117-123). Before, a 403 was final and the row went to Unsent work
+    //   (drain-failure.ts at 60f1bfe48: DEFINITIVE_REFUSALS with 403, :60).
+    //   The screen's line is set-up-hold.ts setUpHoldQueuedLine :312-324
+    //   (screen :209, :242-246). A row parked that way before reads
+    //   PARKED_FOR_AUTHENTICATOR_COPY in Unsent work
+    //   (src/lib/parked-set-up-words.ts :26-27, :45-62; src/lib/queue.ts :576).
+    // - Delete my account on the set-up screen (#599, wired by #604): screen
+    //   :89, :298; the sheet's title, field and core words
+    //   (src/components/delete-account-confirm-sheet.tsx :220, :226, :241-323;
+    //   core account/delete-account-copy.ts :48, :61-70); an account with no
+    //   authenticator starts with the password (src/lib/account-delete.ts
+    //   :222). Settings, Delete my account is unchanged
+    //   (app/(drawer)/settings.tsx). The delete route refuses a request with
+    //   neither under a requiring policy (app/api/v1/account/delete/route.ts
+    //   :133-153), which is what Settings sends.
+    // - Receiving (#617's phone half): app/po/[id].tsx :487-489 and :830
+    //   (showReceiveCta, receiveNoticeFor: src/lib/cta-gating.ts :95-118,
+    //   core RECEIVE_MANAGER_ONLY_COPY). The installed phone offered Scan, the
+    //   quantities and Post receipt for stock:adjust alone
+    //   (app/po/[id].tsx at 60f1bfe48 :488). Read-only, a line still shows
+    //   Ordered and Already.
+    // - Accounts (#598): archive and restore go through PATCH
+    //   /api/v1/customers/[id]/status (src/lib/customer-status.ts :69-95),
+    //   whose service writes an audit row with the caller as the actor
+    //   (server/services/customers.ts :275-288). The installed phone updated
+    //   the row itself, with no audit row (no audit trigger on customers),
+    //   and showed the error's own text in "Could not update"
+    //   (app/(drawer)/customers.tsx at 60f1bfe48 :124-125); now the screen's
+    //   sentences (customer-status.ts :45-57, :167-173).
+    // Left out as not visible: #620 (the phone has no Reverse); #603 (the
+    //   phone's Distribute already asked the manager role, isManagerOrAbove,
+    //   the same answer as roleCanHandOutKits for every role, and the phone
+    //   has no Mark complete); #586 (a 1.4.0 phone keeps its launch look,
+    //   src/lib/launch-look.ts :21, :41-51); #573 (each limit is at least ten
+    //   times what a screen sends); #626 on the website (no page changes).
+    // Who is told: the set-up, kept changes and delete entries every member
+    // (no audience): the hold turns on the organization's policy, which an
+    // audience cannot name, as in 'authenticator-set-up-first-2026-11'. The
+    // receiving entry as the receiving release's own (purchase_orders:read,
+    // Receiving on). The Accounts entry whoever the Accounts screen is for
+    // (customers:manage, B2B customer accounts on). No links: every entry is
+    // about the app. Platform: the mobile app.
+    status: 'published',
+    title:
+      'The mobile app asks you to set up a required authenticator app first, and keeps your unsent changes',
+    summary:
+      'In the mobile app, after the latest update, if your organization requires an authenticator app and you have not set one up, the app shows Set up an authenticator to continue in its place, with a way to set one up on the website. Changes waiting on the phone stay there and are sent after set-up. Receiving on a purchase order shows only for people who can receive. Tap Restart now when the app says Update ready, or close the app completely and open it again.',
+    publishedAt: '2026-11-21T02:31:00Z',
+    entries: [
+      {
+        id: 'app-authenticator-set-up-screen',
+        category: 'new',
+        area: 'Mobile app',
+        title: 'The mobile app asks you to set up a required authenticator app first',
+        whatChanged:
+          'In the mobile app, after the latest update, if your organization requires an authenticator app for you and you have not set one up, the app shows "Set up an authenticator to continue" in place of your workspace. It names your organization and asks you to "Set one up on the website, then come back to this app." The screen has Set up on the website, Check again, Switch workspace when you belong to another organization, Sign out and Delete my account.',
+        whyItMatters:
+          'Before, the app opened as usual and the changes you made there could be refused until you had set one up. Now the app tells you first, and what to do.',
+        howItAffectsYou:
+          "In organizations set to Required for admins this applies to owners and Super Admins, and in organizations set to Required for everyone to every member. Until you set one up, the app shows none of that organization's records. If you have none and the app can't read your organization's sign-in settings for a moment, it says \"Your access could not be checked\" and checks again every 30 seconds.",
+        whatToDo:
+          'If the app shows this screen, tap Set up on the website and follow the steps in Settings, Security. Back in the app, sign in again: setting up your first authenticator app signs you out everywhere else. Then enter the code from your authenticator app. To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+      },
+      {
+        id: 'app-changes-kept-until-set-up',
+        category: 'fixed',
+        area: 'Mobile app',
+        title:
+          'Changes waiting on the phone are kept until you set up a required authenticator app',
+        whatChanged:
+          'In the mobile app, after the latest update, changes saved on the phone that have not been sent yet, such as counts, stock adjustments and receipts, stay on the phone while your organization asks you to set up an authenticator app, and are sent after you have set one up and signed in again. The set-up screen says how many are waiting, for example "2 changes have not synced. They stay on this phone and are sent after you set up your authenticator."',
+        whyItMatters:
+          'Before, StockPilot refused those changes, and the app moved them to Unsent work in Settings, to be entered again by hand.',
+        howItAffectsYou:
+          'A change moved to Unsent work for this reason before the update now says "Not sent: your organization required an authenticator before this could be saved. If it is still needed, enter it again."',
+        whatToDo:
+          'No action needed. If Unsent work in Settings lists a change with that sentence, enter it again if it is still needed.',
+      },
+      {
+        id: 'app-set-up-screen-delete-account',
+        category: 'new',
+        area: 'Account',
+        title: 'Delete my account on the set-up screen asks for your password or an emailed code',
+        whatChanged:
+          'In the mobile app, after the latest update, Delete my account on the screen that asks you to set up an authenticator app opens "Delete your account?". Type DELETE and enter your password, or choose "Email me a code instead" and enter the six-digit code we send to your sign-in email, as on the website.',
+        whyItMatters:
+          'Settings cannot be opened from that screen, and every member can delete their own account.',
+        howItAffectsYou:
+          'The code works for 10 minutes, and if you ask again, only the newest code works. Delete my account in Settings is unchanged.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'app-receive-for-people-who-can-receive',
+        category: 'fixed',
+        area: 'Receiving',
+        title:
+          'In the mobile app, receiving on a purchase order shows only for people who can receive',
+        whatChanged:
+          'In the mobile app, after the latest update, on a purchase order ready to receive, Scan, the quantities and Post receipt show only for managers, admins and owners with the Adjust on-hand permission, as on the website. Staff with Adjust on-hand see "Only a manager can receive purchase orders." in their place, and still see what was ordered and what has been received.',
+        whyItMatters:
+          'Only managers, admins and owners can post a receipt. Before, the app offered staff Scan and Post receipt, and then refused the receipt.',
+        howItAffectsYou:
+          'Nothing changes in who can receive. If you are on staff, ask a manager to post the receipt. Without Adjust on-hand, a purchase order says what it said before.',
+        whatToDo:
+          'No action needed. To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+        audience: { anyPermission: ['purchase_orders:read'], modules: ['receiving'] },
+      },
+      {
+        id: 'app-customer-account-change-recorded',
+        category: 'fixed',
+        area: 'Accounts',
+        title:
+          'Archiving or restoring a customer account in the mobile app is recorded in the Audit log',
+        whatChanged:
+          'In the mobile app, after the latest update, archiving or restoring an account on the Accounts screen is recorded in your organization\'s Audit log, with who made the change. When a change cannot be made, "Could not update" now says why in plain words, such as "You do not have access to do that in this workspace."',
+        whyItMatters:
+          'Before, a change made in the app was not in the Audit log, and a refusal could show a technical error message.',
+        howItAffectsYou: 'Nothing changes in how you archive or restore an account.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['customers:manage'], modules: ['b2b_portal'] },
       },
     ],
   },

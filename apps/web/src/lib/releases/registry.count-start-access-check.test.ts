@@ -34,6 +34,16 @@ import { RELEASES } from './registry';
 const ID = 'count-start-access-check-2026-11';
 const ENTRY = 'count-start-access-could-not-be-checked';
 const EXPORT_RECEIPT_ACCESS_ID = 'export-receipt-access-fixes-2026-11';
+// Added by docs/whats-new-2026-11-21-phone (2026-11-21): the phone authenticator set-up release (every member: three of its five entries have no audience), published later, at the top, below the Liquid Glass draft.
+const PHONE_SET_UP_ID = 'phone-authenticator-set-up-2026-11';
+const PHONE_SET_UP_AT = '2026-11-21T02:31:00Z';
+const phoneSetUpRead = {
+  release_id: PHONE_SET_UP_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-21T02:32:00Z',
+  read_at: '2026-11-21T02:32:00Z',
+};
 /** #624's production deployment went live at this instant. */
 const LIVE_624 = '2026-11-19T20:24:00Z';
 /** The words the reader is quoted, as the code has them. */
@@ -87,26 +97,35 @@ function readerText(r: Release): string[] {
 }
 
 describe('the count start access check release: order, status and date', () => {
-  it('is published once, as revision 1, directly below the Liquid Glass draft and above the export, receipt and access release, the newest published release', () => {
+  // Renamed by docs/whats-new-2026-11-21-phone (2026-11-21; was: "directly below the Liquid Glass draft and above the export, receipt and access release, the newest published release"): the phone authenticator set-up release is published later, at the top, directly below the Liquid Glass draft.
+  it('is published once, as revision 1, directly below the phone authenticator set-up release (published later, below the Liquid Glass draft at the top) and above the export, receipt and access release', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
-    expect(RELEASES.slice(0, 3).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES.slice(0, 3)): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so the list takes one more.
+    expect(RELEASES.slice(0, 4).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
+      // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, directly below the Liquid Glass draft.
+      [PHONE_SET_UP_ID, 'published'],
       [ID, 'published'],
       [EXPORT_RECEIPT_ACCESS_ID, 'published'],
     ]);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: ID): the phone authenticator set-up release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(PHONE_SET_UP_ID);
   });
 
-  it('is dated on a whole minute, in the past, at or after #624 went live, with the draft placeholder at the same minute and every release below it older', () => {
+  // Renamed by docs/whats-new-2026-11-21-phone (2026-11-21; was: "with the draft placeholder at the same minute"): the placeholder moved to the minute of the phone authenticator set-up release, published later, above this one.
+  it('is dated on a whole minute, in the past, at or after #624 went live, with the draft placeholder at or after it and every release below it older', () => {
     const at = Date.parse(release().publishedAt);
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
     expect(at).toBeGreaterThanOrEqual(Date.parse(LIVE_624));
     expect(at).toBeLessThanOrEqual(Date.now());
-    expect(RELEASES[0]!.publishedAt).toBe(release().publishedAt);
-    for (const r of RELEASES.slice(2)) {
+    // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES[0].publishedAt equal to this release's): the placeholder is the minute of the phone authenticator set-up release, published later, above this one.
+    expect(RELEASES[0]!.publishedAt).toBe(PHONE_SET_UP_AT);
+    expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
+    // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES.slice(2)): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(3)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -194,7 +213,8 @@ describe('the count start access check release: who is told', () => {
     expect(shownEntries(managerNoAssign)).toBeUndefined();
   });
 
-  it('is the first notice for whoever it reaches, the export, receipt and access release is next, a reader it does not reach keeps that one, and an old phone build lists it first for whoever it reaches', () => {
+  // Renamed by docs/whats-new-2026-11-21-phone (2026-11-21; was: "is the first notice for whoever it reaches"): the phone authenticator set-up release, published later, reaches every member and is the first notice.
+  it('is the first notice for whoever it reaches once the phone authenticator set-up release is read, the export, receipt and access release is next, a reader it does not reach keeps that one, and an old phone build lists it first for whoever it reaches once that release is seen', () => {
     const read = {
       release_id: ID,
       revision: 1,
@@ -203,11 +223,18 @@ describe('the count start access check release: who is told', () => {
       read_at: '2026-11-19T21:00:00Z',
     };
     for (const v of [owner, admin, manager]) {
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
-      expect(buildReleaseList(RELEASES, v, [read], null).latestUnread?.id, v.role).toBe(
-        EXPORT_RECEIPT_ACCESS_ID,
+      // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), so it is read or seen first, and every notice this test checks is the one it checked before.
+      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(
+        PHONE_SET_UP_ID,
       );
-      expect(legacyAnnouncementsFor(RELEASES, v, {})[0], v.role).toEqual({
+      expect(buildReleaseList(RELEASES, v, [phoneSetUpRead], null).latestUnread?.id, v.role).toBe(
+        ID,
+      );
+      expect(
+        buildReleaseList(RELEASES, v, [phoneSetUpRead, read], null).latestUnread?.id,
+        v.role,
+      ).toBe(EXPORT_RECEIPT_ACCESS_ID);
+      expect(legacyAnnouncementsFor(RELEASES, v, { [PHONE_SET_UP_ID]: true })[0], v.role).toEqual({
         id: ID,
         date: release().publishedAt.slice(0, 10),
         title: release().title,
@@ -215,10 +242,16 @@ describe('the count start access check release: who is told', () => {
       });
     }
     for (const v of [staff, member, managerCountsOff, managerNoAssign, staffWithAssign]) {
+      // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), so it is read or seen first, and every notice this test checks is the one it checked before.
       expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(
+        PHONE_SET_UP_ID,
+      );
+      expect(buildReleaseList(RELEASES, v, [phoneSetUpRead], null).latestUnread?.id, v.role).toBe(
         EXPORT_RECEIPT_ACCESS_ID,
       );
-      expect(legacyAnnouncementsFor(RELEASES, v, {})[0]?.id, v.role).toBe(EXPORT_RECEIPT_ACCESS_ID);
+      expect(legacyAnnouncementsFor(RELEASES, v, { [PHONE_SET_UP_ID]: true })[0]?.id, v.role).toBe(
+        EXPORT_RECEIPT_ACCESS_ID,
+      );
     }
   });
 });
