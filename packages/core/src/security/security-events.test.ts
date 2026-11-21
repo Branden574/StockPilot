@@ -60,6 +60,7 @@ describe('security events: the lists the database checks', () => {
       'unclassified_sign_in_refusals',
       'unrecorded_server_form_password',
       'unrecorded_server_form_code',
+      'too_many_forms_to_count',
       'over_minute_cap',
       'over_buffer_cap',
       ...SECURITY_PROBE_KINDS,
@@ -119,6 +120,12 @@ describe('security events: the lists the database checks', () => {
     for (const reason of ['unrecorded_server_form_password', 'unrecorded_server_form_code']) {
       expect(securityEventReasonLabel(reason)).not.toMatch(/did not make|looked like/);
     }
+  });
+
+  it('names the plain words of an hour whose kinds of refused requests could not all be counted', () => {
+    expect(securityEventReasonLabel('too_many_forms_to_count')).toBe(
+      'More kinds of refused sign-in requests in an hour than could be counted',
+    );
   });
 
   it("names the plain words of a signed-in member's refused password and set-up code, and of a sign-in refused for another reason", () => {
