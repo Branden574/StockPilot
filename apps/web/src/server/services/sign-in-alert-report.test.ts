@@ -29,6 +29,8 @@ const h = vi.hoisted(() => ({
   tables: {} as Record<string, Row[]>,
   calls: [] as Array<{ table: string; op: string; filters: Filter[]; patch?: Row; limit?: number }>,
   failures: {} as Record<string, Partial<Record<'select' | 'update' | 'delete', { code: string; message: string }>>>,
+  /** Tables whose reads answer something that is not a list (an empty body). */
+  notList: new Set<string>(),
   revoke: vi.fn(async (_userId: string) => ({ ok: true, sessionIds: ['s1', 's2'] })),
   memberEmail: vi.fn(async (_a: Record<string, unknown>) => ({ ok: true, id: 'dryrun' })),
   adminEmail: vi.fn(async (_a: Record<string, unknown>) => ({ ok: true, id: 'dryrun' })),
@@ -63,6 +65,7 @@ function builder(table: string) {
       h.tables[table] = rows.filter((r) => !matched.includes(r));
       return { data: null, error: null };
     }
+    if (h.notList.has(table)) return { data: {}, error: null, status: 200 };
     let out = matched.map((r) => ({ ...r }));
     if (state.orderBy) {
       const { column, ascending } = state.orderBy;
@@ -247,6 +250,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.calls = [];
   h.failures = {};
+  h.notList = new Set();
   h.revoke.mockResolvedValue({ ok: true, sessionIds: ['s1', 's2'] });
   h.memberEmail.mockResolvedValue({ ok: true, id: 'dryrun' });
   h.adminEmail.mockResolvedValue({ ok: true, id: 'dryrun' });
@@ -535,6 +539,35 @@ describe('reportSignInAlertNotMe: again, and half-finished', () => {
     expect(tags).toContain('security.sign_in_report_forget_failed');
     expect(tags).toContain('security.sign_in_report_email_failed');
     expect(JSON.stringify(h.reportError.mock.calls)).not.toContain('example.test');
+  });
+
+  it('a profile page that is not a list is a failed read, reported with its detail: nobody is emailed as if that were everyone', async () => {
+    h.notList.add('user_profiles');
+    const answer = await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
+    // The status and the sign-out decided the answer; the rest is best effort.
+    expect(answer).toEqual({ outcome: 'done', firstReport: true });
+    expect(h.memberEmail).not.toHaveBeenCalled();
+    expect(h.adminEmail).not.toHaveBeenCalled();
+    const failure = h.reportError.mock.calls.find(
+      (c) => (c[1] as { tag: string }).tag === 'security.sign_in_report_read_failed',
+    );
+    expect(failure).toBeTruthy();
+    const extra = (failure![1] as { extra: Record<string, unknown> }).extra;
+    expect(extra.read).toBe('profiles');
+    expect(String(extra.detail)).toContain('user_profiles');
+    // The in-app notices come from the memberships, which were read.
+    expect(h.notify).toHaveBeenCalled();
+  });
+
+  it('a membership or organization answer that is not a list is a failed read too', async () => {
+    h.notList.add('organization_members');
+    await reportSignInAlertNotMe({ alert: await readAlert(), via: 'link', auditFrom: AUDIT_FROM });
+    expect(h.adminEmail).not.toHaveBeenCalled();
+    expect(h.audit.mock.calls.map((c) => c[0].organization_id)).toEqual([null]);
+    const reads = h.reportError.mock.calls
+      .filter((c) => (c[1] as { tag: string }).tag === 'security.sign_in_report_read_failed')
+      .map((c) => (c[1] as { extra: { read: string } }).extra.read);
+    expect(reads).toContain('organizations');
   });
 
   it('a membership read that fails: the member is still told; one audit row with no organization', async () => {

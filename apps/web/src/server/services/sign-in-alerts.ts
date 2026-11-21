@@ -161,7 +161,12 @@ export class SignInAlertsService {
       report('sign_in_alerts_for_organization', code, organizationId);
       throw new ServiceError('internal_error', `sign_in_alerts_for_organization failed (${code || 'no code'})`);
     }
-    return ((Array.isArray(data) ? data : []) as Array<Record<string, unknown>>)
+    if (!Array.isArray(data)) {
+      // An answer that is not a list is a failed read, never "no alerts".
+      report('sign_in_alerts_for_organization', 'not_a_list', organizationId);
+      throw new ServiceError('internal_error', 'sign_in_alerts_for_organization answered without a list');
+    }
+    return (data as Array<Record<string, unknown>>)
       .map(organizationRowOf)
       .filter((r): r is OrganizationSignInAlert => r !== null)
       .slice(0, SIGN_IN_ALERTS_ROW_LIMIT);

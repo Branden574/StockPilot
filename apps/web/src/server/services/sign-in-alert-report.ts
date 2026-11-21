@@ -9,7 +9,7 @@ import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { recordSignInAlertEvent } from '@/server/security/sign-in-alert-events';
 import { insertAuditRowReported } from '@/server/services/audit';
-import { fetchAllRowsByIds } from '@/server/services/lib/fetch-by-ids';
+import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
 import { createNotification } from '@/server/services/notifications';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 
@@ -295,14 +295,20 @@ async function peopleById(admin: Admin, ids: string[]): Promise<Map<string, Pers
   const people = new Map<string, Person>();
   try {
     // The member and every owner and admin of up to 5 organizations: no
-    // ceiling on the owners and admins, so the ids go in batches.
-    const rows = await fetchAllRowsByIds<Record<string, unknown>>(ids, (batch) => (from, to) =>
-      admin
-        .from('user_profiles')
-        .select('id, full_name, email, disabled_at')
-        .in('id', batch)
-        .order('id')
-        .range(from, to),
+    // ceiling on the owners and admins, so the ids go in batches. Each id
+    // names one profile, so the rows are bounded by the ids. A page that is
+    // not a list is a failed read (requireList), never "no more rows": an
+    // answer cut short must not tell some owners as if they were all of them.
+    const rows = await fetchAllRowsByIds<Record<string, unknown>>(
+      ids,
+      (batch) => (from, to) =>
+        admin
+          .from('user_profiles')
+          .select('id, full_name, email, disabled_at')
+          .in('id', batch)
+          .order('id')
+          .range(from, to),
+      { requireList: 'user_profiles' },
     );
     for (const row of rows) {
       const id = text(row.id);
@@ -315,10 +321,13 @@ async function peopleById(admin: Admin, ids: string[]): Promise<Map<string, Pers
       });
     }
   } catch (err) {
+    // Nobody is emailed from a partial list: the map stays empty. The raw
+    // text (a ServiceError's internal detail) goes to the server report only.
     reportFailure('security.sign_in_report_read_failed', {
       read: 'profiles',
-      code: codeOf(err) ?? null,
+      detail: rawErrorText(err),
     });
+    return new Map<string, Person>();
   }
   return people;
 }

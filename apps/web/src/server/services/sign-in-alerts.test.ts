@@ -162,6 +162,12 @@ describe('forOrganization', () => {
     expect(JSON.stringify(h.report.mock.calls)).not.toContain('example.test');
   });
 
+  it('an answer that is not a list is a failed read, reported, never an empty list', async () => {
+    const db = client({ data: {}, error: null });
+    await expect(service(db).forOrganization()).rejects.toMatchObject({ code: 'internal_error' });
+    expect(h.report).toHaveBeenCalledTimes(1);
+  });
+
   it('a row out of shape is left out', async () => {
     const db = client({ data: [ORG_ROW, { id: null }], error: null });
     expect(await service(db).forOrganization()).toHaveLength(1);
