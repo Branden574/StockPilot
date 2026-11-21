@@ -183,7 +183,10 @@ describe('the recovery code with passkey records (0475 live)', () => {
 
     const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
 
-    expect(res).toEqual({ ok: true, data: { unenrolled: 2 } });
+    // Stage 5 (the review's finding 1): the answer also says the passkeys went; the
+    // count of apps is pinned with factors as Auth names them
+    // (mfa-recovery.other-sessions.test.ts).
+    expect(res).toMatchObject({ ok: true, data: { unenrolled: 2, passkeysRemoved: true } });
     expect(rpcNames(admin)).toEqual(['consume_recovery_code_with_passkeys']);
     expect(
       admin.rpcCalls.find((c) => c.name === 'consume_recovery_code_with_passkeys')!.args,
@@ -340,7 +343,10 @@ describe('before 0475 is live: the function does not exist', () => {
 
     const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
 
-    expect(res).toEqual({ ok: true, data: { unenrolled: 2 } });
+    expect(res).toEqual({
+      ok: true,
+      data: { unenrolled: 2, passkeysRemoved: true, appsRemoved: 1 },
+    });
     expect(deleteFactorOf(admin)).toHaveBeenCalledTimes(2);
     expect(
       admin.rpcCalls.some(
@@ -369,7 +375,10 @@ describe('before 0475 is live: the function does not exist', () => {
       NAMED_FACTORS,
     );
     const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
-    expect(res).toEqual({ ok: true, data: { unenrolled: 2 } });
+    expect(res).toEqual({
+      ok: true,
+      data: { unenrolled: 2, passkeysRemoved: true, appsRemoved: 1 },
+    });
     expect(recordsMissingReports()).toEqual([]);
   });
 
@@ -418,7 +427,10 @@ describe('any other failure of the new call', () => {
 
       const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
 
-      expect(res).toEqual({ ok: true, data: { unenrolled: 2 } });
+      // Stage 5 (the review's finding 1): the answer also says the passkeys went; the
+      // count of apps is pinned with factors as Auth names them
+      // (mfa-recovery.other-sessions.test.ts).
+      expect(res).toMatchObject({ ok: true, data: { unenrolled: 2, passkeysRemoved: true } });
       expect((h.member as Stub).rpcCalls.map((c) => c.name)).toEqual(['consume_mfa_recovery_code']);
       expect(deleteFactorOf(admin)).toHaveBeenCalledTimes(2);
       expect(rpcNames(admin)).toEqual([

@@ -199,7 +199,7 @@ describe('review 4 finding 4: an unfinished passkey that is the only method', ()
     fireEvent.click(screen.getByRole('button', { name: 'Use recovery code' }));
     await waitFor(() =>
       expect(toastSuccess).toHaveBeenCalledWith(
-        'Your sign-in methods were removed and your other devices were signed out. Set up a new one now.',
+        'Recovery code accepted. 1 authenticator app was removed, and your other devices were signed out. Set up a new one now.',
       ),
     );
   });

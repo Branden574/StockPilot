@@ -6,6 +6,7 @@ import { headers } from 'next/headers';
 import { accountIdHash, reportPasskeyRecordsMissing } from '@/lib/auth/passkey-bridge';
 import { carriesBridgeName } from '@/lib/auth/passkey-bridge-name';
 import { requireSession } from '@/lib/auth/session';
+import type { RecoveryCodeDone, RecoveryMethodsLeft } from '@/lib/auth/recovery-code-words';
 import { readVerifiedSessionTokenOf, type VerifiedSessionToken } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { clientIpFromHeaders } from '@/lib/client-ip';
@@ -234,6 +235,87 @@ const RECOVERY_NOT_CHECKED = 'Could not check your recovery code just now. Try a
 /** The client that acts as the held token alone (made once per press, when first needed). */
 type MemberClient = ReturnType<typeof createAccessTokenClient>;
 
+/** A factor as Auth's admin API lists it (only what the removal reads). */
+type ListedAdminFactor = {
+  id: string;
+  factor_type: string;
+  status?: string;
+  friendly_name?: string | null;
+};
+
+/** What the factor removal did: the true count, and what may be left. */
+type FactorRemoval = {
+  /** The factors listed (none when the list could not be read). */
+  factors: ListedAdminFactor[];
+  /** TOTP factors deleted, the passkey's hidden one included. */
+  unenrolled: number;
+  /** Of those, the ones that are not the passkey's (no reserved name). */
+  appsRemoved: number;
+  /** Deletes that failed (any factor). */
+  failed: number;
+  /** A verified method that may be left, by kind; undefined when none. */
+  left: RecoveryMethodsLeft | undefined;
+};
+
+/**
+ * Removes every TOTP factor of the account with the service role, reading
+ * the list's error and each delete's error (the review of stage 5, finding
+ * 1). A list that cannot be read (an error, or a throw) is `unchecked`: no
+ * factor is deleted and none is called removed. A verified factor whose
+ * delete failed (an error, or a throw) is left: a passkey when it carries the
+ * bridge's reserved name, else an authenticator app. A factor never set up
+ * (`unverified`) is no sign-in method, so its failed delete leaves nothing.
+ * Never throws for a failed Auth call: the code is already spent.
+ */
+async function removeFactors(
+  admin: ReturnType<typeof createAdminClient>,
+  userId: string,
+): Promise<FactorRemoval> {
+  let factors: ListedAdminFactor[];
+  try {
+    const listed = await admin.auth.admin.mfa.listFactors({ userId });
+    if (listed.error || !listed.data) throw new Error('list');
+    factors = (listed.data.factors ?? []) as ListedAdminFactor[];
+  } catch {
+    return { factors: [], unenrolled: 0, appsRemoved: 0, failed: 0, left: 'unchecked' };
+  }
+  let unenrolled = 0;
+  let appsRemoved = 0;
+  let failed = 0;
+  let appLeft = false;
+  let passkeyLeft = false;
+  for (const f of factors) {
+    // We only deliberately enroll TOTP today; play it safe and only
+    // remove totp factors so we don't surprise SSO/SAML setups later.
+    if (f.factor_type !== 'totp') continue;
+    let deleted = false;
+    try {
+      const r = await admin.auth.admin.mfa.deleteFactor({ userId, id: f.id });
+      deleted = !r.error;
+    } catch {
+      deleted = false;
+    }
+    if (deleted) {
+      unenrolled += 1;
+      if (!carriesBridgeName(f)) appsRemoved += 1;
+      continue;
+    }
+    failed += 1;
+    if (f.status === 'unverified') continue;
+    if (carriesBridgeName(f)) passkeyLeft = true;
+    else appLeft = true;
+  }
+  const left: RecoveryMethodsLeft | undefined =
+    appLeft && passkeyLeft
+      ? 'app_and_passkey'
+      : appLeft
+        ? 'app'
+        : passkeyLeft
+          ? 'passkey'
+          : undefined;
+  return { factors, unenrolled, appsRemoved, failed, left };
+}
+
 /**
  * Answers Q6 (stage 5 of the passkey plan): a used code ends every OTHER
  * session of the account, and the session that used it stays signed in.
@@ -293,12 +375,14 @@ async function endOtherSessions(
  * the account's OTHER sessions (this one stays) and emails the account
  * (answers Q6 and Q7). The user then sets up a new method on this session.
  * `otherSessionsLeft` is there only when the other sessions could not be
- * ended, so the form says so.
+ * ended, and `methodsLeft` only when a method could not be removed (or the
+ * list of them could not be read), so the form says so. An account with
+ * passkeys also gets `appsRemoved` and, when they went, `passkeysRemoved`.
  */
 export async function consumeMfaRecoveryCodeAction(input: {
   code: string;
   password?: string;
-}): Promise<ActionResult<{ unenrolled: number; otherSessionsLeft?: true }>> {
+}): Promise<ActionResult<RecoveryCodeDone>> {
   try {
     const session = await requireSession();
 
@@ -471,29 +555,21 @@ export async function consumeMfaRecoveryCodeAction(input: {
     }
 
     // Unenroll every TOTP factor for this user via the admin client: the
-    // passkey bridge among them.
-    const { data: factors } = await admin.auth.admin.mfa.listFactors({
-      userId: session.userId,
-    });
+    // passkey bridge among them. The list's error and each delete's error are
+    // read (the review of stage 5, finding 1): a list that cannot be read, or
+    // a verified factor that could not be deleted, is a method that may be
+    // left, said so in the answer and the email, never called removed.
+    const removal = await removeFactors(admin, session.userId);
+    const factors = removal.factors;
     // The function missing (0475 not live, or lost from the schema cache) and a
     // factor carrying the bridge's reserved name: a bridge may have existed,
     // and its passkey records were not removed. Reported at error level, once
     // per hour (review 2-3 finding 3); an account with no such factor reports
     // nothing.
-    if (spent.kind === 'not_yet' && (factors?.factors ?? []).some(carriesBridgeName)) {
+    if (spent.kind === 'not_yet' && factors.some(carriesBridgeName)) {
       await reportPasskeyRecordsMissing('function', 'recovery_code', session.userId);
     }
-    let unenrolled = 0;
-    for (const f of factors?.factors ?? []) {
-      // We only deliberately enroll TOTP today; play it safe and only
-      // remove totp factors so we don't surprise SSO/SAML setups later.
-      if (f.factor_type !== 'totp') continue;
-      const r = await admin.auth.admin.mfa.deleteFactor({
-        userId: session.userId,
-        id: f.id,
-      });
-      if (!r.error) unenrolled += 1;
-    }
+    const { unenrolled, appsRemoved } = removal;
 
     if (spent.kind === 'failed') {
       // The code is spent and the factors are gone; the passkey records may
@@ -507,8 +583,23 @@ export async function consumeMfaRecoveryCodeAction(input: {
       reportPasskeyRemoval(spent.code, removed === null ? 'unknown' : false, session.userId);
     }
 
-    // Q6: every OTHER session of the account ends; this one stays.
+    // Q6: every OTHER session of the account ends; this one stays, whether
+    // or not every method was removed.
     const othersEnded = await endOtherSessions(held, member, session.userId);
+    const methodsLeft = removal.left;
+    if (methodsLeft) {
+      // Which kind, and how many deletes failed: never a factor, the account
+      // id or the code.
+      void reportError(new Error('A recovery code could not remove every sign-in method'), {
+        tag: 'actions.mfa_recovery.methods_left',
+        level: 'error',
+        userIdHash: accountIdHash(session.userId),
+        extra: { methods_left: methodsLeft, failed: removal.failed },
+      });
+    }
+    // The account had a passkey: one was removed, or a factor carrying the
+    // bridge's reserved name was listed.
+    const hadPasskeys = (passkeysRemoved ?? 0) > 0 || factors.some(carriesBridgeName);
 
     // A used code removes every authenticator of the account: the person's
     // own act, recorded in their default organization. Never the code.
@@ -523,16 +614,27 @@ export async function consumeMfaRecoveryCodeAction(input: {
           : { unenrolled, passkeys_removed: passkeysRemoved },
     });
     // Q7: the security email, after the response. It names passkeys only for
-    // an account that had one (a passkey removed, or a factor carrying the
-    // bridge's reserved name).
+    // an account that had one, and says so when a method was left.
     if (session.email) {
       sendRecoveryCodeUsedEmail(session.email, session.userId, {
-        passkeys: (passkeysRemoved ?? 0) > 0 || (factors?.factors ?? []).some(carriesBridgeName),
+        passkeys: hadPasskeys,
         othersSignedOut: othersEnded,
+        ...(methodsLeft ? { methodsLeft } : {}),
       });
     }
     revalidatePath('/dashboard', 'layout');
-    return ok(othersEnded ? { unenrolled } : { unenrolled, otherSessionsLeft: true as const });
+    // The answer of an account with no passkey whose methods all went, and
+    // whose other sessions ended, is `{ unenrolled }`, as before stage 5.
+    const answer: RecoveryCodeDone = { unenrolled };
+    if (hadPasskeys && methodsLeft !== 'unchecked') {
+      if (methodsLeft !== 'passkey' && methodsLeft !== 'app_and_passkey') {
+        answer.passkeysRemoved = true;
+      }
+      answer.appsRemoved = appsRemoved;
+    }
+    if (methodsLeft) answer.methodsLeft = methodsLeft;
+    if (!othersEnded) answer.otherSessionsLeft = true;
+    return ok(answer);
   } catch (e) {
     return actionErrorResult(e, 'actions.mfa_recovery.consume_mfa_recovery_code');
   }

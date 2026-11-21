@@ -6,9 +6,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * code now does, in plain words. The dialog says it before the press: the
  * code is used up, the two-factor sign-in methods are removed, the other
  * devices are signed out, and this one stays. After the press the toast says
- * what happened: "Your sign-in methods were removed and your other devices
- * were signed out. Set up a new one now." When the server could not end the
- * other sessions (`otherSessionsLeft`), it says that instead, and what to do.
+ * what happened, with the true count: "Recovery code accepted. 1
+ * authenticator app was removed, and your other devices were signed out. Set
+ * up a new one now." When the server could not end the other sessions
+ * (`otherSessionsLeft`), or could not remove a method (`methodsLeft`, the
+ * review of stage 5, finding 1), it says that instead, and what to do.
  * The page then goes to Settings, Security, as before. The words name no
  * passkey: they are the same for every member.
  */
@@ -73,7 +75,7 @@ describe.each([
     useACode();
     await waitFor(() =>
       expect(toastSuccess).toHaveBeenCalledWith(
-        'Your sign-in methods were removed and your other devices were signed out. Set up a new one now.',
+        'Recovery code accepted. 1 authenticator app was removed, and your other devices were signed out. Set up a new one now.',
       ),
     );
     expect(replace).toHaveBeenCalledWith('/dashboard/settings/security');
@@ -88,9 +90,23 @@ describe.each([
     useACode();
     await waitFor(() =>
       expect(toastSuccess).toHaveBeenCalledWith(
-        'Your sign-in methods were removed. We could not sign out your other devices, so change your password now. Then set up a new one.',
+        'Recovery code accepted. 1 authenticator app was removed. We could not sign out your other devices, so change your password now. Then set up a new one.',
       ),
     );
     expect(replace).toHaveBeenCalledWith('/dashboard/settings/security');
+  });
+
+  it('an authenticator app could not be removed: the words say so, never that it was removed', async () => {
+    consumeMfaRecoveryCodeAction.mockResolvedValue({
+      ok: true,
+      data: { unenrolled: 0, methodsLeft: 'app' },
+    });
+    render(<MfaChallengeForm factors={factors} />);
+    useACode();
+    await waitFor(() =>
+      expect(toastSuccess).toHaveBeenCalledWith(
+        "Recovery code accepted. An authenticator app could not be removed. Your other devices were signed out. Ask your organization's owner or StockPilot support for help.",
+      ),
+    );
   });
 });

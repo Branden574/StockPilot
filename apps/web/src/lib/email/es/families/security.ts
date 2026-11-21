@@ -1299,17 +1299,35 @@ export interface RecoveryCodeUsedEmailParams {
   passkeys: boolean;
   /** Every other session of the account was ended. */
   othersSignedOut: boolean;
+  /**
+   * A method that could not be removed (which kind, never which one), or a
+   * factor list that could not be read (the review of stage 5, finding 1).
+   */
+  methodsLeft?: 'app' | 'passkey' | 'app_and_passkey' | 'unchecked';
   firstName?: string | null;
   appUrl?: string;
 }
+
+/** The sentence for a method left, which never says one was removed. */
+const RECOVERY_METHODS_LEFT = {
+  app: 'An authenticator app could not be removed, so it is still on your account.',
+  passkey: 'A passkey could not be removed, so it is still on your account.',
+  app_and_passkey:
+    'An authenticator app and a passkey could not be removed, so they are still on your account.',
+  unchecked: 'We could not check that your sign-in methods were removed.',
+} as const;
 
 /**
  * A recovery code was used (answers Q6 and Q7 of the passkey plan): every
  * authenticator app, and every passkey when the account had one, was removed,
  * and the other devices were signed out when that could be done. Only true
- * sentences: an account with no passkey never reads the word, and devices that
- * could not be signed out are said not to be. The subject is fixed. The one
- * action is the password reset page; no link signs in.
+ * sentences: an account with no passkey never reads the word, devices that
+ * could not be signed out are said not to be, and when a method could not be
+ * removed (or the list of them could not be read) the email says so and never
+ * that they were removed: its subject, pill and first line then say only that
+ * a code was used (the review of stage 5, finding 1). The subject takes only
+ * that flag: nothing a member typed reaches it. The one action is the password
+ * reset page; no link signs in.
  */
 export function renderRecoveryCodeUsedEmail(params: RecoveryCodeUsedEmailParams): RenderedEsEmail {
   const def = esEmailById('recovery-code-used');
@@ -1319,15 +1337,21 @@ export function renderRecoveryCodeUsedEmail(params: RecoveryCodeUsedEmailParams)
   const usedAt = escapeHtml(params.usedAt);
   const resetUrl = `${appUrl.replace(/\/$/, '')}/reset`;
 
+  const methodsLeft = params.methodsLeft !== undefined;
   const removed = params.passkeys
     ? 'Every authenticator app and passkey was removed'
     : 'Every authenticator app was removed';
-  const outcome = params.othersSignedOut
-    ? `${removed}, and your other devices were signed out.`
-    : `${removed}. We could not sign out your other devices.`;
+  const others = params.othersSignedOut
+    ? 'Your other devices were signed out.'
+    : 'We could not sign out your other devices.';
+  const outcome = params.methodsLeft
+    ? `${RECOVERY_METHODS_LEFT[params.methodsLeft]} ${others}`
+    : params.othersSignedOut
+      ? `${removed}, and your other devices were signed out.`
+      : `${removed}. ${others}`;
   const used = `a recovery code was used on your StockPilot account on ${params.usedAt}.`;
 
-  const subject = def.subject({});
+  const subject = def.subject({ methodsLeft });
   const preheader = def.preheader({});
 
   const styles = { darkPills: ['sec' as const] };
@@ -1341,7 +1365,12 @@ export function renderRecoveryCodeUsedEmail(params: RecoveryCodeUsedEmailParams)
       section(
         '36px 36px 24px',
         [
-          statusPill({ variant: 'sec', label: 'Security &middot; Sign-in methods removed' }),
+          statusPill({
+            variant: 'sec',
+            label: methodsLeft
+              ? 'Security &middot; Recovery code used'
+              : 'Security &middot; Sign-in methods removed',
+          }),
           headline({ lead: 'A recovery code was used.', turn: 'This is the record of it.' }),
           bodyText(
             `${greeting(params.firstName)}— a recovery code was used on your StockPilot account on ${usedAt}. ${outcome}`,
@@ -1376,7 +1405,7 @@ export function renderRecoveryCodeUsedEmail(params: RecoveryCodeUsedEmailParams)
   assertEmailWeight(html);
 
   const text = [
-    'Your StockPilot sign-in methods were removed.',
+    `${subject}.`,
     '',
     `${greetingText(params.firstName)}— ${used} ${outcome}`,
     '',

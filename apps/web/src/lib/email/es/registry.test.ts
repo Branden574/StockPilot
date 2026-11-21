@@ -532,3 +532,17 @@ describe('es registry — subjects, preheaders, badges (byte-identical)', () => 
     });
   }
 });
+
+describe('recovery-code-used when a method could not be removed (the review of stage 5, finding 1)', () => {
+  it('the subject and the badge never say the methods were removed', () => {
+    const def = esEmailById('recovery-code-used');
+    expect(def.subject({ methodsLeft: true })).toBe(
+      'A recovery code was used on your StockPilot account',
+    );
+    expect(def.badge.label({ methodsLeft: true })).toBe('Recovery code used');
+    // Nothing a member typed reaches the subject: it takes only the flag.
+    expect(def.subject({ methodsLeft: false })).toBe(
+      'Your StockPilot sign-in methods were removed',
+    );
+  });
+});

@@ -21,6 +21,13 @@ import { PASSKEY_RECOVERY_NOT_YET } from '@/test/passkey-records';
  *      password now";
  *   3. the answer flags other sessions that could not be ended
  *      (`otherSessionsLeft`), so the form says so.
+ * The words are TRUE when a removal fails (the review of stage 5, finding
+ * 1): the factor list's error and each delete's error are read; a method that
+ * could not be removed (`methodsLeft`: which kind, never which one) is said
+ * so in the answer and the email, it is reported, and the other sessions
+ * still end. The answer keeps the true count (`unenrolled`); an account with
+ * passkeys also gets how many authenticator apps went (`appsRemoved`) and
+ * whether its passkeys went (`passkeysRemoved`).
  * NOTHING ELSE changes for an account with no passkey: the same refusals,
  * the same factor removal, the same audit row, the same answer when every
  * other session ended; and a refused code ends nothing and sends nothing.
@@ -60,6 +67,20 @@ vi.mock('@/server/services/lib/defer', () => ({
   defer: (fn: () => Promise<unknown>) => void fn(),
   keepAlive: () => undefined,
 }));
+// The email's words, rendered for real unless a test makes the render throw
+// (the review of stage 5, finding 7).
+vi.mock('@/lib/email/es/families/security', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/email/es/families/security')>();
+  return {
+    ...real,
+    renderRecoveryCodeUsedEmail: vi.fn(
+      (...args: Parameters<typeof real.renderRecoveryCodeUsedEmail>) => {
+        if (h.renderThrows) throw new Error('sample render failure');
+        return real.renderRecoveryCodeUsedEmail(...args);
+      },
+    ),
+  };
+});
 
 type Stub = ReturnType<typeof makeSupabaseStub>;
 const h = vi.hoisted(() => ({
@@ -69,6 +90,8 @@ const h = vi.hoisted(() => ({
   cookieSignOut: null as unknown as (...args: unknown[]) => Promise<{ error: null }>,
   /** The verified token's session id (null: a token without one). */
   sessionId: 'sess-this' as string | null,
+  /** The email's render throws. */
+  renderThrows: false,
 }));
 
 const seg = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -158,6 +181,21 @@ const recordsNoPasskey = () =>
 const memberRpcs = () => (h.member as Stub).rpcCalls.map((c) => c.name);
 const deleteFactorOf = (stub: Stub) =>
   (stub.client.auth.admin as { mfa: { deleteFactor: ReturnType<typeof vi.fn> } }).mfa.deleteFactor;
+const listFactorsOf = (stub: Stub) =>
+  (stub.client.auth.admin as { mfa: { listFactors: ReturnType<typeof vi.fn> } }).mfa.listFactors;
+/** Auth refuses to delete these factors (answered as an error, as supabase-js does). */
+function failDeletes(stub: Stub, ids: string[]) {
+  deleteFactorOf(stub).mockImplementation(async ({ id }: { id: string }) =>
+    ids.includes(id)
+      ? { data: null, error: { message: 'sample failure', status: 500 } }
+      : { data: null, error: null },
+  );
+}
+function methodReports() {
+  return vi
+    .mocked(reportError)
+    .mock.calls.filter((c) => c[1]?.tag === 'actions.mfa_recovery.methods_left');
+}
 function sent() {
   return vi.mocked(sendEmail).mock.calls.map(
     (c) =>
@@ -179,6 +217,7 @@ function sessionReports() {
 beforeEach(() => {
   vi.clearAllMocks();
   h.sessionId = 'sess-this';
+  h.renderThrows = false;
   h.cookieSignOut = vi.fn(async () => ({ error: null }));
   memberWith();
   vi.mocked(signOutAs).mockResolvedValue(SIGNED_OUT);
@@ -390,6 +429,44 @@ describe('a refused or stopped press ends nothing and sends nothing', () => {
     nothingEnded();
   });
 
+  it('a session that no longer verifies as the account (the review of stage 5, finding 3)', async () => {
+    beforeRecords();
+    h.sessionId = 'sess-this';
+    const { createClient } = await import('@/lib/supabase/server');
+    vi.mocked(createClient).mockResolvedValueOnce({
+      auth: {
+        getSession: async () => ({ data: { session: null }, error: null }),
+        getClaims: async () => ({ data: null, error: { message: 'no session' } }),
+        signOut: (...args: unknown[]) => h.cookieSignOut(...args),
+      },
+    } as never);
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toMatchObject({ ok: false, error: { code: 'unauthenticated' } });
+    expect((h.admin as Stub).rpcCalls.map((c) => c.name)).not.toContain(
+      'consume_recovery_code_with_passkeys',
+    );
+    expect(memberRpcs()).not.toContain('consume_mfa_recovery_code');
+    nothingEnded();
+  });
+
+  it('a server without the service client (the review of stage 5, finding 3)', async () => {
+    beforeRecords();
+    const { createAdminClient } = await import('@/lib/supabase/admin');
+    // The limiter's three counts answer; the service client for the code does not.
+    const limiter = h.admin.client;
+    vi.mocked(createAdminClient)
+      .mockImplementationOnce(() => limiter as never)
+      .mockImplementationOnce(() => limiter as never)
+      .mockImplementationOnce(() => limiter as never)
+      .mockImplementationOnce(() => {
+        throw new Error('sample: not set up');
+      });
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res.ok).toBe(false);
+    expect(memberRpcs()).not.toContain('consume_mfa_recovery_code');
+    nothingEnded();
+  });
+
   it('a limit refuses', async () => {
     adminWith({
       ...PASSKEY_RECOVERY_NOT_YET,
@@ -424,7 +501,11 @@ describe('an account with passkeys (0475 live)', () => {
       [APP, BRIDGE],
     );
     const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
-    expect(res).toEqual({ ok: true, data: { unenrolled: 2 } });
+    // The true count: two factors, of which one authenticator app.
+    expect(res).toEqual({
+      ok: true,
+      data: { unenrolled: 2, passkeysRemoved: true, appsRemoved: 1 },
+    });
     expect(sent()[0]!.text).toContain(
       'Every authenticator app and passkey was removed, and your other devices were signed out.',
     );
@@ -443,6 +524,175 @@ describe('the email never changes the answer', () => {
     vi.mocked(sendEmail).mockResolvedValueOnce({ ok: false, error: 'sample failure' } as never);
     const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
     expect(res).toEqual(DONE);
+    expect(
+      vi
+        .mocked(reportError)
+        .mock.calls.filter((c) => c[1]?.tag === 'actions.mfa_recovery.email_failed'),
+    ).toHaveLength(1);
+  });
+});
+
+describe('a method that could not be removed (the review of stage 5, finding 1)', () => {
+  const APP_2 = { id: 'app-2', factor_type: 'totp', friendly_name: 'Tablet' };
+
+  it.each([
+    ['before 0475', () => adminWith(PASSKEY_RECOVERY_NOT_YET)],
+    ['with 0475 live, no passkey', () => recordsNoPasskey()],
+  ])(
+    '%s: the factor list cannot be read: "could not check", reported, and the other sessions still end',
+    async (_when, admin) => {
+      const a = admin();
+      listFactorsOf(a).mockResolvedValue({ data: null, error: { message: 'sample failure' } });
+      const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+
+      expect(res).toEqual({ ok: true, data: { unenrolled: 0, methodsLeft: 'unchecked' } });
+      expect(deleteFactorOf(a)).not.toHaveBeenCalled();
+      expect(signOutAs).toHaveBeenCalledWith(expect.any(String), 'others');
+      expect(broadcastEndedSessions).toHaveBeenCalledWith('user-1', LISTED, 'sess-this');
+      const mail = sent()[0]!;
+      expect(mail.subject).toBe('A recovery code was used on your StockPilot account');
+      expect(mail.text).toContain(
+        'We could not check that your sign-in methods were removed. Your other devices were signed out.',
+      );
+      expect(mail.text).not.toContain('Every authenticator app');
+      expect(methodReports().map((r) => r[1])).toEqual([
+        expect.objectContaining({
+          level: 'error',
+          userIdHash: expect.any(String),
+          extra: { methods_left: 'unchecked', failed: 0 },
+        }),
+      ]);
+    },
+  );
+
+  it('a list that throws is read the same way', async () => {
+    const a = beforeRecords();
+    listFactorsOf(a).mockRejectedValue(new Error('sample network failure'));
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toEqual({ ok: true, data: { unenrolled: 0, methodsLeft: 'unchecked' } });
+    expect(signOutAs).toHaveBeenCalledTimes(1);
+  });
+
+  it('the only authenticator app could not be removed: said so, never "removed"; the other sessions still end', async () => {
+    const a = beforeRecords();
+    failDeletes(a, ['app-1']);
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+
+    expect(res).toEqual({ ok: true, data: { unenrolled: 0, methodsLeft: 'app' } });
+    expect(signOutAs).toHaveBeenCalledTimes(1);
+    const mail = sent()[0]!;
+    expect(mail.subject).toBe('A recovery code was used on your StockPilot account');
+    expect(mail.text).toContain(
+      'An authenticator app could not be removed, so it is still on your account. Your other devices were signed out.',
+    );
+    expect(`${mail.text}\n${mail.html}`).not.toMatch(/passkey|Every authenticator app/i);
+    expect(methodReports().map((r) => r[1]!.extra)).toEqual([{ methods_left: 'app', failed: 1 }]);
+  });
+
+  it('one of two authenticator apps could not be removed: the true count of the other', async () => {
+    const a = adminWith(PASSKEY_RECOVERY_NOT_YET, [APP, APP_2]);
+    failDeletes(a, ['app-2']);
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toEqual({ ok: true, data: { unenrolled: 1, methodsLeft: 'app' } });
+    // Both were tried.
+    expect(deleteFactorOf(a).mock.calls.map((c) => (c[0] as { id: string }).id)).toEqual([
+      'app-1',
+      'app-2',
+    ]);
+  });
+
+  it('a delete that throws counts as not removed', async () => {
+    const a = beforeRecords();
+    deleteFactorOf(a).mockRejectedValue(new Error('sample network failure'));
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toEqual({ ok: true, data: { unenrolled: 0, methodsLeft: 'app' } });
+    expect(sent()).toHaveLength(1);
+  });
+
+  it('a passkey account whose bridge factor could not be removed: "a passkey could not be removed"', async () => {
+    const a = adminWith(
+      {
+        'rpc:consume_recovery_code_with_passkeys': {
+          data: [{ consumed: true, passkeys_removed: 1, bridge_factor_id: BRIDGE.id }],
+          error: null,
+        },
+      },
+      [APP, BRIDGE],
+    );
+    failDeletes(a, ['bridge-1']);
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+
+    expect(res).toEqual({
+      ok: true,
+      data: { unenrolled: 1, appsRemoved: 1, methodsLeft: 'passkey' },
+    });
+    const mail = sent()[0]!;
+    expect(mail.text).toContain('A passkey could not be removed, so it is still on your account.');
+    expect(mail.text).not.toContain('Every authenticator app');
+    expect(methodReports().map((r) => r[1]!.extra)).toEqual([
+      { methods_left: 'passkey', failed: 1 },
+    ]);
+  });
+
+  it('an app and the bridge both left, and the other sessions not ended: every true sentence', async () => {
+    const a = adminWith(PASSKEY_RECOVERY_NOT_YET, [APP, BRIDGE]);
+    failDeletes(a, ['app-1', 'bridge-1']);
+    vi.mocked(signOutAs).mockResolvedValue(NOT_SIGNED_OUT);
+    memberWith({ 'rpc:revoke_my_other_sessions': { data: null, error: { message: 'timeout' } } });
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+
+    expect(res).toEqual({
+      ok: true,
+      data: {
+        unenrolled: 0,
+        appsRemoved: 0,
+        methodsLeft: 'app_and_passkey',
+        otherSessionsLeft: true,
+      },
+    });
+    expect(sent()[0]!.text).toContain(
+      'An authenticator app and a passkey could not be removed, so they are still on your account. We could not sign out your other devices.',
+    );
+  });
+
+  it('a factor never set up (unverified) that could not be removed is no sign-in method: nothing is said left', async () => {
+    const a = adminWith(PASSKEY_RECOVERY_NOT_YET, [
+      APP,
+      { id: 'app-9', factor_type: 'totp', friendly_name: 'Half', status: 'unverified' },
+    ]);
+    failDeletes(a, ['app-9']);
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toEqual(DONE);
+    expect(sent()[0]!.subject).toBe(SUBJECT);
+    expect(methodReports()).toEqual([]);
+  });
+
+  it('the report names the kind, never the factor, the account id or the code', async () => {
+    const a = adminWith(PASSKEY_RECOVERY_NOT_YET, [APP, BRIDGE]);
+    failDeletes(a, ['app-1', 'bridge-1']);
+    await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    const report = JSON.stringify(methodReports());
+    expect(report).toContain('app_and_passkey');
+    for (const secret of ['app-1', 'bridge-1', 'sp-passkey-bridge', 'user-1', CODE]) {
+      expect(report).not.toContain(secret);
+    }
+  });
+
+  it('the audit row keeps the true count', async () => {
+    const a = beforeRecords();
+    failDeletes(a, ['app-1']);
+    await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(vi.mocked(emitAuthAudit).mock.calls.map((c) => c[0].extra)).toEqual([{ unenrolled: 0 }]);
+  });
+});
+
+describe('the email is rendered after the response (the review of stage 5, finding 7)', () => {
+  it('a render that throws cannot change the answer of a recovery that finished; it is reported', async () => {
+    beforeRecords();
+    h.renderThrows = true;
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toEqual(DONE);
+    expect(sendEmail).not.toHaveBeenCalled();
     expect(
       vi
         .mocked(reportError)

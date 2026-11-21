@@ -1,7 +1,10 @@
 import 'server-only';
 
 import { accountIdHash } from '@/lib/auth/passkey-bridge';
-import { renderRecoveryCodeUsedEmail } from '@/lib/email/es/families/security';
+import {
+  renderRecoveryCodeUsedEmail,
+  type RecoveryCodeUsedEmailParams,
+} from '@/lib/email/es/families/security';
 import { sendEmail } from '@/lib/email/resend';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
@@ -12,8 +15,11 @@ import { defer } from '@/server/services/lib/defer';
  * passkey plan): the security email of a used recovery code, sent to the
  * account's address after the response, never blocking it. The words are the
  * true ones for this account (lib/email/es/families/security.ts
- * renderRecoveryCodeUsedEmail). A send that fails is reported with a hash of
- * the account id, never the address.
+ * renderRecoveryCodeUsedEmail). The email is rendered and sent inside the
+ * deferred function, so a render that throws cannot change the answer of a
+ * recovery that finished (the review of stage 5, finding 7). A render that
+ * throws, or a send that fails, is reported with a hash of the account id,
+ * never the address.
  */
 
 const whenNow = () =>
@@ -22,16 +28,34 @@ const whenNow = () =>
 export function sendRecoveryCodeUsedEmail(
   to: string,
   userId: string,
-  facts: { passkeys: boolean; othersSignedOut: boolean },
+  facts: {
+    passkeys: boolean;
+    othersSignedOut: boolean;
+    methodsLeft?: RecoveryCodeUsedEmailParams['methodsLeft'];
+  },
 ): void {
-  const message = renderRecoveryCodeUsedEmail({
-    email: to,
-    usedAt: whenNow(),
-    passkeys: facts.passkeys,
-    othersSignedOut: facts.othersSignedOut,
-    appUrl: env.NEXT_PUBLIC_APP_URL,
-  });
+  // The time the code was used, read now, not when the deferred work runs.
+  const usedAt = whenNow();
   defer(async () => {
+    let message: ReturnType<typeof renderRecoveryCodeUsedEmail>;
+    try {
+      message = renderRecoveryCodeUsedEmail({
+        email: to,
+        usedAt,
+        passkeys: facts.passkeys,
+        othersSignedOut: facts.othersSignedOut,
+        ...(facts.methodsLeft ? { methodsLeft: facts.methodsLeft } : {}),
+        appUrl: env.NEXT_PUBLIC_APP_URL,
+      });
+    } catch {
+      await reportError(new Error('Recovery code email not rendered'), {
+        tag: 'actions.mfa_recovery.email_failed',
+        level: 'error',
+        userIdHash: accountIdHash(userId),
+        extra: { stage: 'render' },
+      });
+      return;
+    }
     const sent = await sendEmail({
       to,
       subject: message.subject,
