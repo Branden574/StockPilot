@@ -173,26 +173,53 @@ interface OrganizationSlice {
   overflow: Map<string, PendingEvent>;
 }
 
-/** The organizations with events waiting; at most MAX_ORGANIZATIONS_PER_WINDOW. */
-let organizations = new Map<string, OrganizationSlice>();
-/** Listed events about no organization, by row key. */
-let waitingWithoutOrganization = new Map<string, PendingEvent>();
-/** Counted events with no organization (and the last resort): category, outcome, source. */
-let overflow = new Map<string, PendingEvent>();
-let flushTimer: ReturnType<typeof setTimeout> | null = null;
-/** When the armed timer fires, in ms since 1970; null with no timer. */
-let flushDueAt: number | null = null;
-/** Settles the kept-alive promise of the events now waiting; null when none is held. */
-let settleScheduledFlush: (() => void) | null = null;
-/** Whether a flush of this instance still has a record_security_events call to answer or make. */
-let flushCallOut = false;
-/** When the last flush that sent anything began; null before the first. */
-let lastFlushStartedAt: number | null = null;
-/** Whether a slice or budget filled since the buffer was last emptied. */
-let earlyFlushWanted = false;
-let flushDelayMs = SECURITY_EVENT_FLUSH_DELAY_MS;
-/** When each kind of report was last sent, by tag. */
-let lastReportAt = new Map<string, number>();
+/** Everything the recorder remembers between calls. */
+interface RecorderState {
+  /** The organizations with events waiting; at most MAX_ORGANIZATIONS_PER_WINDOW. */
+  organizations: Map<string, OrganizationSlice>;
+  /** Listed events about no organization, by row key. */
+  waitingWithoutOrganization: Map<string, PendingEvent>;
+  /** Counted events with no organization (and the last resort): category, outcome, source. */
+  overflow: Map<string, PendingEvent>;
+  flushTimer: ReturnType<typeof setTimeout> | null;
+  /** When the armed timer fires, in ms since 1970; null with no timer. */
+  flushDueAt: number | null;
+  /** Settles the kept-alive promise of the events now waiting; null when none is held. */
+  settleScheduledFlush: (() => void) | null;
+  /** Whether a flush of this instance still has a record_security_events call to answer or make. */
+  flushCallOut: boolean;
+  /** When the last flush that sent anything began; null before the first. */
+  lastFlushStartedAt: number | null;
+  /** Whether a slice or budget filled since the buffer was last emptied. */
+  earlyFlushWanted: boolean;
+  flushDelayMs: number;
+  /** When each kind of report was last sent, by tag. */
+  lastReportAt: Map<string, number>;
+}
+
+/**
+ * ONE state per server instance. A production build can put this module in
+ * more than one chunk (a route handler's and a server action's), and each
+ * copy evaluates it again; with the state in module variables each copy had
+ * its own buffer, its own "one call at a time" and its own report clock. The
+ * state is kept on globalThis under a registered symbol instead, so every
+ * copy in the instance reads and writes the same one
+ * (events.one-buffer.test.ts).
+ */
+const RECORDER_STATE = Symbol.for('stockpilot.security-events.recorder-state.v1');
+const state: RecorderState = ((globalThis as { [RECORDER_STATE]?: RecorderState })[RECORDER_STATE] ??= {
+  organizations: new Map(),
+  waitingWithoutOrganization: new Map(),
+  overflow: new Map(),
+  flushTimer: null,
+  flushDueAt: null,
+  settleScheduledFlush: null,
+  flushCallOut: false,
+  lastFlushStartedAt: null,
+  earlyFlushWanted: false,
+  flushDelayMs: SECURITY_EVENT_FLUSH_DELAY_MS,
+  lastReportAt: new Map(),
+});
 
 /** The request's headers, or null outside a request (a script, a cron worker, a test). */
 async function headersOfThisRequest(): Promise<SecurityEventHeaders | null> {
@@ -303,14 +330,14 @@ function add(e: PendingEvent): void {
 /** An event about no organization. True when its budget is now full. */
 function addWithoutOrganization(e: PendingEvent): boolean {
   const key = keyOf(e);
-  const same = waitingWithoutOrganization.get(key);
+  const same = state.waitingWithoutOrganization.get(key);
   if (same) foldInto(same, e);
-  else if (waitingWithoutOrganization.size < MAX_WAITING_KEYS_WITHOUT_ORGANIZATION) {
-    waitingWithoutOrganization.set(key, e);
+  else if (state.waitingWithoutOrganization.size < MAX_WAITING_KEYS_WITHOUT_ORGANIZATION) {
+    state.waitingWithoutOrganization.set(key, e);
   } else {
-    countOn(overflow, e, null);
+    countOn(state.overflow, e, null);
   }
-  return waitingWithoutOrganization.size >= MAX_WAITING_KEYS_WITHOUT_ORGANIZATION;
+  return state.waitingWithoutOrganization.size >= MAX_WAITING_KEYS_WITHOUT_ORGANIZATION;
 }
 
 /**
@@ -320,17 +347,17 @@ function addWithoutOrganization(e: PendingEvent): boolean {
  * tracked organizations, is now full.
  */
 function addForOrganization(e: PendingEvent, organizationId: string): boolean {
-  let slice = organizations.get(organizationId);
+  let slice = state.organizations.get(organizationId);
   if (!slice) {
-    if (organizations.size >= MAX_ORGANIZATIONS_PER_WINDOW) {
+    if (state.organizations.size >= MAX_ORGANIZATIONS_PER_WINDOW) {
       // The last resort, and the only way an organization's event loses its
       // organization: more organizations in one window than are tracked.
-      countOn(overflow, e, null);
+      countOn(state.overflow, e, null);
       reportOrganizationCeiling();
       return true;
     }
     slice = { waiting: new Map(), overflow: new Map() };
-    organizations.set(organizationId, slice);
+    state.organizations.set(organizationId, slice);
   }
   const key = keyOf(e);
   const same = slice.waiting.get(key);
@@ -339,29 +366,29 @@ function addForOrganization(e: PendingEvent, organizationId: string): boolean {
   else countOn(slice.overflow, e, organizationId);
   return (
     slice.waiting.size >= MAX_WAITING_KEYS_PER_ORGANIZATION ||
-    organizations.size >= MAX_ORGANIZATIONS_PER_WINDOW
+    state.organizations.size >= MAX_ORGANIZATIONS_PER_WINDOW
   );
 }
 
 /** Everything waiting, in the order it is sent: events about an organization first. */
 function pendingEvents(): PendingEvent[] {
   const pending: PendingEvent[] = [];
-  for (const slice of organizations.values()) {
+  for (const slice of state.organizations.values()) {
     pending.push(...slice.waiting.values(), ...slice.overflow.values());
   }
-  pending.push(...waitingWithoutOrganization.values(), ...overflow.values());
+  pending.push(...state.waitingWithoutOrganization.values(), ...state.overflow.values());
   return pending;
 }
 
 function hasPendingEvents(): boolean {
-  return organizations.size > 0 || waitingWithoutOrganization.size > 0 || overflow.size > 0;
+  return state.organizations.size > 0 || state.waitingWithoutOrganization.size > 0 || state.overflow.size > 0;
 }
 
 function emptyBuffer(): void {
-  organizations = new Map();
-  waitingWithoutOrganization = new Map();
-  overflow = new Map();
-  earlyFlushWanted = false;
+  state.organizations = new Map();
+  state.waitingWithoutOrganization = new Map();
+  state.overflow = new Map();
+  state.earlyFlushWanted = false;
 }
 
 /**
@@ -372,23 +399,23 @@ function emptyBuffer(): void {
  * outlive). flushSecurityEvents settles it, whoever calls it.
  */
 function scheduleFlush(): void {
-  if (flushTimer !== null) return;
-  if (settleScheduledFlush === null) {
+  if (state.flushTimer !== null) return;
+  if (state.settleScheduledFlush === null) {
     const flushed = new Promise<void>((resolve) => {
-      settleScheduledFlush = resolve;
+      state.settleScheduledFlush = resolve;
     });
     keepAlive(flushed);
   }
-  armFlushTimer(flushDelayMs);
+  armFlushTimer(state.flushDelayMs);
 }
 
 /** Arms the one flush timer, in place of any already armed. */
 function armFlushTimer(delayMs: number): void {
-  if (flushTimer !== null) clearTimeout(flushTimer);
-  flushDueAt = Date.now() + delayMs;
-  flushTimer = setTimeout(() => {
-    flushTimer = null;
-    flushDueAt = null;
+  if (state.flushTimer !== null) clearTimeout(state.flushTimer);
+  state.flushDueAt = Date.now() + delayMs;
+  state.flushTimer = setTimeout(() => {
+    state.flushTimer = null;
+    state.flushDueAt = null;
     // The flush is handed to keepAlive where it starts, as well as being
     // answered for by the promise handed over when it was scheduled
     // (server/fire-and-forget.guard.test.ts: nothing is left running with
@@ -396,7 +423,7 @@ function armFlushTimer(delayMs: number): void {
     keepAlive(flushSecurityEvents());
   }, delayMs);
   // A script is not held open for a flush; a request is, through keepAlive.
-  (flushTimer as { unref?: () => void }).unref?.();
+  (state.flushTimer as { unref?: () => void }).unref?.();
 }
 
 /**
@@ -406,13 +433,13 @@ function armFlushTimer(delayMs: number): void {
  * than the timer already armed.
  */
 function flushEarly(): void {
-  earlyFlushWanted = true;
-  if (flushCallOut) return;
+  state.earlyFlushWanted = true;
+  if (state.flushCallOut) return;
   const now = Date.now();
-  const sinceLast = lastFlushStartedAt === null ? Infinity : now - lastFlushStartedAt;
+  const sinceLast = state.lastFlushStartedAt === null ? Infinity : now - state.lastFlushStartedAt;
   // A clock that stepped back must not hold the flush longer than the gap.
   const wait = sinceLast < 0 ? EARLY_FLUSH_MIN_GAP_MS : Math.max(0, EARLY_FLUSH_MIN_GAP_MS - sinceLast);
-  if (flushTimer !== null && flushDueAt !== null && flushDueAt <= now + wait) return;
+  if (state.flushTimer !== null && state.flushDueAt !== null && state.flushDueAt <= now + wait) return;
   armFlushTimer(wait);
 }
 
@@ -443,12 +470,12 @@ class FlushTimeout extends Error {
  * is dropped and counted in the same once-per-interval report.
  */
 export async function flushSecurityEvents(): Promise<void> {
-  if (flushTimer !== null) {
-    clearTimeout(flushTimer);
-    flushTimer = null;
-    flushDueAt = null;
+  if (state.flushTimer !== null) {
+    clearTimeout(state.flushTimer);
+    state.flushTimer = null;
+    state.flushDueAt = null;
   }
-  if (flushCallOut) {
+  if (state.flushCallOut) {
     // Leave the events for the next flush; with nothing waiting, nothing is held.
     if (hasPendingEvents()) scheduleFlush();
     else settleScheduled();
@@ -458,24 +485,24 @@ export async function flushSecurityEvents(): Promise<void> {
   emptyBuffer();
   // This flush answers for the promise of the events it took; events that
   // arrive while its calls are out get a new one.
-  const settle = settleScheduledFlush;
-  settleScheduledFlush = null;
+  const settle = state.settleScheduledFlush;
+  state.settleScheduledFlush = null;
   try {
     if (batch.length > 0) {
-      lastFlushStartedAt = Date.now();
+      state.lastFlushStartedAt = Date.now();
       await sendBatch(batch);
     }
   } finally {
     settle?.();
     // A slice or budget that filled while the calls were out could not bring
     // its flush forward then; it does now.
-    if (earlyFlushWanted && hasPendingEvents()) flushEarly();
+    if (state.earlyFlushWanted && hasPendingEvents()) flushEarly();
   }
 }
 
 function settleScheduled(): void {
-  const settle = settleScheduledFlush;
-  settleScheduledFlush = null;
+  const settle = state.settleScheduledFlush;
+  state.settleScheduledFlush = null;
   settle?.();
 }
 
@@ -485,7 +512,7 @@ function settleScheduled(): void {
  * not yet sent are dropped, in one report. Never throws.
  */
 async function sendBatch(batch: PendingEvent[]): Promise<void> {
-  flushCallOut = true;
+  state.flushCallOut = true;
   try {
     for (let from = 0; from < batch.length; from += MAX_FLUSH_CALL_ELEMENTS) {
       const failure = await sendCall(batch.slice(from, from + MAX_FLUSH_CALL_ELEMENTS));
@@ -495,7 +522,7 @@ async function sendBatch(batch: PendingEvent[]): Promise<void> {
       }
     }
   } finally {
-    flushCallOut = false;
+    state.flushCallOut = false;
   }
 }
 
@@ -530,9 +557,9 @@ async function sendCall(elements: PendingEvent[]): Promise<{ cause: unknown } | 
 /** True at most once per FAILURE_REPORT_INTERVAL_MS for each tag. */
 function mayReport(tag: string): boolean {
   const now = Date.now();
-  const last = lastReportAt.get(tag);
+  const last = state.lastReportAt.get(tag);
   if (last !== undefined && now - last >= 0 && now - last < FAILURE_REPORT_INTERVAL_MS) return false;
-  lastReportAt.set(tag, now);
+  state.lastReportAt.set(tag, now);
   return true;
 }
 
@@ -569,20 +596,20 @@ function reportOrganizationCeiling(): void {
 
 /** Test only: an empty buffer, no timer, no call out, no failure reported yet, the default delay. */
 export function __resetSecurityEventsForTests(): void {
-  if (flushTimer !== null) clearTimeout(flushTimer);
-  flushTimer = null;
-  flushDueAt = null;
+  if (state.flushTimer !== null) clearTimeout(state.flushTimer);
+  state.flushTimer = null;
+  state.flushDueAt = null;
   settleScheduled();
-  flushCallOut = false;
-  lastFlushStartedAt = null;
+  state.flushCallOut = false;
+  state.lastFlushStartedAt = null;
   emptyBuffer();
-  lastReportAt = new Map();
-  flushDelayMs = SECURITY_EVENT_FLUSH_DELAY_MS;
+  state.lastReportAt = new Map();
+  state.flushDelayMs = SECURITY_EVENT_FLUSH_DELAY_MS;
 }
 
 /** Test only: the delay before a scheduled flush. */
 export function __setSecurityEventFlushDelayForTests(ms: number): void {
-  flushDelayMs = ms;
+  state.flushDelayMs = ms;
 }
 
 /** Test only: what is waiting, as it would be sent. */
