@@ -44,6 +44,7 @@ describe('PlatformNav', () => {
     ['/platform/provision', 'Provision'],
     ['/platform/support', 'Support'],
     ['/platform/audit', 'Audit'],
+    ['/platform/security', 'Security'],
   ])('marks %s as %s', (path, label) => {
     nav.pathname = path;
     render(<PlatformNav />);
@@ -67,7 +68,7 @@ describe('PlatformNav', () => {
     const marker = nav.querySelector('[data-slot="platform-admin-marker"]');
     expect(marker).not.toBeNull();
     expect(marker).toHaveTextContent('Platform admin');
-    // On a phone the marker starts its own line under the four links.
+    // On a phone the marker starts its own line under the links.
     expect(marker).toHaveClass('max-sm:ml-0');
   });
 
