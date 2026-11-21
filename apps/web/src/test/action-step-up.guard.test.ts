@@ -110,7 +110,7 @@ const REVIEWED: Record<string, Reviewed> = {
   'server/actions/mfa.ts#stepUpMethodsAction': {
     kind: 'before-the-code',
     reason:
-      "Lists the account's own verified authenticator apps, without the passkey bridge, for the step-up modal; it reads the account from the verified token and changes nothing.",
+      "Lists the account's own verified authenticator apps, without the passkey bridge, for the step-up modal; it reads the account from the verified token, counts each call in two closed limits (this address, the account), and changes nothing but ending a session that changed accounts.",
   },
   'server/actions/mfa.ts#challengeFactorAction': {
     kind: 'before-the-code',
