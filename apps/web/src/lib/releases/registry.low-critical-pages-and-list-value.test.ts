@@ -33,12 +33,13 @@ const EMPTIED_FIELDS_ID = 'emptied-fields-and-schedule-completion-2026-11';
 const COUNT_START_ACCESS_ID = 'count-start-access-check-2026-11';
 // Added by docs/whats-new-2026-11-21-phone (2026-11-21): the phone authenticator set-up release (every member: three of its five entries have no audience), published later, at the top, below the Liquid Glass draft.
 const PHONE_SET_UP_ID = 'phone-authenticator-set-up-2026-11';
+const PHONE_SET_UP_AT = '2026-11-21T02:31:00Z';
 const phoneSetUpRead = {
   release_id: PHONE_SET_UP_ID,
   revision: 1,
   dismissed_at: null,
-  opened_at: '2026-11-21T02:01:00Z',
-  read_at: '2026-11-21T02:01:00Z',
+  opened_at: '2026-11-21T02:32:00Z',
+  read_at: '2026-11-21T02:32:00Z',
 };
 // Added by docs/whats-new-small-fixes-1119 (2026-11-19): the export, receipt and access release (every member: its access entry has no audience), published later, at the top, below the Liquid Glass draft.
 const EXPORT_RECEIPT_ACCESS_ID = 'export-receipt-access-fixes-2026-11';
@@ -136,10 +137,8 @@ describe('the Low + critical pages and list value release: order, status and dat
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES[0].publishedAt equal to this release's): the placeholder is the minute of the receiving release, published later, above this one.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RECEIVING_AT): the placeholder is the minute of the export, receipt and access release, published later, above this one.
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: '2026-11-19T16:00:00Z'): the placeholder is the minute of the count start access check release, published later, above this one.
-    // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: COUNT_START_ACCESS_AT): the placeholder is the minute of the phone authenticator set-up release, published later, above this one (a stand-in until the integrator sets it at merge, so it is read from the registry).
-    expect(RELEASES[0]!.publishedAt).toBe(
-      RELEASES.find((r) => r.id === PHONE_SET_UP_ID)!.publishedAt,
-    );
+    // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: COUNT_START_ACCESS_AT): the placeholder is the minute of the phone authenticator set-up release, published later, above this one.
+    expect(RELEASES[0]!.publishedAt).toBe(PHONE_SET_UP_AT);
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
     // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: RELEASES.slice(2)): the receiving release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(3)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.

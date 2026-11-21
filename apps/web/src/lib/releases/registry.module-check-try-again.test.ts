@@ -102,8 +102,8 @@ const phoneSetUpRead = {
   release_id: PHONE_SET_UP_ID,
   revision: 1,
   dismissed_at: null,
-  opened_at: '2026-11-21T02:01:00Z',
-  read_at: '2026-11-21T02:01:00Z',
+  opened_at: '2026-11-21T02:32:00Z',
+  read_at: '2026-11-21T02:32:00Z',
 };
 
 const PAGES = 'pages-say-when-modules-not-checked';

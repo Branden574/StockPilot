@@ -53,12 +53,13 @@ const countStartAccessRead = {
 };
 // Added by docs/whats-new-2026-11-21-phone (2026-11-21): the phone authenticator set-up release (every member: three of its five entries have no audience), published later, at the top, below the Liquid Glass draft.
 const PHONE_SET_UP_ID = 'phone-authenticator-set-up-2026-11';
+const PHONE_SET_UP_AT = '2026-11-21T02:31:00Z';
 const phoneSetUpRead = {
   release_id: PHONE_SET_UP_ID,
   revision: 1,
   dismissed_at: null,
-  opened_at: '2026-11-21T02:01:00Z',
-  read_at: '2026-11-21T02:01:00Z',
+  opened_at: '2026-11-21T02:32:00Z',
+  read_at: '2026-11-21T02:32:00Z',
 };
 /** core RECEIVE_MANAGER_ONLY_COPY in #617: the page note and the refusal. */
 const MANAGER_ONLY = 'Only a manager can receive purchase orders.';
@@ -142,10 +143,8 @@ describe('the receiving release: order, status and date', () => {
     expect(at).toBeLessThanOrEqual(Date.now());
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES[0].publishedAt equal to this release's): the placeholder is the minute of the export, receipt and access release, published later, above this one.
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: EXPORT_RECEIPT_ACCESS_AT): the placeholder is the minute of the count start access check release, published later, above this one.
-    // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: COUNT_START_ACCESS_AT): the placeholder is the minute of the phone authenticator set-up release, published later, above this one (a stand-in until the integrator sets it at merge, so it is read from the registry).
-    expect(RELEASES[0]!.publishedAt).toBe(
-      RELEASES.find((r) => r.id === PHONE_SET_UP_ID)!.publishedAt,
-    );
+    // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: COUNT_START_ACCESS_AT): the placeholder is the minute of the phone authenticator set-up release, published later, above this one.
+    expect(RELEASES[0]!.publishedAt).toBe(PHONE_SET_UP_AT);
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(2)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(3)): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.

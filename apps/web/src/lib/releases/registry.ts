@@ -149,9 +149,9 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whats-new-2026-11-19-errors (2026-11-19; was: '2026-11-19T16:00:00Z'): the count
     // start access check release below is dated 2026-11-19T20:41:00Z, so the placeholder is that same minute.
     // Moved again by docs/whats-new-2026-11-21-phone (2026-11-21; was: '2026-11-19T20:41:00Z'): the phone
-    // authenticator set-up release below is dated 2026-11-21T02:00:00Z (a stand-in until the integrator sets
-    // the real minute at merge), so the placeholder is that same minute. Move it with that release's minute.
-    publishedAt: '2026-11-21T02:00:00Z',
+    // authenticator set-up release below is dated 2026-11-21T02:31:00Z (a whole minute after its phone
+    // update was launched on a phone), so the placeholder is that same minute.
+    publishedAt: '2026-11-21T02:31:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -242,12 +242,11 @@ export const RELEASES: Release[] = [
   {
     id: 'phone-authenticator-set-up-2026-11',
     revision: 1,
-    // SET AT MERGE: publishedAt below is a stand-in, 2026-11-21T02:00:00Z. The
-    // integrator sets the whole minute at or after the first iOS launch of the
-    // phone update that carries this release (an over-the-air update for
-    // runtime 1.4.0; the integrator's record, not readable from the code), and
-    // the Liquid Glass draft placeholder above takes the same minute. Merge
-    // only once phones have that update: every entry here is about the app.
+    // publishedAt is the whole minute this release was dated, after the phone
+    // update that carries it (an over-the-air update for runtime 1.4.0, built
+    // from f5bdf4f52) was launched on a phone: the integrator's record, not
+    // readable from the code. It goes live as soon as it merges. The Liquid
+    // Glass draft placeholder above takes the same minute.
     // The phone update of 2026-11-21 and the web change released with it:
     // - Phone: #604 (squash f5bdf4f52, the set-up screen; it also carries
     //   #599, the delete-account sheet, and #598, Accounts through the status
@@ -256,13 +255,15 @@ export const RELEASES: Release[] = [
     //   'receiving-shown-to-managers-2026-11' said the mobile app does after
     //   its next update: announced here, that release's revision is not
     //   bumped. Phones last updated from 60f1bfe48 (#527).
-    // - Web: #626, API reads hold a member who must set up an authenticator,
-    //   with the reason. It changes no web page (the website already sends
-    //   that member to Settings, Security, #582); with #604 it is what a
-    //   member on the phone sees, so it is told in the set-up entry.
-    // Claims checked against main f5bdf4f52 (#604's squash, the same tree as
-    // its head 4fefc65f5) and #626's head 3fd847f9e (phone paths under
-    // apps/mobile, web under apps/web/src, core under packages/core/src):
+    // - Web: #626 (squash db3eca293), API reads hold a member who must set up
+    //   an authenticator, with the reason. It changes no web page (the website
+    //   already sends that member to Settings, Security, #582); with #604 it is
+    //   what a member on the phone sees, so it is told in the set-up entry.
+    // Claims checked against main db3eca293 (#626's squash; apps/mobile and
+    // packages are as at #604's squash f5bdf4f52, the phone update's build,
+    // and server/lib/api-read-context.ts as at #626's head 3fd847f9e; phone
+    // paths under apps/mobile, web under apps/web/src, core under
+    // packages/core/src):
     // - Who is held: core auth/step-up.ts policyRequiresAuthenticator
     //   (:107-110: everyone under all_required, owner and admin under
     //   admins_required) and a verified factor (src/lib/set-up-hold.ts
@@ -345,8 +346,7 @@ export const RELEASES: Release[] = [
       'The mobile app asks you to set up a required authenticator app first, and keeps your unsent changes',
     summary:
       'In the mobile app, after the latest update, if your organization requires an authenticator app and you have not set one up, the app shows Set up an authenticator to continue in its place, with a way to set one up on the website. Changes waiting on the phone stay there and are sent after set-up. Receiving on a purchase order shows only for people who can receive. Tap Restart now when the app says Update ready, or close the app completely and open it again.',
-    // SET AT MERGE (see the comment at the top of this release): a stand-in.
-    publishedAt: '2026-11-21T02:00:00Z',
+    publishedAt: '2026-11-21T02:31:00Z',
     entries: [
       {
         id: 'app-authenticator-set-up-screen',

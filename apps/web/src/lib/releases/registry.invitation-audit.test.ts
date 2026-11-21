@@ -85,8 +85,8 @@ const phoneSetUpRead = {
   release_id: PHONE_SET_UP_ID,
   revision: 1,
   dismissed_at: null,
-  opened_at: '2026-11-21T02:01:00Z',
-  read_at: '2026-11-21T02:01:00Z',
+  opened_at: '2026-11-21T02:32:00Z',
+  read_at: '2026-11-21T02:32:00Z',
 };
 // Added by docs/whats-new-small-fixes-1119 (2026-11-19): the export, receipt and access release (every member: its access entry has no audience), published later, at the top, below the Liquid Glass draft.
 const EXPORT_RECEIPT_ACCESS_ID = 'export-receipt-access-fixes-2026-11';

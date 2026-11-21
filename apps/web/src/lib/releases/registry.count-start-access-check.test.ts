@@ -36,12 +36,13 @@ const ENTRY = 'count-start-access-could-not-be-checked';
 const EXPORT_RECEIPT_ACCESS_ID = 'export-receipt-access-fixes-2026-11';
 // Added by docs/whats-new-2026-11-21-phone (2026-11-21): the phone authenticator set-up release (every member: three of its five entries have no audience), published later, at the top, below the Liquid Glass draft.
 const PHONE_SET_UP_ID = 'phone-authenticator-set-up-2026-11';
+const PHONE_SET_UP_AT = '2026-11-21T02:31:00Z';
 const phoneSetUpRead = {
   release_id: PHONE_SET_UP_ID,
   revision: 1,
   dismissed_at: null,
-  opened_at: '2026-11-21T02:01:00Z',
-  read_at: '2026-11-21T02:01:00Z',
+  opened_at: '2026-11-21T02:32:00Z',
+  read_at: '2026-11-21T02:32:00Z',
 };
 /** #624's production deployment went live at this instant. */
 const LIVE_624 = '2026-11-19T20:24:00Z';
@@ -121,9 +122,7 @@ describe('the count start access check release: order, status and date', () => {
     expect(at).toBeGreaterThanOrEqual(Date.parse(LIVE_624));
     expect(at).toBeLessThanOrEqual(Date.now());
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES[0].publishedAt equal to this release's): the placeholder is the minute of the phone authenticator set-up release, published later, above this one.
-    expect(RELEASES[0]!.publishedAt).toBe(
-      RELEASES.find((r) => r.id === PHONE_SET_UP_ID)!.publishedAt,
-    );
+    expect(RELEASES[0]!.publishedAt).toBe(PHONE_SET_UP_AT);
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES.slice(2)): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     for (const r of RELEASES.slice(3)) {

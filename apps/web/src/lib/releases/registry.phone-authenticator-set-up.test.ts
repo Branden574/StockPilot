@@ -51,10 +51,9 @@ import { RELEASES } from './registry';
  * has no Mark complete), #586 (a 1.4.0 phone keeps its launch look), #573 (no
  * limit a screen meets), and #626 on the website (no page changes).
  *
- * SET AT MERGE: publishedAt is a stand-in until the integrator sets the whole
- * minute at or after the first iOS launch of the phone update, and the Liquid
- * Glass draft placeholder takes the same minute, so these tests pin the shape
- * and the order, not the minute itself.
+ * publishedAt is the whole minute this release was dated, after the phone
+ * update was launched on a phone (the integrator's record, not readable from
+ * the code), and the Liquid Glass draft placeholder takes the same minute.
  *
  * "the app asks you to sign in again" rests on the lab walk of this update,
  * not on code in this repository: the sign-in service ends the account's other
@@ -71,6 +70,10 @@ const EXPORT_RECEIPT_ACCESS_ID = 'export-receipt-access-fixes-2026-11';
 const RECEIVING_ID = 'receiving-shown-to-managers-2026-11';
 /** #604 (which carries #598 and #599), the last of this update's phone changes, merged at this instant. */
 const MERGED_604 = '2026-11-21T01:56:16Z';
+/** #626, the web change released with this update, merged at this instant. */
+const MERGED_626 = '2026-11-21T02:19:12Z';
+/** The minute this release is dated. */
+const PUBLISHED_AT = '2026-11-21T02:31:00Z';
 /** The words the reader is quoted, as the code has them. */
 const SET_UP_TAIL = 'Set one up on the website, then come back to this app.';
 const UNCHECKED_TITLE = 'Your access could not be checked';
@@ -141,10 +144,12 @@ describe('the phone authenticator set-up release: order, status and date', () =>
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
   });
 
-  it('is dated on a whole minute, in the past, after #604 merged, with the draft placeholder at the same minute and every release below it older', () => {
+  it('is dated on a whole minute, in the past, after #604 and #626 merged, with the draft placeholder at the same minute and every release below it older', () => {
     const at = Date.parse(release().publishedAt);
+    expect(release().publishedAt).toBe(PUBLISHED_AT);
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
     expect(at).toBeGreaterThan(Date.parse(MERGED_604));
+    expect(at).toBeGreaterThan(Date.parse(MERGED_626));
     expect(at).toBeLessThanOrEqual(Date.now());
     expect(RELEASES[0]!.publishedAt).toBe(release().publishedAt);
     for (const r of RELEASES.slice(2)) {
@@ -342,8 +347,8 @@ describe('the phone authenticator set-up release: who is told', () => {
       release_id: ID,
       revision: 1,
       dismissed_at: null,
-      opened_at: '2026-11-21T02:01:00Z',
-      read_at: '2026-11-21T02:01:00Z',
+      opened_at: '2026-11-21T02:32:00Z',
+      read_at: '2026-11-21T02:32:00Z',
     };
     for (const v of [owner, admin, manager, staff, member, managerNoModules, staffNoPoRead]) {
       expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
