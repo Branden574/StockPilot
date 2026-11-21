@@ -423,11 +423,11 @@ describe('noteLoginDevice — new-device alerts per account and per organization
     expect(db.devices).toHaveLength(1 + installs.length);
     expect(sendNewDeviceLoginEmail).toHaveBeenCalledTimes(5);
     // The record of each alert is still written, so Active sessions and the
-    // organization's list show the sixth sign-in on (review 1, finding 6),
-    // and the organization's own channels still hear of it (their own count
-    // of 30 an hour paces them).
+    // organization's list show the sixth sign-in on (review 1, finding 6).
     expect(db.alerts).toHaveLength(installs.length);
-    expect(dispatchEvent).toHaveBeenCalledTimes(installs.length);
+    // The organizations' webhook keeps its own count of 5 a day per account
+    // (review 2, finding 3), so one account cannot fill a channel.
+    expect(dispatchEvent).toHaveBeenCalledTimes(5);
     expect(limiter.calls).toContainEqual({
       key: `new-device-alert:user:${USER}`,
       limit: 5,
@@ -1227,6 +1227,99 @@ describe('noteLoginDevice — two sign-ins at once from one new country, and the
   });
 });
 
+describe('noteLoginDevice — the organizations’ webhook has its own count per account (review 2, finding 3)', () => {
+  const DAY_MS = 24 * 60 * 60_000;
+  const OTHER_USER = '22222222-2222-4222-8222-222222222222';
+  const EVENT_KEY = `new-device-event:user:${USER}`;
+  const inOrganization = (...users: string[]) => {
+    db.members = users.map((user_id) => ({
+      user_id,
+      organization_id: 'org-a',
+      accepted_at: '2026-01-01T00:00:00Z',
+      impersonation_expires_at: null,
+    }));
+  };
+  const newPhone = (n: number, userId = USER, country: string | null = null) =>
+    noteLoginDevice({
+      userId,
+      email: userId === USER ? EMAIL : 'other@example.com',
+      userAgent: APP_UA_1,
+      ip: null,
+      deviceKey: `0f6c2d1e-8a4b-4c5d-9e6f-${String(n).padStart(12, '0')}`,
+      deviceLabel: LABEL,
+      deviceFamily: FAMILY,
+      place: country ? { country, city: null } : null,
+      client: 'phone',
+    });
+  const known = (userId = USER) =>
+    noteLoginDevice({
+      userId,
+      email: userId === USER ? EMAIL : 'other@example.com',
+      userAgent: WEB_UA,
+      ip: null,
+      place: { country: 'US', city: null },
+    });
+
+  it('5 a day per account, closed, asked once for an alert about a new device, before any organization is counted', async () => {
+    inOrganization(USER);
+    await known();
+    await newPhone(1);
+    const eventCalls = limiter.calls.filter((c) => c.key.startsWith('new-device-event:'));
+    expect(eventCalls).toEqual([
+      { key: EVENT_KEY, limit: 5, windowMs: DAY_MS, mode: 'closed' },
+      { key: 'new-device-event:org:org-a', limit: 30, windowMs: 60 * 60_000, mode: 'closed' },
+    ]);
+  });
+
+  it('past it the webhook is held for that account, while the alert row, the email count and the security event go on', async () => {
+    inOrganization(USER);
+    await known();
+    limiter.buckets.set(EVENT_KEY, 5);
+    await newPhone(1, USER, 'MX');
+    expect(dispatchEvent).not.toHaveBeenCalled();
+    expect(db.alerts).toHaveLength(1);
+    expect(db.alerts[0]).toMatchObject({ new_device: true, new_country: true });
+    expect(sendNewDeviceLoginEmail).toHaveBeenCalledTimes(1);
+    expect(recordSignInAlertEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'sign_in_new_country', userId: USER }),
+    );
+  });
+
+  it('one account cannot spend the organization’s hour: the organization is counted only for the webhooks that go', async () => {
+    inOrganization(USER, OTHER_USER);
+    await known();
+    for (let n = 1; n <= 12; n++) await newPhone(n);
+    expect(dispatchEvent).toHaveBeenCalledTimes(5);
+    expect(limiter.buckets.get('new-device-event:org:org-a')).toBe(5);
+
+    // Another member of the same organization still reaches the channel.
+    await known(OTHER_USER);
+    await newPhone(100, OTHER_USER);
+    expect(dispatchEvent).toHaveBeenCalledTimes(6);
+    expect(dispatchEvent.mock.calls[5]![2]).toMatchObject({ userId: OTHER_USER });
+  });
+
+  it('an alert for a new country on a known device does not spend the count: it sends no webhook', async () => {
+    inOrganization(USER);
+    await known();
+    await noteLoginDevice({ userId: USER, email: EMAIL, userAgent: WEB_UA, ip: null, place: { country: 'MX', city: null } });
+    expect(db.alerts).toHaveLength(1);
+    expect(limiter.calls.filter((c) => c.key === EVENT_KEY)).toEqual([]);
+  });
+
+  it('the count cannot answer: no webhook for this alert, and the row and the email still go', async () => {
+    inOrganization(USER);
+    await known();
+    limiter.downPrefix = 'new-device-event:user:';
+    await newPhone(1);
+    expect(dispatchEvent).not.toHaveBeenCalled();
+    expect(db.alerts).toHaveLength(1);
+    expect(sendNewDeviceLoginEmail).toHaveBeenCalledTimes(1);
+    // The organization's own count is not spent on a webhook that did not go.
+    expect(limiter.calls.filter((c) => c.key.startsWith('new-device-event:org:'))).toEqual([]);
+  });
+});
+
 describe('noteLoginDevice — past the daily email count the alert is still recorded (review 1, finding 6)', () => {
   const DAY_MS = 24 * 60 * 60_000;
   const SESSION = '5e551011-0000-4000-8000-000000000003';
@@ -1349,7 +1442,7 @@ describe('noteLoginDevice — past the daily email count the alert is still reco
     await newPhone(2, 'CA');
     const reports = tagged('auth.sign_in_alert_rows_ceiling');
     expect(reports).toHaveLength(1);
-    // The error report is once per window; the security event is every time.
+    // The report (a warning) is once per window; the security event is every time.
     expect(recordSignInAlertsHeldEvent).toHaveBeenCalledTimes(2);
     expect(reports[0]![1]).toMatchObject({
       level: 'warning',

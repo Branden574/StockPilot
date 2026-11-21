@@ -126,6 +126,7 @@ export const LIMITER_NOT_SECURITY_EVENTS: Readonly<Record<string, string>> = {
   'new-device-alert-held:user:': ALERT_PACING,
   'sign-in-alert-rows:user:': ALERT_PACING,
   'sign-in-alert-rows-held:user:': ALERT_PACING,
+  'new-device-event:user:': ALERT_PACING,
   'new-device-event:org:': ALERT_PACING,
   'new-device-event-held:org:': ALERT_PACING,
   'export-alert:': ALERT_PACING,

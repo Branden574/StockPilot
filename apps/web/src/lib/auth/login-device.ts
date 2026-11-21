@@ -56,12 +56,22 @@ export const NEW_DEVICE_ALERT_WINDOW_MS = 24 * 60 * 60_000;
  * sign-in added are taken back (they are still new at the next sign-in, so no
  * sign-in becomes trusted by being turned away). Every sign-in turned away is
  * counted as a security event (sign_in_alerts_held), and the first in a
- * window is also reported once.
+ * window is also reported once, as a warning.
  */
 export const SIGN_IN_ALERT_ROWS_PER_ACCOUNT = 50;
 /** security.new_device_login events per organization in a window. */
 export const NEW_DEVICE_EVENTS_PER_ORGANIZATION = 30;
 export const NEW_DEVICE_EVENT_WINDOW_MS = 60 * 60_000;
+/**
+ * security.new_device_login events one ACCOUNT may send its organizations in
+ * the alert window (a day), in a count of its own (review 2, finding 3).
+ * Before part 3 the event was held with the email, 5 a day; now that only the
+ * email is held past its count, the event keeps that number for itself, so
+ * one account can never spend an organization's 30 an hour and quiet the
+ * channel for every other member. Past it the event is held for that account;
+ * the alert's row and the security events still go.
+ */
+export const NEW_DEVICE_EVENTS_PER_ACCOUNT = 5;
 
 /** The admin client's type, for the helpers below. */
 type AdminClient = ReturnType<typeof createAdminClient>;
@@ -372,7 +382,8 @@ async function insertAlertRow(
  *     are removed, so both are still new at the next sign-in. Every sign-in
  *     turned away is a security event (password_guessing / flagged /
  *     sign_in_alerts_held, in the member's organizations), and the first in
- *     a window is reported once (auth.sign_in_alert_rows_ceiling).
+ *     a window is reported once, as a warning
+ *     (auth.sign_in_alert_rows_ceiling).
  *   - per account, the alert's EMAIL: NEW_DEVICE_ALERTS_PER_ACCOUNT a day (a
  *     new country counts as a new device does). The email that reaches the
  *     count says that no more will come for 24 hours. Past it ONLY THE EMAIL
@@ -380,8 +391,8 @@ async function insertAlertRow(
  *     the sign-in shows with its alert in Active sessions and in the
  *     organization's list, the device and the country are learned as before
  *     (the row stands for them, and a "This was not me" on it forgets them),
- *     and the organizations' events below still go, paced by their own
- *     count. The first email held in a window is reported once
+ *     and the new-country security event still goes. The first email held
+ *     in a window is reported once
  *     (auth.new_device_alerts_held) with the first 16 hex characters of the
  *     SHA-256 of the account id, which the operator matches by hashing
  *     account ids. A held email whose row could not be written either
@@ -389,6 +400,10 @@ async function insertAlertRow(
  *   - when either bucket cannot answer, the device row AND the country row
  *     this call inserted are removed, each on its own (takeBack), so both
  *     are still new at the next sign-in, and nothing is written or sent.
+ *   - per account, the organizations' webhook event:
+ *     NEW_DEVICE_EVENTS_PER_ACCOUNT a day, in a count of its own, so one
+ *     account cannot fill a channel or spend its organization's hour. Past
+ *     it, or without a count, the event is held for that account.
  *   - per organization: NEW_DEVICE_EVENTS_PER_ORGANIZATION
  *     security.new_device_login events an hour, so the organization's
  *     channels are not flooded; the person's own email is not held by it.
@@ -476,7 +491,9 @@ export async function noteLoginDevice(args: {
       await undoNotes();
       if (!rows.failed) {
         // Over the ceiling (not "could not count"): every sign-in turned away
-        // is one security event, and the first in a window one error report.
+        // is one security event, and the first in a window one report, a
+        // warning (reportRowsCeiling). The error-level report is the
+        // take-back that fails twice.
         await recordSignInAlertsHeldEvent({ userId: args.userId, source: client, place });
         await reportRowsCeiling(args.userId);
       }
@@ -535,7 +552,21 @@ export async function noteLoginDevice(args: {
       });
     }
 
-    if (newDevice) {
+    // The organizations' webhook event: counted per account first, closed.
+    // Over the count, or without one, this alert sends none, and no
+    // organization's own count is spent on it.
+    const eventAllowed = newDevice
+      ? (
+          await checkRateLimit(
+            `new-device-event:user:${args.userId}`,
+            NEW_DEVICE_EVENTS_PER_ACCOUNT,
+            NEW_DEVICE_ALERT_WINDOW_MS,
+            'closed',
+          )
+        ).allowed
+      : false;
+
+    if (newDevice && eventAllowed) {
       // Security feed: also surface the new device in each of the user's orgs'
       // subscribed channels (the email above only reaches the user — a hijacked
       // account's owner may never see it; the org's #security channel will).
