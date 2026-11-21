@@ -2321,6 +2321,35 @@ describe('review B3: the Security page is dark for a member who cannot add and h
     });
   });
 
+  it('the reserved name listed but no passkey of this site (a leftover factor only), adding closed: no panel', async () => {
+    const userId = world.addAccount('named-no-rows@example.test');
+    world.signIn(userId, 'aal1');
+    leftoverFactor(userId);
+    world.addAllowed = 'organization_off';
+    expect(await panelFor(userId)).toBeNull();
+  });
+
+  it('the reserved name listed, setup not finished (S4), adding closed: Finish only for a passkey that served before', async () => {
+    const unfinished = (userId: string) => {
+      const b = world.bridges.get(userId)!;
+      world.factors.find((f) => f.id === b.factor_id)!.status = 'unverified';
+    };
+    const never = await memberWithPasskey('never-served@example.test');
+    unfinished(never.userId);
+    world.addAllowed = 'organization_off';
+    expect(await panelFor(never.userId)).toMatchObject({
+      canAdd: false,
+      canFinish: false,
+      passkeys: [expect.objectContaining({ unfinished: true })],
+    });
+    world.addAllowed = 'ok';
+    const served = await memberWithPasskey('served@example.test');
+    expect(await passkeyStep(served.soft)).toEqual({ ok: true });
+    unfinished(served.userId);
+    world.addAllowed = 'organization_off';
+    expect(await panelFor(served.userId)).toMatchObject({ canAdd: false, canFinish: true });
+  });
+
   it('a holder (the reserved name listed) with the organization off still gets the list and Remove', async () => {
     const { userId, passkeyId } = await memberWithPasskey();
     world.signIn(userId, 'aal2');
