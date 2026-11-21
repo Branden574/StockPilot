@@ -209,12 +209,8 @@ async function allowStart(userId: string, ip: string): Promise<boolean> {
   return b.allowed;
 }
 /**
- * Finishes are limited per account AND address only (review 4 finding 11): a
- * finish is counted before its challenge is taken, so an account-wide bucket
- * let someone with only the password, from elsewhere, spend it with junk
- * finishes and pause the member's own passkey step. The member's own address
- * keeps its own bucket. A finish guesses no secret: it needs a fresh one-use
- * challenge and a signature by the account's passkey.
+ * Finishes are limited per account and address (review 4 finding 11): 10 in
+ * 15 minutes for each address an account finishes from.
  */
 async function allowFinish(userId: string, ip: string): Promise<boolean> {
   const a = await checkRateLimit(`passkey-finish:${userId}:${ip}`, 10, 15 * MIN, 'closed');
