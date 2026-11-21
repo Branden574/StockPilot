@@ -54,6 +54,7 @@ import {
   SIGN_OUT_UNBIND_TIMEOUT_MS,
 } from './push-unbind';
 import { hasStoredSession, liveOutboxScope } from './session-scope';
+import { forgetSetUpInputs } from './set-up-inputs';
 import {
   endSession,
   runSignOutFlow,
@@ -623,6 +624,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // The saved workspace belongs to this account, not the device: the
           // same keys an eviction removes (use-account-gate.ts).
           clearAccountStorage: async () => {
+            // The authenticator policy inputs held this run go first, so
+            // nothing saves them back after the keys are removed.
+            await forgetSetUpInputs();
             const keys = accountScopedStorageKeys(await AsyncStorage.getAllKeys());
             if (keys.length > 0) await AsyncStorage.multiRemove(keys);
           },

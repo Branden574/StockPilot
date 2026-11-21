@@ -2,17 +2,24 @@ import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-import { describe, expect, expectTypeOf, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
 
 import {
   canSettleOutbox,
   HELD_FOR_OTHER_SQL,
+  heldForSetUp,
   isOwnedBy,
   outboxSendDecision,
   OWNED_BY_USER_SQL,
   type OutboxRowOwner,
   type OutboxSendDecision,
 } from './outbox-scope';
+import {
+  beginSetUpRead,
+  noteServerReadUser,
+  recordMembershipInputs,
+  resetSetUpInputsForTests,
+} from './set-up-inputs';
 
 /**
  * The one scope rule for queued work (S4a, owner decision D4). Pure cases,
@@ -255,6 +262,96 @@ describe("a row with no workspace of its own waits for its account's own", () =>
 
   it('the type says it too: a decision to send always carries a workspace', () => {
     expectTypeOf<Extract<OutboxSendDecision, { send: true }>['orgId']>().toEqualTypeOf<string>();
+  });
+});
+
+/**
+ * Authenticator set-up is owed per WORKSPACE: its policy and this account's
+ * role there (set-up-inputs.ts). A row is held while ITS OWN workspace answers
+ * 'owed', whichever workspace is active, and left exactly as it is.
+ */
+describe('a row whose own workspace owes authenticator set-up is held', () => {
+  const live = { orgId: 'org-optional', userId: 'u1', stepUpOwed: false };
+  const HELD = { send: false, reason: 'set-up-owed' };
+
+  beforeEach(() => {
+    resetSetUpInputsForTests();
+    recordMembershipInputs(
+      'u1',
+      [
+        { organizationId: 'org-optional', role: 'staff', organization: { name: 'Opt', mfa_policy: 'optional' } },
+        // The embed as an array of one, as some answers give it.
+        { organizationId: 'org-all', role: 'staff', organization: [{ name: 'All', mfa_policy: 'all_required' }] },
+        { organizationId: 'org-admins', role: 'staff', organization: { name: 'Adm', mfa_policy: 'admins_required' } },
+        { organizationId: 'org-hidden', role: 'staff', organization: null },
+      ],
+      beginSetUpRead(),
+    );
+    noteServerReadUser({ id: 'u1', factors: [] });
+  });
+  afterEach(() => resetSetUpInputsForTests());
+
+  it('a row queued in a requiring workspace while an Optional one is active: held', () => {
+    expect(outboxSendDecision({ organizationId: 'org-all', userId: 'u1' }, live)).toEqual(HELD);
+  });
+
+  it('the active Optional workspace and a policy that does not ask this role: sent', () => {
+    expect(outboxSendDecision({ organizationId: 'org-optional', userId: 'u1' }, live)).toMatchObject({
+      send: true,
+      orgId: 'org-optional',
+    });
+    expect(outboxSendDecision({ organizationId: 'org-admins', userId: 'u1' }, live)).toMatchObject({
+      send: true,
+      orgId: 'org-admins',
+    });
+  });
+
+  it('a legacy row is decided by the workspace it would be sent under', () => {
+    expect(
+      outboxSendDecision({ organizationId: null, userId: null }, { ...live, orgId: 'org-all' }),
+    ).toEqual(HELD);
+    expect(outboxSendDecision({ organizationId: null, userId: null }, live)).toMatchObject({ send: true });
+  });
+
+  it('a hidden workspace row or an unknown answer is not a hold: the drain rule keeps a refusal', () => {
+    expect(outboxSendDecision({ organizationId: 'org-hidden', userId: 'u1' }, live)).toMatchObject({
+      send: true,
+    });
+    resetSetUpInputsForTests();
+    expect(outboxSendDecision({ organizationId: 'org-all', userId: 'u1' }, live)).toMatchObject({
+      send: true,
+    });
+  });
+
+  it('once the account has a verified authenticator the same row goes, once', () => {
+    noteServerReadUser({ id: 'u1', factors: [{ status: 'verified' }] });
+    expect(outboxSendDecision({ organizationId: 'org-all', userId: 'u1' }, live)).toEqual({
+      send: true,
+      orgId: 'org-all',
+      userId: 'u1',
+      adopt: false,
+    });
+  });
+
+  it('decided after whose row it is: another account and a code still owed come first', () => {
+    expect(outboxSendDecision({ organizationId: 'org-all', userId: 'u2' }, live)).toEqual({
+      send: false,
+      reason: 'other-account',
+    });
+    expect(
+      outboxSendDecision({ organizationId: 'org-all', userId: 'u1' }, { ...live, stepUpOwed: true }),
+    ).toEqual({ send: false, reason: 'step-up-owed' });
+  });
+
+  it('heldForSetUp says the same for a row, for the count drain to settle nothing it holds', () => {
+    expect(heldForSetUp({ organizationId: 'org-all', userId: 'u1' }, live)).toBe(true);
+    expect(heldForSetUp({ organizationId: 'org-optional', userId: 'u1' }, live)).toBe(false);
+    expect(heldForSetUp({ organizationId: null, userId: 'u1' }, { ...live, orgId: 'org-all' })).toBe(true);
+    expect(heldForSetUp({ organizationId: 'org-all', userId: 'u1' }, { ...live, userId: null })).toBe(false);
+    // Only the live account's own rows (and legacy ones) are held for its
+    // set-up: another account's row takes the path it always took.
+    expect(heldForSetUp({ organizationId: 'org-all', userId: 'u2' }, live)).toBe(false);
+    expect(heldForSetUp({ organizationId: 'org-all', userId: null }, live)).toBe(true);
   });
 });
 
