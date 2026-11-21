@@ -920,6 +920,83 @@ describe('rules 13 to 18', () => {
   });
 });
 
+describe('a limiter that cannot count refuses, and records no pause of the member', () => {
+  type Limit = Awaited<ReturnType<typeof checkRateLimit>>;
+  /** The limiter's answer in closed mode when its store cannot count. */
+  const COULD_NOT_COUNT = { allowed: false, failed: true } as Limit;
+  const pauseEvents = () =>
+    vi
+      .mocked(recordSecurityEvent)
+      .mock.calls.filter((c) => (c[0] as { reason?: string }).reason === 'passkey_checks_paused');
+  const STEPS: Array<[string, (passkeyId: string) => Promise<unknown>]> = [
+    ['the second step’s start', () => pk.startSecondStep()],
+    ['the second step’s finish', () => pk.completeSecondStep({ challengeId: 'x', response: {} })],
+    [
+      'the start of adding a passkey',
+      () => pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } }),
+    ],
+    ['the finish of adding a passkey', () => pk.finishAddPasskey({ challengeId: 'x', response: {}, name: 'n' })],
+    ['removing a passkey', (passkeyId) => pk.removePasskey({ passkeyId })],
+  ];
+
+  it.each(STEPS)(
+    '%s: refused with the usual words, nothing issued or deleted, and no passkey_checks_paused event',
+    async (_step, run) => {
+      const { passkeyId } = await memberWithPasskey();
+      const issued = world.challenges.length;
+      vi.mocked(recordSecurityEvent).mockClear();
+      vi.mocked(checkRateLimit).mockImplementation(async () => COULD_NOT_COUNT);
+      expect(await run(passkeyId)).toMatchObject({
+        ok: false,
+        code: 'rate_limited',
+        message: pk.PASSKEY_WORDS.tooMany,
+      });
+      expect(pauseEvents()).toEqual([]);
+      expect(world.challenges).toHaveLength(issued);
+      expect(world.calls.deleteFactor).toEqual([]);
+      expect(world.passkeys.filter((r) => r.removed_at === null)).toHaveLength(1);
+    },
+  );
+
+  it('the start: the account key is not asked once the address key could not count', async () => {
+    await memberWithPasskey();
+    vi.mocked(checkRateLimit).mockClear();
+    vi.mocked(checkRateLimit).mockImplementation(async () => COULD_NOT_COUNT);
+    expect(await pk.startSecondStep()).toMatchObject({ ok: false, code: 'rate_limited' });
+    expect(vi.mocked(checkRateLimit).mock.calls.map((c) => String(c[0]).split(':')[0])).toEqual([
+      'passkey-start',
+    ]);
+  });
+
+  it('the start: an address key that counts and an account key that cannot: refused, no event', async () => {
+    await memberWithPasskey();
+    vi.mocked(recordSecurityEvent).mockClear();
+    vi.mocked(checkRateLimit).mockImplementation(async (key: string) =>
+      String(key).startsWith('passkey-start-account:')
+        ? COULD_NOT_COUNT
+        : ({ allowed: true } as Limit),
+    );
+    expect(await pk.startSecondStep()).toMatchObject({ ok: false, code: 'rate_limited' });
+    expect(pauseEvents()).toEqual([]);
+  });
+
+  it.each([
+    ['the address key', 'passkey-start:'],
+    ['the account key', 'passkey-start-account:'],
+  ])(
+    'the start: a count over the limit on %s is still recorded as a pause',
+    async (_which, prefix) => {
+      await memberWithPasskey();
+      vi.mocked(recordSecurityEvent).mockClear();
+      vi.mocked(checkRateLimit).mockImplementation(
+        async (key: string) => ({ allowed: !String(key).startsWith(prefix) }) as Limit,
+      );
+      expect(await pk.startSecondStep()).toMatchObject({ ok: false, code: 'rate_limited' });
+      expect(pauseEvents()).toHaveLength(1);
+    },
+  );
+});
+
 describe('rule 19 and the proof to add', () => {
   it('an account with a verified factor adds only from an aal2 session', async () => {
     const userId = world.addAccount('app@example.test');

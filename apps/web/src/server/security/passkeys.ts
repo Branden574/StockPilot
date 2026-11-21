@@ -202,25 +202,39 @@ const bridgeFactorName = () => `${PASSKEY_BRIDGE_NAME_PREFIX}${randomBytes(6).to
 // ── Limits (plan 2.8; every key on server/security/limiter-events.ts) ──
 
 const MIN = 60_000;
-async function allowStart(userId: string, ip: string): Promise<boolean> {
-  const a = await checkRateLimit(`passkey-start:${userId}:${ip}`, 20, 15 * MIN, 'closed');
-  if (!a.allowed) return false;
-  const b = await checkRateLimit(`passkey-start-account:${userId}`, 60, 60 * MIN, 'closed');
-  return b.allowed;
+/**
+ * A limit's answer. Every key is asked in closed mode, so a limiter that
+ * could not count refuses too; it is told apart ('could_not_count') because
+ * the member was then not paused by their own tries (limited()).
+ */
+type LimitAnswer = 'allowed' | 'over_limit' | 'could_not_count';
+function limitAnswer(a: Awaited<ReturnType<typeof checkRateLimit>>): LimitAnswer {
+  if (a.allowed) return 'allowed';
+  return a.failed ? 'could_not_count' : 'over_limit';
+}
+async function allowStart(userId: string, ip: string): Promise<LimitAnswer> {
+  const a = limitAnswer(
+    await checkRateLimit(`passkey-start:${userId}:${ip}`, 20, 15 * MIN, 'closed'),
+  );
+  if (a !== 'allowed') return a;
+  return limitAnswer(
+    await checkRateLimit(`passkey-start-account:${userId}`, 60, 60 * MIN, 'closed'),
+  );
 }
 /**
  * Finishes are limited per account and address (review 4 finding 11): 10 in
  * 15 minutes for each address an account finishes from.
  */
-async function allowFinish(userId: string, ip: string): Promise<boolean> {
-  const a = await checkRateLimit(`passkey-finish:${userId}:${ip}`, 10, 15 * MIN, 'closed');
-  return a.allowed;
+async function allowFinish(userId: string, ip: string): Promise<LimitAnswer> {
+  return limitAnswer(
+    await checkRateLimit(`passkey-finish:${userId}:${ip}`, 10, 15 * MIN, 'closed'),
+  );
 }
-async function allowRegister(userId: string): Promise<boolean> {
-  return (await checkRateLimit(`passkey-register:${userId}`, 5, 15 * MIN, 'closed')).allowed;
+async function allowRegister(userId: string): Promise<LimitAnswer> {
+  return limitAnswer(await checkRateLimit(`passkey-register:${userId}`, 5, 15 * MIN, 'closed'));
 }
-async function allowRemove(userId: string): Promise<boolean> {
-  return (await checkRateLimit(`passkey-remove:${userId}`, 10, 15 * MIN, 'closed')).allowed;
+async function allowRemove(userId: string): Promise<LimitAnswer> {
+  return limitAnswer(await checkRateLimit(`passkey-remove:${userId}`, 10, 15 * MIN, 'closed'));
 }
 
 // ── Security events (plan 2.8; organization looked up after the response) ──
@@ -420,10 +434,15 @@ async function heldActive(): Promise<Result<{ held: Held }>> {
   return { ok: true, held };
 }
 
-/** Our limiter for one step; a refusal is a security event (passkey_checks_paused). */
+/**
+ * Our limiter for one step. A count over the limit is a security event
+ * (passkey_checks_paused). A limiter that could not count refuses with the
+ * same words (closed) and records no such event: nobody's tries paused the
+ * member (lib/rate-limit logs the failure itself).
+ */
 async function limited(step: Step, userId: string): Promise<PasskeyFailure | null> {
   const ip = await clientIp();
-  const allowed =
+  const answer: LimitAnswer =
     step === 'start'
       ? await allowStart(userId, ip)
       : step === 'finish'
@@ -432,9 +451,9 @@ async function limited(step: Step, userId: string): Promise<PasskeyFailure | nul
           ? await allowRegister(userId)
           : step === 'remove'
             ? await allowRemove(userId)
-            : true;
-  if (allowed) return null;
-  await recordPasskeyEvent('passkey_checks_paused', userId);
+            : 'allowed';
+  if (answer === 'allowed') return null;
+  if (answer === 'over_limit') await recordPasskeyEvent('passkey_checks_paused', userId);
   return fail('rate_limited', PASSKEY_WORDS.tooMany, 'limited');
 }
 
