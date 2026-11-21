@@ -61,6 +61,7 @@ export const SECURITY_BOT_FAMILIES = [
   'public_api',
   'webhook',
   'isbn_lookup',
+  'sign_in_alert',
 ] as const;
 export type SecurityBotFamily = (typeof SECURITY_BOT_FAMILIES)[number];
 
@@ -101,6 +102,7 @@ const BOT_FAMILY_WORDS: Readonly<Record<SecurityBotFamily, string>> = {
   public_api: 'the public API',
   webhook: 'a webhook',
   isbn_lookup: 'the ISBN lookup',
+  sign_in_alert: 'a sign-in alert link',
 };
 
 /** The reason codes this build writes, with the words admins read. */
@@ -116,6 +118,10 @@ export const SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, string>> = {
   wrong_recovery_code: 'Wrong recovery code',
   recovery_code_checks_paused: 'Recovery code checks paused after too many attempts',
   unknown_api_key: 'Unknown API key',
+  // Phishing: what a sign-in alert flags (part 3). Not refusals: the sign-in
+  // happened, and the alert asks the member whether it was them.
+  sign_in_new_country: 'Sign-in from a new country',
+  sign_in_not_me: 'A member said a sign-in was not them',
   // Exploit attempts: a scanner asked for a path this site never serves.
   env_file: 'Request for a settings file',
   git_dir: 'Request for source control files',

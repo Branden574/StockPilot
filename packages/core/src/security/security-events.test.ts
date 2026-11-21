@@ -52,6 +52,8 @@ describe('security events: the lists the database checks', () => {
       'wrong_recovery_code',
       'recovery_code_checks_paused',
       'unknown_api_key',
+      'sign_in_new_country',
+      'sign_in_not_me',
       'over_minute_cap',
       'over_buffer_cap',
       ...SECURITY_PROBE_KINDS,
@@ -84,6 +86,20 @@ describe('security events: the lists the database checks', () => {
     expect(securityEventReasonLabel('wrong_password')).toBe('Wrong password at sign-in');
     expect(securityEventReasonLabel('repeated_wrong_password')).toBe(
       'Repeated wrong passwords from one source',
+    );
+  });
+
+  it('names the plain words of the two sign-in alert reasons (part 3)', () => {
+    expect(securityEventReasonLabel('sign_in_new_country')).toBe('Sign-in from a new country');
+    expect(securityEventReasonLabel('sign_in_not_me')).toBe(
+      'A member said a sign-in was not them',
+    );
+  });
+
+  it('the sign-in alert link is an anonymous family of its own, with its own words', () => {
+    expect(SECURITY_BOT_FAMILIES).toContain('sign_in_alert');
+    expect(securityEventReasonLabel(securityBotReason('sign_in_alert'))).toBe(
+      'Too many requests to a sign-in alert link',
     );
   });
 });
