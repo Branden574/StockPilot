@@ -1,7 +1,6 @@
 'use server';
 
 import { revalidatePath, updateTag } from 'next/cache';
-import { headers } from 'next/headers';
 import { z } from 'zod';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
@@ -21,12 +20,12 @@ import {
   MFA_SESSION_ENDED,
   MFA_SETUP_NOT_OPEN,
   MFA_SETUP_UNREADABLE,
+  recordRefusedSetUpCode,
   signOutThisSession,
 } from '@/lib/auth/mfa-code-attempts';
 import { factorsOf, readMfaFactorList, type MfaFactorList } from '@/lib/auth/mfa-factors';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { requireOrgContext, requireSession } from '@/lib/auth/session';
-import { recordAccountCodeBlocked } from '@/server/security/account-events';
 import { isSessionEndedError } from '@/lib/auth/session-ended';
 import { sessionAccountNow, type SessionAccountNow } from '@/lib/auth/session-account';
 import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
@@ -76,15 +75,6 @@ function mfaCodeFailure(
     });
   }
   return err('internal_error', MFA_CODE_NOT_CHECKED);
-}
-
-/** The request's headers, or null outside a request: never a throw. */
-async function requestHeadersOrNull(): Promise<Awaited<ReturnType<typeof headers>> | null> {
-  try {
-    return await headers();
-  } catch {
-    return null;
-  }
 }
 
 /** The set-up could not confirm the session's account before the code was checked. */
@@ -277,23 +267,11 @@ export async function verifyEnrollmentAction(input: {
       code: parsed.data.code,
     });
     if (vErr) {
-      // A security event for a set-up code the sign-in service judged wrong,
-      // in the account's organization (looked up after the response). Its
-      // own reason, not wrong_code: nothing that protects the account is
-      // being guessed here. It is recorded so that our own record holds
-      // every code our server sent and the service refused
-      // (server/security/auth-logs.ts compares the two). Never the member's
-      // problem: the answer below is the same whatever happens here.
+      // A security event for a set-up code the sign-in service judged wrong
+      // (recordRefusedSetUpCode says why, and never throws): the answer
+      // below is the same whatever happens there.
       if (classifyMfaCodeError(vErr) === 'refused') {
-        try {
-          recordAccountCodeBlocked(
-            'wrong_setup_code',
-            session.userId,
-            await requestHeadersOrNull(),
-          );
-        } catch {
-          // An event that could not be recorded is dropped.
-        }
+        await recordRefusedSetUpCode(session.userId);
       }
       return mfaCodeFailure('verify', vErr, 'actions.mfa.verify_enrollment');
     }
