@@ -451,38 +451,42 @@ async function tellEveryone(
     memberName && memberEmail ? `${memberName} (${memberEmail})` : (memberName ?? memberEmail ?? 'A member');
 
   // The audit rows and the security event wait on nothing here; they are
-  // started now and collected at the end.
+  // started now and collected at the end. Each is started inside its own
+  // async step, so one that throws on the spot is one that failed, and stops
+  // none of the others.
   const records: Array<Promise<unknown>> = [];
   const auditTargets: Array<string | null> = reached.length > 0 ? reached : [null];
   for (const organizationId of auditTargets) {
     records.push(
-      insertAuditRowReported({
-        organization_id: organizationId,
-        user_id: alert.userId,
-        event: 'security.sign_in_reported',
-        ip: args.auditFrom.ip,
-        user_agent: args.auditFrom.userAgent,
-        metadata: {
-          entity_type: 'sign_in_alert',
-          entity_id: alert.id,
-          new_device: alert.newDevice,
-          new_country: alert.newCountry,
-          client: alert.client,
-          via: args.via,
-          // Always true since the sign-out comes first; kept so the rows read
-          // as they did.
-          signed_out: true,
-        },
-      }),
+      (async () =>
+        insertAuditRowReported({
+          organization_id: organizationId,
+          user_id: alert.userId,
+          event: 'security.sign_in_reported',
+          ip: args.auditFrom.ip,
+          user_agent: args.auditFrom.userAgent,
+          metadata: {
+            entity_type: 'sign_in_alert',
+            entity_id: alert.id,
+            new_device: alert.newDevice,
+            new_country: alert.newCountry,
+            client: alert.client,
+            via: args.via,
+            // Always true since the sign-out comes first; kept so the rows
+            // read as they did.
+            signed_out: true,
+          },
+        }))(),
     );
   }
   records.push(
-    recordSignInAlertEvent({
-      reason: 'sign_in_not_me',
-      userId: alert.userId,
-      source: alert.client,
-      place,
-    }),
+    (async () =>
+      recordSignInAlertEvent({
+        reason: 'sign_in_not_me',
+        userId: alert.userId,
+        source: alert.client,
+        place,
+      }))(),
   );
   const recorded = Promise.allSettled(records);
 
@@ -490,7 +494,7 @@ async function tellEveryone(
   // says "the owners and admins were told" only when one was made.
   const body = noticeBody(who, alert.deviceFamily);
   const notices = await Promise.allSettled(
-    told.map((t) =>
+    told.map(async (t) =>
       createNotification({
         organizationId: t.organizationId,
         userId: t.userId,

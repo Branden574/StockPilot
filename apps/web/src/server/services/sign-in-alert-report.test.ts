@@ -591,6 +591,27 @@ describe('reportSignInAlertNotMe: the emails go one after another (finding 3)', 
     expect(JSON.stringify(h.reportError.mock.calls)).not.toContain('example.test');
   });
 
+  it('an audit row, an event or a notice that throws on the spot stops none of the others', async () => {
+    h.audit.mockImplementation(() => {
+      throw new Error('audit threw for member@example.test');
+    });
+    h.event.mockImplementation(() => {
+      throw new Error('event threw');
+    });
+    h.notify.mockImplementation(() => {
+      throw new Error('notice threw');
+    });
+    const answer = await report(await readAlert());
+    // No notice was made, but both emails went.
+    expect(answer).toEqual({ outcome: 'done', adminsTold: true });
+    expect(h.memberEmail).toHaveBeenCalledTimes(1);
+    expect(h.adminEmail).toHaveBeenCalledTimes(2);
+    expect(tags()).not.toContain('security.sign_in_report_tell_failed');
+    h.audit.mockImplementation(async () => true);
+    h.event.mockImplementation(async () => undefined);
+    h.notify.mockImplementation(async () => 'n1');
+  });
+
   it('every email sent: nothing is reported', async () => {
     await report(await readAlert());
     expect(tags()).not.toContain('security.sign_in_report_email_failed');
