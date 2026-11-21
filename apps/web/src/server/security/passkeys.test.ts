@@ -2168,8 +2168,8 @@ describe('review 4 finding 11: notes', () => {
   it("junk finishes from other addresses cannot pause the member's own passkey step (the limit is per account and address)", async () => {
     const { soft } = await memberWithPasskey();
     countingLimiter();
-    // Someone with only the password, sending junk finishes from five
-    // addresses until each one is refused: sixty in all.
+    // The finish limit is per account and address: each of five other
+    // addresses spends its own limit (sixty finishes in all).
     const elsewhere = [
       '198.51.100.9',
       '198.51.100.10',
