@@ -2358,7 +2358,8 @@ WEB_TESTS=(
   src/server/services/sign-in-alert-report.test.ts
   src/server/actions/sign-in-alerts.test.ts
   # Sign-in alerts, the reads: a member's own alerts and "This was me" (one
-  # update of the caller's own open alert, refused while the authenticator
+  # update of the caller's own open alert, and when it changes nothing one
+  # read of the caller's own alert; refused while the authenticator
   # step is owed), and the organization's list for owners and admins only,
   # asked in the order authenticator step, role, read, with the active
   # organization, naming the device family and never the member's label.
