@@ -939,6 +939,46 @@ PGTAP_TESTS=(
   # authenticated (a signed-in owner cannot read or write it), service_role
   # only, and the rows go with the organization.
   supabase/tests/0469_cron_sweep_attempts.test.sql
+  # Security events (0472): no API role reads or writes the table directly
+  # (RLS on, no policy, service_role may only SELECT); rows are written by
+  # record_security_events and removed by purge_security_events, service_role
+  # only; an organization's admin and owner read their own organization's rows
+  # through the two read functions, and a manager, another organization's
+  # owner, a signed-out caller and a password-only session that owes an
+  # authenticator step are refused; the usual shapes of an address, an email,
+  # an id, a path or a user agent sent as a city are not stored. The
+  # two-session checks (one call at a time, a wait given up after 2 s, the
+  # purge against a write, an organization being deleted) are
+  # scripts/db-concurrency/0472_security_events_writer_race.sh.
+  supabase/tests/0472_security_events.test.sql
+  # Membership rows are added by the server (0473), in two layers: anon and
+  # authenticated hold no INSERT on organization_members or on any column of
+  # it, and a BEFORE INSERT trigger refuses a row inserted as either role
+  # (shown with the privilege out of the way). An owner, an admin, a manager,
+  # a staff member, a viewer, a live act-as seat, an invitation not accepted,
+  # an account with no membership, a token with no account and a signed-out
+  # caller add no row in any statement shape; no API caller writes a row's
+  # account, organization or acceptance (the 0393 guard, each column); the
+  # service role's writes (workspace creation, invitation acceptance, act-as
+  # seats, ownership transfer), SECURITY DEFINER code, an admin's role, driver
+  # and warehouse changes and removals, a member's own removal and account
+  # deletion work.
+  supabase/tests/0473_membership_rows_added_by_the_server.test.sql
+  # Sign-in alerts (0474): no API role reads or writes sign_in_alerts or
+  # user_sign_in_countries directly (RLS on, no policy, service_role only);
+  # a member reads their own alerts of 30 days, and nobody signed in, a
+  # disabled account and a password-only session that owes an
+  # authenticator step are refused; an
+  # organization's owner, admin and a live act-as seat read the alerts of
+  # its accepted members (act-as seats, invitations, outsiders and a member
+  # removed left out) with the device family and no session id, device row
+  # or full label, and a manager, a staff member, another organization's
+  # owner, an expired act-as seat, a disabled admin, a signed-out caller and
+  # a password-only session that owes an authenticator step are refused; the
+  # device words take letters, digits, spaces and ( ) + . - only; the city
+  # rule is 0472's text; the purge keeps 90 days, 5,000 a call; both tables
+  # go with the account.
+  supabase/tests/0474_sign_in_alerts.test.sql
   # The request context reads the caller's own rows by index (0471): the same
   # answer as 0413's body for every kind of caller (several organizations, an
   # invitation not accepted, a disabled account, live and expired Act-as
@@ -2278,6 +2318,23 @@ WEB_TESTS=(
   # (its key is unique) writes the rest; a retry with the same key writes
   # nothing again, and the same key with other lines is the conflict.
   src/server/services/receiving.replay-writes-once.test.ts
+  # Security events: the recorder and its helpers are server-only and are
+  # never exported from a server action file; an event's organization is
+  # passed to the recorder only from inside server/security; every limiter
+  # key that is recorded is on a reviewed list. The recorder never throws,
+  # never waits on the database, sends no address, keeps one buffer per
+  # server instance however many copies of the module a build makes, gives
+  # each organization its own slice of it, and makes one call at a time.
+  src/server/security/events.guard.test.ts
+  src/server/security/limiter-events.guard.test.ts
+  src/server/security/events.test.ts
+  src/server/security/events.one-buffer.test.ts
+  # Membership rows are added by the server (0473): no later migration grants
+  # INSERT or ALL on organization_members, or on a column of it, to anon,
+  # authenticated or PUBLIC, and none drops, disables or restates the trigger
+  # that refuses a row inserted as either role, or its function. The file
+  # carries the "Security invariant" marker.
+  src/test/membership-insert-stays-revoked.guard.test.ts
   # Sign-in alerts, the "This was not me" link: a tag for one alert and one
   # account opens no other, compared in constant time, good for 7 days, and
   # nothing is signed without the key. Its page outside the login wall reads

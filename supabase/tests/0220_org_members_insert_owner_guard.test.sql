@@ -1,6 +1,7 @@
 -- pgTAP: org_members INSERT owner-guard (migration 0220).
--- An authenticated admin cannot mint an owner row, but can add a non-owner; the
--- service-role provisioning path can still create the first owner.
+-- Membership rows are added by the server (0473): an authenticated admin
+-- inserts no membership row, an owner row or any other; the service-role
+-- provisioning path creates the first owner.
 begin;
 select plan(3);
 
@@ -17,8 +18,10 @@ insert into public.organizations (id, name, slug) values (:org, 'Guard Org', 'gu
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
   (:org, :admin, 'admin', now());
 
--- Become the org admin (the 0217 INSERT policy lets an admin INSERT; the trigger
--- must block role='owner').
+-- Become the org admin. authenticated holds no INSERT on the table (0473), so
+-- both inserts below are refused by the privilege, before any policy or
+-- trigger; the guard trigger's own refusal of role='owner' is shown in the
+-- 0473 test.
 set local "request.jwt.claim.sub" to 'c2a00000-0000-0000-0000-0000000000a2';
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
@@ -30,10 +33,12 @@ select throws_ok(
   null,
   'admin CANNOT mint an owner row via direct insert (admin->owner escalation blocked)'
 );
-select lives_ok(
+select throws_ok(
   $$ insert into public.organization_members (organization_id, user_id, role, accepted_at)
        values ('c2000000-0000-0000-0000-0000000000c2','c2b00000-0000-0000-0000-0000000000b2','staff', now()) $$,
-  'admin CAN still add a non-owner member (legit path preserved)'
+  '42501',
+  'permission denied for table organization_members',
+  'membership rows are added by the server (0473): an admin''s own session holds no INSERT on the table'
 );
 reset role;
 

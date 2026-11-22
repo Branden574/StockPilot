@@ -9,8 +9,9 @@
 --        production's own keys) and no composite key or column-list SET NULL
 --        to a person;
 --    K2  no RESTRICT or NO ACTION key to a person in any schema;
---    K3  the CASCADE person keys in public are exactly the 20 personal ones (0399 adds one)
---        (delivery_locations and order_submissions added, invites gone);
+--    K3  the CASCADE person keys in public are exactly the 23 personal ones (0399
+--        and 0418 add one each, 0474 two) (delivery_locations and
+--        order_submissions added, invites gone);
 --    K4  the tables carrying deleted_users are exactly the 16 of the narrow
 --        scope, and each table's trigger arguments are exactly its SET NULL
 --        person columns;
@@ -319,9 +320,14 @@ select is(
   -- (recomputed from that production census with the one entry added).
   -- 0418 (Liquid Glass, placeholder number) adds one more: a person's chosen
   -- appearance, user_appearance.user_id>auth.users:c:NN (the local census
-  -- through 0416 gave 885e1d5a...|135; with 0418 applied it gives this).
-  '3e027513d5d267367f318ced17abb6f3|136|0/0',
-  'K1: the person-key census in public is 0393''s plus 0399''s grouping request log and 0418''s appearance (136 keys), and no key to a person is composite or names SET NULL columns');
+  -- through 0416 gave 885e1d5a...|135; with 0418 applied it gives
+  -- 3e027513...|136). 0474 (sign-in alerts) adds two: a person's sign-in
+  -- alerts and the countries they sign in from,
+  -- sign_in_alerts.user_id>user_profiles:c:NN and
+  -- user_sign_in_countries.user_id>user_profiles:c:NN (the local census
+  -- through 0473 gave 3e027513...|136; with 0474 applied it gives this).
+  '1f02404af1f2f8cc32691a426854d141|138|0/0',
+  'K1: the person-key census in public is 0393''s plus 0399''s grouping request log, 0418''s appearance and 0474''s sign-in alerts and countries (138 keys), and no key to a person is composite or names SET NULL columns');
 select is(
   (select coalesce(string_agg(c.conrelid::regclass::text || '.' || c.conname || ':' || c.confdeltype::text, ',' order by 1), '')
      from pg_constraint c
@@ -338,10 +344,11 @@ select is(
   'item_grouping_requests.user_id,'
   'mfa_recovery_codes.user_id,notification_preferences.user_id,notifications.user_id,order_submissions.user_id,'
   'organization_members.user_id,platform_impersonation_sessions.admin_user_id,push_tokens.user_id,saved_views.user_id,'
+  'sign_in_alerts.user_id,'
   'user_appearance.user_id,'
   'user_category_assignments.user_id,user_login_devices.user_id,user_onboarding.user_id,user_permission_overrides.user_id,'
-  'user_profiles.id,user_release_state.user_id,user_warehouse_assignments.user_id',
-  'K3: the person keys in public that cascade are exactly the 21 personal ones (0393 adds the driver''s live position and the placer''s submission log; invites move to SET NULL; 0399 adds the grouping request log; 0418 adds the chosen appearance)');
+  'user_profiles.id,user_release_state.user_id,user_sign_in_countries.user_id,user_warehouse_assignments.user_id',
+  'K3: the person keys in public that cascade are exactly the 23 personal ones (0393 adds the driver''s live position and the placer''s submission log; invites move to SET NULL; 0399 adds the grouping request log; 0418 adds the chosen appearance; 0474 adds the sign-in alerts and countries)');
 select is(
   (select string_agg(c.relname, ',' order by c.relname collate "C")
      from pg_attribute a join pg_class c on c.oid = a.attrelid
@@ -1013,8 +1020,8 @@ select is(
   pg_temp.attempt('authenticated', :mgr,
                   format($q$insert into public.organization_members (organization_id, user_id, role, accepted_at)
                             values (%L, %L, 'staff', now())$q$, :orgA, :xinv), :'promote_mgr'),
-  'ok:1 | ok:1 | ok:1 | 42501:-:cannot create an Act as seat via direct insert | ok:1',
-  'G3: what the app writes still works (team.ts: role, is_delivery_driver, all_warehouses, on any row an admin may edit; the owner too), an admin may still add a member (0217/0220), but no API caller may insert an "Act as" seat');
+  'ok:1 | ok:1 | ok:1 | 42501:-:permission denied for table organization_members | 42501:-:permission denied for table organization_members',
+  'G3: what the app writes still works (team.ts: role, is_delivery_driver, all_warehouses, on any row an admin may edit; the owner too); membership rows are added by the server (0473), so no API caller inserts one, an "Act as" seat or any other (the privilege refuses; the guard''s own refusal of a seat is shown in the 0473 test)');
 select is(
   pg_temp.attempt('service_role', null, format('select public.transfer_org_ownership(%L, %L, %L)', :orgA, :own, :mgr),
                   format('%s; select pg_temp.call_as(%L, %L, %L)', :'promote_mgr', 'authenticated', :mgr,

@@ -45,7 +45,7 @@ create temporary table expected_junctions (junction text, a text, b text, a_fk t
 create temporary table expected_pairs (a text, b text, relationships text) on commit drop;
 
 -- BEGIN GENERATED: scripts/gen-postgrest-embed-snapshot.mjs from scripts/postgrest-embeds/relationships.snapshot.json. Do not edit by hand.
--- 405 foreign keys, 9 junctions, 35 ambiguous pairs.
+-- 408 foreign keys, 9 junctions, 35 ambiguous pairs.
 insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('activity_logs', 'activity_logs_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('activity_logs', 'activity_logs_user_id_fkey', 'user_profiles', 'user_id', 'id'),
@@ -375,6 +375,7 @@ insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('schedule_events', 'schedule_events_order_request_id_fkey', 'order_requests', 'order_request_id', 'id'),
   ('schedule_events', 'schedule_events_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('schedule_events', 'schedule_events_warehouse_id_fkey', 'warehouses', 'warehouse_id', 'id'),
+  ('security_events', 'security_events_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('serial_registry', 'serial_registry_item_id_fkey', 'inventory_items', 'item_id', 'id'),
   ('serial_registry', 'serial_registry_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('serial_registry', 'serial_registry_receipt_line_id_fkey', 'receipt_lines', 'receipt_line_id', 'id'),
@@ -387,6 +388,7 @@ insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('shipments', 'shipments_order_request_id_fkey', 'order_requests', 'order_request_id', 'id'),
   ('shipments', 'shipments_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('shipments', 'shipments_source_warehouse_id_fkey', 'warehouses', 'source_warehouse_id', 'id'),
+  ('sign_in_alerts', 'sign_in_alerts_user_id_fkey', 'user_profiles', 'user_id', 'id'),
   ('size_count_adjustments', 'size_count_adjustments_operator_id_fkey', 'user_profiles', 'operator_id', 'id'),
   ('size_count_adjustments', 'size_count_adjustments_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('size_count_adjustments', 'size_count_adjustments_session_id_fkey', 'size_count_sessions', 'session_id', 'id'),
@@ -436,6 +438,7 @@ insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('user_permission_overrides', 'user_permission_overrides_user_id_fkey', 'user_profiles', 'user_id', 'id'),
   ('user_profiles', 'user_profiles_default_organization_id_fkey', 'organizations', 'default_organization_id', 'id'),
   ('user_profiles', 'user_profiles_disabled_by_fkey', 'user_profiles', 'disabled_by', 'id'),
+  ('user_sign_in_countries', 'user_sign_in_countries_user_id_fkey', 'user_profiles', 'user_id', 'id'),
   ('user_warehouse_assignments', 'user_warehouse_assignments_assigned_by_fkey', 'user_profiles', 'assigned_by', 'id'),
   ('user_warehouse_assignments', 'user_warehouse_assignments_charter_id_fkey', 'charters', 'charter_id', 'id'),
   ('user_warehouse_assignments', 'user_warehouse_assignments_organization_id_fkey', 'organizations', 'organization_id', 'id'),
