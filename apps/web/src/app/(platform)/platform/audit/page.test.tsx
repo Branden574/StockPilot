@@ -177,6 +177,53 @@ describe('platform audit', () => {
     expect(second).not.toHaveTextContent('→');
   });
 
+  it('labels the passkey switches and shows which one and what it changed from and to', async () => {
+    h.list.mockResolvedValue([
+      row({
+        id: 'k1',
+        action: 'passkeys_switched',
+        targetUserId: null,
+        targetUserEmail: null,
+        targetOrganizationId: null,
+        detail: { setting: 'passkeys_on', from: false, to: true },
+      }),
+      row({
+        id: 'k2',
+        action: 'passkeys_switched',
+        targetUserId: null,
+        targetUserEmail: null,
+        targetOrganizationId: null,
+        detail: { setting: 'passkey_adds_on', from: true, to: false },
+      }),
+      row({
+        id: 'k3',
+        action: 'org_passkeys_switched',
+        targetUserId: null,
+        targetUserEmail: null,
+        detail: { from: true, to: false },
+      }),
+      row({
+        id: 'k4',
+        action: 'passkeys_switched',
+        targetUserId: null,
+        targetUserEmail: null,
+        detail: { setting: 'something_else', from: 'no', to: 1 },
+      }),
+    ]);
+    await renderPage();
+    const region = screen.getByRole('region', { name: 'Platform audit' });
+    const [, first, second, third, fourth] = within(region).getAllByRole('row') as HTMLElement[];
+    expect(within(first!).getByText('Switched passkeys')).toBeInTheDocument();
+    expect(within(first!).getByText('Passkeys for everyone: Off → On')).toBeInTheDocument();
+    expect(within(second!).getByText('New passkeys: On → Off')).toBeInTheDocument();
+    expect(within(third!).getByText("Switched an organization's passkeys")).toBeInTheDocument();
+    expect(within(third!).getByText('On → Off')).toBeInTheDocument();
+    expect(third).toHaveTextContent(ORG);
+    // A detail this build cannot read prints the label alone, never a guess.
+    expect(within(fourth!).getByText('Switched passkeys')).toBeInTheDocument();
+    expect(fourth).not.toHaveTextContent('→');
+  });
+
   it('keeps the empty words', async () => {
     h.list.mockResolvedValue([]);
     await renderPage();
