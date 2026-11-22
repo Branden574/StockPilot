@@ -105,6 +105,89 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
     router.refresh();
   }
 
+  const recoveryDialog = (
+    <Dialog open={recoveryOpen} onOpenChange={setRecoveryOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Use a recovery code</DialogTitle>
+          <DialogDescription>
+            Enter one of the recovery codes you saved when you set up two-factor authentication. The
+            code will be consumed and your authenticator factor will be removed so you can re-enroll
+            a new device.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={recover} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="recovery-code">Recovery code</Label>
+            <Input
+              id="recovery-code"
+              value={recoveryCode}
+              onChange={(e) => setRecoveryCode(e.target.value.toUpperCase())}
+              placeholder="XXXX-XXXX-XXXX-XXXX"
+              className="font-mono tracking-widest"
+              maxLength={32}
+              autoFocus
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="recovery-password">Confirm your password</Label>
+            <Input
+              id="recovery-password"
+              type="password"
+              autoComplete="current-password"
+              value={recoveryPassword}
+              onChange={(e) => setRecoveryPassword(e.target.value)}
+              placeholder="Your account password"
+            />
+            <p className="text-muted-foreground text-xs">
+              Required so a stolen sign-in cookie can't strip your MFA on its own.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setRecoveryOpen(false)}
+              disabled={recoveryPending}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={recoveryPending}>
+              {recoveryPending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Use recovery code'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+
+  // No authenticator app to offer (an account whose only second step is a
+  // passkey this page cannot take yet): no code box, so no code is sent; the
+  // recovery code and sign-out stay.
+  if (factors.length === 0) {
+    return (
+      <>
+        <div className="flex flex-col items-center gap-1">
+          <button
+            type="button"
+            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex min-h-11 items-center justify-center gap-1.5 rounded-md px-2 text-center text-xs focus-visible:outline-none focus-visible:ring-2 sm:min-h-8"
+            onClick={() => setRecoveryOpen(true)}
+          >
+            <KeyRound className="h-3 w-3" aria-hidden /> Use a recovery code
+          </button>
+          <button
+            type="button"
+            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex min-h-11 items-center justify-center rounded-md px-2 text-center text-xs focus-visible:outline-none focus-visible:ring-2 sm:min-h-8"
+            onClick={cancel}
+          >
+            Cancel and sign out
+          </button>
+        </div>
+        {recoveryDialog}
+      </>
+    );
+  }
+
   // The recovery dialog renders BESIDE the code form, never inside it: the
   // dialog is portalled, but React bubbles a portalled form's submit event up
   // the React tree, so a dialog inside the code form submitted both forms
@@ -188,63 +271,7 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
         </div>
       </form>
 
-      <Dialog open={recoveryOpen} onOpenChange={setRecoveryOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Use a recovery code</DialogTitle>
-            <DialogDescription>
-              Enter one of the recovery codes you saved when you set up two-factor authentication.
-              The code will be consumed and your authenticator factor will be removed so you can
-              re-enroll a new device.
-            </DialogDescription>
-          </DialogHeader>
-          <form onSubmit={recover} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="recovery-code">Recovery code</Label>
-              <Input
-                id="recovery-code"
-                value={recoveryCode}
-                onChange={(e) => setRecoveryCode(e.target.value.toUpperCase())}
-                placeholder="XXXX-XXXX-XXXX-XXXX"
-                className="font-mono tracking-widest"
-                maxLength={32}
-                autoFocus
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="recovery-password">Confirm your password</Label>
-              <Input
-                id="recovery-password"
-                type="password"
-                autoComplete="current-password"
-                value={recoveryPassword}
-                onChange={(e) => setRecoveryPassword(e.target.value)}
-                placeholder="Your account password"
-              />
-              <p className="text-muted-foreground text-xs">
-                Required so a stolen sign-in cookie can't strip your MFA on its own.
-              </p>
-            </div>
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setRecoveryOpen(false)}
-                disabled={recoveryPending}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" disabled={recoveryPending}>
-                {recoveryPending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  'Use recovery code'
-                )}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+      {recoveryDialog}
     </>
   );
 }

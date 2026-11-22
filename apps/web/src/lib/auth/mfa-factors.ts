@@ -8,6 +8,10 @@ export interface MfaFactor {
   /** GoTrue's id of the factor (every listed factor has one). */
   id?: string;
   status: string;
+  /** 'totp', 'phone' or 'webauthn', as GoTrue lists it. */
+  factor_type?: string;
+  /** The name it was enrolled under (a passkey's bridge carries a reserved one: lib/auth/passkey-bridge-name). */
+  friendly_name?: string | null;
 }
 
 /** A factor list, and the account it is the list of. */
