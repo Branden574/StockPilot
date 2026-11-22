@@ -9,8 +9,8 @@
 --        production's own keys) and no composite key or column-list SET NULL
 --        to a person;
 --    K2  no RESTRICT or NO ACTION key to a person in any schema;
---    K3  the CASCADE person keys in public are exactly the 23 personal ones (0399
---        and 0418 add one each, 0474 two) (delivery_locations and
+--    K3  the CASCADE person keys in public are exactly the 26 personal ones (0399
+--        and 0418 add one each, 0474 two, 0475 three) (delivery_locations and
 --        order_submissions added, invites gone);
 --    K4  the tables carrying deleted_users are exactly the 16 of the narrow
 --        scope, and each table's trigger arguments are exactly its SET NULL
@@ -325,9 +325,15 @@ select is(
   -- alerts and the countries they sign in from,
   -- sign_in_alerts.user_id>user_profiles:c:NN and
   -- user_sign_in_countries.user_id>user_profiles:c:NN (the local census
-  -- through 0473 gave 3e027513...|136; with 0474 applied it gives this).
-  '1f02404af1f2f8cc32691a426854d141|138|0/0',
-  'K1: the person-key census in public is 0393''s plus 0399''s grouping request log, 0418''s appearance and 0474''s sign-in alerts and countries (138 keys), and no key to a person is composite or names SET NULL columns');
+  -- through 0473 gave 3e027513...|136; with 0474 applied it gave
+  -- 1f02404a...|138). 0475 (passkeys) adds three: a person's passkeys, their
+  -- bridge and their ceremony challenges,
+  -- member_passkeys.user_id>user_profiles:c:NN,
+  -- passkey_bridges.user_id>user_profiles:c:NN and
+  -- passkey_challenges.user_id>user_profiles:c:NN (the local census through
+  -- 0474 gave 1f02404a...|138; with 0475 applied it gives this).
+  '76aff65dfb79546f07604818e401184f|141|0/0',
+  'K1: the person-key census in public is 0393''s plus 0399''s grouping request log, 0418''s appearance, 0474''s sign-in alerts and countries and 0475''s passkeys, bridge and challenges (141 keys), and no key to a person is composite or names SET NULL columns');
 select is(
   (select coalesce(string_agg(c.conrelid::regclass::text || '.' || c.conname || ':' || c.confdeltype::text, ',' order by 1), '')
      from pg_constraint c
@@ -342,13 +348,16 @@ select is(
       and c.connamespace = 'public'::regnamespace and c.confdeltype = 'c'),
   'ai_chat_sessions.user_id,customer_users.user_id,delivery_locations.driver_user_id,import_jobs.user_id,'
   'item_grouping_requests.user_id,'
+  'member_passkeys.user_id,'
   'mfa_recovery_codes.user_id,notification_preferences.user_id,notifications.user_id,order_submissions.user_id,'
-  'organization_members.user_id,platform_impersonation_sessions.admin_user_id,push_tokens.user_id,saved_views.user_id,'
+  'organization_members.user_id,'
+  'passkey_bridges.user_id,passkey_challenges.user_id,'
+  'platform_impersonation_sessions.admin_user_id,push_tokens.user_id,saved_views.user_id,'
   'sign_in_alerts.user_id,'
   'user_appearance.user_id,'
   'user_category_assignments.user_id,user_login_devices.user_id,user_onboarding.user_id,user_permission_overrides.user_id,'
   'user_profiles.id,user_release_state.user_id,user_sign_in_countries.user_id,user_warehouse_assignments.user_id',
-  'K3: the person keys in public that cascade are exactly the 23 personal ones (0393 adds the driver''s live position and the placer''s submission log; invites move to SET NULL; 0399 adds the grouping request log; 0418 adds the chosen appearance; 0474 adds the sign-in alerts and countries)');
+  'K3: the person keys in public that cascade are exactly the 26 personal ones (0393 adds the driver''s live position and the placer''s submission log; invites move to SET NULL; 0399 adds the grouping request log; 0418 adds the chosen appearance; 0474 adds the sign-in alerts and countries; 0475 adds the passkeys, the bridge and the ceremony challenges)');
 select is(
   (select string_agg(c.relname, ',' order by c.relname collate "C")
      from pg_attribute a join pg_class c on c.oid = a.attrelid
