@@ -158,3 +158,57 @@ describe('a method that could not be removed (the review of stage 5, finding 1)'
     expect(`${m.subject}\n${m.preheader}\n${m.text}\n${m.html}`).not.toMatch(/passkey/i);
   });
 });
+
+describe('a code that removed nothing (REVIEW-STAGE-6B finding 2)', () => {
+  it.each([
+    [true, 'Your other devices were signed out.'],
+    [false, 'We could not sign out your other devices.'],
+  ])(
+    'other devices signed out %s: says a code was used and that, and no sentence about methods',
+    (othersSignedOut, sentence) => {
+      for (const passkeys of [false, true]) {
+        const m = renderRecoveryCodeUsedEmail({
+          ...base,
+          passkeys,
+          othersSignedOut,
+          nothingRemoved: true,
+        });
+        expect(m.subject).toBe('A recovery code was used on your StockPilot account');
+        expect(m.text).toContain(
+          `a recovery code was used on your StockPilot account on Nov 21, 2026, 9:41 AM UTC. ${sentence}`,
+        );
+        expect(m.html).toContain(sentence);
+        expect(m.html).toContain('Recovery code used');
+        expect(m.text).toContain(
+          'If this was not you, reset your password now: https://app.example.test/reset',
+        );
+        expect(m.text).toContain('Then tell your administrator.');
+        const all = `${m.subject}\n${m.preheader}\n${m.text}\n${m.html}`;
+        expect(all).not.toMatch(/removed|could not be removed|set up your sign-in methods again/i);
+        expect(all).not.toMatch(/passkey/i);
+      }
+    },
+  );
+
+  it('a method left wins: its sentence is said, never the nothing-removed words alone', () => {
+    const m = renderRecoveryCodeUsedEmail({
+      ...base,
+      passkeys: false,
+      othersSignedOut: true,
+      methodsLeft: 'app',
+      nothingRemoved: true,
+    });
+    expect(m.text).toContain(
+      'An authenticator app could not be removed, so it is still on your account.',
+    );
+    expect(m.text).toContain('Then set up your sign-in methods again');
+  });
+
+  it('without the flag the email is as before: the removed sentence', () => {
+    const m = renderRecoveryCodeUsedEmail({ ...base, passkeys: false, othersSignedOut: true });
+    expect(m.subject).toBe('Your StockPilot sign-in methods were removed');
+    expect(m.text).toContain(
+      'Every authenticator app was removed, and your other devices were signed out.',
+    );
+  });
+});

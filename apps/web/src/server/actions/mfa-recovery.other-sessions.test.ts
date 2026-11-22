@@ -874,8 +874,27 @@ describe('the email is rendered after the response (the review of stage 5, findi
   });
 });
 
-describe('the email goes only when a sign-in method was removed (the second lab walk, RS5 25)', () => {
+describe('a spent code always sends one email, with only the true sentences (REVIEW-STAGE-6B finding 2)', () => {
+  /**
+   * Q7, "yes, for everyone": an email whenever a recovery code is spent.
+   * Its sentences are only the true ones (the second lab walk, RS5 25):
+   * "removed" only when a sign-in method was removed, "could not be removed"
+   * only when one was left. A code that removed nothing says only that a
+   * code was used and whether the other devices were signed out. A press
+   * refused before the code is spent sends nothing.
+   */
   const UNVERIFIED = { ...APP, id: 'app-half', status: 'unverified' };
+  const CODE_USED = 'A recovery code was used on your StockPilot account';
+  /** The words of a code that removed nothing: no sentence about methods. */
+  function saysOnlyCodeUsed(mail: { subject: string; text: string; html: string }) {
+    expect(mail.subject).toBe(CODE_USED);
+    expect(mail.text).toContain('a recovery code was used on your StockPilot account on ');
+    expect(mail.text).toContain('If this was not you, reset your password now');
+    expect(mail.text).toContain('Then tell your administrator.');
+    const all = `${mail.subject}\n${mail.text}\n${mail.html}`;
+    expect(all).not.toMatch(/removed|Methods removed|set up your sign-in methods again/i);
+    expect(all).not.toMatch(/passkey/i);
+  }
 
   it.each([
     ['before 0475 (today’s consume)', () => adminWith(PASSKEY_RECOVERY_NOT_YET, [])],
@@ -893,7 +912,7 @@ describe('the email goes only when a sign-in method was removed (the second lab 
         ),
     ],
   ])(
-    '%s, an account with no factor: the code is used and the other sessions end, but no email says methods were removed',
+    '%s, NOTHING REMOVED (an account with no factor): the code is used, the other sessions end, and one email says only that, never "removed"',
     async (_when, admin) => {
       admin();
       const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
@@ -902,18 +921,49 @@ describe('the email goes only when a sign-in method was removed (the second lab 
       expect(vi.mocked(emitAuthAudit).mock.calls.map((c) => c[0].event)).toContain(
         'mfa.recovery.consumed',
       );
-      expect(sendEmail).not.toHaveBeenCalled();
+      const mails = sent();
+      expect(mails).toHaveLength(1);
+      expect(mails[0]!.to).toBe('member@example.test');
+      expect(mails[0]!.text).toContain('Your other devices were signed out.');
+      saysOnlyCodeUsed(mails[0]!);
     },
   );
 
-  it('only a factor never set up (unverified) went: no sign-in method was removed, so no email', async () => {
+  it('nothing removed, and the other devices could not be signed out: says that, still never "removed"', async () => {
+    adminWith(PASSKEY_RECOVERY_NOT_YET, []);
+    vi.mocked(signOutAs).mockResolvedValue(NOT_SIGNED_OUT);
+    memberWith({ 'rpc:revoke_my_other_sessions': { data: null, error: { message: 'timeout' } } });
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toEqual({ ok: true, data: { unenrolled: 0, otherSessionsLeft: true } });
+    const mails = sent();
+    expect(mails).toHaveLength(1);
+    expect(mails[0]!.text).toContain('We could not sign out your other devices.');
+    expect(mails[0]!.text).not.toContain('Your other devices were signed out.');
+    saysOnlyCodeUsed(mails[0]!);
+  });
+
+  it('only a factor never set up (unverified) went: no sign-in method was removed, so the email says only that a code was used', async () => {
     adminWith(PASSKEY_RECOVERY_NOT_YET, [UNVERIFIED]);
     const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
     expect(res).toEqual({ ok: true, data: { unenrolled: 1 } });
-    expect(sendEmail).not.toHaveBeenCalled();
+    expect(sent()).toHaveLength(1);
+    saysOnlyCodeUsed(sent()[0]!);
   });
 
-  it('passkeys removed with the code while no factor was listed: removed, so the email goes', async () => {
+  it('REMOVED: a verified app removed: the removed sentence, as before', async () => {
+    beforeRecords();
+    await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(sent()).toHaveLength(1);
+    expect(sent()[0]!.subject).toBe(SUBJECT);
+    expect(sent()[0]!.text).toContain(
+      'Every authenticator app was removed, and your other devices were signed out.',
+    );
+    expect(sent()[0]!.text).toContain(
+      'Then set up your sign-in methods again in Settings, Security, and tell your administrator.',
+    );
+  });
+
+  it('REMOVED: passkeys removed with the code while no factor was listed: the removed sentence names them', async () => {
     adminWith(
       {
         'rpc:consume_recovery_code_with_passkeys': {
@@ -924,20 +974,58 @@ describe('the email goes only when a sign-in method was removed (the second lab 
       [],
     );
     await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
-    expect(sendEmail).toHaveBeenCalledTimes(1);
+    expect(sent()).toHaveLength(1);
+    expect(sent()[0]!.subject).toBe(SUBJECT);
+    expect(sent()[0]!.text).toContain('Every authenticator app and passkey was removed');
   });
 
-  it('a method that could not be removed is still said, by email, though nothing was removed', async () => {
+  it('COULD NOT REMOVE: the only app could not be deleted: the could-not sentence, never "removed"', async () => {
     const a = beforeRecords();
     failDeletes(a, ['app-1']);
     await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
-    expect(sendEmail).toHaveBeenCalledTimes(1);
+    expect(sent()).toHaveLength(1);
+    const mail = sent()[0]!;
+    expect(mail.subject).toBe(CODE_USED);
+    expect(mail.text).toContain(
+      'An authenticator app could not be removed, so it is still on your account.',
+    );
+    expect(mail.text).not.toMatch(/Every authenticator app|was removed|were removed/);
   });
 
-  it('a verified app removed: the email goes, as before', async () => {
-    beforeRecords();
-    await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
-    expect(sendEmail).toHaveBeenCalledTimes(1);
-    expect(sent()[0]!.subject).toBe(SUBJECT);
+  describe('REFUSED BEFORE SPENDING: no email', () => {
+    it('a code that is not the account’s (today’s consume)', async () => {
+      adminWith(PASSKEY_RECOVERY_NOT_YET, []);
+      memberWith({ 'rpc:consume_mfa_recovery_code': { data: false, error: null } });
+      const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+      expect(res.ok).toBe(false);
+      expect(sendEmail).not.toHaveBeenCalled();
+    });
+
+    it('a code the 0475 function did not accept', async () => {
+      adminWith(
+        {
+          'rpc:consume_recovery_code_with_passkeys': {
+            data: [{ consumed: false, passkeys_removed: 0, bridge_factor_id: null }],
+            error: null,
+          },
+        },
+        [],
+      );
+      const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+      expect(res.ok).toBe(false);
+      expect(sendEmail).not.toHaveBeenCalled();
+    });
+
+    it('a wrong password', async () => {
+      adminWith(PASSKEY_RECOVERY_NOT_YET, []);
+      vi.mocked(verifyPasswordSideChannel).mockResolvedValueOnce({
+        ok: false,
+        reason: 'invalid_password',
+        message: 'That password is incorrect.',
+      } as never);
+      const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: 'not it' });
+      expect(res.ok).toBe(false);
+      expect(sendEmail).not.toHaveBeenCalled();
+    });
   });
 });

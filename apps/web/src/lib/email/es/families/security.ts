@@ -1312,6 +1312,13 @@ export interface RecoveryCodeUsedEmailParams {
    * step, or a list of methods that could not be read (no removal tried).
    */
   methodsLeft?: 'app' | 'passkey' | 'app_and_passkey' | 'second_step' | 'unchecked';
+  /**
+   * The code removed no sign-in method and none was left (the account had no
+   * verified factor and no passkey; REVIEW-STAGE-6B finding 2). The email
+   * then says only that a code was used and what became of the other
+   * devices. Not read with `methodsLeft`.
+   */
+  nothingRemoved?: boolean;
   firstName?: string | null;
   appUrl?: string;
 }
@@ -1341,9 +1348,11 @@ const RECOVERY_UNCHECKED_AFTER_PASSKEYS =
  * could not be signed out are said not to be, and when a method could not be
  * removed (or the list of them could not be read) the email says so and never
  * that they were removed: its subject, pill and first line then say only that
- * a code was used (the review of stage 5, finding 1). The subject takes only
- * that flag: nothing a member typed reaches it. The one action is the password
- * reset page; no link signs in.
+ * a code was used (the review of stage 5, finding 1). A code that removed
+ * nothing (and left nothing) still sends it, saying only that a code was used
+ * and whether the other devices were signed out (REVIEW-STAGE-6B finding 2).
+ * The subject takes only those flags: nothing a member typed reaches it. The
+ * one action is the password reset page; no link signs in.
  */
 export function renderRecoveryCodeUsedEmail(params: RecoveryCodeUsedEmailParams): RenderedEsEmail {
   const def = esEmailById('recovery-code-used');
@@ -1354,6 +1363,8 @@ export function renderRecoveryCodeUsedEmail(params: RecoveryCodeUsedEmailParams)
   const resetUrl = `${appUrl.replace(/\/$/, '')}/reset`;
 
   const methodsLeft = params.methodsLeft !== undefined;
+  // Nothing removed and nothing left: no sentence about methods at all.
+  const nothingRemoved = !methodsLeft && params.nothingRemoved === true;
   const removed = params.passkeys
     ? 'Every authenticator app and passkey was removed'
     : 'Every authenticator app was removed';
@@ -1368,12 +1379,19 @@ export function renderRecoveryCodeUsedEmail(params: RecoveryCodeUsedEmailParams)
         : '';
   const outcome = params.methodsLeft
     ? `${left} ${others}`
-    : params.othersSignedOut
+    : nothingRemoved
+      ? others
+      : params.othersSignedOut
       ? `${removed}, and your other devices were signed out.`
       : `${removed}. ${others}`;
   const used = `a recovery code was used on your StockPilot account on ${params.usedAt}.`;
 
-  const subject = def.subject({ methodsLeft });
+  const subject = def.subject({ methodsLeft, nothingRemoved });
+  // What to do if it was not you: set the methods up again only when some
+  // were removed or left.
+  const thenWhat = nothingRemoved
+    ? 'Then tell your administrator.'
+    : 'Then set up your sign-in methods again in Settings, Security, and tell your administrator.';
   const preheader = def.preheader({});
 
   const styles = { darkPills: ['sec' as const] };
@@ -1389,9 +1407,10 @@ export function renderRecoveryCodeUsedEmail(params: RecoveryCodeUsedEmailParams)
         [
           statusPill({
             variant: 'sec',
-            label: methodsLeft
-              ? 'Security &middot; Recovery code used'
-              : 'Security &middot; Sign-in methods removed',
+            label:
+              methodsLeft || nothingRemoved
+                ? 'Security &middot; Recovery code used'
+                : 'Security &middot; Sign-in methods removed',
           }),
           headline({ lead: 'A recovery code was used.', turn: 'This is the record of it.' }),
           bodyText(
@@ -1404,8 +1423,7 @@ export function renderRecoveryCodeUsedEmail(params: RecoveryCodeUsedEmailParams)
         banner({
           tone: 'err',
           titleHtml: 'Was this not you?',
-          bodyHtml:
-            'If this was not you, reset your password now. Then set up your sign-in methods again in Settings, Security, and tell your administrator.',
+          bodyHtml: `If this was not you, reset your password now. ${thenWhat}`,
         }),
       ),
       section(
@@ -1433,7 +1451,7 @@ export function renderRecoveryCodeUsedEmail(params: RecoveryCodeUsedEmailParams)
     '',
     `If this was not you, reset your password now: ${resetUrl}`,
     '',
-    'Then set up your sign-in methods again in Settings, Security, and tell your administrator.',
+    thenWhat,
   ].join('\n');
 
   return { id: def.id, subject, preheader, html, text, from: def.from };

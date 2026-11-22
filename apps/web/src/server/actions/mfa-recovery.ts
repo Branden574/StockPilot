@@ -718,21 +718,25 @@ export async function consumeMfaRecoveryCodeAction(input: {
           ? { unenrolled }
           : { unenrolled, passkeys_removed: passkeysRemoved },
     });
-    // Q7: the security email, after the response. It names passkeys only for
-    // an account that had one, and says so when a method was left. It goes
-    // only when it has something true to say (the second lab walk, RS5 25):
-    // a sign-in method was removed (a verified factor, or passkeys with the
-    // code), or one could not be removed. A code used on an account with no
-    // method (or only a factor never set up) sends none: "your sign-in
-    // methods were removed" would be untrue.
-    const somethingToSay =
-      removal.methodsRemoved > 0 || (passkeysRemoved ?? 0) > 0 || methodsLeft !== undefined;
-    if (session.email && somethingToSay) {
+    // Q7: the security email, after the response, whenever a code was spent
+    // (here; a press refused before this point spent nothing and sends none).
+    // It names passkeys only for an account that had one, and says so when a
+    // method was left. Its sentences are only the true ones (the second lab
+    // walk, RS5 25, and REVIEW-STAGE-6B finding 2): "removed" only when a
+    // sign-in method was removed (a verified factor, or passkeys with the
+    // code), "could not be removed" only when one was left; a code that did
+    // neither (an account with no method, or only a factor never set up)
+    // says only that a code was used and whether the other devices were
+    // signed out.
+    const nothingRemoved =
+      removal.methodsRemoved === 0 && (passkeysRemoved ?? 0) === 0 && methodsLeft === undefined;
+    if (session.email) {
       sendRecoveryCodeUsedEmail(session.email, session.userId, {
         passkeys: hadPasskeys,
         othersSignedOut: othersEnded,
         ...(methodsLeft ? { methodsLeft } : {}),
         ...(methodsLeft === 'unchecked' && passkeysKnownRemoved ? { passkeysRemoved: true } : {}),
+        ...(nothingRemoved ? { nothingRemoved: true } : {}),
       });
     }
     revalidatePath('/dashboard', 'layout');

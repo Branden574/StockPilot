@@ -545,4 +545,15 @@ describe('recovery-code-used when a method could not be removed (the review of s
       'Your StockPilot sign-in methods were removed',
     );
   });
+
+  it('a code that removed nothing (REVIEW-STAGE-6B finding 2): only that a code was used', () => {
+    const def = esEmailById('recovery-code-used');
+    expect(def.subject({ nothingRemoved: true })).toBe(
+      'A recovery code was used on your StockPilot account',
+    );
+    expect(def.badge.label({ nothingRemoved: true })).toBe('Recovery code used');
+    expect(def.subject({ nothingRemoved: false })).toBe(
+      'Your StockPilot sign-in methods were removed',
+    );
+  });
 });

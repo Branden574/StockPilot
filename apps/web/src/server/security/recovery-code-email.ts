@@ -13,7 +13,8 @@ import { defer } from '@/server/services/lib/defer';
 /**
  * "Your StockPilot sign-in methods were removed" (answers Q6 and Q7 of the
  * passkey plan): the security email of a used recovery code, sent to the
- * account's address after the response, never blocking it. The words are the
+ * account's address after the response, never blocking it, whenever a code
+ * was spent (when it removed nothing, it says only that a code was used). The words are the
  * true ones for this account (lib/email/es/families/security.ts
  * renderRecoveryCodeUsedEmail). The email is rendered and sent inside the
  * deferred function, so a render that throws cannot change the answer of a
@@ -34,6 +35,8 @@ export function sendRecoveryCodeUsedEmail(
     methodsLeft?: RecoveryCodeUsedEmailParams['methodsLeft'];
     /** With `methodsLeft: 'unchecked'`: the passkeys are known removed. */
     passkeysRemoved?: boolean;
+    /** The code removed no sign-in method and left none. */
+    nothingRemoved?: boolean;
   },
 ): void {
   // The time the code was used, read now, not when the deferred work runs.
@@ -48,6 +51,7 @@ export function sendRecoveryCodeUsedEmail(
         othersSignedOut: facts.othersSignedOut,
         ...(facts.methodsLeft ? { methodsLeft: facts.methodsLeft } : {}),
         ...(facts.passkeysRemoved ? { passkeysRemoved: true } : {}),
+        ...(facts.nothingRemoved ? { nothingRemoved: true } : {}),
         appUrl: env.NEXT_PUBLIC_APP_URL,
       });
     } catch {
