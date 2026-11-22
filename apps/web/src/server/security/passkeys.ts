@@ -169,6 +169,13 @@ export const PASSKEY_WORDS = {
    */
   onlyMethodUnfinished:
     "This passkey's setup isn't finished and it is your only second step, so it can't be removed yet. Add an authenticator app first, then remove it. Or use a recovery code, if you saved one: it removes every second step, passkeys included.",
+  /**
+   * The second lab walk, FAIL 2: no active passkey, and a verified factor
+   * that carries the bridge's reserved name that no bridge row records
+   * (addBlockedByStray). No Add can finish there; the ways out, as they are.
+   */
+  addBlocked:
+    "A passkey can't be added right now: a second step on your account can't be used. Try again later, or use a recovery code, if you saved one: it removes every second step, passkeys included.",
   finishFirstOnlyMethod:
     "Finish setting up your passkey first. Press Finish next to it. If you can't, add an authenticator app first, then remove the passkey. Or use a recovery code, if you saved one: it removes every second step, passkeys included.",
   /** Decision B: the same words as an authenticator app's removal (second-step-methods.ts). */
@@ -742,6 +749,30 @@ function bridgeServes(p: Judged): boolean {
  */
 function onlyMethodUnfinished(p: AccountPicture): boolean {
   return setupUnfinished(p) && !p.factors.some((f) => f.status === 'verified');
+}
+
+/**
+ * The second lab walk, FAIL 2 (review 6A finding 4): no active passkey of
+ * this site, and a VERIFIED factor that carries the bridge's reserved name
+ * and that no bridge row records (S12, S13, S14, S17 with no row, or a stray
+ * beside a recorded bridge). That factor is no app (`apps` leaves it out: no
+ * member has its code), and it is never the account's bridge. Every state it
+ * leaves with no active passkey is one finishAddPasskey refuses:
+ * reserved_factor_without_row (a bridge row, which then cannot serve),
+ * bridge_newer_than_removal, removal_unfinished, bridge_without_passkey and
+ * other_site_only. So the Add is neither offered (the panel's `addBlocked`)
+ * nor started: startAddPasskey refuses after rule 19 and before any proof is
+ * checked or any challenge issued. The records were read to know this: a
+ * record that cannot be read never gets here (readPicture refuses with "try
+ * again"). With an active passkey (S15) the Add is judged as before.
+ */
+function addBlockedByStray(p: AccountPicture): boolean {
+  return (
+    p.active.length === 0 &&
+    p.factors.some(
+      (f) => f.status === 'verified' && isReservedTotp(f) && f.id !== p.bridge?.factor_id,
+    )
+  );
 }
 
 /**
@@ -1561,6 +1592,10 @@ export async function startAddPasskey(input: {
   // Rule 19: an account with a verified factor adds only from an aal2 session.
   if (anyVerified && held.claims.aal !== 'aal2')
     return fail('forbidden', PASSKEY_WORDS.stepUpFirst, 'aal2_required');
+  // The second lab walk, FAIL 2: no Add can finish here, so no proof is
+  // asked or checked and no challenge is issued.
+  if (addBlockedByStray(picture))
+    return fail('forbidden', PASSKEY_WORDS.addBlocked, 'add_blocked');
 
   const proof = input.proof as AddProof | null | undefined;
   if (!proof || typeof proof !== 'object')
@@ -2153,6 +2188,12 @@ export interface PasskeysPanel {
    * ways out (an authenticator app first, or a recovery code).
    */
   onlyMethodUnfinished: boolean;
+  /**
+   * The second lab walk, FAIL 2: no Add can finish for this account now (no
+   * active passkey and a verified reserved-name factor no bridge row
+   * records): the panel says why and offers the recovery code instead of Add.
+   */
+  addBlocked: boolean;
 }
 
 /**
@@ -2246,6 +2287,7 @@ async function panelOf(
     phoneConfirmation: canAdd && !hasApp && (await usedPhoneAppRecently(admin, userId)),
     aal2: held.claims.aal === 'aal2',
     onlyMethodUnfinished: onlyMethodUnfinished(picture),
+    addBlocked: addBlockedByStray(picture),
   };
 }
 

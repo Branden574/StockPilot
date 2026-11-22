@@ -46,6 +46,9 @@ export const PASSKEYS_PANEL_WORDS = {
   /** Review 4 finding 4: the same words as the server's (passkeys.test.ts pins them equal). */
   onlyMethodUnfinished:
     "This passkey's setup isn't finished and it is your only second step, so it can't be removed yet. Add an authenticator app first, then remove it. Or use a recovery code, if you saved one: it removes every second step, passkeys included.",
+  /** The second lab walk, FAIL 2: the same words as the server's (passkeys.test.ts pins them equal). */
+  addBlocked:
+    "A passkey can't be added right now: a second step on your account can't be used. Try again later, or use a recovery code, if you saved one: it removes every second step, passkeys included.",
   useRecoveryCode: 'Use a recovery code',
   recoveryTitle: 'Use a recovery code',
   recoveryBody:

@@ -76,6 +76,7 @@ vi.mock('@/lib/auth/platform-admin', async () => {
 });
 
 const { checkMfaCode } = await import('@/lib/auth/mfa-code-attempts');
+const { verifyPasswordSideChannel: passwordCheck } = await import('@/lib/auth/verify-password');
 const { checkRateLimit } = await import('@/lib/rate-limit');
 const { reportError } = await import('@/lib/error-reporter');
 const { emitAuthAudit } = await import('@/server/services/auth-audit');
@@ -1176,6 +1177,147 @@ describe('a reserved-name factor that no bridge row records is no authenticator 
       proof: 'passkey_or_code',
       apps: [{ id: app.id, friendlyName: 'StockPilot app' }],
     });
+  });
+});
+
+describe('the Add with no active passkey and a reserved-name factor that no bridge row records (the second lab walk, FAIL 2)', () => {
+  /**
+   * The walk's account: a session at aal2, the bridge row gone, no active
+   * passkey, no app. Its only verified factor carries the reserved name and
+   * no row records it: no app (no member has its code), and every state it
+   * leaves is one the finish refuses. So the Add is neither offered nor
+   * started: no proof is asked, none is checked, no challenge is issued.
+   */
+  const ROWS: Array<[string, (userId: string) => void]> = [
+    [
+      'S13 (removed rows, the factor made before the removal)',
+      (userId) => {
+        for (const r of world.passkeys.filter((p) => p.user_id === userId))
+          r.removed_at = new Date(Date.now() + 1000).toISOString();
+      },
+    ],
+    [
+      'S17 (removed rows, the factor made after the removal)',
+      (userId) => {
+        for (const r of world.passkeys.filter((p) => p.user_id === userId))
+          r.removed_at = new Date(Date.now() - 60_000).toISOString();
+      },
+    ],
+    [
+      'no passkey row at all',
+      (userId) => {
+        world.passkeys = world.passkeys.filter((p) => p.user_id !== userId);
+      },
+    ],
+  ];
+  /** The walk's account in one of the states above, signed in at `aal`. */
+  async function strandedAccount(rows: (userId: string) => void, aal: 'aal1' | 'aal2' = 'aal2') {
+    const { userId } = await memberWithPasskey();
+    world.bridges.delete(userId);
+    rows(userId);
+    world.signIn(userId, aal);
+    // The setup above checked a password; count from here.
+    vi.mocked(passwordCheck).mockClear();
+    vi.mocked(checkMfaCode).mockClear();
+    return userId;
+  }
+
+  it.each(ROWS)(
+    '%s: the panel offers no Add, says why, and the proof step is never reached',
+    async (_state, rows) => {
+      const userId = await strandedAccount(rows);
+      const panel = await panelFor(userId);
+      expect(panel).toMatchObject({
+        passkeys: [],
+        canAdd: true,
+        addBlocked: true,
+        hasApp: false,
+        apps: [],
+      });
+      expect(JSON.stringify(panel)).not.toContain('sp-passkey-bridge');
+    },
+  );
+
+  it.each(ROWS)(
+    '%s: the start refuses before any proof is checked, and issues no challenge',
+    async (_state, rows) => {
+      const userId = await strandedAccount(rows);
+      const stray = world.factors.find((f) => f.user_id === userId)!;
+      vi.mocked(checkMfaCode).mockResolvedValue({ kind: 'verified' } as never);
+      const issued = world.challenges.length;
+      for (const proof of [
+        { kind: 'password', password: SAMPLE_PASSWORD },
+        { kind: 'code', factorId: stray.id, code: '123456' },
+      ]) {
+        expect(await pk.startAddPasskey({ proof })).toMatchObject({
+          ok: false,
+          message: pk.PASSKEY_WORDS.addBlocked,
+          reason: 'add_blocked',
+        });
+      }
+      expect(passwordCheck).not.toHaveBeenCalled();
+      expect(checkMfaCode).not.toHaveBeenCalled();
+      expect(world.challenges).toHaveLength(issued);
+      // Nothing deleted, nothing enrolled.
+      expect(world.calls.deleteFactor).toEqual([]);
+      expect(world.factors.filter((f) => f.user_id === userId)).toEqual([stray]);
+    },
+  );
+
+  it('with an authenticator app of the member’s own too: no Add either, and the app’s code is not asked', async () => {
+    const userId = await strandedAccount(ROWS[0]![1]);
+    const app = world.addApp(userId);
+    expect(await panelFor(userId)).toMatchObject({ addBlocked: true, hasApp: true });
+    vi.mocked(checkMfaCode).mockResolvedValue({ kind: 'verified' } as never);
+    expect(
+      await pk.startAddPasskey({ proof: { kind: 'code', factorId: app.id, code: '123456' } }),
+    ).toMatchObject({ ok: false, reason: 'add_blocked' });
+    expect(checkMfaCode).not.toHaveBeenCalled();
+  });
+
+  it('an aal1 session in that state still gets "confirm it’s you first" (rule 19 comes first)', async () => {
+    const userId = await strandedAccount(ROWS[0]![1], 'aal1');
+    expect(
+      await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } }),
+    ).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.stepUpFirst, reason: 'aal2_required' });
+    expect(userId).toBeTruthy();
+  });
+
+  it('the bridge record CANNOT be read: still closed, with "try again" (no panel; the start refuses before any proof)', async () => {
+    const userId = await strandedAccount(ROWS[0]![1]);
+    world.knobs.failReads = ['passkey_bridges'];
+    expect(await panelFor(userId)).toBeNull();
+    expect(
+      await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } }),
+    ).toMatchObject({
+      ok: false,
+      message: pk.PASSKEY_WORDS.couldNotFinish,
+      reason: 'records_unreadable',
+    });
+    expect(passwordCheck).not.toHaveBeenCalled();
+    world.knobs.failReads = [];
+  });
+
+  it('the Add is still offered where it can finish: S15 (a stray beside a serving passkey), a member with no method, a member with an app', async () => {
+    const s15 = await memberWithPasskey('s15@example.test');
+    const stray = world.addApp(s15.userId);
+    stray.friendly_name = 'sp-passkey-bridge-0123456789ab';
+    world.signIn(s15.userId, 'aal2');
+    expect(await panelFor(s15.userId)).toMatchObject({ addBlocked: false, proof: 'passkey' });
+
+    const none = world.addAccount('none@example.test');
+    world.signIn(none, 'aal1');
+    expect(await panelFor(none)).toMatchObject({ addBlocked: false, proof: 'password' });
+
+    const withApp = world.addAccount('app@example.test');
+    world.addApp(withApp);
+    world.signIn(withApp, 'aal2');
+    expect(await panelFor(withApp)).toMatchObject({ addBlocked: false, proof: 'code' });
+  });
+
+  it('the panel’s words are the server’s', () => {
+    expect(PASSKEYS_PANEL_WORDS.addBlocked).toBe(pk.PASSKEY_WORDS.addBlocked);
+    expect(pk.PASSKEY_WORDS.addBlocked).toMatch(/recovery code/);
   });
 });
 

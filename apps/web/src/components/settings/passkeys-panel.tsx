@@ -180,7 +180,15 @@ export function PasskeysPanel({ data }: { data: PanelData }) {
         )
       ) : null}
       <div role="alert">{rowError ? <p className="text-destructive text-[12px]">{rowError}</p> : null}</div>
-      {!full || !data.canAdd ? null : data.atLimit ? (
+      {!full || !data.canAdd ? null : data.addBlocked ? (
+        // The second lab walk, FAIL 2: no Add can finish; the ways out.
+        <div className="space-y-2">
+          <p className="text-muted-foreground text-[12px]">{PASSKEYS_PANEL_WORDS.addBlocked}</p>
+          <Button size="sm" variant="outline" onClick={() => setRecovering(true)}>
+            {PASSKEYS_PANEL_WORDS.useRecoveryCode}
+          </Button>
+        </div>
+      ) : data.atLimit ? (
         <p className="text-muted-foreground text-[12px]">{PASSKEYS_PANEL_WORDS.atLimit}</p>
       ) : (
         <Button size="sm" onClick={() => setAdding(true)}>

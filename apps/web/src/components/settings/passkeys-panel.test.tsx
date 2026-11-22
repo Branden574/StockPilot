@@ -58,6 +58,7 @@ function panel(extra: Partial<PanelData> = {}): PanelData {
     phoneConfirmation: false,
     aal2: true,
     onlyMethodUnfinished: false,
+    addBlocked: false,
     ...extra,
   };
 }
@@ -121,6 +122,30 @@ describe('the Passkeys panel (decision A)', () => {
     unmount();
     render(<PasskeysPanel data={panel({ passkeys: unfinished, canFinish: true, canAdd: false })} />);
     expect(buttons()).toEqual(['Finish', 'Remove']);
+  });
+});
+
+describe('the second lab walk, FAIL 2: no Add can finish', () => {
+  const blocked = () =>
+    panel({
+      passkeys: [],
+      hasApp: false,
+      apps: [],
+      proof: 'code',
+      addBlocked: true,
+    });
+
+  it('says why and offers the recovery code, never Add (so no code box for a code nobody has)', () => {
+    render(<PasskeysPanel data={blocked()} />);
+    expect(screen.getByText(PASSKEYS_PANEL_WORDS.addBlocked)).toBeTruthy();
+    expect(buttons()).toEqual([PASSKEYS_PANEL_WORDS.useRecoveryCode]);
+    expect(screen.queryByText(PASSKEYS_PANEL_WORDS.code)).toBeNull();
+  });
+
+  it('the recovery code dialog opens from it', () => {
+    render(<PasskeysPanel data={blocked()} />);
+    fireEvent.click(screen.getByRole('button', { name: PASSKEYS_PANEL_WORDS.useRecoveryCode }));
+    expect(screen.getByLabelText('Recovery code')).toBeTruthy();
   });
 });
 
