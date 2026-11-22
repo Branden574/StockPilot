@@ -3768,11 +3768,22 @@ describe('a run: six hours, oldest first, each written once', () => {
       const [err, ctx] = h.report.mock.calls[0]!;
       expect(String(err)).toContain('Flagged counts of refused sign-ins were stored');
       expect(String(err)).toContain('no organization');
-      expect(String(err)).toContain("the platform console's Security page does");
+      // The page lists a fixed number of the newest rows, of every
+      // organization: the report says so, and names the hour to look for.
+      expect(String(err)).toContain(
+        "the platform console's Security page shows them among its newest entries",
+      );
+      expect(String(err)).toContain('The first flagged hour (UTC)');
+      expect(summary.firstFlaggedHour).toBe('2026-11-21T05:00Z');
       expect(ctx).toEqual({
         tag: 'cron.security-events-auth-logs',
         level: 'warning',
-        extra: { cause: 'flagged_stored', hours: 1, unclassified_sign_in_refusals: 4 },
+        extra: {
+          cause: 'flagged_stored',
+          hours: 1,
+          hour: '2026-11-21T05:00Z',
+          unclassified_sign_in_refusals: 4,
+        },
       });
     });
 
@@ -3809,12 +3820,14 @@ describe('a run: six hours, oldest first, each written once', () => {
         },
       });
       expect(reportCauses().sort()).toEqual(['flagged_stored', 'totals_incomplete']);
+      // The first flagged hour is the oldest (04), not the last one run (07).
       expect(reportsOf('flagged_stored')[0]![1]).toEqual({
         tag: 'cron.security-events-auth-logs',
         level: 'warning',
         extra: {
           cause: 'flagged_stored',
           hours: 2,
+          hour: '2026-11-21T04:00Z',
           unclassified_sign_in_refusals: 6,
           unrecorded_server_form_password: 6,
           unrecorded_server_form_code: 4,
@@ -3853,18 +3866,24 @@ describe('a run: six hours, oldest first, each written once', () => {
       hourAnswers(H(5), [], [totalsRow({ kind: 'token_other', n: 4 }, H(5))]);
       h.rpc.mockResolvedValueOnce({ data: null, error: { code: '55P03', message: 'lock' } });
       const summary = full(await run());
-      expect(summary).toMatchObject({ hoursStored: 0, flaggedHours: 0, flaggedStored: {} });
+      expect(summary).toMatchObject({
+        hoursStored: 0,
+        flaggedHours: 0,
+        firstFlaggedHour: null,
+        flaggedStored: {},
+      });
       expect(reportCauses()).toEqual(['writer_failed']);
     });
 
-    it('the report holds counts and reason codes only', async () => {
+    it('the report holds counts, reason codes and the hour only', async () => {
       hourAnswers(H(5), [], [totalsRow({ kind: 'token_other', n: 4 }, H(5))]);
       await run();
       const [err, ctx] = reportsOf('flagged_stored')[0]!;
       expect(String(err)).not.toMatch(/[0-9]/);
       for (const [key, value] of Object.entries((ctx as { extra: object }).extra)) {
         expect(key).toMatch(/^[a-z_]+$/);
-        expect(typeof value === 'number' || value === 'flagged_stored').toBe(true);
+        if (key === 'hour') expect(value).toMatch(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:00Z$/);
+        else expect(typeof value === 'number' || value === 'flagged_stored', key).toBe(true);
       }
     });
   });

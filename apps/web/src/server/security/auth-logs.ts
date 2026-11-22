@@ -176,11 +176,12 @@ import { createAdminClient } from '@/lib/supabase/admin';
  *
  * A FLAGGED COUNT IS REPORTED AS WELL AS STORED. The rows this job stores
  * have no organization, so they are on no organization's Blocked activity
- * page, only on the platform console's Security page (the newest entries of
- * every organization and none). Whenever a run stores a flagged element (requests of an unknown
- * form, refusals in our server's form that our server has no record of,
- * totals that were not whole) it sends one warning with the events by
- * reason. A run that stores only ordinary counts reports nothing.
+ * page, only on the platform console's Security page, among its newest
+ * entries (of every organization and none). Whenever a run stores a flagged
+ * element (requests of an unknown form, refusals in our server's form that
+ * our server has no record of, totals that were not whole) it sends one
+ * warning with the first flagged hour (UTC) and the events by reason. A run
+ * that stores only ordinary counts reports nothing.
  *
  * THE HOUR'S END. A line stamped on the very instant an hour ends belongs to
  * the next hour. Whether the logs service answers it for the hour that ends
@@ -750,6 +751,8 @@ export interface AuthLogsRunSummary {
   unrecordedFlags: number;
   /** Hours for which this run stored at least one flagged element. */
   flaggedHours: number;
+  /** The first (oldest) of those hours, e.g. 2026-11-21T04:00Z; null when there is none. */
+  firstFlaggedHour: string | null;
   /** Reason -> events on the flagged elements this run stored. */
   flaggedStored: Partial<Record<AuthLogsReason, number>>;
   /** Hours whose own record could not all be read: compared with what was read (fail closed). */
@@ -1728,6 +1731,7 @@ function emptySummary(hours: AuthLogsHour[]): AuthLogsRunSummary {
     ambiguousFormGroups: 0,
     unrecordedFlags: 0,
     flaggedHours: 0,
+    firstFlaggedHour: null,
     flaggedStored: {},
     reconcileIncomplete: 0,
     seen: {},
@@ -1975,7 +1979,11 @@ async function runHour(
   summary.eventsStored += events;
   // What was stored as flagged, by reason: the run reports it (readAuthLogs).
   const flagged = built.elements.filter((e) => e.outcome === 'flagged');
-  if (flagged.length > 0) summary.flaggedHours += 1;
+  if (flagged.length > 0) {
+    summary.flaggedHours += 1;
+    // Hours are run oldest first, so the first one is the oldest.
+    summary.firstFlaggedHour ??= hourLabel(hour);
+  }
   for (const e of flagged) {
     summary.flaggedStored[e.reason] = (summary.flaggedStored[e.reason] ?? 0) + e.count;
   }
@@ -2181,16 +2189,24 @@ export async function readAuthLogs(options: {
   }
   // A FLAGGED COUNT IS TOLD, NOT ONLY STORED. Every row this job stores has
   // no organization, so no organization's Blocked activity page shows it;
-  // only the platform console's Security page does, among its newest
-  // entries. A flagged count is what the job could not account for, and the
-  // comparison with our own record only protects anyone if someone hears of
-  // it: one warning for the run, with the events stored by reason.
+  // only the platform console's Security page does, and only among its
+  // newest entries (it lists a fixed number of the newest rows, and these
+  // are dated in their own hour, up to a few hours before they are
+  // written). A flagged count is what the job could not account for, and
+  // the comparison with our own record only protects anyone if someone
+  // hears of it: one warning for the run, with the first flagged hour (UTC)
+  // to look for and the events stored by reason.
   if (summary.flaggedHours > 0) {
     reports.push({
       message:
-        "Flagged counts of refused sign-ins were stored. They have no organization, so no organization's Blocked activity page shows them; the platform console's Security page does. The counts by reason are in this report",
+        "Flagged counts of refused sign-ins were stored. They have no organization, so no organization's Blocked activity page shows them; the platform console's Security page shows them among its newest entries. The first flagged hour (UTC) and the counts by reason are in this report",
       level: 'warning',
-      extra: { cause: 'flagged_stored', hours: summary.flaggedHours, ...summary.flaggedStored },
+      extra: {
+        cause: 'flagged_stored',
+        hours: summary.flaggedHours,
+        ...(summary.firstFlaggedHour !== null ? { hour: summary.firstFlaggedHour } : {}),
+        ...summary.flaggedStored,
+      },
     });
   }
   if (summary.landedPastMinuteCaps > 0) {
