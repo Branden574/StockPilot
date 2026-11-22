@@ -81,7 +81,7 @@ const PHONE_SET_UP_ID = 'phone-authenticator-set-up-2026-11';
 // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: PHONE_SET_UP_AT = '2026-11-21T02:31:00Z'): the Liquid Glass draft placeholder is now the minute of the Blocked activity release, published later, above the phone authenticator set-up release.
 // Re-pinned by docs/whats-new-sign-in-alerts-and-reader (2026-11-22; was: BLOCKED_AT = '2026-11-21T18:19:00Z'): the Liquid Glass draft placeholder is now the minute of the Blocked activity current password and set-up code release, published later, above the Blocked activity release.
 // Re-pinned by docs/whats-new-sign-in-alerts-and-reader (2026-11-22; was: BLOCKED_CURRENT_AT = '2026-11-22T05:42:00Z'): the Liquid Glass draft placeholder is now the minute of the sign-in alerts release, published later, above the Blocked activity current password and set-up code release.
-const SIGNIN_AT = '2026-11-22T06:00:00Z';
+const SIGNIN_AT = '2026-11-22T06:08:00Z';
 const phoneSetUpRead = {
   release_id: PHONE_SET_UP_ID,
   revision: 1,

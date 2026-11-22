@@ -157,9 +157,9 @@ export const RELEASES: Release[] = [
     // Blocked activity current password and set-up code release below is dated 2026-11-22T05:42:00Z, so the
     // placeholder is that same minute.
     // Moved again by docs/whats-new-sign-in-alerts-and-reader (2026-11-22; was: '2026-11-22T05:42:00Z'): the
-    // sign-in alerts release below is dated 2026-11-22T06:00:00Z (a placeholder minute until #635 is live),
-    // so the placeholder is that same minute.
-    publishedAt: '2026-11-22T06:00:00Z',
+    // sign-in alerts release below is dated 2026-11-22T06:08:00Z (the minute #635 went live), so the
+    // placeholder is that same minute.
+    publishedAt: '2026-11-22T06:08:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -250,13 +250,9 @@ export const RELEASES: Release[] = [
   {
     id: 'sign-in-alerts-2026-11',
     revision: 1,
-    // Sign-in alerts (part 3 of the security tools; PR #635). Published by
-    // docs/whats-new-sign-in-alerts-and-reader (2026-11-22) ahead of its merge:
-    // it needs the web release of #635 (migration 0474 is already live).
-    // PLACEHOLDER MINUTE: publishedAt below is a stand-in. Set it to the whole
-    // minute #635's web release goes live, and move the Liquid Glass draft
-    // placeholder above to the same minute, before this merges. Do not merge
-    // this entry while #635 is not live.
+    // Sign-in alerts (part 3 of the security tools; PR #635, live
+    // 2026-11-22T06:08:57Z; migration 0474 live since 02:52:33Z). Published by
+    // docs/whats-new-sign-in-alerts-and-reader at the minute it went live.
     // Left out on purpose: how an alert is decided (which sign-ins are new,
     // what is counted, the limits on emails and on the link). Words that say
     // when no alert is sent would tell someone with a stolen password how to
@@ -270,7 +266,7 @@ export const RELEASES: Release[] = [
       'The email StockPilot sends when your account signs in from a new device now also comes for a sign-in from a new country, says roughly where it came from, and has a This was not me button that ends every session of your account. Owners and admins can see their organization\'s sign-in alerts on a separate Sign-in alerts page, linked from the Security page.',
     // PLACEHOLDER (stand-in, not a real release time): a whole minute after the
     // release below, to be replaced with the minute #635's web release is live.
-    publishedAt: '2026-11-22T06:00:00Z',
+    publishedAt: '2026-11-22T06:08:00Z',
     entries: [
       {
         id: 'sign-in-alert-not-me',

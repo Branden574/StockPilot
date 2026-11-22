@@ -72,7 +72,7 @@ const BLOCKED_CURRENT_ID = 'blocked-activity-current-password-and-set-up-code-20
 const SIGNIN_ID = 'sign-in-alerts-2026-11';
 // Re-pinned by docs/whats-new-sign-in-alerts-and-reader (2026-11-22; was: BLOCKED_AT = '2026-11-21T18:19:00Z'): the Liquid Glass draft placeholder is now the minute of the Blocked activity current password and set-up code release, published later, above the Blocked activity release.
 // Re-pinned by docs/whats-new-sign-in-alerts-and-reader (2026-11-22; was: BLOCKED_CURRENT_AT = '2026-11-22T05:42:00Z'): the Liquid Glass draft placeholder is now the minute of the sign-in alerts release, published later, above the Blocked activity current password and set-up code release.
-const SIGNIN_AT = '2026-11-22T06:00:00Z';
+const SIGNIN_AT = '2026-11-22T06:08:00Z';
 const EXPORT_RECEIPT_ACCESS_ID = 'export-receipt-access-fixes-2026-11';
 const RECEIVING_ID = 'receiving-shown-to-managers-2026-11';
 /** #604 (which carries #598 and #599), the last of this update's phone changes, merged at this instant. */
