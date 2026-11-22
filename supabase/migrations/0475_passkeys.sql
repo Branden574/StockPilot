@@ -153,7 +153,7 @@
 --     refuses with 42501 (passkeys_not_allowed) when nobody is signed in and
 --     when the account is disabled (user_profiles.disabled_at, the mark
 --     has_org_role reads since 0310), before anything else. Then the part of
---     the app's authenticator rule that needs no organization (0473's): an
+--     the app's authenticator rule that needs no organization (0474's): an
 --     account with a verified authenticator reads only from a session that
 --     holds the second step (42501, message and hint aal2_required). It never
 --     returns the credential id, the public key, the counter or the site.
@@ -684,7 +684,7 @@ begin
     raise exception 'passkeys_not_allowed' using errcode = '42501';
   end if;
   -- The part of the app's authenticator rule that needs no organization
-  -- (0473's): an account with a verified factor (an authenticator app or a
+  -- (0474's): an account with a verified factor (an authenticator app or a
   -- bridge) reads only from a session that holds the second step.
   if exists (select 1 from auth.mfa_factors f
               where f.user_id = v_uid and f.status = 'verified')
@@ -737,7 +737,7 @@ begin
     return 'adds_off';
   end if;
   -- Memberships are the accepted ones that are not act-as seats (0413's and
-  -- 0473's rule): an invitation not accepted and an act-as seat count for
+  -- 0474's rule): an invitation not accepted and an act-as seat count for
   -- nothing here.
   if not exists (select 1 from public.organization_members m
                   where m.user_id = p_user_id
