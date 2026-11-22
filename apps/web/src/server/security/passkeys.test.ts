@@ -1318,15 +1318,120 @@ describe('the Add with no active passkey and a reserved-name factor that no brid
     expect(await panelFor(withApp)).toMatchObject({ addBlocked: false, proof: 'code' });
   });
 
-  it('the RECORDED bridge with no active passkey (S8) is not this rule: a factor a row records is never a stray', async () => {
+});
+
+describe('the Add with no active passkey and a bridge ROW (REVIEW-STAGE-6B finding 3)', () => {
+  /**
+   * A bridge row with no active passkey of this site: the finish keeps a
+   * row's bridge only when it serves, and it serves only beside an active
+   * passkey, so every Add would be refused after the device prompt ("finish
+   * setting up your passkey first" with nothing listed). So it is neither
+   * offered nor started, with the same words and the recovery code.
+   */
+  const ROW_STATES: Array<[string, (userId: string) => 'aal1' | 'aal2']> = [
+    [
+      'S8 (the row and its verified factor, no passkey row)',
+      (userId) => {
+        world.passkeys = world.passkeys.filter((p) => p.user_id !== userId);
+        return 'aal2';
+      },
+    ],
+    [
+      'the row and its verified factor, every passkey removed',
+      (userId) => {
+        for (const r of world.passkeys.filter((p) => p.user_id === userId))
+          r.removed_at = new Date().toISOString();
+        return 'aal2';
+      },
+    ],
+    [
+      'the row whose factor is gone (no verified factor: the start would have asked the password)',
+      (userId) => {
+        world.passkeys = world.passkeys.filter((p) => p.user_id !== userId);
+        const factorId = world.bridges.get(userId)!.factor_id;
+        world.factors = world.factors.filter((f) => f.id !== factorId);
+        return 'aal1';
+      },
+    ],
+  ];
+  async function rowAccount(state: (userId: string) => 'aal1' | 'aal2') {
     const { userId } = await memberWithPasskey();
-    world.passkeys = world.passkeys.filter((p) => p.user_id !== userId);
-    world.signIn(userId, 'aal2');
     expect(world.bridges.has(userId)).toBe(true);
-    expect(await panelFor(userId)).toMatchObject({ addBlocked: false });
+    const aal = state(userId);
+    world.signIn(userId, aal);
+    vi.mocked(passwordCheck).mockClear();
+    vi.mocked(checkMfaCode).mockClear();
+    return userId;
+  }
+
+  it.each(ROW_STATES)('%s: the panel offers no Add and says why', async (_state, state) => {
+    const userId = await rowAccount(state);
+    expect(await panelFor(userId)).toMatchObject({
+      passkeys: [],
+      canAdd: true,
+      addBlocked: true,
+      hasApp: false,
+      apps: [],
+    });
+  });
+
+  it.each(ROW_STATES)(
+    '%s: the start refuses before any proof is read or checked, and issues no challenge',
+    async (_state, state) => {
+      const userId = await rowAccount(state);
+      const factorsBefore = world.factors.filter((f) => f.user_id === userId);
+      const bridgeBefore = world.bridges.get(userId);
+      vi.mocked(checkMfaCode).mockResolvedValue({ kind: 'verified' } as never);
+      const issued = world.challenges.length;
+      for (const proof of [
+        { kind: 'password', password: SAMPLE_PASSWORD },
+        { kind: 'code', factorId: bridgeBefore!.factor_id, code: '123456' },
+      ]) {
+        expect(await pk.startAddPasskey({ proof })).toMatchObject({
+          ok: false,
+          message: pk.PASSKEY_WORDS.addBlocked,
+          reason: 'add_blocked',
+        });
+      }
+      expect(passwordCheck).not.toHaveBeenCalled();
+      expect(checkMfaCode).not.toHaveBeenCalled();
+      expect(world.challenges).toHaveLength(issued);
+      expect(world.calls.deleteFactor).toEqual([]);
+      expect(world.factors.filter((f) => f.user_id === userId)).toEqual(factorsBefore);
+      expect(world.bridges.get(userId)).toEqual(bridgeBefore);
+    },
+  );
+
+  it('S8 at aal1 still gets "confirm it’s you first" (rule 19 comes first)', async () => {
+    await rowAccount((userId) => {
+      world.passkeys = world.passkeys.filter((p) => p.user_id !== userId);
+      return 'aal1';
+    });
     expect(
       await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } }),
-    ).not.toMatchObject({ reason: 'add_blocked' });
+    ).toMatchObject({ ok: false, message: pk.PASSKEY_WORDS.stepUpFirst, reason: 'aal2_required' });
+    expect(passwordCheck).not.toHaveBeenCalled();
+  });
+
+  it('the bridge record CANNOT be read: still closed, with "try again" (no panel; the start refuses before any proof)', async () => {
+    const userId = await rowAccount(ROW_STATES[2]![1]);
+    world.knobs.failReads = ['passkey_bridges'];
+    expect(await panelFor(userId)).toBeNull();
+    expect(
+      await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } }),
+    ).toMatchObject({
+      ok: false,
+      message: pk.PASSKEY_WORDS.couldNotFinish,
+      reason: 'records_unreadable',
+    });
+    expect(passwordCheck).not.toHaveBeenCalled();
+    world.knobs.failReads = [];
+  });
+
+  it('the row beside an ACTIVE passkey (healthy) is not this rule: the Add asks for the passkey as before', async () => {
+    const { userId } = await memberWithPasskey();
+    world.signIn(userId, 'aal2');
+    expect(await panelFor(userId)).toMatchObject({ addBlocked: false, proof: 'passkey' });
   });
 
   it('the panel’s words are the server’s', () => {

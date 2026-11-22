@@ -171,9 +171,10 @@ export const PASSKEY_WORDS = {
   onlyMethodUnfinished:
     "This passkey's setup isn't finished and it is your only second step, so it can't be removed yet. Add an authenticator app first, then remove it. Or use a recovery code, if you saved one: it removes every second step, passkeys included.",
   /**
-   * The second lab walk, FAIL 2: no active passkey, and a verified factor
-   * that carries the bridge's reserved name that no bridge row records
-   * (addBlockedByStray). No Add can finish there; the ways out, as they are.
+   * The second lab walk, FAIL 2, and REVIEW-STAGE-6B finding 3: no active
+   * passkey, and a bridge row or a verified factor that carries the bridge's
+   * reserved name that no bridge row records (addCannotFinish). No Add can
+   * finish there; the ways out, as they are.
    */
   addBlocked:
     "A passkey can't be added right now: a second step on your account can't be used. Try again later, or use a recovery code, if you saved one: it removes every second step, passkeys included.",
@@ -753,26 +754,37 @@ function onlyMethodUnfinished(p: AccountPicture): boolean {
 }
 
 /**
- * The second lab walk, FAIL 2 (review 6A finding 4): no active passkey of
- * this site, and a VERIFIED factor that carries the bridge's reserved name
- * and that no bridge row records (S12, S13, S14, S17 with no row, or a stray
- * beside a recorded bridge). That factor is no app (`apps` leaves it out: no
- * member has its code), and it is never the account's bridge. Every state it
- * leaves with no active passkey is one finishAddPasskey refuses:
- * reserved_factor_without_row (a bridge row, which then cannot serve),
- * bridge_newer_than_removal, removal_unfinished, bridge_without_passkey and
- * other_site_only. So the Add is neither offered (the panel's `addBlocked`)
- * nor started: startAddPasskey refuses after rule 19 and before any proof is
- * checked or any challenge issued. The records were read to know this: a
- * record that cannot be read never gets here (readPicture refuses with "try
- * again"). With an active passkey (S15) the Add is judged as before.
+ * No Add can finish for this account now, so none is offered (the panel's
+ * `addBlocked`) or started: startAddPasskey refuses after rule 19 and before
+ * any proof is read or checked and before any challenge is issued. The rule
+ * is exactly where finishAddPasskey would refuse after the device prompt
+ * (which would leave a passkey on the device): no active passkey of this
+ * site, and
+ *   - a bridge row (S8, a row whose factor is gone, a row beside removed or
+ *     other-site passkeys): the finish keeps a row's bridge only when it
+ *     serves, and bridgeServes needs an active passkey, so it answers
+ *     "finish setting up" with nothing to finish (REVIEW-STAGE-6B finding 3;
+ *     a row whose factor is gone leaves no verified factor, so the start
+ *     would have asked the password and run the device prompt); or
+ *   - a VERIFIED factor that carries the bridge's reserved name and that no
+ *     bridge row records (the second lab walk, FAIL 2: S12, S13, S14, S17
+ *     with no row). That factor is no app (`apps` leaves it out: no member
+ *     has its code), and every state it leaves with no row is one the finish
+ *     refuses (bridge_newer_than_removal, removal_unfinished,
+ *     bridge_without_passkey, other_site_only).
+ * The way out offered is the recovery code, which removes every second step
+ * and the bridge row. The records were read to know this: a record that
+ * cannot be read never gets here (readPicture refuses with "try again").
+ * With an active passkey (S15) the Add is judged as before. A member with no
+ * passkey has no bridge row and no reserved-name factor: never refused here.
  */
-function addBlockedByStray(p: AccountPicture): boolean {
+function addCannotFinish(p: AccountPicture): boolean {
   return (
     p.active.length === 0 &&
-    p.factors.some(
-      (f) => f.status === 'verified' && isReservedTotp(f) && f.id !== p.bridge?.factor_id,
-    )
+    (p.bridge !== null ||
+      p.factors.some(
+        (f) => f.status === 'verified' && isReservedTotp(f) && f.id !== p.bridge?.factor_id,
+      ))
   );
 }
 
@@ -1593,9 +1605,9 @@ export async function startAddPasskey(input: {
   // Rule 19: an account with a verified factor adds only from an aal2 session.
   if (anyVerified && held.claims.aal !== 'aal2')
     return fail('forbidden', PASSKEY_WORDS.stepUpFirst, 'aal2_required');
-  // The second lab walk, FAIL 2: no Add can finish here, so no proof is
-  // asked or checked and no challenge is issued.
-  if (addBlockedByStray(picture))
+  // No Add can finish here (addCannotFinish), so no proof is asked or
+  // checked and no challenge is issued.
+  if (addCannotFinish(picture))
     return fail('forbidden', PASSKEY_WORDS.addBlocked, 'add_blocked');
 
   const proof = input.proof as AddProof | null | undefined;
@@ -2212,9 +2224,10 @@ export interface PasskeysPanel {
    */
   onlyMethodUnfinished: boolean;
   /**
-   * The second lab walk, FAIL 2: no Add can finish for this account now (no
-   * active passkey and a verified reserved-name factor no bridge row
-   * records): the panel says why and offers the recovery code instead of Add.
+   * No Add can finish for this account now (addCannotFinish: no active
+   * passkey, and a bridge row or a verified reserved-name factor no bridge
+   * row records): the panel says why and offers the recovery code instead of
+   * Add.
    */
   addBlocked: boolean;
 }
@@ -2310,7 +2323,7 @@ async function panelOf(
     phoneConfirmation: canAdd && !hasApp && (await usedPhoneAppRecently(admin, userId)),
     aal2: held.claims.aal === 'aal2',
     onlyMethodUnfinished: onlyMethodUnfinished(picture),
-    addBlocked: addBlockedByStray(picture),
+    addBlocked: addCannotFinish(picture),
   };
 }
 
