@@ -141,11 +141,20 @@ describe('platform gates, real session reads', () => {
 
   it("an action's answer carries the email Auth verified, never the profile's (an audit row's actor)", async () => {
     const { FIXTURE_EMAIL } = await import('@/test/auth-session-fixture');
+    const { requireSession } = await import('./session');
+    // The profile column (member-writable) names someone else.
+    const profile = {
+      userId: '11111111-1111-4111-8111-111111111111',
+      email: 'edited-profile@example.test',
+      fullName: null,
+      avatarUrl: null,
+      defaultOrganizationId: null,
+    };
+    vi.mocked(requireSession).mockResolvedValueOnce(profile).mockResolvedValueOnce(profile);
     await signIn(sessionClaims({ aal: 'aal2', totpAgeSeconds: 60 }));
     const withStepUp = await checkPlatformAdmin({ requireStepUp: true });
     expect(withStepUp).toMatchObject({ ok: true, verifiedEmail: FIXTURE_EMAIL });
-    // The session's email is the profile column (member-writable): not this.
-    expect(withStepUp.ok && withStepUp.session.email).toBe('member@example.com');
+    expect(withStepUp.ok && withStepUp.session.email).toBe('edited-profile@example.test');
     await expect(checkPlatformAdmin()).resolves.toMatchObject({
       ok: true,
       verifiedEmail: FIXTURE_EMAIL,
