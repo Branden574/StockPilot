@@ -1340,7 +1340,10 @@ describe("one hour's elements for the writer", () => {
     const tooMany = (out: logs.AuthLogsHourElements) =>
       out.elements.filter((e) => e.reason === 'too_many_forms_to_count');
 
-    it('one flagged element for the hour: its own reason, source api, the total of the rows read, no country', () => {
+    it('one flagged element for the hour: its own reason, source api, no country, and as its number the refused requests that were counted, of every kind', () => {
+      // The words are "refused sign-in requests in an hour that could not all
+      // be counted": the number beside them is every line of every row that
+      // was read, whatever its kind (here: none of them is stored on its own).
       const out = notWhole([
         totalsRow({ kind: 'refresh', n: 40 }),
         totalsRow({ kind: 'token_known_other', caller: 'other', n: 25 }),

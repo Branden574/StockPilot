@@ -167,9 +167,11 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * TOTALS THAT ARE NOT WHOLE ARE NEVER STORED AS IF THEY WERE. If the totals
  * answer is full all the same, or a row of it fails its checks, the rows
  * that are missing can be the ones a flagged count is made from. The hour
- * is then stored with ONE flagged count of its own (too_many_forms_to_count,
- * source api, the lines that were read), its lines in our server's form are
- * compared with the part that was read, and the run reports it once.
+ * is then stored with ONE flagged count of its own (too_many_forms_to_count:
+ * refused sign-in requests in an hour that could not all be counted; source
+ * api; its number is the refused requests of the hour that WERE counted, of
+ * every kind), its lines in our server's form are compared with the part
+ * that was read, and the run reports it once.
  *
  * A FLAGGED COUNT IS REPORTED AS WELL AS STORED. The rows this job stores
  * have no organization, so they are on no organization's Blocked activity
@@ -1242,11 +1244,16 @@ export function buildHourElements(input: {
   // Totals that are not whole: every count above is of a part of the hour
   // only, and rows that were not read could be the very ones a flagged count
   // is made from (our server's form, an unknown form). The hour is never
-  // stored as if it were clean: one flagged count, of the lines that were
-  // read (at least 1), at the hour's first minute.
+  // stored as if it were clean: one flagged count at the hour's first
+  // minute. Its words are "refused sign-in requests in an hour that could
+  // not all be counted", and its number is what those words count: the
+  // refused requests of the hour that were counted, of every kind (every
+  // line of every totals row that passed its checks; at least 1). Whether
+  // the answer was full or a row of it failed its checks, the requests
+  // missing from that number are the ones that could not be counted.
   if (input.totalsIncomplete) {
-    const read = input.totals.reduce((sum, row) => sum + row.n, 0);
-    flag('too_many_forms_to_count', 'api', Math.max(1, read), input.hour.startMs);
+    const counted = input.totals.reduce((sum, row) => sum + row.n, 0);
+    flag('too_many_forms_to_count', 'api', Math.max(1, counted), input.hour.startMs);
   }
   // Requests of an unknown form, even one: one count per source, at the hour's first minute.
   for (const source of AUTH_LOGS_SOURCES) {

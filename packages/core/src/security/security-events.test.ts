@@ -122,10 +122,14 @@ describe('security events: the lists the database checks', () => {
     }
   });
 
-  it('names the plain words of an hour whose kinds of refused requests could not all be counted', () => {
+  it('names the plain words of an hour whose refused requests could not all be counted', () => {
+    // True of both ways it happens (the count read was full; a part of it
+    // could not be read), and the number beside it reads as what it is: the
+    // refused requests of that hour that were counted.
     expect(securityEventReasonLabel('too_many_forms_to_count')).toBe(
-      'More kinds of refused sign-in requests in an hour than could be counted',
+      'Refused sign-in requests in an hour that could not all be counted',
     );
+    expect(securityEventReasonLabel('too_many_forms_to_count')).not.toMatch(/kinds/);
   });
 
   it("names the plain words of a signed-in member's refused password and set-up code, and of a sign-in refused for another reason", () => {

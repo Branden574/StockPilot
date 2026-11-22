@@ -130,8 +130,10 @@ export const SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, string>> = {
   // refusals that carried our server's marks and that our server has no
   // record of. Those last words are chosen to be true whoever sent them:
   // someone presenting our server's marks, or our own server when its record
-  // of a refusal was lost. And an hour in which the kinds of refused requests
-  // were more than the job could count, so its other counts may be short.
+  // of a refusal was lost. And an hour whose refused requests could not all
+  // be counted (the count read was full, or a part of it could not be read):
+  // its number is the requests that were counted, and its other counts may
+  // be short.
   auth_rate_limited: 'Too many sign-in attempts, paused by the sign-in service',
   auth_log_over_cap: 'More refused sign-ins than could be listed',
   unclassified_sign_in_refusals: 'Refused sign-in requests of an unusual form',
@@ -139,8 +141,7 @@ export const SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, string>> = {
     "Refused sign-ins in our server's form that our server has no record of",
   unrecorded_server_form_code:
     "Refused authenticator codes in our server's form that our server has no record of",
-  too_many_forms_to_count:
-    'More kinds of refused sign-in requests in an hour than could be counted',
+  too_many_forms_to_count: 'Refused sign-in requests in an hour that could not all be counted',
   // Exploit attempts: a scanner asked for a path this site never serves.
   env_file: 'Request for a settings file',
   git_dir: 'Request for source control files',
