@@ -10,17 +10,30 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * again 500 ms later; three in a row end the run. A run that stops before its
  * work is done (40 calls, 45 s, or busy) is reported once, as a warning, with
  * its counts and why. Any other error is reported and answered 500.
+ *
+ * Part 3 (sign-in alerts): the same run then calls purge_sign_in_alerts() by
+ * the same rule (5,000 a call, 40 calls, a busy call tried again 500 ms
+ * later, three in a row end it), within 30 s of its own, and whether or not
+ * the first loop failed. Its counts are answered under signInAlerts. The
+ * harness answers each function by its name: h.rpc is purge_security_events,
+ * h.alerts is purge_sign_in_alerts (nothing to purge unless a test says).
  */
 
 const h = vi.hoisted(() => ({
   env: { CRON_SECRET: 'cron-secret-for-tests' as string | undefined },
   rpc: vi.fn(),
+  alerts: vi.fn(),
   report: vi.fn(async () => undefined),
 }));
 
 vi.mock('@/lib/env', () => ({ env: h.env }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: h.report }));
-vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => ({ rpc: h.rpc }) }));
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: () => ({
+    rpc: (fn: string, ...rest: unknown[]) =>
+      fn === 'purge_sign_in_alerts' ? h.alerts(fn, ...rest) : h.rpc(fn, ...rest),
+  }),
+}));
 
 import * as route from './route';
 
@@ -37,6 +50,8 @@ const busy = { data: null, error: { code: '55P03', message: 'canceling statement
 beforeEach(() => {
   h.env.CRON_SECRET = 'cron-secret-for-tests';
   h.rpc.mockReset();
+  h.alerts.mockReset();
+  h.alerts.mockResolvedValue({ data: 0, error: null });
   h.report.mockClear();
   vi.spyOn(console, 'info').mockImplementation(() => undefined);
   vi.useFakeTimers();
@@ -79,7 +94,15 @@ describe('the loop', () => {
     h.rpc.mockResolvedValueOnce(counts(12, 340));
     expect(await run()).toEqual({
       status: 200,
-      body: { ok: true, deleted: 12, hashesCleared: 340, calls: 1, stoppedEarly: false, stop: null },
+      body: {
+        ok: true,
+        deleted: 12,
+        hashesCleared: 340,
+        calls: 1,
+        stoppedEarly: false,
+        stop: null,
+        signInAlerts: { deleted: 0, calls: 1, stoppedEarly: false, stop: null },
+      },
     });
     expect(h.rpc).toHaveBeenCalledWith('purge_security_events');
   });
@@ -97,6 +120,7 @@ describe('the loop', () => {
       calls: 4,
       stoppedEarly: false,
       stop: null,
+      signInAlerts: { deleted: 0, calls: 1, stoppedEarly: false, stop: null },
     });
   });
 
@@ -109,6 +133,7 @@ describe('the loop', () => {
       calls: 40,
       stoppedEarly: true,
       stop: 'call_limit',
+      signInAlerts: { deleted: 0, calls: 1, stoppedEarly: false, stop: null },
     });
     expect(h.rpc).toHaveBeenCalledTimes(40);
     // The purge was outrun: more is left than one run takes. Once, as a warning, counts only.
@@ -157,7 +182,15 @@ describe('the loop', () => {
     expect(h.rpc).toHaveBeenCalledTimes(2);
     await vi.runAllTimersAsync();
     const body = await (await pending).json();
-    expect(body).toEqual({ ok: true, deleted: 5003, hashesCleared: 4, calls: 5, stoppedEarly: false, stop: null });
+    expect(body).toEqual({
+      ok: true,
+      deleted: 5003,
+      hashesCleared: 4,
+      calls: 5,
+      stoppedEarly: false,
+      stop: null,
+      signInAlerts: { deleted: 0, calls: 1, stoppedEarly: false, stop: null },
+    });
     expect(h.report).not.toHaveBeenCalled();
   });
 
@@ -169,7 +202,15 @@ describe('the loop', () => {
       .mockResolvedValueOnce(busy);
     expect(await run()).toEqual({
       status: 200,
-      body: { ok: true, deleted: 5000, hashesCleared: 5000, calls: 4, stoppedEarly: true, stop: 'busy' },
+      body: {
+        ok: true,
+        deleted: 5000,
+        hashesCleared: 5000,
+        calls: 4,
+        stoppedEarly: true,
+        stop: 'busy',
+        signInAlerts: { deleted: 0, calls: 1, stoppedEarly: false, stop: null },
+      },
     });
     expect(h.rpc).toHaveBeenCalledTimes(4);
     expect(h.report).toHaveBeenCalledTimes(1);
@@ -198,6 +239,113 @@ describe('the loop', () => {
     h.rpc.mockRejectedValueOnce(new Error('fetch failed'));
     expect((await run()).status).toBe(500);
     expect(h.report).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('sign-in alerts (part 3): the same run, the same rule', () => {
+  const alertsCount = (n: number) => ({ data: n, error: null });
+
+  it('after the security events, purge_sign_in_alerts() is called, with no arguments', async () => {
+    h.rpc.mockResolvedValueOnce(counts(1, 1));
+    h.alerts.mockResolvedValueOnce(alertsCount(7));
+    expect((await run()).body).toMatchObject({
+      signInAlerts: { deleted: 7, calls: 1, stoppedEarly: false, stop: null },
+    });
+    expect(h.alerts).toHaveBeenCalledWith('purge_sign_in_alerts');
+    expect(h.rpc.mock.invocationCallOrder[0]!).toBeLessThan(h.alerts.mock.invocationCallOrder[0]!);
+  });
+
+  it('calls again while a call removes 5,000, and sums', async () => {
+    h.rpc.mockResolvedValueOnce(counts(0, 0));
+    h.alerts
+      .mockResolvedValueOnce(alertsCount(5000))
+      .mockResolvedValueOnce(alertsCount(5000))
+      .mockResolvedValueOnce(alertsCount(12));
+    expect((await run()).body).toMatchObject({
+      signInAlerts: { deleted: 10012, calls: 3, stoppedEarly: false, stop: null },
+    });
+  });
+
+  it('stops after 40 calls and reports it once, as a warning with counts only', async () => {
+    h.rpc.mockResolvedValueOnce(counts(0, 0));
+    h.alerts.mockResolvedValue(alertsCount(5000));
+    expect((await run()).body).toMatchObject({
+      ok: true,
+      signInAlerts: { deleted: 200000, calls: 40, stoppedEarly: true, stop: 'call_limit' },
+    });
+    expect(h.report).toHaveBeenCalledTimes(1);
+    expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'cron.security-events-retention',
+      level: 'warning',
+      extra: { table: 'sign_in_alerts', calls: 40, deleted: 200000, stop: 'call_limit' },
+    });
+  });
+
+  it('starts no call 30 s into its own part of the run', async () => {
+    h.rpc.mockResolvedValueOnce(counts(0, 0));
+    h.alerts.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
+      return alertsCount(5000);
+    });
+    expect((await run()).body).toMatchObject({
+      signInAlerts: { calls: 3, deleted: 15000, stoppedEarly: true, stop: 'time_limit' },
+    });
+  });
+
+  it('a busy call is tried again 500 ms later; three in a row end its part', async () => {
+    h.rpc.mockResolvedValueOnce(counts(0, 0));
+    h.alerts
+      .mockResolvedValueOnce(busy)
+      .mockResolvedValueOnce(alertsCount(3));
+    expect((await run()).body).toMatchObject({
+      signInAlerts: { deleted: 3, calls: 2, stoppedEarly: false, stop: null },
+    });
+    h.rpc.mockResolvedValueOnce(counts(0, 0));
+    h.alerts.mockReset();
+    h.alerts.mockResolvedValue(busy);
+    expect((await run()).body).toMatchObject({
+      signInAlerts: { deleted: 0, calls: 3, stoppedEarly: true, stop: 'busy' },
+    });
+  });
+
+  it.each([
+    ['another error', { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }],
+    ['an answer that is not a count', { data: 'many', error: null }],
+  ])('%s is reported and answered 500', async (_what, answer) => {
+    h.rpc.mockResolvedValueOnce(counts(1, 1));
+    h.alerts.mockResolvedValueOnce(answer);
+    expect(await run()).toEqual({ status: 500, body: { error: 'internal_error' } });
+    expect(h.report).toHaveBeenCalledTimes(1);
+    expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'cron.security-events-retention',
+      extra: { table: 'sign_in_alerts', calls: 1, deleted: 0 },
+    });
+  });
+
+  it('a security events purge that stops on its call limit is still reported when the sign-in alerts purge fails; both reports, and 500', async () => {
+    h.rpc.mockResolvedValue(counts(5000, 5000));
+    h.alerts.mockResolvedValueOnce({ data: null, error: { code: '57014', message: 'canceling statement' } });
+    expect(await run()).toEqual({ status: 500, body: { error: 'internal_error' } });
+    expect(h.report).toHaveBeenCalledTimes(2);
+    expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'cron.security-events-retention',
+      level: 'warning',
+      extra: { calls: 40, deleted: 200000, hashesCleared: 200000, stop: 'call_limit' },
+    });
+    expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'cron.security-events-retention',
+      extra: { table: 'sign_in_alerts', calls: 1, deleted: 0 },
+    });
+    // The events purge's report comes first, as its loop ends.
+    const first = h.report.mock.calls[0] as unknown as [Error, { extra: Record<string, unknown> }];
+    expect(first[1].extra).not.toHaveProperty('table');
+  });
+
+  it('a security events loop that fails still lets the sign-in alerts be purged, and the run answers 500', async () => {
+    h.rpc.mockRejectedValueOnce(new Error('fetch failed'));
+    h.alerts.mockResolvedValueOnce(alertsCount(4));
+    expect((await run()).status).toBe(500);
+    expect(h.alerts).toHaveBeenCalledTimes(1);
   });
 });
 

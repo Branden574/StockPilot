@@ -251,6 +251,54 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
     motionAsset: 'pulse',
     footer: 'ess',
   }),
+  // Outside the design package (2026-11-21, sign-in alerts): what follows a
+  // member's "This was not me". The member is told every session ended and
+  // asked to reset the password; the owners and admins of each organization
+  // the member belongs to are told who reported it and on which kind of
+  // device (the family, never the member's own label). No motion: a plain
+  // record of what was done. Neither subject says "signed out everywhere" (a
+  // device already open keeps its pass until it expires), and the admins'
+  // subject is fixed words: the member's own name is in the body only.
+  d({
+    id: 'signin-signed-out',
+    family: 'security',
+    name: 'Sessions Ended',
+    status: 'live',
+    category: 'ess',
+    tag: 'Security',
+    trigger: 'The member said a sign-in alert was not them; every session of the account was ended',
+    to: 'Account holder',
+    from: 'StockPilot Security <security@stockpilotusa.com>',
+    replyTo: 'Not monitored — support link inside',
+    subject: () => 'We ended every session of your StockPilot account',
+    preheader: () =>
+      'You said a sign-in was not you, so every session of your account has been ended. Reset your password now.',
+    badge: { variant: 'sec', label: () => 'Sessions ended' },
+    cta: 'Reset my password',
+    motionNote: 'None',
+    motionAsset: null,
+    footer: 'ess',
+  }),
+  d({
+    id: 'signin-reported',
+    family: 'security',
+    name: 'Sign-In Reported',
+    status: 'live',
+    category: 'ess',
+    tag: 'Security',
+    trigger: 'A member said a sign-in alert was not them (sent to the owners and admins of each organization they belong to)',
+    to: 'Organization owners and admins',
+    from: 'StockPilot Security <security@stockpilotusa.com>',
+    replyTo: 'Not monitored — support link inside',
+    subject: () => 'A member reported a sign-in they did not make',
+    preheader: () =>
+      'Every session of their account has been ended. See the sign-in alerts of your organization.',
+    badge: { variant: 'sec', label: () => 'Reported sign-in' },
+    cta: 'Review sign-in alerts',
+    motionNote: 'None',
+    motionAsset: null,
+    footer: 'ess',
+  }),
   // Outside the design package (2026-11-15): the code that confirms deleting
   // an account with no authenticator. The code is in the body only, never in
   // the subject or the preheader (a dry-run send logs the subject).

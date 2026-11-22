@@ -61,6 +61,7 @@ export const SECURITY_BOT_FAMILIES = [
   'public_api',
   'webhook',
   'isbn_lookup',
+  'sign_in_alert',
 ] as const;
 export type SecurityBotFamily = (typeof SECURITY_BOT_FAMILIES)[number];
 
@@ -101,6 +102,7 @@ const BOT_FAMILY_WORDS: Readonly<Record<SecurityBotFamily, string>> = {
   public_api: 'the public API',
   webhook: 'a webhook',
   isbn_lookup: 'the ISBN lookup',
+  sign_in_alert: 'a sign-in alert link',
 };
 
 /** The reason codes this build writes, with the words admins read. */
@@ -123,6 +125,14 @@ export const SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, string>> = {
   wrong_setup_code: 'Wrong code while setting up an authenticator',
   sign_in_refused_other: 'Sign-in refused for another reason',
   unknown_api_key: 'Unknown API key',
+  // One account met its daily ceiling on sign-in alerts: so many sign-ins from
+  // new devices or countries in a day that further ones are turned away
+  // unrecorded (flagged, not blocked: the sign-in itself still happened).
+  sign_in_alerts_held: 'Sign-in alerts held after too many in one day',
+  // Phishing: what a sign-in alert flags (part 3). Not refusals: the sign-in
+  // happened, and the alert asks the member whether it was them.
+  sign_in_new_country: 'Sign-in from a new country',
+  sign_in_not_me: 'A member said a sign-in was not them',
   // Read from the sign-in service's own log (the phone app and direct
   // callers): its own limit refused the attempt, or more refusals came in one
   // hour than could be listed one by one. Stored as flagged, never as blocked

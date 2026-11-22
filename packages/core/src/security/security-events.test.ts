@@ -55,6 +55,9 @@ describe('security events: the lists the database checks', () => {
       'wrong_setup_code',
       'sign_in_refused_other',
       'unknown_api_key',
+      'sign_in_new_country',
+      'sign_in_not_me',
+      'sign_in_alerts_held',
       'auth_rate_limited',
       'auth_log_over_cap',
       'unclassified_sign_in_refusals',
@@ -93,6 +96,24 @@ describe('security events: the lists the database checks', () => {
     expect(securityEventReasonLabel('wrong_password')).toBe('Wrong password at sign-in');
     expect(securityEventReasonLabel('repeated_wrong_password')).toBe(
       'Repeated wrong passwords from one source',
+    );
+  });
+
+  it('names the plain words of the two sign-in alert reasons (part 3)', () => {
+    expect(securityEventReasonLabel('sign_in_new_country')).toBe('Sign-in from a new country');
+    expect(securityEventReasonLabel('sign_in_not_me')).toBe('A member said a sign-in was not them');
+  });
+
+  it('names the plain words of sign-in alerts held past the daily ceiling', () => {
+    expect(securityEventReasonLabel('sign_in_alerts_held')).toBe(
+      'Sign-in alerts held after too many in one day',
+    );
+  });
+
+  it('the sign-in alert link is an anonymous family of its own, with its own words', () => {
+    expect(SECURITY_BOT_FAMILIES).toContain('sign_in_alert');
+    expect(securityEventReasonLabel(securityBotReason('sign_in_alert'))).toBe(
+      'Too many requests to a sign-in alert link',
     );
   });
 

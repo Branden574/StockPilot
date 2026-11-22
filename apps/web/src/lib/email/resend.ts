@@ -44,6 +44,12 @@ interface SendResult {
   ok: boolean;
   id?: string;
   error?: string;
+  /**
+   * The HTTP status of a refusal by the mail provider, so a caller can tell a
+   * refusal for rate (429) from the rest. Absent when the send worked, was a
+   * dry run, or never got an answer.
+   */
+  status?: number;
 }
 
 /**
@@ -131,7 +137,7 @@ export async function sendEmail({
     if (!res.ok) {
       const body = await res.text();
       console.error('[email] Resend error', res.status, body);
-      return { ok: false, error: body };
+      return { ok: false, error: body, status: res.status };
     }
 
     const data = (await res.json()) as { id?: string };

@@ -28,6 +28,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const signInWithPassword = vi.fn();
 const getAuthenticatorAssuranceLevel = vi.fn();
 const cookieSet = vi.fn();
+// The verified read of the new session's token (lib/auth/verified-claims):
+// unanswered unless a test says otherwise.
+const getClaims = vi.fn(async (_token?: string) => ({
+  data: null as { claims: Record<string, unknown> } | null,
+  error: { name: 'AuthInvalidJwtError', message: 'no' } as unknown,
+}));
 
 const { checkRateLimit, auditInsert, noteLoginDevice, noteDisabledAccountBlocked, request } =
   vi.hoisted(() => ({
@@ -114,6 +120,7 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: async () => ({
     auth: {
       signInWithPassword,
+      getClaims,
       mfa: { getAuthenticatorAssuranceLevel },
     },
   }),
@@ -324,5 +331,81 @@ describe('signInAction — AAL routing', () => {
 
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data.next).toBe('/dashboard');
+  });
+});
+
+describe('signInAction — the sign-in alert gets its place, its session and its client (part 3)', () => {
+  const SESSION = '5e551011-0000-4000-8000-0000000000a1';
+  const TOKEN = 'header.payload.signature';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    checkRateLimit.mockResolvedValue({ allowed: true, count: 1, resetAt: Date.now() + 60_000 });
+    signInWithPassword.mockResolvedValue({
+      data: { user: { id: 'u1' }, session: { access_token: TOKEN } },
+      error: null,
+    });
+    getAuthenticatorAssuranceLevel.mockResolvedValue({
+      data: { currentLevel: 'aal1', nextLevel: 'aal1' },
+    });
+    auditInsert.mockResolvedValue({ error: null });
+    getClaims.mockResolvedValue({
+      data: { claims: { sub: 'u1', session_id: SESSION } },
+      error: null,
+    });
+  });
+
+  it('everything new runs after the response: nothing is read or noted before it, and the answer is the same', async () => {
+    request.headers = {
+      'x-forwarded-for': '203.0.113.7',
+      'user-agent': 'vitest-agent',
+      'x-vercel-ip-country': 'MX',
+      'x-vercel-ip-city': 'Tijuana',
+    };
+    const res = await signInAction(INPUT);
+    expect(res).toEqual({ ok: true, data: { next: '/dashboard' } });
+    expect(getClaims).not.toHaveBeenCalled();
+    expect(noteLoginDevice).not.toHaveBeenCalled();
+
+    const deferred = vi.mocked(after).mock.calls.at(-1)?.[0] as (() => unknown) | undefined;
+    await deferred!();
+    expect(getClaims).toHaveBeenCalledWith(TOKEN);
+    expect(noteLoginDevice).toHaveBeenCalledWith({
+      userId: 'u1',
+      // signInSchema lower-cases the address.
+      email: 'user@example.com',
+      userAgent: 'vitest-agent',
+      ip: '203.0.113.7',
+      place: { country: 'MX', city: 'Tijuana' },
+      sessionId: SESSION,
+      client: 'web',
+    });
+  });
+
+  it('a token whose claims name another account gives no session id', async () => {
+    getClaims.mockResolvedValue({ data: { claims: { sub: 'someone-else', session_id: SESSION } }, error: null });
+    await signInAction(INPUT);
+    const deferred = vi.mocked(after).mock.calls.at(-1)?.[0] as (() => unknown) | undefined;
+    await deferred!();
+    expect(noteLoginDevice).toHaveBeenCalledWith(expect.objectContaining({ sessionId: null }));
+  });
+
+  it('a token that cannot be read gives no session id, and the device is still noted', async () => {
+    getClaims.mockRejectedValue(new Error('no key set'));
+    await signInAction(INPUT);
+    const deferred = vi.mocked(after).mock.calls.at(-1)?.[0] as (() => unknown) | undefined;
+    await deferred!();
+    expect(noteLoginDevice).toHaveBeenCalledWith(expect.objectContaining({ sessionId: null }));
+  });
+
+  it('off Vercel there is no place', async () => {
+    vi.stubEnv('VERCEL', '');
+    request.headers = { 'user-agent': 'vitest-agent', 'x-vercel-ip-country': 'MX' };
+    await signInAction(INPUT);
+    const deferred = vi.mocked(after).mock.calls.at(-1)?.[0] as (() => unknown) | undefined;
+    await deferred!();
+    expect(noteLoginDevice).toHaveBeenCalledWith(
+      expect.objectContaining({ place: { country: null, city: null } }),
+    );
   });
 });

@@ -192,6 +192,13 @@ const EXEMPT: Record<string, Exemption> = {
     reason:
       "Confirms a public order request with the confirmation email's single-use token, checked by confirm_public_order_request with the service client.",
   },
+  'sign-in-alert/route.ts': {
+    methods: ['POST'],
+    auth: 'public token',
+    session: 'none',
+    reason:
+      "The not-me press from the alert page's own form, behind the email's signed token. A post from another site is refused first; the route reads no session and sets no cookie, and all it can do is end the sessions of the alert's own account, once per alert, and tell that account's owners and admins once.",
+  },
   'unsubscribe/route.ts': {
     methods: ['POST'],
     auth: 'public token',
