@@ -144,16 +144,24 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   'src/components/ui/toggle.tsx':
     '0f94a5d9eef3cc588556141111590fb16586e13b31dde062d0bb1b1b42aa2786',
   // Sign-in, welcome and the root gates (native-core).
+  // Re-pinned for the passkey notice's AX5 walk (Classic is meant to change: the shell now scrolls
+  // its content, and sign-in, which has its own ScrollView and keyboard-avoiding view, turns the
+  // shell's off with scroll={false}; nothing it draws changes). Before this the pin was
+  // 19ab14bb...efd6.
   // prettier-ignore
   'app/(auth)/sign-in.tsx':
-    '19ab14bb04aea77af8fc63bb2d8e4e448ec81e6d8a11f9bd43b8a38598ccefd6',
+    '3adad35f132230fe2a4990e4bf637f191b494e9f32c87dcbcef7ea0d4f8f608b',
   // prettier-ignore
   'app/(auth)/welcome.tsx':
     '84d2fa5ad3c05268760c3d9f1e111abf5b23053a875f31e2a72b45f1696ab93c',
   'src/components/account-disabled-screen.tsx':
     'f08b00bb93fdc3b740b2d2d6bb63fbe37ecb8fe557e74fe1fde26a3ff1fd483c',
+  // Re-pinned for the passkey notice's AX5 walk (Classic is meant to change: under the brand bar
+  // the content scrolls in a keyboard-avoiding view when it is taller than the screen, so every
+  // button of the gates is reachable at AX3 to AX5 and above the number pad; at Large it fills the
+  // same space and does not move). Before this the pin was d44a5716...1eb7.
   'src/components/auth/auth-shell.tsx':
-    'd44a57161903d76256a79ef57874d896bb69d49319c1d53f4c01f1c2c9d31eb7',
+    '598cf0d75e648f3ee734786d4314294befb8bd3da2f2d14e04a639328f5b62e0',
   'src/components/biometric-lock-screen.tsx':
     'd422de3d6bfdeb7990290349cfde176b8f17228707476a98686197816b95bcc1',
   'src/components/mfa-challenge-screen.tsx':

@@ -165,7 +165,8 @@ export default function SignIn() {
       style={{ flex: 1 }}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <AuthShell>
+      {/* Its own ScrollView and keyboard-avoiding view: the shell's stay off. */}
+      <AuthShell scroll={false}>
         <BiometricOptInSheet
           visible={showOptIn}
           onDismiss={() => setShowOptIn(false)}
