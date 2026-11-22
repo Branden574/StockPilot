@@ -47,7 +47,7 @@ export interface FakeSession {
    * set by a verify. Auth's own unenroll (DELETE /factors/{id}) lowers every
    * session whose factor it is to aal1 (DowngradeSessionsToAAL1, every Auth
    * version since v2.188.1 at least); the service role's delete does that
-   * only from v2.196.0 (the lab's v2.188.1 does not: knobs.adminDeleteDowngrades).
+   * only from v2.193.0 (the lab's v2.188.1 does not: knobs.adminDeleteDowngrades).
    */
   factorId?: string;
 }
@@ -195,7 +195,7 @@ export function makeWorld() {
       userReadFails: false,
       /** The member's own unenroll answers this error code (500). */
       unenrolError: null as string | null,
-      /** The service role's factor delete lowers the factor's sessions too (Auth v2.196.0 and later). */
+      /** The service role's factor delete lowers the factor's sessions too (Auth v2.193.0 and later). */
       adminDeleteDowngrades: false,
     },
   };

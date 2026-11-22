@@ -2038,10 +2038,10 @@ export async function finishPasskeySetup(input: {
  * aal1 in the same transaction (DowngradeSessionsToAAL1: their `totp` entry
  * gone, aal1, so their next refresh answers aal1), on every Auth version
  * read (v2.188.1, the lab's, and later). The service role's delete does that
- * only from v2.196.0: on the lab's Auth the session the bridge raised kept
+ * only from v2.193.0: on the lab's Auth the session the bridge raised kept
  * aal2 and refreshed at aal2. A session the member's app raised is not the
  * bridge's and keeps its level. When Auth refuses the member's unenroll, the
- * service role deletes the factor as before (on an Auth before v2.196.0 the
+ * service role deletes the factor as before (on an Auth before v2.193.0 the
  * sessions the bridge raised then keep aal2 until they end), reported at
  * warning level with Auth's code. True when the factor is gone.
  */
