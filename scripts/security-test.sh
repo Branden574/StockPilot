@@ -2376,7 +2376,7 @@ WEB_TESTS=(
   # the table is missing every one is refused (fail closed): the code check,
   # the step-up list and the code page with try-again words, the code page
   # keeping its recovery code and sign-out, and the reset with no code box,
-  # saying a reset is not available for the account yet. A reserved-name
+  # saying to try again and that the password was not changed. A reserved-name
   # factor that is not recorded is listed in Settings like an app and
   # reported (limited per account); the records missing with a reserved-name
   # factor listed is reported (limited); an unreadable record hides nothing
