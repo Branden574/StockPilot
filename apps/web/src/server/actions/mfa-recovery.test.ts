@@ -51,9 +51,13 @@ vi.mock('@/lib/supabase/access-token-client', () => ({
   createAccessTokenClient: vi.fn((_token: string) => stubHolder.stub!.client),
 }));
 
-vi.mock('@/lib/supabase/admin', () => ({
-  createAdminClient: vi.fn(() => stubHolder.stub!.client),
-}));
+// 0475 is not live in this file's world: the recovery code's new function
+// does not exist yet, so today's path runs (test/passkey-records.ts;
+// mfa-recovery.passkeys.test.ts covers the function).
+vi.mock('@/lib/supabase/admin', async () => {
+  const { beforePasskeyRecords } = await import('@/test/passkey-records');
+  return { createAdminClient: vi.fn(() => beforePasskeyRecords(stubHolder.stub!.client)) };
+});
 
 vi.mock('@/server/services/auth-audit', () => ({
   emitAuthAudit: vi.fn(async () => {}),

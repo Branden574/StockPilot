@@ -13,6 +13,7 @@ import {
   modulesFromMembership,
   orgRowFromMembership,
 } from '@/lib/auth/request-context-bundle';
+import { keepContextFactorListRead } from '@/lib/auth/context-factor-list';
 import { requireOrgContext } from '@/lib/auth/session';
 import { sharingFactorsRead } from '@/lib/auth/step-up-gate';
 import { PLACEMENT_KINDS, PLACEMENT_TYPES, SYSTEM_KINDS } from '@/lib/locations/groups';
@@ -312,6 +313,10 @@ export const withContext = cache(async (): Promise<ServiceContext> => {
     cookieClient: supabase,
   };
   if (policyUnread) POLICY_UNREAD_CONTEXTS.add(serviceContext);
+  // The factor list read this context started, for an action that looks at
+  // the factors' names (lib/auth/context-factor-list): no second GoTrue round
+  // trip. Kept beside the context, which is unchanged.
+  keepContextFactorListRead(serviceContext, factorsRead);
   return serviceContext;
 });
 

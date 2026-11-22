@@ -108,6 +108,10 @@ export const LIMITER_NOT_SECURITY_EVENTS: Readonly<Record<string, string>> = {
   'mfa-recovery-gen:': SIGNED_IN,
   'mfa-enroll-verify:': SIGNED_IN,
   'mfa-factor-refused-report:': SIGNED_IN,
+  // The step-up modal's list of the account's authenticator apps (passkey
+  // bridge left out): the account at one address, then the account.
+  'mfa-step-up-methods:': SIGNED_IN,
+  'mfa-step-up-methods-account:': SIGNED_IN,
   'pwchange:': SIGNED_IN,
   'emailchange:': SIGNED_IN,
   'emailchange-target:': SIGNED_IN,
@@ -130,6 +134,13 @@ export const LIMITER_NOT_SECURITY_EVENTS: Readonly<Record<string, string>> = {
   'new-device-event:org:': ALERT_PACING,
   'new-device-event-held:org:': ALERT_PACING,
   'export-alert:': ALERT_PACING,
+  // Reports about the passkey records (lib/auth/passkey-bridge.ts): a
+  // reserved-name factor that is not the account's bridge, and the records
+  // missing while such a factor is listed: the missing table once an hour
+  // for everyone (`...:table`), the missing function once an hour per account.
+  'passkeys-not-ours-report:': ALERT_PACING,
+  'passkeys-records-missing-report:': ALERT_PACING,
+  'passkeys-records-missing-report:function:': ALERT_PACING,
   // The platform console.
   'org-delete:': PLATFORM_ADMIN,
   'org-passphrase-rotate:': PLATFORM_ADMIN,

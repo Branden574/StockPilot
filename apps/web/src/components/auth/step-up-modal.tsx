@@ -14,9 +14,10 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { carriesBridgeName } from '@/lib/auth/passkey-bridge-name';
 import { isControlFlow } from '@/lib/control-flow';
 import { createClient } from '@/lib/supabase/client';
-import { challengeFactorAction } from '@/server/actions/mfa';
+import { challengeFactorAction, stepUpMethodsAction } from '@/server/actions/mfa';
 
 interface Factor {
   id: string;
@@ -66,6 +67,18 @@ export function useStepUp() {
  *  itself never got an answer. */
 const NO_ANSWER_COPY = 'Could not reach the server. Try again.';
 const FACTORS_UNREADABLE_COPY = 'Could not load your authenticator. Try again.';
+/**
+ * The account's only authenticator is its passkey's bridge (the server said
+ * so: no app beside it). No app shows that code and the web cannot take a
+ * passkey here yet, so the modal asks for no code at all: no code box, no
+ * Verify, and the title and description say plainly that this confirmation
+ * cannot be done here yet and what to do (review 2-3 finding 9, review B
+ * finding 6). A recovery code is not offered: it removes every sign-in
+ * method, too much for one confirmation. The passkey replaces it later.
+ */
+const BRIDGE_ONLY_TITLE = "Confirm it's you";
+const BRIDGE_ONLY_COPY =
+  "This confirmation can't be done here yet, so close this and ask your organization's owner or StockPilot support for help.";
 
 /**
  * Stacking: the modal is usually opened from inside another dialog (Restore,
@@ -81,12 +94,15 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
   const [code, setCode] = React.useState('');
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  /** The server answered that the account's only authenticator is the passkey's bridge. */
+  const [bridgeOnly, setBridgeOnly] = React.useState(false);
 
   /** Every way out clears the typed code and the last error, so the next
    *  opening starts clean. */
   function done(ok: boolean) {
     setCode('');
     setError(null);
+    setBridgeOnly(false);
     onDone(ok);
   }
 
@@ -107,15 +123,63 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
           setError(FACTORS_UNREADABLE_COPY);
           return;
         }
-        const totp = (data?.totp ?? [])
-          .filter((f) => f.status === 'verified')
-          .map((f) => ({ id: f.id, friendlyName: f.friendly_name ?? null }));
+        const verified = (data?.totp ?? []).filter((f) => f.status === 'verified');
+        let totp: Factor[] = verified.map((f) => ({
+          id: f.id,
+          friendlyName: f.friendly_name ?? null,
+        }));
+        // A factor with the passkey bridge's reserved name: only the server
+        // knows whether it is the account's bridge, whose code no app shows,
+        // so it is asked once for the account's apps. A factor of that name
+        // is never offered for a code here, whatever the server answered
+        // (fail closed; the code check refuses it too).
+        if (verified.some(carriesBridgeName)) {
+          let methods: Awaited<ReturnType<typeof stepUpMethodsAction>> | null = null;
+          try {
+            methods = await stepUpMethodsAction();
+          } catch (e) {
+            // A redirect: the router is already on its way.
+            if (isControlFlow(e)) return;
+          }
+          if (cancelled) return;
+          if (methods?.ok) {
+            totp = methods.data.apps;
+            if (totp.length === 0) {
+              if (methods.data.recordsUnread) {
+                // The bridge record could not be read just now: a passing
+                // fault, said in the words of a list that could not load.
+                setFactors(null);
+                setFactorId('');
+                setError(FACTORS_UNREADABLE_COPY);
+                return;
+              }
+              setFactors(totp);
+              setFactorId('');
+              setBridgeOnly(true);
+              return;
+            }
+          } else {
+            // No answer: the browser's own list without the reserved-name
+            // factors (fail closed: which of them is the bridge is not
+            // known, and no member has a code for any of them). With no app
+            // left, the words of a list that could not load.
+            totp = totp.filter((f) => !carriesBridgeName({ friendly_name: f.friendlyName }));
+            if (totp.length === 0) {
+              setFactors(null);
+              setFactorId('');
+              setError(FACTORS_UNREADABLE_COPY);
+              return;
+            }
+          }
+        }
         setFactors(totp);
         setFactorId(totp[0]?.id ?? '');
         if (totp.length === 0) {
           setError('No authenticator is enrolled. Add one in Settings → Security first.');
         }
-      } catch {
+      } catch (e) {
+        // A redirect from the server call above: the router is on its way.
+        if (isControlFlow(e)) return;
         if (!cancelled) setError(FACTORS_UNREADABLE_COPY);
       }
     })();
@@ -164,12 +228,16 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
         <DialogHeader data-glass="step-up-head">
           <DialogTitle className="flex items-center gap-2">
             <ShieldCheck className="text-muted-foreground h-5 w-5" />
-            Confirm with your authenticator
+            {bridgeOnly ? BRIDGE_ONLY_TITLE : <>Confirm with your authenticator</>}
           </DialogTitle>
-          <DialogDescription>
-            This action needs a fresh two-factor check. Enter the current 6-digit code from your
-            authenticator app — you won&apos;t be signed out.
-          </DialogDescription>
+          {bridgeOnly ? (
+            <DialogDescription>{BRIDGE_ONLY_COPY}</DialogDescription>
+          ) : (
+            <DialogDescription>
+              This action needs a fresh two-factor check. Enter the current 6-digit code from your
+              authenticator app — you won&apos;t be signed out.
+            </DialogDescription>
+          )}
         </DialogHeader>
         <form data-glass="step-up-form" onSubmit={submit} className="space-y-3">
           {factors && factors.length > 1 ? (
@@ -192,21 +260,23 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
               </select>
             </div>
           ) : null}
-          <div data-glass="step-up-field" className="space-y-1.5">
-            <Label htmlFor="stepup-code">Authentication code</Label>
-            <Input
-              id="stepup-code"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              autoFocus
-              placeholder="123456"
-              value={code}
-              // Digits only, the first six. No maxLength: a browser cuts a pasted
-              // "123 456" at six characters before this runs, leaving five digits.
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              className="font-mono tracking-widest"
-            />
-          </div>
+          {bridgeOnly ? null : (
+            <div data-glass="step-up-field" className="space-y-1.5">
+              <Label htmlFor="stepup-code">Authentication code</Label>
+              <Input
+                id="stepup-code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                autoFocus
+                placeholder="123456"
+                value={code}
+                // Digits only, the first six. No maxLength: a browser cuts a pasted
+                // "123 456" at six characters before this runs, leaving five digits.
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                className="font-mono tracking-widest"
+              />
+            </div>
+          )}
           {error ? (
             <p className="text-destructive text-[12px]" role="alert">
               {error}
@@ -216,9 +286,11 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
             <Button type="button" variant="outline" onClick={() => done(false)} disabled={pending}>
               Cancel
             </Button>
-            <Button type="submit" disabled={pending || code.length !== 6 || !factorId}>
-              {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Verify'}
-            </Button>
+            {bridgeOnly ? null : (
+              <Button type="submit" disabled={pending || code.length !== 6 || !factorId}>
+                {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Verify'}
+              </Button>
+            )}
           </DialogFooter>
         </form>
       </DialogContent>

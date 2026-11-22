@@ -2365,6 +2365,41 @@ WEB_TESTS=(
   src/server/security/limiter-events.guard.test.ts
   src/server/security/events.test.ts
   src/server/security/events.one-buffer.test.ts
+  # A passkey's bridge factor (a TOTP factor whose secret only the server
+  # holds): the record is read only when a factor carries the reserved name.
+  # The Security page's list leaves out the recorded bridge, and the set-up,
+  # the removal and the set-up clean-up refuse it. Where a code is typed (the
+  # code check, the step-up list, the reset's pick, the code page) no factor
+  # that carries the reserved name is ever offered or checked, whatever the
+  # record read answered: one that no record names is refused as a second
+  # step that cannot be used here, and while the record cannot be read or
+  # the table is missing every one is refused (fail closed): the code check,
+  # the step-up list and the code page with try-again words, the code page
+  # keeping its recovery code and sign-out, and the reset with no code box,
+  # saying a reset is not available for the account yet. A reserved-name
+  # factor that is not recorded is listed in Settings like an app and
+  # reported (limited per account); the records missing with a reserved-name
+  # factor listed is reported (limited); an unreadable record hides nothing
+  # from the Settings list, and the removal, the set-up confirmation and the
+  # set-up clean-up then leave every reserved-name factor alone (the table
+  # missing holds nothing back there). The removal looks
+  # at the names the context already read. A recovery code spends the code
+  # and removes the passkeys in one service-role call, made only after the
+  # three limits, the password and the held session, with today's path when
+  # the function does not exist. The step-up list is limited per account at
+  # an address and per account, closed.
+  src/lib/auth/passkey-bridge.test.ts
+  src/server/actions/mfa.passkey-bridge.test.ts
+  src/server/actions/auth.reset-bridge.test.ts
+  src/server/actions/mfa-recovery.passkeys.test.ts
+  'src/app/(auth)/signin/mfa/page.passkey-bridge.test.tsx'
+  'src/app/(dashboard)/dashboard/settings/security/page.passkey-bridge.test.tsx'
+  src/components/auth/step-up-modal.passkey-bridge.test.tsx
+  # The code page's form with no authenticator app to offer (an account whose
+  # only second step is the passkey's bridge): no code box and no code ever
+  # sent, so nothing can be typed at the bridge; the recovery code still
+  # sends the account password with the code.
+  src/components/auth/mfa-challenge-form.recovery-only.test.tsx
   # Membership rows are added by the server (0473): no later migration grants
   # INSERT or ALL on organization_members, or on a column of it, to anon,
   # authenticated or PUBLIC, and none drops, disables or restates the trigger

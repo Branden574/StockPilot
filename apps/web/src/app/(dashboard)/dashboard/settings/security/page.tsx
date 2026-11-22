@@ -10,6 +10,7 @@ import { MfaRecoveryCodes } from '@/components/settings/mfa-recovery-codes';
 import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
 import { Button } from '@/components/ui/button';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
+import { readPasskeyBridge, withoutPasskeyBridge } from '@/lib/auth/passkey-bridge';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getVerifiedSessionClaimsForRequest } from '@/lib/auth/verified-claims';
 import { createClient } from '@/lib/supabase/server';
@@ -68,13 +69,18 @@ export default async function SecuritySettingsPage({
   // unreadable list must not read as "not enrolled": that tells an enrolled
   // user to set up an authenticator they already have. It gets its own state.
   const factorsUnreadable = Boolean(factorsRes.error);
-  const verifiedFactors = (factorsRes.data?.all ?? [])
-    .filter((f) => f.status === 'verified')
-    .map((f) => ({
-      id: f.id,
-      status: 'verified' as const,
-      friendlyName: f.friendly_name ?? null,
-    }));
+  const verifiedFactors = (factorsRes.data?.all ?? []).filter((f) => f.status === 'verified');
+  // The authenticator card lists the apps: never the account's recorded
+  // passkey bridge (lib/auth/passkey-bridge), which its Remove button would
+  // take away from the passkey. A record that cannot be read hides nothing.
+  // The bridge still counts as a second step below (the password change, the
+  // recovery codes, the set-up banner).
+  const bridge = await readPasskeyBridge(ctx.userId, verifiedFactors, 'security_page');
+  const appFactors = withoutPasskeyBridge(verifiedFactors, bridge).map((f) => ({
+    id: f.id,
+    status: 'verified' as const,
+    friendlyName: f.friendly_name ?? null,
+  }));
 
   // Same rule as the gates that send people here and the action behind the
   // Remove button: a row this member cannot read is held to the strictest
@@ -174,7 +180,7 @@ export default async function SecuritySettingsPage({
             </div>
           </div>
         ) : (
-          <MfaEnrollment verifiedFactors={verifiedFactors} policyRequired={policyRequired} />
+          <MfaEnrollment verifiedFactors={appFactors} policyRequired={policyRequired} />
         )}
       </SettingsPanel>
 

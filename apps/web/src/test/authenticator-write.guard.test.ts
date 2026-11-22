@@ -297,6 +297,8 @@ const REVIEWED: Record<string, Reviewed> = {
       'audit_logs.upsert',
       'auth.admin.mfa.deleteFactor',
       'rpc:consume_mfa_recovery_code',
+      'rpc:consume_recovery_code_with_passkeys',
+      'rpc:passkey_remove_all',
     ],
   },
   'server/actions/mfa-recovery.ts#generateMfaRecoveryCodesAction': {
