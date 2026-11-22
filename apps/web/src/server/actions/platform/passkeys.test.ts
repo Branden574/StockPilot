@@ -610,6 +610,46 @@ describe.each([
     }
   });
 
+  it("turning ON: the read again finds another actor's ON at this press's very instant: not credited", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-11-22T07:00:00.000Z'));
+      settings = onRow();
+      settingsWriteErrors = [{ message: 'connection reset' }];
+      beforeWrite = () => {
+        settings = onRow({
+          [column]: true,
+          updated_by: '0a000000-0000-4000-8000-0000000000ee',
+          updated_at: '2026-11-22T07:00:00.000000+00:00',
+        });
+      };
+      const res = await action({ on: true, confirm: 'PASSKEYS' });
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.error.message).toBe(
+          'Could not confirm whether the passkey switch changed. Reload the page to see its state.',
+        );
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('turning ON: the read again finds a time that does not parse: not credited', async () => {
+    settings = onRow();
+    settingsWriteErrors = [{ message: 'connection reset' }];
+    beforeWrite = () => {
+      settings = onRow({ [column]: true, updated_by: ADMIN.userId, updated_at: 'not a time' });
+    };
+    const res = await action({ on: true, confirm: 'PASSKEYS' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.message).toBe(
+        'Could not confirm whether the passkey switch changed. Reload the page to see its state.',
+      );
+    }
+  });
+
   it("turning ON: a write that answers an error but did land is confirmed by this press's own actor and timestamp, in the database's form", async () => {
     settings = onRow();
     settingsWriteErrors = [{ message: 'connection reset', landed: true }];
