@@ -16,6 +16,7 @@ import { createClient } from '@/lib/supabase/server';
 import { getMfaRecoveryCodeStatus } from '@/server/actions/mfa-recovery';
 import { withContext } from '@/server/services/context';
 import { SessionsService } from '@/server/services/sessions';
+import { SignInAlertsService } from '@/server/services/sign-in-alerts';
 
 // The Liquid Glass settings and administration composition (stage 4:
 // pages/admin.css): every rule is scoped to this area's [data-glass-page] root
@@ -49,9 +50,13 @@ export default async function SecuritySettingsPage({
     withContext(),
   ]);
   const currentSessionId = claims?.sessionId ?? null;
-  const activeSessions = await new SessionsService(serviceContext)
-    .list(currentSessionId)
-    .catch(() => []);
+  // The member's own sign-in alerts (part 3) are read beside the sessions,
+  // not after them: Active sessions shows each on the session it made. Null
+  // when they could not be read (the panel says so).
+  const [activeSessions, myAlerts] = await Promise.all([
+    new SessionsService(serviceContext).list(currentSessionId).catch(() => []),
+    new SignInAlertsService(serviceContext).mine().catch(() => null),
+  ]);
 
   const [factorsRes, orgRow, recoveryStatus] = await Promise.all([
     supabase.auth.mfa.listFactors(),
@@ -177,7 +182,7 @@ export default async function SecuritySettingsPage({
         title="Active sessions"
         description="Devices you're signed in on. Sign out any you don't recognize."
       >
-        <ActiveSessions sessions={activeSessions} />
+        <ActiveSessions sessions={activeSessions} alerts={myAlerts} />
       </SettingsPanel>
 
       {verifiedFactors.length > 0 && (
@@ -195,6 +200,28 @@ export default async function SecuritySettingsPage({
           description="Choose how strictly to require MFA across the team."
         >
           <MfaPolicyEditor current={policy} />
+        </SettingsPanel>
+      )}
+
+      {isAdmin && (
+        <SettingsPanel
+          title="Blocked activity"
+          description="Wrong passwords and codes the app refused for the accounts in your organization."
+        >
+          <Button asChild size="sm" variant="outline">
+            <Link href="/dashboard/settings/security/activity">View blocked activity</Link>
+          </Button>
+        </SettingsPanel>
+      )}
+
+      {isAdmin && (
+        <SettingsPanel
+          title="Sign-in alerts"
+          description="Sign-ins from a new device or a new country for the accounts in your organization, and how each member answered."
+        >
+          <Button asChild size="sm" variant="outline">
+            <Link href="/dashboard/settings/security/sign-ins">View sign-in alerts</Link>
+          </Button>
         </SettingsPanel>
       )}
     </SettingsPage>

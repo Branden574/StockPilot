@@ -111,6 +111,16 @@ describe('sendEmail — back-compat (legacy call shape)', () => {
     expect(res.ok).toBe(false);
     expect(res.error).toBe('nope');
   });
+
+  it('a refusal carries its HTTP status, so a caller can tell a refusal for rate (429) from the rest', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('rate_limit_exceeded', { status: 429 }));
+    expect(await sendEmail(BASE)).toEqual({ ok: false, error: 'rate_limit_exceeded', status: 429 });
+    fetchMock.mockResolvedValueOnce(new Response('nope', { status: 422 }));
+    expect(await sendEmail(BASE)).toEqual({ ok: false, error: 'nope', status: 422 });
+    // A send that never got an answer has no status.
+    fetchMock.mockRejectedValueOnce(new Error('network'));
+    expect(await sendEmail(BASE)).toEqual({ ok: false, error: 'network' });
+  });
 });
 
 describe('sendEmail — es extensions', () => {

@@ -131,3 +131,4 @@ export * from './auth/set-up-copy';
 export * from './auth/passkey-copy';
 export * from './account/delete-account-copy';
 export * from './appearance';
+export * from './security/security-events';

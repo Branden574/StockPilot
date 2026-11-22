@@ -15,13 +15,14 @@ import {
   MFA_CODE_REFUSED,
   signOutThisSession,
 } from '@/lib/auth/mfa-code-attempts';
+import { newSessionIdOf } from '@/lib/auth/new-session-id';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
 import { openedFromResetLink } from '@/lib/auth/reset-link-session';
 import { sessionAccountNow, type SessionAccountNow } from '@/lib/auth/session-account';
 import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { broadcastToChannel } from '@/lib/realtime/broadcast';
-import { clientIpForRecord, clientIpFromHeaders } from '@/lib/client-ip';
+import { clientIpForRecord, clientIpFromHeaders, clientPlaceFromHeaders } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createClient } from '@/lib/supabase/server';
@@ -35,6 +36,7 @@ import {
   isBannedUserAuthError,
 } from '@/server/actions/auth-error-classify';
 import { unexpectedActionError } from '@/server/lib/action-error-result';
+import { recordSignInBlocked } from '@/server/security/account-events';
 import { audit } from '@/server/services/audit';
 import { emitAuthAudit, resolveDefaultOrgAndRole } from '@/server/services/auth-audit';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
@@ -102,13 +104,21 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
   // door. Return the typed `rate_limited` error (don't throw) so the
   // sign-in form can toast a clean message.
   const emailKey = parsed.data.email.toLowerCase();
-  const ip = await getClientIp();
+  // The request's headers, read once: the address for the limiter's second
+  // key, and the place and source of a refusal recorded as a security event
+  // (server/security/account-events.ts, after the response).
+  const requestHeaders = await headers();
+  const ip = clientIpFromHeaders(requestHeaders);
+  // A refusal by either limiter is a security event; a limiter that could not
+  // count (`failed`, closed mode) is not one.
   const emailRl = await checkRateLimit(`signin:${emailKey}`, 5, 60_000, 'closed');
   if (!emailRl.allowed) {
+    if (!emailRl.failed) recordSignInBlocked('sign_in_paused', emailKey, requestHeaders);
     return err('rate_limited', 'Too many sign-in attempts. Try again in a minute.');
   }
   const ipRl = await checkRateLimit(`signin-ip:${ip}`, 30, 60_000, 'closed');
   if (!ipRl.allowed) {
+    if (!ipRl.failed) recordSignInBlocked('sign_in_paused', emailKey, requestHeaders);
     return err('rate_limited', 'Too many sign-in attempts. Try again in a minute.');
   }
 
@@ -146,6 +156,11 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
     // reason rather than a new org-visible event — org visibility of a platform
     // disable is an open policy question.
     if (isBannedUserAuthError(errAny)) {
+      // A security event with NO organization (the policy question above is
+      // unchanged: the organization's page does not show it): the sign-in
+      // service refused a password our server sent, and our own record holds
+      // every such refusal (server/security/auth-logs.ts compares the two).
+      recordSignInBlocked('sign_in_refused_other', emailKey, requestHeaders);
       noteDisabledAccountBlocked('login');
       await emitAuthAudit({
         event: 'user.sign_in_failed',
@@ -165,6 +180,22 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
         reason: isRateLimit ? 'supabase_rate_limited' : 'invalid_credentials',
       },
     });
+    // A security event for the Auth server's own limit, and for credentials
+    // GoTrue judged wrong (its structured code, the same for an address that
+    // is not an account). The account's organization is looked up after
+    // the response, so the answer takes the same time either way. Any other
+    // refusal with the status of a wrong password (an unconfirmed email, a
+    // code this does not know) is recorded with no organization, as a
+    // disabled account's is above: it is not a wrong password, and our own
+    // record holds every password the sign-in service refused from our
+    // server. An outage or no answer judged nothing and is not recorded.
+    if (isRateLimit) {
+      recordSignInBlocked('auth_server_paused', emailKey, requestHeaders);
+    } else if (errAny.code === 'invalid_credentials') {
+      recordSignInBlocked('wrong_password', emailKey, requestHeaders);
+    } else if (errAny.status === 400) {
+      recordSignInBlocked('sign_in_refused_other', emailKey, requestHeaders);
+    }
     if (isRateLimit) {
       return err(
         'rate_limited',
@@ -218,14 +249,28 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
   // on an account that already has known devices (first device = silent
   // baseline). Fires here on the password step — i.e. even before TOTP — so a
   // stolen password used from a new device still alerts the real owner.
+  //
+  // Part 3 (sign-in alerts): the note also gets the place (Vercel's headers,
+  // only on Vercel), the session this sign-in made and the client. The session
+  // id is read from the new session's own token, verified, inside the after()
+  // callback, so nothing new runs before the answer.
   if (userId) {
-    const h = await headers();
+    const h = requestHeaders;
     const ua = h.get('user-agent');
     // The device row and the email take the address only as an IP literal,
     // never the limiter's 'unknown' bucket.
     const deviceIp = clientIpForRecord(h);
-    after(() =>
-      noteLoginDevice({ userId, email: parsed.data.email, userAgent: ua, ip: deviceIp }),
+    const accessToken = signInData.session?.access_token ?? null;
+    after(async () =>
+      noteLoginDevice({
+        userId,
+        email: parsed.data.email,
+        userAgent: ua,
+        ip: deviceIp,
+        place: clientPlaceFromHeaders(h),
+        sessionId: await newSessionIdOf(supabase, accessToken, userId),
+        client: 'web',
+      }),
     );
   }
 
@@ -812,7 +857,7 @@ export async function changePasswordAction(
   // four flows (MFA enroll-verify, MFA recovery consume, team, email-change)
   // moved on and this one silently would not have followed any hardening
   // applied there. One implementation, one place to harden.
-  const pw = await verifyPasswordSideChannel(user.email, parsed.data.currentPassword);
+  const pw = await verifyPasswordSideChannel(user.email, parsed.data.currentPassword, user.id);
   if (!pw.ok) {
     // Keep the two failure shapes distinct: a wrong password is the user's to
     // fix, a thrown client is ours. (The inline copy let a thrown client

@@ -205,7 +205,10 @@ const read = (id: string) => ({
   release_id: id,
   // Re-pinned by docs/whats-new-integrations-message-and-api-key-rows (2026-11-16; was: revision 1): the API key audit release is re-announced as revision 2, so a read of it is recorded at revision 2.
   // Re-pinned by bundles/hand-out-follows-the-manager-rule (2026-11-16; was: id === 'api-key-audit-2026-11' ? 2 : 1): the emptied fields and schedule completion release is re-announced as revision 2, so a read of it is recorded at revision 2.
-  revision: id === 'api-key-audit-2026-11' || id === 'emptied-fields-and-schedule-completion-2026-11' ? 2 : 1,
+  revision:
+    id === 'api-key-audit-2026-11' || id === 'emptied-fields-and-schedule-completion-2026-11'
+      ? 2
+      : 1,
   dismissed_at: null,
   opened_at: '2026-11-03T00:00:00Z',
   read_at: '2026-11-03T00:00:00Z',
@@ -251,7 +254,8 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(27, 32)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(28, 33)): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES.slice(29, 34)): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES.slice(30, 35).map((r) => r.id)).toEqual([...NEW_IDS, WEB_FIXES_ID]);
+    // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: .slice(30, 35)): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES.slice(33, 38).map((r) => r.id)).toEqual([...NEW_IDS, WEB_FIXES_ID]);
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: EXPORT_ID): the S2 release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: S2_ID): the count sheet release is published after it, at the top, the newest published release.
     // Re-pinned by feat/order-add-all (2026-11-10; was: COUNT_SHEET_ID): the Add all release is published after it, at the top, the newest published release.
@@ -277,7 +281,8 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
       // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: the receiving release): the export, receipt and access release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: the export, receipt and access release): the count start access check release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: 'count-start-access-check-2026-11'): the phone authenticator set-up release is published after it, at the top, the newest published release.
-      'phone-authenticator-set-up-2026-11',
+      // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: 'phone-authenticator-set-up-2026-11'): the Blocked activity release is published after it, at the top, the newest published release.
+      'sign-in-alerts-2026-11',
     );
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
       'liquid-glass-2026-11',
@@ -325,7 +330,7 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
       // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(i + 28)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
       // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(i + 29)): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
       // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES.slice(i + 30)): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-      for (const r of RELEASES.slice(i + 31)) {
+      for (const r of RELEASES.slice(i + 34)) {
         expect(at(NEW_IDS[i]!), `${NEW_IDS[i]} after ${r.id}`).toBeGreaterThan(
           Date.parse(r.publishedAt),
         );
@@ -378,6 +383,10 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (owners, admins, managers, staff and viewers by default), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), an owner with every permission and module among them, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+          read('sign-in-alerts-2026-11'),
+          read('blocked-activity-current-password-and-set-up-code-2026-11'),
+          read('blocked-activity-2026-11'),
           read('phone-authenticator-set-up-2026-11'),
           // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, and reaches a manager or above who can assign counts where Cycle Counts is on (an owner with every permission and module among them), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           read('count-start-access-check-2026-11'),
@@ -436,6 +445,10 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (owners, admins, managers, staff and viewers by default), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), an owner with every permission and module among them, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+          read('sign-in-alerts-2026-11'),
+          read('blocked-activity-current-password-and-set-up-code-2026-11'),
+          read('blocked-activity-2026-11'),
           read('phone-authenticator-set-up-2026-11'),
           // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, and reaches a manager or above who can assign counts where Cycle Counts is on (an owner with every permission and module among them), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           read('count-start-access-check-2026-11'),
@@ -495,6 +508,10 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (owners, admins, managers, staff and viewers by default), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), an owner with every permission and module among them, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+          read('sign-in-alerts-2026-11'),
+          read('blocked-activity-current-password-and-set-up-code-2026-11'),
+          read('blocked-activity-2026-11'),
           read('phone-authenticator-set-up-2026-11'),
           // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, and reaches a manager or above who can assign counts where Cycle Counts is on (an owner with every permission and module among them), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           read('count-start-access-check-2026-11'),
@@ -555,6 +572,10 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (owners, admins, managers, staff and viewers by default), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), an owner with every permission and module among them, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+          read('sign-in-alerts-2026-11'),
+          read('blocked-activity-current-password-and-set-up-code-2026-11'),
+          read('blocked-activity-2026-11'),
           read('phone-authenticator-set-up-2026-11'),
           // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, and reaches a manager or above who can assign counts where Cycle Counts is on (an owner with every permission and module among them), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           read('count-start-access-check-2026-11'),
@@ -616,6 +637,10 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (owners, admins, managers, staff and viewers by default), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), an owner with every permission and module among them, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+          'sign-in-alerts-2026-11',
+          'blocked-activity-current-password-and-set-up-code-2026-11',
+          'blocked-activity-2026-11',
           'phone-authenticator-set-up-2026-11',
           // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, and reaches a manager or above who can assign counts where Cycle Counts is on (an owner with every permission and module among them), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           'count-start-access-check-2026-11',
@@ -658,7 +683,8 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
     // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: without it): the delete account release is published later, at the top, and reaches every member, so it is read or seen first, and the notice this test checks is the one it checked before.
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), so it is read first, and the notice this test checks is the one it checked before.
-    expect(buildReleaseList(RELEASES, member, [read('phone-authenticator-set-up-2026-11'), read('export-receipt-access-fixes-2026-11'), deleteConfirmRead, authSetUpRead], null).latestUnread?.id).toBe(
+    // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+    expect(buildReleaseList(RELEASES, member, [read('sign-in-alerts-2026-11'), read('blocked-activity-current-password-and-set-up-code-2026-11'), read('blocked-activity-2026-11'), read('phone-authenticator-set-up-2026-11'), read('export-receipt-access-fixes-2026-11'), deleteConfirmRead, authSetUpRead], null).latestUnread?.id).toBe(
       // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: the emailed links release): the phone authenticator code release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: the phone authenticator code release): the phone screens by access release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: the phone screens by access release): the email change release is published after it and reaches every member, so a member is told it first (the count read rule release, the newest published, does not reach this member).
@@ -684,6 +710,10 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (owners, admins, managers, staff and viewers by default), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+          read('sign-in-alerts-2026-11'),
+          read('blocked-activity-current-password-and-set-up-code-2026-11'),
+          read('blocked-activity-2026-11'),
           read('phone-authenticator-set-up-2026-11'),
           // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, and reaches a manager or above who can assign counts where Cycle Counts is on (an owner with every permission and module among them), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           read('count-start-access-check-2026-11'),
@@ -725,6 +755,10 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (owners, admins, managers, staff and viewers by default), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+          read('sign-in-alerts-2026-11'),
+          read('blocked-activity-current-password-and-set-up-code-2026-11'),
+          read('blocked-activity-2026-11'),
           read('phone-authenticator-set-up-2026-11'),
           // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, and reaches a manager or above who can assign counts where Cycle Counts is on (an owner with every permission and module among them), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           read('count-start-access-check-2026-11'),
@@ -885,7 +919,14 @@ describe('the phone update release (B42, B23, B65, B75 and S5a)', () => {
       "ctx.supabase.rpc('revoke_my_other_sessions'",
     );
     expect(source('app/api/v1/auth/signed-in/route.ts')).toContain("event: 'user.signed_in',");
-    expect(source('lib/auth/login-device.ts')).toContain('if (hadKnownDevices && args.email) {');
+    // A first device (and a first country) is recorded without an alert, and
+    // an alert needs an address to go to.
+    expect(source('lib/auth/login-device.ts')).toContain(
+      'return { insertedNow: true, alerts: hadKnownDevices };',
+    );
+    expect(source('lib/auth/login-device.ts')).toContain(
+      'if (!(newDevice || newCountry) || !args.email) return;',
+    );
     expect(entry(PHONE_ID, 'app-sign-ins-in-audit-log').whatChanged).toContain(
       'StockPilot app on iPhone 15 Pro (iOS 18.1)',
     );

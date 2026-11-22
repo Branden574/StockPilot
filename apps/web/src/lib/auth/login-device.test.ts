@@ -19,7 +19,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *  - The webhook event went to up to five organizations of ANY membership
  *    row: an invitation never accepted, or a support "act as" seat.
  *
- * The admin client is an in-memory table that keeps 0168's unique key.
+ * PART 3 (sign-in alerts): the same call also notes the sign-in's country,
+ * records each alert in sign_in_alerts before its email, and alerts for a new
+ * country as well as a new device (one alert per sign-in, both flags). Its
+ * cases are at the end of this file.
+ *
+ * The admin client is an in-memory model of the tables it writes, keeping
+ * 0168's unique key and the sign_in_alerts and user_sign_in_countries keys
+ * and checks of migration sign_in_alerts.
  */
 
 interface DeviceRow {
@@ -35,66 +42,190 @@ interface MemberRow {
   accepted_at: string | null;
   impersonation_expires_at: string | null;
 }
+interface CountryRow {
+  user_id: string;
+  country: string;
+  first_seen_at: string;
+  last_seen_at: string;
+}
+interface AlertRow {
+  id: string;
+  user_id: string;
+  session_id: string | null;
+  new_device: boolean;
+  new_country: boolean;
+  client: string;
+  device_label: string;
+  device_family: string;
+  device_hash: string | null;
+  country: string | null;
+  city: string | null;
+  status: string;
+  resolved_at: string | null;
+  [column: string]: unknown;
+}
+
+type TableName =
+  | 'user_login_devices'
+  | 'organization_members'
+  | 'user_sign_in_countries'
+  | 'sign_in_alerts';
 
 const db = vi.hoisted(() => ({
   devices: [] as DeviceRow[],
   members: [] as MemberRow[],
-  /** Forces the next insert's answer (a refusal the table would not give). */
+  countries: [] as CountryRow[],
+  alerts: [] as AlertRow[],
+  /** Forces the next insert's answer on a table (a refusal the table would not give). */
   insertError: null as null | { code: string; message: string },
+  insertErrorTable: 'user_login_devices' as string,
+  /** Forces the next count's answer on user_sign_in_countries. */
+  countError: null as null | { code: string; message: string },
+  /** Every delete on these tables is refused with this, or throws ('throw'), until cleared. */
+  deleteError: {} as Record<string, { code: string; message: string } | 'throw'>,
+  /** The same, for the NEXT delete on the table only. */
+  deleteErrorOnce: {} as Record<string, { code: string; message: string } | 'throw'>,
+  /** The next insert on this table throws (the network, not a refusal). */
+  insertThrowsTable: null as string | null,
   nextId: 1,
+  /** What was asked of each table, in order: `<op>:<table>`. */
+  ops: [] as string[],
+  clock: 0,
 }));
 
-type Filter = ['eq' | 'is' | 'not', string, unknown];
+type Filter = ['eq' | 'is' | 'not' | 'neq', string, unknown];
 
-function tableClient(name: 'user_login_devices' | 'organization_members') {
+/** sign_in_alerts' checks (migration sign_in_alerts), as the database would refuse a row: 23514. */
+function alertRefusal(row: AlertRow): string | null {
+  const words = /^[A-Za-z0-9 ()+.-]{1,120}$/;
+  if (!(row.new_device || row.new_country)) return 'sign_in_alerts_new_device_or_country';
+  if (row.new_country && row.country === null) return 'sign_in_alerts_new_country_named';
+  if (!['web', 'phone'].includes(row.client)) return 'sign_in_alerts_client';
+  if (!words.test(row.device_label)) return 'sign_in_alerts_device_label';
+  if (!words.test(row.device_family)) return 'sign_in_alerts_device_family';
+  if (row.device_hash !== null && !/^[0-9a-f]{40}$/.test(row.device_hash)) return 'sign_in_alerts_device_hash';
+  if (row.country !== null && !/^[A-Z]{2}$/.test(row.country)) return 'sign_in_alerts_country';
+  if (row.city !== null && /[@/\\:;<>(){}[\]=?&%#"|$*+^~`]|[0-9].*[0-9].*[0-9].*[0-9]/.test(row.city)) {
+    return 'sign_in_alerts_city';
+  }
+  if ((row.status === 'open') !== (row.resolved_at === null)) return 'sign_in_alerts_resolved_with_answer';
+  for (const column of ['ip', 'last_ip', 'email', 'user_agent']) {
+    if (column in row) return `no column ${column}`;
+  }
+  return null;
+}
+
+function tableClient(name: TableName) {
   const q = {
     op: 'select' as 'select' | 'insert' | 'update' | 'delete',
     head: false,
     payload: null as Record<string, unknown> | null,
     filters: [] as Filter[],
     limit: Infinity,
+    returning: false,
   };
   const rows = (): Array<Record<string, unknown>> =>
-    (name === 'user_login_devices' ? db.devices : db.members) as unknown as Array<
-      Record<string, unknown>
-    >;
+    (name === 'user_login_devices'
+      ? db.devices
+      : name === 'organization_members'
+        ? db.members
+        : name === 'user_sign_in_countries'
+          ? db.countries
+          : db.alerts) as unknown as Array<Record<string, unknown>>;
+  const setRows = (next: Array<Record<string, unknown>>) => {
+    if (name === 'user_login_devices') db.devices = next as unknown as DeviceRow[];
+    else if (name === 'organization_members') db.members = next as unknown as MemberRow[];
+    else if (name === 'user_sign_in_countries') db.countries = next as unknown as CountryRow[];
+    else db.alerts = next as unknown as AlertRow[];
+  };
   const matches = (r: Record<string, unknown>) =>
     q.filters.every(([kind, col, value]) =>
       kind === 'eq'
         ? r[col] === value
-        : kind === 'is'
-          ? (r[col] ?? null) === value
-          : (r[col] ?? null) !== value,
+        : kind === 'neq'
+          ? r[col] !== value
+          : kind === 'is'
+            ? (r[col] ?? null) === value
+            : (r[col] ?? null) !== value,
     );
   const run = (): { data: unknown; error: unknown; count?: number } => {
+    db.ops.push(`${q.op}:${name}`);
     if (q.op === 'insert') {
-      if (db.insertError) {
+      if (db.insertThrowsTable === name) {
+        db.insertThrowsTable = null;
+        throw new Error(`insert into ${name} threw for member@example.com`);
+      }
+      if (db.insertError && db.insertErrorTable === name) {
         const error = db.insertError;
         db.insertError = null;
         return { data: null, error };
       }
-      const p = q.payload as unknown as DeviceRow;
-      if (db.devices.some((d) => d.user_id === p.user_id && d.device_hash === p.device_hash)) {
-        return { data: null, error: { code: '23505', message: 'duplicate key value' } };
+      if (name === 'user_login_devices') {
+        const p = q.payload as unknown as DeviceRow;
+        if (db.devices.some((d) => d.user_id === p.user_id && d.device_hash === p.device_hash)) {
+          return { data: null, error: { code: '23505', message: 'duplicate key value' } };
+        }
+        db.devices.push({ ...p, id: `device-${db.nextId++}` });
+        return { data: null, error: null };
       }
-      db.devices.push({ ...p, id: `device-${db.nextId++}` });
-      return { data: null, error: null };
+      if (name === 'user_sign_in_countries') {
+        const p = q.payload as unknown as CountryRow;
+        if (!/^[A-Z]{2}$/.test(p.country)) {
+          return { data: null, error: { code: '23514', message: 'user_sign_in_countries_country' } };
+        }
+        if (db.countries.some((c) => c.user_id === p.user_id && c.country === p.country)) {
+          return { data: null, error: { code: '23505', message: 'duplicate key value' } };
+        }
+        const at = new Date(Date.UTC(2026, 10, 20) + db.clock++ * 1000).toISOString();
+        // The table's defaults fill the two times the insert leaves out.
+        const sent = p as Partial<CountryRow> & Pick<CountryRow, 'user_id' | 'country'>;
+        db.countries.push({ ...sent, first_seen_at: sent.first_seen_at ?? at, last_seen_at: sent.last_seen_at ?? at });
+        return { data: null, error: null };
+      }
+      if (name === 'sign_in_alerts') {
+        const id = `0000aaaa-0000-4000-8000-${String(db.nextId++).padStart(12, '0')}`;
+        const row = {
+          status: 'open',
+          resolved_at: null,
+          session_id: null,
+          device_hash: null,
+          country: null,
+          city: null,
+          ...(q.payload as Record<string, unknown>),
+          id,
+        } as AlertRow;
+        const refused = alertRefusal(row);
+        if (refused) return { data: null, error: { code: '23514', message: refused } };
+        db.alerts.push(row);
+        return { data: q.returning ? [{ id }] : null, error: null };
+      }
+      throw new Error(`insert into ${name} is not modelled`);
     }
     if (q.op === 'delete') {
-      const keep = rows().filter((r) => !matches(r));
-      if (name === 'user_login_devices') db.devices = keep as unknown as DeviceRow[];
+      const once = db.deleteErrorOnce[name];
+      delete db.deleteErrorOnce[name];
+      const refusal = once ?? db.deleteError[name];
+      if (refusal === 'throw') throw new Error(`delete from ${name} threw for member@example.com`);
+      if (refusal) return { data: null, error: refusal };
+      setRows(rows().filter((r) => !matches(r)));
       return { data: null, error: null };
     }
     if (q.op === 'update') {
       for (const r of rows().filter(matches)) Object.assign(r, q.payload);
       return { data: null, error: null };
     }
+    if (name === 'user_sign_in_countries' && q.head && db.countError) {
+      const error = db.countError;
+      db.countError = null;
+      return { data: null, error };
+    }
     const found = rows().filter(matches).slice(0, q.limit);
     return q.head ? { data: null, error: null, count: found.length } : { data: found, error: null };
   };
   const b = {
-    select: (_cols: string, opts?: { head?: boolean }) => {
-      q.head = opts?.head === true;
+    select: (_cols?: string, opts?: { head?: boolean; count?: string }) => {
+      if (q.op === 'insert' || q.op === 'update') q.returning = true;
+      else q.head = opts?.head === true;
       return b;
     },
     insert: (payload: Record<string, unknown>) => {
@@ -115,6 +246,10 @@ function tableClient(name: 'user_login_devices' | 'organization_members') {
       q.filters.push(['eq', col, value]);
       return b;
     },
+    neq: (col: string, value: unknown) => {
+      q.filters.push(['neq', col, value]);
+      return b;
+    },
     is: (col: string, value: unknown) => {
       q.filters.push(['is', col, value]);
       return b;
@@ -132,6 +267,13 @@ function tableClient(name: 'user_login_devices' | 'organization_members') {
       const r = run();
       return { data: (r.data as unknown[] | null)?.[0] ?? null, error: r.error };
     },
+    single: async () => {
+      const r = run();
+      const list = r.data as unknown[] | null;
+      if (r.error) return { data: null, error: r.error };
+      if (!list || list.length !== 1) return { data: null, error: { code: 'PGRST116', message: 'not one row' } };
+      return { data: list[0], error: null };
+    },
     then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
       Promise.resolve().then(run).then(resolve, reject),
   };
@@ -140,17 +282,37 @@ function tableClient(name: 'user_login_devices' | 'organization_members') {
 
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => ({
-    from: (t: 'user_login_devices' | 'organization_members') => tableClient(t),
+    from: (t: TableName) => tableClient(t),
   }),
 }));
 const sendNewDeviceLoginEmail = vi.hoisted(() =>
-  vi.fn(async (_args: Record<string, unknown>) => undefined),
+  vi.fn(async (_args: Record<string, unknown>) => {
+    db.ops.push('email');
+  }),
 );
 vi.mock('@/lib/email/login-alert', () => ({ sendNewDeviceLoginEmail }));
 const dispatchEvent = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => undefined));
 vi.mock('@/server/services/integration-events', () => ({ dispatchEvent }));
 const reportError = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => undefined));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
+// The "This was not me" link: its format and key are tested in
+// sign-in-alert-link.test.ts; here only which alert it names.
+vi.mock('@/lib/auth/sign-in-alert-url', () => ({
+  signInAlertLinkUrl: vi.fn(
+    ({ alertId }: { alertId: string }) =>
+      `https://app.example.test/sign-in-alert?a=${alertId}&i=20261120&t=${'x'.repeat(43)}`,
+  ),
+}));
+const recordSignInAlertEvent = vi.hoisted(() =>
+  vi.fn(async (_args: Record<string, unknown>) => undefined),
+);
+const recordSignInAlertsHeldEvent = vi.hoisted(() =>
+  vi.fn(async (_args: Record<string, unknown>) => undefined),
+);
+vi.mock('@/server/security/sign-in-alert-events', () => ({
+  recordSignInAlertEvent,
+  recordSignInAlertsHeldEvent,
+}));
 // The bucket table, in memory, with lib/rate-limit's own answer when its
 // store cannot be reached: a closed bucket refuses, an open one allows.
 const limiter = vi.hoisted(() => ({
@@ -159,10 +321,17 @@ const limiter = vi.hoisted(() => ({
   /** Only the buckets whose key starts with this cannot answer. */
   downPrefix: null as string | null,
   calls: [] as Array<{ key: string; limit: number; windowMs: number; mode?: string }>,
+  /** Runs once, when the limiter is next asked: what another sign-in does meanwhile. */
+  meanwhile: null as null | (() => Promise<void>),
 }));
 vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: vi.fn(async (key: string, limit: number, windowMs: number, mode?: string) => {
     limiter.calls.push({ key, limit, windowMs, mode });
+    if (limiter.meanwhile) {
+      const other = limiter.meanwhile;
+      limiter.meanwhile = null;
+      await other();
+    }
     if (limiter.storeDown || (limiter.downPrefix && key.startsWith(limiter.downPrefix))) {
       return mode === 'closed'
         ? { allowed: false, count: limit, resetAt: Date.now() + windowMs, failed: true }
@@ -175,7 +344,7 @@ vi.mock('@/lib/rate-limit', () => ({
   }),
 }));
 
-import { noteLoginDevice } from './login-device';
+import { TAKE_BACK_RETRY, noteLoginDevice } from './login-device';
 
 const USER = '11111111-1111-4111-8111-111111111111';
 const EMAIL = 'member@example.com';
@@ -186,6 +355,8 @@ const APP_UA_2 = 'StockPilot/42 CFNetwork/1568.200.51 Darwin/24.1.0';
 const INSTALL_1 = '0f6c2d1e-8a4b-4c5d-9e6f-7a8b9c0d1e2f';
 const INSTALL_2 = '3a4b5c6d-7e8f-4a0b-8c1d-2e3f4a5b6c7d';
 const LABEL = 'StockPilot app on iPhone 15 Pro (iOS 18.1)';
+/** How a report names the account: the first 16 hex characters of the SHA-256 of its id. */
+const USER_HASH = createHash('sha256').update(USER).digest('hex').slice(0, 16);
 const FAMILY = 'StockPilot app on iPhone';
 
 const phone = (deviceKey: string, userAgent = APP_UA_1, deviceLabel = LABEL) =>
@@ -204,8 +375,22 @@ const web = () =>
 beforeEach(() => {
   db.devices = [];
   db.members = [];
+  db.countries = [];
+  db.alerts = [];
   db.insertError = null;
+  db.insertErrorTable = 'user_login_devices';
+  db.countError = null;
+  db.deleteError = {};
+  db.deleteErrorOnce = {};
+  db.insertThrowsTable = null;
   db.nextId = 1;
+  db.ops = [];
+  db.clock = 0;
+  recordSignInAlertEvent.mockClear();
+  recordSignInAlertsHeldEvent.mockClear();
+  // The wait before a take-back's one more try: none here, so no test waits.
+  TAKE_BACK_RETRY.waitMs = 0;
+  limiter.meanwhile = null;
   sendNewDeviceLoginEmail.mockClear();
   dispatchEvent.mockClear();
   reportError.mockClear();
@@ -231,12 +416,17 @@ describe('noteLoginDevice — new-device alerts per account and per organization
     }));
   };
 
-  it('at most 5 alerts a day per account: every device is recorded, the sixth on sends no email and no event', async () => {
+  it('at most 5 alert emails a day per account: every device is recorded and every alert is written; from the sixth on only the email is held', async () => {
     memberOf('org-a');
     await web();
     for (const install of installs) await phone(install);
     expect(db.devices).toHaveLength(1 + installs.length);
     expect(sendNewDeviceLoginEmail).toHaveBeenCalledTimes(5);
+    // The record of each alert is still written, so Active sessions and the
+    // organization's list show the sixth sign-in on (review 1, finding 6).
+    expect(db.alerts).toHaveLength(installs.length);
+    // The organizations' webhook keeps its own count of 5 a day per account
+    // (review 2, finding 3), so one account cannot fill a channel.
     expect(dispatchEvent).toHaveBeenCalledTimes(5);
     expect(limiter.calls).toContainEqual({
       key: `new-device-alert:user:${USER}`,
@@ -283,11 +473,13 @@ describe('noteLoginDevice — new-device alerts per account and per organization
     expect(dispatchEvent).toHaveBeenCalledTimes(1);
   });
 
-  it('a count refusal keeps the device recorded', async () => {
+  it('a count refusal keeps the device recorded and writes the alert; only the email is held', async () => {
     await web();
     limiter.buckets.set(`new-device-alert:user:${USER}`, 5);
     await phone(installs[0]!);
     expect(db.devices).toHaveLength(2);
+    expect(db.alerts).toHaveLength(1);
+    expect(db.alerts[0]).toMatchObject({ new_device: true, status: 'open' });
     expect(sendNewDeviceLoginEmail).not.toHaveBeenCalled();
   });
 
@@ -436,13 +628,19 @@ describe('noteLoginDevice — the label names the device to the person, the fami
       ip: '203.0.113.7',
       deviceLabel: LABEL,
       lastForADay: false,
+      place: { country: null, city: null },
+      newDevice: true,
+      newCountry: false,
+      notMeUrl: `https://app.example.test/sign-in-alert?a=${db.alerts[0]!.id}&i=20261120&t=${'x'.repeat(43)}`,
     });
     expect(db.devices[1]!.user_agent).toBe(LABEL);
     // Integrator decision (device label, 2026-11-02): the sign-in note keeps
-    // only the device family in the organization's activity.
+    // only the device family in the organization's activity. Part 3 adds the
+    // country (two letters, or null when unknown), never the city.
     expect(dispatchEvent).toHaveBeenCalledWith('org-a', 'security.new_device_login', {
       userId: USER,
       device: FAMILY,
+      country: null,
     });
     expect(JSON.stringify(dispatchEvent.mock.calls)).not.toContain('15 Pro');
   });
@@ -509,7 +707,7 @@ describe('noteLoginDevice — a web sign-in is named by its browser and system, 
 
   it('the event names the browser and system, not the agent', async () => {
     const data = await secondWebSignIn(FIREFOX_WINDOWS);
-    expect(data).toEqual({ userId: USER, device: 'Firefox on Windows' });
+    expect(data).toEqual({ userId: USER, device: 'Firefox on Windows', country: null });
     // The person's own list and email still get the agent.
     expect(db.devices[1]!.user_agent).toBe(FIREFOX_WINDOWS);
     expect(sendNewDeviceLoginEmail).toHaveBeenCalledWith(
@@ -568,5 +766,890 @@ describe('noteLoginDevice — a web sign-in is named by its browser and system, 
       expect(text).not.toContain('example.com');
       expect(text).not.toMatch(/[<>[\]]/);
     }
+  });
+});
+
+// ── Part 3: sign-in alerts ──────────────────────────────────────────────────
+
+describe('noteLoginDevice — the country rule (part 3)', () => {
+  const SESSION = '5e551011-0000-4000-8000-000000000001';
+  const signIn = (country: string | null, overrides: Record<string, unknown> = {}) =>
+    noteLoginDevice({
+      userId: USER,
+      email: EMAIL,
+      userAgent: WEB_UA,
+      ip: '203.0.113.9',
+      place: { country, city: country === 'MX' ? 'Tijuana' : null },
+      sessionId: SESSION,
+      client: 'web',
+      ...overrides,
+    });
+
+  it('the first country an account is ever seen in is recorded silently, as the first device is', async () => {
+    await signIn('US');
+    expect(db.countries.map((c) => c.country)).toEqual(['US']);
+    expect(db.alerts).toEqual([]);
+    expect(sendNewDeviceLoginEmail).not.toHaveBeenCalled();
+    expect(recordSignInAlertEvent).not.toHaveBeenCalled();
+  });
+
+  it('a known country is silent, and its row is kept up to date', async () => {
+    await signIn('US');
+    const first = db.countries[0]!.last_seen_at;
+    await signIn('US');
+    expect(db.countries).toHaveLength(1);
+    expect(db.countries[0]!.last_seen_at).not.toBe(first);
+    expect(db.alerts).toEqual([]);
+    expect(sendNewDeviceLoginEmail).not.toHaveBeenCalled();
+  });
+
+  it('a new country on a known device alerts once: one row (new_country only), one email, one security event, and no new-device webhook', async () => {
+    db.members = [
+      { user_id: USER, organization_id: 'org-a', accepted_at: '2026-01-01T00:00:00Z', impersonation_expires_at: null },
+    ];
+    await signIn('US');
+    await signIn('MX');
+    expect(db.alerts).toHaveLength(1);
+    expect(db.alerts[0]).toMatchObject({ new_device: false, new_country: true, country: 'MX', city: 'Tijuana' });
+    expect(sendNewDeviceLoginEmail).toHaveBeenCalledTimes(1);
+    expect(sendNewDeviceLoginEmail.mock.calls[0]![0]).toMatchObject({
+      newDevice: false,
+      newCountry: true,
+      place: { country: 'MX', city: 'Tijuana' },
+    });
+    expect(recordSignInAlertEvent).toHaveBeenCalledTimes(1);
+    expect(recordSignInAlertEvent).toHaveBeenCalledWith({
+      reason: 'sign_in_new_country',
+      userId: USER,
+      source: 'web',
+      place: { country: 'MX', city: 'Tijuana' },
+    });
+    // The webhook event is about a new device; this device is known.
+    expect(dispatchEvent).not.toHaveBeenCalled();
+
+    // The same country again: known now, silent.
+    await signIn('MX');
+    expect(db.alerts).toHaveLength(1);
+    expect(sendNewDeviceLoginEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it('a new device in a new country is ONE alert with both flags, one email', async () => {
+    await signIn('US');
+    await noteLoginDevice({
+      userId: USER,
+      email: EMAIL,
+      userAgent: APP_UA_1,
+      ip: '203.0.113.7',
+      deviceKey: INSTALL_1,
+      deviceLabel: LABEL,
+      deviceFamily: FAMILY,
+      place: { country: 'MX', city: 'Tijuana' },
+      sessionId: SESSION,
+      client: 'phone',
+    });
+    expect(db.alerts).toHaveLength(1);
+    expect(db.alerts[0]).toMatchObject({ new_device: true, new_country: true, client: 'phone' });
+    expect(sendNewDeviceLoginEmail).toHaveBeenCalledTimes(1);
+    expect(sendNewDeviceLoginEmail.mock.calls[0]![0]).toMatchObject({ newDevice: true, newCountry: true });
+    expect(recordSignInAlertEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'sign_in_new_country', source: 'phone' }),
+    );
+  });
+
+  it('the country is a plain INSERT: nothing reads this country first, and a 23505 means "known"', async () => {
+    await signIn('US');
+    db.ops = [];
+    await signIn('US');
+    const countryOps = db.ops.filter((op) => op.endsWith(':user_sign_in_countries'));
+    expect(countryOps[0]).toBe('insert:user_sign_in_countries');
+    expect(countryOps).toEqual(['insert:user_sign_in_countries', 'update:user_sign_in_countries']);
+  });
+
+  it('a country refused another way is reported with its code, and the sign-in alerts by device as before', async () => {
+    await signIn('US');
+    db.insertError = { code: '57014', message: 'timeout for member@example.com' };
+    db.insertErrorTable = 'user_sign_in_countries';
+    await noteLoginDevice({
+      userId: USER,
+      email: EMAIL,
+      userAgent: APP_UA_1,
+      ip: null,
+      deviceKey: INSTALL_1,
+      place: { country: 'MX', city: null },
+      client: 'phone',
+    });
+    expect(db.alerts).toHaveLength(1);
+    expect(db.alerts[0]).toMatchObject({ new_device: true, new_country: false });
+    const reported = reportError.mock.calls.filter(
+      (c) => (c[1] as { tag: string }).tag === 'auth.sign_in_country_note_failed',
+    );
+    expect(reported).toHaveLength(1);
+    expect(reported[0]![1]).toEqual({
+      tag: 'auth.sign_in_country_note_failed',
+      level: 'warning',
+      extra: { code: '57014' },
+    });
+    expect(JSON.stringify(reported)).not.toContain(EMAIL);
+  });
+
+  it('a count that cannot be read after the insert: the row is taken back, so the country is still new next time, and nothing alerts for it', async () => {
+    await signIn('US');
+    db.countError = { code: '57014', message: 'timeout' };
+    await signIn('MX');
+    expect(db.countries.map((c) => c.country)).toEqual(['US']);
+    expect(db.alerts).toEqual([]);
+    await signIn('MX');
+    expect(db.alerts).toHaveLength(1);
+    expect(db.alerts[0]).toMatchObject({ new_country: true, country: 'MX' });
+  });
+
+  it('with no place (off Vercel, or a header that failed its rule) no country is noted and none alerts', async () => {
+    await signIn(null);
+    await signIn(null);
+    expect(db.countries).toEqual([]);
+    expect(db.alerts).toEqual([]);
+    await noteLoginDevice({ userId: USER, email: EMAIL, userAgent: WEB_UA, ip: null, place: { country: 'mx', city: null } });
+    expect(db.countries).toEqual([]);
+  });
+
+  it('new-country alerts share the account’s 5-emails-a-day count with new-device alerts; every alert is still written', async () => {
+    await signIn('US');
+    for (const country of ['MX', 'CA', 'BR', 'DE', 'FR', 'JP', 'NL']) await signIn(country);
+    expect(db.countries).toHaveLength(8);
+    expect(db.alerts).toHaveLength(7);
+    expect(db.alerts.map((a) => a.country)).toEqual(['MX', 'CA', 'BR', 'DE', 'FR', 'JP', 'NL']);
+    expect(sendNewDeviceLoginEmail).toHaveBeenCalledTimes(5);
+    expect(recordSignInAlertEvent).toHaveBeenCalledTimes(7);
+    expect(limiter.calls.filter((c) => c.key === `new-device-alert:user:${USER}`)).toHaveLength(7);
+  });
+
+  it('the limiter cannot answer: BOTH rows this sign-in added are taken back, nothing is written or sent, and the next sign-in alerts with both flags', async () => {
+    await signIn('US');
+    limiter.storeDown = true;
+    await noteLoginDevice({
+      userId: USER,
+      email: EMAIL,
+      userAgent: APP_UA_1,
+      ip: null,
+      deviceKey: INSTALL_1,
+      deviceLabel: LABEL,
+      deviceFamily: FAMILY,
+      place: { country: 'MX', city: null },
+      client: 'phone',
+    });
+    expect(db.devices).toHaveLength(1);
+    expect(db.countries.map((c) => c.country)).toEqual(['US']);
+    expect(db.alerts).toEqual([]);
+    expect(sendNewDeviceLoginEmail).not.toHaveBeenCalled();
+    expect(recordSignInAlertEvent).not.toHaveBeenCalled();
+
+    limiter.storeDown = false;
+    await noteLoginDevice({
+      userId: USER,
+      email: EMAIL,
+      userAgent: APP_UA_1,
+      ip: null,
+      deviceKey: INSTALL_1,
+      deviceLabel: LABEL,
+      deviceFamily: FAMILY,
+      place: { country: 'MX', city: null },
+      client: 'phone',
+    });
+    expect(db.alerts).toHaveLength(1);
+    expect(db.alerts[0]).toMatchObject({ new_device: true, new_country: true });
+  });
+
+  it('the limiter cannot answer for a known device in a new country: only the country row is taken back', async () => {
+    await signIn('US');
+    limiter.storeDown = true;
+    await signIn('MX');
+    expect(db.devices).toHaveLength(1);
+    expect(db.countries.map((c) => c.country)).toEqual(['US']);
+  });
+
+  it('a count refusal keeps both rows and writes the alert: only the email is held', async () => {
+    await signIn('US');
+    limiter.buckets.set(`new-device-alert:user:${USER}`, 5);
+    await signIn('MX');
+    expect(db.countries.map((c) => c.country)).toEqual(['US', 'MX']);
+    expect(db.alerts).toHaveLength(1);
+    expect(db.alerts[0]).toMatchObject({ new_device: false, new_country: true, country: 'MX', session_id: SESSION });
+    expect(sendNewDeviceLoginEmail).not.toHaveBeenCalled();
+  });
+});
+
+describe('noteLoginDevice — the country step never costs the device alert (review 1, finding 5)', () => {
+  const newPhoneFrom = (country: string) =>
+    noteLoginDevice({
+      userId: USER,
+      email: EMAIL,
+      userAgent: APP_UA_1,
+      ip: null,
+      deviceKey: INSTALL_1,
+      deviceLabel: LABEL,
+      deviceFamily: FAMILY,
+      place: { country, city: null },
+      client: 'phone',
+    });
+  const known = () =>
+    noteLoginDevice({ userId: USER, email: EMAIL, userAgent: WEB_UA, ip: null, place: { country: 'US', city: null } });
+  const tagged = (tag: string) =>
+    reportError.mock.calls.filter((c) => (c[1] as { tag: string }).tag === tag);
+
+  it('the count read fails and the take-back fails twice: the new device still alerts, and the failed take-back is reported once, as an error', async () => {
+    await known();
+    db.countError = { code: '57014', message: 'timeout' };
+    db.deleteError.user_sign_in_countries = { code: '42501', message: 'refused for member@example.com' };
+    await newPhoneFrom('MX');
+    expect(db.alerts).toHaveLength(1);
+    expect(db.alerts[0]).toMatchObject({ new_device: true, new_country: false });
+    expect(sendNewDeviceLoginEmail).toHaveBeenCalledTimes(1);
+    const undo = tagged('auth.sign_in_note_undo_failed');
+    expect(undo).toHaveLength(1);
+    expect(undo[0]![1]).toEqual({
+      tag: 'auth.sign_in_note_undo_failed',
+      level: 'error',
+      userIdHash: USER_HASH,
+      extra: { row: 'country', code: '42501' },
+    });
+    expect(JSON.stringify(undo)).not.toContain(USER);
+    expect(tagged('auth.login_device_note_failed')).toEqual([]);
+    expect(JSON.stringify(reportError.mock.calls)).not.toContain(EMAIL);
+  });
+
+  it('the country insert throws: the new device still alerts, and it is reported with no text of the failure', async () => {
+    await known();
+    db.insertThrowsTable = 'user_sign_in_countries';
+    await newPhoneFrom('MX');
+    expect(db.alerts).toHaveLength(1);
+    expect(db.alerts[0]).toMatchObject({ new_device: true, new_country: false });
+    expect(tagged('auth.sign_in_country_note_failed')).toHaveLength(1);
+    expect(tagged('auth.login_device_note_failed')).toEqual([]);
+    expect(JSON.stringify(reportError.mock.calls)).not.toContain(EMAIL);
+  });
+
+  it('the take-back throws: the new device still alerts', async () => {
+    await known();
+    db.countError = { code: '57014', message: 'timeout' };
+    db.deleteError.user_sign_in_countries = 'throw';
+    await newPhoneFrom('MX');
+    expect(db.alerts).toHaveLength(1);
+    expect(tagged('auth.sign_in_note_undo_failed')).toHaveLength(1);
+    expect(JSON.stringify(reportError.mock.calls)).not.toContain(EMAIL);
+  });
+
+  it('a count that cannot be read is reported with its code', async () => {
+    await known();
+    db.countError = { code: '57014', message: 'timeout for member@example.com' };
+    await newPhoneFrom('MX');
+    const reported = tagged('auth.sign_in_country_note_failed');
+    expect(reported).toHaveLength(1);
+    expect(reported[0]![1]).toEqual({
+      tag: 'auth.sign_in_country_note_failed',
+      level: 'warning',
+      extra: { code: '57014', step: 'count' },
+    });
+    expect(JSON.stringify(reportError.mock.calls)).not.toContain(EMAIL);
+  });
+});
+
+describe('noteLoginDevice — each take-back runs whatever the other one did (review 1, finding 5)', () => {
+  const newPhoneFromMexico = () =>
+    noteLoginDevice({
+      userId: USER,
+      email: EMAIL,
+      userAgent: APP_UA_1,
+      ip: null,
+      deviceKey: INSTALL_1,
+      deviceLabel: LABEL,
+      deviceFamily: FAMILY,
+      place: { country: 'MX', city: null },
+      client: 'phone',
+    });
+  const undoReports = () =>
+    reportError.mock.calls
+      .filter((c) => (c[1] as { tag: string }).tag === 'auth.sign_in_note_undo_failed')
+      .map((c) => (c[1] as { extra: unknown }).extra);
+
+  beforeEach(async () => {
+    await noteLoginDevice({ userId: USER, email: EMAIL, userAgent: WEB_UA, ip: null, place: { country: 'US', city: null } });
+    limiter.storeDown = true;
+  });
+
+  it('the device row cannot be taken back: the country row still is, and the failure is reported once', async () => {
+    db.deleteError.user_login_devices = { code: '42501', message: 'refused' };
+    await newPhoneFromMexico();
+    expect(db.countries.map((c) => c.country)).toEqual(['US']);
+    expect(db.devices).toHaveLength(2);
+    expect(undoReports()).toEqual([{ row: 'device', code: '42501' }]);
+    expect(db.alerts).toEqual([]);
+    expect(sendNewDeviceLoginEmail).not.toHaveBeenCalled();
+  });
+
+  it('the device take-back throws: the country row is still taken back', async () => {
+    db.deleteError.user_login_devices = 'throw';
+    await newPhoneFromMexico();
+    expect(db.countries.map((c) => c.country)).toEqual(['US']);
+    expect(undoReports()).toEqual([{ row: 'device', code: null }]);
+  });
+
+  it('the country row cannot be taken back: the device row still is', async () => {
+    db.deleteError.user_sign_in_countries = { code: '57014', message: 'timeout' };
+    await newPhoneFromMexico();
+    expect(db.devices).toHaveLength(1);
+    expect(db.countries).toHaveLength(2);
+    expect(undoReports()).toEqual([{ row: 'country', code: '57014' }]);
+  });
+
+  it('neither can be taken back: each is reported once, and nothing is thrown or sent', async () => {
+    db.deleteError.user_login_devices = { code: '42501', message: 'refused' };
+    db.deleteError.user_sign_in_countries = 'throw';
+    await expect(newPhoneFromMexico()).resolves.toBeUndefined();
+    expect(undoReports()).toEqual([
+      { row: 'device', code: '42501' },
+      { row: 'country', code: null },
+    ]);
+    expect(sendNewDeviceLoginEmail).not.toHaveBeenCalled();
+    expect(JSON.stringify(reportError.mock.calls)).not.toContain(EMAIL);
+  });
+});
+
+describe('noteLoginDevice — a take-back that fails is tried once more, then reported as an error', () => {
+  const newPhoneFromMexico = () =>
+    noteLoginDevice({
+      userId: USER,
+      email: EMAIL,
+      userAgent: APP_UA_1,
+      ip: null,
+      deviceKey: INSTALL_1,
+      deviceLabel: LABEL,
+      deviceFamily: FAMILY,
+      place: { country: 'MX', city: null },
+      client: 'phone',
+    });
+  const undoReports = () =>
+    reportError.mock.calls.filter((c) => (c[1] as { tag: string }).tag === 'auth.sign_in_note_undo_failed');
+
+  beforeEach(async () => {
+    await noteLoginDevice({ userId: USER, email: EMAIL, userAgent: WEB_UA, ip: null, place: { country: 'US', city: null } });
+    limiter.storeDown = true;
+    db.ops = [];
+  });
+
+  it('the first delete is refused and the second works: the row is gone, and nothing is reported', async () => {
+    db.deleteErrorOnce.user_login_devices = { code: '57014', message: 'timeout' };
+    db.deleteErrorOnce.user_sign_in_countries = { code: '57014', message: 'timeout' };
+    await newPhoneFromMexico();
+    expect(db.devices).toHaveLength(1);
+    expect(db.countries.map((c) => c.country)).toEqual(['US']);
+    expect(db.ops.filter((op) => op === 'delete:user_login_devices')).toHaveLength(2);
+    expect(db.ops.filter((op) => op === 'delete:user_sign_in_countries')).toHaveLength(2);
+    expect(undoReports()).toEqual([]);
+  });
+
+  it('the first delete throws and the second works: the row is gone, and nothing is reported', async () => {
+    db.deleteErrorOnce.user_login_devices = 'throw';
+    await newPhoneFromMexico();
+    expect(db.devices).toHaveLength(1);
+    expect(undoReports()).toEqual([]);
+  });
+
+  it('both tries fail: ONE report, at error level, with a hash of the account id and which row, and no third try', async () => {
+    db.deleteError.user_login_devices = { code: '42501', message: 'refused for member@example.com' };
+    await newPhoneFromMexico();
+    // The device stays recorded as seen with no alert: that is what the error says.
+    expect(db.devices).toHaveLength(2);
+    expect(db.ops.filter((op) => op === 'delete:user_login_devices')).toHaveLength(2);
+    const reports = undoReports();
+    expect(reports).toHaveLength(1);
+    expect(reports[0]![1]).toEqual({
+      tag: 'auth.sign_in_note_undo_failed',
+      level: 'error',
+      userIdHash: USER_HASH,
+      extra: { row: 'device', code: '42501' },
+    });
+    const text = JSON.stringify(reports);
+    for (const absent of [USER, EMAIL, 'refused for']) expect(text).not.toContain(absent);
+    // The other row was still taken back.
+    expect(db.countries.map((c) => c.country)).toEqual(['US']);
+  });
+
+  it('the one more try waits a short while first', async () => {
+    expect(TAKE_BACK_RETRY.waitMs).toBe(0);
+    TAKE_BACK_RETRY.waitMs = 300;
+    vi.useFakeTimers();
+    try {
+      db.deleteErrorOnce.user_login_devices = { code: '57014', message: 'timeout' };
+      const pending = newPhoneFromMexico();
+      await vi.advanceTimersByTimeAsync(299);
+      expect(db.ops.filter((op) => op === 'delete:user_login_devices')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(db.ops.filter((op) => op === 'delete:user_login_devices')).toHaveLength(2);
+      expect(db.devices).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('noteLoginDevice — two sign-ins at once from one new country, and the first is held', () => {
+  it('the country row the first one added is taken back, so the country is NOT learned and the next sign-in from it alerts', async () => {
+    const fromMexico = () =>
+      noteLoginDevice({ userId: USER, email: EMAIL, userAgent: WEB_UA, ip: null, place: { country: 'MX', city: null } });
+    await noteLoginDevice({ userId: USER, email: EMAIL, userAgent: WEB_UA, ip: null, place: { country: 'US', city: null } });
+
+    // The first sign-in inserts the country row and asks the limiter, which
+    // cannot answer. While it waits, a second sign-in from the same country
+    // finds the row and takes the country as known: it is silent.
+    limiter.storeDown = true;
+    let secondSawItKnown = false;
+    limiter.meanwhile = async () => {
+      const before = db.alerts.length;
+      await fromMexico();
+      secondSawItKnown = db.alerts.length === before && db.countries.some((c) => c.country === 'MX');
+    };
+    await fromMexico();
+    expect(secondSawItKnown).toBe(true);
+
+    // The first one could not be counted, so it took its row back: after the
+    // take-back the country row is gone. Neither sign-in alerted, and the
+    // country is not learned.
+    expect(db.countries.map((c) => c.country)).toEqual(['US']);
+    expect(db.alerts).toEqual([]);
+    expect(sendNewDeviceLoginEmail).not.toHaveBeenCalled();
+
+    // The next sign-in from that country alerts.
+    limiter.storeDown = false;
+    await fromMexico();
+    expect(db.alerts).toHaveLength(1);
+    expect(db.alerts[0]).toMatchObject({ new_country: true, country: 'MX' });
+  });
+});
+
+describe('noteLoginDevice — the organizations’ webhook has its own count per account (review 2, finding 3)', () => {
+  const DAY_MS = 24 * 60 * 60_000;
+  const OTHER_USER = '22222222-2222-4222-8222-222222222222';
+  const EVENT_KEY = `new-device-event:user:${USER}`;
+  const inOrganization = (...users: string[]) => {
+    db.members = users.map((user_id) => ({
+      user_id,
+      organization_id: 'org-a',
+      accepted_at: '2026-01-01T00:00:00Z',
+      impersonation_expires_at: null,
+    }));
+  };
+  const newPhone = (n: number, userId = USER, country: string | null = null) =>
+    noteLoginDevice({
+      userId,
+      email: userId === USER ? EMAIL : 'other@example.com',
+      userAgent: APP_UA_1,
+      ip: null,
+      deviceKey: `0f6c2d1e-8a4b-4c5d-9e6f-${String(n).padStart(12, '0')}`,
+      deviceLabel: LABEL,
+      deviceFamily: FAMILY,
+      place: country ? { country, city: null } : null,
+      client: 'phone',
+    });
+  const known = (userId = USER) =>
+    noteLoginDevice({
+      userId,
+      email: userId === USER ? EMAIL : 'other@example.com',
+      userAgent: WEB_UA,
+      ip: null,
+      place: { country: 'US', city: null },
+    });
+
+  it('5 a day per account, closed, asked once for an alert about a new device, before any organization is counted', async () => {
+    inOrganization(USER);
+    await known();
+    await newPhone(1);
+    const eventCalls = limiter.calls.filter((c) => c.key.startsWith('new-device-event:'));
+    expect(eventCalls).toEqual([
+      { key: EVENT_KEY, limit: 5, windowMs: DAY_MS, mode: 'closed' },
+      { key: 'new-device-event:org:org-a', limit: 30, windowMs: 60 * 60_000, mode: 'closed' },
+    ]);
+  });
+
+  it('past it the webhook is held for that account, while the alert row, the email count and the security event go on', async () => {
+    inOrganization(USER);
+    await known();
+    limiter.buckets.set(EVENT_KEY, 5);
+    await newPhone(1, USER, 'MX');
+    expect(dispatchEvent).not.toHaveBeenCalled();
+    expect(db.alerts).toHaveLength(1);
+    expect(db.alerts[0]).toMatchObject({ new_device: true, new_country: true });
+    expect(sendNewDeviceLoginEmail).toHaveBeenCalledTimes(1);
+    expect(recordSignInAlertEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'sign_in_new_country', userId: USER }),
+    );
+  });
+
+  it('one account cannot spend the organization’s hour: the organization is counted only for the webhooks that go', async () => {
+    inOrganization(USER, OTHER_USER);
+    await known();
+    for (let n = 1; n <= 12; n++) await newPhone(n);
+    expect(dispatchEvent).toHaveBeenCalledTimes(5);
+    expect(limiter.buckets.get('new-device-event:org:org-a')).toBe(5);
+
+    // Another member of the same organization still reaches the channel.
+    await known(OTHER_USER);
+    await newPhone(100, OTHER_USER);
+    expect(dispatchEvent).toHaveBeenCalledTimes(6);
+    expect(dispatchEvent.mock.calls[5]![2]).toMatchObject({ userId: OTHER_USER });
+  });
+
+  it('an alert for a new country on a known device does not spend the count: it sends no webhook', async () => {
+    inOrganization(USER);
+    await known();
+    await noteLoginDevice({ userId: USER, email: EMAIL, userAgent: WEB_UA, ip: null, place: { country: 'MX', city: null } });
+    expect(db.alerts).toHaveLength(1);
+    expect(limiter.calls.filter((c) => c.key === EVENT_KEY)).toEqual([]);
+  });
+
+  it('the count cannot answer: no webhook for this alert, and the row and the email still go', async () => {
+    inOrganization(USER);
+    await known();
+    limiter.downPrefix = 'new-device-event:user:';
+    await newPhone(1);
+    expect(dispatchEvent).not.toHaveBeenCalled();
+    expect(db.alerts).toHaveLength(1);
+    expect(sendNewDeviceLoginEmail).toHaveBeenCalledTimes(1);
+    // The organization's own count is not spent on a webhook that did not go.
+    expect(limiter.calls.filter((c) => c.key.startsWith('new-device-event:org:'))).toEqual([]);
+  });
+});
+
+describe('noteLoginDevice — past the daily email count the alert is still recorded (review 1, finding 6)', () => {
+  const DAY_MS = 24 * 60 * 60_000;
+  const SESSION = '5e551011-0000-4000-8000-000000000003';
+  const ROWS_KEY = `sign-in-alert-rows:user:${USER}`;
+  const newPhone = (n: number, country = 'US') =>
+    noteLoginDevice({
+      userId: USER,
+      email: EMAIL,
+      userAgent: APP_UA_1,
+      ip: null,
+      deviceKey: `0f6c2d1e-8a4b-4c5d-9e6f-${String(n).padStart(12, '0')}`,
+      deviceLabel: LABEL,
+      deviceFamily: FAMILY,
+      place: { country, city: null },
+      sessionId: SESSION,
+      client: 'phone',
+    });
+  const known = () =>
+    noteLoginDevice({ userId: USER, email: EMAIL, userAgent: WEB_UA, ip: null, place: { country: 'US', city: null } });
+  const tagged = (tag: string) =>
+    reportError.mock.calls.filter((c) => (c[1] as { tag: string }).tag === tag);
+
+  it('an alert whose email is held is not a sign-in turned away: no "alerts held" security event', async () => {
+    await known();
+    limiter.buckets.set(`new-device-alert:user:${USER}`, 5);
+    await newPhone(1);
+    expect(db.alerts).toHaveLength(1);
+    expect(recordSignInAlertsHeldEvent).not.toHaveBeenCalled();
+  });
+
+  it('the sixth sign-in of a day from a new device: its alert row is written, with its session, and only the email is held', async () => {
+    db.members = [
+      { user_id: USER, organization_id: 'org-a', accepted_at: '2026-01-01T00:00:00Z', impersonation_expires_at: null },
+    ];
+    await known();
+    for (let n = 1; n <= 6; n++) await newPhone(n);
+    expect(sendNewDeviceLoginEmail).toHaveBeenCalledTimes(5);
+    expect(db.alerts).toHaveLength(6);
+    expect(db.alerts[5]).toMatchObject({ new_device: true, session_id: SESSION, status: 'open', device_family: FAMILY });
+    // The device is learned, as before: the alert stands for it.
+    expect(db.devices).toHaveLength(7);
+    // Held once per window, as before.
+    expect(tagged('auth.new_device_alerts_held')).toHaveLength(1);
+  });
+
+  it('a held alert from a new country is recorded with its country and its security event', async () => {
+    await known();
+    limiter.buckets.set(`new-device-alert:user:${USER}`, 5);
+    await newPhone(1, 'MX');
+    expect(db.alerts).toHaveLength(1);
+    expect(db.alerts[0]).toMatchObject({ new_device: true, new_country: true, country: 'MX' });
+    expect(sendNewDeviceLoginEmail).not.toHaveBeenCalled();
+    expect(recordSignInAlertEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'sign_in_new_country', userId: USER }),
+    );
+  });
+
+  it('the email is held and the row cannot be written: the sign-in would leave no trace, so nothing is learned and it is still new next time', async () => {
+    db.members = [
+      { user_id: USER, organization_id: 'org-a', accepted_at: '2026-01-01T00:00:00Z', impersonation_expires_at: null },
+    ];
+    await known();
+    limiter.buckets.set(`new-device-alert:user:${USER}`, 5);
+    db.insertError = { code: '57014', message: 'timeout' };
+    db.insertErrorTable = 'sign_in_alerts';
+    await newPhone(1, 'MX');
+    expect(db.alerts).toEqual([]);
+    expect(sendNewDeviceLoginEmail).not.toHaveBeenCalled();
+    expect(db.devices).toHaveLength(1);
+    expect(db.countries.map((c) => c.country)).toEqual(['US']);
+    expect(dispatchEvent).not.toHaveBeenCalled();
+    expect(tagged('auth.sign_in_alert_insert_failed')).toHaveLength(1);
+
+    await newPhone(1, 'MX');
+    expect(db.alerts).toHaveLength(1);
+    expect(db.alerts[0]).toMatchObject({ new_device: true, new_country: true });
+  });
+
+  it('a hard ceiling of 50 alert rows a day per account, counted in its own closed bucket before anything is written', async () => {
+    await known();
+    await newPhone(1);
+    expect(limiter.calls[0]).toEqual({ key: ROWS_KEY, limit: 50, windowMs: DAY_MS, mode: 'closed' });
+    expect(limiter.calls[1]).toMatchObject({ key: `new-device-alert:user:${USER}` });
+  });
+
+  it('past the ceiling nothing is learned and nothing is written: both rows are taken back, no row, no email, no event', async () => {
+    db.members = [
+      { user_id: USER, organization_id: 'org-a', accepted_at: '2026-01-01T00:00:00Z', impersonation_expires_at: null },
+    ];
+    await known();
+    limiter.buckets.set(ROWS_KEY, 50);
+    await newPhone(1, 'MX');
+    expect(db.devices).toHaveLength(1);
+    expect(db.countries.map((c) => c.country)).toEqual(['US']);
+    expect(db.alerts).toEqual([]);
+    expect(sendNewDeviceLoginEmail).not.toHaveBeenCalled();
+    expect(dispatchEvent).not.toHaveBeenCalled();
+    expect(recordSignInAlertEvent).not.toHaveBeenCalled();
+    // It is counted as a security event, with the sign-in's place and client.
+    expect(recordSignInAlertsHeldEvent).toHaveBeenCalledTimes(1);
+    expect(recordSignInAlertsHeldEvent).toHaveBeenCalledWith({
+      userId: USER,
+      source: 'phone',
+      place: { country: 'MX', city: null },
+    });
+    // The email count is not spent on it.
+    expect(limiter.calls.filter((c) => c.key === `new-device-alert:user:${USER}`)).toEqual([]);
+
+    // Still new once the window has passed: it alerts then, with both flags.
+    limiter.buckets.delete(ROWS_KEY);
+    await newPhone(1, 'MX');
+    expect(db.alerts).toHaveLength(1);
+    expect(db.alerts[0]).toMatchObject({ new_device: true, new_country: true });
+  });
+
+  it('the ceiling is reported once per window, with a hash of the account id only', async () => {
+    await known();
+    limiter.buckets.set(ROWS_KEY, 50);
+    await newPhone(1, 'MX');
+    await newPhone(2, 'CA');
+    const reports = tagged('auth.sign_in_alert_rows_ceiling');
+    expect(reports).toHaveLength(1);
+    // The report (a warning) is once per window; the security event is every time.
+    expect(recordSignInAlertsHeldEvent).toHaveBeenCalledTimes(2);
+    expect(reports[0]![1]).toMatchObject({
+      level: 'warning',
+      extra: { limit: 50, window_hours: 24 },
+    });
+    expect(limiter.calls).toContainEqual({
+      key: `sign-in-alert-rows-held:user:${USER}`,
+      limit: 1,
+      windowMs: DAY_MS,
+      mode: 'closed',
+    });
+    const text = JSON.stringify(reports);
+    for (const absent of [USER, EMAIL, LABEL, 'MX']) expect(text).not.toContain(absent);
+  });
+
+  it('the ceiling bucket cannot answer: both rows are taken back, nothing is written, and nothing is reported as a ceiling', async () => {
+    await known();
+    limiter.downPrefix = 'sign-in-alert-rows:';
+    await newPhone(1, 'MX');
+    expect(db.devices).toHaveLength(1);
+    expect(db.countries.map((c) => c.country)).toEqual(['US']);
+    expect(db.alerts).toEqual([]);
+    expect(tagged('auth.sign_in_alert_rows_ceiling')).toEqual([]);
+    // A count that could not be read is not "too many": no security event.
+    expect(recordSignInAlertsHeldEvent).not.toHaveBeenCalled();
+  });
+
+  it('the email count cannot answer: both rows are taken back and nothing is written or sent, as before', async () => {
+    await known();
+    limiter.downPrefix = 'new-device-alert:';
+    await newPhone(1, 'MX');
+    expect(db.devices).toHaveLength(1);
+    expect(db.countries.map((c) => c.country)).toEqual(['US']);
+    expect(db.alerts).toEqual([]);
+    expect(sendNewDeviceLoginEmail).not.toHaveBeenCalled();
+  });
+});
+
+describe('noteLoginDevice — the alert row (part 3)', () => {
+  const SESSION = '5e551011-0000-4000-8000-000000000002';
+  const FIREFOX_WINDOWS =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0';
+
+  it('is written BEFORE the email, and the email’s link names it', async () => {
+    await web();
+    db.ops = [];
+    await noteLoginDevice({
+      userId: USER,
+      email: EMAIL,
+      userAgent: FIREFOX_WINDOWS,
+      ip: '203.0.113.9',
+      sessionId: SESSION,
+      client: 'web',
+    });
+    const alertAt = db.ops.indexOf('insert:sign_in_alerts');
+    expect(alertAt).toBeGreaterThan(-1);
+    expect(db.ops.indexOf('email')).toBeGreaterThan(alertAt);
+    expect(sendNewDeviceLoginEmail.mock.calls[0]![0].notMeUrl).toContain(`a=${db.alerts[0]!.id}`);
+  });
+
+  it('a web sign-in: both device columns are sent, in fixed words, with the session, the device row and no address, email or agent', async () => {
+    await web();
+    await noteLoginDevice({
+      userId: USER,
+      email: EMAIL,
+      userAgent: FIREFOX_WINDOWS,
+      ip: '203.0.113.9',
+      sessionId: SESSION,
+      client: 'web',
+    });
+    const expectedHash = createHash('sha256')
+      .update(`${USER}::${FIREFOX_WINDOWS.replace(/[0-9]+(\.[0-9]+)*/g, '#')}`)
+      .digest('hex')
+      .slice(0, 40);
+    expect(db.alerts[0]).toEqual({
+      id: db.alerts[0]!.id,
+      user_id: USER,
+      session_id: SESSION,
+      new_device: true,
+      new_country: false,
+      client: 'web',
+      device_label: 'Firefox on Windows',
+      device_family: 'Firefox on Windows',
+      device_hash: expectedHash,
+      country: null,
+      city: null,
+      status: 'open',
+      resolved_at: null,
+    });
+    expect(db.devices.some((d) => d.device_hash === expectedHash)).toBe(true);
+    expect(JSON.stringify(db.alerts)).not.toContain('203.0.113.9');
+    expect(JSON.stringify(db.alerts)).not.toContain(EMAIL);
+    expect(JSON.stringify(db.alerts)).not.toContain('Mozilla');
+  });
+
+  it('a phone sign-in: the member’s label and the organization’s family, both sent', async () => {
+    await web();
+    await phone(INSTALL_1);
+    expect(db.alerts[0]).toMatchObject({ device_label: LABEL, device_family: FAMILY });
+  });
+
+  it('a session id that is not one is sent as none, so it cannot cost the row', async () => {
+    await web();
+    await noteLoginDevice({
+      userId: USER,
+      email: EMAIL,
+      userAgent: FIREFOX_WINDOWS,
+      ip: null,
+      sessionId: 'not-a-session',
+      client: 'web',
+    });
+    expect(db.alerts[0]!.session_id).toBeNull();
+  });
+
+  it('a city the table would refuse is emptied before the insert: the alert keeps its country', async () => {
+    await noteLoginDevice({ userId: USER, email: EMAIL, userAgent: WEB_UA, ip: null, place: { country: 'US', city: null } });
+    await noteLoginDevice({
+      userId: USER,
+      email: EMAIL,
+      userAgent: WEB_UA,
+      ip: null,
+      place: { country: 'MX', city: 'Springfield (East)' },
+      client: 'web',
+    });
+    expect(db.alerts).toHaveLength(1);
+    expect(db.alerts[0]).toMatchObject({ country: 'MX', city: null, new_country: true });
+    expect(sendNewDeviceLoginEmail.mock.calls[0]![0].place).toEqual({ country: 'MX', city: null });
+  });
+
+  it('a label or family that would fail the table’s rule falls back to fixed words, so the row is never lost for it', async () => {
+    await web();
+    await noteLoginDevice({
+      userId: USER,
+      email: EMAIL,
+      userAgent: APP_UA_1,
+      ip: null,
+      deviceKey: INSTALL_1,
+      deviceLabel: 'StockPilot app on <b>phone</b>',
+      deviceFamily: 'StockPilot/app',
+      client: 'phone',
+    });
+    expect(db.alerts).toHaveLength(1);
+    expect(db.alerts[0]).toMatchObject({ device_label: 'Unknown device', device_family: 'Unknown device' });
+  });
+
+  it('an alert row that cannot be written is reported, and the email still goes, without the link', async () => {
+    await web();
+    db.insertError = { code: '57014', message: 'timeout' };
+    db.insertErrorTable = 'sign_in_alerts';
+    await phone(INSTALL_1);
+    expect(db.alerts).toEqual([]);
+    expect(sendNewDeviceLoginEmail).toHaveBeenCalledTimes(1);
+    expect(sendNewDeviceLoginEmail.mock.calls[0]![0].notMeUrl).toBeNull();
+    const reported = reportError.mock.calls.filter(
+      (c) => (c[1] as { tag: string }).tag === 'auth.sign_in_alert_insert_failed',
+    );
+    expect(reported).toHaveLength(1);
+    expect(reported[0]![1]).toEqual({
+      tag: 'auth.sign_in_alert_insert_failed',
+      level: 'warning',
+      extra: { code: '57014' },
+    });
+  });
+
+  it('no email address: no alert at all, as before (the rows are still noted)', async () => {
+    await noteLoginDevice({ userId: USER, email: null, userAgent: WEB_UA, ip: null, place: { country: 'US', city: null } });
+    await noteLoginDevice({ userId: USER, email: null, userAgent: APP_UA_1, ip: null, deviceKey: INSTALL_1, place: { country: 'MX', city: null } });
+    expect(db.devices).toHaveLength(2);
+    expect(db.countries).toHaveLength(2);
+    expect(db.alerts).toEqual([]);
+    expect(limiter.calls).toEqual([]);
+  });
+
+  it('the webhook event carries the country, two letters, and never the city', async () => {
+    db.members = [
+      { user_id: USER, organization_id: 'org-a', accepted_at: '2026-01-01T00:00:00Z', impersonation_expires_at: null },
+    ];
+    await noteLoginDevice({ userId: USER, email: EMAIL, userAgent: WEB_UA, ip: null, place: { country: 'MX', city: 'Tijuana' } });
+    await noteLoginDevice({
+      userId: USER,
+      email: EMAIL,
+      userAgent: APP_UA_1,
+      ip: null,
+      deviceKey: INSTALL_1,
+      deviceFamily: FAMILY,
+      place: { country: 'MX', city: 'Tijuana' },
+      client: 'phone',
+    });
+    expect(dispatchEvent).toHaveBeenCalledWith('org-a', 'security.new_device_login', {
+      userId: USER,
+      device: FAMILY,
+      country: 'MX',
+    });
+    expect(JSON.stringify(dispatchEvent.mock.calls)).not.toContain('Tijuana');
+  });
+
+  it('a new-device alert in a known country records no security event (only a new country does)', async () => {
+    await noteLoginDevice({ userId: USER, email: EMAIL, userAgent: WEB_UA, ip: null, place: { country: 'MX', city: null } });
+    await noteLoginDevice({ userId: USER, email: EMAIL, userAgent: APP_UA_1, ip: null, deviceKey: INSTALL_1, place: { country: 'MX', city: null }, client: 'phone' });
+    expect(db.alerts).toHaveLength(1);
+    expect(recordSignInAlertEvent).not.toHaveBeenCalled();
+  });
+
+  it('never throws, whatever fails', async () => {
+    await web();
+    db.insertError = { code: 'XX000', message: 'boom' };
+    db.insertErrorTable = 'user_login_devices';
+    await expect(phone(INSTALL_1)).resolves.toBeUndefined();
   });
 });

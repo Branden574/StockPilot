@@ -190,6 +190,7 @@ export async function POST(req: NextRequest) {
         email: address.email,
         readLevel,
         input: credential,
+        source: 'phone',
       });
       if (!confirmation.ok) {
         if (confirmation.kind === 'gone') return NextResponse.json({ ok: true });

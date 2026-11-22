@@ -184,6 +184,7 @@ describe('verifyEnrollmentAction — password re-confirm is mandatory', () => {
     expect(verifyPasswordSideChannel).toHaveBeenCalledWith(
       'u@example.test',
       ACCOUNT_VALUE,
+      'user-1',
     );
     expect(mfaStub.challenge).toHaveBeenCalledWith({ factorId: 'f1' });
     expect(mfaStub.verify).toHaveBeenCalledWith({

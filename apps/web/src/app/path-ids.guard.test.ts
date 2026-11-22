@@ -71,6 +71,7 @@ const OTHER_SEGMENTS: Record<string, string> = {
   provider: "an integration's name",
   n: "a photo's number",
   path: "the analytics proxy's path under /ingest (the route answers only an allowlisted path)",
+  kind: 'a scanner-path kind (every value gets the same 404; only a listed kind is recorded)',
 };
 
 /** The strict pattern: 8-4-4-4-12 hex digits, any case, any version. */

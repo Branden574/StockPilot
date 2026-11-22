@@ -26,7 +26,22 @@ vi.mock('@/components/settings/mfa-enrollment', async () => {
       React.createElement('div', { 'data-testid': 'mfa-enrollment' }, `enrolled:${verifiedFactors.length}`),
   };
 });
-vi.mock('@/components/settings/active-sessions', () => ({ ActiveSessions: () => null }));
+/** What the page hands Active sessions (part 3: the member's own sign-in alerts too). */
+const activeSessionsProps = vi.fn();
+vi.mock('@/components/settings/active-sessions', () => ({
+  ActiveSessions: (props: unknown) => {
+    activeSessionsProps(props);
+    return null;
+  },
+}));
+const myAlerts = vi.fn(async (): Promise<unknown> => []);
+vi.mock('@/server/services/sign-in-alerts', () => ({
+  SignInAlertsService: class {
+    mine() {
+      return myAlerts();
+    }
+  },
+}));
 vi.mock('@/components/settings/change-password-form', () => ({ ChangePasswordForm: () => null }));
 vi.mock('@/components/settings/mfa-policy-editor', () => ({ MfaPolicyEditor: () => null }));
 vi.mock('@/components/settings/mfa-recovery-codes', async () => {
@@ -105,6 +120,7 @@ vi.mock('@/lib/supabase/server', () => ({
   }),
 }));
 
+import { requireOrgContext } from '@/lib/auth/session';
 import { withContext } from '@/server/services/context';
 
 import SecuritySettingsPage from './page';
@@ -237,5 +253,64 @@ describe('Security page: the claims read does not hold up the service context', 
     answerClaims();
     await rendering;
     expect(listedWith).toHaveBeenLastCalledWith('sess-verified');
+  });
+});
+
+describe('Security page: the Blocked activity link', () => {
+  it.each(['owner', 'admin'] as const)('an %s is shown the link to Blocked activity', async (role) => {
+    vi.mocked(requireOrgContext).mockResolvedValueOnce({
+      organizationId: 'org-1',
+      userId: 'u1',
+      role,
+    } as Awaited<ReturnType<typeof requireOrgContext>>);
+    await renderPage();
+    expect(
+      screen.getByRole('link', { name: 'View blocked activity' }).getAttribute('href'),
+    ).toBe('/dashboard/settings/security/activity');
+  });
+
+  it.each(['manager', 'staff', 'viewer'] as const)('a %s is not', async (role) => {
+    vi.mocked(requireOrgContext).mockResolvedValueOnce({
+      organizationId: 'org-1',
+      userId: 'u1',
+      role,
+    } as Awaited<ReturnType<typeof requireOrgContext>>);
+    await renderPage();
+    expect(screen.queryByRole('link', { name: 'View blocked activity' })).toBeNull();
+    expect(screen.queryByText('Blocked activity')).toBeNull();
+  });
+});
+
+describe('Security page: sign-in alerts (part 3)', () => {
+  it.each(['owner', 'admin'] as const)('an %s is shown the link to Sign-in alerts', async (role) => {
+    vi.mocked(requireOrgContext).mockResolvedValueOnce({
+      organizationId: 'org-1',
+      userId: 'u1',
+      role,
+    } as Awaited<ReturnType<typeof requireOrgContext>>);
+    await renderPage();
+    expect(
+      screen.getByRole('link', { name: 'View sign-in alerts' }).getAttribute('href'),
+    ).toBe('/dashboard/settings/security/sign-ins');
+  });
+
+  it.each(['manager', 'staff', 'viewer'] as const)('a %s is not', async (role) => {
+    vi.mocked(requireOrgContext).mockResolvedValueOnce({
+      organizationId: 'org-1',
+      userId: 'u1',
+      role,
+    } as Awaited<ReturnType<typeof requireOrgContext>>);
+    await renderPage();
+    expect(screen.queryByRole('link', { name: 'View sign-in alerts' })).toBeNull();
+  });
+
+  it('every member’s own alerts reach Active sessions, and an unreadable answer stays null', async () => {
+    const alerts = [{ id: 'a1', sessionId: null, status: 'open' }];
+    myAlerts.mockResolvedValueOnce(alerts);
+    await renderPage();
+    expect(activeSessionsProps).toHaveBeenLastCalledWith(expect.objectContaining({ alerts }));
+    myAlerts.mockResolvedValueOnce(null);
+    await renderPage();
+    expect(activeSessionsProps).toHaveBeenLastCalledWith(expect.objectContaining({ alerts: null }));
   });
 });

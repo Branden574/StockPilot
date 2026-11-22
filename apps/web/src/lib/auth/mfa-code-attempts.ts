@@ -4,11 +4,13 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { headers } from 'next/headers';
 
 import { SESSION_ENDED_NOTICE } from '@/lib/auth/auth-page-notices';
+import { requestHeadersOrNull } from '@/lib/auth/request-headers';
 import { sessionAccountNow } from '@/lib/auth/session-account';
 import { clientIpFromHeaders } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { classifyMfaCodeError, type MfaCodeOutcome } from '@/server/actions/auth-error-classify';
+import { recordAccountCodeBlocked } from '@/server/security/account-events';
 import { emitAuthAudit } from '@/server/services/auth-audit';
 
 /**
@@ -107,7 +109,8 @@ export type MfaCodePath = 'challenge' | 'password_reset';
  * the account's own bucket. True only when both allow the attempt.
  */
 export async function allowMfaCodeAttempt(userId: string): Promise<boolean> {
-  const ip = clientIpFromHeaders(await headers());
+  const requestHeaders = await headers();
+  const ip = clientIpFromHeaders(requestHeaders);
   // checkRateLimit never throws: in closed mode a limiter that cannot answer
   // comes back as not allowed. One after the other, never together: a press
   // refused at this address (or whose address bucket cannot answer) must not
@@ -119,13 +122,22 @@ export async function allowMfaCodeAttempt(userId: string): Promise<boolean> {
     MFA_CODE_ATTEMPT_WINDOW_MS,
     'closed',
   );
-  if (!atAddress.allowed) return false;
+  // A spent budget, in either bucket, is a security event in the account's
+  // organization (looked up after the response); a limiter that could not
+  // count (`failed`) is not one.
+  if (!atAddress.allowed) {
+    if (!atAddress.failed) recordAccountCodeBlocked('code_checks_paused', userId, requestHeaders);
+    return false;
+  }
   const account = await checkRateLimit(
     `mfa-code-account:${userId}`,
     MFA_CODE_ACCOUNT_LIMIT,
     MFA_CODE_ACCOUNT_WINDOW_MS,
     'closed',
   );
+  if (!account.allowed && !account.failed) {
+    recordAccountCodeBlocked('code_checks_paused', userId, requestHeaders);
+  }
   return account.allowed;
 }
 
@@ -165,6 +177,26 @@ export async function signOutThisSession(supabase: MfaClient): Promise<void> {
     await supabase.auth.signOut({ scope: 'local' });
   } catch {
     // Refused below whatever happened here.
+  }
+}
+
+/**
+ * A SECURITY EVENT FOR A SET-UP CODE THE SIGN-IN SERVICE JUDGED WRONG (the
+ * first code of an authenticator being set up, server/actions/mfa.ts), in
+ * the account's organization, looked up after the response. Its own reason,
+ * wrong_setup_code, not wrong_code: nothing that protects the account is
+ * being guessed there. It is recorded so that our own record holds every
+ * code our server sent and the service refused: the reader of that service's
+ * log (server/security/auth-logs.ts) compares the two counts.
+ *
+ * Never the caller's problem: it never throws, waits only for the request's
+ * headers (already in memory), and changes nothing the member is answered.
+ */
+export async function recordRefusedSetUpCode(userId: string): Promise<void> {
+  try {
+    recordAccountCodeBlocked('wrong_setup_code', userId, await requestHeadersOrNull());
+  } catch {
+    // An event that could not be recorded is dropped.
   }
 }
 
@@ -237,6 +269,10 @@ export async function checkMfaCode(
       ...(params.sessionAal !== undefined ? { sessionAal: params.sessionAal } : {}),
       gotrueCode: typeof vErr.code === 'string' ? vErr.code : null,
     });
+    // And a security event in the account's organization (after the
+    // response). The database stores it as repeated_wrong_code when the same
+    // source already has four or more in ten minutes.
+    recordAccountCodeBlocked('wrong_code', params.userId, await requestHeadersOrNull());
   } else if (outcome === 'unchecked') {
     void reportError(new Error('Authenticator code check got an answer it does not know'), {
       tag: 'mfa.verify_unclassified',

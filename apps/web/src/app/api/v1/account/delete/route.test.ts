@@ -63,8 +63,13 @@ vi.mock('@/lib/auth/verified-claims', async (importOriginal) => ({
 }));
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn(async () => ({ auth: {} })) }));
 
+/** Where each password check was said to come from (the fourth argument). */
+const passwordCheckSources: unknown[] = [];
 vi.mock('@/lib/auth/verify-password', () => ({
-  verifyPasswordSideChannel: (e: string, p: string) => verifyPassword(e, p),
+  verifyPasswordSideChannel: (e: string, p: string, _userId: string, source?: unknown) => {
+    passwordCheckSources.push(source);
+    return verifyPassword(e, p);
+  },
 }));
 
 /** The deletion-code email; the test reads the code from it, as the person does. */
@@ -841,6 +846,13 @@ describe('POST /api/v1/account/delete: the password or the emailed code', () => 
       expect(res.status).toBe(200);
       expect(verifyPassword).toHaveBeenCalledWith('staff@example.test', PASSWORD);
       expect(deleteUser).toHaveBeenCalledWith(USER_ID);
+    });
+
+    it('the password check is told the request came from the phone app, so a refusal is recorded with that source', async () => {
+      passwordCheckSources.length = 0;
+      vi.mocked(withApiContext).mockResolvedValueOnce(requiring(happyStub()) as never);
+      await POST(buildRequest({ confirm: 'DELETE', password: PASSWORD }));
+      expect(passwordCheckSources).toEqual(['phone']);
     });
 
     it('no authenticator, Optional organization: deleted', async () => {

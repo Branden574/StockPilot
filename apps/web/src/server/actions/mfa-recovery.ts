@@ -13,6 +13,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { createAccessTokenClient } from '@/lib/supabase/access-token-client';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
+import { recordAccountCodeBlocked } from '@/server/security/account-events';
 import { emitAuthAudit, resolveDefaultOrgAndRole } from '@/server/services/auth-audit';
 import { ServiceError } from '@/server/services/context';
 import { SESSION_CHANGED } from '@/server/services/step-up-held';
@@ -126,9 +127,24 @@ const RECOVERY_PASSWORD_CHECKS = 10;
 /** Presses of one account whose password checked out, at every address, in a window. */
 const RECOVERY_CODE_CHECKS = 5;
 
-/** One count in a bucket of the recovery code; closed: a limiter that cannot answer refuses. */
-async function allowRecoveryPress(key: string, limit: number): Promise<boolean> {
-  return (await checkRateLimit(key, limit, RECOVERY_WINDOW_MS, 'closed')).allowed;
+/**
+ * One count in a bucket of the recovery code; closed: a limiter that cannot
+ * answer refuses. A press refused because the bucket is over its count is a
+ * security event in the account's organization (looked up after the
+ * response), like a spent authenticator-code budget; a limiter that could not
+ * count (`failed`) is not one.
+ */
+async function allowRecoveryPress(
+  key: string,
+  limit: number,
+  userId: string,
+  requestHeaders: Awaited<ReturnType<typeof headers>>,
+): Promise<boolean> {
+  const answer = await checkRateLimit(key, limit, RECOVERY_WINDOW_MS, 'closed');
+  if (!answer.allowed && !answer.failed) {
+    recordAccountCodeBlocked('recovery_code_checks_paused', userId, requestHeaders);
+  }
+  return answer.allowed;
 }
 
 /**
@@ -175,11 +191,14 @@ export async function consumeMfaRecoveryCodeAction(input: {
     // change-password, email-change request/resend) already passes 'closed';
     // this one had been missing it. The trade — a limiter outage blocks
     // recovery-code use for its duration — is the one they all already make.
-    const ip = clientIpFromHeaders(await headers());
+    const requestHeaders = await headers();
+    const ip = clientIpFromHeaders(requestHeaders);
     if (
       !(await allowRecoveryPress(
         `mfa-recovery:${session.userId}:${ip}`,
         RECOVERY_PRESSES_AT_ADDRESS,
+        session.userId,
+        requestHeaders,
       ))
     ) {
       return err('validation_error', RECOVERY_PAUSED);
@@ -197,6 +216,8 @@ export async function consumeMfaRecoveryCodeAction(input: {
       !(await allowRecoveryPress(
         `mfa-recovery-password:${session.userId}`,
         RECOVERY_PASSWORD_CHECKS,
+        session.userId,
+        requestHeaders,
       ))
     ) {
       // Presses from more than one address paused the account's password
@@ -209,7 +230,7 @@ export async function consumeMfaRecoveryCodeAction(input: {
       });
       return err('validation_error', RECOVERY_PAUSED);
     }
-    const pwRes = await verifyPasswordSideChannel(session.email, input.password);
+    const pwRes = await verifyPasswordSideChannel(session.email, input.password, session.userId);
     if (!pwRes.ok) {
       return err(
         pwRes.reason === 'invalid_password' ? 'forbidden' : 'internal_error',
@@ -227,7 +248,14 @@ export async function consumeMfaRecoveryCodeAction(input: {
     const held = await readVerifiedSessionTokenOf(supabase, session.userId);
     if (!held) return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
 
-    if (!(await allowRecoveryPress(`mfa-recovery-code:${session.userId}`, RECOVERY_CODE_CHECKS))) {
+    if (
+      !(await allowRecoveryPress(
+        `mfa-recovery-code:${session.userId}`,
+        RECOVERY_CODE_CHECKS,
+        session.userId,
+        requestHeaders,
+      ))
+    ) {
       return err('validation_error', RECOVERY_PAUSED);
     }
 
@@ -245,6 +273,10 @@ export async function consumeMfaRecoveryCodeAction(input: {
         userId: session.userId,
         organizationId: null,
       });
+      // A security event in the account's organization (looked up after the
+      // response): what the organization's admins see is that a recovery
+      // code was refused, from where, never the code.
+      recordAccountCodeBlocked('wrong_recovery_code', session.userId, requestHeaders);
       return err('validation_error', 'That recovery code is invalid or already used.');
     }
 

@@ -939,6 +939,82 @@ PGTAP_TESTS=(
   # authenticated (a signed-in owner cannot read or write it), service_role
   # only, and the rows go with the organization.
   supabase/tests/0469_cron_sweep_attempts.test.sql
+  # Security events (0472): no API role reads or writes the table directly
+  # (RLS on, no policy, service_role may only SELECT); rows are written by
+  # record_security_events and removed by purge_security_events, service_role
+  # only; an organization's admin and owner read their own organization's rows
+  # through the two read functions, and a manager, another organization's
+  # owner, a signed-out caller and a password-only session that owes an
+  # authenticator step are refused; the usual shapes of an address, an email,
+  # an id, a path or a user agent sent as a city are not stored. The
+  # two-session checks (one call at a time, a wait given up after 2 s, the
+  # purge against a write, an organization being deleted) are
+  # scripts/db-concurrency/0472_security_events_writer_race.sh.
+  supabase/tests/0472_security_events.test.sql
+  # Membership rows are added by the server (0473), in two layers: anon and
+  # authenticated hold no INSERT on organization_members or on any column of
+  # it, and a BEFORE INSERT trigger refuses a row inserted as either role
+  # (shown with the privilege out of the way). An owner, an admin, a manager,
+  # a staff member, a viewer, a live act-as seat, an invitation not accepted,
+  # an account with no membership, a token with no account and a signed-out
+  # caller add no row in any statement shape; no API caller writes a row's
+  # account, organization or acceptance (the 0393 guard, each column); the
+  # service role's writes (workspace creation, invitation acceptance, act-as
+  # seats, ownership transfer), SECURITY DEFINER code, an admin's role, driver
+  # and warehouse changes and removals, a member's own removal and account
+  # deletion work.
+  supabase/tests/0473_membership_rows_added_by_the_server.test.sql
+  # Sign-in alerts (0474): no API role reads or writes sign_in_alerts or
+  # user_sign_in_countries directly (RLS on, no policy, service_role only);
+  # a member reads their own alerts of 30 days, and nobody signed in, a
+  # disabled account and a password-only session that owes an
+  # authenticator step are refused; an
+  # organization's owner, admin and a live act-as seat read the alerts of
+  # its accepted members (act-as seats, invitations, outsiders and a member
+  # removed left out) with the device family and no session id, device row
+  # or full label, and a manager, a staff member, another organization's
+  # owner, an expired act-as seat, a disabled admin, a signed-out caller and
+  # a password-only session that owes an authenticator step are refused; the
+  # device words take letters, digits, spaces and ( ) + . - only; the city
+  # rule is 0472's text; the purge keeps 90 days, 5,000 a call; both tables
+  # go with the account.
+  supabase/tests/0474_sign_in_alerts.test.sql
+  # Passkeys as the second step (0475): no API role reads or writes
+  # member_passkeys, passkey_bridges, passkey_challenges or
+  # organization_passkey_switches directly (RLS on, no policy), and
+  # service_role writes a passkey only through passkey_register() (column
+  # grants for a use and a name), a bridge and a challenge only through the
+  # functions; a stored passkey was made with user verification and a
+  # bridge secret is only ever ciphertext; a member reads their own active
+  # passkeys with no key material, and nobody signed in, a disabled account
+  # and a session that owes the second step are refused; a passkey may be
+  # added only with both platform switches on and every organization of the
+  # account switched on (act-as seats and invitations count for nothing),
+  # at most ten; a bridge row is inserted only when the account has none,
+  # only for a reserved-name TOTP factor of the same account, and goes in
+  # the same transaction as the last active passkey (and only then); a
+  # bridge row is never dropped while a passkey is active, and a verified
+  # bridge is never replaced by an unverified one; a challenge is spent
+  # once, only for its account, session, purpose and browser before it
+  # ends, and never while the kill switch is off; a member and a signed-out
+  # caller can neither read nor change the platform switches; a recovery
+  # code is spent and every passkey and the bridge row removed together, by
+  # service_role only; the health list names every unhealthy account and
+  # tells a removal not finished from a factor made after it; the purge
+  # keeps a day of challenges and 90 days of removed passkeys (longer for an
+  # unfinished removal), 5,000 a call; everything goes with the account.
+  # The session list gives each bridge-raised session its raise time and
+  # holds it when either time is in the window. service_role can end ONE
+  # Auth session, and only one held now (aal2) by the account's recorded
+  # bridge factor, through passkey_end_bridge_session(), the check and the
+  # delete in one statement (no member and no signed-out caller can call
+  # it); every other session is refused, nothing else is touched, and two
+  # calls at once end it once. A member and a signed-out caller cannot
+  # change the third setting (passkey_check_ends_sessions, default off).
+  # The races between two sessions are
+  # scripts/db-concurrency/0475_passkey_races.sh; the migration's and its
+  # rollback's locks are scripts/db-concurrency/0475_migration_lock_footprint.sh.
+  supabase/tests/0475_passkeys.test.sql
   # The request context reads the caller's own rows by index (0471): the same
   # answer as 0413's body for every kind of caller (several organizations, an
   # invitation not accepted, a disabled account, live and expired Act-as
@@ -2278,6 +2354,93 @@ WEB_TESTS=(
   # (its key is unique) writes the rest; a retry with the same key writes
   # nothing again, and the same key with other lines is the conflict.
   src/server/services/receiving.replay-writes-once.test.ts
+  # Security events: the recorder and its helpers are server-only and are
+  # never exported from a server action file; an event's organization is
+  # passed to the recorder only from inside server/security; every limiter
+  # key that is recorded is on a reviewed list. The recorder never throws,
+  # never waits on the database, sends no address, keeps one buffer per
+  # server instance however many copies of the module a build makes, gives
+  # each organization its own slice of it, and makes one call at a time.
+  src/server/security/events.guard.test.ts
+  src/server/security/limiter-events.guard.test.ts
+  src/server/security/events.test.ts
+  src/server/security/events.one-buffer.test.ts
+  # Membership rows are added by the server (0473): no later migration grants
+  # INSERT or ALL on organization_members, or on a column of it, to anon,
+  # authenticated or PUBLIC, and none drops, disables or restates the trigger
+  # that refuses a row inserted as either role, or its function. The file
+  # carries the "Security invariant" marker.
+  src/test/membership-insert-stays-revoked.guard.test.ts
+  # Sign-in alerts, the "This was not me" link: a tag for one alert and one
+  # account opens no other, compared in constant time, good for 7 days, and
+  # nothing is signed without the key. Its page outside the login wall reads
+  # the account from the alert's own row, gives every bad link one page, byte
+  # for byte, changes nothing on GET (counted per address before the alert is
+  # read), refuses a post from another site first, counts each press per
+  # address and per alert, all closed, and gives a reported alert a page with
+  # no button and no form.
+  src/lib/auth/sign-in-alert-link.test.ts
+  src/lib/auth/sign-in-alert-url.test.ts
+  src/app/sign-in-alert/route.test.ts
+  # Sign-in alerts, the report: it ends every session of the alert's own
+  # account first and changes nothing else when that fails; only the press
+  # that marks the alert forgets its device or country row and tells the
+  # member, the owners and admins (accepted, not act-as, at most 5
+  # organizations; never managers or staff), the audit log and the security
+  # events, once. One alert, one sign-out: an alert already reported ends no
+  # session again, from the link or from Settings. The signed-in action acts
+  # only on the caller's own alert (another account's and a made-up id are
+  # refused alike) and is counted per account, closed.
+  src/server/services/sign-in-alert-report.test.ts
+  src/server/actions/sign-in-alerts.test.ts
+  # Sign-in alerts, the reads: a member's own alerts and "This was me" (one
+  # update of the caller's own open alert, and when it changes nothing one
+  # read of the caller's own alert; refused while the authenticator
+  # step is owed), and the organization's list for owners and admins only,
+  # asked in the order authenticator step, role, read, with the active
+  # organization, naming the device family and never the member's label.
+  src/server/services/sign-in-alerts.test.ts
+  'src/app/(dashboard)/dashboard/settings/security/sign-ins/page.test.tsx'
+  # Sign-in alerts, what a notice or an email to other people may carry of a
+  # member's own name (cut to 80 characters, no control or invisible
+  # character, never in a title or a subject), the city a row may hold, and
+  # the security event of an alert (the member's organizations only).
+  src/lib/auth/sign-in-alert-words.test.ts
+  src/lib/place-name.test.ts
+  src/server/security/sign-in-alert-events.test.ts
+  # A sign-in by a password-reset link is noted after the answer, which does
+  # not change and cannot be reached by anything the note does; a magic link,
+  # an invite, an email change and a sign-up note nothing.
+  src/app/auth/confirm/route.sign-in-alert.test.ts
+  # Refused sign-ins read from Supabase's gateway log (the hourly cron
+  # security-events-auth-logs): the cron secret is checked first; without the
+  # logs token nothing is done; the token is sent only as the Authorization
+  # header to api.supabase.com and is in no report, answer or log line, even
+  # when the service repeats it back; the SQL is two constants that return
+  # counts and codes, never an address, a raw log line or the client string;
+  # every returned field is checked; an hour is written once; our own
+  # server's lines are not stored. The guard pins that no other writer sends
+  # source phone or api with the job's reasons, which its "already stored"
+  # check relies on. The net guard pins that no database function, table,
+  # view, bucket or Edge Function of ours holds the words the reader's wide
+  # net reads (it would flag our own refusals), and that the app's ordinary
+  # sign-in requests are exact forms there. The file carries the "Security
+  # invariant" marker.
+  src/server/security/auth-logs.test.ts
+  src/server/security/auth-logs.guard.test.ts
+  src/server/security/auth-logs-net.guard.test.ts
+  src/app/api/cron/security-events-auth-logs/route.test.ts
+  # The refusals our own server records on its live sign-in paths (the
+  # reader above compares their count with the sign-in service's log): a
+  # refused sign-in, a refused current password and a refused set-up code are
+  # recorded after the response, never change the member's answer and never
+  # throw; the organization is found on the server, and a refusal that is not
+  # a wrong password is recorded with none. Each file carries the "Security
+  # invariant" marker.
+  src/server/security/account-events.test.ts
+  src/server/actions/auth.sign-in.security-events.test.ts
+  src/lib/auth/verify-password.security-events.test.ts
+  src/server/actions/mfa.set-up.security-events.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

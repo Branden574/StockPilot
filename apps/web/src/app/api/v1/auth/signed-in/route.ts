@@ -15,6 +15,7 @@ import {
   sessionRef,
   verifiedBearerClaims,
 } from '@/lib/auth/session-note';
+import { clientPlaceFromHeaders } from '@/lib/client-ip';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { internalErrorResponse, unreadableRequestResponse } from '@/server/lib/api-error-response';
 import { emitAuthAudit } from '@/server/services/auth-audit';
@@ -237,11 +238,16 @@ export async function POST(req: Request) {
     // sign-in: the device, and the email when it is new on an account that
     // already has a known one. The label goes to the person's own device
     // list and email; the organization's activity gets the family.
+    //
+    // Part 3 (sign-in alerts): the place (Vercel's headers, only on Vercel),
+    // read inside the deferred work, the session this token belongs to (its
+    // verified claims, above) and the client.
     const userId = ctx.userId;
     const email = claims.email;
     const userAgent = req.headers.get('user-agent');
     const ip = requestIp(req);
-    defer(() =>
+    const requestHeaders = req.headers;
+    defer(async () =>
       noteLoginDevice({
         userId,
         email,
@@ -250,6 +256,9 @@ export async function POST(req: Request) {
         deviceKey: installId,
         deviceLabel: label,
         deviceFamily: family,
+        place: clientPlaceFromHeaders(requestHeaders),
+        sessionId,
+        client: 'phone',
       }),
     );
 

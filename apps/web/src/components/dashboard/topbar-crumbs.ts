@@ -58,6 +58,8 @@ const PUBLIC_REQUESTS_LIST: Crumb = {
   label: 'Public requests',
   href: '/dashboard/settings/public-requests',
 };
+// The parent of Blocked activity and Sign-in alerts: the Security settings page, not a sidebar item.
+const SECURITY_SETTINGS: Crumb = { label: 'Security', href: '/dashboard/settings/security' };
 // The parent of the admin sub-pages. Its href is the sidebar's Admin overview,
 // so an org's rename of that item reaches this crumb too.
 const ADMIN_OVERVIEW: Crumb = { label: 'Admin overview', href: '/dashboard/admin' };
@@ -365,6 +367,16 @@ const CRUMBS: Array<[RegExp, Crumb[]]> = [
   [
     /^\/dashboard\/settings\/public-requests\/[^/]+$/,
     [SECTION_WORKSPACE, SETTINGS_LIST, PUBLIC_REQUESTS_LIST, tail('Detail')],
+  ],
+  // Blocked activity sits under the Security page that links to it.
+  [
+    /^\/dashboard\/settings\/security\/activity$/,
+    [SECTION_WORKSPACE, SETTINGS_LIST, SECURITY_SETTINGS, tail('Blocked activity')],
+  ],
+  // Sign-in alerts (part 3) sit under the Security page too.
+  [
+    /^\/dashboard\/settings\/security\/sign-ins$/,
+    [SECTION_WORKSPACE, SETTINGS_LIST, SECURITY_SETTINGS, tail('Sign-in alerts')],
   ],
   [
     /^\/dashboard\/settings\/migrate\/sage50$/,

@@ -60,10 +60,26 @@ const reportError = vi.fn(async (..._args: unknown[]) => {});
 vi.mock('@/lib/error-reporter', () => ({
   reportError: (...args: unknown[]) => reportError(...args),
 }));
+// A sign-in by emailed link notes its device AFTER the answer (part 3, sign-in
+// alerts). In production that work runs once the answer has left; here it is
+// held, so the requests and cookie writes above are the answer's own, and one
+// test below runs it.
+const deferred: Array<() => Promise<unknown>> = [];
+vi.mock('@/server/services/lib/defer', () => ({
+  defer: (fn: () => Promise<unknown>) => {
+    deferred.push(fn);
+  },
+  keepAlive: () => {},
+}));
+const noteLoginDevice = vi.fn(async (_args: Record<string, unknown>) => {});
+vi.mock('@/lib/auth/login-device', () => ({
+  noteLoginDevice: (args: Record<string, unknown>) => noteLoginDevice(args),
+}));
 
 import { signConfirmRecipient } from '@/lib/auth/confirm-recipient';
 import {
   FIXTURE_AUTH_COOKIE,
+  FIXTURE_SESSION_ID,
   FIXTURE_SUPABASE_URL,
   makeSigningKey,
   sessionClaims,
@@ -135,6 +151,7 @@ async function authServer(input: RequestInfo | URL, init?: RequestInit): Promise
     });
   }
   if (path === '/logout') return new Response(null, { status: 204 });
+  if (path === '/.well-known/jwks.json') return json(200, { keys: [projectKey.publicJwk] });
   return json(404, { msg: `no route ${path}` });
 }
 
@@ -200,6 +217,7 @@ beforeAll(async () => {
 beforeEach(() => {
   jar = new Map();
   writes.length = 0;
+  deferred.length = 0;
   requests = [];
   sessionUser = USER_A;
   firstOfTwo = false;
@@ -218,6 +236,31 @@ describe('POST /auth/confirm with the real session libraries (S25)', () => {
     expect(res.headers.get('location')).toBe(`${BASE}/reset/complete`);
     expect(liveSessionCookies().length).toBeGreaterThan(0);
     expect(requests).toEqual(['POST /verify']);
+  });
+
+  it('the device note runs after the answer: it reads the new session id from the verified token and writes no cookie', async () => {
+    const res = await POST(pressFor('recovery'));
+    expect(res.status).toBe(303);
+    expect(requests).toEqual(['POST /verify']);
+    expect(deferred).toHaveLength(1);
+    const writesAtAnswer = writes.length;
+
+    await deferred[0]!();
+    expect(noteLoginDevice).toHaveBeenCalledTimes(1);
+    expect(noteLoginDevice.mock.calls[0]![0]).toMatchObject({
+      userId: USER_A,
+      sessionId: FIXTURE_SESSION_ID,
+      client: 'web',
+    });
+    // Only the project's public keys were read, and no cookie was written.
+    expect(requests).toEqual(['POST /verify', 'GET /.well-known/jwks.json']);
+    expect(writes).toHaveLength(writesAtAnswer);
+  });
+
+  it('a session for another account notes nothing', async () => {
+    sessionUser = USER_B;
+    await POST(pressFor('recovery'));
+    expect(deferred).toEqual([]);
   });
 
   it('a session for another account is written, then removed again in the same answer', async () => {
