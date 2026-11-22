@@ -64,8 +64,10 @@ import { createAdminClient } from '@/lib/supabase/admin';
  *     not be the one it acted on. Several grant_type values are counted in
  *     the log line as of an ambiguous form. Only the query string is read:
  *     a grant in a form body cannot carry a password check (measured on
- *     2026-11-21: the body must be JSON, and the grant of the address wins
- *     over one inside a JSON body).
+ *     2026-11-21: a request sent with a form content type is answered
+ *     bad_json and no password is checked, whatever its body holds, even a
+ *     body that is valid JSON too; and the grant of the address wins over
+ *     one inside a JSON body).
  *   - `/auth/v1/factors/<id>/verify` with a well-formed id: `verify`, a code
  *     check. `/auth/v1/factors` (enrolling a factor) and
  *     `/auth/v1/factors/<id>/challenge` (asking for a challenge) check no

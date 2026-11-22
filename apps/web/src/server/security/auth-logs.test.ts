@@ -1636,7 +1636,7 @@ describe('the SQL is two constants that return classes and counts only', () => {
     expect(AUTH_LOGS_TOTALS_SQL).toContain('toString(max(ts)) AS last_seen');
   });
 
-  // ── The totals answer cannot be filled ──
+  // -- The totals answer cannot be filled --
 
   /** Every text an expression of one select can answer, when it answers only texts written in the query. */
   function answersOf(sql: string, alias: string): string[] {
