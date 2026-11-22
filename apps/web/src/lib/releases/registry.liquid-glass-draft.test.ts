@@ -83,7 +83,7 @@ describe('the Liquid Glass release is a draft at the top, and never leaves the s
     // Re-pinned by docs/whats-new-delete-account-confirm (2026-11-16; was: every pinned position one place higher): the delete account release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES[18]): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES[19]): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    const block = text.slice(0, text.indexOf(`id: '${RELEASES[21]!.id}'`));
+    const block = text.slice(0, text.indexOf(`id: '${RELEASES[22]!.id}'`));
     const lines = block.split('\n').filter((l) => l.includes('RECHECK'));
     expect(lines.length).toBeGreaterThan(0);
     for (const line of lines) expect(line.trim().startsWith('//'), line).toBe(true);

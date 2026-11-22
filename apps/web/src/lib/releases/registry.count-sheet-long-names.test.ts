@@ -69,6 +69,7 @@ const NEWER_IDS_1113 = [
   // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (owners, admins, managers, staff and viewers by default), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
   // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
   // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+  'sign-in-alerts-2026-11',
   'blocked-activity-current-password-and-set-up-code-2026-11',
   'blocked-activity-2026-11',
   'phone-authenticator-set-up-2026-11',
@@ -203,7 +204,7 @@ describe('the count sheet release: order, status and date', () => {
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES[26]): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES[27]): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES[28]): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[30]?.id).toBe(ID);
+    expect(RELEASES[31]?.id).toBe(ID);
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -216,7 +217,7 @@ describe('the count sheet release: order, status and date', () => {
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES[27]): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES[28]): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES[29]): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[31]?.id).toBe(S2_ID);
+    expect(RELEASES[32]?.id).toBe(S2_ID);
     // Re-pinned by feat/order-add-all (2026-11-10; was: this release at 0, the newest published): the Add all release is published later, at the top.
     // Re-pinned when main was merged into feat/liquid-glass after #493 and #494 (2026-11-10; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
@@ -239,7 +240,7 @@ describe('the count sheet release: order, status and date', () => {
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES[25]): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES[26]): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES[27]): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[29]?.id).toBe(ADD_ALL_ID);
+    expect(RELEASES[30]?.id).toBe(ADD_ALL_ID);
     // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: ADD_ALL_ID, the newest published): the returns request and names release is published later, at the top, directly above the Add all release.
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
@@ -256,7 +257,7 @@ describe('the count sheet release: order, status and date', () => {
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES[24]): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES[25]): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES[26]): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[28]?.id).toBe(RETURNS_REQUEST_ID);
+    expect(RELEASES[29]?.id).toBe(RETURNS_REQUEST_ID);
     // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: the returns request and names release, the newest published): the phone appearance and returns release is published later, at the top, directly below the Liquid Glass draft.
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
       // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: the phone appearance and returns release): the Release count release is published after it, at the top, the newest published release.
@@ -279,7 +280,7 @@ describe('the count sheet release: order, status and date', () => {
       // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: the export, receipt and access release): the count start access check release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: 'count-start-access-check-2026-11'): the phone authenticator set-up release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: 'phone-authenticator-set-up-2026-11'): the Blocked activity release is published after it, at the top, the newest published release.
-      'blocked-activity-current-password-and-set-up-code-2026-11',
+      'sign-in-alerts-2026-11',
     );
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
       'liquid-glass-2026-11',
@@ -320,7 +321,7 @@ describe('the count sheet release: order, status and date', () => {
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(27)): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES.slice(28)): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES.slice(29)): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(31)) {
+    for (const r of RELEASES.slice(32)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -461,6 +462,7 @@ describe('the count sheet release: who is told', () => {
           // Re-pinned by docs/releases-low-critical-pages (2026-11-18; was: without it): the Low + critical pages and list value release is published later, at the top, and reaches whoever can read items (owners, admins, managers, staff and viewers by default), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+          'sign-in-alerts-2026-11': true,
           'blocked-activity-current-password-and-set-up-code-2026-11': true,
           'blocked-activity-2026-11': true,
           'phone-authenticator-set-up-2026-11': true,

@@ -156,7 +156,10 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whats-new-sign-in-alerts-and-reader (2026-11-22; was: '2026-11-21T18:19:00Z'): the
     // Blocked activity current password and set-up code release below is dated 2026-11-22T05:42:00Z, so the
     // placeholder is that same minute.
-    publishedAt: '2026-11-22T05:42:00Z',
+    // Moved again by docs/whats-new-sign-in-alerts-and-reader (2026-11-22; was: '2026-11-22T05:42:00Z'): the
+    // sign-in alerts release below is dated 2026-11-22T06:00:00Z (a placeholder minute until #635 is live),
+    // so the placeholder is that same minute.
+    publishedAt: '2026-11-22T06:00:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -241,6 +244,64 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'sign-in-alerts-2026-11',
+    revision: 1,
+    // Sign-in alerts (part 3 of the security tools; PR #635). Published by
+    // docs/whats-new-sign-in-alerts-and-reader (2026-11-22) ahead of its merge:
+    // it needs the web release of #635 (migration 0474 is already live).
+    // PLACEHOLDER MINUTE: publishedAt below is a stand-in. Set it to the whole
+    // minute #635's web release goes live, and move the Liquid Glass draft
+    // placeholder above to the same minute, before this merges. Do not merge
+    // this entry while #635 is not live.
+    // Left out on purpose: how an alert is decided (which sign-ins are new,
+    // what is counted, the limits on emails and on the link). Words that say
+    // when no alert is sent would tell someone with a stolen password how to
+    // avoid one.
+    // The phone: no app update. A phone sign-in is alerted by email; the
+    // phone has no Active sessions screen, and the owners' notice opens the
+    // inbox (apps/mobile/src/lib/web-path-rewrite.ts).
+    status: 'published',
+    title: 'Sign-in alerts: where a sign-in came from, and "This was not me"',
+    summary:
+      'The email StockPilot sends when your account signs in from a new device now also comes for a sign-in from a new country, says roughly where it came from, and has a This was not me button that ends every session of your account. Owners and admins can see their organization\'s sign-in alerts on a separate Sign-in alerts page, linked from the Security page.',
+    // PLACEHOLDER (stand-in, not a real release time): a whole minute after the
+    // release below, to be replaced with the minute #635's web release is live.
+    publishedAt: '2026-11-22T06:00:00Z',
+    entries: [
+      {
+        id: 'sign-in-alert-not-me',
+        category: 'new',
+        area: 'Security',
+        title: 'Sign-in alerts say where, and let you say "This was not me"',
+        whatChanged:
+          'The sign-in alert email now also comes when your account signs in from a country it has not signed in from before. It shows the approximate place and has a This was not me button. On the website, the Security page in Settings shows each alert on the session it made, with This was me and This was not me.',
+        whyItMatters:
+          'If someone else knows your password, you can end every session of your account with one press, from the email or from Settings. Other owners and admins of your organization, when there are any, are told.',
+        howItAffectsYou:
+          'This was not me ends every session of your account, this one too. A device that is already open can keep working for a short while (until its current pass expires). Then reset your password: that is what closes the door. This was me marks the alert as yours. The place is approximate: a VPN or travel can show a country you are not in.',
+        whatToDo:
+          'If you get an alert for a sign-in you did not make, press This was not me, then reset your password.',
+        link: { href: '/dashboard/settings/security', label: 'Open Security' },
+      },
+      {
+        id: 'sign-in-alerts-for-admins',
+        category: 'new',
+        area: 'Security',
+        title: 'Owners and admins can see sign-in alerts',
+        whatChanged:
+          'The Security page in Settings links to a new Sign-in alerts page. It lists the sign-in alerts of the last 90 days for the members of your organization: when, who, the kind of device, the approximate place, what was new, and how the member answered.',
+        whyItMatters:
+          'You can see when a member reports a sign-in they did not make. You also get a notification and an email when that happens.',
+        howItAffectsYou:
+          'When a member says a sign-in was not them, StockPilot has already ended every session of their account. A device that was already open can keep working for a short while (until its current pass expires). The page shows the kind of device (for example Chrome on macOS), never the name a member gave their device.',
+        whatToDo:
+          'When a member reports a sign-in, check that they reset their password right away.',
+        link: { href: '/dashboard/settings/security/sign-ins', label: 'Open Sign-in alerts' },
+        audience: { roles: ['owner', 'admin'] },
       },
     ],
   },
