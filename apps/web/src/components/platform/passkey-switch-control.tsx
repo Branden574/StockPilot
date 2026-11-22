@@ -21,7 +21,6 @@ import {
   membersStillHoldingWords,
   PASSKEY_SETTING_LABEL,
   PASSKEYS_CONFIRM_WORD,
-  PASSKEYS_COPY,
   type PlatformPasskeySetting,
 } from '@/lib/platform/passkeys-console';
 import {
@@ -87,8 +86,7 @@ function press(
  * PASSKEYS. The action re-gates on platform-admin and a FRESH step-up; when
  * that has lapsed it answers `aal2_required`, and the authenticator code is
  * asked for in place (useStepUp) and the same payload pressed again. The page
- * is refreshed after every answer, because a refused ON may have been
- * switched back off, or (rarely) left on.
+ * is refreshed after every answer, so it shows the switch as it is now.
  */
 export function PasskeySwitchControl({ target, on }: { target: PasskeySwitchTarget; on: boolean }) {
   const router = useRouter();
@@ -123,8 +121,6 @@ export function PasskeySwitchControl({ target, on }: { target: PasskeySwitchTarg
       const state = res.data.on ? 'on' : 'off';
       if (!res.data.changed) {
         toast.info(`${words.name} was already ${state}.`);
-      } else if (!res.data.auditRecorded) {
-        toast.warning(PASSKEYS_COPY.offNotRecorded);
       } else {
         const counted =
           target.kind === 'organization' &&

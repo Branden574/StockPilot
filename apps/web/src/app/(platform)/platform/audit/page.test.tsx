@@ -203,6 +203,14 @@ describe('platform audit', () => {
         detail: { from: true, to: false },
       }),
       row({
+        id: 'k5',
+        action: 'passkeys_switched',
+        targetUserId: null,
+        targetUserEmail: null,
+        targetOrganizationId: null,
+        detail: { setting: 'passkeys_on', from: true, to: false, not_applied: true },
+      }),
+      row({
         id: 'k4',
         action: 'passkeys_switched',
         targetUserId: null,
@@ -212,7 +220,13 @@ describe('platform audit', () => {
     ]);
     await renderPage();
     const region = screen.getByRole('region', { name: 'Platform audit' });
-    const [, first, second, third, fourth] = within(region).getAllByRole('row') as HTMLElement[];
+    const [, first, second, third, notApplied, fourth] = within(region).getAllByRole(
+      'row',
+    ) as HTMLElement[];
+    // A second row that marks a press whose write failed after its record.
+    expect(
+      within(notApplied!).getByText('Passkeys for everyone: On → Off (not applied)'),
+    ).toBeInTheDocument();
     expect(within(first!).getByText('Switched passkeys')).toBeInTheDocument();
     expect(within(first!).getByText('Passkeys for everyone: Off → On')).toBeInTheDocument();
     expect(within(second!).getByText('New passkeys: On → Off')).toBeInTheDocument();

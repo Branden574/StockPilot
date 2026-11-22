@@ -24,20 +24,9 @@ export const PASSKEYS_COPY = {
   writeFailed: 'Could not change the passkey switch, so nothing was changed. Try again.',
   orgNotFound: 'Organization not found.',
   orgReadFailed: 'Could not read the organization, so nothing was changed. Try again.',
-  /** An ON whose audit row did not land, switched back off. */
-  notRecordedLeftOff: {
-    passkeys_on:
-      'The change could not be recorded in the platform audit, so passkeys were left off. Try again.',
-    passkey_adds_on:
-      'The change could not be recorded in the platform audit, so new passkeys were left off. Try again.',
-    organization:
-      'The change could not be recorded in the platform audit, so passkeys were left off for this organization. Try again.',
-  },
-  /** An ON whose audit row did not land and whose switch-back failed too. */
-  notRecordedMayBeOn:
-    'The change could not be recorded in the platform audit, and the switch may still be on. Reload this page and turn it off if it is.',
-  /** An OFF stands even when its audit row did not land; the operator is told. */
-  offNotRecorded: 'It is off. The change could not be recorded in the platform audit.',
+  /** The audit row could not be written first: the press is refused, ON or OFF. */
+  notRecorded:
+    'Could not record the change in the platform audit, so nothing was switched. Try again.',
 } as const;
 
 /** What the console says after an organization's passkeys are turned off. */
@@ -68,7 +57,8 @@ export function passkeySwitchChangeOf(
 ): string | null {
   const { from, to, setting } = detail;
   if (typeof from !== 'boolean' || typeof to !== 'boolean') return null;
-  const change = `${ON_OFF(from)} → ${ON_OFF(to)}`;
+  // A second row marks a press whose write failed after its record landed.
+  const change = `${ON_OFF(from)} → ${ON_OFF(to)}${detail.not_applied === true ? ' (not applied)' : ''}`;
   if (action === 'org_passkeys_switched') return change;
   if (action !== 'passkeys_switched') return null;
   if (setting !== 'passkeys_on' && setting !== 'passkey_adds_on') return null;
