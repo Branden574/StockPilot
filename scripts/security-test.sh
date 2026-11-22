@@ -2709,7 +2709,8 @@ MOBILE_TESTS=(
   # RootGate; the gate itself is unchanged (it still owes aal2, the data
   # hooks are still handed nobody). A session copy and a server answer that
   # disagree on the kind of step are refreshed like any stale copy, and the
-  # screen's Check again makes the set-up screen's own read.
+  # screen's Check again reads only the user (one Auth user read, no
+  # membership read and no token refresh).
   src/lib/mfa-level.passkey-bridge.test.ts
   src/lib/passkey-only-notice-structure.test.ts
 )
