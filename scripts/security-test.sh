@@ -2329,9 +2329,14 @@ WEB_TESTS=(
   # every returned field is checked; an hour is written once; our own
   # server's lines are not stored. The guard pins that no other writer sends
   # source phone or api with the job's reasons, which its "already stored"
-  # check relies on.
+  # check relies on. The net guard pins that no database function, table,
+  # view, bucket or Edge Function of ours holds the words the reader's wide
+  # net reads (it would flag our own refusals), and that the app's ordinary
+  # sign-in requests are exact forms there. The file carries the "Security
+  # invariant" marker.
   src/server/security/auth-logs.test.ts
   src/server/security/auth-logs.guard.test.ts
+  src/server/security/auth-logs-net.guard.test.ts
   src/app/api/cron/security-events-auth-logs/route.test.ts
   # The refusals our own server records on its live sign-in paths (the
   # reader above compares their count with the sign-in service's log): a
