@@ -54,8 +54,9 @@ export type PlatformAuditAction =
    * switch, target organization, detail {from, to}. The database accepts these
    * two words only once the migration adding them to
    * platform_admin_audit_action_check is live; until then the insert is
-   * refused, and the console switches an ON back off (it never stands
-   * unrecorded).
+   * refused, and the console refuses every ON before it switches anything
+   * (an ON never stands unrecorded), while an OFF still proceeds and says its
+   * record could not be written.
    */
   | 'passkeys_switched'
   | 'org_passkeys_switched';
