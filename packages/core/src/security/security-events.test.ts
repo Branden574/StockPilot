@@ -101,9 +101,7 @@ describe('security events: the lists the database checks', () => {
 
   it('names the plain words of the two sign-in alert reasons (part 3)', () => {
     expect(securityEventReasonLabel('sign_in_new_country')).toBe('Sign-in from a new country');
-    expect(securityEventReasonLabel('sign_in_not_me')).toBe(
-      'A member said a sign-in was not them',
-    );
+    expect(securityEventReasonLabel('sign_in_not_me')).toBe('A member said a sign-in was not them');
   });
 
   it('names the plain words of sign-in alerts held past the daily ceiling', () => {
