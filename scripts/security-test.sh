@@ -964,6 +964,21 @@ PGTAP_TESTS=(
   # and warehouse changes and removals, a member's own removal and account
   # deletion work.
   supabase/tests/0473_membership_rows_added_by_the_server.test.sql
+  # Sign-in alerts (0474): no API role reads or writes sign_in_alerts or
+  # user_sign_in_countries directly (RLS on, no policy, service_role only);
+  # a member reads their own alerts of 30 days, and nobody signed in, a
+  # disabled account and a password-only session that owes an
+  # authenticator step are refused; an
+  # organization's owner, admin and a live act-as seat read the alerts of
+  # its accepted members (act-as seats, invitations, outsiders and a member
+  # removed left out) with the device family and no session id, device row
+  # or full label, and a manager, a staff member, another organization's
+  # owner, an expired act-as seat, a disabled admin, a signed-out caller and
+  # a password-only session that owes an authenticator step are refused; the
+  # device words take letters, digits, spaces and ( ) + . - only; the city
+  # rule is 0472's text; the purge keeps 90 days, 5,000 a call; both tables
+  # go with the account.
+  supabase/tests/0474_sign_in_alerts.test.sql
   # The request context reads the caller's own rows by index (0471): the same
   # answer as 0413's body for every kind of caller (several organizations, an
   # invitation not accepted, a disabled account, live and expired Act-as
