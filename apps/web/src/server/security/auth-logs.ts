@@ -150,12 +150,18 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * the hour, and that is reported. The writer's own count of what it stored
  * is read, and a count below what was sent is reported.
  *
- * TWO QUERIES AN HOUR. The groups query lists the lines that can be stored
- * (a password answered 400 or 429, a code check answered 422 or 429) by
- * minute and country, at most AUTH_LOGS_ROW_LIMIT groups, largest first.
- * The totals query counts every kind by kind, status class, caller class and network
- * class only: it gives the log line, the flagged counts, our server's counts
- * and, when the groups query was full, the rest. THE TOTALS CANNOT BE
+ * TWO QUERIES AN HOUR, THE TOTALS FIRST. The totals query counts every kind
+ * by kind, status class, caller class and network class only: it gives the
+ * log line, the flagged counts, our server's counts and, when the groups
+ * query was full, the rest. It is read for every hour that is read, first.
+ * The groups query lists the lines that can be stored (a password answered
+ * 400 or 429, a code check answered 422 or 429) by minute and country, at
+ * most AUTH_LOGS_ROW_LIMIT groups, largest first. It is asked only when the
+ * totals could hold such a line (groupsQueryNeeded: whole totals with no
+ * row it could list mean its answer would be empty), so an hour with
+ * nothing to store costs one call. A full groups answer is followed by the
+ * totals once more, for the rest (the first totals were read before it).
+ * THE TOTALS CANNOT BE
  * FILLED BY A CALLER: every class it is grouped by is a short list written
  * in the query (nine kinds, five status classes, four pairs of caller and
  * network), so it answers at most 180 rows, below its limit. Nothing a
@@ -206,6 +212,21 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * reaches it stops and says so once. The reports are sent together and
  * waited for AUTH_LOGS_REPORTS_MAX_MS at most.
  *
+ * THE LOGS ENDPOINT'S LIMIT (measured on 2026-11-22: 12 calls in about 20 s,
+ * then 429 with a wait of about 30 s). A run makes AUTH_LOGS_CALL_BUDGET
+ * logs calls at most; an hour with nothing to store costs one, so an
+ * ordinary run of six such hours makes six. When the budget is spent the
+ * hour being read and the ones after it wait for the next run, which reads
+ * them oldest first: the oldest unread hour is always the first a run
+ * reads, with the whole budget, so it is never starved. A 429 ends the
+ * run's logs reading at once (no further call), and leaves the refused
+ * hour and the ones after it for the next run. Neither is a failure: the
+ * log line counts them (logsCalls, hoursOverBudget, rateLimited,
+ * hoursLeftByRateLimit), and they are reported only when they cost an
+ * hour: when the hour left is the oldest of the six, which the next run no
+ * longer reads (stopLosesAnHour). A 401 or 403 is the refused token, as
+ * before; a timeout or another status is one hour's failure, as before.
+ *
  * THE TOKEN (SUPABASE_LOGS_READ_TOKEN, which the route reads through the env
  * module and hands in) is sent only as the Authorization header of a GET to
  * AUTH_LOGS_API_ORIGIN, with redirects refused. It is never logged, never put
@@ -251,6 +272,21 @@ export const AUTH_LOGS_RECONCILE_PAGE_ROWS = 1000;
  * more rows is compared with the rows that were read (see readRecorded).
  */
 export const AUTH_LOGS_RECONCILE_MAX_PAGES = 10;
+/**
+ * Logs calls one run makes at most. Measured on 2026-11-22: the logs
+ * endpoint answered 12 calls in about 20 s, then 429 (no call left, and a
+ * wait of about 30 s). A run that would make more leaves the hours it has
+ * not reached for the next run, oldest first (THE LOGS ENDPOINT'S LIMIT,
+ * in the comment at the top).
+ */
+export const AUTH_LOGS_CALL_BUDGET = 8;
+/**
+ * The most logs calls one hour can take: its totals, its groups, its totals
+ * again after a full groups answer, and the next hour's totals for the carry
+ * of its edge. The budget is at least this, so the first hour a run reads
+ * is never cut by it.
+ */
+export const AUTH_LOGS_MOST_CALLS_PER_HOUR = 4;
 /** One logs call: one try, this long at most. */
 export const AUTH_LOGS_CALL_TIMEOUT_MS = 20_000;
 /** One read or write of the record, this long at most (the writer waits 2 s for its turn). */
@@ -664,6 +700,10 @@ export type AuthLogsFailureCause =
   | 'logs_unavailable'
   | 'logs_timeout'
   | 'logs_unreachable'
+  /** 429 from the logs endpoint: the run reads no more logs (see readAuthLogs). */
+  | 'logs_rate_limited'
+  /** The run's AUTH_LOGS_CALL_BUDGET is spent: the hours left wait for the next run. */
+  | 'call_budget_spent'
   | 'logs_bad_answer'
   | 'db_read_failed'
   | 'reconcile_read_failed'
@@ -685,7 +725,17 @@ export interface AuthLogsHourReport {
    * flagged and the hour after it, which may hold our record of refusals at
    * its edge, is not complete yet. Nothing of it is written.
    */
-  outcome: 'stored' | 'already_stored' | 'nothing_to_store' | 'waiting' | 'failed' | 'not_tried';
+  outcome:
+    | 'stored'
+    | 'already_stored'
+    | 'nothing_to_store'
+    | 'waiting'
+    | 'failed'
+    | 'not_tried'
+    /** The run's call budget was spent before the hour was done: read by the next run. */
+    | 'over_budget'
+    /** A logs call of the hour was answered 429: read by the next run. */
+    | 'rate_limited';
   /** Events stored for the hour by this run. */
   events: number;
   /** Our server's form of the hour, reconciled; present once the hour was read. */
@@ -710,6 +760,16 @@ export interface AuthLogsRunSummary {
   hoursStored: number;
   /** Hours left for the next run with nothing written (see the `waiting` outcome). */
   hoursWaiting: number;
+  /** Calls made to the logs endpoint (at most AUTH_LOGS_CALL_BUDGET). */
+  logsCalls: number;
+  /** Hours read whose groups query was not asked: their totals show no line it could list. */
+  groupsSkipped: number;
+  /** Hours left for the next run because the call budget was spent (the cut hour and the ones after it). */
+  hoursOverBudget: number;
+  /** Logs calls answered 429 (0 or 1: the first one ends the run's logs reading). */
+  rateLimited: number;
+  /** Hours left for the next run because of that 429 (the refused hour and the ones after it). */
+  hoursLeftByRateLimit: number;
   /** Group rows that passed the checks. */
   groups: number;
   /** Rows (of either query) dropped by the checks. */
@@ -882,6 +942,34 @@ export function serverFormRefusals(totals: readonly AuthLogsTotalsRow[]): {
     if (row.kind === 'verify' && row.status === '422') code += row.n;
   }
   return { password, code };
+}
+
+/**
+ * Whether the groups query has to be asked for an hour, given its totals:
+ * false only when the totals are WHOLE and none of their rows is a line the
+ * groups query could list. That is the groups query's outer WHERE, written
+ * here as it is there: a password answered 400 or 429, or a code check
+ * (verify) answered 422 or 429, and not our own server's form (its client
+ * string AND a hosting network). Both queries read the same lines and class
+ * them by the same definitions (the reader test compares them), and the
+ * totals are grouped by exactly the four classes that WHERE reads, so when
+ * no totals row passes it, no line does, and the groups answer would be
+ * empty. Totals that are not whole (a full answer, a row that failed its
+ * checks) can be missing the very rows that pass: the groups are asked.
+ * A network class that is not exactly `hosting` is `other` here as in the
+ * row checks, so a row is never left out as our server's by mistake.
+ */
+export function groupsQueryNeeded(
+  totals: readonly AuthLogsTotalsRow[],
+  totalsIncomplete: boolean,
+): boolean {
+  if (totalsIncomplete) return true;
+  return totals.some(
+    (row) =>
+      ((row.kind === 'password' && (row.status === '400' || row.status === '429')) ||
+        (row.kind === 'verify' && (row.status === '422' || row.status === '429'))) &&
+      (row.caller !== 'server' || row.network !== 'hosting'),
+  );
 }
 
 function isRecord(raw: unknown): raw is Record<string, unknown> {
@@ -1129,6 +1217,7 @@ export function reconcileServerForm(
  * category, reason and source (never below zero) and stored on one
  * auth_log_over_cap element per category and source, unless a group row was
  * dropped (`groupsDropped`): its count would come back through the totals.
+ * Per kind, the total is the larger of `totals` and `totalsAfterGroups`.
  * The smallest groups are folded into those elements until the call fits.
  * When the totals were not whole (`totalsIncomplete`), one flagged
  * too_many_forms_to_count element is added: the hour's other counts are then
@@ -1148,6 +1237,11 @@ export function buildHourElements(input: {
   recorded: AuthLogsRecorded | null;
   /** The carry of the hour's edge (hourEdgeCarry), when one was worked out. */
   carry?: AuthLogsCarry | null;
+  /**
+   * When the groups were full: the hour's totals read again AFTER the groups
+   * (the first totals are read before them). Only the remainder reads them.
+   */
+  totalsAfterGroups?: readonly AuthLogsTotalsRow[] | null;
 }): AuthLogsHourElements {
   const listed = new Map<string, AuthLogsElement>();
   const listedByKind = new Map<string, number>();
@@ -1222,17 +1316,26 @@ export function buildHourElements(input: {
     if (input.groupsDropped > 0) {
       remainderSkipped = true;
     } else {
-      const totalByKind = new Map<
-        string,
-        { category: AuthLogsElement['category']; source: AuthLogsSource; n: number }
-      >();
-      for (const t of input.totals) {
-        const v = classifyAuthLogLine(t);
-        if (!v.store) continue;
-        const kind = [v.category, v.reason, v.source].join('\u001f');
-        const same = totalByKind.get(kind);
-        if (same) same.n += t.n;
-        else totalByKind.set(kind, { category: v.category, source: v.source, n: t.n });
+      type KindTotal = { category: AuthLogsElement['category']; source: AuthLogsSource; n: number };
+      const byKind = (rows: readonly AuthLogsTotalsRow[]) => {
+        const out = new Map<string, KindTotal>();
+        for (const t of rows) {
+          const v = classifyAuthLogLine(t);
+          if (!v.store) continue;
+          const kind = [v.category, v.reason, v.source].join('\u001f');
+          const same = out.get(kind);
+          if (same) same.n += t.n;
+          else out.set(kind, { category: v.category, source: v.source, n: t.n });
+        }
+        return out;
+      };
+      const totalByKind = byKind(input.totals);
+      // The totals read again after the full groups answer hold every line
+      // the groups did, even one logged between the two calls: per kind the
+      // larger of the two is the total, so such a line is never left out.
+      for (const [kind, again] of byKind(input.totalsAfterGroups ?? [])) {
+        const first = totalByKind.get(kind);
+        if (!first || again.n > first.n) totalByKind.set(kind, again);
       }
       for (const [kind, total] of totalByKind) {
         const rest = total.n - (listedByKind.get(kind) ?? 0);
@@ -1367,6 +1470,8 @@ interface RunContext {
   completeUntil: number;
   /** The totals answers of this run, by the hour's start: an hour's totals are asked for once. */
   totalsAnswers: Map<number, unknown[]>;
+  /** Logs calls made so far (AUTH_LOGS_CALL_BUDGET at most). */
+  logsCalls: number;
 }
 
 /** The time a call may take: its own limit, or what is left of the run (`cut`); null when too little is left. */
@@ -1468,15 +1573,19 @@ async function readCapped(res: Response): Promise<string | null> {
  * One query to the logs endpoint for one hour: one try, AUTH_LOGS_CALL_TIMEOUT_MS
  * at most. The token goes in the Authorization header and nowhere else; a
  * redirect is refused, so it can never be sent on to another host. An answer
- * that is not a success is never read.
+ * that is not a success is never read. No call is made once the run's
+ * AUTH_LOGS_CALL_BUDGET is spent; a 429 is `logs_rate_limited`.
  */
 async function queryLogs(
   ctx: RunContext,
   sql: string,
   hour: AuthLogsHour,
 ): Promise<Outcome<unknown[]>> {
+  if (ctx.logsCalls >= AUTH_LOGS_CALL_BUDGET)
+    return { ok: false, failure: { cause: 'call_budget_spent' } };
   const limit = callLimit(ctx, AUTH_LOGS_CALL_TIMEOUT_MS);
   if (!limit) return { ok: false, failure: { cause: 'out_of_time' } };
+  ctx.logsCalls += 1;
   const params = new URLSearchParams({
     sql,
     iso_timestamp_start: iso(hour.startMs),
@@ -1499,10 +1608,12 @@ async function queryLogs(
           // Nothing to do: the body is not read either way.
         }
         const refused = res.status === 401 || res.status === 403;
-        return {
-          ok: false,
-          failure: { cause: refused ? 'token_refused' : 'logs_unavailable', status: res.status },
-        };
+        const cause: AuthLogsFailureCause = refused
+          ? 'token_refused'
+          : res.status === 429
+            ? 'logs_rate_limited'
+            : 'logs_unavailable';
+        return { ok: false, failure: { cause, status: res.status } };
       }
       const text = await readCapped(res);
       if (text === null) return { ok: false, failure: { cause: 'logs_bad_answer' } };
@@ -1709,6 +1820,11 @@ function emptySummary(hours: AuthLogsHour[]): AuthLogsRunSummary {
     hoursSkipped: 0,
     hoursStored: 0,
     hoursWaiting: 0,
+    logsCalls: 0,
+    groupsSkipped: 0,
+    hoursOverBudget: 0,
+    rateLimited: 0,
+    hoursLeftByRateLimit: 0,
     groups: 0,
     dropped: 0,
     capped: 0,
@@ -1825,23 +1941,9 @@ async function runHour(
     return null;
   }
 
-  const groupsAnswer = await queryLogs(ctx, AUTH_LOGS_GROUPS_SQL, hour);
-  if (!groupsAnswer.ok) return groupsAnswer.failure;
-  const groups: AuthLogsGroupRow[] = [];
-  let dropped = 0;
-  let atHourEnd = 0;
-  for (const raw of groupsAnswer.value) {
-    const row = parseGroupRow(raw, hour);
-    if (row) groups.push(row);
-    // Lines stamped on the instant the hour ends: the next hour's.
-    else if (isGroupRowOfNextHour(raw, hour)) atHourEnd += 1;
-    else dropped += 1;
-  }
-  const groupsDropped = dropped;
-  const capped = groupsAnswer.value.length >= AUTH_LOGS_ROW_LIMIT;
-
-  // Every kind of the hour: always read (the log line, the flagged counts,
-  // our server's form, and the remainder when the groups were full).
+  // Every kind of the hour: always read, and read FIRST (the log line, the
+  // flagged counts, our server's form, the remainder when the groups are
+  // full, and whether the groups query is needed at all).
   const totalsAnswer = await readTotals(ctx, hour);
   if (!totalsAnswer.ok) return totalsAnswer.failure;
   const totals: AuthLogsTotalsRow[] = [];
@@ -1851,7 +1953,6 @@ async function runHour(
     if (row) totals.push(row);
     else totalsDropped += 1;
   }
-  dropped += totalsDropped;
   // TOTALS THAT ARE NOT WHOLE ARE NEVER STORED AS IF THEY WERE. The query
   // answers its largest groups first, so a full answer leaves the smallest
   // out, and those can be the very rows everything below is read from: our
@@ -1907,6 +2008,47 @@ async function runHour(
     if (!read.ok) return read.failure;
     carry = read.value;
   }
+
+  // THE GROUPS, ONLY WHEN THEY CAN HOLD A LINE (groupsQueryNeeded): whole
+  // totals with no row the groups query could list mean its answer would be
+  // empty, so the hour costs one call. Asked after the waiting decision, so
+  // a waiting hour does not ask for them either.
+  const groups: AuthLogsGroupRow[] = [];
+  let groupsDropped = 0;
+  let atHourEnd = 0;
+  let capped = false;
+  let totalsAfterGroups: AuthLogsTotalsRow[] | null = null;
+  if (groupsQueryNeeded(totals, totalsIncomplete)) {
+    const groupsAnswer = await queryLogs(ctx, AUTH_LOGS_GROUPS_SQL, hour);
+    if (!groupsAnswer.ok) return groupsAnswer.failure;
+    for (const raw of groupsAnswer.value) {
+      const row = parseGroupRow(raw, hour);
+      if (row) groups.push(row);
+      // Lines stamped on the instant the hour ends: the next hour's.
+      else if (isGroupRowOfNextHour(raw, hour)) atHourEnd += 1;
+      else groupsDropped += 1;
+    }
+    capped = groupsAnswer.value.length >= AUTH_LOGS_ROW_LIMIT;
+    // A FULL GROUPS ANSWER: the remainder is the totals less what was
+    // listed. The totals above were read BEFORE the groups, so a line logged
+    // between the two calls could be listed and not be in them, and the
+    // remainder would come out short. The totals are read again, after the
+    // groups, for the remainder only (buildHourElements takes the larger).
+    // Rows of that second answer that fail their checks are left out of it
+    // (the first answer still counts), never a reason to store less.
+    if (capped) {
+      const again = await queryLogs(ctx, AUTH_LOGS_TOTALS_SQL, hour);
+      if (!again.ok) return again.failure;
+      totalsAfterGroups = [];
+      for (const raw of again.value) {
+        const row = parseTotalsRow(raw, hour);
+        if (row) totalsAfterGroups.push(row);
+      }
+    }
+  } else {
+    summary.groupsSkipped += 1;
+  }
+  const dropped = groupsDropped + totalsDropped;
   if (recorded && !recorded.complete) summary.reconcileIncomplete += 1;
 
   if (totalsIncomplete) countTotalsIncomplete(summary, totalsFull, totalsDropped);
@@ -1925,6 +2067,7 @@ async function runHour(
     totalsIncomplete,
     recorded,
     carry,
+    totalsAfterGroups,
   });
   report.reconcile = built.reconcile;
   if (totalsIncomplete) report.totalsIncomplete = true;
@@ -2021,7 +2164,25 @@ const FAILURE_WORDS: Record<AuthLogsFailureCause, (f: AuthLogsFailure) => string
     "Reading refused sign-ins from Supabase's logs stopped at its time limit; the hours left are read by the next run",
   unexpected: () =>
     "Reading refused sign-ins from Supabase's logs failed unexpectedly; the next run tries again",
+  // These two are reported only when they cost an hour (stopLosesAnHour).
+  logs_rate_limited: () =>
+    "Supabase's logs refused this job's calls as too many (status 429) at the oldest of the six hours it reads; the next run no longer reads that hour, so refused sign-ins in it are never counted",
+  call_budget_spent: () =>
+    "Reading refused sign-ins from Supabase's logs used up the run's calls at the oldest of the six hours it reads; the next run no longer reads that hour, so refused sign-ins in it are never counted",
 };
+
+/**
+ * Whether a run whose logs reading ended (a 429, or the call budget spent)
+ * at `hours[index]` costs an hour. That hour and every newer one are left
+ * for the next run, which reads the last AUTH_LOGS_HOURS_PER_RUN complete
+ * hours: all of them but the oldest of this run's window (index 0), which
+ * then falls out unread. Any other is read again, oldest first. The budget
+ * alone never ends a run there: the first hour a run reads has the whole
+ * budget, and an hour takes AUTH_LOGS_MOST_CALLS_PER_HOUR at most.
+ */
+export function stopLosesAnHour(index: number): boolean {
+  return index === 0;
+}
 
 interface Report {
   message: string;
@@ -2118,11 +2279,14 @@ export async function readAuthLogs(options: {
     admin: () => (admin ??= createAdminClient()),
     completeUntil: Math.floor((options.nowMs ?? started) / HOUR_MS) * HOUR_MS,
     totalsAnswers: new Map(),
+    logsCalls: 0,
   };
 
   // Each distinct failure of the run (its cause, status and code), with the
   // first hour it stopped and how many hours it stopped.
   const failures = new Map<string, { failure: AuthLogsFailure; hour: string; hours: number }>();
+  // The call budget or a 429 that ended the run's logs reading, and at which hour.
+  let ended: { failure: AuthLogsFailure; index: number } | null = null;
   for (const [i, hour] of hours.entries()) {
     const hourReport = summary.hours[i]!;
     let failure: AuthLogsFailure | null;
@@ -2135,6 +2299,26 @@ export async function readAuthLogs(options: {
       };
     }
     if (!failure) continue;
+    // THE CALL BUDGET, AND A 429. Neither is a failure of the hour: the hour
+    // and the ones after it wait for the next run, which reads them oldest
+    // first, with nothing written; the log line counts them. After a 429 no
+    // further call is made this run (another would be refused too, and
+    // would only lengthen the wait). Either is reported only when it costs
+    // an hour (stopLosesAnHour).
+    if (failure.cause === 'call_budget_spent' || failure.cause === 'logs_rate_limited') {
+      const left = hours.length - i;
+      if (failure.cause === 'call_budget_spent') {
+        hourReport.outcome = 'over_budget';
+        summary.hoursOverBudget += left;
+      } else {
+        hourReport.outcome = 'rate_limited';
+        hourReport.failure = failure;
+        summary.rateLimited += 1;
+        summary.hoursLeftByRateLimit += left;
+      }
+      ended = { failure, index: i };
+      break;
+    }
     // The failed hour is left as it is and read again by the next run. One
     // bad hour does not hold up the newer ones: the run goes on, unless the
     // failure is one every hour would meet.
@@ -2148,6 +2332,15 @@ export async function readAuthLogs(options: {
     else failures.set(key, { failure, hour: hourLabel(hour), hours: 1 });
     if (RUN_STOPPING_CAUSES.includes(failure.cause)) break;
   }
+  summary.logsCalls = ctx.logsCalls;
+  // A stop that costs an hour is reported: the hour it left is the oldest of
+  // the window, which the next run no longer reads.
+  if (ended && stopLosesAnHour(ended.index)) {
+    const lost = hours[ended.index]!;
+    summary.ok = false;
+    summary.failure ??= { ...ended.failure, hour: hourLabel(lost) };
+    failures.set('lost_hour', { failure: ended.failure, hour: hourLabel(lost), hours: 1 });
+  }
 
   // One report for each distinct failure, never one per hour.
   const reports: Report[] = [];
@@ -2155,8 +2348,15 @@ export async function readAuthLogs(options: {
     const { cause, status, code } = failure;
     reports.push({
       message: FAILURE_WORDS[cause](failure),
-      // Both need someone to act: a new token, or a fix to the query.
-      level: cause === 'token_refused' || cause === 'logs_query_error' ? 'error' : 'warning',
+      // Each needs someone to act: a new token, a fix to the query, or (an
+      // hour lost to the logs endpoint's limit) a look at who else calls it.
+      level:
+        cause === 'token_refused' ||
+        cause === 'logs_query_error' ||
+        cause === 'logs_rate_limited' ||
+        cause === 'call_budget_spent'
+          ? 'error'
+          : 'warning',
       extra: {
         cause,
         ...(status !== undefined ? { status } : {}),
