@@ -122,7 +122,9 @@ function tableMissing(error: { code?: unknown; message?: unknown }): boolean {
 
 function reportUnreadable(site: PasskeyBridgeSite, detail: Record<string, string>): PasskeyBridge {
   void reportError(
-    new Error('The account’s passkey bridge record could not be read; nothing was hidden'),
+    new Error(
+      'The account’s passkey bridge record could not be read; reserved-name factors are listed but not offered for a code',
+    ),
     {
       tag: 'passkeys.bridge_unreadable',
       level: 'error',
@@ -166,9 +168,13 @@ async function reportNotOurs(site: PasskeyBridgeSite, userId: string): Promise<v
  * consume_recovery_code_with_passkeys (site 'recovery_code'). Before 0475 is
  * live that is a factor nobody made through our server; after it, something
  * broke (a schema cache that lost the objects after a restore, a changed
- * signature, a dropped grant), and bridges are then shown, offered and
- * removable like apps. Error level, with the account's hash. Closed limiter.
- * Never throws.
+ * signature, a dropped grant). While the table is missing a factor carrying
+ * the reserved name is listed in Settings and removable like an app
+ * (factorChangeRefusal holds nothing back), but never offered for a code:
+ * the code page, the code check, the step-up list and the reset fail closed
+ * (appFactorsForCode, refusedForCode). While the function is missing the
+ * recovery code runs today's consume and the passkey records stay. Error
+ * level, with the account's hash. Closed limiter. Never throws.
  *   - The table: one report per window for every account together (the
  *     state is the database's, not the account's).
  *   - The function: one report per window FOR EACH ACCOUNT (review 2-3 B
