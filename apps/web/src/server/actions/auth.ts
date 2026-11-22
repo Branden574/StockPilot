@@ -15,7 +15,11 @@ import {
   MFA_CODE_REFUSED,
   signOutThisSession,
 } from '@/lib/auth/mfa-code-attempts';
-import { appFactorsForCode, readPasskeyBridge } from '@/lib/auth/passkey-bridge';
+import {
+  appFactorsForCode,
+  passkeyRecordsUnread,
+  readPasskeyBridge,
+} from '@/lib/auth/passkey-bridge';
 import { newSessionIdOf } from '@/lib/auth/new-session-id';
 import { carriesBridgeName } from '@/lib/auth/passkey-bridge-name';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
@@ -521,6 +525,17 @@ const RESET_BRIDGE_ONLY =
   "A password reset isn't available for this account yet. Ask your organization's owner or StockPilot support for help.";
 
 /**
+ * The same account (its only second step carries the bridge's reserved name)
+ * while the bridge record cannot be read (a failed read, or the table
+ * missing; passkeyRecordsUnread). The passkey this build can take for a reset
+ * cannot be judged now, so "not available" would be untrue: a fault, said as
+ * one, with no code box (no `reason`) and no Settings (REVIEW-STAGE-6A
+ * finding 2). The password was not changed: GoTrue refused it at aal1.
+ */
+const RESET_RECORDS_UNREAD =
+  'Could not check your second step just now, so your password was not changed. Try again in a moment.';
+
+/**
  * The reset's ask when the account's passkey can finish it (stage 5; plan
  * section 4): a member whose only second step is the passkey, and a member
  * with an authenticator app too. `details.method` tells the form which.
@@ -800,7 +815,11 @@ export async function completePasswordResetAction(
     if (refusal?.kind === 'aal') {
       // Only the passkey's bridge: no code box, a code would never be
       // checked; say what to do instead.
-      if (bridgeOnly) return err('forbidden', RESET_BRIDGE_ONLY);
+      if (bridgeOnly) {
+        return passkeyRecordsUnread(bridge)
+          ? err('internal_error', RESET_RECORDS_UNREAD)
+          : err('forbidden', RESET_BRIDGE_ONLY);
+      }
       // GoTrue still wants AAL2, so the code step above did not run (as when
       // the factor list could not be read). Ask for the code, so the form
       // shows its box; a code sent with this press was never checked, so say
