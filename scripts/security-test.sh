@@ -2508,6 +2508,11 @@ WEB_TESTS=(
   'src/app/(dashboard)/dashboard/settings/security/page.passkeys.test.tsx'
   src/components/settings/passkeys-panel.test.tsx
   src/components/auth/step-up-modal.passkeys.test.tsx
+  # A recovery code is spent only by a session Auth still holds: Auth is asked
+  # with the held token after the limits and the password and before any code
+  # is checked; a refused token, another account, or no answer spends no
+  # code, removes no method, ends no session and sends no mail.
+  src/server/actions/mfa-recovery.session-live.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
