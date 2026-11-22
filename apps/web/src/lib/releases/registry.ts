@@ -153,7 +153,10 @@ export const RELEASES: Release[] = [
     // update was launched on a phone), so the placeholder is that same minute.
     // Moved again by docs/whats-new-blocked-activity (2026-11-21; was: '2026-11-21T02:31:00Z'): the Blocked
     // activity release below is dated 2026-11-21T18:19:00Z, so the placeholder is that same minute.
-    publishedAt: '2026-11-21T18:19:00Z',
+    // Moved again by docs/whats-new-sign-in-alerts-and-reader (2026-11-22; was: '2026-11-21T18:19:00Z'): the
+    // Blocked activity current password and set-up code release below is dated 2026-11-22T05:42:00Z, so the
+    // placeholder is that same minute.
+    publishedAt: '2026-11-22T05:42:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -238,6 +241,84 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'blocked-activity-current-password-and-set-up-code-2026-11',
+    revision: 1,
+    // Published by docs/whats-new-sign-in-alerts-and-reader (2026-11-22): the change that
+    // records these two events went live with the refused sign-ins reader (#634) at
+    // 2026-11-22T05:42:55Z, so publishedAt is the whole minute 05:42 and the Liquid Glass
+    // draft's placeholder above is moved to the same minute. (The Blocked activity page
+    // itself is announced below, blocked-activity-2026-11.)
+    // Claims, each checked on the branch:
+    // - The two rows and their words: packages/core/src/security/
+    //   security-events.ts (wrong_current_password "Wrong current password
+    //   entered by a signed-in member", wrong_setup_code "Wrong code while
+    //   setting up an authenticator").
+    // - Where the current password is asked: lib/auth/verify-password.ts is
+    //   called by changing the password (server/actions/auth.ts), changing
+    //   the sign-in email (server/services/email-change.ts), setting up an
+    //   authenticator app (server/actions/mfa.ts), using a recovery code
+    //   (server/actions/mfa-recovery.ts), transferring ownership
+    //   (server/actions/team.ts) and deleting the account
+    //   (server/lib/account-deletion-credential.ts).
+    // - The set-up code: server/actions/mfa.ts verifyEnrollmentAction, only a
+    //   code the sign-in service judged wrong.
+    // - The organization: the signed-in account's (server/security/
+    //   account-events.ts recordAccountCodeBlocked), so the row shows on the
+    //   page of the organization the account's other sign-in rows show on.
+    // - The columns: When, What, Where, Source, Count
+    //   (settings/security/activity/page.tsx); both rows count under
+    //   Password guessing in the totals. No column names the member. The
+    //   source of a wrong current password is the website, or the mobile app
+    //   when the phone asked (deleting the account, changing the email).
+    // Left out as not visible to an organization (rechecked 2026-11-22 on main
+    // at 024636c63): a sign-in refused for another reason
+    // (sign_in_refused_other) is always recorded with no organization
+    // (server/security/account-events.ts recordSignInBlocked), and the rows the
+    // sign-in service's own log reader stores (phone app, direct callers) have
+    // no organization either; both appear only on the platform console, which
+    // members never see, so nothing here promises them to a member.
+    // Who is told: owners and admins, the page's own rule
+    // (server/services/security-events.ts assertMaySeeSecurityActivity).
+    status: 'published',
+    title: 'Blocked activity lists a wrong current password and a wrong authenticator set-up code',
+    summary:
+      'Settings, Security, Blocked activity now also lists two things for the accounts in your organization: a wrong current password entered by a member who is already signed in, and a wrong code entered while setting up an authenticator app. Each entry shows when, from where and how many times, as the other entries do.',
+    publishedAt: '2026-11-22T05:42:00Z',
+    entries: [
+      {
+        id: 'blocked-activity-wrong-current-password',
+        category: 'new',
+        area: 'Security',
+        title: 'A wrong current password is listed in Blocked activity',
+        whatChanged:
+          'StockPilot asks a signed-in member for their current password again before a sensitive change: changing the password or the sign-in email, setting up an authenticator app, using a recovery code, transferring ownership, or deleting the account. When that password is wrong, Blocked activity now lists it as "Wrong current password entered by a signed-in member".',
+        whyItMatters:
+          'A wrong current password is usually a typing mistake. It is also what someone would meet who is using a session that is not theirs, so it is worth being able to see.',
+        howItAffectsYou:
+          'The entry shows when it happened, the place it came from, and how many times. It is counted under Password guessing in the totals. The member still reads the same message as before, and nothing else about these changes is different.',
+        whatToDo:
+          'No action needed. An entry does not say which member it was. If you see several from a place you do not expect, ask your team.',
+        link: { href: '/dashboard/settings/security/activity', label: 'Open Blocked activity' },
+        audience: { roles: ['owner', 'admin'] },
+      },
+      {
+        id: 'blocked-activity-wrong-set-up-code',
+        category: 'new',
+        area: 'Security',
+        title: 'A wrong code while setting up an authenticator is listed in Blocked activity',
+        whatChanged:
+          'When a member enters a wrong six-digit code while setting up an authenticator app, Blocked activity now lists it as "Wrong code while setting up an authenticator".',
+        whyItMatters:
+          'It is kept apart from "Wrong authenticator code", which is a wrong code from an authenticator that is already set up. A wrong code during set-up is nearly always a mistyped or expired first code.',
+        howItAffectsYou:
+          'Expect a few of these on the day your organization starts requiring an authenticator app. The member still reads the same message as before.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/settings/security/activity', label: 'Open Blocked activity' },
+        audience: { roles: ['owner', 'admin'] },
       },
     ],
   },
