@@ -79,7 +79,11 @@ import {
   type SigningKey,
 } from '@/test/auth-session-fixture';
 
-import { checkPlatformAdmin, currentUserIsPlatformAdmin, requirePlatformAdmin } from './platform-admin';
+import {
+  checkPlatformAdmin,
+  currentUserIsPlatformAdmin,
+  requirePlatformAdmin,
+} from './platform-admin';
 
 let projectKey: SigningKey;
 let server: FakeAuthServer;
@@ -133,6 +137,19 @@ describe('platform gates, real session reads', () => {
     await signIn(sessionClaims({ aal: 'aal2', totpAgeSeconds: 60 }));
     await expect(checkPlatformAdmin({ requireStepUp: true })).resolves.toMatchObject({ ok: true });
     expect(insecureWarnings()).toBe(0);
+  });
+
+  it("an action's answer carries the email Auth verified, never the profile's (an audit row's actor)", async () => {
+    const { FIXTURE_EMAIL } = await import('@/test/auth-session-fixture');
+    await signIn(sessionClaims({ aal: 'aal2', totpAgeSeconds: 60 }));
+    const withStepUp = await checkPlatformAdmin({ requireStepUp: true });
+    expect(withStepUp).toMatchObject({ ok: true, verifiedEmail: FIXTURE_EMAIL });
+    // The session's email is the profile column (member-writable): not this.
+    expect(withStepUp.ok && withStepUp.session.email).toBe('member@example.com');
+    await expect(checkPlatformAdmin()).resolves.toMatchObject({
+      ok: true,
+      verifiedEmail: FIXTURE_EMAIL,
+    });
   });
 
   it('a dangerous action is refused when the step-up is 20 minutes old', async () => {
