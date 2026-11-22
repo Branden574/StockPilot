@@ -2302,15 +2302,23 @@ WEB_TESTS=(
   src/server/security/events.test.ts
   src/server/security/events.one-buffer.test.ts
   # A passkey's bridge factor (a TOTP factor whose secret only the server
-  # holds) is hidden and refused BY ITS RECORDED ID ONLY: the code check, the
-  # set-up, the removal, the set-up clean-up, the step-up list, the reset's
-  # pick, the code page and the Security page each leave out the account's
-  # recorded bridge, read only when a factor carries the reserved name; a
-  # reserved-name factor that is not recorded is treated as an app and
+  # holds): the record is read only when a factor carries the reserved name.
+  # The Security page's list leaves out the recorded bridge, and the set-up,
+  # the removal and the set-up clean-up refuse it. Where a code is typed (the
+  # code check, the step-up list, the reset's pick, the code page) no factor
+  # that carries the reserved name is ever offered or checked, whatever the
+  # record read answered: one that no record names is refused as a second
+  # step that cannot be used here, and while the record cannot be read or
+  # the table is missing every one is refused (fail closed): the code check,
+  # the step-up list and the code page with try-again words, the code page
+  # keeping its recovery code and sign-out, and the reset with no code box,
+  # saying a reset is not available for the account yet. A reserved-name
+  # factor that is not recorded is listed in Settings like an app and
   # reported (limited per account); the records missing with a reserved-name
   # factor listed is reported (limited); an unreadable record hides nothing
-  # from a list, and the removal, the set-up confirmation and the set-up
-  # clean-up then leave every reserved-name factor alone. The removal looks
+  # from the Settings list, and the removal, the set-up confirmation and the
+  # set-up clean-up then leave every reserved-name factor alone (the table
+  # missing holds nothing back there). The removal looks
   # at the names the context already read. A recovery code spends the code
   # and removes the passkeys in one service-role call, made only after the
   # three limits, the password and the held session, with today's path when
