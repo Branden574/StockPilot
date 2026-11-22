@@ -59,6 +59,7 @@ import {
   enrolTotpAs,
   readAccountAs,
   signOutAs,
+  unenrolAs,
   type AuthFactor,
   type RaisedSession,
 } from './passkey-auth';
@@ -2030,6 +2031,28 @@ export async function finishPasskeySetup(input: {
 
 // ── E. F. Remove and rename ────────────────────────────────────────────
 
+/**
+ * Walk 4 FAIL 3: the bridge factor of a removed last passkey goes through
+ * the MEMBER'S OWN unenroll (DELETE /factors/{id} with this aal2 session's
+ * token). Auth's UnenrollFactor lowers every session that factor raised to
+ * aal1 in the same transaction (DowngradeSessionsToAAL1: their `totp` entry
+ * gone, aal1, so their next refresh answers aal1), on every Auth version
+ * read (v2.188.1, the lab's, and later). The service role's delete does that
+ * only from v2.196.0: on the lab's Auth the session the bridge raised kept
+ * aal2 and refreshed at aal2. A session the member's app raised is not the
+ * bridge's and keeps its level. When Auth refuses the member's unenroll, the
+ * service role deletes the factor as before (on an Auth before v2.196.0 the
+ * sessions the bridge raised then keep aal2 until they end), reported at
+ * warning level with Auth's code. True when the factor is gone.
+ */
+async function removeBridgeFactor(admin: Admin, held: Held, factorId: string): Promise<boolean> {
+  const userId = held.claims.userId;
+  const own = await unenrolAs(held.token, factorId);
+  if (own.ok) return true;
+  reportPasskeys('bridge_unenrol_refused', 'warning', userId, { code: own.code ?? 'none' });
+  return deleteFactor(admin, userId, factorId);
+}
+
 /** E: remove one of the member's passkeys (aal2), then end the other sessions. */
 export async function removePasskey(input: {
   passkeyId: unknown;
@@ -2095,7 +2118,7 @@ export async function removePasskey(input: {
     return fail('not_found', PASSKEY_WORDS.alreadyRemoved, 'not_removed');
   let finishing = false;
   if (answer.bridge_dropped === true && typeof answer.bridge_factor_id === 'string') {
-    if (!(await deleteFactor(admin, userId, answer.bridge_factor_id))) {
+    if (!(await removeBridgeFactor(admin, held, answer.bridge_factor_id))) {
       finishing = true;
       reportPasskeys('removal_factor_left', 'error', userId);
     }

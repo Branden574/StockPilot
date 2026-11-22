@@ -305,7 +305,10 @@ describe('the gates (decision A): ADD needs all four conditions; USE the site, t
         expect(await pk.removePasskey({ passkeyId })).toEqual({ ok: true, finishing: false });
         expect(world.passkeys[0]!.removed_at).not.toBeNull();
         expect(world.bridges.has(userId)).toBe(false);
-        expect(world.calls.deleteFactor).toContain(bridge.factor_id);
+        // The member's own unenroll removes the bridge factor (Auth lowers
+        // the sessions it raised); the service role is not asked.
+        expect(world.calls.unenrol).toEqual([bridge.factor_id]);
+        expect(world.factors.some((f) => f.id === bridge.factor_id)).toBe(false);
         // With nothing left to list, the panel is absent again.
         expect(await panelFor(userId)).toBeNull();
       } finally {
@@ -1827,12 +1830,99 @@ describe('E: removal', () => {
     expect(await pk.removePasskey({ passkeyId })).toEqual({ ok: true, finishing: false });
     expect(world.passkeys[0]).toMatchObject({ removed_reason: 'member' });
     expect(world.bridges.has(userId)).toBe(false);
-    expect(world.calls.deleteFactor).toContain(bridge.factor_id);
+    expect(world.calls.unenrol).toEqual([bridge.factor_id]);
+    expect(world.factors.some((f) => f.id === bridge.factor_id)).toBe(false);
     expect(world.calls.auth.some((c) => c.path === '/logout?scope=others')).toBe(true);
     expect(emitAuthAudit).toHaveBeenLastCalledWith(
       expect.objectContaining({ event: 'passkey.removed' }),
     );
     expect(sendPasskeyRemovedEmail).toHaveBeenCalled();
+  });
+
+  /**
+   * Walk 4 FAIL 3 (unchanged in the second walk): the lab's Auth (v2.188.1)
+   * does not lower a session when the service role deletes the factor that
+   * raised it, so the session the bridge raised stayed aal2 after its last
+   * passkey went. The member's own unenroll lowers every session the factor
+   * raised, on every Auth version (knobs.adminDeleteDowngrades stays false
+   * here: the lab's behaviour).
+   */
+  describe('the session the bridge raised does not keep a second step the account no longer has (walk 4 FAIL 3)', () => {
+    const reports = (tag: string) =>
+      vi
+        .mocked(reportError)
+        .mock.calls.map((c) => c[1])
+        .filter((ctx) => ctx.tag === tag);
+
+    it('the last passkey removed from the session its bridge raised: that session is aal1 at Auth, so its next refresh answers aal1', async () => {
+      const { soft, userId, passkeyId, session } = await memberWithPasskey();
+      expect(await passkeyStep(soft)).toEqual({ ok: true });
+      const bridge = world.bridges.get(userId)!;
+      expect(world.sessions.get(session.id)).toMatchObject({ aal: 'aal2', factorId: bridge.factor_id });
+      expect(await pk.removePasskey({ passkeyId })).toEqual({ ok: true, finishing: false });
+      expect(world.calls.unenrol).toEqual([bridge.factor_id]);
+      expect(world.calls.deleteFactor).toEqual([]);
+      expect(world.sessions.get(session.id)!.aal).toBe('aal1');
+      expect(world.sessions.get(session.id)!.factorId).toBeUndefined();
+      // This session is kept (only the others end).
+      expect(world.sessions.has(session.id)).toBe(true);
+    });
+
+    it('a member whose session the app raised keeps that session at aal2: only the bridge’s sessions go down', async () => {
+      const { userId, passkeyId } = await memberWithPasskey();
+      const app = world.addApp(userId);
+      const bySession = world.signIn(userId, 'aal2');
+      bySession.factorId = app.id;
+      const bridge = world.bridges.get(userId)!;
+      expect(await pk.removePasskey({ passkeyId })).toEqual({ ok: true, finishing: false });
+      expect(world.calls.unenrol).toEqual([bridge.factor_id]);
+      expect(world.sessions.get(bySession.id)).toMatchObject({ aal: 'aal2', factorId: app.id });
+      expect(world.factors.map((f) => f.id)).toEqual([app.id]);
+    });
+
+    it('a passkey that is not the last leaves the bridge and the session alone', async () => {
+      const { soft, userId, passkeyId, session } = await memberWithPasskey();
+      expect(await passkeyStep(soft)).toEqual({ ok: true });
+      world.passkeys.push({
+        ...world.passkeys[0]!,
+        id: crypto.randomUUID(),
+        credential_id: 'sample-second-credential',
+      });
+      expect(await pk.removePasskey({ passkeyId })).toEqual({ ok: true, finishing: false });
+      expect(world.calls.unenrol).toEqual([]);
+      expect(world.calls.deleteFactor).toEqual([]);
+      expect(world.sessions.get(session.id)!.aal).toBe('aal2');
+      expect(world.bridges.has(userId)).toBe(true);
+    });
+
+    it('Auth refuses the member’s own unenroll: the service role deletes the factor as before, and it is reported', async () => {
+      const { soft, userId, passkeyId } = await memberWithPasskey();
+      expect(await passkeyStep(soft)).toEqual({ ok: true });
+      const bridge = world.bridges.get(userId)!;
+      world.knobs.unenrolError = 'unexpected_failure';
+      expect(await pk.removePasskey({ passkeyId })).toEqual({ ok: true, finishing: false });
+      expect(world.calls.deleteFactor).toEqual([bridge.factor_id]);
+      expect(world.factors.some((f) => f.id === bridge.factor_id)).toBe(false);
+      expect(reports('passkeys.bridge_unenrol_refused')).toEqual([
+        expect.objectContaining({
+          level: 'warning',
+          extra: expect.objectContaining({
+            code: 'unexpected_failure',
+            userIdHash: expect.stringMatching(/^[0-9a-f]{16}$/),
+          }),
+        }),
+      ]);
+      expect(reports('passkeys.removal_factor_left')).toEqual([]);
+    });
+
+    it('both refuse: "finishing in the background" and the factor-left report, as before', async () => {
+      const { soft, passkeyId } = await memberWithPasskey();
+      expect(await passkeyStep(soft)).toEqual({ ok: true });
+      world.knobs.unenrolError = 'unexpected_failure';
+      world.knobs.deleteFails = true;
+      expect(await pk.removePasskey({ passkeyId })).toEqual({ ok: true, finishing: true });
+      expect(reports('passkeys.removal_factor_left')).toHaveLength(1);
+    });
   });
 
   function requiringOrg(userId: string, policy = 'all_required', role = 'member') {

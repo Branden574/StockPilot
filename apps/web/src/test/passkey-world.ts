@@ -42,6 +42,14 @@ export interface FakeSession {
    * no `amr` claim at all. When set, `amr` above is not used.
    */
   amrClaim?: { claim: unknown };
+  /**
+   * The factor that raised this session to aal2 (auth.sessions.factor_id),
+   * set by a verify. Auth's own unenroll (DELETE /factors/{id}) lowers every
+   * session whose factor it is to aal1 (DowngradeSessionsToAAL1, every Auth
+   * version since v2.188.1 at least); the service role's delete does that
+   * only from v2.196.0 (the lab's v2.188.1 does not: knobs.adminDeleteDowngrades).
+   */
+  factorId?: string;
 }
 export interface FakeFactor {
   id: string;
@@ -155,6 +163,8 @@ export function makeWorld() {
       /** The database functions called, by name (a list: not a client). */
       fns: [] as Array<{ name: string; args: Record<string, unknown> }>,
       deleteFactor: [] as string[],
+      /** The member's own unenrolls (DELETE /factors/{id} as the token), by factor id. */
+      unenrol: [] as string[],
       setSession: 0,
       cookieSignOut: [] as string[],
       /** Every service-role table read, by table (finding 6 counts them). */
@@ -183,6 +193,10 @@ export function makeWorld() {
       enrolNoSecret: false,
       /** Auth's GET /user answers an error (from the moment a test sets it). */
       userReadFails: false,
+      /** The member's own unenroll answers this error code (500). */
+      unenrolError: null as string | null,
+      /** The service role's factor delete lowers the factor's sessions too (Auth v2.196.0 and later). */
+      adminDeleteDowngrades: false,
     },
   };
 
@@ -346,6 +360,7 @@ export function makeWorld() {
         return json(422, { error_code: 'mfa_verification_failed' });
       f.status = 'verified';
       session.aal = 'aal2';
+      session.factorId = f.id;
       const raisedFor = w.knobs.verifyAnswersOtherSession
         ? { ...session, id: randomUUID() }
         : session;
@@ -359,13 +374,31 @@ export function makeWorld() {
     }
     const deleteMatch = /^\/factors\/([^/]+)$/.exec(path);
     if (method === 'DELETE' && deleteMatch) {
-      w.factors = w.factors.filter(
-        (f) => !(f.id === deleteMatch[1] && f.user_id === session.userId),
-      );
-      return json(200, {});
+      const id = decodeURIComponent(deleteMatch[1]!);
+      w.calls.unenrol.push(id);
+      if (w.knobs.unenrolError) return json(500, { error_code: w.knobs.unenrolError });
+      const f = mine().find((x) => x.id === id);
+      if (!f) return json(404, { error_code: 'mfa_factor_not_found' });
+      // Auth: a verified factor is removed only from an aal2 session.
+      if (f.status === 'verified' && session.aal !== 'aal2') {
+        return json(422, { error_code: 'insufficient_aal' });
+      }
+      w.factors = w.factors.filter((x) => x !== f);
+      lowerSessionsOf(f.id);
+      return json(200, { id: f.id });
     }
     if (method === 'POST' && path === '/logout') return new Response(null, { status: 204 });
     return json(404, { error_code: 'not_found' });
+  }
+
+  /** Auth's DowngradeSessionsToAAL1: every session the factor raised goes to aal1, its totp entry gone. */
+  function lowerSessionsOf(factorId: string): void {
+    for (const s of w.sessions.values()) {
+      if (s.factorId !== factorId) continue;
+      s.aal = 'aal1';
+      delete s.factorId;
+      if (s.amr) s.amr = s.amr.filter((a) => a.method !== 'totp');
+    }
   }
 
   // ── fake database (service role) ────────────────────────────────────
@@ -630,6 +663,7 @@ export function makeWorld() {
             if (w.knobs.deleteFails)
               return { data: null, error: { status: 500, code: 'unexpected_failure' } };
             w.factors = w.factors.filter((f) => !(f.id === id && f.user_id === userId));
+            if (w.knobs.adminDeleteDowngrades) lowerSessionsOf(id);
             return { data: { id }, error: null };
           },
         },
@@ -703,6 +737,7 @@ export function makeWorld() {
     w.calls.auth.length = 0;
     w.calls.fns.length = 0;
     w.calls.deleteFactor.length = 0;
+    w.calls.unenrol.length = 0;
     w.calls.setSession = 0;
     w.calls.cookieSignOut.length = 0;
     w.calls.reads.length = 0;
@@ -722,6 +757,8 @@ export function makeWorld() {
       deleteFails: false,
       enrolNoSecret: false,
       userReadFails: false,
+      unenrolError: null,
+      adminDeleteDowngrades: false,
     };
   }
 
