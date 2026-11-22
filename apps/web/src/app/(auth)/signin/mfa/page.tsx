@@ -67,15 +67,22 @@ export default async function MfaChallengePage() {
   // the way in (the form shows no code box without an app).
   if (factors.length === 0) {
     // The bridge record could not be read (a failed read, or the table
-    // missing): a passing fault, not a second step that cannot be used. The
-    // page's own words for a list it could not load, and no form.
+    // missing): a fault, not a second step that cannot be used, so the words
+    // say to reload. The fault can last (a table lost from the schema cache,
+    // a lost grant), so the card keeps the form with no factor: no code box,
+    // and its recovery code and sign-out (the second lab walk, FAIL 1). The
+    // recovery code needs no passkey record, and keeps its own rules.
     if (passkeyRecordsUnread(bridge)) {
       return (
         <AuthCard
           eyebrow="Two-factor"
           title="Two-factor authentication"
-          description="We could not load your authenticator just now. Reload this page to try again."
-        />
+          description="We could not load your second step just now. Reload this page to try again, or use a recovery code."
+        >
+          <Suspense fallback={<ChallengeSkeleton />}>
+            <MfaChallengeForm factors={[]} />
+          </Suspense>
+        </AuthCard>
       );
     }
     return (

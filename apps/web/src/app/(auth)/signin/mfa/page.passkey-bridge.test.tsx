@@ -19,9 +19,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * records cannot be read (a failed read, or the table missing) a factor that
  * carries the reserved name is still never offered for a typed code (fail
  * closed): an account with an app is offered the app, and an account left
- * with none gets the page's own "could not load, reload to try again" card,
- * with no form. An account with no reserved-name factor makes no record
- * read, so a failed read changes nothing for it.
+ * with none gets a "could not load, reload to try again" card that still
+ * holds the form with no code box: the recovery code and the sign-out (the
+ * second lab walk, FAIL 1: without them a passkey-only member was held on the
+ * card for as long as the fault lasted). An account with no reserved-name
+ * factor makes no record read, so a failed read changes nothing for it.
  */
 
 const redirect = vi.fn((to: string) => {
@@ -189,8 +191,9 @@ describe('the code page and the passkey bridge', () => {
     },
   };
   const FAILED = { data: null, error: { code: '57014', message: 'canceling statement' } };
-  /** The page's own words for a list it could not load. */
-  const TRY_AGAIN = 'We could not load your authenticator just now. Reload this page to try again.';
+  /** The card's words while the record cannot be read: reload, or the recovery code below them. */
+  const TRY_AGAIN =
+    'We could not load your second step just now. Reload this page to try again, or use a recovery code.';
 
   describe('while the record cannot be read (fail closed)', () => {
     it.each([
@@ -220,13 +223,16 @@ describe('the code page and the passkey bridge', () => {
       ['the table missing', NOT_YET, false],
       ['a service client that cannot be made', FAILED, true],
     ])(
-      '%s, no app: the try-again card, no code box, no form, and no trip to the dashboard',
+      '%s, no app: the try-again card with the recovery code and the sign-out, no code box, and no trip to the dashboard',
       async (_state, record, adminThrows) => {
         h.record = record;
         h.adminThrows = adminThrows;
         for (const factors of [[BRIDGE], [IMPOSTOR, BRIDGE]]) {
           h.factors = factors;
-          expect(await shown(0)).toEqual({ description: TRY_AGAIN, factors: null });
+          // The form with no factor: no code box, so no code is sent; its
+          // "Use a recovery code" and "Cancel and sign out" stay
+          // (mfa-challenge-form.recovery-only.test.tsx).
+          expect(await shown(1)).toEqual({ description: TRY_AGAIN, factors: [] });
         }
         expect(redirect).not.toHaveBeenCalled();
       },
