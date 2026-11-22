@@ -117,6 +117,13 @@ export const SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, string>> = {
   code_checks_paused: 'Authenticator code checks paused after too many attempts',
   wrong_recovery_code: 'Wrong recovery code',
   recovery_code_checks_paused: 'Recovery code checks paused after too many attempts',
+  // A signed-in member, asked for the current password or for the first code
+  // of a new authenticator, got it wrong; and a sign-in the sign-in service
+  // refused for a reason that is not a wrong password (recorded with no
+  // organization).
+  wrong_current_password: 'Wrong current password entered by a signed-in member',
+  wrong_setup_code: 'Wrong code while setting up an authenticator',
+  sign_in_refused_other: 'Sign-in refused for another reason',
   unknown_api_key: 'Unknown API key',
   // One account met its daily ceiling on sign-in alerts: so many sign-ins from
   // new devices or countries in a day that further ones are turned away
@@ -126,6 +133,25 @@ export const SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, string>> = {
   // happened, and the alert asks the member whether it was them.
   sign_in_new_country: 'Sign-in from a new country',
   sign_in_not_me: 'A member said a sign-in was not them',
+  // Read from the sign-in service's own log (the phone app and direct
+  // callers): its own limit refused the attempt, or more refusals came in one
+  // hour than could be listed one by one. Stored as flagged, never as blocked
+  // attacks: refused requests of a form the job does not classify, and
+  // refusals that carried our server's marks and that our server has no
+  // record of. Those last words are chosen to be true whoever sent them:
+  // someone presenting our server's marks, or our own server when its record
+  // of a refusal was lost. And an hour whose refused requests could not all
+  // be counted (the count read was full, or a part of it could not be read):
+  // its number is the requests that were counted, and its other counts may
+  // be short.
+  auth_rate_limited: 'Too many sign-in attempts, paused by the sign-in service',
+  auth_log_over_cap: 'More refused sign-ins than could be listed',
+  unclassified_sign_in_refusals: 'Refused sign-in requests of an unusual form',
+  unrecorded_server_form_password:
+    "Refused sign-ins in our server's form that our server has no record of",
+  unrecorded_server_form_code:
+    "Refused authenticator codes in our server's form that our server has no record of",
+  too_many_forms_to_count: 'Refused sign-in requests in an hour that could not all be counted',
   // Exploit attempts: a scanner asked for a path this site never serves.
   env_file: 'Request for a settings file',
   git_dir: 'Request for source control files',

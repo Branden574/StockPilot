@@ -180,6 +180,13 @@ const serverSchema = z.object({
 
   // Google Books API key (optional — keyless works at low volume; set to raise quota).
   GOOGLE_BOOKS_API_KEY: optionalSecret.transform((s) => s.trim()),
+
+  // A Supabase access token limited to one project and Logs: Read, for the
+  // hourly job that counts refused sign-ins in Supabase's gateway log
+  // (/api/cron/security-events-auth-logs, server/security/auth-logs.ts).
+  // Optional: unset, the job answers { skipped: 'no_token' } and does
+  // nothing. Sent only to api.supabase.com; never logged.
+  SUPABASE_LOGS_READ_TOKEN: optionalSecret.transform((s) => s.trim()),
 });
 
 const clientSchema = z.object({

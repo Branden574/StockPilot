@@ -437,6 +437,17 @@ describe('requestEmailChange — refusal order (each stops before the next spend
     });
   });
 
+  it('the password check is told where the request came from: the phone API says phone, the website says web', async () => {
+    await requestEmailChange({ ...REQUEST, source: 'mobile' });
+    await requestEmailChange(REQUEST);
+    expect(verifyPasswordSideChannel.mock.calls.map((call) => call[3])).toEqual(['phone', 'web']);
+    expect(verifyPasswordSideChannel.mock.calls[0]!.slice(0, 3)).toEqual([
+      expect.any(String),
+      REQUEST.currentPassword,
+      USER_ID,
+    ]);
+  });
+
   it('a wrong password is refused and mints nothing', async () => {
     verifyPasswordSideChannel.mockResolvedValue({ ok: false, reason: 'invalid_password', message: 'Password is incorrect.' });
     await expect(requestEmailChange(REQUEST)).rejects.toMatchObject({ code: 'forbidden' });

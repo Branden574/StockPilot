@@ -61,7 +61,7 @@ describe('verifyPasswordSideChannel', () => {
   });
 
   it('builds an isolated, non-persisting client', async () => {
-    await verifyPasswordSideChannel('u@example.test', 'pw');
+    await verifyPasswordSideChannel('u@example.test', 'pw', 'u1');
     expect(refs.createClient).toHaveBeenCalledWith(
       'https://example.supabase.co',
       'anon-key',
@@ -72,7 +72,7 @@ describe('verifyPasswordSideChannel', () => {
   });
 
   it('revokes the session the password grant just minted (no ghost row)', async () => {
-    const res = await verifyPasswordSideChannel('u@example.test', 'pw');
+    const res = await verifyPasswordSideChannel('u@example.test', 'pw', 'u1');
 
     expect(res).toEqual({ ok: true });
     // scope 'local' — revoke ONLY the ghost. 'global'/'others' would evict the
@@ -87,7 +87,7 @@ describe('verifyPasswordSideChannel', () => {
       error: { message: 'Invalid login credentials' },
     });
 
-    const res = await verifyPasswordSideChannel('u@example.test', 'bad');
+    const res = await verifyPasswordSideChannel('u@example.test', 'bad', 'u1');
 
     expect(res).toEqual({
       ok: false,
@@ -103,7 +103,9 @@ describe('verifyPasswordSideChannel', () => {
     // A failed cleanup must never turn a VERIFIED password into a failure —
     // a leaked ghost is the pre-fix status quo, a false "password incorrect"
     // would block the user out of email change / MFA enroll entirely.
-    await expect(verifyPasswordSideChannel('u@example.test', 'pw')).resolves.toEqual({ ok: true });
+    await expect(verifyPasswordSideChannel('u@example.test', 'pw', 'u1')).resolves.toEqual({
+      ok: true,
+    });
   });
 
   // S31: the message used to be the thrown error's own text, and the MFA,
@@ -113,7 +115,7 @@ describe('verifyPasswordSideChannel', () => {
     const thrown = new Error('getaddrinfo ENOTFOUND example.supabase.co');
     refs.signInWithPassword.mockRejectedValue(thrown);
 
-    const res = await verifyPasswordSideChannel('u@example.test', 'pw');
+    const res = await verifyPasswordSideChannel('u@example.test', 'pw', 'u1');
 
     expect(res).toEqual({
       ok: false,

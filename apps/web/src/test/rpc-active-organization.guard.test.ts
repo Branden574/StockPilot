@@ -331,6 +331,10 @@ const REGISTRY: Record<string, Entry> = {
   'server/loaders/orders-new-catalog.ts::rls_inv_read_warehouse_charter_ids': RO(
     "The caller's own scope sets.",
   ),
+  'server/security/auth-logs.ts::record_security_events': [
+    'not_org_data',
+    "The hourly job that counts refused sign-ins in Supabase's gateway log, behind the cron secret: the service client stores counts in fixed words with no organization (a log line names no account). No value from a request reaches the call.",
+  ],
   'server/security/events.ts::record_security_events': [
     'not_org_data',
     "The security-events recorder's flush: the service client stores counts in fixed words. An event's organization comes from the server (the sign-in email's account, the session's account), never from a row id in a request.",

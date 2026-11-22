@@ -2376,6 +2376,35 @@ WEB_TESTS=(
   # not change and cannot be reached by anything the note does; a magic link,
   # an invite, an email change and a sign-up note nothing.
   src/app/auth/confirm/route.sign-in-alert.test.ts
+  # Refused sign-ins read from Supabase's gateway log (the hourly cron
+  # security-events-auth-logs): the cron secret is checked first; without the
+  # logs token nothing is done; the token is sent only as the Authorization
+  # header to api.supabase.com and is in no report, answer or log line, even
+  # when the service repeats it back; the SQL is two constants that return
+  # counts and codes, never an address, a raw log line or the client string;
+  # every returned field is checked; an hour is written once; our own
+  # server's lines are not stored. The guard pins that no other writer sends
+  # source phone or api with the job's reasons, which its "already stored"
+  # check relies on. The net guard pins that no database function, table,
+  # view, bucket or Edge Function of ours holds the words the reader's wide
+  # net reads (it would flag our own refusals), and that the app's ordinary
+  # sign-in requests are exact forms there. The file carries the "Security
+  # invariant" marker.
+  src/server/security/auth-logs.test.ts
+  src/server/security/auth-logs.guard.test.ts
+  src/server/security/auth-logs-net.guard.test.ts
+  src/app/api/cron/security-events-auth-logs/route.test.ts
+  # The refusals our own server records on its live sign-in paths (the
+  # reader above compares their count with the sign-in service's log): a
+  # refused sign-in, a refused current password and a refused set-up code are
+  # recorded after the response, never change the member's answer and never
+  # throw; the organization is found on the server, and a refusal that is not
+  # a wrong password is recorded with none. Each file carries the "Security
+  # invariant" marker.
+  src/server/security/account-events.test.ts
+  src/server/actions/auth.sign-in.security-events.test.ts
+  src/lib/auth/verify-password.security-events.test.ts
+  src/server/actions/mfa.set-up.security-events.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
