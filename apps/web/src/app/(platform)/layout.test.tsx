@@ -51,7 +51,7 @@ describe('platform console shell', () => {
       within(nav)
         .getAllByRole('link')
         .map((a) => a.textContent),
-    ).toEqual(['Organizations', 'Provision', 'Support', 'Audit']);
+    ).toEqual(['Organizations', 'Provision', 'Support', 'Audit', 'Security']);
     expect(within(banner).getByText('Platform admin')).toBeInTheDocument();
     expect(within(banner).getByText('god@stockpilotusa.com')).toBeInTheDocument();
     expect(within(banner).getByRole('link', { name: '← My workspace' })).toHaveAttribute(

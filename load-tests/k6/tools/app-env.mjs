@@ -53,6 +53,8 @@ export const OUTSIDE_SERVICE_ENV = Object.freeze([
   'EXPO_ACCESS_TOKEN',
   'UPSTASH_REDIS_REST_URL',
   'UPSTASH_REDIS_REST_TOKEN',
+  // Supabase's logs (the refused sign-ins job; api.supabase.com)
+  'SUPABASE_LOGS_READ_TOKEN',
   'VERCEL',
   'VERCEL_ENV',
   'VERCEL_URL',

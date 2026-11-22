@@ -23,6 +23,7 @@ import {
   MFA_SESSION_ENDED,
   MFA_SETUP_NOT_OPEN,
   MFA_SETUP_UNREADABLE,
+  recordRefusedSetUpCode,
   signOutThisSession,
 } from '@/lib/auth/mfa-code-attempts';
 import { contextFactorsOf } from '@/lib/auth/context-factor-list';
@@ -248,7 +249,11 @@ export async function verifyEnrollmentAction(input: {
         'Too many enrollment confirmations. Try again in a few minutes.',
       );
     }
-    const pwRes = await verifyPasswordSideChannel(session.email, parsed.data.password);
+    const pwRes = await verifyPasswordSideChannel(
+      session.email,
+      parsed.data.password,
+      session.userId,
+    );
     if (!pwRes.ok) {
       return err(
         pwRes.reason === 'invalid_password' ? 'forbidden' : 'internal_error',
@@ -305,6 +310,12 @@ export async function verifyEnrollmentAction(input: {
       code: parsed.data.code,
     });
     if (vErr) {
+      // A security event for a set-up code the sign-in service judged wrong
+      // (recordRefusedSetUpCode says why, and never throws): the answer
+      // below is the same whatever happens there.
+      if (classifyMfaCodeError(vErr) === 'refused') {
+        await recordRefusedSetUpCode(session.userId);
+      }
       return mfaCodeFailure('verify', vErr, 'actions.mfa.verify_enrollment');
     }
     const afterCode = await sessionAccountNow(supabase, session.userId);

@@ -49,14 +49,17 @@ select throws_ok(
 );
 reset role;
 
--- ── #6: an admin CAN still add a member to their own org ────────────────────
+-- ── #6: membership rows are added by the server (0473) ──────────────────────
+-- (the service-role client; authenticated holds no INSERT on the table)
 set local "request.jwt.claim.sub" to 'e6020000-0000-0000-0000-000000000002'; -- admin
 set local "request.jwt.claim.role" to 'authenticated';
 set local role to 'authenticated';
-select lives_ok(
+select throws_ok(
   $$ insert into public.organization_members (organization_id, user_id, role)
        values ('e6000000-0000-0000-0000-0000000000e6','e6060000-0000-0000-0000-000000000006','staff') $$,
-  '#6: an admin CAN still add a member to their own org (legit path preserved)'
+  '42501',
+  'permission denied for table organization_members',
+  '#6: membership rows are added by the server (0473): an admin''s own session holds no INSERT on the table'
 );
 reset role;
 

@@ -226,6 +226,10 @@ const REGISTRY: Record<string, Entry> = {
     'not_org_data',
     'Scheduled purge of old security events in every organization and none; no active organization.',
   ],
+  'app/api/cron/security-events-retention/route.ts::purge_sign_in_alerts': [
+    'not_org_data',
+    'Scheduled purge of sign-in alerts older than 90 days, of every account; no active organization.',
+  ],
   'app/api/orders/sign/route.ts::confirm_order_signature': [
     'not_org_data',
     'Public sign link: the signature token names the order; no active organization.',
@@ -335,6 +339,10 @@ const REGISTRY: Record<string, Entry> = {
   'server/loaders/orders-new-catalog.ts::rls_inv_read_warehouse_charter_ids': RO(
     "The caller's own scope sets.",
   ),
+  'server/security/auth-logs.ts::record_security_events': [
+    'not_org_data',
+    "The hourly job that counts refused sign-ins in Supabase's gateway log, behind the cron secret: the service client stores counts in fixed words with no organization (a log line names no account). No value from a request reaches the call.",
+  ],
   'server/security/events.ts::record_security_events': [
     'not_org_data',
     "The security-events recorder's flush: the service client stores counts in fixed words. An event's organization comes from the server (the sign-in email's account, the session's account), never from a row id in a request.",
@@ -344,6 +352,11 @@ const REGISTRY: Record<string, Entry> = {
     'Passes the active organization.',
   ],
   'server/services/security-events.ts::security_events_for_organization': [
+    'takes_org',
+    'Passes the active organization.',
+  ],
+  'server/services/sign-in-alerts.ts::my_sign_in_alerts': RO("The caller's own sign-in alerts."),
+  'server/services/sign-in-alerts.ts::sign_in_alerts_for_organization': [
     'takes_org',
     'Passes the active organization.',
   ],
@@ -839,13 +852,37 @@ const TABLE_WRITES: Record<string, ClassifiedWrite> = {
     'not_org_data',
     'Stamps last-used on the key row the request authenticated with.',
   ],
-  'lib/auth/login-device.ts#noteLoginDevice::user_login_devices.update': [
+  'lib/auth/login-device.ts#noteDevice::user_login_devices.update': [
     'not_org_data',
     "The signing-in person's own device row, read just above.",
   ],
-  'lib/auth/login-device.ts#noteLoginDevice::user_login_devices.delete': [
+  'lib/auth/login-device.ts#forgetDevice::user_login_devices.delete': [
     'own_row',
     "The signing-in person's own device row this call just inserted, by user id and device hash, removed when the alert could not be counted.",
+  ],
+  'lib/auth/login-device.ts#noteCountry::user_sign_in_countries.update': [
+    'own_row',
+    "The signing-in person's own country row, by user id and country: when it was last seen.",
+  ],
+  'lib/auth/login-device.ts#forgetCountry::user_sign_in_countries.delete': [
+    'own_row',
+    "The signing-in person's own country row this call just inserted, by user id and country, removed when the alert could not be counted.",
+  ],
+  'server/services/sign-in-alert-report.ts#markNotMe::sign_in_alerts.update': [
+    'own_row',
+    "One account's own sign-in alert, by its id and that account's id, marked as not theirs.",
+  ],
+  'server/services/sign-in-alert-report.ts#forgetRows::user_login_devices.delete': [
+    'own_row',
+    "The reported alert's own account: the device row the alert was about, by user id and device hash.",
+  ],
+  'server/services/sign-in-alert-report.ts#forgetRows::user_sign_in_countries.delete': [
+    'own_row',
+    "The reported alert's own account: the country row the alert was about, by user id and country.",
+  ],
+  'server/services/sign-in-alerts.ts#SignInAlertsService.confirm::sign_in_alerts.update': [
+    'own_row',
+    "The caller's own sign-in alert, by its id and the caller's id, marked as theirs.",
   ],
   'lib/books/lookup.ts#writeBookCache::book_metadata_cache.upsert': [
     'not_org_data',

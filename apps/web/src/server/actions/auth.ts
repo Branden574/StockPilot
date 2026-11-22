@@ -16,13 +16,14 @@ import {
   signOutThisSession,
 } from '@/lib/auth/mfa-code-attempts';
 import { appFactorsForCode, readPasskeyBridge } from '@/lib/auth/passkey-bridge';
+import { newSessionIdOf } from '@/lib/auth/new-session-id';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
 import { openedFromResetLink } from '@/lib/auth/reset-link-session';
 import { sessionAccountNow, type SessionAccountNow } from '@/lib/auth/session-account';
 import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { broadcastToChannel } from '@/lib/realtime/broadcast';
-import { clientIpForRecord, clientIpFromHeaders } from '@/lib/client-ip';
+import { clientIpForRecord, clientIpFromHeaders, clientPlaceFromHeaders } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createClient } from '@/lib/supabase/server';
@@ -156,6 +157,11 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
     // reason rather than a new org-visible event — org visibility of a platform
     // disable is an open policy question.
     if (isBannedUserAuthError(errAny)) {
+      // A security event with NO organization (the policy question above is
+      // unchanged: the organization's page does not show it): the sign-in
+      // service refused a password our server sent, and our own record holds
+      // every such refusal (server/security/auth-logs.ts compares the two).
+      recordSignInBlocked('sign_in_refused_other', emailKey, requestHeaders);
       noteDisabledAccountBlocked('login');
       await emitAuthAudit({
         event: 'user.sign_in_failed',
@@ -177,14 +183,19 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
     });
     // A security event for the Auth server's own limit, and for credentials
     // GoTrue judged wrong (its structured code, the same for an address that
-    // is not an account). Any other refusal (an outage, an answer this does
-    // not know) is not one. The account's organization is looked up after
-    // the response, so the answer takes the same time either way. A disabled
-    // account's sign-in (above) records nothing new.
+    // is not an account). The account's organization is looked up after
+    // the response, so the answer takes the same time either way. Any other
+    // refusal with the status of a wrong password (an unconfirmed email, a
+    // code this does not know) is recorded with no organization, as a
+    // disabled account's is above: it is not a wrong password, and our own
+    // record holds every password the sign-in service refused from our
+    // server. An outage or no answer judged nothing and is not recorded.
     if (isRateLimit) {
       recordSignInBlocked('auth_server_paused', emailKey, requestHeaders);
     } else if (errAny.code === 'invalid_credentials') {
       recordSignInBlocked('wrong_password', emailKey, requestHeaders);
+    } else if (errAny.status === 400) {
+      recordSignInBlocked('sign_in_refused_other', emailKey, requestHeaders);
     }
     if (isRateLimit) {
       return err(
@@ -239,14 +250,28 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
   // on an account that already has known devices (first device = silent
   // baseline). Fires here on the password step — i.e. even before TOTP — so a
   // stolen password used from a new device still alerts the real owner.
+  //
+  // Part 3 (sign-in alerts): the note also gets the place (Vercel's headers,
+  // only on Vercel), the session this sign-in made and the client. The session
+  // id is read from the new session's own token, verified, inside the after()
+  // callback, so nothing new runs before the answer.
   if (userId) {
     const h = requestHeaders;
     const ua = h.get('user-agent');
     // The device row and the email take the address only as an IP literal,
     // never the limiter's 'unknown' bucket.
     const deviceIp = clientIpForRecord(h);
-    after(() =>
-      noteLoginDevice({ userId, email: parsed.data.email, userAgent: ua, ip: deviceIp }),
+    const accessToken = signInData.session?.access_token ?? null;
+    after(async () =>
+      noteLoginDevice({
+        userId,
+        email: parsed.data.email,
+        userAgent: ua,
+        ip: deviceIp,
+        place: clientPlaceFromHeaders(h),
+        sessionId: await newSessionIdOf(supabase, accessToken, userId),
+        client: 'web',
+      }),
     );
   }
 
@@ -866,7 +891,7 @@ export async function changePasswordAction(
   // four flows (MFA enroll-verify, MFA recovery consume, team, email-change)
   // moved on and this one silently would not have followed any hardening
   // applied there. One implementation, one place to harden.
-  const pw = await verifyPasswordSideChannel(user.email, parsed.data.currentPassword);
+  const pw = await verifyPasswordSideChannel(user.email, parsed.data.currentPassword, user.id);
   if (!pw.ok) {
     // Keep the two failure shapes distinct: a wrong password is the user's to
     // fix, a thrown client is ours. (The inline copy let a thrown client

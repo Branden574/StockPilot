@@ -331,6 +331,21 @@ const EXPECTED: Expected[] = [
     badge: 'Email changed',
   },
   {
+    id: 'signin-signed-out',
+    subject: 'We ended every session of your StockPilot account',
+    preheader:
+      'You said a sign-in was not you, so every session of your account has been ended. Reset your password now.',
+    badge: 'Sessions ended',
+  },
+  {
+    // Fixed words: the member's own name is never in the subject.
+    id: 'signin-reported',
+    subject: 'A member reported a sign-in they did not make',
+    preheader:
+      'Every session of their account has been ended. See the sign-in alerts of your organization.',
+    badge: 'Reported sign-in',
+  },
+  {
     id: 'account-delete-code',
     subject: 'Your code to delete your StockPilot account',
     preheader:
@@ -359,15 +374,15 @@ const EXPECTED: Expected[] = [
 ];
 
 describe('es registry — shape', () => {
-  it('carries every row of ES.EMAILS (35 — 29 design-package rows + Maintenance Resolved 2026-08-06 + the 3 email-change rows 2026-08-25 + Return Update 2026-10-05 + Account Deletion Code 2026-11-15)', () => {
-    expect(ES_EMAILS).toHaveLength(35);
-    expect(EXPECTED).toHaveLength(35);
-    expect(new Set(ES_EMAILS.map((e) => e.id)).size).toBe(35);
+  it('carries every row of ES.EMAILS (37 — 29 design-package rows + Maintenance Resolved 2026-08-06 + the 3 email-change rows 2026-08-25 + Return Update 2026-10-05 + Account Deletion Code 2026-11-15 + the 2 sign-in alert answers 2026-11-21)', () => {
+    expect(ES_EMAILS).toHaveLength(37);
+    expect(EXPECTED).toHaveLength(37);
+    expect(new Set(ES_EMAILS.map((e) => e.id)).size).toBe(37);
   });
 
-  it('splits into 31 live + 2 latent + 2 concept', () => {
+  it('splits into 33 live + 2 latent + 2 concept', () => {
     const by = (st: string) => ES_EMAILS.filter((e) => e.status === st).length;
-    expect(by('live')).toBe(31);
+    expect(by('live')).toBe(33);
     expect(by('latent')).toBe(2);
     expect(by('concept')).toBe(2);
   });
@@ -375,8 +390,9 @@ describe('es registry — shape', () => {
   it('matches the family counts from the design package', () => {
     const by = (fam: string) => ES_EMAILS.filter((e) => e.family === fam).length;
     // 2 design-package rows + 3 email-change rows (2026-08-25) + the
-    // account deletion code (2026-11-15).
-    expect(by('security')).toBe(6);
+    // account deletion code (2026-11-15) + the member's "every session
+    // ended" and the admins' "reported a sign-in" (2026-11-21).
+    expect(by('security')).toBe(8);
     expect(by('invites')).toBe(4);
     expect(by('orders')).toBe(9);
     // 4 design-package rows + Return Update (returns RX-1, 2026-10-05).
@@ -461,6 +477,8 @@ describe('es registry — shape', () => {
       'support-received',
       'support-resolved',
       'account-delete-code',
+      'signin-signed-out',
+      'signin-reported',
     ]) {
       expect(asset(id), id).toBeNull();
     }

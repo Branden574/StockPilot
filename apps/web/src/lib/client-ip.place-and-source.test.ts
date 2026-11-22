@@ -27,7 +27,7 @@ vi.mock('@/lib/env', () => ({
   },
 }));
 
-import { clientPlaceFromHeaders, clientSourceHash } from './client-ip';
+import { clientPlaceFromHeaders, clientSourceHash, placeOnlyHeaders } from './client-ip';
 
 const bag = (values: Record<string, string>) => new Headers(values);
 const DAY = new Date('2026-11-21T10:15:00Z');
@@ -268,5 +268,45 @@ describe('clientSourceHash', () => {
 
   it('an invalid date: null, never a throw', () => {
     expect(clientSourceHash(at('203.0.113.7'), new Date('nope'))).toBeNull();
+  });
+});
+
+describe('placeOnlyHeaders (part 3, sign-in alerts)', () => {
+  beforeEach(() => {
+    vi.stubEnv('VERCEL', '1');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('a place already read reads back the same through clientPlaceFromHeaders', () => {
+    expect(clientPlaceFromHeaders(placeOnlyHeaders({ country: 'BR', city: 'São Paulo' }))).toEqual({
+      country: 'BR',
+      city: 'São Paulo',
+    });
+    expect(clientPlaceFromHeaders(placeOnlyHeaders({ country: 'MX', city: null }))).toEqual({
+      country: 'MX',
+      city: null,
+    });
+    expect(clientPlaceFromHeaders(placeOnlyHeaders({ country: null, city: null }))).toEqual({
+      country: null,
+      city: null,
+    });
+  });
+
+  it('names no address, so there is no source hash, and nothing else', () => {
+    const headers = placeOnlyHeaders({ country: 'MX', city: 'Tijuana' });
+    expect(clientSourceHash(headers)).toBeNull();
+    for (const name of ['x-forwarded-for', 'x-real-ip', 'user-agent', 'cookie']) {
+      expect(headers.get(name)).toBeNull();
+    }
+  });
+
+  it('off Vercel it reads as no place, like every other place there', () => {
+    vi.stubEnv('VERCEL', '');
+    expect(clientPlaceFromHeaders(placeOnlyHeaders({ country: 'MX', city: 'Tijuana' }))).toEqual({
+      country: null,
+      city: null,
+    });
   });
 });

@@ -1,5 +1,6 @@
 /**
- * StockPilot email system — SECURITY family (pw-reset, signin).
+ * StockPilot email system — SECURITY family (pw-reset, signin, and the two
+ * emails that follow a sign-in alert's "This was not me").
  *
  * Composed exclusively from the shared es component layer; markup follows
  * `docs/design/email-system/templates/archetype-security.html` (the
@@ -41,6 +42,7 @@ import {
 } from '../components';
 import { esEmailById } from '../registry';
 import { DELETE_ACCOUNT_NEWEST_CODE_ONLY_COPY } from '@/components/settings/delete-account-copy';
+import { NOT_ME_WORDS, reportedMemberName } from '@/lib/auth/sign-in-alert-words';
 import { ES_LIGHT, ES_MONO_INLINE, esAssetUrl } from '../tokens';
 
 const L = ES_LIGHT;
@@ -214,13 +216,56 @@ export interface SigninAlertEmailParams {
    * NEW_DEVICE_ALERTS_PER_ACCOUNT): one more sentence says so, in both parts.
    */
   lastForADay?: boolean;
+  /**
+   * Where the sign-in came from, in words ("Tijuana, Mexico", or the country
+   * alone; lib/auth/sign-in-alert-words.ts). A Location row, said to be
+   * approximate; left out when unknown. Part 3.
+   */
+  location?: string | null;
+  /** What was new: the device (the default), the country, or both. Part 3. */
+  kind?: { newDevice: boolean; newCountry: boolean };
+  /**
+   * The signed "This was not me" link (lib/auth/sign-in-alert-url.ts). With
+   * it, the email's primary button; without it (the alert's record could not
+   * be written), the buttons are as before. Part 3.
+   */
+  notMeUrl?: string | null;
 }
 
-/** The sentence on the email that reaches the 24-hour count (text part). */
+/** The primary button of a sign-in alert email that carries its link (part 3). */
+export const SIGNIN_ALERT_NOT_ME_LABEL = 'This was not me';
+
+/** "New device", "New country" or both, for the status pill and the text part. */
+function signinKindWords(kind: { newDevice: boolean; newCountry: boolean }): string {
+  if (kind.newDevice && kind.newCountry) return 'New device and new country';
+  if (kind.newCountry) return 'New country';
+  return 'New device';
+}
+
+/** How the body says what was new (plain text; the HTML escapes its apostrophe). */
+function signinKindSentence(kind: { newDevice: boolean; newCountry: boolean }): string {
+  if (kind.newDevice && kind.newCountry) {
+    return 'from a device and a country we haven’t seen on this account before';
+  }
+  if (kind.newCountry) return 'from a country we haven’t seen on this account before';
+  return 'from a device we haven’t seen before';
+}
+
+/** The sentence on the email that reaches the 24-hour count (text part), for a new device. */
 export const SIGNIN_ALERT_LAST_FOR_A_DAY_TEXT =
   'Further new-device sign-ins won’t send more emails for up to 24 hours, so if these sign-ins weren’t you, change your password and review your devices under Active sessions in your security settings now.';
-const SIGNIN_ALERT_LAST_FOR_A_DAY_HTML =
-  'Further new-device sign-ins won&rsquo;t send more emails for up to 24 hours, so if these sign-ins weren&rsquo;t you, change your password and review your devices under Active sessions in your security settings now.';
+
+/**
+ * The same sentence as the email prints it. The count is of sign-in alerts of
+ * either kind, so an alert that is for a new country (alone, or with a new
+ * device) says "sign-in alerts": "new-device sign-ins" would be untrue of it
+ * (review 2, finding 5). A new device alone keeps the sentence it had.
+ */
+function lastForADaySentence(kind: { newDevice: boolean; newCountry: boolean }): string {
+  return kind.newCountry
+    ? SIGNIN_ALERT_LAST_FOR_A_DAY_TEXT.replace('Further new-device sign-ins', 'Further sign-in alerts')
+    : SIGNIN_ALERT_LAST_FOR_A_DAY_TEXT;
+}
 
 export function renderSigninAlertEmail(params: SigninAlertEmailParams): RenderedEsEmail {
   const def = esEmailById('signin');
@@ -230,14 +275,21 @@ export function renderSigninAlertEmail(params: SigninAlertEmailParams): Rendered
   const device = escapeHtml(params.device);
   const when = escapeHtml(params.when);
   const ip = params.ip && params.ip !== 'unknown' ? escapeHtml(params.ip) : 'Unknown';
+  const kind = params.kind ?? { newDevice: true, newCountry: false };
+  const kindWords = signinKindWords(kind);
+  const sentence = signinKindSentence(kind);
+  const location = params.location?.trim() || null;
+  const notMeUrl = params.notMeUrl?.trim() || null;
+  // The registry's own sample summary names the place next to the device.
+  const summary = location ? `${params.device} near ${location}` : params.device;
 
   const subject = def.subject({});
-  const preheader = def.preheader({ summary: params.device, time: params.when });
+  const preheader = def.preheader({ summary, time: params.when });
 
   const styles = { darkPills: ['sec' as const], mobileExtras: MOBILE_GRID_RULES };
   const html = emailShell({
     title: escapeHtml(subject),
-    preheader: def.preheader({ summary: device, time: when }),
+    preheader: def.preheader({ summary: escapeHtml(summary), time: when }),
     preheaderPad: 6,
     styles,
     rows: [
@@ -245,10 +297,13 @@ export function renderSigninAlertEmail(params: SigninAlertEmailParams): Rendered
       section(
         '36px 36px 24px',
         [
-          statusPill({ variant: 'sec', label: 'Security &middot; New sign-in' }),
+          statusPill({
+            variant: 'sec',
+            label: params.kind ? `Security &middot; ${kindWords}` : 'Security &middot; New sign-in',
+          }),
           headline({ lead: 'New sign-in to your account.', turn: 'Was this you?' }),
           bodyText(
-            `${greeting(params.firstName)}— <strong class="ink" style="font-weight:600;color:${L.ink}">${email}</strong> was just signed in from a device we haven&rsquo;t seen before. If this was you, there&rsquo;s nothing to do.`,
+            `${greeting(params.firstName)}— <strong class="ink" style="font-weight:600;color:${L.ink}">${email}</strong> was just signed in ${sentence.replace(/’/g, '&rsquo;')}. If this was you, there&rsquo;s nothing to do.`,
           ),
         ].join('\n      '),
       ),
@@ -277,6 +332,9 @@ export function renderSigninAlertEmail(params: SigninAlertEmailParams): Rendered
               { label: 'Account', valueHtml: email },
             ],
           ],
+          ...(location
+            ? { span: { label: 'Location', valueHtml: `${escapeHtml(location)} (approximate)` } }
+            : {}),
         }),
       ),
       section(
@@ -284,23 +342,37 @@ export function renderSigninAlertEmail(params: SigninAlertEmailParams): Rendered
         banner({
           tone: 'err',
           titleHtml: 'Don&rsquo;t recognize this?',
-          bodyHtml:
-            'Secure your account right away — you can sign out all devices and reset your password from your security settings.',
+          bodyHtml: notMeUrl
+            ? `Press &ldquo;This was not me&rdquo; below. ${NOT_ME_WORDS.whatItDoes} ${NOT_ME_WORDS.thenReset}`
+            : 'Secure your account right away — you can sign out all devices and reset your password from your security settings.',
         }),
       ),
       ...(params.lastForADay
-        ? [section('0 36px 20px', bodyText(SIGNIN_ALERT_LAST_FOR_A_DAY_HTML))]
+        ? [section('0 36px 20px', bodyText(lastForADaySentence(kind).replace(/’/g, '&rsquo;')))]
         : []),
       section(
         '0 36px 30px',
-        ctaRow({
-          primary: { label: def.cta, href: escapeHtml(params.securityUrl) },
-          secondary: { label: def.cta2!, href: escapeHtml(params.resetUrl) },
-        }),
+        notMeUrl
+          ? ctaRow({
+              primary: { label: SIGNIN_ALERT_NOT_ME_LABEL, href: escapeHtml(notMeUrl) },
+              secondary: { label: def.cta, href: escapeHtml(params.securityUrl) },
+              noteHtml:
+                'This button works for 7 days. It opens a page where you can end every session of your account.',
+            })
+          : ctaRow({
+              primary: { label: def.cta, href: escapeHtml(params.securityUrl) },
+              secondary: { label: def.cta2!, href: escapeHtml(params.resetUrl) },
+            }),
       ),
       footer({
         kind: 'ess',
-        reasonHtml: `Sent to <span class="ink2" style="color:${L.ink2};text-decoration:underline">${email}</span> when a new device signs in — a core account-safety notice.`,
+        reasonHtml: `Sent to <span class="ink2" style="color:${L.ink2};text-decoration:underline">${email}</span> ${
+          kind.newCountry && !kind.newDevice
+            ? 'when your account signs in from a new country'
+            : kind.newCountry
+              ? 'when a new device signs in from a new country'
+              : 'when a new device signs in'
+        } — a core account-safety notice.`,
         urls,
       }),
     ].join('\n    '),
@@ -310,15 +382,281 @@ export function renderSigninAlertEmail(params: SigninAlertEmailParams): Rendered
   const text = [
     'New sign-in to your StockPilot account.',
     '',
-    `${params.email} was just signed in from a device we haven’t seen before. If this was you, there’s nothing to do.`,
+    `${params.email} was just signed in ${sentence}. If this was you, there’s nothing to do.`,
     '',
     `Device:      ${params.device}`,
+    ...(location ? [`Location:    ${location} (approximate)`] : []),
     `IP address:  ${params.ip && params.ip !== 'unknown' ? params.ip : 'Unknown'}`,
     `Date & time: ${params.when}`,
+    ...(params.kind ? [`Why:         ${kindWords}`] : []),
     '',
-    `Don’t recognize this? Secure your account right away — sign out all devices and reset your password: ${params.securityUrl}`,
-    `Reset password: ${params.resetUrl}`,
-    ...(params.lastForADay ? ['', SIGNIN_ALERT_LAST_FOR_A_DAY_TEXT] : []),
+    ...(notMeUrl
+      ? [
+          `Don’t recognize this? This was not me (ends every session of your account): ${notMeUrl}`,
+          NOT_ME_WORDS.thenReset,
+          'This link works for 7 days.',
+          `Secure my account: ${params.securityUrl}`,
+        ]
+      : [
+          `Don’t recognize this? Secure your account right away — sign out all devices and reset your password: ${params.securityUrl}`,
+          `Reset password: ${params.resetUrl}`,
+        ]),
+    ...(params.lastForADay ? ['', lastForADaySentence(kind)] : []),
+  ].join('\n');
+
+  return { id: def.id, subject, preheader, html, text, from: def.from };
+}
+
+// ── signin-signed-out (part 3) ──────────────────────────────────────
+
+export interface SigninSignedOutEmailParams {
+  /** Recipient: the account's own address. */
+  email: string;
+  firstName?: string | null;
+  /** The member's own words for the device of the sign-in they reported. */
+  device: string;
+  /** Where that sign-in came from, in words, or null when unknown. */
+  location?: string | null;
+  /** When that sign-in happened, preformatted ("Nov 20, 2026, 3:30 PM UTC"). */
+  when: string;
+  /** The password-reset request page (/reset). */
+  resetUrl: string;
+  appUrl?: string;
+  /**
+   * At least one owner or admin of the member's organization was told. The
+   * email says so only then: a sole owner, an account in no organization and
+   * a failed read are all false (review 1, finding 8).
+   */
+  adminsTold?: boolean;
+}
+
+/**
+ * After the member's "This was not me" (server/services/sign-in-alert-report.ts):
+ * every session of the account has been ended. One button, to reset the
+ * password, because a password someone else knows still signs in. Sent once
+ * per alert.
+ *
+ * THE WORDS PROMISE WHAT HAPPENS AND NO MORE (review 1, finding 1;
+ * NOT_ME_WORDS in lib/auth/sign-in-alert-words.ts): the sessions are ended, a
+ * device that is already open can keep working until its current pass
+ * expires, and the reset is what closes the door. Never "signed out
+ * everywhere" or "right away".
+ */
+export function renderSigninSignedOutEmail(params: SigninSignedOutEmailParams): RenderedEsEmail {
+  const def = esEmailById('signin-signed-out');
+  const appUrl = params.appUrl ?? DEFAULT_APP_URL;
+  const urls = marketingUrls(appUrl);
+  const email = escapeHtml(params.email);
+  const device = escapeHtml(params.device);
+  const when = escapeHtml(params.when);
+  const location = params.location?.trim() || null;
+  const resetUrl = escapeHtml(params.resetUrl);
+  // Plain words with nothing to escape; the same in both parts.
+  const closing = params.adminsTold === true
+    ? `${NOT_ME_WORDS.resetNow} ${NOT_ME_WORDS.adminsTold}`
+    : NOT_ME_WORDS.resetNow;
+
+  const subject = def.subject({});
+  const preheader = def.preheader({});
+
+  const styles = { darkPills: ['sec' as const], darkCards: '.card', mobileExtras: MOBILE_GRID_RULES };
+  const html = emailShell({
+    title: escapeHtml(subject),
+    preheader: escapeHtml(preheader),
+    preheaderPad: 6,
+    styles,
+    rows: [
+      brandStrip({ tag: def.tag }),
+      section(
+        '36px 36px 24px',
+        [
+          statusPill({ variant: 'sec', label: 'Security &middot; Sessions ended' }),
+          headline({ lead: NOT_ME_WORDS.sessionsEnded, turn: 'Reset your password now.' }),
+          bodyText(
+            `${greeting(params.firstName)}— you told us a sign-in to <strong class="ink" style="font-weight:600;color:${L.ink}">${email}</strong> was not you. ${NOT_ME_WORDS.sessionsEnded} That covers the web and the phone app. ${NOT_ME_WORDS.openDevice}`,
+          ),
+        ].join('\n      '),
+      ),
+      section(
+        '0 36px 24px',
+        detailGrid({
+          rows: [
+            [
+              { label: 'Device', valueHtml: device, strong: true },
+              { label: 'Date &amp; time', valueHtml: when, strong: true },
+            ],
+          ],
+          ...(location
+            ? { span: { label: 'Location', valueHtml: `${escapeHtml(location)} (approximate)` } }
+            : {}),
+        }),
+      ),
+      section(
+        '0 36px 20px',
+        banner({
+          tone: 'err',
+          titleHtml: 'Your password still works',
+          bodyHtml: closing,
+        }),
+      ),
+      section(
+        '0 36px 30px',
+        [
+          ctaRow({ primary: { label: def.cta, href: resetUrl } }),
+          linkFallback(resetUrl, { marginTop: 12 }),
+        ].join('\n      '),
+      ),
+      footer({
+        kind: 'ess',
+        reasonHtml: `Sent to <span class="ink2" style="color:${L.ink2};text-decoration:underline">${email}</span> because you said a sign-in to this StockPilot account was not you — a core account-safety notice.`,
+        urls,
+      }),
+    ].join('\n    '),
+  });
+  assertEmailWeight(html);
+
+  const text = [
+    'Every session of your StockPilot account has been ended.',
+    '',
+    `${greetingText(params.firstName)}— you told us a sign-in to ${params.email} was not you. ${NOT_ME_WORDS.sessionsEnded} That covers the web and the phone app. ${NOT_ME_WORDS.openDevice}`,
+    '',
+    `Device:      ${params.device}`,
+    ...(location ? [`Location:    ${location} (approximate)`] : []),
+    `Date & time: ${params.when}`,
+    '',
+    closing,
+    `${def.cta}: ${params.resetUrl}`,
+  ].join('\n');
+
+  return { id: def.id, subject, preheader, html, text, from: def.from };
+}
+
+// ── signin-reported (part 3) ────────────────────────────────────────
+
+export interface SigninReportedEmailParams {
+  /** Recipient: an owner or admin of the organization. */
+  adminEmail: string;
+  adminFirstName?: string | null;
+  /**
+   * The member's own profile name, or null when they have none. The member
+   * chooses it, so it is in the BODY only, cut and cleaned (reportedMemberName),
+   * next to memberEmail; it is never in the subject (review 1, finding 7).
+   */
+  memberName: string | null;
+  /** The member's sign-in address, which the member cannot edit. */
+  memberEmail: string;
+  organizationName: string;
+  /** The device FAMILY ("Chrome on macOS", "StockPilot app on iPhone"), never the member's label. */
+  deviceFamily: string;
+  location?: string | null;
+  /** When the reported sign-in happened, preformatted. */
+  when: string;
+  /** The organization's list of sign-in alerts. */
+  listUrl: string;
+  appUrl?: string;
+}
+
+/**
+ * To each owner and admin of an organization the member belongs to, after the
+ * member's "This was not me": who, which kind of device (the family only, as
+ * the organization's activity names a device), where and when, and a link to
+ * the organization's list of sign-in alerts. Managers and staff are never
+ * sent it (server/services/sign-in-alert-report.ts decides who is).
+ */
+export function renderSigninReportedEmail(params: SigninReportedEmailParams): RenderedEsEmail {
+  const def = esEmailById('signin-reported');
+  const appUrl = params.appUrl ?? DEFAULT_APP_URL;
+  const urls = marketingUrls(appUrl);
+  // Who reported it, for the body: the name next to the sign-in address, or
+  // the address alone, or fixed words when neither is known.
+  const name = reportedMemberName(params.memberName);
+  const address = params.memberEmail.trim();
+  const whoText = name && address ? `${name} (${address})` : name || address || 'A member';
+  const strong = (inner: string) =>
+    `<strong class="ink" style="font-weight:600;color:${L.ink}">${escapeHtml(inner)}</strong>`;
+  const whoHtml = name && address ? `${strong(name)} (${escapeHtml(address)})` : strong(name || address || 'A member');
+  // Whom to talk to: the name when there is one, else "them".
+  const talkTo = name ?? 'them';
+  const memberEmail = escapeHtml(address);
+  const adminEmail = escapeHtml(params.adminEmail);
+  const organization = escapeHtml(params.organizationName);
+  const deviceFamily = escapeHtml(params.deviceFamily);
+  const when = escapeHtml(params.when);
+  const location = params.location?.trim() || null;
+  const listUrl = escapeHtml(params.listUrl);
+
+  const subject = def.subject({});
+  const preheader = def.preheader({});
+
+  const styles = { darkPills: ['sec' as const], mobileExtras: MOBILE_GRID_RULES };
+  const html = emailShell({
+    title: escapeHtml(subject),
+    preheader: escapeHtml(preheader),
+    preheaderPad: 6,
+    styles,
+    rows: [
+      brandStrip({ tag: def.tag }),
+      section(
+        '36px 36px 24px',
+        [
+          statusPill({ variant: 'sec', label: 'Security &middot; Reported sign-in' }),
+          headline({ lead: 'A member reported a sign-in.', turn: 'Their sessions were ended.' }),
+          bodyText(
+            `${greeting(params.adminFirstName)}— ${whoHtml} told StockPilot that a sign-in to their account was not them. ${NOT_ME_WORDS.theirSessionsEnded} ${NOT_ME_WORDS.openDevice}`,
+          ),
+        ].join('\n      '),
+      ),
+      section(
+        '0 36px 24px',
+        detailGrid({
+          rows: [
+            [
+              { label: 'Device', valueHtml: deviceFamily, strong: true },
+              { label: 'Date &amp; time', valueHtml: when, strong: true },
+            ],
+            [
+              { label: 'Member', valueHtml: memberEmail },
+              { label: 'Organization', valueHtml: organization },
+            ],
+          ],
+          ...(location
+            ? { span: { label: 'Location', valueHtml: `${escapeHtml(location)} (approximate)` } }
+            : {}),
+        }),
+      ),
+      section(
+        '0 36px 20px',
+        banner({
+          tone: 'err',
+          titleHtml: 'What you can do',
+          bodyHtml: `Talk to ${escapeHtml(talkTo)} and make sure they reset their password now. That is what closes the door. Look at the sign-in alerts of your organization for other sign-ins nobody expects.`,
+        }),
+      ),
+      section(
+        '0 36px 30px',
+        ctaRow({ primary: { label: def.cta, href: listUrl } }),
+      ),
+      footer({
+        kind: 'ess',
+        reasonHtml: `Sent to <span class="ink2" style="color:${L.ink2};text-decoration:underline">${adminEmail}</span> because you are an owner or admin of ${organization} — a core account-safety notice.`,
+        urls,
+      }),
+    ].join('\n    '),
+  });
+  assertEmailWeight(html);
+
+  const text = [
+    `${subject}.`,
+    '',
+    `${greetingText(params.adminFirstName)}— ${whoText} told StockPilot that a sign-in to their account was not them. ${NOT_ME_WORDS.theirSessionsEnded} ${NOT_ME_WORDS.openDevice}`,
+    '',
+    `Device:       ${params.deviceFamily}`,
+    ...(location ? [`Location:     ${location} (approximate)`] : []),
+    `Date & time:  ${params.when}`,
+    `Organization: ${params.organizationName}`,
+    '',
+    `What you can do: talk to ${talkTo} and make sure they reset their password now. That is what closes the door. Look at the sign-in alerts of your organization for other sign-ins nobody expects.`,
+    `${def.cta}: ${params.listUrl}`,
   ].join('\n');
 
   return { id: def.id, subject, preheader, html, text, from: def.from };

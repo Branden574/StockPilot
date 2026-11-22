@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import { DELETE_ACCOUNT_NEWEST_CODE_ONLY_COPY } from '@/components/settings/delete-account-copy';
 
+import { NOT_ME_WORDS } from '@/lib/auth/sign-in-alert-words';
+
 import { esEmailById } from '../registry';
 import { ES_MAX_HTML_BYTES } from '../tokens';
 import {
@@ -455,5 +457,291 @@ describe('account-delete-code (renderAccountDeleteCodeEmail)', () => {
     const res = renderAccountDeleteCodeEmail({ email: 'a<b>@example.test', code: '000001' });
     expect(res.html).not.toContain('a<b>@example.test');
     expect(res.html).toContain('a&lt;b&gt;@example.test');
+  });
+});
+
+// ── sign-in alerts, part 3 (2026-11-21) ─────────────────────────────
+
+import {
+  renderSigninReportedEmail,
+  renderSigninSignedOutEmail,
+  SIGNIN_ALERT_NOT_ME_LABEL,
+} from './security';
+
+const NOT_ME_URL =
+  'https://stockpilotusa.com/sign-in-alert?a=0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d&i=20261120&t=' +
+  'x'.repeat(43);
+
+describe('signin (part 3): the place, which kind it is, and "This was not me"', () => {
+  const base = {
+    email: 'member@example.test',
+    device: 'Chrome on macOS',
+    ip: SEED.ip,
+    when: SEED.when,
+    securityUrl: SEED.securityUrl,
+    resetUrl: `${SEED.appUrl}/reset`,
+    appUrl: SEED.appUrl,
+  };
+
+  it('a Location row when the place is known, said to be approximate, in both parts', () => {
+    const res = renderSigninAlertEmail({ ...base, location: 'Tijuana, Mexico' });
+    expect(res.html).toContain('>Location</div>');
+    expect(res.html).toContain('Tijuana, Mexico (approximate)');
+    expect(res.text).toContain('Location:    Tijuana, Mexico (approximate)');
+    assertWeight(res);
+  });
+
+  it('no Location row when the place is not known', () => {
+    for (const location of [undefined, null, '', '   ']) {
+      const res = renderSigninAlertEmail({ ...base, location });
+      expect(res.html).not.toContain('>Location</div>');
+      expect(res.text).not.toContain('Location:');
+    }
+  });
+
+  it('the preheader names the place next to the device, as the registry sample does', () => {
+    const def = esEmailById('signin');
+    const res = renderSigninAlertEmail({ ...base, location: 'Tijuana, Mexico' });
+    expect(res.preheader).toBe(
+      def.preheader({ summary: 'Chrome on macOS near Tijuana, Mexico', time: SEED.when }),
+    );
+  });
+
+  it.each([
+    [{ newDevice: true, newCountry: false }, 'from a device we haven’t seen before', 'New device'],
+    [{ newDevice: false, newCountry: true }, 'from a country we haven’t seen on this account before', 'New country'],
+    [
+      { newDevice: true, newCountry: true },
+      'from a device and a country we haven’t seen on this account before',
+      'New device and new country',
+    ],
+  ])('says which kind of alert it is: %j', (kind, sentence, pill) => {
+    const res = renderSigninAlertEmail({ ...base, kind });
+    expect(res.text).toContain(`${base.email} was just signed in ${sentence}.`);
+    expect(res.html).toContain(`Security &middot; ${pill}`);
+    expect(res.text).toContain(`Why:         ${pill}`);
+  });
+
+  it('the email that reaches the 24-hour count, for a new COUNTRY: it says "sign-in alerts", not "new-device sign-ins"', () => {
+    const sentence =
+      'Further sign-in alerts won’t send more emails for up to 24 hours, so if these sign-ins weren’t you, change your password and review your devices under Active sessions in your security settings now.';
+    for (const kind of [
+      { newDevice: false, newCountry: true },
+      { newDevice: true, newCountry: true },
+    ]) {
+      const res = renderSigninAlertEmail({ ...base, kind, lastForADay: true });
+      expect(res.text).toContain(sentence);
+      expect(res.html).toContain(sentence.replace(/’/g, '&rsquo;'));
+      expect(res.text).not.toContain('Further new-device sign-ins');
+      expect(res.html).not.toContain('Further new-device sign-ins');
+      assertWeight(res);
+    }
+    // A new device alone keeps the sentence it had.
+    const device = renderSigninAlertEmail({
+      ...base,
+      kind: { newDevice: true, newCountry: false },
+      lastForADay: true,
+    });
+    expect(device.text).toContain(SIGNIN_ALERT_LAST_FOR_A_DAY_TEXT);
+    expect(device.text).toContain('Further new-device sign-ins');
+  });
+
+  it('with the link: a primary "This was not me" button, and "Secure my account" kept beside it', () => {
+    const res = renderSigninAlertEmail({ ...base, notMeUrl: NOT_ME_URL });
+    expect(SIGNIN_ALERT_NOT_ME_LABEL).toBe('This was not me');
+    expect(res.html).toContain('>This was not me &rarr;</a>');
+    // In markup the query's & is written &amp; (the browser reads it back as &).
+    expect(res.html).toContain(`href="${NOT_ME_URL.replace(/&/g, '&amp;')}"`);
+    expect(res.html).toContain('>Secure my account</a>');
+    expect(res.html).toContain('This button works for 7 days. It opens a page where you can end every session of your account.');
+    expect(res.html).toContain('It ends every session of your account. Then reset your password. That is what closes the door.');
+    expect(res.text).toContain(`This was not me (ends every session of your account): ${NOT_ME_URL}`);
+    // It promises no more than happens (review 1, finding 1).
+    for (const part of [res.html, res.text]) {
+      expect(part).not.toMatch(/signs you out|right away|every device/);
+    }
+    expect(res.text).toContain(`Secure my account: ${base.securityUrl}`);
+    assertWeight(res);
+  });
+
+  it('without the link (its record could not be written): the old buttons, and no "This was not me"', () => {
+    const res = renderSigninAlertEmail({ ...base, notMeUrl: null });
+    expect(res.html).not.toContain('This was not me');
+    expect(res.text).not.toContain('This was not me');
+    expect(res.html).toContain('>Secure my account &rarr;</a>');
+    expect(res.html).toContain('>Reset password</a>');
+  });
+
+  it('escapes a hostile place', () => {
+    const res = renderSigninAlertEmail({ ...base, location: '<script>x</script>, Mexico' });
+    expect(res.html).not.toContain('<script>x');
+    expect(res.html).toContain('&lt;script&gt;x&lt;/script&gt;, Mexico');
+  });
+});
+
+describe('signin-signed-out (renderSigninSignedOutEmail): the member, after "This was not me"', () => {
+  const render = (extra: { adminsTold?: boolean } = {}) =>
+    renderSigninSignedOutEmail({
+      email: 'member@example.test',
+      firstName: 'Robin',
+      device: 'StockPilot app on iPhone 15 Pro (iOS 18.1)',
+      location: 'Tijuana, Mexico',
+      when: 'Nov 20, 2026, 3:30 PM UTC',
+      resetUrl: 'https://stockpilotusa.com/reset',
+      appUrl: SEED.appUrl,
+      ...extra,
+    });
+
+  it('says every session ended and asks for a new password, with one button', () => {
+    const res = render();
+    assertNoLeakage(res);
+    assertWeight(res);
+    assertEssentialFooter(res.html);
+    expect(res.subject).toBe('We ended every session of your StockPilot account');
+    expect(res.html).toContain('Every session of your account has been ended.');
+    expect(res.html).toContain('Reset your password now.');
+    expect(res.html).toContain('>Reset my password &rarr;</a>');
+    expect(res.html).toContain('href="https://stockpilotusa.com/reset"');
+    expect(res.html).toContain('StockPilot app on iPhone 15 Pro (iOS 18.1)');
+    expect(res.html).toContain('Tijuana, Mexico (approximate)');
+    expect(res.text).toContain('Reset my password: https://stockpilotusa.com/reset');
+  });
+
+  it('promises what happens and no more: an open device keeps its pass for a short while, and the reset closes the door (finding 1)', () => {
+    const res = render();
+    for (const part of [res.html, res.text]) {
+      expect(part).toContain(NOT_ME_WORDS.sessionsEnded);
+      expect(part).toContain(NOT_ME_WORDS.openDevice);
+      expect(part).toContain('for a short while (until its current pass expires)');
+      expect(part).not.toMatch(/hour at most/);
+      expect(part).toContain(NOT_ME_WORDS.resetNow);
+      expect(part).not.toMatch(/signed out (on|of)|signed you out|every device|everywhere|right away/i);
+    }
+    expect(`${res.subject} ${res.preheader}`).not.toMatch(/signed you out|everywhere|every device/i);
+  });
+
+  it('says the owners and admins were told only when one was (finding 8)', () => {
+    const told = render({ adminsTold: true });
+    expect(told.html).toContain(NOT_ME_WORDS.adminsTold);
+    expect(told.text).toContain(NOT_ME_WORDS.adminsTold);
+    for (const res of [render({ adminsTold: false }), render()]) {
+      expect(res.html).not.toMatch(/owners and admins/);
+      expect(res.text).not.toMatch(/owners and admins/);
+    }
+  });
+
+  it('subject and preheader are byte-equal to the registry', () => {
+    const def = esEmailById('signin-signed-out');
+    const res = render();
+    expect(res.subject).toBe(def.subject({}));
+    expect(res.preheader).toBe(def.preheader({}));
+    expect(res.from).toBe('StockPilot Security <security@stockpilotusa.com>');
+    expect(def.category).toBe('ess');
+  });
+
+  it('no place: no Location row', () => {
+    const res = renderSigninSignedOutEmail({
+      email: 'member@example.test',
+      device: 'Chrome on macOS',
+      location: null,
+      when: 'Nov 20, 2026, 3:30 PM UTC',
+      resetUrl: 'https://stockpilotusa.com/reset',
+    });
+    expect(res.html).not.toContain('>Location</div>');
+    expect(res.html).toContain('Hi —');
+  });
+});
+
+describe('signin-reported (renderSigninReportedEmail): owners and admins', () => {
+  const SUBJECT = 'A member reported a sign-in they did not make';
+  const render = (name: string | null = 'Robin Sample') =>
+    renderSigninReportedEmail({
+      adminEmail: 'admin@example.test',
+      adminFirstName: 'Sam',
+      memberName: name,
+      memberEmail: 'member@example.test',
+      organizationName: 'Sample Org',
+      deviceFamily: 'StockPilot app on iPhone',
+      location: 'Mexico',
+      when: 'Nov 20, 2026, 3:30 PM UTC',
+      listUrl: 'https://stockpilotusa.com/dashboard/settings/security/sign-ins',
+      appUrl: SEED.appUrl,
+    });
+
+  it('names the member in the body and the device family, and links to the list', () => {
+    const res = render();
+    assertNoLeakage(res);
+    assertWeight(res);
+    assertEssentialFooter(res.html);
+    expect(res.subject).toBe(SUBJECT);
+    expect(res.html).toContain('Robin Sample</strong> (member@example.test)');
+    expect(res.text).toContain('Robin Sample (member@example.test) told StockPilot');
+    expect(res.html).toContain('StockPilot app on iPhone');
+    expect(res.html).toContain('Mexico (approximate)');
+    expect(res.html).toContain('>Review sign-in alerts &rarr;</a>');
+    expect(res.html).toContain('href="https://stockpilotusa.com/dashboard/settings/security/sign-ins"');
+    expect(res.html).toContain('because you are an owner or admin of Sample Org');
+    expect(res.text).toContain('Review sign-in alerts: https://stockpilotusa.com/dashboard/settings/security/sign-ins');
+  });
+
+  it('subject and preheader are byte-equal to the registry', () => {
+    const def = esEmailById('signin-reported');
+    const res = render();
+    expect(res.subject).toBe(def.subject({}));
+    expect(res.preheader).toBe(def.preheader({}));
+    expect(res.from).toBe('StockPilot Security <security@stockpilotusa.com>');
+  });
+
+  it('the member’s name never leads: the subject, the title, the preheader and the first line are fixed words (finding 7)', () => {
+    const chosen = 'Sign in at sample.example.test to keep your account';
+    const res = render(chosen);
+    expect(res.subject).toBe(SUBJECT);
+    expect(res.preheader).not.toContain('sample.example.test');
+    expect(res.html).toContain(`<title>${SUBJECT}</title>`);
+    expect(res.text.split('\n')[0]).toBe(`${SUBJECT}.`);
+    // In the body, next to the sign-in address.
+    expect(res.html).toContain(`${chosen}</strong> (member@example.test)`);
+    expect(res.text).toContain(`${chosen} (member@example.test)`);
+  });
+
+  it('the name in the body is cut to 80 characters and loses control and invisible characters', () => {
+    const res = render(`Ro\u200Bbin\u202E\nSample\u0007 ${'R'.repeat(200)}`);
+    const clean = `Robin Sample ${'R'.repeat(200)}`.slice(0, 80);
+    expect(res.html).toContain(`${clean}</strong> (member@example.test)`);
+    expect(res.text).toContain(`${clean} (member@example.test)`);
+    for (const part of [res.html, res.text]) {
+      expect(part).not.toContain('R'.repeat(81));
+      expect(part).not.toMatch(/[\u0007\u200B\u202E]/);
+    }
+    expect(res.subject).toBe(SUBJECT);
+  });
+
+  it('escapes the member’s name in the markup', () => {
+    const res = render('<b>Robin</b>\nSample');
+    expect(res.html).not.toContain('<b>Robin');
+    expect(res.html).toContain('&lt;b&gt;Robin&lt;/b&gt; Sample');
+    expect(res.subject).toBe(SUBJECT);
+  });
+
+  it('a member with no name is named by the sign-in address alone', () => {
+    for (const none of [null, '', '  \u200B ']) {
+      const res = render(none);
+      expect(res.subject).toBe(SUBJECT);
+      expect(res.html).toContain('member@example.test</strong> told StockPilot');
+      expect(res.text).toContain('member@example.test told StockPilot');
+      expect(res.text).toContain('talk to them');
+    }
+  });
+
+  it('promises what happens and no more (finding 1)', () => {
+    const res = render();
+    for (const part of [res.html, res.text]) {
+      expect(part).toContain(NOT_ME_WORDS.theirSessionsEnded);
+      expect(part).toContain(NOT_ME_WORDS.openDevice);
+      expect(part).not.toMatch(/hour at most/);
+      expect(part).toContain('reset their password now');
+      expect(part).not.toMatch(/signed (them )?out|every device|everywhere|right away/i);
+    }
+    expect(res.preheader).not.toMatch(/signed them out|every device/);
   });
 });

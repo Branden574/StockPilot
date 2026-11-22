@@ -47,6 +47,15 @@ export type AuditEvent =
    * (security/monitors.ts) to spot a sustained export-abuse pattern.
    */
   | 'security.export_rate_limited'
+  /**
+   * Part 3 (sign-in alerts): a member said a sign-in alert was not them
+   * (server/services/sign-in-alert-report.ts). One row per organization the
+   * member belongs to (accepted, not a support act-as seat, at most 5), or one
+   * with no organization; written by the member. metadata {entity_type
+   * 'sign_in_alert', entity_id, new_device, new_country, client, via ('link' or
+   * 'signed_in'), signed_out}. Every session of the account was ended.
+   */
+  | 'security.sign_in_reported'
   | 'inventory.item.created'
   | 'inventory.item.updated'
   | 'inventory.item.duplicated'

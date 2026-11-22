@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { headers } from 'next/headers';
 
 import { SESSION_ENDED_NOTICE } from '@/lib/auth/auth-page-notices';
+import { requestHeadersOrNull } from '@/lib/auth/request-headers';
 import { sessionAccountNow } from '@/lib/auth/session-account';
 import { clientIpFromHeaders } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
@@ -195,12 +196,23 @@ export async function signOutThisSession(supabase: MfaClient): Promise<void> {
   }
 }
 
-/** The request's headers, or null outside a request: never a throw. */
-async function requestHeadersOrNull(): Promise<Awaited<ReturnType<typeof headers>> | null> {
+/**
+ * A SECURITY EVENT FOR A SET-UP CODE THE SIGN-IN SERVICE JUDGED WRONG (the
+ * first code of an authenticator being set up, server/actions/mfa.ts), in
+ * the account's organization, looked up after the response. Its own reason,
+ * wrong_setup_code, not wrong_code: nothing that protects the account is
+ * being guessed there. It is recorded so that our own record holds every
+ * code our server sent and the service refused: the reader of that service's
+ * log (server/security/auth-logs.ts) compares the two counts.
+ *
+ * Never the caller's problem: it never throws, waits only for the request's
+ * headers (already in memory), and changes nothing the member is answered.
+ */
+export async function recordRefusedSetUpCode(userId: string): Promise<void> {
   try {
-    return await headers();
+    recordAccountCodeBlocked('wrong_setup_code', userId, await requestHeadersOrNull());
   } catch {
-    return null;
+    // An event that could not be recorded is dropped.
   }
 }
 

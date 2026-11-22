@@ -51,7 +51,19 @@ describe('security events: the lists the database checks', () => {
       'code_checks_paused',
       'wrong_recovery_code',
       'recovery_code_checks_paused',
+      'wrong_current_password',
+      'wrong_setup_code',
+      'sign_in_refused_other',
       'unknown_api_key',
+      'sign_in_new_country',
+      'sign_in_not_me',
+      'sign_in_alerts_held',
+      'auth_rate_limited',
+      'auth_log_over_cap',
+      'unclassified_sign_in_refusals',
+      'unrecorded_server_form_password',
+      'unrecorded_server_form_code',
+      'too_many_forms_to_count',
       'over_minute_cap',
       'over_buffer_cap',
       ...SECURITY_PROBE_KINDS,
@@ -84,6 +96,72 @@ describe('security events: the lists the database checks', () => {
     expect(securityEventReasonLabel('wrong_password')).toBe('Wrong password at sign-in');
     expect(securityEventReasonLabel('repeated_wrong_password')).toBe(
       'Repeated wrong passwords from one source',
+    );
+  });
+
+  it('names the plain words of the two sign-in alert reasons (part 3)', () => {
+    expect(securityEventReasonLabel('sign_in_new_country')).toBe('Sign-in from a new country');
+    expect(securityEventReasonLabel('sign_in_not_me')).toBe('A member said a sign-in was not them');
+  });
+
+  it('names the plain words of sign-in alerts held past the daily ceiling', () => {
+    expect(securityEventReasonLabel('sign_in_alerts_held')).toBe(
+      'Sign-in alerts held after too many in one day',
+    );
+  });
+
+  it('the sign-in alert link is an anonymous family of its own, with its own words', () => {
+    expect(SECURITY_BOT_FAMILIES).toContain('sign_in_alert');
+    expect(securityEventReasonLabel(securityBotReason('sign_in_alert'))).toBe(
+      'Too many requests to a sign-in alert link',
+    );
+  });
+
+  it("names the plain words of the refusals read from the sign-in service's own log", () => {
+    expect(securityEventReasonLabel('auth_rate_limited')).toBe(
+      'Too many sign-in attempts, paused by the sign-in service',
+    );
+    expect(securityEventReasonLabel('auth_log_over_cap')).toBe(
+      'More refused sign-ins than could be listed',
+    );
+    expect(securityEventReasonLabel('unclassified_sign_in_refusals')).toBe(
+      'Refused sign-in requests of an unusual form',
+    );
+  });
+
+  it('the two reconciliation flags say what is always true: our server has no record of them', () => {
+    // True when someone else sent them, and true when our own server did and
+    // its record of them was lost: never "did not make".
+    expect(securityEventReasonLabel('unrecorded_server_form_password')).toBe(
+      "Refused sign-ins in our server's form that our server has no record of",
+    );
+    expect(securityEventReasonLabel('unrecorded_server_form_code')).toBe(
+      "Refused authenticator codes in our server's form that our server has no record of",
+    );
+    for (const reason of ['unrecorded_server_form_password', 'unrecorded_server_form_code']) {
+      expect(securityEventReasonLabel(reason)).not.toMatch(/did not make|looked like/);
+    }
+  });
+
+  it('names the plain words of an hour whose refused requests could not all be counted', () => {
+    // True of both ways it happens (the count read was full; a part of it
+    // could not be read), and the number beside it reads as what it is: the
+    // refused requests of that hour that were counted.
+    expect(securityEventReasonLabel('too_many_forms_to_count')).toBe(
+      'Refused sign-in requests in an hour that could not all be counted',
+    );
+    expect(securityEventReasonLabel('too_many_forms_to_count')).not.toMatch(/kinds/);
+  });
+
+  it("names the plain words of a signed-in member's refused password and set-up code, and of a sign-in refused for another reason", () => {
+    expect(securityEventReasonLabel('wrong_current_password')).toBe(
+      'Wrong current password entered by a signed-in member',
+    );
+    expect(securityEventReasonLabel('wrong_setup_code')).toBe(
+      'Wrong code while setting up an authenticator',
+    );
+    expect(securityEventReasonLabel('sign_in_refused_other')).toBe(
+      'Sign-in refused for another reason',
     );
   });
 });

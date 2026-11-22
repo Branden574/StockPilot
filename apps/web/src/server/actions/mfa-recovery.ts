@@ -311,7 +311,7 @@ export async function consumeMfaRecoveryCodeAction(input: {
       });
       return err('validation_error', RECOVERY_PAUSED);
     }
-    const pwRes = await verifyPasswordSideChannel(session.email, input.password);
+    const pwRes = await verifyPasswordSideChannel(session.email, input.password, session.userId);
     if (!pwRes.ok) {
       return err(
         pwRes.reason === 'invalid_password' ? 'forbidden' : 'internal_error',

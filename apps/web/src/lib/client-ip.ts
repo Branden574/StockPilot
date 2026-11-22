@@ -81,6 +81,10 @@ function countryOf(raw: string | null): string | null {
   return raw !== null && /^[A-Z]{2}$/.test(raw) ? raw : null;
 }
 
+/** Vercel's two place headers: read by clientPlaceFromHeaders, answered by placeOnlyHeaders. */
+const COUNTRY_HEADER = 'x-vercel-ip-country';
+const CITY_HEADER = 'x-vercel-ip-city';
+
 /** Vercel sends the city percent-encoded (UTF-8); anything malformed is no city. */
 function cityOf(raw: string | null): string | null {
   if (raw === null) return null;
@@ -106,8 +110,30 @@ function cityOf(raw: string | null): string | null {
 export function clientPlaceFromHeaders(headers: { get(name: string): string | null }): ClientPlace {
   if (process.env.VERCEL !== '1') return { country: null, city: null };
   return {
-    country: countryOf(headers.get('x-vercel-ip-country')),
-    city: cityOf(headers.get('x-vercel-ip-city')),
+    country: countryOf(headers.get(COUNTRY_HEADER)),
+    city: cityOf(headers.get(CITY_HEADER)),
+  };
+}
+
+/**
+ * A header reader that names only a place already read, as Vercel's edge would
+ * send it (part 3, sign-in alerts). The security events recorder reads the
+ * place from headers; a sign-in alert's event carries the SIGN-IN's place,
+ * not the place of whoever presses a button later. It answers the two place
+ * headers and nothing else, so it carries no address and gives no source
+ * hash, and the place reads back through clientPlaceFromHeaders' own rules
+ * (only on Vercel). Kept here so the header names stay in this one file.
+ */
+export function placeOnlyHeaders(place: ClientPlace): { get(name: string): string | null } {
+  const country = typeof place.country === 'string' ? place.country : null;
+  const city = typeof place.city === 'string' ? encodeURIComponent(place.city) : null;
+  return {
+    get(name: string): string | null {
+      const key = name.toLowerCase();
+      if (key === COUNTRY_HEADER) return country;
+      if (key === CITY_HEADER) return city;
+      return null;
+    },
   };
 }
 

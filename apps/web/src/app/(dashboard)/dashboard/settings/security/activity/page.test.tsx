@@ -249,6 +249,14 @@ describe('what an owner or admin sees', () => {
     h.activity.mockResolvedValueOnce(ACTIVITY);
     await renderPage();
     expect(screen.getByRole('heading', { level: 1, name: 'Blocked activity' })).toBeTruthy();
+    // The page also lists a wrong current password and a wrong set-up code,
+    // which are not sign-in attempts: its one line says passwords and codes.
+    expect(
+      screen.getByText(
+        'Wrong passwords and codes the app refused for the accounts in your organization. Kept for 90 days.',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Sign-in attempts the app refused/)).toBeNull();
 
     const totals = screen.getByRole('region', { name: 'Last 7 days' });
     expect(within(totals).getByText('Password guessing')).toBeTruthy();

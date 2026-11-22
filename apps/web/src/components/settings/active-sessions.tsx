@@ -14,6 +14,9 @@ import {
   revokeSessionAction,
 } from '@/server/actions/sessions';
 import type { SessionInfo } from '@/server/services/sessions';
+import type { MySignInAlert } from '@/server/services/sign-in-alerts';
+
+import { RecentSignInAlerts, SignInAlertOnSession } from './sign-in-alert-answers';
 
 function formatLastActive(iso: string | null): string {
   if (!iso) return 'unknown';
@@ -28,7 +31,20 @@ function formatLastActive(iso: string | null): string {
 
 const MAX_NAME = 60;
 
-export function ActiveSessions({ sessions }: { sessions: SessionInfo[] }) {
+/**
+ * Part 3 (sign-in alerts): `alerts` are the member's own alerts of the last 30
+ * days (my_sign_in_alerts()), or null when they could not be read. An alert
+ * shows on the session it made; the rest show under the list as "Recent
+ * sign-in alerts" (./sign-in-alert-answers.tsx). Left out, the list is as
+ * before.
+ */
+export function ActiveSessions({
+  sessions,
+  alerts,
+}: {
+  sessions: SessionInfo[];
+  alerts?: MySignInAlert[] | null;
+}) {
   const router = useRouter();
   const [busyId, setBusyId] = React.useState<string | null>(null);
   const [editingId, setEditingId] = React.useState<string | null>(null);
@@ -38,6 +54,17 @@ export function ActiveSessions({ sessions }: { sessions: SessionInfo[] }) {
   // moved to a different row (the save closure captures a stale editingId).
   const editingIdRef = React.useRef<string | null>(null);
   const others = sessions.filter((s) => !s.isCurrent);
+  // An alert belongs to the session it made while that session is active.
+  const activeIds = new Set(sessions.map((s) => s.id));
+  const alertBySession = new Map<string, MySignInAlert>();
+  for (const a of alerts ?? []) {
+    if (a.sessionId && activeIds.has(a.sessionId) && a.status !== 'not_me' && !alertBySession.has(a.sessionId)) {
+      alertBySession.set(a.sessionId, a);
+    }
+  }
+  const recentAlerts = (alerts ?? []).filter(
+    (a) => !(a.sessionId && alertBySession.get(a.sessionId)?.id === a.id),
+  );
 
   function beginEdit(id: string | null, value: string) {
     editingIdRef.current = id;
@@ -200,6 +227,9 @@ export function ActiveSessions({ sessions }: { sessions: SessionInfo[] }) {
                       {s.customName ? `${s.label} · ` : ''}
                       {s.ip ?? 'unknown IP'} · active {formatLastActive(s.lastActiveAt)}
                     </div>
+                    {alertBySession.has(s.id) && (
+                      <SignInAlertOnSession alert={alertBySession.get(s.id)!} />
+                    )}
                   </>
                 )}
               </div>
@@ -229,6 +259,19 @@ export function ActiveSessions({ sessions }: { sessions: SessionInfo[] }) {
         Signing out takes effect immediately on devices that are online; a device that&apos;s
         offline is signed out within the hour.
       </p>
+      {alerts === null && (
+        <p className="text-muted-foreground text-[12px]">
+          Your sign-in alerts could not be loaded just now.
+        </p>
+      )}
+      <RecentSignInAlerts
+        alerts={recentAlerts}
+        signOutOthers={
+          others.length > 0
+            ? { run: () => void signOutOthers(), busy: busyId === 'others' }
+            : null
+        }
+      />
     </div>
   );
 }
