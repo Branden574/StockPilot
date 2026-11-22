@@ -45,7 +45,10 @@ export type SignInAlertEventReason = 'sign_in_new_country' | 'sign_in_not_me';
 const MAX_ORGANIZATIONS = 5;
 
 /** The sign-in's place as headers (lib/client-ip.ts), with a city the tables would refuse left out. */
-function placeHeaders(place: { country: string | null; city: string | null }): SecurityEventHeaders {
+function placeHeaders(place: {
+  country: string | null;
+  city: string | null;
+}): SecurityEventHeaders {
   return placeOnlyHeaders({
     country: typeof place.country === 'string' ? place.country : null,
     city: cityForRecord(place.city),
@@ -95,17 +98,44 @@ async function recordInOrganizations(
     const organizations = await organizationsOf(userId);
     const targets: Array<string | null> =
       organizations && organizations.length > 0 ? organizations : [null];
+    // Each reason is written as a literal at its call, so the auth-logs guard
+    // can see that a phone row of this recorder never carries one of the
+    // hourly log reader's reasons (its "already stored" check reads those).
     for (const organizationId of targets) {
-      await recordSecurityEvent(
-        {
-          category: event.category,
-          outcome: 'flagged',
-          reason: event.reason,
-          source: event.source,
-          organizationId,
-        },
-        headers,
-      );
+      if (event.reason === 'sign_in_new_country') {
+        await recordSecurityEvent(
+          {
+            category: event.category,
+            outcome: 'flagged',
+            reason: 'sign_in_new_country',
+            source: event.source,
+            organizationId,
+          },
+          headers,
+        );
+      } else if (event.reason === 'sign_in_not_me') {
+        await recordSecurityEvent(
+          {
+            category: event.category,
+            outcome: 'flagged',
+            reason: 'sign_in_not_me',
+            source: event.source,
+            organizationId,
+          },
+          headers,
+        );
+      } else {
+        await recordSecurityEvent(
+          {
+            category: event.category,
+            outcome: 'flagged',
+            reason: 'sign_in_alerts_held',
+            source: event.source,
+            organizationId,
+          },
+          headers,
+        );
+      }
     }
   } catch {
     // Never the caller's problem: these are counts for admins to read.
