@@ -191,14 +191,23 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * warning with the first flagged hour (UTC) and the events by reason. A run
  * that stores only ordinary counts reports nothing.
  *
- * THE HOUR'S END. A line stamped on the very instant an hour ends belongs to
- * the next hour. Whether the logs service answers it for the hour that ends
- * there is not relied on. If it does: a totals row whose last line is on
- * that instant is kept, its count as it is (one line more in an hour is the
- * safe direction; such a line can never take a row away), and a group row
- * on that minute is left to the next hour's own run, which lists it.
+ * THE HOUR'S END (Corrected 2026-11-22, review 4). A line stamped on or
+ * after the instant an hour ends belongs to the next hour. Both bounds of
+ * the window are inclusive (measured at a line's own millisecond); at what
+ * grain the end is compared is not known and not relied on: any grain up to
+ * a minute is read (AUTH_LOGS_END_GRAIN_MS). So a line in the first minute
+ * of the next hour may be in this hour's answers. Then: a totals row that
+ * also holds a line of this hour is kept, its count as it is (one line more
+ * in an hour, the safe direction, never a flag by itself; such a line can
+ * never take a row away or make the totals "not whole"); a totals row made
+ * only of such lines is left to the next hour (readTotalsAnswer); a group
+ * row on the end's minute is left to the next hour's own run, which lists
+ * it, and when the groups are full it is taken off the remainder, so a line
+ * the groups listed there is stored once.
  *
- * FAILURES. A failed hour is left for the next run, and the hours after it
+ * FAILURES. A failed hour is left for the next run (unless it is the oldest
+ * of the six, which the next run no longer reads: the report says that hour
+ * is lost), and the hours after it
  * are still tried, so one bad hour does not hold up the newer ones. The run
  * stops only at a failure every hour would meet (a refused token, a query
  * the logs service did not run, a service that cannot be reached) or at its
@@ -307,6 +316,17 @@ const MAX_ANSWER_BYTES = 2_000_000;
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 3_600_000;
+/**
+ * How far past an hour's end the logs service may still answer lines for
+ * that hour (Corrected 2026-11-22, review 4). Both bounds of the window were
+ * measured inclusive, but only at a line's own millisecond: whether the end
+ * is compared at the millisecond, the second or the minute is not known, and
+ * the job does not depend on it. Any grain up to one minute is read: a
+ * totals row whose last line is up to (not including) this long past the
+ * end is kept, and a group row on the end's minute is left to the next
+ * hour. A later line is not of this hour's answer: its row fails its checks.
+ */
+export const AUTH_LOGS_END_GRAIN_MS = 60_000;
 
 /** Every reason this job writes. No other code may write one with source phone or api. */
 export const AUTH_LOGS_REASONS = [
@@ -791,6 +811,11 @@ export interface AuthLogsRunSummary {
   totalsIncompleteWaiting: number;
   /** Group rows on the minute an hour ends: lines of the next hour, left to its own run. */
   atHourEnd: number;
+  /**
+   * Lines of totals rows made only of lines of the next hour (their first
+   * line on or after the hour's end), left to that hour (readTotalsAnswer).
+   */
+  totalsAtHourEnd: number;
   /** Full hours given no remainder because a group row was dropped. */
   remainderSkipped: number;
   /** Elements sent to the writer. */
@@ -1068,42 +1093,101 @@ export function parseGroupRow(raw: unknown, hour: AuthLogsHour): AuthLogsGroupRo
 }
 
 /**
- * Whether a row of the groups query is, in every other respect, a good row
- * whose minute is the one the hour ENDS on. A line stamped on the very
- * instant an hour ends belongs to the next hour. Whether the logs service
- * answers such a line for the hour that ends there is not relied on: if it
- * does, the line's group row is left to the next hour (whose own run lists
- * and stores it at its first minute) and is not a row that failed its
- * checks. Storing it here would put a row of this job on a minute of the
- * next hour, and that hour would then be taken as already stored.
+ * The row of the groups query as the NEXT hour reads it, when it is, in
+ * every other respect, a good row whose minute is the one the hour ENDS on;
+ * null otherwise. A line stamped on or after the instant an hour ends
+ * belongs to the next hour. Whether the logs service answers such lines for
+ * the hour that ends there is not relied on (AUTH_LOGS_END_GRAIN_MS: at any
+ * grain up to a minute every such line is on the end's minute): if it does,
+ * the line's group row is left to the next hour (whose own run lists and
+ * stores it at its first minute) and is not a row that failed its checks.
+ * Storing it here would put a row of this job on a minute of the next hour,
+ * and that hour would then be taken as already stored.
  */
-export function isGroupRowOfNextHour(raw: unknown, hour: AuthLogsHour): boolean {
+export function parseGroupRowOfNextHour(raw: unknown, hour: AuthLogsHour): AuthLogsGroupRow | null {
   const next = parseGroupRow(raw, { startMs: hour.endMs, endMs: hour.endMs + HOUR_MS });
-  return next !== null && next.minuteMs === hour.endMs;
+  return next !== null && next.minuteMs === hour.endMs ? next : null;
 }
 
-/**
- * One row of the totals query, checked the same way; its first and last
- * instants are inside the hour, or its last is the instant the hour ends. A
- * line stamped on that instant belongs to the next hour, and whether the
- * logs service answers it for this one is not relied on: if it does, the row
- * is KEPT, with its count as it is, so such a line can never take a whole
- * row (our server's, for one) out of the totals. One line more in an hour is
- * the safe direction. The row held a line of an ambiguous form only when the
- * query said exactly that.
- */
-export function parseTotalsRow(raw: unknown, hour: AuthLogsHour): AuthLogsTotalsRow | null {
+/** Whether parseGroupRowOfNextHour reads the row. */
+export function isGroupRowOfNextHour(raw: unknown, hour: AuthLogsHour): boolean {
+  return parseGroupRowOfNextHour(raw, hour) !== null;
+}
+
+/** A checked totals row with its first instant (whether it is of the next hour only). */
+function parseTotalsRowAt(
+  raw: unknown,
+  hour: AuthLogsHour,
+): { row: AuthLogsTotalsRow; firstMs: number } | null {
   if (!isRecord(raw)) return null;
   const line = lineOf(raw);
   if (!line) return null;
   const first = parseLogsTime(raw.first_seen);
   const last = parseLogsTime(raw.last_seen);
   if (first === null || last === null) return null;
-  if (first < hour.startMs || last > hour.endMs || first > last) return null;
+  if (first < hour.startMs || last >= hour.endMs + AUTH_LOGS_END_GRAIN_MS || first > last)
+    return null;
   const n = countOf(raw.n);
   if (n === null) return null;
   // The forms only feed a count of the log line: never a reason to drop a row.
-  return { ...line, ambiguous: raw.forms === 'ambiguous', n };
+  return { row: { ...line, ambiguous: raw.forms === 'ambiguous', n }, firstMs: first };
+}
+
+/**
+ * One row of the totals query, checked the same way; its first instant is
+ * inside the hour (or past it, see below), and its last is inside the hour
+ * or less than AUTH_LOGS_END_GRAIN_MS past its end (Corrected 2026-11-22,
+ * review 4). A line stamped on or after the instant an hour ends belongs to
+ * the next hour, and whether the logs service answers such lines for this
+ * one is not relied on: it may, at a grain up to a minute. If it does, the
+ * row is KEPT, with its count as it is, so such a line can never take a
+ * whole row (our server's, for one) out of the totals, and never makes the
+ * totals "not whole". A line in the first minute of the next hour may so be
+ * counted in this hour's totals too: one line more, the safe direction,
+ * never a flag by itself (a row made ONLY of such lines is left to the next
+ * hour: readTotalsAnswer). The row held a line of an ambiguous form only
+ * when the query said exactly that.
+ */
+export function parseTotalsRow(raw: unknown, hour: AuthLogsHour): AuthLogsTotalsRow | null {
+  return parseTotalsRowAt(raw, hour)?.row ?? null;
+}
+
+/** A totals answer, checked row by row (readTotalsAnswer). */
+export interface AuthLogsTotalsAnswer {
+  /** The rows of the hour: each holds at least one line of it. */
+  rows: AuthLogsTotalsRow[];
+  /** Rows that failed their checks. */
+  dropped: number;
+  /**
+   * Lines of rows whose FIRST line is on or after the hour's end: every line
+   * of such a row is of the next hour, which counts them (its window starts
+   * on that instant, inclusive, measured), so they are left to it.
+   */
+  ofNextHour: number;
+}
+
+/**
+ * A totals answer of an hour, checked (pure). A row whose every line is of
+ * the next hour (its first line on or after the end; possible only at the
+ * end's instant, or in the end's first minute if the service compares the
+ * end at a coarser grain) is not a row of this hour: it is left out of
+ * every count here, never dropped (so it never makes the totals "not
+ * whole"), and counted in `ofNextHour`. Leaving it out cannot hide a line:
+ * the next hour's own answer holds every one of them. A row that also holds
+ * a line of this hour is kept whole (parseTotalsRow).
+ */
+export function readTotalsAnswer(
+  raws: readonly unknown[],
+  hour: AuthLogsHour,
+): AuthLogsTotalsAnswer {
+  const out: AuthLogsTotalsAnswer = { rows: [], dropped: 0, ofNextHour: 0 };
+  for (const raw of raws) {
+    const read = parseTotalsRowAt(raw, hour);
+    if (!read) out.dropped += 1;
+    else if (read.firstMs >= hour.endMs) out.ofNextHour += read.row.n;
+    else out.rows.push(read.row);
+  }
+  return out;
 }
 
 /** What one hour's rows come to. */
@@ -1217,7 +1301,9 @@ export function reconcileServerForm(
  * category, reason and source (never below zero) and stored on one
  * auth_log_over_cap element per category and source, unless a group row was
  * dropped (`groupsDropped`): its count would come back through the totals.
- * Per kind, the total is the larger of `totals` and `totalsAfterGroups`.
+ * Per kind, the remainder is the larger of what `totals` and
+ * `totalsAfterGroups` leave once the listed lines are taken off, and the
+ * lines of the next hour (`groupsAtHourEnd`) are taken off the second.
  * The smallest groups are folded into those elements until the call fits.
  * When the totals were not whole (`totalsIncomplete`), one flagged
  * too_many_forms_to_count element is added: the hour's other counts are then
@@ -1239,9 +1325,19 @@ export function buildHourElements(input: {
   carry?: AuthLogsCarry | null;
   /**
    * When the groups were full: the hour's totals read again AFTER the groups
-   * (the first totals are read before them). Only the remainder reads them.
+   * (the first totals are read before them). The remainder reads them, and
+   * the flagged count of each source's requests of an unknown form takes
+   * the larger of the two answers.
    */
   totalsAfterGroups?: readonly AuthLogsTotalsRow[] | null;
+  /** That second answer was whole: not full, and no row of it failed its checks. */
+  totalsAfterGroupsWhole?: boolean;
+  /**
+   * Rows of the groups answer on the minute the hour ends
+   * (parseGroupRowOfNextHour): lines of the next hour, which lists and
+   * stores them. When the groups were full they are taken off the remainder.
+   */
+  groupsAtHourEnd?: readonly AuthLogsGroupRow[];
 }): AuthLogsHourElements {
   const listed = new Map<string, AuthLogsElement>();
   const listedByKind = new Map<string, number>();
@@ -1289,6 +1385,19 @@ export function buildHourElements(input: {
     if (v.why === 'unclassified') unclassifiedBySource[v.source] += row.n;
     else notStored[v.why] += row.n;
   }
+  // The totals read again after a full groups answer (REVIEW-4, L18): their
+  // lines of an unknown form are in hand too, so per source the larger of
+  // the two answers is flagged. Lines only arrive, so the larger is the one
+  // that holds every line either answer saw; nothing else reads them.
+  if (input.totalsAfterGroups) {
+    const again: Record<AuthLogsSource, number> = { phone: 0, api: 0 };
+    for (const row of input.totalsAfterGroups) {
+      const v = classifyAuthLogLine(row);
+      if (!v.store && v.why === 'unclassified') again[v.source] += row.n;
+    }
+    for (const source of AUTH_LOGS_SOURCES)
+      unclassifiedBySource[source] = Math.max(unclassifiedBySource[source], again[source]);
+  }
 
   // The remainder, one element per category and source.
   const overCap = new Map<string, AuthLogsElement>();
@@ -1316,30 +1425,68 @@ export function buildHourElements(input: {
     if (input.groupsDropped > 0) {
       remainderSkipped = true;
     } else {
-      type KindTotal = { category: AuthLogsElement['category']; source: AuthLogsSource; n: number };
-      const byKind = (rows: readonly AuthLogsTotalsRow[]) => {
-        const out = new Map<string, KindTotal>();
+      type KindRest = { category: AuthLogsElement['category']; source: AuthLogsSource; n: number };
+      // LINES OF THE NEXT HOUR (REVIEW-4, L16). A line on or after the
+      // instant the hour ends can be in this hour's totals (its row also
+      // holds a line of this hour) and in the groups only on the end's
+      // minute, which the next hour lists and stores. Left in the remainder
+      // it would be stored twice. So the end-minute group rows are taken off
+      // an answer's remainder, per kind, but only those whose totals row
+      // (kind, status, caller, network) is in that answer: an answer read
+      // AFTER the groups holds every such line the groups saw (lines only
+      // arrive), so nothing of this hour is taken off. A row of the next hour
+      // only was left out of the totals (readTotalsAnswer): its lines are in
+      // no total here, and none is taken off for them. Lines of the end's
+      // minute that the full groups answer left out (it lists the largest
+      // groups first), or that arrived after it, stay in the remainder: one
+      // line more each, the safe direction.
+      const restOf = (rows: readonly AuthLogsTotalsRow[], lessNextHour: boolean) => {
+        const out = new Map<string, KindRest>();
         for (const t of rows) {
           const v = classifyAuthLogLine(t);
           if (!v.store) continue;
           const kind = [v.category, v.reason, v.source].join('\u001f');
           const same = out.get(kind);
           if (same) same.n += t.n;
-          else out.set(kind, { category: v.category, source: v.source, n: t.n });
+          else
+            out.set(kind, {
+              category: v.category,
+              source: v.source,
+              n: t.n - (listedByKind.get(kind) ?? 0),
+            });
+        }
+        if (lessNextHour) {
+          const keys = new Set(rows.map(seenKey));
+          for (const g of input.groupsAtHourEnd ?? []) {
+            if (!keys.has(seenKey(g))) continue;
+            const v = classifyAuthLogLine(g);
+            if (!v.store) continue;
+            const same = out.get([v.category, v.reason, v.source].join('\u001f'));
+            if (same) same.n -= g.n;
+          }
         }
         return out;
       };
-      const totalByKind = byKind(input.totals);
       // The totals read again after the full groups answer hold every line
       // the groups did, even one logged between the two calls: per kind the
-      // larger of the two is the total, so such a line is never left out.
-      for (const [kind, again] of byKind(input.totalsAfterGroups ?? [])) {
-        const first = totalByKind.get(kind);
-        if (!first || again.n > first.n) totalByKind.set(kind, again);
+      // larger of the two remainders is stored, so such a line is never left
+      // out. The second answer, when whole, holds every line the groups
+      // listed and every end-minute line they saw, so its remainder is never
+      // short of a line of this hour; the first answer's remainder is then
+      // never above it, and both are taken the end-minute lines off. When the
+      // second answer is NOT whole (full, or a row of it failed its checks)
+      // the first one's remainder is not taken them off: it may not hold
+      // them all, and a line stored twice is the safe direction. With no
+      // second answer, the caller's one answer is taken as read after the
+      // groups.
+      const after = input.totalsAfterGroups;
+      const restByKind = restOf(input.totals, !after || input.totalsAfterGroupsWhole === true);
+      for (const [kind, again] of after ? restOf(after, true) : []) {
+        const first = restByKind.get(kind);
+        if (!first || again.n > first.n) restByKind.set(kind, again);
       }
-      for (const [kind, total] of totalByKind) {
-        const rest = total.n - (listedByKind.get(kind) ?? 0);
-        if (rest > 0) countOnOverCap(total.category, total.source, rest);
+      for (const rest of restByKind.values()) {
+        if (rest.n > 0) countOnOverCap(rest.category, rest.source, rest.n);
       }
     }
   }
@@ -1833,6 +1980,7 @@ function emptySummary(hours: AuthLogsHour[]): AuthLogsRunSummary {
     totalsIncomplete: 0,
     totalsIncompleteWaiting: 0,
     atHourEnd: 0,
+    totalsAtHourEnd: 0,
     remainderSkipped: 0,
     elements: 0,
     eventsStored: 0,
@@ -1887,12 +2035,13 @@ async function readEdgeCarry(
   const answer = await readTotals(ctx, next);
   if (!answer.ok) return answer;
   if (answer.value.length >= AUTH_LOGS_ROW_LIMIT) return { ok: true, value: null };
-  const totals: AuthLogsTotalsRow[] = [];
-  for (const raw of answer.value) {
-    const row = parseTotalsRow(raw, next);
-    if (!row) return { ok: true, value: null };
-    totals.push(row);
-  }
+  // Rows of the hour after THAT one only are left out: its gateway count is
+  // then the one the carry was made for. A row that also holds the first
+  // minute of the hour after it stays whole: its count can only be larger,
+  // which makes the carry smaller (the safe direction).
+  const read = readTotalsAnswer(answer.value, next);
+  if (read.dropped > 0) return { ok: true, value: null };
+  const totals = read.rows;
   const recorded = await readRecorded(ctx, next);
   if (!recorded.ok) return recorded;
   const gateway = serverFormRefusals(totals);
@@ -1946,13 +2095,10 @@ async function runHour(
   // full, and whether the groups query is needed at all).
   const totalsAnswer = await readTotals(ctx, hour);
   if (!totalsAnswer.ok) return totalsAnswer.failure;
-  const totals: AuthLogsTotalsRow[] = [];
-  let totalsDropped = 0;
-  for (const raw of totalsAnswer.value) {
-    const row = parseTotalsRow(raw, hour);
-    if (row) totals.push(row);
-    else totalsDropped += 1;
-  }
+  // A row made only of lines of the next hour is left to it (readTotalsAnswer).
+  const totalsRead = readTotalsAnswer(totalsAnswer.value, hour);
+  const totals = totalsRead.rows;
+  const totalsDropped = totalsRead.dropped;
   // TOTALS THAT ARE NOT WHOLE ARE NEVER STORED AS IF THEY WERE. The query
   // answers its largest groups first, so a full answer leaves the smallest
   // out, and those can be the very rows everything below is read from: our
@@ -2014,18 +2160,23 @@ async function runHour(
   // empty, so the hour costs one call. Asked after the waiting decision, so
   // a waiting hour does not ask for them either.
   const groups: AuthLogsGroupRow[] = [];
+  const groupsAtHourEnd: AuthLogsGroupRow[] = [];
   let groupsDropped = 0;
-  let atHourEnd = 0;
   let capped = false;
   let totalsAfterGroups: AuthLogsTotalsRow[] | null = null;
+  let totalsAfterGroupsWhole = false;
   if (groupsQueryNeeded(totals, totalsIncomplete)) {
     const groupsAnswer = await queryLogs(ctx, AUTH_LOGS_GROUPS_SQL, hour);
     if (!groupsAnswer.ok) return groupsAnswer.failure;
     for (const raw of groupsAnswer.value) {
       const row = parseGroupRow(raw, hour);
-      if (row) groups.push(row);
-      // Lines stamped on the instant the hour ends: the next hour's.
-      else if (isGroupRowOfNextHour(raw, hour)) atHourEnd += 1;
+      if (row) {
+        groups.push(row);
+        continue;
+      }
+      // Lines on or after the instant the hour ends, on its minute: the next hour's.
+      const ofNext = parseGroupRowOfNextHour(raw, hour);
+      if (ofNext) groupsAtHourEnd.push(ofNext);
       else groupsDropped += 1;
     }
     capped = groupsAnswer.value.length >= AUTH_LOGS_ROW_LIMIT;
@@ -2033,17 +2184,17 @@ async function runHour(
     // listed. The totals above were read BEFORE the groups, so a line logged
     // between the two calls could be listed and not be in them, and the
     // remainder would come out short. The totals are read again, after the
-    // groups, for the remainder only (buildHourElements takes the larger).
-    // Rows of that second answer that fail their checks are left out of it
-    // (the first answer still counts), never a reason to store less.
-    if (capped) {
+    // groups, for the remainder (buildHourElements takes the larger) and the
+    // unknown-form counts. Rows of that second answer that fail their checks
+    // are left out of it (the first answer still counts), never a reason to
+    // store less. Not read when a group row was dropped (REVIEW-4, L18): no
+    // remainder is added then (buildHourElements), so it would not be used.
+    if (capped && groupsDropped === 0) {
       const again = await queryLogs(ctx, AUTH_LOGS_TOTALS_SQL, hour);
       if (!again.ok) return again.failure;
-      totalsAfterGroups = [];
-      for (const raw of again.value) {
-        const row = parseTotalsRow(raw, hour);
-        if (row) totalsAfterGroups.push(row);
-      }
+      const read = readTotalsAnswer(again.value, hour);
+      totalsAfterGroups = read.rows;
+      totalsAfterGroupsWhole = again.value.length < AUTH_LOGS_ROW_LIMIT && read.dropped === 0;
     }
   } else {
     summary.groupsSkipped += 1;
@@ -2052,7 +2203,8 @@ async function runHour(
   if (recorded && !recorded.complete) summary.reconcileIncomplete += 1;
 
   if (totalsIncomplete) countTotalsIncomplete(summary, totalsFull, totalsDropped);
-  summary.atHourEnd += atHourEnd;
+  summary.atHourEnd += groupsAtHourEnd.length;
+  summary.totalsAtHourEnd += totalsRead.ofNextHour;
   if (capped) summary.capped += 1;
   summary.hoursRead += 1;
   summary.groups += groups.length;
@@ -2068,6 +2220,8 @@ async function runHour(
     recorded,
     carry,
     totalsAfterGroups,
+    totalsAfterGroupsWhole,
+    groupsAtHourEnd,
   });
   report.reconcile = built.reconcile;
   if (totalsIncomplete) report.totalsIncomplete = true;
@@ -2142,34 +2296,52 @@ async function runHour(
   return null;
 }
 
+/**
+ * A failure in plain words: what failed, then what becomes of the hour
+ * (failureWords adds that).
+ */
 const FAILURE_WORDS: Record<AuthLogsFailureCause, (f: AuthLogsFailure) => string> = {
   token_refused: () =>
     "Refused sign-ins were not read from Supabase's logs: the logs token was refused (expired or deleted): the owner makes a new one",
   logs_query_error: () =>
-    "Supabase's logs did not run this job's query (it answered with an error); the hour is left for the next run",
-  logs_unavailable: (f) =>
-    `Supabase's logs could not be read (status ${f.status ?? 'unknown'}); the hour is left for the next run`,
-  logs_timeout: () =>
-    "Supabase's logs did not answer within 20 seconds; the hour is left for the next run",
-  logs_unreachable: () => "Supabase's logs could not be reached; the hour is left for the next run",
-  logs_bad_answer: () =>
-    "Supabase's logs answered in a shape this job does not read; the hour is left for the next run",
+    "Supabase's logs did not run this job's query (it answered with an error)",
+  logs_unavailable: (f) => `Supabase's logs could not be read (status ${f.status ?? 'unknown'})`,
+  logs_timeout: () => "Supabase's logs did not answer within 20 seconds",
+  logs_unreachable: () => "Supabase's logs could not be reached",
+  logs_bad_answer: () => "Supabase's logs answered in a shape this job does not read",
   reconcile_read_failed: (f) =>
-    `Our own record of refused web sign-ins could not be read to compare with Supabase's logs (code ${f.code ?? 'no_code'}); the hour is left for the next run`,
+    `Our own record of refused web sign-ins could not be read to compare with Supabase's logs (code ${f.code ?? 'no_code'})`,
   db_read_failed: (f) =>
-    `The security events record could not be read (code ${f.code ?? 'no_code'}); the hour is left for the next run`,
+    `The security events record could not be read (code ${f.code ?? 'no_code'})`,
   writer_failed: (f) =>
-    `The refused sign-ins of an hour could not be stored (code ${f.code ?? 'no_code'}); the hour is left for the next run`,
-  out_of_time: () =>
-    "Reading refused sign-ins from Supabase's logs stopped at its time limit; the hours left are read by the next run",
-  unexpected: () =>
-    "Reading refused sign-ins from Supabase's logs failed unexpectedly; the next run tries again",
+    `The refused sign-ins of an hour could not be stored (code ${f.code ?? 'no_code'})`,
+  out_of_time: () => "Reading refused sign-ins from Supabase's logs stopped at its time limit",
+  unexpected: () => "Reading refused sign-ins from Supabase's logs failed unexpectedly",
   // These two are reported only when they cost an hour (stopLosesAnHour).
-  logs_rate_limited: () =>
-    "Supabase's logs refused this job's calls as too many (status 429) at the oldest of the six hours it reads; the next run no longer reads that hour, so refused sign-ins in it are never counted",
-  call_budget_spent: () =>
-    "Reading refused sign-ins from Supabase's logs used up the run's calls at the oldest of the six hours it reads; the next run no longer reads that hour, so refused sign-ins in it are never counted",
+  logs_rate_limited: () => "Supabase's logs refused this job's calls as too many (status 429)",
+  call_budget_spent: () => "Reading refused sign-ins from Supabase's logs used up the run's calls",
 };
+
+/** What becomes of an hour that was left, when the next run still reads it. */
+const LEFT_WORDS: Partial<Record<AuthLogsFailureCause, string>> = {
+  token_refused: '',
+  out_of_time: '; the hours left are read by the next run',
+  unexpected: '; the next run tries again',
+};
+
+/**
+ * A failure's words for its report. `lost`: the first hour it stopped is
+ * the oldest of the window (stopLosesAnHour), which the next run no longer
+ * reads, whatever stopped it (REVIEW-4, L17): the words say so, never "left
+ * for the next run".
+ */
+function failureWords(failure: AuthLogsFailure, lost: boolean): string {
+  const what = FAILURE_WORDS[failure.cause](failure);
+  if (lost) {
+    return `${what}; that was at the oldest of the six hours this job reads, which the next run no longer reads, so refused sign-ins in it are never counted`;
+  }
+  return what + (LEFT_WORDS[failure.cause] ?? '; the hour is left for the next run');
+}
 
 /**
  * Whether a run whose logs reading ended (a 429, or the call budget spent)
@@ -2284,7 +2456,11 @@ export async function readAuthLogs(options: {
 
   // Each distinct failure of the run (its cause, status and code), with the
   // first hour it stopped and how many hours it stopped.
-  const failures = new Map<string, { failure: AuthLogsFailure; hour: string; hours: number }>();
+  // `lost`: that first hour is the oldest of the window (stopLosesAnHour).
+  const failures = new Map<
+    string,
+    { failure: AuthLogsFailure; hour: string; hours: number; lost: boolean }
+  >();
   // The call budget or a 429 that ended the run's logs reading, and at which hour.
   let ended: { failure: AuthLogsFailure; index: number } | null = null;
   for (const [i, hour] of hours.entries()) {
@@ -2319,8 +2495,10 @@ export async function readAuthLogs(options: {
       ended = { failure, index: i };
       break;
     }
-    // The failed hour is left as it is and read again by the next run. One
-    // bad hour does not hold up the newer ones: the run goes on, unless the
+    // The failed hour is left as it is and read again by the next run,
+    // unless it is the oldest of the window, which the next run no longer
+    // reads: still reported, and its words say that hour is lost. One bad
+    // hour does not hold up the newer ones: the run goes on, unless the
     // failure is one every hour would meet.
     hourReport.outcome = 'failed';
     hourReport.failure = failure;
@@ -2329,7 +2507,7 @@ export async function readAuthLogs(options: {
     const key = [failure.cause, failure.status ?? '', failure.code ?? ''].join(' ');
     const same = failures.get(key);
     if (same) same.hours += 1;
-    else failures.set(key, { failure, hour: hourLabel(hour), hours: 1 });
+    else failures.set(key, { failure, hour: hourLabel(hour), hours: 1, lost: stopLosesAnHour(i) });
     if (RUN_STOPPING_CAUSES.includes(failure.cause)) break;
   }
   summary.logsCalls = ctx.logsCalls;
@@ -2339,15 +2517,20 @@ export async function readAuthLogs(options: {
     const lost = hours[ended.index]!;
     summary.ok = false;
     summary.failure ??= { ...ended.failure, hour: hourLabel(lost) };
-    failures.set('lost_hour', { failure: ended.failure, hour: hourLabel(lost), hours: 1 });
+    failures.set('lost_hour', {
+      failure: ended.failure,
+      hour: hourLabel(lost),
+      hours: 1,
+      lost: true,
+    });
   }
 
   // One report for each distinct failure, never one per hour.
   const reports: Report[] = [];
-  for (const { failure, hour, hours: stopped } of failures.values()) {
+  for (const { failure, hour, hours: stopped, lost } of failures.values()) {
     const { cause, status, code } = failure;
     reports.push({
-      message: FAILURE_WORDS[cause](failure),
+      message: failureWords(failure, lost),
       // Each needs someone to act: a new token, a fix to the query, or (an
       // hour lost to the logs endpoint's limit) a look at who else calls it.
       level:

@@ -846,10 +846,9 @@ describe('every returned field is checked before use', () => {
       parseTotalsRow(totalsRow({ first_seen: '2026-11-21 04:00:00.000001' }), hour),
     ).not.toBeNull();
     expect(parseTotalsRow(totalsRow({ first_seen: chTime(H04 - 1_000) }), hour)).toBeNull();
-    expect(parseTotalsRow(totalsRow({ last_seen: chTime(H04 + HOUR + 1_000) }), hour)).toBeNull();
-    expect(
-      parseTotalsRow(totalsRow({ last_seen: '2026-11-21 05:00:00.001000000' }), hour),
-    ).toBeNull();
+    // The end: up to (not including) one minute past it (AUTH_LOGS_END_GRAIN_MS).
+    expect(parseTotalsRow(totalsRow({ last_seen: chTime(H04 + HOUR + MIN) }), hour)).toBeNull();
+    expect(parseTotalsRow(totalsRow({ last_seen: chTime(H04 + 2 * HOUR) }), hour)).toBeNull();
     expect(
       parseTotalsRow(
         totalsRow({ first_seen: chTime(H04 + 50_000), last_seen: chTime(H04 + 40_000) }),
@@ -884,12 +883,91 @@ describe("the hour's end: a line stamped on the instant an hour ends belongs to 
       n: 41,
     });
     expect(parseTotalsRow(totalsRow({ last_seen: chTime(H04 + HOUR) }), hour)?.n).toBe(3);
-    // A group made only of such lines is kept too.
+    // A group made only of such lines passes its checks too (the hour's
+    // answer then leaves it to the next hour: readTotalsAnswer, below).
     expect(parseTotalsRow(totalsRow({ first_seen: END, last_seen: END, n: 1 }), hour)?.n).toBe(1);
-    // Anything later is not of this hour's answer at all.
+    // A line a minute or more past the end is not of this hour's answer at all.
     expect(
-      parseTotalsRow(totalsRow({ last_seen: '2026-11-21 05:00:00.001000000' }), hour),
+      parseTotalsRow(totalsRow({ last_seen: '2026-11-21 05:01:00.000000000' }), hour),
     ).toBeNull();
+  });
+
+  describe('the grain at which the logs service compares the end is not relied on: any grain up to a minute is read (Corrected 2026-11-22, review 4)', () => {
+    // A line the service could answer for the hour 04:00 if it compared the
+    // end at each grain: the latest instant of the end's millisecond, second
+    // and minute (made-up rows).
+    const GRAINS = [
+      ['millisecond', '2026-11-21 05:00:00.000999000', H04 + HOUR],
+      ['second', '2026-11-21 05:00:00.999000000', H04 + HOUR + 999],
+      ['minute', '2026-11-21 05:00:59.999000000', H04 + HOUR + MIN - 1],
+    ] as const;
+
+    it.each(GRAINS)(
+      '%s: a totals row whose last line is past the end is kept whole, never dropped',
+      (_grain, last) => {
+        expect(parseTotalsRow(totalsRow({ ...ours, n: 41, last_seen: last }), hour)).toEqual({
+          kind: 'password',
+          ambiguous: false,
+          status: '400',
+          caller: 'server',
+          network: 'hosting',
+          n: 41,
+        });
+        const read = logs.readTotalsAnswer([totalsRow({ ...ours, n: 41, last_seen: last })], hour);
+        expect(read).toEqual({
+          rows: [expect.objectContaining({ n: 41 })],
+          dropped: 0,
+          ofNextHour: 0,
+        });
+      },
+    );
+
+    it.each(GRAINS)(
+      '%s: a totals row made only of lines of the next hour is left to it: not counted here, not dropped',
+      (_grain, last) => {
+        const read = logs.readTotalsAnswer(
+          [
+            totalsRow({ n: 2 }),
+            totalsRow({ kind: 'token_other', first_seen: END, last_seen: last, n: 1 }),
+          ],
+          hour,
+        );
+        expect(read).toEqual({
+          rows: [expect.objectContaining({ kind: 'password', n: 2 })],
+          dropped: 0,
+          ofNextHour: 1,
+        });
+      },
+    );
+
+    it.each(GRAINS)(
+      '%s: the group row of such a line is on the end minute: left to the next hour, not dropped',
+      (_grain, _last, lineMs) => {
+        // The groups query prints toStartOfMinute of the line's time.
+        const row = groupRow({ minute: chTime(Math.floor(lineMs / MIN) * MIN), n: 2 });
+        expect(parseGroupRow(row, hour)).toBeNull();
+        expect(isGroupRowOfNextHour(row, hour)).toBe(true);
+        expect(logs.parseGroupRowOfNextHour(row, hour)).toMatchObject({
+          minuteMs: H04 + HOUR,
+          n: 2,
+        });
+      },
+    );
+
+    it('a line a minute or more past the end is a row that fails its checks (the totals are then not whole)', () => {
+      const read = logs.readTotalsAnswer(
+        [totalsRow({ last_seen: '2026-11-21 05:01:00.000000000' })],
+        hour,
+      );
+      expect(read).toEqual({ rows: [], dropped: 1, ofNextHour: 0 });
+      expect(logs.AUTH_LOGS_END_GRAIN_MS).toBe(MIN);
+    });
+
+    it('the start is not widened: a line before the hour still fails its checks', () => {
+      expect(
+        logs.readTotalsAnswer([totalsRow({ first_seen: '2026-11-21 03:59:59.999000000' })], hour),
+      ).toEqual({ rows: [], dropped: 1, ofNextHour: 0 });
+    });
   });
 
   it('a group row at the minute the hour ends is of the next hour: not a row of this one, and told apart from a row that fails its checks', () => {
@@ -1538,15 +1616,138 @@ describe("one hour's elements for the writer", () => {
         totalsAfterGroups: totalsOf([totalsRow({ n: listedSum + 1 })]),
       });
       expect(overCap(lower)).toEqual([['password_guessing', 'phone', 50]]);
-      // It is read for the remainder only: the log line and the flagged counts come from the first.
-      const only = buildCapped([totalsRow({ n: listedSum })], {
-        totalsAfterGroups: totalsOf([
-          totalsRow({ n: listedSum }),
-          totalsRow({ kind: 'token_other', n: 9 }),
-        ]),
+      // Besides the remainder it is read for the requests of an unknown form
+      // only (REVIEW-4, L18): per source the larger of the two answers is
+      // flagged. The log line and every other count come from the first.
+      const only = buildCapped(
+        [totalsRow({ n: listedSum }), totalsRow({ kind: 'token_other', caller: 'other', n: 2 })],
+        {
+          totalsAfterGroups: totalsOf([
+            totalsRow({ n: listedSum }),
+            totalsRow({ kind: 'token_other', n: 9 }),
+            totalsRow({ kind: 'token_other', caller: 'other', n: 1 }),
+            totalsRow({ kind: 'refresh', n: 70 }),
+          ]),
+        },
+      );
+      expect(only.unclassified).toBe(9 + 2);
+      expect(
+        only.elements
+          .filter((e) => e.outcome === 'flagged')
+          .map((e) => [e.reason, e.source, e.count]),
+      ).toEqual([
+        ['unclassified_sign_in_refusals', 'api', 2],
+        ['unclassified_sign_in_refusals', 'phone', 9],
+      ]);
+      expect(only.notStored.refresh).toBe(0);
+      expect(Object.keys(only.seen)).not.toContain('refresh 400 phone other');
+    });
+
+    describe('a line on the instant the hour ends, listed by full groups on that minute, is stored once (REVIEW-4, L16)', () => {
+      // REVIEW-4's probe: 198 group rows inside the hour and one on the
+      // minute it ends (199 rows: a full answer); the totals hold all 199
+      // lines, the last on the end's instant.
+      const inside = Array.from({ length: AUTH_LOGS_ROW_LIMIT - 1 }, (_, i) =>
+        groupRow({
+          minute: minuteOf(H04, i % 60),
+          country: ['NL', 'US', 'DE', 'FR'][Math.floor(i / 60)]!,
+          n: 1,
+        }),
+      );
+      const atEnd = groupRow({ minute: minuteOf(H04, 60), n: 1 });
+      const totals199 = [totalsRow({ n: 199, last_seen: '2026-11-21 05:00:00.000000000' })];
+      const build = (over: Partial<Parameters<typeof buildHourElements>[0]> = {}) =>
+        buildHourElements({
+          hour,
+          groups: parsed(inside),
+          groupsCapped: true,
+          groupsDropped: 0,
+          totals: totalsOf(totals199),
+          recorded: null,
+          groupsAtHourEnd: [logs.parseGroupRowOfNextHour(atEnd, hour)!],
+          ...over,
+        });
+      const stored = (out: ReturnType<typeof build>) =>
+        out.elements.reduce((s, e) => s + e.count, 0);
+      // The next hour lists the line at its first minute and stores it.
+      const nextHour = buildHourElements({
+        hour: hourAt(H04 + HOUR),
+        groups: [parseGroupRow(atEnd, hourAt(H04 + HOUR))!],
+        groupsCapped: false,
+        groupsDropped: 0,
+        totals: [parseTotalsRow(totalsRow({ n: 1 }, H04 + HOUR), hourAt(H04 + HOUR))!],
+        recorded: null,
       });
-      expect(only.unclassified).toBe(0);
-      expect(only.elements.some((e) => e.outcome === 'flagged')).toBe(false);
+
+      it('199 lines store 199, not 200: 198 in their hour, the last in the next', () => {
+        expect(stored(build())).toBe(198);
+        expect(build().remainder).toBe(0);
+        expect(stored(nextHour)).toBe(1);
+        expect(stored(build()) + stored(nextHour)).toBe(199);
+      });
+
+      it('the same with the totals read again after the groups, whole', () => {
+        const out = build({ totalsAfterGroups: totalsOf(totals199), totalsAfterGroupsWhole: true });
+        expect(stored(out)).toBe(198);
+      });
+
+      it('a line that arrived after the first totals is still counted: only the answer read after the groups is trusted to hold the end lines', () => {
+        // First totals: 190 (read before 9 of the lines and the end line
+        // arrived); second, whole: all 199 + 5 not listed.
+        const out = build({
+          totals: totalsOf([totalsRow({ n: 190 })]),
+          totalsAfterGroups: totalsOf([
+            totalsRow({ n: 204, last_seen: '2026-11-21 05:00:00.000000000' }),
+          ]),
+          totalsAfterGroupsWhole: true,
+        });
+        expect(out.remainder).toBe(5);
+        expect(stored(out)).toBe(198 + 5);
+      });
+
+      it('a second answer that is not whole: the first answer is not taken the end line off (it may not hold it), so it is stored twice, never short', () => {
+        const out = build({
+          totalsAfterGroups: totalsOf(totals199),
+          totalsAfterGroupsWhole: false,
+        });
+        expect(stored(out)).toBe(199);
+      });
+
+      it('an end line whose totals row is not in the answer (a row of the next hour only) takes nothing off', () => {
+        // The totals hold the 198 listed lines of the hour, and 5 of our
+        // server's client string from another network (stored as api, none
+        // listed); the end line is a browser's (api too), and its row, made
+        // only of end lines, was left to the next hour (readTotalsAnswer).
+        const out = build({
+          totals: totalsOf([
+            totalsRow({ n: 198 }),
+            totalsRow({ caller: 'server', network: 'other', n: 5 }),
+          ]),
+          groupsAtHourEnd: [
+            logs.parseGroupRowOfNextHour(
+              groupRow({ minute: minuteOf(H04, 60), caller: 'other', n: 1 }),
+              hour,
+            )!,
+          ],
+        });
+        // The same kind (a wrong password, api), another row: nothing taken off.
+        expect(out.remainder).toBe(5);
+        expect(stored(out)).toBe(198 + 5);
+      });
+
+      it('never below a line of the hour: end lines of another kind take nothing off this one', () => {
+        const out = build({
+          totals: totalsOf([totalsRow({ n: 199 + 7 })]),
+          groupsAtHourEnd: [
+            logs.parseGroupRowOfNextHour(
+              groupRow({ minute: minuteOf(H04, 60), status: '429', caller: 'other', n: 50 }),
+              hour,
+            )!,
+          ],
+        });
+        // 199 + 7 lines, 198 listed: 8 not listed, nothing taken off.
+        expect(out.remainder).toBe(8);
+      });
     });
   });
 });
@@ -3405,6 +3606,66 @@ describe('a run: six hours, oldest first, each written once', () => {
         expect(summary.hours[1]!.reconcile?.carried).toBeUndefined();
       });
 
+      it.each([
+        ['millisecond', '2026-11-21 07:00:00.000999000'],
+        ['second', '2026-11-21 07:00:00.999000000'],
+        ['minute', '2026-11-21 07:00:59.999000000'],
+      ])(
+        "the next hour's totals holding lines of the hour after it (an end compared at the %s): still whole, the carry is made",
+        async (_grain, past) => {
+          serverHour(H(5), 3);
+          hourAnswers(
+            H(6),
+            [],
+            [
+              // Hour 06's own lines of our server's form, one past its end.
+              totalsRow({ ...ours, n: 2, last_seen: past }, H(6)),
+              // A row made only of lines of hour 07: left to it.
+              totalsRow(
+                { kind: 'verify', status: '422', ...ours, n: 4, first_seen: past, last_seen: past },
+                H(6),
+              ),
+            ],
+          );
+          recordWeb(H(6), 'wrong_password', 3, { minute: 0 });
+          recordWeb(H(6), 'wrong_password', 2, { minute: 20 });
+          const summary = full(await run());
+          // Hour 06 recorded 5 against its own 2 (the line of 07 counted too:
+          // one more, which can only make the carry smaller): 3 carried.
+          expect(summary.hours[1]).toMatchObject({
+            outcome: 'nothing_to_store',
+            reconcile: { excess: { password: 0, code: 0 }, carried: { password: 3, code: 0 } },
+          });
+          expect(h.rpc).not.toHaveBeenCalled();
+          expect(h.report).not.toHaveBeenCalled();
+        },
+      );
+
+      it("a row of the next hour's totals made only of lines of the hour after it is not that hour's gateway count: the carry is the one it was made for", async () => {
+        serverHour(H(5), 0, 3);
+        recordWeb(H(6), 'wrong_code', 3, { minute: 0 });
+        const END7 = '2026-11-21 07:00:00.412000000';
+        hourAnswers(
+          H(6),
+          [],
+          [
+            totalsRow(
+              { kind: 'verify', status: '422', ...ours, n: 4, first_seen: END7, last_seen: END7 },
+              H(6),
+            ),
+          ],
+        );
+        const summary = full(await run());
+        expect(summary.hours[1]).toMatchObject({
+          reconcile: { excess: { password: 0, code: 0 }, carried: { password: 0, code: 3 } },
+        });
+        expect(summary.hours[2]).toMatchObject({
+          reconcile: { gateway: { password: 0, code: 0 }, excess: { password: 0, code: 0 } },
+        });
+        expect(h.rpc).not.toHaveBeenCalled();
+        expect(summary).toMatchObject({ totalsAtHourEnd: 4, totalsIncomplete: 0 });
+      });
+
       it('the newest hour waits one run when it would be flagged: the hour after it is not complete yet', async () => {
         // 09:00 to 10:00 is the newest complete hour at 10:10. Its edge
         // refusals are recorded in hour 10, which is still running.
@@ -3840,8 +4101,8 @@ describe('a run: six hours, oldest first, each written once', () => {
         [],
         [
           totalsRow({ kind: 'refresh', n: 6 }, H(5)),
-          // Our server's row, with an instant outside the hour: not read.
-          totalsRow({ ...ours, n: 50, last_seen: chTime(H(6) + 5_000) }, H(5)),
+          // Our server's row, with an instant a minute past the hour: not read.
+          totalsRow({ ...ours, n: 50, last_seen: chTime(H(6) + 60_000) }, H(5)),
           totalsRow({ kind: 'mystery' }, H(5)),
         ],
       );
@@ -3913,6 +4174,63 @@ describe('a run: six hours, oldest first, each written once', () => {
       expect(h.report).not.toHaveBeenCalled();
     });
 
+    it.each([
+      ['millisecond', '2026-11-21 06:00:00.000999000'],
+      ['second', '2026-11-21 06:00:00.412000000'],
+      ['minute', '2026-11-21 06:00:59.999000000'],
+    ])(
+      'lines in the first %s of the next hour, answered for this one too: no failure, no flag, no report, each stored once (Corrected 2026-11-22, review 4)',
+      async (_grain, past) => {
+        hourAnswers(
+          H(5),
+          [groupRow({ n: 2 }, H(5)), groupRow({ minute: minuteOf(H(5), 60), n: 1 }, H(5))],
+          [
+            // Two lines of the hour and one of the next.
+            totalsRow({ n: 3, last_seen: past }, H(5)),
+            // Our server's form: two of the hour, recorded, and one of the next.
+            totalsRow({ ...ours, n: 3, last_seen: past }, H(5)),
+            // An unknown form, only in the next hour: left to it.
+            totalsRow({ kind: 'token_other', n: 1, first_seen: past, last_seen: past }, H(5)),
+          ],
+        );
+        recordWeb(H(5), 'wrong_password', 2);
+        // The next hour's own answers hold the same lines of its first minute.
+        hourAnswers(
+          H(6),
+          [groupRow({ minute: minuteOf(H(6), 0), n: 1 }, H(6))],
+          [
+            totalsRow({ n: 1, first_seen: past, last_seen: past }, H(6)),
+            totalsRow({ kind: 'token_other', n: 1, first_seen: past, last_seen: past }, H(6)),
+          ],
+        );
+        const summary = full(await run());
+        expect(summary).toMatchObject({
+          dropped: 0,
+          totalsIncomplete: 0,
+          atHourEnd: 1,
+          totalsAtHourEnd: 1,
+          unrecordedFlags: 0,
+        });
+        // Hour 05: its two wrong passwords, nothing flagged.
+        expect(written(0)).toEqual([
+          expect.objectContaining({ reason: 'wrong_password', count: 2, at_ms: H(5) + 5 * MIN }),
+        ]);
+        expect(summary.hours[1]).toMatchObject({
+          outcome: 'stored',
+          reconcile: { gateway: { password: 3, code: 0 }, excess: { password: 1, code: 0 } },
+        });
+        // Hour 06: the line of its first minute, and the unknown form, flagged there only.
+        expect(written(1).map((e) => [e.reason, e.count, e.at_ms])).toEqual([
+          ['unclassified_sign_in_refusals', 1, H(6)],
+          ['wrong_password', 1, H(6)],
+        ]);
+        expect(reportCauses()).toEqual(['flagged_stored']);
+        expect(reportsOf('flagged_stored')[0]![1]).toMatchObject({
+          extra: { hour: '2026-11-21T06:00Z', hours: 1 },
+        });
+      },
+    );
+
     it('such a row among full groups does not cancel the remainder', async () => {
       const rows = [
         ...Array.from({ length: AUTH_LOGS_ROW_LIMIT - 1 }, (_, i) =>
@@ -3933,12 +4251,92 @@ describe('a run: six hours, oldest first, each written once', () => {
       const summary = full(await run());
       const elements = written() as Array<{ reason: string; count: number; at_ms: number }>;
       expect(summary).toMatchObject({ capped: 1, remainderSkipped: 0, atHourEnd: 1, dropped: 0 });
-      // The 30 not listed, and the one line on the last instant (counted here
-      // as well as in its own hour: one line more is the safe direction).
+      // The 30 not listed. The one line on the last instant was listed on
+      // the end minute: it is the next hour's, and is not in this remainder
+      // (REVIEW-4, L16; it was counted twice before).
       expect(elements.filter((e) => e.reason === 'auth_log_over_cap')).toEqual([
-        expect.objectContaining({ count: 31 }),
+        expect.objectContaining({ count: 30 }),
       ]);
       expect(elements.every((e) => e.at_ms < H(9))).toBe(true);
+    });
+
+    it("REVIEW-4's probe through a run: 199 lines, the last on the instant hour 04 ends, store 199 over the two hours", async () => {
+      const rows = [
+        ...Array.from({ length: AUTH_LOGS_ROW_LIMIT - 1 }, (_, i) =>
+          groupRow(
+            {
+              minute: minuteOf(H(4), i % 60),
+              country: ['NL', 'US', 'DE', 'FR'][Math.floor(i / 60)]!,
+              n: 1,
+            },
+            H(4),
+          ),
+        ),
+        groupRow({ minute: minuteOf(H(4), 60), n: 1 }, H(4)),
+      ];
+      const END4 = '2026-11-21 05:00:00.000000000';
+      hourAnswers(H(4), rows, [totalsRow({ n: 199, last_seen: END4 }, H(4))]);
+      hourAnswers(
+        H(5),
+        [groupRow({ minute: minuteOf(H(5), 0), n: 1 }, H(5))],
+        [totalsRow({ n: 1, first_seen: END4, last_seen: END4 }, H(5))],
+      );
+      const summary = full(await run());
+      expect(summary).toMatchObject({ capped: 1, atHourEnd: 1, eventsStored: 199 });
+      expect(h.stored.filter((r) => r.hour === iso(H(4)))).toHaveLength(198);
+      expect(h.stored.filter((r) => r.hour === iso(H(5)))).toHaveLength(1);
+    });
+
+    it('the same when the totals read again are not whole: the first answer keeps the end line (stored twice, never short)', async () => {
+      const rows = [
+        ...Array.from({ length: AUTH_LOGS_ROW_LIMIT - 1 }, (_, i) =>
+          groupRow(
+            {
+              minute: minuteOf(H(4), i % 60),
+              country: ['NL', 'US', 'DE', 'FR'][Math.floor(i / 60)]!,
+              n: 1,
+            },
+            H(4),
+          ),
+        ),
+        groupRow({ minute: minuteOf(H(4), 60), n: 1 }, H(4)),
+      ];
+      const END4 = '2026-11-21 05:00:00.000000000';
+      let asked = 0;
+      answers.set(`groups@${iso(H(4))}`, ok(rows));
+      answers.set(`totals@${iso(H(4))}`, () => {
+        asked += 1;
+        const first = totalsRow({ n: 199, last_seen: END4 }, H(4));
+        // The second answer: the same row, and one row that fails its checks.
+        return ok(asked === 1 ? [first] : [first, totalsRow({ kind: 'mystery' }, H(4))])({});
+      });
+      const summary = full(await run());
+      expect(asked).toBe(2);
+      expect(summary.hours[0]).toMatchObject({ outcome: 'stored', events: 199 });
+    });
+
+    it('a group row was dropped: the totals are not read a second time (no remainder would use them) (REVIEW-4, L18)', async () => {
+      const rows = [
+        ...Array.from({ length: AUTH_LOGS_ROW_LIMIT - 1 }, (_, i) =>
+          groupRow(
+            {
+              minute: minuteOf(H(8), i % 60),
+              country: ['NL', 'US', 'DE', 'FR'][Math.floor(i / 60)]!,
+              n: 1,
+            },
+            H(8),
+          ),
+        ),
+        groupRow({ status: 'x' }, H(8)),
+      ];
+      hourAnswers(H(8), rows, [totalsRow({ n: 250 }, H(8))]);
+      const summary = full(await run());
+      expect(
+        fetches
+          .filter((f) => startOf(f) === iso(H(8)))
+          .map((f) => (sqlOf(f) === AUTH_LOGS_GROUPS_SQL ? 'groups' : 'totals')),
+      ).toEqual(['totals', 'groups']);
+      expect(summary).toMatchObject({ capped: 1, remainderSkipped: 1, dropped: 1, logsCalls: 7 });
     });
   });
 
@@ -4222,6 +4620,67 @@ describe('failures: reported once, in plain words and codes, never the token', (
       expect(fetches.map(startOf)).toContain(iso(H(5)));
     },
   );
+
+  describe('a failure on the oldest hour of the window says that hour is lost: the next run no longer reads it (REVIEW-4, L17)', () => {
+    const LOST =
+      '; that was at the oldest of the six hours this job reads, which the next run no longer reads, so refused sign-ins in it are never counted';
+
+    it.each([
+      ['a 5xx', status(503), 'logs_unavailable', "Supabase's logs could not be read (status 503)"],
+      ['a timeout', never, 'logs_timeout', "Supabase's logs did not answer within 20 seconds"],
+      [
+        'an answer it does not read',
+        () => new Response('not json', { status: 200 }),
+        'logs_bad_answer',
+        "Supabase's logs answered in a shape this job does not read",
+      ],
+    ] as Array<[string, Answer, string, string]>)(
+      '%s on hour 04: still reported, with words that say the hour is lost',
+      async (_what, answer, cause, words) => {
+        vi.useFakeTimers();
+        vi.setSystemTime(NOW);
+        answers.set(`totals@${iso(H(4))}`, answer);
+        const pending = run({ nowMs: undefined });
+        await vi.advanceTimersByTimeAsync(25_000);
+        const summary = full(await pending);
+        expect(summary.hours[0]).toMatchObject({ outcome: 'failed' });
+        const sent = reportsOf(cause);
+        expect(sent).toHaveLength(1);
+        expect((sent[0]![0] as Error).message).toBe(words + LOST);
+        expect(sent[0]![1]).toMatchObject({ extra: { cause, hour: '2026-11-21T04:00Z' } });
+        expect((sent[0]![0] as Error).message).not.toContain('left for the next run');
+      },
+    );
+
+    it('the same failure on a newer hour is left for the next run, and says so', async () => {
+      answers.set(`totals@${iso(H(5))}`, status(503));
+      await run();
+      const [err] = reportsOf('logs_unavailable')[0]!;
+      expect((err as Error).message).toBe(
+        "Supabase's logs could not be read (status 503); the hour is left for the next run",
+      );
+    });
+
+    it('one failure on hour 04 and again on a newer hour: one report, with the lost words and both hours', async () => {
+      answers.set(`totals@${iso(H(4))}`, status(503));
+      answers.set(`totals@${iso(H(7))}`, status(503));
+      await run();
+      const sent = reportsOf('logs_unavailable');
+      expect(sent).toHaveLength(1);
+      expect((sent[0]![0] as Error).message).toContain(LOST);
+      expect(sent[0]![1]).toMatchObject({ extra: { hour: '2026-11-21T04:00Z', hours: 2 } });
+    });
+
+    it('a refused token on hour 04 says so too', async () => {
+      answers.set(`totals@${iso(H(4))}`, status(401));
+      await run();
+      const [err] = reportsOf('token_refused')[0]!;
+      expect((err as Error).message).toBe(
+        "Refused sign-ins were not read from Supabase's logs: the logs token was refused (expired or deleted): the owner makes a new one" +
+          LOST,
+      );
+    });
+  });
 
   it('a failed totals query leaves the hour too, with nothing written', async () => {
     answers.set(`groups@${iso(H(4))}`, ok([groupRow()]));
@@ -4973,7 +5432,9 @@ describe("the logs endpoint's limit: a budget of calls, the oldest hour first, a
       });
       expect(h.report).toHaveBeenCalledTimes(1);
       const [err, ctx] = h.report.mock.calls[0]!;
-      expect(String(err)).toContain('too many (status 429) at the oldest of the six hours');
+      expect(String(err)).toContain(
+        'too many (status 429); that was at the oldest of the six hours this job reads, which the next run no longer reads',
+      );
       expect(ctx).toMatchObject({
         tag: 'cron.security-events-auth-logs',
         level: 'error',
