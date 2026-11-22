@@ -46,7 +46,19 @@ export type PlatformAuditAction =
    * in the same transaction as the change (never through recordPlatformAudit):
    * detail {permission, before, after, target_role}.
    */
-  | 'permission_exception_changed';
+  | 'permission_exception_changed'
+  /**
+   * The passkey switches (part 2, plan 2.6 H; server/actions/platform/passkeys.ts).
+   * passkeys_switched: a platform-wide setting, detail {setting: 'passkeys_on' |
+   * 'passkey_adds_on', from, to}. org_passkeys_switched: one organization's
+   * switch, target organization, detail {from, to}. The database accepts these
+   * two words only once the migration adding them to
+   * platform_admin_audit_action_check is live; until then the insert is
+   * refused, and the console switches an ON back off (it never stands
+   * unrecorded).
+   */
+  | 'passkeys_switched'
+  | 'org_passkeys_switched';
 
 export interface RecordPlatformAuditInput {
   actorUserId: string;
