@@ -313,7 +313,7 @@ describe.each([
   it('turns it on when the settings row does not exist: an upsert of the one row with only this column', async () => {
     settings = null;
     const res = await action({ on: true, confirm: 'PASSKEYS' });
-    expect(res).toEqual({ ok: true, data: { on: true, changed: true } });
+    expect(res).toEqual({ ok: true, data: { on: true, changed: true, recorded: true } });
     const values = lastUpsert()!;
     expect(values).toMatchObject({ id: true, [column]: true, updated_by: ADMIN.userId });
     expect(Object.keys(values).sort()).toEqual(['id', column, 'updated_at', 'updated_by'].sort());
@@ -366,7 +366,7 @@ describe.each([
       org_deletion_passphrase_hash: null,
     };
     const res = await action({ on: false, confirm: 'PASSKEYS' });
-    expect(res).toEqual({ ok: true, data: { on: false, changed: true } });
+    expect(res).toEqual({ ok: true, data: { on: false, changed: true, recorded: true } });
     expect(settings![column]).toBe(false);
     expect(settings![other]).toBe(true);
     expect(h.recordPlatformAudit).toHaveBeenCalledWith(
@@ -380,7 +380,7 @@ describe.each([
   it('a press that changes nothing writes nothing and records nothing (no row is off)', async () => {
     settings = null;
     const res = await action({ on: false, confirm: 'PASSKEYS' });
-    expect(res).toEqual({ ok: true, data: { on: false, changed: false } });
+    expect(res).toEqual({ ok: true, data: { on: false, changed: false, recorded: false } });
     expect(writes()).toBe(0);
     expect(h.recordPlatformAudit).not.toHaveBeenCalled();
   });
@@ -394,7 +394,7 @@ describe.each([
       org_deletion_passphrase_hash: null,
     };
     const res = await action({ on: true, confirm: 'PASSKEYS' });
-    expect(res).toEqual({ ok: true, data: { on: true, changed: false } });
+    expect(res).toEqual({ ok: true, data: { on: true, changed: false, recorded: false } });
     expect(writes()).toBe(0);
     expect(h.recordPlatformAudit).not.toHaveBeenCalled();
   });
@@ -418,33 +418,70 @@ describe.each([
     expect(order).toEqual(['audit', 'write']);
   });
 
-  for (const [from, to] of [
-    [false, true],
-    [true, false],
-  ] as const) {
-    it(`${from ? 'ON' : 'OFF'} to ${to ? 'ON' : 'OFF'}: an audit row that cannot be written refuses, and nothing is switched`, async () => {
-      settings = {
-        id: true,
-        passkeys_on: from,
-        passkey_adds_on: from,
-        passkey_check_ends_sessions: false,
-        org_deletion_passphrase_hash: null,
-      };
-      h.recordPlatformAudit.mockImplementation(async () => false);
-      const res = await action({ on: to, confirm: 'PASSKEYS' });
-      expect(res).toEqual({
-        ok: false,
-        error: {
-          code: 'internal_error',
-          message:
-            'Could not record the change in the platform audit, so nothing was switched. Try again.',
-        },
-      });
-      expect(writes()).toBe(0);
-      expect(settings![column]).toBe(from);
-      expect(h.reportError).toHaveBeenCalled();
+  it('turning ON: an audit row that cannot be written refuses, and nothing is switched', async () => {
+    h.recordPlatformAudit.mockImplementation(async () => false);
+    const res = await action({ on: true, confirm: 'PASSKEYS' });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message:
+          'Could not record the change in the platform audit, so nothing was switched. Try again.',
+      },
     });
-  }
+    expect(writes()).toBe(0);
+    expect(settings).toBeNull();
+    expect(h.reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: `actions.platform.passkeys.${column}.not_recorded` }),
+    );
+  });
+
+  it('turning OFF: switched first, then recorded', async () => {
+    settings = {
+      id: true,
+      passkeys_on: true,
+      passkey_adds_on: true,
+      passkey_check_ends_sessions: false,
+      org_deletion_passphrase_hash: null,
+    };
+    await action({ on: false, confirm: 'PASSKEYS' });
+    expect(order).toEqual(['write', 'audit']);
+  });
+
+  it('turning OFF: an audit row that cannot be written never holds it back; reported at error level with ids only, and the answer says so', async () => {
+    settings = {
+      id: true,
+      passkeys_on: true,
+      passkey_adds_on: true,
+      passkey_check_ends_sessions: false,
+      org_deletion_passphrase_hash: null,
+    };
+    h.recordPlatformAudit.mockImplementation(async () => false);
+    const res = await action({ on: false, confirm: 'PASSKEYS' });
+    expect(res).toEqual({ ok: true, data: { on: false, changed: true, recorded: false } });
+    expect(settings![column]).toBe(false);
+    expect(h.reportError).toHaveBeenCalledWith(expect.anything(), {
+      tag: `actions.platform.passkeys.${column}.off_not_recorded`,
+      level: 'error',
+      extra: { setting: column, to: false },
+    });
+    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain('@');
+  });
+
+  it('turning OFF: a write that fails is refused and records nothing', async () => {
+    settings = {
+      id: true,
+      passkeys_on: true,
+      passkey_adds_on: true,
+      passkey_check_ends_sessions: false,
+      org_deletion_passphrase_hash: null,
+    };
+    upsertErrors = [{ message: 'connection reset' }];
+    const res = await action({ on: false, confirm: 'PASSKEYS' });
+    expect(res.ok).toBe(false);
+    expect(h.recordPlatformAudit).not.toHaveBeenCalled();
+  });
 
   it('a write that fails after its record refuses, reports, and marks the record not applied', async () => {
     upsertErrors = [{ message: 'connection reset' }];
@@ -494,7 +531,7 @@ describe('setOrganizationPasskeysAction', () => {
       on: true,
       confirm: 'PASSKEYS',
     });
-    expect(res).toEqual({ ok: true, data: { on: true, changed: true } });
+    expect(res).toEqual({ ok: true, data: { on: true, changed: true, recorded: true } });
     expect([...switches]).toEqual([ORG]);
     expect(adminStub.chainsAll.get('organization_passkey_switches.insert')).toEqual([['insert']]);
     expect(adminStub.chainArgsAll.get('organization_passkey_switches.insert')?.[0]?.[0]).toEqual([
@@ -537,7 +574,7 @@ describe('setOrganizationPasskeysAction', () => {
     });
     expect(res).toEqual({
       ok: true,
-      data: { on: false, changed: true, membersWithPasskeys: 2 },
+      data: { on: false, changed: true, recorded: true, membersWithPasskeys: 2 },
     });
     expect([...switches]).toEqual([OTHER_ORG]);
     expect(h.recordPlatformAudit).toHaveBeenCalledWith(
@@ -559,7 +596,7 @@ describe('setOrganizationPasskeysAction', () => {
     });
     expect(res).toEqual({
       ok: true,
-      data: { on: false, changed: true, membersWithPasskeys: 0 },
+      data: { on: false, changed: true, recorded: true, membersWithPasskeys: 0 },
     });
   });
 
@@ -573,7 +610,7 @@ describe('setOrganizationPasskeysAction', () => {
     });
     expect(res).toEqual({
       ok: true,
-      data: { on: false, changed: true, membersWithPasskeys: null },
+      data: { on: false, changed: true, recorded: true, membersWithPasskeys: null },
     });
     expect(switches.size).toBe(0);
     expect(h.reportError).toHaveBeenCalled();
@@ -589,7 +626,7 @@ describe('setOrganizationPasskeysAction', () => {
     });
     expect(res).toEqual({
       ok: true,
-      data: { on: false, changed: false, membersWithPasskeys: 1 },
+      data: { on: false, changed: false, recorded: false, membersWithPasskeys: 1 },
     });
     expect(writes()).toBe(0);
     expect(h.recordPlatformAudit).not.toHaveBeenCalled();
@@ -602,7 +639,7 @@ describe('setOrganizationPasskeysAction', () => {
       on: true,
       confirm: 'PASSKEYS',
     });
-    expect(res).toEqual({ ok: true, data: { on: true, changed: false } });
+    expect(res).toEqual({ ok: true, data: { on: true, changed: false, recorded: false } });
     expect(writes()).toBe(0);
     expect(h.recordPlatformAudit).not.toHaveBeenCalled();
   });
@@ -675,7 +712,7 @@ describe('setOrganizationPasskeysAction', () => {
       on: true,
       confirm: 'PASSKEYS',
     });
-    expect(res).toEqual({ ok: true, data: { on: true, changed: false } });
+    expect(res).toEqual({ ok: true, data: { on: true, changed: false, recorded: false } });
     expect(h.recordPlatformAudit).toHaveBeenLastCalledWith(
       expect.objectContaining({ detail: { from: false, to: true, not_applied: true } }),
     );
@@ -710,30 +747,56 @@ describe('setOrganizationPasskeysAction', () => {
     );
   });
 
-  for (const on of [true, false]) {
-    it(`turning ${on ? 'on' : 'off'}: an audit row that cannot be written refuses, and nothing is switched`, async () => {
-      switches = on ? new Set() : new Set([ORG]);
-      h.recordPlatformAudit.mockImplementation(async () => false);
-      const res = await setOrganizationPasskeysAction({
-        organizationId: ORG,
-        on,
-        confirm: 'PASSKEYS',
-      });
-      expect(res).toEqual({
-        ok: false,
-        error: {
-          code: 'internal_error',
-          message:
-            'Could not record the change in the platform audit, so nothing was switched. Try again.',
-        },
-      });
-      expect(writes()).toBe(0);
-      expect(switches.has(ORG)).toBe(!on);
-      expect(h.reportError).toHaveBeenCalled();
+  it('turning on: an audit row that cannot be written refuses, and nothing is switched', async () => {
+    h.recordPlatformAudit.mockImplementation(async () => false);
+    const res = await setOrganizationPasskeysAction({
+      organizationId: ORG,
+      on: true,
+      confirm: 'PASSKEYS',
     });
-  }
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message:
+          'Could not record the change in the platform audit, so nothing was switched. Try again.',
+      },
+    });
+    expect(writes()).toBe(0);
+    expect(switches.has(ORG)).toBe(false);
+    expect(h.reportError).toHaveBeenCalled();
+  });
 
-  it('a delete that fails refuses and marks its record not applied', async () => {
+  it('turning off: switched first, then recorded', async () => {
+    switches = new Set([ORG]);
+    await setOrganizationPasskeysAction({ organizationId: ORG, on: false, confirm: 'PASSKEYS' });
+    expect(order).toEqual(['write', 'audit']);
+  });
+
+  it('turning off: an audit row that cannot be written never holds it back; reported at error level with ids only, and the answer says so', async () => {
+    switches = new Set([ORG]);
+    members = [member(U1, ORG)];
+    passkeys = [{ user_id: U1, removed_at: null }];
+    h.recordPlatformAudit.mockImplementation(async () => false);
+    const res = await setOrganizationPasskeysAction({
+      organizationId: ORG,
+      on: false,
+      confirm: 'PASSKEYS',
+    });
+    expect(res).toEqual({
+      ok: true,
+      data: { on: false, changed: true, recorded: false, membersWithPasskeys: 1 },
+    });
+    expect(switches.has(ORG)).toBe(false);
+    expect(h.reportError).toHaveBeenCalledWith(expect.anything(), {
+      tag: 'actions.platform.passkeys.organization.off_not_recorded',
+      level: 'error',
+      extra: { organizationId: ORG, to: false },
+    });
+    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain('@');
+  });
+
+  it('turning off: a delete that fails is refused and records nothing', async () => {
     switches = new Set([ORG]);
     switchDeleteErrors = [{ message: 'connection reset' }];
     const res = await setOrganizationPasskeysAction({
@@ -749,9 +812,7 @@ describe('setOrganizationPasskeysAction', () => {
       },
     });
     expect(switches.has(ORG)).toBe(true);
-    expect(h.recordPlatformAudit).toHaveBeenLastCalledWith(
-      expect.objectContaining({ detail: { from: true, to: false, not_applied: true } }),
-    );
+    expect(h.recordPlatformAudit).not.toHaveBeenCalled();
   });
 
   it('the delete names this organization only', async () => {

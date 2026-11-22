@@ -21,6 +21,7 @@ import {
   membersStillHoldingWords,
   PASSKEY_SETTING_LABEL,
   PASSKEYS_CONFIRM_WORD,
+  PASSKEYS_COPY,
   type PlatformPasskeySetting,
 } from '@/lib/platform/passkeys-console';
 import {
@@ -119,15 +120,16 @@ export function PasskeySwitchControl({ target, on }: { target: PasskeySwitchTarg
         return;
       }
       const state = res.data.on ? 'on' : 'off';
+      const counted =
+        target.kind === 'organization' && !res.data.on && res.data.membersWithPasskeys !== undefined
+          ? ` ${membersStillHoldingWords(res.data.membersWithPasskeys)}`
+          : '';
       if (!res.data.changed) {
         toast.info(`${words.name} was already ${state}.`);
+      } else if (!res.data.recorded) {
+        // An OFF is made even when its record cannot be written; say both.
+        toast.warning(`${PASSKEYS_COPY.offNotRecorded}${counted}`);
       } else {
-        const counted =
-          target.kind === 'organization' &&
-          !res.data.on &&
-          res.data.membersWithPasskeys !== undefined
-            ? ` ${membersStillHoldingWords(res.data.membersWithPasskeys)}`
-            : '';
         toast.success(`${words.name}: ${res.data.on ? 'On' : 'Off'}.${counted}`);
       }
       setOpen(false);

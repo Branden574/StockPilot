@@ -40,9 +40,9 @@ const done = (data: Record<string, unknown>) => ({ ok: true, data });
 
 beforeEach(() => {
   vi.clearAllMocks();
-  h.kill.mockResolvedValue(done({ on: true, changed: true }));
-  h.adds.mockResolvedValue(done({ on: true, changed: true }));
-  h.org.mockResolvedValue(done({ on: true, changed: true }));
+  h.kill.mockResolvedValue(done({ on: true, changed: true, recorded: true }));
+  h.adds.mockResolvedValue(done({ on: true, changed: true, recorded: true }));
+  h.org.mockResolvedValue(done({ on: true, changed: true, recorded: true }));
   h.ensure.mockResolvedValue(true);
 });
 
@@ -99,7 +99,7 @@ describe('PasskeySwitchControl', () => {
   });
 
   it('new passkeys: turning off sends { on: false } to its own action', async () => {
-    h.adds.mockResolvedValue(done({ on: false, changed: true }));
+    h.adds.mockResolvedValue(done({ on: false, changed: true, recorded: true }));
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     render(<PasskeySwitchControl target={{ kind: 'platform', setting: 'passkey_adds_on' }} on />);
     await openAndType(user, 'Turn off', 'PASSKEYS');
@@ -110,7 +110,9 @@ describe('PasskeySwitchControl', () => {
   });
 
   it('an organization: sends its id, and after turning off says how many members still hold passkeys', async () => {
-    h.org.mockResolvedValue(done({ on: false, changed: true, membersWithPasskeys: 3 }));
+    h.org.mockResolvedValue(
+      done({ on: false, changed: true, recorded: true, membersWithPasskeys: 3 }),
+    );
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     render(
       <PasskeySwitchControl
@@ -140,7 +142,7 @@ describe('PasskeySwitchControl', () => {
           details: { reason: 'aal2_required' },
         },
       })
-      .mockResolvedValueOnce(done({ on: true, changed: true }));
+      .mockResolvedValueOnce(done({ on: true, changed: true, recorded: true }));
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     render(
       <PasskeySwitchControl target={{ kind: 'platform', setting: 'passkeys_on' }} on={false} />,
@@ -223,8 +225,29 @@ describe('PasskeySwitchControl', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
+  it('an OFF made without its record says it was made and that the record is missing, with the count', async () => {
+    h.org.mockResolvedValue(
+      done({ on: false, changed: true, recorded: false, membersWithPasskeys: 2 }),
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(
+      <PasskeySwitchControl
+        target={{ kind: 'organization', organizationId: ORG, organizationName: 'Example Academy' }}
+        on
+      />,
+    );
+    await openAndType(user, 'Turn off', 'PASSKEYS');
+    await user.click(screen.getByRole('button', { name: 'Turn off passkeys for Example Academy' }));
+    await waitFor(() =>
+      expect(h.toast.warning).toHaveBeenCalledWith(
+        'Turned off. The change was made, but its record could not be written to the platform audit. 2 members still hold passkeys. They keep working until they are removed.',
+      ),
+    );
+    expect(h.toast.success).not.toHaveBeenCalled();
+  });
+
   it('a press that changed nothing says it already was', async () => {
-    h.kill.mockResolvedValue(done({ on: true, changed: false }));
+    h.kill.mockResolvedValue(done({ on: true, changed: false, recorded: false }));
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     render(
       <PasskeySwitchControl target={{ kind: 'platform', setting: 'passkeys_on' }} on={false} />,

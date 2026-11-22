@@ -2529,9 +2529,10 @@ WEB_TESTS=(
   # and one organization's switch are pressed only by a platform admin on a
   # fresh step-up with the typed word PASSKEYS, checked before anything is
   # read or written; the settings row is upserted with only its own column;
-  # every change writes its platform audit row first, with the email Auth
-  # verified, and a press whose row cannot be written switches nothing,
-  # on or off.
+  # every change has its platform audit row with the email Auth verified.
+  # Turning on writes the row first and switches nothing without it; turning
+  # off always proceeds, and a row that cannot be written then is reported
+  # at error level and said in the answer.
   src/server/actions/platform/passkeys.test.ts
 )
 

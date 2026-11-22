@@ -24,9 +24,12 @@ export const PASSKEYS_COPY = {
   writeFailed: 'Could not change the passkey switch, so nothing was changed. Try again.',
   orgNotFound: 'Organization not found.',
   orgReadFailed: 'Could not read the organization, so nothing was changed. Try again.',
-  /** The audit row could not be written first: the press is refused, ON or OFF. */
+  /** Turning ON: the audit row could not be written first, so nothing was switched. */
   notRecorded:
     'Could not record the change in the platform audit, so nothing was switched. Try again.',
+  /** Turning OFF: made, but its audit row could not be written (reported at error level). */
+  offNotRecorded:
+    'Turned off. The change was made, but its record could not be written to the platform audit.',
 } as const;
 
 /** What the console says after an organization's passkeys are turned off. */

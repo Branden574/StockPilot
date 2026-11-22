@@ -39,22 +39,26 @@ import { err, ok, type ActionResult } from '@stockpilot/core';
  *   2. The input, then the typed word PASSKEYS, compared exactly.
  *   3. The current state, read (a failed read refuses; it is never "off").
  *      A press that changes nothing writes nothing and records nothing.
- *   4. The platform_admin_audit row FIRST: passkeys_switched (detail
- *      { setting, from, to }) or org_passkeys_switched (target organization,
- *      detail { from, to }), the actor's email the one Auth verified (the
- *      gate's verifiedEmail, never the profile column). When it does not land,
- *      the press is refused and NOTHING is switched, ON or OFF: a switch never
- *      changes without its record. (Until the migration adding these two
- *      words to platform_admin_audit's check is live, every press is refused
- *      this way.)
+ *   4. Turning ON (integrator's decision): the platform_admin_audit row
+ *      FIRST: passkeys_switched (detail { setting, from, to }) or
+ *      org_passkeys_switched (target organization, detail { from, to }), the
+ *      actor's email the one Auth verified (the gate's verifiedEmail, never the
+ *      profile column). When it does not land, nothing is switched and the
+ *      answer says so. (Until migration 0476 adds these two words to
+ *      platform_admin_audit's check, every ON is refused this way.)
  *   5. The write: an UPSERT of the one platform_settings row with only this
  *      column (the row may not exist in production, review F; an upsert
  *      leaves the other settings and the deletion passphrase as they are), or
  *      the organization's switch row inserted or deleted (service_role has
- *      select, insert and delete on that table, no update). A write that
+ *      select, insert and delete on that table, no update). An ON whose write
  *      fails after its record landed is refused, and a second row with the
  *      same words and detail not_applied: true says the first did not happen
- *      (best effort: when that row fails too, it is reported).
+ *      (best effort; reported when it fails too).
+ *      Turning OFF always proceeds: off is the safe direction and is never
+ *      held back by the audit path in an incident. Its record is written
+ *      after the switch; when it cannot be written, that is reported at
+ *      error level (ids only, never an email) and the answer says the change
+ *      was made but its record could not be written (recorded: false).
  *   6. An organization turned off (or already off) answers how many of its
  *      members still hold an active passkey (null when that cannot be read).
  *
@@ -69,6 +73,13 @@ export interface PasskeySwitchSaved {
   on: boolean;
   /** False when it already was in that state (nothing written, nothing recorded). */
   changed: boolean;
+  /**
+   * Whether the change's audit row landed. Always true for a change to ON
+   * (refused without it); false only for an OFF that was made but whose
+   * record could not be written (reported at error level). False when
+   * nothing changed.
+   */
+  recorded: boolean;
 }
 
 export interface OrganizationPasskeysSaved extends PasskeySwitchSaved {
@@ -175,7 +186,7 @@ async function setPlatformSwitch(
     return err('internal_error', PASSKEYS_COPY.readFailed);
   }
   const from = (read.data as Record<string, unknown> | null)?.[setting] === true;
-  if (from === on) return ok({ on, changed: false });
+  if (from === on) return ok({ on, changed: false, recorded: false });
 
   const record = (extra: Record<string, unknown> = {}) =>
     recordPlatformAudit({
@@ -185,7 +196,8 @@ async function setPlatformSwitch(
       detail: { setting, from, to: on, ...extra },
     });
 
-  if (!(await record())) {
+  // ON: the record first; without it nothing is switched.
+  if (on && !(await record())) {
     await reportError(new Error('passkey switch refused: its audit row could not be written'), {
       tag: `${tag}.not_recorded`,
       extra: { to: on },
@@ -201,7 +213,7 @@ async function setPlatformSwitch(
   });
   if (written.error) {
     await reportError(new Error(written.error.message), { tag: `${tag}.write`, extra: { to: on } });
-    if (!(await record({ not_applied: true }))) {
+    if (on && !(await record({ not_applied: true }))) {
       await reportError(new Error('a passkey switch record could not be marked not applied'), {
         tag: `${tag}.not_applied_unrecorded`,
         extra: { to: on },
@@ -209,7 +221,16 @@ async function setPlatformSwitch(
     }
     return err('internal_error', PASSKEYS_COPY.writeFailed);
   }
-  return ok({ on, changed: true });
+  // OFF: switched first, never held back by the audit path; then recorded.
+  if (!on && !(await record())) {
+    await reportError(new Error('passkey switch turned off without its audit row'), {
+      tag: `${tag}.off_not_recorded`,
+      level: 'error',
+      extra: { setting, to: on },
+    });
+    return ok({ on, changed: true, recorded: false });
+  }
+  return ok({ on, changed: true, recorded: true });
 }
 
 /** Turn passkeys on or off for one organization (a row in organization_passkey_switches). */
@@ -255,14 +276,16 @@ export async function setOrganizationPasskeysAction(input: {
   const from = current.data !== null;
 
   /** The answer for an organization that is off now: who still holds a passkey. */
-  const offAnswer = async (changed: boolean) =>
+  const offAnswer = async (changed: boolean, recorded: boolean) =>
     ok({
       on: false,
       changed,
+      recorded,
       membersWithPasskeys: await countOrganizationPasskeyHolders(admin, organizationId),
     });
 
-  if (from === on) return on ? ok({ on, changed: false }) : offAnswer(false);
+  if (from === on)
+    return on ? ok({ on, changed: false, recorded: false }) : offAnswer(false, false);
 
   const record = (extra: Record<string, unknown> = {}) =>
     recordPlatformAudit({
@@ -285,7 +308,8 @@ export async function setOrganizationPasskeysAction(input: {
     }
   };
 
-  if (!(await record())) {
+  // ON: the record first; without it nothing is switched.
+  if (on && !(await record())) {
     await reportError(
       new Error('organization passkey switch refused: its audit row could not be written'),
       {
@@ -306,14 +330,24 @@ export async function setOrganizationPasskeysAction(input: {
     if (on && (written.error as { code?: string }).code === '23505') {
       // Another admin turned it on first: this press changed nothing.
       await markNotApplied();
-      return ok({ on: true, changed: false });
+      return ok({ on: true, changed: false, recorded: false });
     }
     await reportError(new Error(written.error.message), {
       tag: `${tag}.write`,
       extra: { organizationId, to: on },
     });
-    await markNotApplied();
+    if (on) await markNotApplied();
     return err('internal_error', PASSKEYS_COPY.writeFailed);
   }
-  return on ? ok({ on, changed: true }) : offAnswer(true);
+  if (on) return ok({ on, changed: true, recorded: true });
+  // OFF: switched first, never held back by the audit path; then recorded.
+  if (!(await record())) {
+    await reportError(new Error('organization passkey switch turned off without its audit row'), {
+      tag: `${tag}.off_not_recorded`,
+      level: 'error',
+      extra: { organizationId, to: on },
+    });
+    return offAnswer(true, false);
+  }
+  return offAnswer(true, true);
 }
