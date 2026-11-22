@@ -420,6 +420,50 @@ describe('consumeMfaRecoveryCodeAction: a code is spent only as the validated ac
   });
 });
 
+/** The session the cookie store holds now (any of its chunks), or null when none is left. */
+async function storedSession(): Promise<string | null> {
+  const raw = await combineChunks(FIXTURE_AUTH_COOKIE, (name) => jar.get(name) || null);
+  return raw || null;
+}
+
+describe('consumeMfaRecoveryCodeAction: a session Auth no longer holds (REVIEW-STAGE-6B finding 4)', () => {
+  /**
+   * The "Sign in again" answer of a press whose session Auth has ended
+   * (Auth's session_not_found, which auth-js names AuthSessionMissingError)
+   * also clears THIS browser's sign-in cookies: auth-js's getUser(jwt) removes
+   * the stored session of the client it ran on, and sessionAtAuth runs on the
+   * cookie client. Harmless and consistent (the session is already gone at
+   * Auth, and the answer says to sign in again), but it is a write, so it is
+   * pinned here with real auth-js and @supabase/ssr. Nothing is spent.
+   */
+  it('the session ended at Auth: "Sign in again", nothing spent, and this browser’s sign-in cookies are cleared', async () => {
+    await signedIn(MEMBER, 'aal1', MEMBER_REFRESH, NEVER);
+    expect(await storedSession()).not.toBeNull();
+    server.revokedSessions.add(FIXTURE_SESSION_ID);
+    const result = await consumeMfaRecoveryCodeAction({ code: MEMBER_CODE, password: PASSWORD });
+    expect(result).toEqual(SIGN_IN_AGAIN);
+    expect(authCalls).toContain('/user');
+    expect(callsOf('consume_mfa_recovery_code')).toEqual([]);
+    expect(state.admin).toEqual([]);
+    expect(unusedCodes.get(MEMBER)).toEqual(new Set([MEMBER_CODE]));
+    // The cookie client's own removal: no sign-in cookie is left in the jar
+    // (removed, or written empty for the response to clear).
+    expect(await storedSession()).toBeNull();
+    for (const [name, value] of jar) {
+      if (name.startsWith(FIXTURE_AUTH_COOKIE)) expect(value, name).toBe('');
+    }
+  });
+
+  it('control: a session Auth still holds keeps its cookies and spends its own code', async () => {
+    await signedIn(MEMBER, 'aal1', MEMBER_REFRESH, NEVER);
+    const before = await storedSession();
+    const result = await consumeMfaRecoveryCodeAction({ code: MEMBER_CODE, password: PASSWORD });
+    expect(result).toEqual({ ok: true, data: { unenrolled: 1 } });
+    expect(authCalls).toContain('/user');
+    expect(await storedSession()).toBe(before);
+  });
+});
+
 describe('generateMfaRecoveryCodesAction: codes are minted only for the validated account', () => {
   it('refuses, minting nothing, when the verified session is not the validated account', async () => {
     await signedIn(MEMBER, 'aal1', OTHER_REFRESH, CROSSES_AT_THE_LEVEL_READ);

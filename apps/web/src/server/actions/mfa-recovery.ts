@@ -246,7 +246,11 @@ const RECOVERY_NOT_CHECKED = 'Could not check your recovery code just now. Try a
  *     AuthSessionMissingError; a 401 or 403), or answered another account;
  *   - 'unknown': any other error answer (Auth not reached, a 5xx).
  * The caller refuses both of the last two before any code is checked; a
- * throw goes to the action's catch, which refuses too.
+ * throw goes to the action's catch, which refuses too. On 'ended' for
+ * session_not_found, auth-js also removes the stored session of the client it
+ * ran on, the cookie client here, so that answer clears this browser's
+ * sign-in cookies too (the session is already gone at Auth; pinned in
+ * mfa-recovery.held-reads.test.ts).
  */
 async function sessionAtAuth(
   supabase: Awaited<ReturnType<typeof createClient>>,
