@@ -423,53 +423,53 @@ type AuthLogsNetwork = 'hosting' | 'other';
 export const AUTH_LOGS_GROUPS_SQL = `/* The hosting network owner prefix in this query was measured on 2026-11-21 from 24 hours of gateway lines. */
 SELECT minute, kind, status, caller, network, country, count() AS n
 FROM (
+ SELECT
+  minute,
+  multiIf(
+   match(routed_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/verify$'), 'verify',
+   routed_path = '/auth/v1/factors', 'factors_known_other',
+   match(routed_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/challenge$'), 'factors_known_other',
+   position(net_path, 'factors') > 0, 'verify_other',
+   routed_path = '/auth/v1/verify', 'emailed_code',
+   position(net_path, 'verify') > 0, 'emailed_code_other',
+   routed_path != '/auth/v1/token', 'token_other',
+   match(raw_search, '%([^0-9A-Fa-f]|[0-9A-Fa-f][^0-9A-Fa-f]|[0-9A-Fa-f]?$|26|3[Dd]|[01][0-9A-Fa-f]|7[Ff])'), 'token_other',
+   position(raw_search, ';') > 0, 'token_other',
+   first_grant = 'password', 'password',
+   first_grant = 'refresh_token', 'refresh',
+   first_grant IN ('pkce', 'id_token', 'web3'), 'token_known_other',
+   'token_other'
+  ) AS kind,
+  multiIf(raw_status = '400', '400', raw_status = '404', '404', raw_status = '422', '422', raw_status = '429', '429', 'other') AS status,
+  caller,
+  if(caller = 'server' AND startsWith(owner, 'Amazon'), 'hosting', 'other') AS network,
+  if(match(raw_country, '^[A-Z]{2}$') AND raw_country != 'XX', raw_country, '') AS country
+ FROM (
   SELECT
-    minute,
-    multiIf(
-      match(routed_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/verify$'), 'verify',
-      routed_path = '/auth/v1/factors', 'factors_known_other',
-      match(routed_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/challenge$'), 'factors_known_other',
-      position(net_path, 'factors') > 0, 'verify_other',
-      routed_path = '/auth/v1/verify', 'emailed_code',
-      position(net_path, 'verify') > 0, 'emailed_code_other',
-      routed_path != '/auth/v1/token', 'token_other',
-      match(raw_search, '%([^0-9A-Fa-f]|[0-9A-Fa-f][^0-9A-Fa-f]|[0-9A-Fa-f]?$|26|3[Dd]|[01][0-9A-Fa-f]|7[Ff])'), 'token_other',
-      position(raw_search, ';') > 0, 'token_other',
-      first_grant = 'password', 'password',
-      first_grant = 'refresh_token', 'refresh',
-      first_grant IN ('pkce', 'id_token', 'web3'), 'token_known_other',
-      'token_other'
-    ) AS kind,
-    multiIf(raw_status = '400', '400', raw_status = '404', '404', raw_status = '422', '422', raw_status = '429', '429', 'other') AS status,
-    caller,
-    if(caller = 'server' AND startsWith(owner, 'Amazon'), 'hosting', 'other') AS network,
-    if(match(raw_country, '^[A-Z]{2}$') AND raw_country != 'XX', raw_country, '') AS country
-  FROM (
-    SELECT
-      toString(toStartOfMinute(timestamp)) AS minute,
-      replaceRegexpAll(log_attributes['request.path'], '/+', '/') AS routed_path,
-      lower(decodeURLComponent(log_attributes['request.path'])) AS net_path,
-      log_attributes['request.search'] AS raw_search,
-      extract(decodeURLComponent(log_attributes['request.search']), '(?:^[?]?|&)grant_type=([^&]*)(?:&|$)') AS first_grant,
-      multiIf(
-        match(log_attributes['request.headers.x_client_info'], '^supabase-ssr/[0-9]+[.][0-9]+[.][0-9]+ createServerClient$'), 'server',
-        match(log_attributes['request.headers.x_client_info'], '^supabase-js/[0-9]+[.][0-9]+[.][0-9]+; runtime=node; runtime-version=[0-9]+[.][0-9]+[.][0-9]+$'), 'server',
-        position(log_attributes['request.headers.x_client_info'], 'supabase-js-react-native') > 0, 'phone',
-        position(log_attributes['request.headers.x_client_info'], '; runtime=react-native') > 0, 'phone',
-        'other'
-      ) AS caller,
-      log_attributes['response.status_code'] AS raw_status,
-      log_attributes['request.cf.asOrganization'] AS owner,
-      log_attributes['request.cf.country'] AS raw_country
-    FROM logs
-    WHERE source = 'edge_logs'
-      AND log_attributes['request.method'] = 'POST'
-      AND match(log_attributes['response.status_code'], '^4[0-9][0-9]$')
-      AND position(lower(decodeURLComponent(log_attributes['request.path'])), 'auth') > 0
-      AND (position(lower(decodeURLComponent(log_attributes['request.path'])), 'token') > 0
-           OR position(lower(decodeURLComponent(log_attributes['request.path'])), 'factors') > 0
-           OR position(lower(decodeURLComponent(log_attributes['request.path'])), 'verify') > 0)
-  )
+   toString(toStartOfMinute(timestamp)) AS minute,
+   replaceRegexpAll(log_attributes['request.path'], '/+', '/') AS routed_path,
+   lower(decodeURLComponent(log_attributes['request.path'])) AS net_path,
+   log_attributes['request.search'] AS raw_search,
+   extract(decodeURLComponent(log_attributes['request.search']), '(?:^[?]?|&)grant_type=([^&]*)(?:&|$)') AS first_grant,
+   multiIf(
+    match(log_attributes['request.headers.x_client_info'], '^supabase-ssr/[0-9]+[.][0-9]+[.][0-9]+ createServerClient$'), 'server',
+    match(log_attributes['request.headers.x_client_info'], '^supabase-js/[0-9]+[.][0-9]+[.][0-9]+; runtime=node; runtime-version=[0-9]+[.][0-9]+[.][0-9]+$'), 'server',
+    position(log_attributes['request.headers.x_client_info'], 'supabase-js-react-native') > 0, 'phone',
+    position(log_attributes['request.headers.x_client_info'], '; runtime=react-native') > 0, 'phone',
+    'other'
+   ) AS caller,
+   log_attributes['response.status_code'] AS raw_status,
+   log_attributes['request.cf.asOrganization'] AS owner,
+   log_attributes['request.cf.country'] AS raw_country
+  FROM logs
+  WHERE source = 'edge_logs'
+   AND log_attributes['request.method'] = 'POST'
+   AND match(log_attributes['response.status_code'], '^4[0-9][0-9]$')
+   AND position(lower(decodeURLComponent(log_attributes['request.path'])), 'auth') > 0
+   AND (position(lower(decodeURLComponent(log_attributes['request.path'])), 'token') > 0
+     OR position(lower(decodeURLComponent(log_attributes['request.path'])), 'factors') > 0
+     OR position(lower(decodeURLComponent(log_attributes['request.path'])), 'verify') > 0)
+ )
 )
 WHERE ((kind = 'password' AND status IN ('400', '429')) OR (kind = 'verify' AND status IN ('422', '429'))) AND (caller != 'server' OR network != 'hosting')
 GROUP BY minute, kind, status, caller, network, country
@@ -493,54 +493,54 @@ LIMIT 199`;
 export const AUTH_LOGS_TOTALS_SQL = `/* The hosting network owner prefix in this query was measured on 2026-11-21 from 24 hours of gateway lines. */
 SELECT kind, status, caller, network, min(form) AS forms, toString(min(ts)) AS first_seen, toString(max(ts)) AS last_seen, count() AS n
 FROM (
+ SELECT
+  ts,
+  multiIf(
+   match(routed_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/verify$'), 'verify',
+   routed_path = '/auth/v1/factors', 'factors_known_other',
+   match(routed_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/challenge$'), 'factors_known_other',
+   position(net_path, 'factors') > 0, 'verify_other',
+   routed_path = '/auth/v1/verify', 'emailed_code',
+   position(net_path, 'verify') > 0, 'emailed_code_other',
+   routed_path != '/auth/v1/token', 'token_other',
+   match(raw_search, '%([^0-9A-Fa-f]|[0-9A-Fa-f][^0-9A-Fa-f]|[0-9A-Fa-f]?$|26|3[Dd]|[01][0-9A-Fa-f]|7[Ff])'), 'token_other',
+   position(raw_search, ';') > 0, 'token_other',
+   first_grant = 'password', 'password',
+   first_grant = 'refresh_token', 'refresh',
+   first_grant IN ('pkce', 'id_token', 'web3'), 'token_known_other',
+   'token_other'
+  ) AS kind,
+  multiIf(raw_status = '400', '400', raw_status = '404', '404', raw_status = '422', '422', raw_status = '429', '429', 'other') AS status,
+  caller,
+  if(caller = 'server' AND startsWith(owner, 'Amazon'), 'hosting', 'other') AS network,
+  if(match(decoded_search, '(^[?]?|&)grant_type=.*&grant_type=') OR raw_path != routed_path, 'ambiguous', 'plain') AS form
+ FROM (
   SELECT
-    ts,
-    multiIf(
-      match(routed_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/verify$'), 'verify',
-      routed_path = '/auth/v1/factors', 'factors_known_other',
-      match(routed_path, '^/auth/v1/factors/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/challenge$'), 'factors_known_other',
-      position(net_path, 'factors') > 0, 'verify_other',
-      routed_path = '/auth/v1/verify', 'emailed_code',
-      position(net_path, 'verify') > 0, 'emailed_code_other',
-      routed_path != '/auth/v1/token', 'token_other',
-      match(raw_search, '%([^0-9A-Fa-f]|[0-9A-Fa-f][^0-9A-Fa-f]|[0-9A-Fa-f]?$|26|3[Dd]|[01][0-9A-Fa-f]|7[Ff])'), 'token_other',
-      position(raw_search, ';') > 0, 'token_other',
-      first_grant = 'password', 'password',
-      first_grant = 'refresh_token', 'refresh',
-      first_grant IN ('pkce', 'id_token', 'web3'), 'token_known_other',
-      'token_other'
-    ) AS kind,
-    multiIf(raw_status = '400', '400', raw_status = '404', '404', raw_status = '422', '422', raw_status = '429', '429', 'other') AS status,
-    caller,
-    if(caller = 'server' AND startsWith(owner, 'Amazon'), 'hosting', 'other') AS network,
-    if(match(decoded_search, '(^[?]?|&)grant_type=.*&grant_type=') OR raw_path != routed_path, 'ambiguous', 'plain') AS form
-  FROM (
-    SELECT
-      timestamp AS ts,
-      log_attributes['request.path'] AS raw_path,
-      replaceRegexpAll(log_attributes['request.path'], '/+', '/') AS routed_path,
-      lower(decodeURLComponent(log_attributes['request.path'])) AS net_path,
-      log_attributes['request.search'] AS raw_search,
-      decodeURLComponent(log_attributes['request.search']) AS decoded_search,
-      extract(decodeURLComponent(log_attributes['request.search']), '(?:^[?]?|&)grant_type=([^&]*)(?:&|$)') AS first_grant,
-      multiIf(
-        match(log_attributes['request.headers.x_client_info'], '^supabase-ssr/[0-9]+[.][0-9]+[.][0-9]+ createServerClient$'), 'server',
-        match(log_attributes['request.headers.x_client_info'], '^supabase-js/[0-9]+[.][0-9]+[.][0-9]+; runtime=node; runtime-version=[0-9]+[.][0-9]+[.][0-9]+$'), 'server',
-        position(log_attributes['request.headers.x_client_info'], 'supabase-js-react-native') > 0, 'phone',
-        position(log_attributes['request.headers.x_client_info'], '; runtime=react-native') > 0, 'phone',
-        'other'
-      ) AS caller,
-      log_attributes['response.status_code'] AS raw_status,
-      log_attributes['request.cf.asOrganization'] AS owner
-    FROM logs
-    WHERE source = 'edge_logs'
-      AND log_attributes['request.method'] = 'POST'
-      AND match(log_attributes['response.status_code'], '^4[0-9][0-9]$')
-      AND position(lower(decodeURLComponent(log_attributes['request.path'])), 'auth') > 0
-      AND (position(lower(decodeURLComponent(log_attributes['request.path'])), 'token') > 0
-           OR position(lower(decodeURLComponent(log_attributes['request.path'])), 'factors') > 0
-           OR position(lower(decodeURLComponent(log_attributes['request.path'])), 'verify') > 0)
-  )
+   timestamp AS ts,
+   log_attributes['request.path'] AS raw_path,
+   replaceRegexpAll(log_attributes['request.path'], '/+', '/') AS routed_path,
+   lower(decodeURLComponent(log_attributes['request.path'])) AS net_path,
+   log_attributes['request.search'] AS raw_search,
+   decodeURLComponent(log_attributes['request.search']) AS decoded_search,
+   extract(decodeURLComponent(log_attributes['request.search']), '(?:^[?]?|&)grant_type=([^&]*)(?:&|$)') AS first_grant,
+   multiIf(
+    match(log_attributes['request.headers.x_client_info'], '^supabase-ssr/[0-9]+[.][0-9]+[.][0-9]+ createServerClient$'), 'server',
+    match(log_attributes['request.headers.x_client_info'], '^supabase-js/[0-9]+[.][0-9]+[.][0-9]+; runtime=node; runtime-version=[0-9]+[.][0-9]+[.][0-9]+$'), 'server',
+    position(log_attributes['request.headers.x_client_info'], 'supabase-js-react-native') > 0, 'phone',
+    position(log_attributes['request.headers.x_client_info'], '; runtime=react-native') > 0, 'phone',
+    'other'
+   ) AS caller,
+   log_attributes['response.status_code'] AS raw_status,
+   log_attributes['request.cf.asOrganization'] AS owner
+  FROM logs
+  WHERE source = 'edge_logs'
+   AND log_attributes['request.method'] = 'POST'
+   AND match(log_attributes['response.status_code'], '^4[0-9][0-9]$')
+   AND position(lower(decodeURLComponent(log_attributes['request.path'])), 'auth') > 0
+   AND (position(lower(decodeURLComponent(log_attributes['request.path'])), 'token') > 0
+     OR position(lower(decodeURLComponent(log_attributes['request.path'])), 'factors') > 0
+     OR position(lower(decodeURLComponent(log_attributes['request.path'])), 'verify') > 0)
+ )
 )
 GROUP BY kind, status, caller, network
 ORDER BY n DESC, kind, status, caller, network

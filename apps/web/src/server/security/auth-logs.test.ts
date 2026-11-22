@@ -1573,10 +1573,12 @@ describe('the SQL is two constants that return classes and counts only', () => {
     }
   });
 
-  it('each query fits a request line: its whole URL stays far below 8,000 bytes', () => {
+  it('each query fits a request line: its whole URL stays below 5,000 bytes, far below 8,000', () => {
     // The query travels in the URL of a GET. The longest one seen to run on
     // the logs service was about 3,600 bytes; a common limit for a request
-    // line is 8,000.
+    // line is 8,000. The texts reviewed before the first real run made URLs
+    // of just under 5,000 bytes: neither may grow past that (a leading space
+    // of the text is one byte of the URL, so the texts are indented by one).
     for (const [name, sql] of BOTH) {
       const params = new URLSearchParams({
         sql,
@@ -1584,7 +1586,7 @@ describe('the SQL is two constants that return classes and counts only', () => {
         iso_timestamp_end: iso(H04 + HOUR),
       });
       const url = `https://api.supabase.com/v1/projects/${PROJECT_REF}/analytics/endpoints/logs?${params.toString()}`;
-      expect(url.length, name).toBeLessThan(5_500);
+      expect(url.length, name).toBeLessThan(5_000);
     }
   });
 
