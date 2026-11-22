@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeSupabaseStub } from '@/test/supabase-mock';
-import { verifiedSessionAuth, type StubbedCookieSession } from '@/test/verified-session-stub';
+import { liveSessionAuth, verifiedSessionAuth, type StubbedCookieSession } from '@/test/verified-session-stub';
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn() }));
@@ -50,6 +50,7 @@ vi.mock('@/lib/supabase/server', () => ({
       auth: Object.assign(
         stubHolder.stub!.client.auth,
         verifiedSessionAuth(() => cookie.session),
+        liveSessionAuth(),
       ),
     }),
   ),

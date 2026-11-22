@@ -116,6 +116,13 @@ vi.mock('@/lib/supabase/server', () => ({
         error: null,
       }),
       signOut: (...args: unknown[]) => h.cookieSignOut(...args),
+      // Auth still holds the session (mfa-recovery.session-live.test.ts covers the rest).
+      getUser: async (token: string) => ({
+        data: {
+          user: { id: JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString('utf8')).sub },
+        },
+        error: null,
+      }),
     },
   })),
 }));

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
-import { verifiedSessionAuth } from '@/test/verified-session-stub';
+import { liveSessionAuth, verifiedSessionAuth } from '@/test/verified-session-stub';
 
 /**
  * consumeMfaRecoveryCodeAction's security event (part 1 of the security
@@ -50,6 +50,7 @@ vi.mock('@/lib/supabase/server', () => ({
       auth: Object.assign(
         stubHolder.stub!.client.auth,
         verifiedSessionAuth(() => ({ sub: 'user-1', aal: 'aal1' })),
+        liveSessionAuth(),
       ),
     }),
   ),

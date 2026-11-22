@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeSupabaseStub } from '@/test/supabase-mock';
 import { PASSKEY_RECOVERY_NOT_YET } from '@/test/passkey-records';
-import { verifiedSessionAuth } from '@/test/verified-session-stub';
+import { liveSessionAuth, verifiedSessionAuth } from '@/test/verified-session-stub';
 
 /**
  * Security invariant: a recovery code removes every sign-in method of the
@@ -91,6 +91,7 @@ vi.mock('@/lib/supabase/server', () => ({
       auth: Object.assign(
         h.cookie.client.auth,
         verifiedSessionAuth(() => ({ sub: h.sessionSub, aal: 'aal1' })),
+        liveSessionAuth(),
       ),
     }),
   ),

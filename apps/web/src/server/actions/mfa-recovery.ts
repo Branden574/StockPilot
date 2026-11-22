@@ -232,6 +232,40 @@ function reportPasskeyRemoval(
  */
 const RECOVERY_NOT_CHECKED = 'Could not check your recovery code just now. Try again.';
 
+/**
+ * Whether Auth still holds the session of `token` (the held, verified token
+ * of `userId`): GET /user with that token, which Auth answers only while the
+ * session exists. The token was checked LOCALLY (getClaims) and PostgREST
+ * accepts it until it expires, so a session already ended at Auth (signed
+ * out, revoked from another device, ended by a used recovery code) could
+ * still spend a code with the password while its token lasted (the second
+ * lab walk, RS5 20). One round trip, made only for a press that got past the
+ * three limiters and the password, right before any code is checked.
+ *   - 'live': Auth answered with this account;
+ *   - 'ended': Auth refused the token (auth-js names Auth's session_not_found
+ *     AuthSessionMissingError; a 401 or 403), or answered another account;
+ *   - 'unknown': anything else (Auth not reached, a 5xx, a throw).
+ * The caller refuses both of the last two before any code is checked.
+ */
+async function sessionAtAuth(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  token: string,
+  userId: string,
+): Promise<'live' | 'ended' | 'unknown'> {
+  try {
+    const { data, error } = await supabase.auth.getUser(token);
+    if (error) {
+      const { name, status } = error as { name?: string; status?: number };
+      if (name === 'AuthSessionMissingError') return 'ended';
+      if (name === 'AuthApiError' && (status === 401 || status === 403)) return 'ended';
+      return 'unknown';
+    }
+    return data?.user?.id === userId ? 'live' : 'ended';
+  } catch {
+    return 'unknown';
+  }
+}
+
 /** The client that acts as the held token alone (made once per press, when first needed). */
 type MemberClient = ReturnType<typeof createAccessTokenClient>;
 
@@ -518,6 +552,16 @@ export async function consumeMfaRecoveryCodeAction(input: {
     ) {
       return err('validation_error', RECOVERY_PAUSED);
     }
+
+    // The session must still exist at Auth, not only carry a token that has
+    // not expired yet (RS5 20): an ended session spends no code, removes no
+    // method and ends no other session. Closed: an answer that cannot be had
+    // refuses too, with "try again".
+    const atAuth = await sessionAtAuth(supabase, held.token, session.userId);
+    if (atAuth === 'ended') {
+      return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
+    }
+    if (atAuth === 'unknown') return err('internal_error', RECOVERY_NOT_CHECKED);
 
     // The service client spends the code with the passkey records and removes
     // the factors, so it is made before any code is checked.
