@@ -442,7 +442,11 @@ export async function transferOwnershipAction(input: {
     }
 
     // Password re-confirm.
-    const pwRes = await verifyPasswordSideChannel(session.email, parsed.data.password);
+    const pwRes = await verifyPasswordSideChannel(
+      session.email,
+      parsed.data.password,
+      session.userId,
+    );
     if (!pwRes.ok) {
       return err(
         pwRes.reason === 'invalid_password' ? 'forbidden' : 'internal_error',

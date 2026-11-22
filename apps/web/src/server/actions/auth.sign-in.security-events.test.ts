@@ -1,11 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
+ * Security invariant: a refused sign-in is recorded after the response, so
+ * its timing tells nothing about the email, and a refusal that is not a
+ * wrong password is recorded with no organization.
+ *
  * signInAction's security events (part 1 of the security tools): a refusal by
  * the email or the address limiter is sign_in_paused, credentials GoTrue
  * judged wrong are wrong_password, the Auth server's own limit is
- * auth_server_paused. A limiter that could not count, a disabled account, an
- * answer that judged nothing and a sign-in that worked record nothing.
+ * auth_server_paused, and a refusal with the status of a wrong password that
+ * is not one (a disabled account, an unconfirmed email) is
+ * sign_in_refused_other, recorded with no organization. A limiter that could
+ * not count, an answer that judged nothing and a sign-in that worked record
+ * nothing.
  *
  * The organization comes from the typed email, looked up AFTER the response
  * (server/security/account-events.ts): the action returns before anything is
@@ -169,14 +176,33 @@ describe('signInAction records its refusals', () => {
     expect(recorded().map(([r]) => r)).toEqual(['auth_server_paused']);
   });
 
-  it('a disabled account records nothing new', async () => {
+  it('a disabled account: sign_in_refused_other (recorded with no organization), the answer unchanged', async () => {
     signInWithPassword.mockResolvedValue({
       data: { user: null },
       error: { status: 400, code: 'user_banned', message: 'User is banned' },
     });
     expect(await signInAction(input)).toMatchObject({ ok: false, error: { code: 'account_disabled' } });
-    expect(recorded()).toEqual([]);
+    expect(recorded().map(([r]) => r)).toEqual(['sign_in_refused_other']);
   });
+
+  it.each([
+    ['an unconfirmed email', 'email_not_confirmed'],
+    ['a code this does not know', 'something_new'],
+    ['no code at all', undefined],
+  ])(
+    'the service refused with its 400 for a reason that is not a wrong password (%s): sign_in_refused_other',
+    async (_what, code) => {
+      signInWithPassword.mockResolvedValue({
+        data: { user: null },
+        error: { status: 400, code, message: 'refused' },
+      });
+      expect(await signInAction(input)).toMatchObject({
+        ok: false,
+        error: { code: 'unauthenticated', message: 'Invalid email or password' },
+      });
+      expect(recorded().map(([r]) => r)).toEqual(['sign_in_refused_other']);
+    },
+  );
 
   it('an answer that judged no credentials (an outage) records nothing', async () => {
     signInWithPassword.mockResolvedValue({
@@ -192,6 +218,34 @@ describe('signInAction records its refusals', () => {
     expect(await signInAction(input)).toMatchObject({ ok: true });
     expect(recorded()).toEqual([]);
   });
+});
+
+describe('a sign-in refused for another reason is recorded with no organization', () => {
+  it.each([['user_banned'], ['email_not_confirmed']])(
+    '%s: nothing about the email is ever read, and the event names no organization',
+    async (code) => {
+      h.useRealHelper = true;
+      signInWithPassword.mockResolvedValue({
+        data: { user: null },
+        error: { status: 400, code, message: 'refused' },
+      });
+      await signInAction(input);
+      expect(recordSecurityEvent).not.toHaveBeenCalled();
+      for (const [task] of h.after.mock.calls) await (task as () => Promise<unknown>)();
+      expect(h.profileReads).toEqual([]);
+      expect(recordSecurityEvent).toHaveBeenCalledTimes(1);
+      expect(recordSecurityEvent).toHaveBeenCalledWith(
+        {
+          category: 'password_guessing',
+          outcome: 'blocked',
+          reason: 'sign_in_refused_other',
+          source: 'web',
+          organizationId: null,
+        },
+        expect.any(Headers),
+      );
+    },
+  );
 });
 
 describe('the organization is looked up after the response', () => {

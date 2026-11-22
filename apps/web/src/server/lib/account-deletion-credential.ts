@@ -190,6 +190,11 @@ export async function confirmDeletionCredential(args: {
   email: string | null;
   readLevel: SessionLevelReader;
   input: DeletionCredentialInput;
+  /**
+   * Where the request came from, for the record of a refused password: the
+   * phone app through our API, or the website (when not said).
+   */
+  source?: 'web' | 'phone';
   now?: Date;
 }): Promise<DeletionCredentialResult> {
   const { admin, userId, email, input } = args;
@@ -214,7 +219,12 @@ export async function confirmDeletionCredential(args: {
       if (!email || password.length > MAX_PASSWORD_LENGTH) {
         return { ok: false, kind: 'password_refused' };
       }
-      const pw = await verifyPasswordSideChannel(email, password);
+      const pw = await verifyPasswordSideChannel(
+        email,
+        password,
+        userId,
+        args.source === 'phone' ? 'phone' : 'web',
+      );
       if (pw.ok) return { ok: true, by: 'password' };
       return {
         ok: false,

@@ -119,7 +119,7 @@ describe("transferOwnershipAction checks the password of the context's own accou
   it("control: the session answers with the owner: the owner's email is checked and ownership moves", async () => {
     const res = await transferOwnershipAction(INPUT);
     expect(res).toEqual({ ok: true, data: { newOwnerUserId: TARGET_USER } });
-    expect(verifyPasswordSideChannel).toHaveBeenCalledWith('owner@example.com', TYPED_VALUE);
+    expect(verifyPasswordSideChannel).toHaveBeenCalledWith('owner@example.com', TYPED_VALUE, OWNER);
     expect(h.rpc).toHaveLength(1);
   });
 

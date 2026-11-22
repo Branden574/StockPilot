@@ -96,7 +96,7 @@ export default async function BlockedActivityPage() {
     <SettingsPage width="wide">
       <PageHeader
         title="Blocked activity"
-        subline="Sign-in attempts the app refused for the accounts in your organization. Kept for 90 days."
+        subline="Wrong passwords and codes the app refused for the accounts in your organization. Kept for 90 days."
         back={
           <PageHeaderBackLink href="/dashboard/settings/security">
             ← Back to security

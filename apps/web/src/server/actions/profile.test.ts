@@ -1569,7 +1569,8 @@ describe('deleteOwnAccountAction', () => {
       requiringOrgWithoutFactor();
       const result = await deleteOwnAccountAction({ confirm: 'DELETE', password: PASSWORD });
       expect(result.ok).toBe(true);
-      expect(verifyPasswordMock).toHaveBeenCalledWith('u@example.test', PASSWORD);
+      // From the website: a refused password is recorded with that source.
+      expect(verifyPasswordMock).toHaveBeenCalledWith('u@example.test', PASSWORD, 'user-1', 'web');
       expect(adminAuth.deleteUser).toHaveBeenCalledWith('user-1');
     });
 

@@ -1,11 +1,70 @@
 import 'server-only';
 
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
-
+import { requestHeadersOrNull } from '@/lib/auth/request-headers';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
+import {
+  type PasswordCheckSource,
+  recordAccountCodeBlocked,
+  recordSignInBlocked,
+} from '@/server/security/account-events';
 
 import type { Database } from '@stockpilot/core';
+
+/**
+ * A SECURITY EVENT FOR A PASSWORD THE SIGN-IN SERVICE REFUSED HERE (part 1
+ * of the security tools). This check sends a password to the sign-in service
+ * from our own server, so its refusals appear in that service's log in our
+ * server's form. Each is recorded, so that our own record holds every
+ * refusal our server causes there and the reader of that log
+ * (server/security/auth-logs.ts) can tell them from requests that only carry
+ * our server's marks:
+ *   - a password the service judged wrong (its `invalid_credentials`):
+ *     wrong_current_password, in the organization of the signed-in account
+ *     (looked up after the response, as a wrong code is);
+ *   - any other refusal with the same status (a disabled account, for
+ *     instance): sign_in_refused_other, with no organization;
+ *   - the service's own limit, an outage or no answer judged no password:
+ *     nothing.
+ * It is also worth an admin's eye: a wrong current password is what someone
+ * holding another person's open session meets before a sensitive change.
+ * Both are recorded with the source the check came from: the website, or
+ * the phone app through our API (the caller says which).
+ *
+ * Never the caller's problem: it never throws, waits only for the request's
+ * headers (already in memory), and changes nothing the member is answered.
+ */
+async function recordRefusedPassword(
+  error: { status?: unknown; code?: unknown },
+  email: string,
+  userId: string,
+  source: PasswordCheckSource,
+): Promise<void> {
+  try {
+    const code = typeof error.code === 'string' ? error.code : null;
+    if (code === 'invalid_credentials') {
+      if (typeof userId !== 'string' || userId.length === 0) return;
+      recordAccountCodeBlocked(
+        'wrong_current_password',
+        userId,
+        await requestHeadersOrNull(),
+        source,
+      );
+      return;
+    }
+    // A 400 with no code is recorded too. The client library builds such an
+    // error itself only when neither an email nor a phone number is given,
+    // which no caller here does; so every row recorded here has a line in
+    // the sign-in service's log, which is what the reader of that log
+    // relies on when it counts these rows as refusals our server made.
+    if (error.status === 400 && !(code !== null && /rate.?limit/i.test(code))) {
+      recordSignInBlocked('sign_in_refused_other', email, await requestHeadersOrNull(), source);
+    }
+  } catch {
+    // An event that could not be recorded is dropped.
+  }
+}
 
 /**
  * Out-of-band password verification. Spins up an isolated Supabase
@@ -22,10 +81,18 @@ import type { Database } from '@stockpilot/core';
  *
  * Callers are responsible for their own rate-limiting; this helper
  * does NOT enforce a brute-force ceiling.
+ *
+ * `userId` is the signed-in account whose password this is (the account the
+ * email belongs to): a refused password is recorded as a security event for
+ * it (recordRefusedPassword above). `source` is where the request came
+ * from: `phone` when the phone app asked through our API, the website
+ * otherwise.
  */
 export async function verifyPasswordSideChannel(
   email: string,
   password: string,
+  userId: string,
+  source: PasswordCheckSource = 'web',
 ): Promise<{ ok: true } | { ok: false; reason: 'invalid_password' | 'internal_error'; message: string }> {
   try {
     const client = createSupabaseClient<Database>(
@@ -41,6 +108,7 @@ export async function verifyPasswordSideChannel(
     );
     const { error } = await client.auth.signInWithPassword({ email, password });
     if (error) {
+      await recordRefusedPassword(error, email, userId, source === 'phone' ? 'phone' : 'web');
       return { ok: false, reason: 'invalid_password', message: 'Password is incorrect.' };
     }
 
