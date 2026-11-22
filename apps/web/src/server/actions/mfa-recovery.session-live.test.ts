@@ -124,7 +124,10 @@ const SIGN_IN_AGAIN = {
 };
 const TRY_AGAIN = {
   ok: false,
-  error: { code: 'internal_error', message: 'Could not check your recovery code just now. Try again.' },
+  error: {
+    code: 'internal_error',
+    message: 'Could not check your recovery code just now. Try again.',
+  },
 };
 
 function adminWith(results: Record<string, unknown>): Stub {
@@ -250,18 +253,27 @@ describe.each(WORLDS)('a recovery code, %s', (_when, world) => {
         error: { name: 'AuthApiError', message: 'sample failure', status: 500 },
       }),
     ],
-    [
-      'the call throws',
-      async () => {
-        throw new Error('sample throw');
-      },
-    ],
   ];
 
   it.each(UNKNOWN)('%s: closed, "try again", and nothing is spent', async (_case, answer) => {
     const admin = world();
     h.atAuth = answer;
     expect(await consumeMfaRecoveryCodeAction({ code: CODE, password: PW })).toEqual(TRY_AGAIN);
+    expect(consumeCalls(admin)).toEqual([]);
+    expect(adminOf(admin).mfa.deleteFactor).not.toHaveBeenCalled();
+    expect(signOutAs).not.toHaveBeenCalled();
+    expect(sendRecoveryCodeUsedEmail).not.toHaveBeenCalled();
+  });
+});
+
+describe.each(WORLDS)('a recovery code, %s, when the question throws', (_when, world) => {
+  it('the action’s own catch refuses: an internal error, and nothing is spent', async () => {
+    const admin = world();
+    h.atAuth = async () => {
+      throw new Error('sample throw');
+    };
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toMatchObject({ ok: false, error: { code: 'internal_error' } });
     expect(consumeCalls(admin)).toEqual([]);
     expect(adminOf(admin).mfa.deleteFactor).not.toHaveBeenCalled();
     expect(signOutAs).not.toHaveBeenCalled();

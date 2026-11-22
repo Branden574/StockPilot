@@ -244,26 +244,25 @@ const RECOVERY_NOT_CHECKED = 'Could not check your recovery code just now. Try a
  *   - 'live': Auth answered with this account;
  *   - 'ended': Auth refused the token (auth-js names Auth's session_not_found
  *     AuthSessionMissingError; a 401 or 403), or answered another account;
- *   - 'unknown': anything else (Auth not reached, a 5xx, a throw).
- * The caller refuses both of the last two before any code is checked.
+ *   - 'unknown': any other error answer (Auth not reached, a 5xx).
+ * The caller refuses both of the last two before any code is checked; a
+ * throw goes to the action's catch, which refuses too.
  */
 async function sessionAtAuth(
   supabase: Awaited<ReturnType<typeof createClient>>,
   token: string,
   userId: string,
 ): Promise<'live' | 'ended' | 'unknown'> {
-  try {
-    const { data, error } = await supabase.auth.getUser(token);
-    if (error) {
-      const { name, status } = error as { name?: string; status?: number };
-      if (name === 'AuthSessionMissingError') return 'ended';
-      if (name === 'AuthApiError' && (status === 401 || status === 403)) return 'ended';
-      return 'unknown';
-    }
-    return data?.user?.id === userId ? 'live' : 'ended';
-  } catch {
+  // A throw is not caught here: it reaches the action's own catch
+  // (actionErrorResult), which refuses before any code is checked.
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error) {
+    const { name, status } = error as { name?: string; status?: number };
+    if (name === 'AuthSessionMissingError') return 'ended';
+    if (name === 'AuthApiError' && (status === 401 || status === 403)) return 'ended';
     return 'unknown';
   }
+  return data?.user?.id === userId ? 'live' : 'ended';
 }
 
 /** The client that acts as the held token alone (made once per press, when first needed). */
