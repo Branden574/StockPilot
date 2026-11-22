@@ -64,11 +64,16 @@ import { err, ok, type ActionResult } from '@stockpilot/core';
  *      record is marked not applied. An organization OFF whose delete removed
  *      nothing: already off, no record.
  *      An ON whose write answers an error after its record landed: the switch
- *      is read again first. On after all (the answer was lost, not the
- *      write): the change stands, recorded. Still off: refused, and a second
- *      row with the same words and detail not_applied: true says the first
- *      did not happen (best effort; reported when it fails too). Unreadable:
- *      the record is left as it is, the unknown is reported at error level,
+ *      is read again first. Every write sends this press's own timestamp
+ *      (updated_at with updated_by, or the organization row's
+ *      switched_on_at; never the database's default). On, and written by
+ *      this press (its actor and its timestamp; for an organization, whose
+ *      row records no actor, its timestamp): the answer was lost, not the
+ *      write, and the change stands, recorded. Still off: refused, and a
+ *      second row with the same words and detail not_applied: true says the
+ *      first did not happen (best effort; reported when it fails too). On by
+ *      another press, or unreadable: this press is not credited, the record
+ *      is left as it is, the unknown is reported at error level (ids only),
  *      and the answer says the change could not be confirmed.
  *      Turning OFF always proceeds: off is the safe direction and is never
  *      held back by the audit path in an incident. Its record is written
@@ -178,13 +183,23 @@ function adminClient(
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
-/** The one platform_settings row's two passkey switches (null data: no row). */
+/**
+ * The one platform_settings row's two passkey switches and who last wrote it,
+ * when (null data: no row).
+ */
 function readSettings(admin: AdminClient) {
   return admin
     .from('platform_settings')
-    .select('passkeys_on, passkey_adds_on')
+    .select('passkeys_on, passkey_adds_on, updated_at, updated_by')
     .eq('id', true)
     .maybeSingle();
+}
+
+/** The same instant: Postgres answers a timestamp in its own form, not as it was sent. */
+function sameInstant(stored: unknown, sent: string): boolean {
+  if (typeof stored !== 'string') return false;
+  const a = Date.parse(stored);
+  return !Number.isNaN(a) && a === Date.parse(sent);
 }
 
 /**
@@ -197,11 +212,11 @@ function readSettings(admin: AdminClient) {
 async function writeSetting(
   admin: AdminClient,
   setting: PlatformPasskeySetting,
-  w: { from: boolean; on: boolean; rowExists: boolean; userId: string },
+  w: { from: boolean; on: boolean; rowExists: boolean; userId: string; at: string },
 ): Promise<{ error: { message: string } | null; applied: boolean }> {
   const values = {
     [setting]: w.on,
-    updated_at: new Date().toISOString(),
+    updated_at: w.at,
     updated_by: w.userId,
   };
   if (!w.rowExists) {
@@ -293,24 +308,40 @@ async function setPlatformSwitch(
     return err('internal_error', PASSKEYS_COPY.notRecorded);
   }
 
+  // This press's own timestamp, sent (never the database's default): with the
+  // actor's id it tells this press's write apart from any other on a read again.
+  const at = new Date().toISOString();
   const written = await writeSetting(admin, setting, {
     from,
     on,
     rowExists: row !== null,
     userId: actor.userId,
+    at,
   });
   if (written.error) {
     await reportError(new Error(written.error.message), { tag: `${tag}.write`, extra: { to: on } });
     if (on) {
-      // Its record landed: read again before saying it did not happen.
+      // Its record landed: read again before saying it did not happen. Only
+      // this press's own write (its actor and its timestamp) confirms it; an
+      // ON written by any other press, or an unreadable row, cannot.
       const again = await readSettings(admin);
-      if (!again.error && (again.data as Record<string, unknown> | null)?.[setting] === true) {
+      const now = again.data as Record<string, unknown> | null;
+      if (
+        !again.error &&
+        now?.[setting] === true &&
+        now.updated_by === actor.userId &&
+        sameInstant(now.updated_at, at)
+      ) {
         return ok({ on, changed: true, recorded: true });
       }
-      if (again.error) {
+      if (again.error || now?.[setting] === true) {
         await reportError(
-          new Error('a passkey switch write answered an error and could not be read again'),
-          { tag: `${tag}.write_unconfirmed`, level: 'error', extra: { setting, to: on } },
+          new Error('a passkey switch write answered an error and was not confirmed'),
+          {
+            tag: `${tag}.write_unconfirmed`,
+            level: 'error',
+            extra: { setting, to: on },
+          },
         );
         return err('internal_error', PASSKEYS_COPY.writeUnconfirmed);
       }
@@ -367,7 +398,7 @@ export async function setOrganizationPasskeysAction(input: {
   const readSwitch = () =>
     admin
       .from('organization_passkey_switches')
-      .select('organization_id')
+      .select('organization_id, switched_on_at')
       .eq('organization_id', organizationId)
       .maybeSingle();
   const current = await readSwitch();
@@ -425,8 +456,14 @@ export async function setOrganizationPasskeysAction(input: {
     return err('internal_error', PASSKEYS_COPY.notRecorded);
   }
 
+  // This press's own timestamp, sent (never the database's default): the row
+  // records no actor (0475), so on a read again it is what tells this press's
+  // row apart from one another press made.
+  const at = new Date().toISOString();
   const written = on
-    ? await admin.from('organization_passkey_switches').insert({ organization_id: organizationId })
+    ? await admin
+        .from('organization_passkey_switches')
+        .insert({ organization_id: organizationId, switched_on_at: at })
     : await admin
         .from('organization_passkey_switches')
         .delete()
@@ -443,14 +480,17 @@ export async function setOrganizationPasskeysAction(input: {
       extra: { organizationId, to: on },
     });
     if (on) {
-      // Its record landed: read again before saying it did not happen.
+      // Its record landed: read again before saying it did not happen. Only
+      // this press's own row (its timestamp) confirms it; a row another press
+      // made, or an unreadable one, cannot.
       const again = await readSwitch();
-      if (!again.error && again.data !== null) return ok({ on, changed: true, recorded: true });
-      if (again.error) {
+      const now = again.data as { switched_on_at?: unknown } | null;
+      if (!again.error && now !== null && sameInstant(now.switched_on_at, at)) {
+        return ok({ on, changed: true, recorded: true });
+      }
+      if (again.error || now !== null) {
         await reportError(
-          new Error(
-            'an organization passkey switch write answered an error and could not be read again',
-          ),
+          new Error('an organization passkey switch write answered an error and was not confirmed'),
           { tag: `${tag}.write_unconfirmed`, level: 'error', extra: { organizationId, to: on } },
         );
         return err('internal_error', PASSKEYS_COPY.writeUnconfirmed);

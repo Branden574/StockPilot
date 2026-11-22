@@ -62,6 +62,8 @@ type SettingsRow = {
   passkey_adds_on: boolean;
   passkey_check_ends_sessions: boolean;
   org_deletion_passphrase_hash: string | null;
+  updated_at?: string;
+  updated_by?: string | null;
 };
 let settings: SettingsRow | null = null;
 let settingsReadError: { message: string; code?: string } | null = null;
@@ -73,6 +75,8 @@ let settingsReadQueue: Array<{ message: string } | null> = [];
  */
 let settingsWriteErrors: Array<{ message: string; code?: string; landed?: boolean } | null> = [];
 let switches = new Set<string>();
+/** When each organization's row says it was switched on (default: long ago). */
+let switchedOnAt = new Map<string, string>();
 let switchReadError: { message: string } | null = null;
 /** Each switch read answers the next of these first (then switchReadError). */
 let switchReadQueue: Array<{ message: string } | null> = [];
@@ -97,6 +101,11 @@ const NO_SETTINGS_ROW: SettingsRow = {
   org_deletion_passphrase_hash: null,
 };
 
+/** A timestamp as Postgres answers it (microseconds, +00:00), not as it was sent. */
+function asStored(at: unknown): unknown {
+  return typeof at === 'string' ? new Date(at).toISOString().replace('Z', '000+00:00') : at;
+}
+
 /** Every `.eq(column, value)` of a chain. */
 function eqFilters(call: MockCall): Array<[string, unknown]> {
   return call.methods.flatMap((m, i) => (m === 'eq' ? [call.args[i] as [string, unknown]] : []));
@@ -119,7 +128,8 @@ function writeSettings(call: MockCall) {
     const matches =
       row !== null &&
       eqFilters(call).every(([c, v]) => (row as unknown as Record<string, unknown>)[c] === v);
-    if (matches) settings = { ...row, ...values } as SettingsRow;
+    if (matches)
+      settings = { ...row, ...values, updated_at: asStored(values.updated_at) } as SettingsRow;
     if (call.methods.includes('select')) data = matches ? [{ id: true }] : [];
   } else {
     const upsert = call.methods.includes('upsert');
@@ -133,7 +143,11 @@ function writeSettings(call: MockCall) {
         },
       };
     }
-    settings = { ...(settings ?? NO_SETTINGS_ROW), ...values } as SettingsRow;
+    settings = {
+      ...(settings ?? NO_SETTINGS_ROW),
+      ...values,
+      updated_at: asStored(values.updated_at),
+    } as SettingsRow;
   }
   return err ? { data: null, error: err } : { data, error: null };
 }
@@ -151,15 +165,25 @@ const adminStub = makeSupabaseStub({
     const queued = switchReadQueue.length > 0 ? switchReadQueue.shift() : switchReadError;
     return queued
       ? { data: null, error: queued }
-      : servedLikePostgrest([...switches].map((organization_id) => ({ organization_id })))(call);
+      : servedLikePostgrest(
+          [...switches].map((organization_id) => ({
+            organization_id,
+            switched_on_at: switchedOnAt.get(organization_id) ?? '2026-01-01T00:00:00+00:00',
+          })),
+        )(call);
   },
   'organization_passkey_switches.insert': (call) => {
     order.push('write');
     beforeWrite?.();
     if (switchWriteError && !switchWriteError.landed)
       return { data: null, error: switchWriteError };
-    const row = callArgs(call, 'insert')?.[0] as { organization_id: string };
+    const row = callArgs(call, 'insert')?.[0] as {
+      organization_id: string;
+      switched_on_at?: string;
+    };
     switches.add(row.organization_id);
+    if (row.switched_on_at)
+      switchedOnAt.set(row.organization_id, asStored(row.switched_on_at) as string);
     return { data: null, error: switchWriteError };
   },
   'organization_passkey_switches.delete': (call) => {
@@ -260,6 +284,7 @@ beforeEach(() => {
   settingsWriteErrors = [];
   beforeWrite = null;
   switches = new Set();
+  switchedOnAt = new Map();
   switchReadError = null;
   switchReadQueue = [];
   switchWriteError = null;
@@ -538,6 +563,67 @@ describe.each([
     );
   });
 
+  it('turning ON: a write that fails, and the read again finds it on by another press: not credited, and it could not be confirmed', async () => {
+    settings = onRow();
+    settingsWriteErrors = [{ message: 'connection reset' }];
+    beforeWrite = () => {
+      settings = onRow({
+        [column]: true,
+        updated_by: '0a000000-0000-4000-8000-0000000000ee',
+        updated_at: '2026-11-22T07:00:00.000+00:00',
+      });
+    };
+    const res = await action({ on: true, confirm: 'PASSKEYS' });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message:
+          'Could not confirm whether the passkey switch changed. Reload the page to see its state.',
+      },
+    });
+    expect(h.recordPlatformAudit).toHaveBeenCalledTimes(1);
+    expect(h.reportError).toHaveBeenCalledWith(expect.anything(), {
+      tag: `actions.platform.passkeys.${column}.write_unconfirmed`,
+      level: 'error',
+      extra: { setting: column, to: true },
+    });
+    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain('@');
+  });
+
+  it('turning ON: a write that fails, and the read again finds it on by this admin at another moment: not credited', async () => {
+    settings = onRow();
+    settingsWriteErrors = [{ message: 'connection reset' }];
+    beforeWrite = () => {
+      settings = onRow({
+        [column]: true,
+        updated_by: ADMIN.userId,
+        updated_at: '2026-11-22T06:00:00.000+00:00',
+      });
+    };
+    const res = await action({ on: true, confirm: 'PASSKEYS' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.message).toBe(
+        'Could not confirm whether the passkey switch changed. Reload the page to see its state.',
+      );
+    }
+  });
+
+  it("turning ON: a write that answers an error but did land is confirmed by this press's own actor and timestamp, in the database's form", async () => {
+    settings = onRow();
+    settingsWriteErrors = [{ message: 'connection reset', landed: true }];
+    const res = await action({ on: true, confirm: 'PASSKEYS' });
+    expect(res).toEqual({ ok: true, data: { on: true, changed: true, recorded: true } });
+    const sent = adminStub.chainArgsAll.get('platform_settings.update')?.[0]?.[0]?.[0] as {
+      updated_at: string;
+    };
+    // Stored as Postgres answers it, not as sent: the same instant.
+    expect(settings!.updated_at).not.toBe(sent.updated_at);
+    expect(Date.parse(settings!.updated_at!)).toBe(Date.parse(sent.updated_at));
+    expect(settings!.updated_by).toBe(ADMIN.userId);
+  });
+
   it('turning ON: a write that fails is read again before its record is marked not applied', async () => {
     settings = onRow();
     settingsWriteErrors = [{ message: 'connection reset' }];
@@ -769,9 +855,11 @@ describe('setOrganizationPasskeysAction', () => {
     expect(res).toEqual({ ok: true, data: { on: true, changed: true, recorded: true } });
     expect([...switches]).toEqual([ORG]);
     expect(adminStub.chainsAll.get('organization_passkey_switches.insert')).toEqual([['insert']]);
-    expect(adminStub.chainArgsAll.get('organization_passkey_switches.insert')?.[0]?.[0]).toEqual([
-      { organization_id: ORG },
-    ]);
+    const inserted = adminStub.chainArgsAll.get('organization_passkey_switches.insert')?.[0]?.[0];
+    // The press's own timestamp, sent by the action (never the database's default).
+    expect(inserted).toEqual([{ organization_id: ORG, switched_on_at: expect.any(String) }]);
+    const at = (inserted?.[0] as { switched_on_at: string }).switched_on_at;
+    expect(new Date(at).toISOString()).toBe(at);
     expect(h.recordPlatformAudit).toHaveBeenCalledTimes(1);
     expect(h.recordPlatformAudit).toHaveBeenCalledWith({
       actorUserId: ADMIN.userId,
@@ -998,6 +1086,33 @@ describe('setOrganizationPasskeysAction', () => {
       expect.anything(),
       expect.objectContaining({ tag: 'actions.platform.passkeys.organization.write' }),
     );
+  });
+
+  it('an insert that fails, and the read again finds a row another press made: not credited, and it could not be confirmed', async () => {
+    switchWriteError = { message: 'connection reset' };
+    beforeWrite = () => {
+      switches.add(ORG);
+      switchedOnAt.set(ORG, '2026-11-22T07:00:00.000+00:00');
+    };
+    const res = await setOrganizationPasskeysAction({
+      organizationId: ORG,
+      on: true,
+      confirm: 'PASSKEYS',
+    });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message:
+          'Could not confirm whether the passkey switch changed. Reload the page to see its state.',
+      },
+    });
+    expect(h.recordPlatformAudit).toHaveBeenCalledTimes(1);
+    expect(h.reportError).toHaveBeenCalledWith(expect.anything(), {
+      tag: 'actions.platform.passkeys.organization.write_unconfirmed',
+      level: 'error',
+      extra: { organizationId: ORG, to: true },
+    });
   });
 
   it('an insert that fails and cannot be read again leaves its record unmarked, reports at error level, and says it could not tell', async () => {
