@@ -979,6 +979,42 @@ PGTAP_TESTS=(
   # rule is 0472's text; the purge keeps 90 days, 5,000 a call; both tables
   # go with the account.
   supabase/tests/0474_sign_in_alerts.test.sql
+  # Passkeys as the second step (0475): no API role reads or writes
+  # member_passkeys, passkey_bridges, passkey_challenges or
+  # organization_passkey_switches directly (RLS on, no policy), and
+  # service_role writes a passkey only through passkey_register() (column
+  # grants for a use and a name), a bridge and a challenge only through the
+  # functions; a stored passkey was made with user verification and a
+  # bridge secret is only ever ciphertext; a member reads their own active
+  # passkeys with no key material, and nobody signed in, a disabled account
+  # and a session that owes the second step are refused; a passkey may be
+  # added only with both platform switches on and every organization of the
+  # account switched on (act-as seats and invitations count for nothing),
+  # at most ten; a bridge row is inserted only when the account has none,
+  # only for a reserved-name TOTP factor of the same account, and goes in
+  # the same transaction as the last active passkey (and only then); a
+  # bridge row is never dropped while a passkey is active, and a verified
+  # bridge is never replaced by an unverified one; a challenge is spent
+  # once, only for its account, session, purpose and browser before it
+  # ends, and never while the kill switch is off; a member and a signed-out
+  # caller can neither read nor change the platform switches; a recovery
+  # code is spent and every passkey and the bridge row removed together, by
+  # service_role only; the health list names every unhealthy account and
+  # tells a removal not finished from a factor made after it; the purge
+  # keeps a day of challenges and 90 days of removed passkeys (longer for an
+  # unfinished removal), 5,000 a call; everything goes with the account.
+  # The session list gives each bridge-raised session its raise time and
+  # holds it when either time is in the window. service_role can end ONE
+  # Auth session, and only one held now (aal2) by the account's recorded
+  # bridge factor, through passkey_end_bridge_session(), the check and the
+  # delete in one statement (no member and no signed-out caller can call
+  # it); every other session is refused, nothing else is touched, and two
+  # calls at once end it once. A member and a signed-out caller cannot
+  # change the third setting (passkey_check_ends_sessions, default off).
+  # The races between two sessions are
+  # scripts/db-concurrency/0475_passkey_races.sh; the migration's and its
+  # rollback's locks are scripts/db-concurrency/0475_migration_lock_footprint.sh.
+  supabase/tests/0475_passkeys.test.sql
   # The request context reads the caller's own rows by index (0471): the same
   # answer as 0413's body for every kind of caller (several organizations, an
   # invitation not accepted, a disabled account, live and expired Act-as
