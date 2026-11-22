@@ -161,6 +161,26 @@ describe('platform gates, real session reads', () => {
     });
   });
 
+  it("an action's answer carries the id Auth verified, apart from the session's", async () => {
+    const { requireSession } = await import('./session');
+    const profile = {
+      userId: '11111111-1111-4111-8111-111111111111',
+      email: 'edited-profile@example.test',
+      fullName: null,
+      avatarUrl: null,
+      defaultOrganizationId: null,
+    };
+    vi.mocked(requireSession).mockResolvedValueOnce(profile).mockResolvedValueOnce(profile);
+    await signIn(sessionClaims({ aal: 'aal2', totpAgeSeconds: 60 }));
+    const withStepUp = await checkPlatformAdmin({ requireStepUp: true });
+    expect(withStepUp).toMatchObject({ ok: true, verifiedUserId: FIXTURE_USER_ID });
+    expect(withStepUp.ok && withStepUp.session.userId).toBe(profile.userId);
+    await expect(checkPlatformAdmin()).resolves.toMatchObject({
+      ok: true,
+      verifiedUserId: FIXTURE_USER_ID,
+    });
+  });
+
   it('a dangerous action is refused when the step-up is 20 minutes old', async () => {
     await signIn(sessionClaims({ aal: 'aal2', totpAgeSeconds: 20 * 60 }));
     await expect(checkPlatformAdmin({ requireStepUp: true })).resolves.toEqual({

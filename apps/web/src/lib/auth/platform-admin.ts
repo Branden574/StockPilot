@@ -275,6 +275,13 @@ export type PlatformAdminCheck =
        * account itself can edit: an audit row's actor takes this one.
        */
       verifiedEmail: string;
+      /**
+       * The id Auth verified for this request, from the same answer as
+       * verifiedEmail. `session.userId` comes from the request's session read;
+       * a caller that records the actor's id and email as one pair takes this
+       * one (and may refuse when the two differ).
+       */
+      verifiedUserId: string;
     }
   | { ok: false; reason: 'forbidden' | 'aal2_required' };
 
@@ -304,5 +311,5 @@ export async function checkPlatformAdmin(
   }
   if (!(await holdsNoRecordedBridge(admin))) return { ok: false, reason: 'forbidden' };
   // isPlatformAdmin passed on this email, so it is a non-empty string.
-  return { ok: true, session, verifiedEmail: admin.email ?? '' };
+  return { ok: true, session, verifiedEmail: admin.email ?? '', verifiedUserId: admin.id };
 }
