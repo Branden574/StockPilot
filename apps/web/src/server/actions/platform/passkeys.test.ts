@@ -18,9 +18,10 @@ import {
  * row is UPSERTED (it may not exist in production, review F) with only the
  * one column, so the other settings and the deletion passphrase are kept; an
  * audit row with { from, to } for every change and none for a press that
- * changed nothing; an ON whose audit row does not land is switched back off;
- * an OFF stands without it and says so; an organization turned off answers
- * how many of its members still hold an active passkey.
+ * changed nothing; an ON whose audit row does not land is refused before
+ * anything is switched; an OFF stands without it and says so; a write applies
+ * only while the switch still holds the value read; an organization turned
+ * off answers how many of its members still hold an active passkey.
  *
  * Made-up ids and addresses only.
  */
@@ -64,63 +65,112 @@ type SettingsRow = {
 };
 let settings: SettingsRow | null = null;
 let settingsReadError: { message: string; code?: string } | null = null;
-/** Each upsert answers the next of these (default: success). */
-let upsertErrors: Array<{ message: string } | null> = [];
+/** Each settings read answers the next of these first (then settingsReadError). */
+let settingsReadQueue: Array<{ message: string } | null> = [];
+/**
+ * Each settings write answers the next of these (default: success). `landed`:
+ * the write committed but its answer was an error (a lost response).
+ */
+let settingsWriteErrors: Array<{ message: string; code?: string; landed?: boolean } | null> = [];
 let switches = new Set<string>();
 let switchReadError: { message: string } | null = null;
-let switchWriteError: { message: string; code?: string } | null = null;
+/** Each switch read answers the next of these first (then switchReadError). */
+let switchReadQueue: Array<{ message: string } | null> = [];
+let switchWriteError: { message: string; code?: string; landed?: boolean } | null = null;
 let switchDeleteErrors: Array<{ message: string } | null> = [];
 let orgs: Array<{ id: string; name: string }> = [];
 let orgReadError: { message: string } | null = null;
 let members: Array<Record<string, unknown>> = [];
 let passkeys: Array<Record<string, unknown>> = [];
 let membersReadError: { message: string } | null = null;
+/** Another admin's press landing between this press's read and its write. */
+let beforeWrite: (() => void) | null = null;
 
 /** The order of the audit rows and the switch writes in one press. */
 const order: string[] = [];
 
-function upsertSettings(call: MockCall) {
+const NO_SETTINGS_ROW: SettingsRow = {
+  id: true,
+  passkeys_on: false,
+  passkey_adds_on: false,
+  passkey_check_ends_sessions: false,
+  org_deletion_passphrase_hash: null,
+};
+
+/** Every `.eq(column, value)` of a chain. */
+function eqFilters(call: MockCall): Array<[string, unknown]> {
+  return call.methods.flatMap((m, i) => (m === 'eq' ? [call.args[i] as [string, unknown]] : []));
+}
+
+/**
+ * platform_settings as PostgREST would answer it: an insert of a row that
+ * exists is a 23505, an upsert merges, an update changes the row only when
+ * every `.eq` still matches and returns the rows it changed when asked.
+ */
+function writeSettings(call: MockCall) {
   order.push('write');
-  const err = upsertErrors.shift() ?? null;
-  if (err) return { data: null, error: err };
-  const values = callArgs(call, 'upsert')?.[0] as Partial<SettingsRow> & Record<string, unknown>;
-  settings = {
-    ...(settings ?? {
-      id: true,
-      passkeys_on: false,
-      passkey_adds_on: false,
-      passkey_check_ends_sessions: false,
-      org_deletion_passphrase_hash: null,
-    }),
-    ...values,
-  } as SettingsRow;
-  return { data: null, error: null };
+  beforeWrite?.();
+  const err = settingsWriteErrors.shift() ?? null;
+  if (err && !err.landed) return { data: null, error: err };
+  let data: unknown = null;
+  if (call.op === 'update') {
+    const values = callArgs(call, 'update')?.[0] as Partial<SettingsRow>;
+    const row = settings;
+    const matches =
+      row !== null &&
+      eqFilters(call).every(([c, v]) => (row as unknown as Record<string, unknown>)[c] === v);
+    if (matches) settings = { ...row, ...values } as SettingsRow;
+    if (call.methods.includes('select')) data = matches ? [{ id: true }] : [];
+  } else {
+    const upsert = call.methods.includes('upsert');
+    const values = callArgs(call, upsert ? 'upsert' : 'insert')?.[0] as Partial<SettingsRow>;
+    if (!upsert && settings !== null) {
+      return {
+        data: null,
+        error: {
+          message: 'duplicate key value violates unique constraint "platform_settings_pkey"',
+          code: '23505',
+        },
+      };
+    }
+    settings = { ...(settings ?? NO_SETTINGS_ROW), ...values } as SettingsRow;
+  }
+  return err ? { data: null, error: err } : { data, error: null };
 }
 
 const adminStub = makeSupabaseStub({
-  'platform_settings.select': () =>
-    settingsReadError ? { data: null, error: settingsReadError } : { data: settings, error: null },
-  'platform_settings.insert': upsertSettings,
+  'platform_settings.select': () => {
+    const queued = settingsReadQueue.length > 0 ? settingsReadQueue.shift() : settingsReadError;
+    return queued ? { data: null, error: queued } : { data: settings, error: null };
+  },
+  'platform_settings.insert': writeSettings,
+  'platform_settings.update': writeSettings,
   'organizations.select': (call) =>
     orgReadError ? { data: null, error: orgReadError } : servedLikePostgrest(orgs)(call),
-  'organization_passkey_switches.select': (call) =>
-    switchReadError
-      ? { data: null, error: switchReadError }
-      : servedLikePostgrest([...switches].map((organization_id) => ({ organization_id })))(call),
+  'organization_passkey_switches.select': (call) => {
+    const queued = switchReadQueue.length > 0 ? switchReadQueue.shift() : switchReadError;
+    return queued
+      ? { data: null, error: queued }
+      : servedLikePostgrest([...switches].map((organization_id) => ({ organization_id })))(call);
+  },
   'organization_passkey_switches.insert': (call) => {
     order.push('write');
-    if (switchWriteError) return { data: null, error: switchWriteError };
+    beforeWrite?.();
+    if (switchWriteError && !switchWriteError.landed)
+      return { data: null, error: switchWriteError };
     const row = callArgs(call, 'insert')?.[0] as { organization_id: string };
     switches.add(row.organization_id);
-    return { data: null, error: null };
+    return { data: null, error: switchWriteError };
   },
   'organization_passkey_switches.delete': (call) => {
     order.push('write');
+    beforeWrite?.();
     const err = switchDeleteErrors.shift() ?? null;
     if (err) return { data: null, error: err };
     const eq = callArgs(call, 'eq') as [string, string];
-    if (eq?.[0] === 'organization_id') switches.delete(eq[1]);
-    return { data: null, error: null };
+    const removed =
+      eq?.[0] === 'organization_id' && switches.delete(eq[1]) ? [{ organization_id: eq[1] }] : [];
+    return { data: call.methods.includes('select') ? removed : null, error: null };
   },
   'organization_members.select': (call) =>
     membersReadError ? { data: null, error: membersReadError } : servedLikePostgrest(members)(call),
@@ -152,10 +202,17 @@ function writes(): number {
 function reads(): number {
   return adminStub.fromCalls.length;
 }
-function lastUpsert(): Record<string, unknown> | undefined {
+/** The values of the last insert (or upsert) of the settings row. */
+function lastSettingsInsert(): Record<string, unknown> | undefined {
   const all = adminStub.chainArgsAll.get('platform_settings.insert') ?? [];
   const last = all[all.length - 1];
   return last?.[0]?.[0] as Record<string, unknown> | undefined;
+}
+function settingsReads(): number {
+  return adminStub.chainsAll.get('platform_settings.select')?.length ?? 0;
+}
+function onRow(over: Partial<SettingsRow> = {}): SettingsRow {
+  return { ...NO_SETTINGS_ROW, ...over };
 }
 function member(userId: string, organizationId: string, over: Record<string, unknown> = {}) {
   return {
@@ -189,6 +246,7 @@ beforeEach(() => {
     ok: true,
     session: ADMIN,
     verifiedEmail: VERIFIED_EMAIL,
+    verifiedUserId: ADMIN.userId,
   }));
   order.length = 0;
   h.recordPlatformAudit.mockImplementation(async () => {
@@ -198,9 +256,12 @@ beforeEach(() => {
   h.adminThrows = false;
   settings = null;
   settingsReadError = null;
-  upsertErrors = [];
+  settingsReadQueue = [];
+  settingsWriteErrors = [];
+  beforeWrite = null;
   switches = new Set();
   switchReadError = null;
+  switchReadQueue = [];
   switchWriteError = null;
   switchDeleteErrors = [];
   orgs = [
@@ -248,6 +309,37 @@ describe('every passkey switch: who may press it', () => {
             details: { reason: 'aal2_required' },
           },
         });
+        expect(reads()).toBe(0);
+        expect(writes()).toBe(0);
+        expect(h.recordPlatformAudit).not.toHaveBeenCalled();
+      });
+
+      it('refuses when the id Auth verified is not the session id, before anything is read or written', async () => {
+        h.gate.mockImplementation(async () => ({
+          ok: true,
+          session: ADMIN,
+          verifiedEmail: VERIFIED_EMAIL,
+          verifiedUserId: '0a000000-0000-4000-8000-0000000000ff',
+        }));
+        const res = await press(true, 'PASSKEYS');
+        expect(res).toEqual({
+          ok: false,
+          error: { code: 'forbidden', message: 'Not authorized.' },
+        });
+        expect(reads()).toBe(0);
+        expect(writes()).toBe(0);
+        expect(h.recordPlatformAudit).not.toHaveBeenCalled();
+        expect(JSON.stringify(h.reportError.mock.calls)).not.toContain('@');
+      });
+
+      it('refuses a gate answer with no verified id, and touches nothing', async () => {
+        h.gate.mockImplementation(async () => ({
+          ok: true,
+          session: ADMIN,
+          verifiedEmail: VERIFIED_EMAIL,
+        }));
+        const res = await press(true, 'PASSKEYS');
+        expect(res.ok).toBe(false);
         expect(reads()).toBe(0);
         expect(writes()).toBe(0);
         expect(h.recordPlatformAudit).not.toHaveBeenCalled();
@@ -310,11 +402,11 @@ describe.each([
 ] as const)('%s (platform_settings.%s)', (_name, column, action) => {
   const other = column === 'passkeys_on' ? 'passkey_adds_on' : 'passkeys_on';
 
-  it('turns it on when the settings row does not exist: an upsert of the one row with only this column', async () => {
+  it('turns it on when the settings row does not exist: an insert of the one row with only this column', async () => {
     settings = null;
     const res = await action({ on: true, confirm: 'PASSKEYS' });
     expect(res).toEqual({ ok: true, data: { on: true, changed: true, recorded: true } });
-    const values = lastUpsert()!;
+    const values = lastSettingsInsert()!;
     expect(values).toMatchObject({ id: true, [column]: true, updated_by: ADMIN.userId });
     expect(Object.keys(values).sort()).toEqual(['id', column, 'updated_at', 'updated_by'].sort());
     expect(settings).toMatchObject({ [column]: true, [other]: false });
@@ -336,6 +428,149 @@ describe.each([
       passkey_check_ends_sessions: true,
       org_deletion_passphrase_hash: 'stored-digest',
     });
+  });
+
+  it('an existing row is updated in place: only this column, on the one row, and only while it still holds the value read', async () => {
+    settings = onRow({ org_deletion_passphrase_hash: 'stored-digest' });
+    const res = await action({ on: true, confirm: 'PASSKEYS' });
+    expect(res).toEqual({ ok: true, data: { on: true, changed: true, recorded: true } });
+    expect(adminStub.chainsAll.get('platform_settings.insert')).toBeUndefined();
+    const methods = adminStub.chainsAll.get('platform_settings.update')?.[0];
+    const args = adminStub.chainArgsAll.get('platform_settings.update')?.[0];
+    expect(methods?.[0]).toBe('update');
+    const values = args?.[0]?.[0] as Record<string, unknown>;
+    expect(Object.keys(values).sort()).toEqual([column, 'updated_at', 'updated_by'].sort());
+    expect(values).toMatchObject({ [column]: true, updated_by: ADMIN.userId });
+    const eqs = methods!.flatMap((m, i) => (m === 'eq' ? [args![i]] : []));
+    expect(eqs).toEqual(
+      expect.arrayContaining([
+        ['id', true],
+        [column, false],
+      ]),
+    );
+    expect(eqs).toHaveLength(2);
+    expect(methods).toContain('select');
+  });
+
+  it('turning ON: another admin turned it on between the read and the write: nothing done, the answer says so, and its record is marked not applied', async () => {
+    settings = onRow();
+    beforeWrite = () => {
+      settings = onRow({ [column]: true });
+    };
+    const res = await action({ on: true, confirm: 'PASSKEYS' });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message:
+          'Someone else changed this passkey switch at the same moment, so nothing was done. Check its state and try again.',
+      },
+    });
+    expect(h.recordPlatformAudit).toHaveBeenCalledTimes(2);
+    expect(h.recordPlatformAudit).toHaveBeenLastCalledWith({
+      actorUserId: ADMIN.userId,
+      actorEmail: VERIFIED_EMAIL,
+      action: 'passkeys_switched',
+      detail: { setting: column, from: false, to: true, not_applied: true },
+    });
+  });
+
+  it('turning OFF: another admin turned it off between the read and the write: nothing done, the answer says so, and nothing recorded', async () => {
+    settings = onRow({ passkeys_on: true, passkey_adds_on: true });
+    beforeWrite = () => {
+      settings = onRow({ passkeys_on: true, passkey_adds_on: true, [column]: false });
+    };
+    const res = await action({ on: false, confirm: 'PASSKEYS' });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message:
+          'Someone else changed this passkey switch at the same moment, so nothing was done. Check its state and try again.',
+      },
+    });
+    expect(h.recordPlatformAudit).not.toHaveBeenCalled();
+  });
+
+  it('turning ON with no row, when another admin made the row first: switched only while it still holds the value read', async () => {
+    settings = null;
+    beforeWrite = () => {
+      settings = onRow({ [other]: true, org_deletion_passphrase_hash: 'stored-digest' });
+      beforeWrite = null;
+    };
+    const res = await action({ on: true, confirm: 'PASSKEYS' });
+    expect(res).toEqual({ ok: true, data: { on: true, changed: true, recorded: true } });
+    expect(settings).toMatchObject({
+      [column]: true,
+      [other]: true,
+      org_deletion_passphrase_hash: 'stored-digest',
+    });
+    expect(h.recordPlatformAudit).toHaveBeenCalledTimes(1);
+  });
+
+  it('turning ON with no row, when another admin made the row already on: nothing done, and its record is marked not applied', async () => {
+    settings = null;
+    beforeWrite = () => {
+      settings = onRow({ [column]: true });
+      beforeWrite = null;
+    };
+    const res = await action({ on: true, confirm: 'PASSKEYS' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe('conflict');
+    expect(h.recordPlatformAudit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        detail: { setting: column, from: false, to: true, not_applied: true },
+      }),
+    );
+  });
+
+  it('turning ON: a write that answers an error but did land is read again: on, so its record is not marked not applied', async () => {
+    settings = onRow();
+    settingsWriteErrors = [{ message: 'connection reset', landed: true }];
+    const res = await action({ on: true, confirm: 'PASSKEYS' });
+    expect(res).toEqual({ ok: true, data: { on: true, changed: true, recorded: true } });
+    expect(settings![column]).toBe(true);
+    expect(settingsReads()).toBe(2);
+    expect(h.recordPlatformAudit).toHaveBeenCalledTimes(1);
+    expect(h.reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: `actions.platform.passkeys.${column}.write` }),
+    );
+  });
+
+  it('turning ON: a write that fails is read again before its record is marked not applied', async () => {
+    settings = onRow();
+    settingsWriteErrors = [{ message: 'connection reset' }];
+    const res = await action({ on: true, confirm: 'PASSKEYS' });
+    expect(res.ok).toBe(false);
+    expect(settingsReads()).toBe(2);
+    expect(h.recordPlatformAudit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        detail: { setting: column, from: false, to: true, not_applied: true },
+      }),
+    );
+  });
+
+  it('turning ON: a write that fails and cannot be read again leaves its record unmarked, reports at error level, and says it could not tell', async () => {
+    settings = onRow();
+    settingsWriteErrors = [{ message: 'connection reset' }];
+    settingsReadQueue = [null, { message: 'canceling statement due to statement timeout' }];
+    const res = await action({ on: true, confirm: 'PASSKEYS' });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message:
+          'Could not confirm whether the passkey switch changed. Reload the page to see its state.',
+      },
+    });
+    expect(h.recordPlatformAudit).toHaveBeenCalledTimes(1);
+    expect(h.reportError).toHaveBeenCalledWith(expect.anything(), {
+      tag: `actions.platform.passkeys.${column}.write_unconfirmed`,
+      level: 'error',
+      extra: { setting: column, to: true },
+    });
+    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain('@');
   });
 
   it('reads the one settings row by its key', async () => {
@@ -477,14 +712,14 @@ describe.each([
       passkey_check_ends_sessions: false,
       org_deletion_passphrase_hash: null,
     };
-    upsertErrors = [{ message: 'connection reset' }];
+    settingsWriteErrors = [{ message: 'connection reset' }];
     const res = await action({ on: false, confirm: 'PASSKEYS' });
     expect(res.ok).toBe(false);
     expect(h.recordPlatformAudit).not.toHaveBeenCalled();
   });
 
   it('a write that fails after its record refuses, reports, and marks the record not applied', async () => {
-    upsertErrors = [{ message: 'connection reset' }];
+    settingsWriteErrors = [{ message: 'connection reset' }];
     const res = await action({ on: true, confirm: 'PASSKEYS' });
     expect(res).toEqual({
       ok: false,
@@ -505,7 +740,7 @@ describe.each([
   });
 
   it('a not-applied mark that cannot be written is reported too', async () => {
-    upsertErrors = [{ message: 'connection reset' }];
+    settingsWriteErrors = [{ message: 'connection reset' }];
     let calls = 0;
     h.recordPlatformAudit.mockImplementation(async () => ++calls === 1);
     const res = await action({ on: true, confirm: 'PASSKEYS' });
@@ -745,6 +980,68 @@ describe('setOrganizationPasskeysAction', () => {
         detail: { from: false, to: true, not_applied: true },
       }),
     );
+    // read again before marking it: still off
+    expect(adminStub.chainsAll.get('organization_passkey_switches.select')).toHaveLength(2);
+  });
+
+  it('an insert that answers an error but did land is read again: on, so its record is not marked not applied', async () => {
+    switchWriteError = { message: 'connection reset', landed: true };
+    const res = await setOrganizationPasskeysAction({
+      organizationId: ORG,
+      on: true,
+      confirm: 'PASSKEYS',
+    });
+    expect(res).toEqual({ ok: true, data: { on: true, changed: true, recorded: true } });
+    expect(switches.has(ORG)).toBe(true);
+    expect(h.recordPlatformAudit).toHaveBeenCalledTimes(1);
+    expect(h.reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'actions.platform.passkeys.organization.write' }),
+    );
+  });
+
+  it('an insert that fails and cannot be read again leaves its record unmarked, reports at error level, and says it could not tell', async () => {
+    switchWriteError = { message: 'connection reset' };
+    switchReadQueue = [null, { message: 'canceling statement due to statement timeout' }];
+    const res = await setOrganizationPasskeysAction({
+      organizationId: ORG,
+      on: true,
+      confirm: 'PASSKEYS',
+    });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message:
+          'Could not confirm whether the passkey switch changed. Reload the page to see its state.',
+      },
+    });
+    expect(h.recordPlatformAudit).toHaveBeenCalledTimes(1);
+    expect(h.reportError).toHaveBeenCalledWith(expect.anything(), {
+      tag: 'actions.platform.passkeys.organization.write_unconfirmed',
+      level: 'error',
+      extra: { organizationId: ORG, to: true },
+    });
+    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain('@');
+  });
+
+  it('turning off: a delete that removes nothing (another admin turned it off first) answers no change and records nothing', async () => {
+    switches = new Set([ORG]);
+    members = [member(U1, ORG)];
+    passkeys = [{ user_id: U1, removed_at: null }];
+    beforeWrite = () => {
+      switches.delete(ORG);
+    };
+    const res = await setOrganizationPasskeysAction({
+      organizationId: ORG,
+      on: false,
+      confirm: 'PASSKEYS',
+    });
+    expect(res).toEqual({
+      ok: true,
+      data: { on: false, changed: false, recorded: false, membersWithPasskeys: 1 },
+    });
+    expect(h.recordPlatformAudit).not.toHaveBeenCalled();
   });
 
   it('turning on: an audit row that cannot be written refuses, and nothing is switched', async () => {
@@ -815,12 +1112,13 @@ describe('setOrganizationPasskeysAction', () => {
     expect(h.recordPlatformAudit).not.toHaveBeenCalled();
   });
 
-  it('the delete names this organization only', async () => {
+  it('the delete names this organization only, and returns the rows it removed', async () => {
     switches = new Set([ORG]);
     await setOrganizationPasskeysAction({ organizationId: ORG, on: false, confirm: 'PASSKEYS' });
     const del = adminStub.chainArgsAll.get('organization_passkey_switches.delete')?.[0];
     const methods = adminStub.chainsAll.get('organization_passkey_switches.delete')?.[0];
-    expect(methods).toEqual(['delete', 'eq']);
+    expect(methods).toEqual(['delete', 'eq', 'select']);
     expect(del?.[1]).toEqual(['organization_id', ORG]);
+    expect(del?.[2]).toEqual(['organization_id']);
   });
 });

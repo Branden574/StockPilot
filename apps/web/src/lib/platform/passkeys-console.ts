@@ -30,6 +30,12 @@ export const PASSKEYS_COPY = {
   /** Turning OFF: made, but its audit row could not be written (reported at error level). */
   offNotRecorded:
     'Turned off. The change was made, but its record could not be written to the platform audit.',
+  /** The switch no longer held the value read when the write ran: nothing was done. */
+  changedElsewhere:
+    'Someone else changed this passkey switch at the same moment, so nothing was done. Check its state and try again.',
+  /** Turning ON: the write answered an error and the switch could not be read again. */
+  writeUnconfirmed:
+    'Could not confirm whether the passkey switch changed. Reload the page to see its state.',
 } as const;
 
 /** What the console says after an organization's passkeys are turned off. */
