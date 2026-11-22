@@ -153,7 +153,13 @@ export const RELEASES: Release[] = [
     // update was launched on a phone), so the placeholder is that same minute.
     // Moved again by docs/whats-new-blocked-activity (2026-11-21; was: '2026-11-21T02:31:00Z'): the Blocked
     // activity release below is dated 2026-11-21T18:19:00Z, so the placeholder is that same minute.
-    publishedAt: '2026-11-21T18:19:00Z',
+    // Moved again by docs/whats-new-sign-in-alerts-and-reader (2026-11-22; was: '2026-11-21T18:19:00Z'): the
+    // Blocked activity current password and set-up code release below is dated 2026-11-22T05:42:00Z, so the
+    // placeholder is that same minute.
+    // Moved again by docs/whats-new-sign-in-alerts-and-reader (2026-11-22; was: '2026-11-22T05:42:00Z'): the
+    // sign-in alerts release below is dated 2026-11-22T06:08:00Z (the minute #635 went live), so the
+    // placeholder is that same minute.
+    publishedAt: '2026-11-22T06:08:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -238,6 +244,138 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'sign-in-alerts-2026-11',
+    revision: 1,
+    // Sign-in alerts (part 3 of the security tools; PR #635, live
+    // 2026-11-22T06:08:57Z; migration 0474 live since 02:52:33Z). Published by
+    // docs/whats-new-sign-in-alerts-and-reader at the minute it went live.
+    // Left out on purpose: how an alert is decided (which sign-ins are new,
+    // what is counted, the limits on emails and on the link). Words that say
+    // when no alert is sent would tell someone with a stolen password how to
+    // avoid one.
+    // The phone: no app update. A phone sign-in is alerted by email; the
+    // phone has no Active sessions screen, and the owners' notice opens the
+    // inbox (apps/mobile/src/lib/web-path-rewrite.ts).
+    status: 'published',
+    title: 'Sign-in alerts: where a sign-in came from, and "This was not me"',
+    summary:
+      'The email StockPilot sends when your account signs in from a new device now also comes for a sign-in from a new country, says roughly where it came from, and has a This was not me button that ends every session of your account. Owners and admins can see their organization\'s sign-in alerts on a separate Sign-in alerts page, linked from the Security page.',
+    // PLACEHOLDER (stand-in, not a real release time): a whole minute after the
+    // release below, to be replaced with the minute #635's web release is live.
+    publishedAt: '2026-11-22T06:08:00Z',
+    entries: [
+      {
+        id: 'sign-in-alert-not-me',
+        category: 'new',
+        area: 'Security',
+        title: 'Sign-in alerts say where, and let you say "This was not me"',
+        whatChanged:
+          'The sign-in alert email now also comes when your account signs in from a country it has not signed in from before. It shows the approximate place and has a This was not me button. On the website, the Security page in Settings shows each alert on the session it made, with This was me and This was not me.',
+        whyItMatters:
+          'If someone else knows your password, you can end every session of your account with one press, from the email or from Settings. Other owners and admins of your organization, when there are any, are told.',
+        howItAffectsYou:
+          'This was not me ends every session of your account, this one too. A device that is already open can keep working for a short while (until its current pass expires). Then reset your password: that is what closes the door. This was me marks the alert as yours. The place is approximate: a VPN or travel can show a country you are not in.',
+        whatToDo:
+          'If you get an alert for a sign-in you did not make, press This was not me, then reset your password.',
+        link: { href: '/dashboard/settings/security', label: 'Open Security' },
+      },
+      {
+        id: 'sign-in-alerts-for-admins',
+        category: 'new',
+        area: 'Security',
+        title: 'Owners and admins can see sign-in alerts',
+        whatChanged:
+          'The Security page in Settings links to a new Sign-in alerts page. It lists the sign-in alerts of the last 90 days for the members of your organization: when, who, the kind of device, the approximate place, what was new, and how the member answered.',
+        whyItMatters:
+          'You can see when a member reports a sign-in they did not make. You also get a notification and an email when that happens.',
+        howItAffectsYou:
+          'When a member says a sign-in was not them, StockPilot has already ended every session of their account. A device that was already open can keep working for a short while (until its current pass expires). The page shows the kind of device (for example Chrome on macOS), never the name a member gave their device.',
+        whatToDo:
+          'When a member reports a sign-in, check that they reset their password right away.',
+        link: { href: '/dashboard/settings/security/sign-ins', label: 'Open Sign-in alerts' },
+        audience: { roles: ['owner', 'admin'] },
+      },
+    ],
+  },
+  {
+    id: 'blocked-activity-current-password-and-set-up-code-2026-11',
+    revision: 1,
+    // Published by docs/whats-new-sign-in-alerts-and-reader (2026-11-22): the change that
+    // records these two events went live with the refused sign-ins reader (#634) at
+    // 2026-11-22T05:42:55Z, so publishedAt is the whole minute 05:42 and the Liquid Glass
+    // draft's placeholder above is moved to the same minute. (The Blocked activity page
+    // itself is announced below, blocked-activity-2026-11.)
+    // Claims, each checked on the branch:
+    // - The two rows and their words: packages/core/src/security/
+    //   security-events.ts (wrong_current_password "Wrong current password
+    //   entered by a signed-in member", wrong_setup_code "Wrong code while
+    //   setting up an authenticator").
+    // - Where the current password is asked: lib/auth/verify-password.ts is
+    //   called by changing the password (server/actions/auth.ts), changing
+    //   the sign-in email (server/services/email-change.ts), setting up an
+    //   authenticator app (server/actions/mfa.ts), using a recovery code
+    //   (server/actions/mfa-recovery.ts), transferring ownership
+    //   (server/actions/team.ts) and deleting the account
+    //   (server/lib/account-deletion-credential.ts).
+    // - The set-up code: server/actions/mfa.ts verifyEnrollmentAction, only a
+    //   code the sign-in service judged wrong.
+    // - The organization: the signed-in account's (server/security/
+    //   account-events.ts recordAccountCodeBlocked), so the row shows on the
+    //   page of the organization the account's other sign-in rows show on.
+    // - The columns: When, What, Where, Source, Count
+    //   (settings/security/activity/page.tsx); both rows count under
+    //   Password guessing in the totals. No column names the member. The
+    //   source of a wrong current password is the website, or the mobile app
+    //   when the phone asked (deleting the account, changing the email).
+    // Left out as not visible to an organization (rechecked 2026-11-22 on main
+    // at 024636c63): a sign-in refused for another reason
+    // (sign_in_refused_other) is always recorded with no organization
+    // (server/security/account-events.ts recordSignInBlocked), and the rows the
+    // sign-in service's own log reader stores (phone app, direct callers) have
+    // no organization either; both appear only on the platform console, which
+    // members never see, so nothing here promises them to a member.
+    // Who is told: owners and admins, the page's own rule
+    // (server/services/security-events.ts assertMaySeeSecurityActivity).
+    status: 'published',
+    title: 'Blocked activity lists a wrong current password and a wrong authenticator set-up code',
+    summary:
+      'Settings, Security, Blocked activity now also lists two things for the accounts in your organization: a wrong current password entered by a member who is already signed in, and a wrong code entered while setting up an authenticator app. Each entry shows when, from where and how many times, as the other entries do.',
+    publishedAt: '2026-11-22T05:42:00Z',
+    entries: [
+      {
+        id: 'blocked-activity-wrong-current-password',
+        category: 'new',
+        area: 'Security',
+        title: 'A wrong current password is listed in Blocked activity',
+        whatChanged:
+          'StockPilot asks a signed-in member for their current password again before a sensitive change: changing the password or the sign-in email, setting up an authenticator app, using a recovery code, transferring ownership, or deleting the account. When that password is wrong, Blocked activity now lists it as "Wrong current password entered by a signed-in member".',
+        whyItMatters:
+          'A wrong current password is usually a typing mistake. It is also what someone would meet who is using a session that is not theirs, so it is worth being able to see.',
+        howItAffectsYou:
+          'The entry shows when it happened, the place it came from, and how many times. It is counted under Password guessing in the totals. The member still reads the same message as before, and nothing else about these changes is different.',
+        whatToDo:
+          'No action needed. An entry does not say which member it was. If you see several from a place you do not expect, ask your team.',
+        link: { href: '/dashboard/settings/security/activity', label: 'Open Blocked activity' },
+        audience: { roles: ['owner', 'admin'] },
+      },
+      {
+        id: 'blocked-activity-wrong-set-up-code',
+        category: 'new',
+        area: 'Security',
+        title: 'A wrong code while setting up an authenticator is listed in Blocked activity',
+        whatChanged:
+          'When a member enters a wrong six-digit code while setting up an authenticator app, Blocked activity now lists it as "Wrong code while setting up an authenticator".',
+        whyItMatters:
+          'It is kept apart from "Wrong authenticator code", which is a wrong code from an authenticator that is already set up. A wrong code during set-up is nearly always a mistyped or expired first code.',
+        howItAffectsYou:
+          'Expect a few of these on the day your organization starts requiring an authenticator app. The member still reads the same message as before.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/settings/security/activity', label: 'Open Blocked activity' },
+        audience: { roles: ['owner', 'admin'] },
       },
     ],
   },

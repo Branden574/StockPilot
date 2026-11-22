@@ -81,7 +81,7 @@ describe('the Release count release', () => {
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES[20]): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES[21]): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES[22]): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[23]?.id).toBe(ID);
+    expect(RELEASES[25]?.id).toBe(ID);
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -94,7 +94,7 @@ describe('the Release count release', () => {
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES[21]): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES[22]): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES[23]): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[24]?.id).toBe('ai-assistant-plain-words-2026-11');
+    expect(RELEASES[26]?.id).toBe('ai-assistant-plain-words-2026-11');
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: this release, the newest published): the emailed links release is published later, directly above it.
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -110,7 +110,7 @@ describe('the Release count release', () => {
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES[19]): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES[20]): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES[21]): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[22]?.id).toBe('emailed-links-name-their-account-2026-11');
+    expect(RELEASES[24]?.id).toBe('emailed-links-name-their-account-2026-11');
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
       // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: the emailed links release): the phone authenticator code release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: the phone authenticator code release): the order request alerts release is published after it, at the top, the newest published release.
@@ -130,7 +130,7 @@ describe('the Release count release', () => {
       // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: the export, receipt and access release): the count start access check release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: 'count-start-access-check-2026-11'): the phone authenticator set-up release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: 'phone-authenticator-set-up-2026-11'): the Blocked activity release is published after it, at the top, the newest published release.
-      'blocked-activity-2026-11',
+      'sign-in-alerts-2026-11',
     );
     // Migration 0419 reached production at 08:17:32Z; #444's web build went live at 07:54Z.
     expect(release().publishedAt).toBe('2026-11-13T08:18:00Z');
