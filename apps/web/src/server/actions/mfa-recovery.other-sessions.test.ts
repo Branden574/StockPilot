@@ -873,3 +873,71 @@ describe('the email is rendered after the response (the review of stage 5, findi
     ).toHaveLength(1);
   });
 });
+
+describe('the email goes only when a sign-in method was removed (the second lab walk, RS5 25)', () => {
+  const UNVERIFIED = { ...APP, id: 'app-half', status: 'unverified' };
+
+  it.each([
+    ['before 0475 (today’s consume)', () => adminWith(PASSKEY_RECOVERY_NOT_YET, [])],
+    [
+      'with 0475 live, no passkey',
+      () =>
+        adminWith(
+          {
+            'rpc:consume_recovery_code_with_passkeys': {
+              data: [{ consumed: true, passkeys_removed: 0, bridge_factor_id: null }],
+              error: null,
+            },
+          },
+          [],
+        ),
+    ],
+  ])(
+    '%s, an account with no factor: the code is used and the other sessions end, but no email says methods were removed',
+    async (_when, admin) => {
+      admin();
+      const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+      expect(res).toEqual({ ok: true, data: { unenrolled: 0 } });
+      expect(vi.mocked(signOutAs).mock.calls).toHaveLength(1);
+      expect(vi.mocked(emitAuthAudit).mock.calls.map((c) => c[0].event)).toContain(
+        'mfa.recovery.consumed',
+      );
+      expect(sendEmail).not.toHaveBeenCalled();
+    },
+  );
+
+  it('only a factor never set up (unverified) went: no sign-in method was removed, so no email', async () => {
+    adminWith(PASSKEY_RECOVERY_NOT_YET, [UNVERIFIED]);
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toEqual({ ok: true, data: { unenrolled: 1 } });
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('passkeys removed with the code while no factor was listed: removed, so the email goes', async () => {
+    adminWith(
+      {
+        'rpc:consume_recovery_code_with_passkeys': {
+          data: [{ consumed: true, passkeys_removed: 2, bridge_factor_id: null }],
+          error: null,
+        },
+      },
+      [],
+    );
+    await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it('a method that could not be removed is still said, by email, though nothing was removed', async () => {
+    const a = beforeRecords();
+    failDeletes(a, ['app-1']);
+    await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it('a verified app removed: the email goes, as before', async () => {
+    beforeRecords();
+    await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+    expect(sent()[0]!.subject).toBe(SUBJECT);
+  });
+});

@@ -285,6 +285,11 @@ type FactorRemoval = {
   unenrolled: number;
   /** Of those, the ones that are not the passkey's (no reserved name). */
   appsRemoved: number;
+  /**
+   * Of those, the sign-in methods: every one but a factor never set up
+   * (unverified). A factor whose status is not given counts (closed).
+   */
+  methodsRemoved: number;
   /** Deletes that failed (any factor). */
   failed: number;
   /** The list could not be read: no delete was tried. */
@@ -321,6 +326,7 @@ async function removeFactors(
       factors: [],
       unenrolled: 0,
       appsRemoved: 0,
+      methodsRemoved: 0,
       failed: 0,
       unchecked: true,
       appLeft: false,
@@ -329,6 +335,7 @@ async function removeFactors(
   }
   let unenrolled = 0;
   let appsRemoved = 0;
+  let methodsRemoved = 0;
   let failed = 0;
   let appLeft = false;
   let passkeyFactorLeft = false;
@@ -346,6 +353,7 @@ async function removeFactors(
     if (deleted) {
       unenrolled += 1;
       if (!carriesBridgeName(f)) appsRemoved += 1;
+      if (f.status !== 'unverified') methodsRemoved += 1;
       continue;
     }
     failed += 1;
@@ -353,7 +361,16 @@ async function removeFactors(
     if (carriesBridgeName(f)) passkeyFactorLeft = true;
     else appLeft = true;
   }
-  return { factors, unenrolled, appsRemoved, failed, unchecked: false, appLeft, passkeyFactorLeft };
+  return {
+    factors,
+    unenrolled,
+    appsRemoved,
+    methodsRemoved,
+    failed,
+    unchecked: false,
+    appLeft,
+    passkeyFactorLeft,
+  };
 }
 
 /**
@@ -703,8 +720,15 @@ export async function consumeMfaRecoveryCodeAction(input: {
           : { unenrolled, passkeys_removed: passkeysRemoved },
     });
     // Q7: the security email, after the response. It names passkeys only for
-    // an account that had one, and says so when a method was left.
-    if (session.email) {
+    // an account that had one, and says so when a method was left. It goes
+    // only when it has something true to say (the second lab walk, RS5 25):
+    // a sign-in method was removed (a verified factor, or passkeys with the
+    // code), or one could not be removed. A code used on an account with no
+    // method (or only a factor never set up) sends none: "your sign-in
+    // methods were removed" would be untrue.
+    const somethingToSay =
+      removal.methodsRemoved > 0 || (passkeysRemoved ?? 0) > 0 || methodsLeft !== undefined;
+    if (session.email && somethingToSay) {
       sendRecoveryCodeUsedEmail(session.email, session.userId, {
         passkeys: hadPasskeys,
         othersSignedOut: othersEnded,
