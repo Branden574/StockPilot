@@ -2525,6 +2525,13 @@ WEB_TESTS=(
   # after the press count only methods that were set up; a refused press
   # ends nothing and sends nothing.
   src/server/actions/mfa-recovery.other-sessions.test.ts
+  # The console's passkey switches (stage 6): the kill switch, new passkeys
+  # and one organization's switch are pressed only by a platform admin on a
+  # fresh step-up with the typed word PASSKEYS, checked before anything is
+  # read or written; the settings row is upserted with only its own column;
+  # every change has its platform audit row, and an ON whose row does not
+  # land is switched back off (an OFF stands and says so).
+  src/server/actions/platform/passkeys.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
