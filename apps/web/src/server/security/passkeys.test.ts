@@ -1318,6 +1318,17 @@ describe('the Add with no active passkey and a reserved-name factor that no brid
     expect(await panelFor(withApp)).toMatchObject({ addBlocked: false, proof: 'code' });
   });
 
+  it('the RECORDED bridge with no active passkey (S8) is not this rule: a factor a row records is never a stray', async () => {
+    const { userId } = await memberWithPasskey();
+    world.passkeys = world.passkeys.filter((p) => p.user_id !== userId);
+    world.signIn(userId, 'aal2');
+    expect(world.bridges.has(userId)).toBe(true);
+    expect(await panelFor(userId)).toMatchObject({ addBlocked: false });
+    expect(
+      await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } }),
+    ).not.toMatchObject({ reason: 'add_blocked' });
+  });
+
   it('the panel’s words are the server’s', () => {
     expect(PASSKEYS_PANEL_WORDS.addBlocked).toBe(pk.PASSKEY_WORDS.addBlocked);
     expect(pk.PASSKEY_WORDS.addBlocked).toMatch(/recovery code/);
