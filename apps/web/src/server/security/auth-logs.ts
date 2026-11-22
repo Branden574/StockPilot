@@ -124,7 +124,8 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * next hour, and at most what that hour's record holds beyond its own
  * gateway count, so one recorded row never covers two refusals
  * (hourEdgeCarry). The newest hour, when it would be flagged, waits one run
- * for the hour after it to be complete, with nothing written.
+ * for the hour after it to be complete, with nothing written (totals of it
+ * that were not whole are reported at once, by the run that saw them).
  * Our client strings from any other network, or any string that only
  * contains their words, are not ours, and are stored as api. A network class
  * that is not exactly `hosting` is `other` (fail closed), and the queries
@@ -718,9 +719,13 @@ export interface AuthLogsRunSummary {
   totalsRowsDropped: number;
   /**
    * Hours whose totals were not whole (a full answer, or a dropped row):
-   * each is given a flagged count, and its counts are of the part read.
+   * each is given a flagged count, and its counts are of the part read. A
+   * waiting hour is counted too, in the run that saw it: it is given its
+   * flagged count by the next run.
    */
   totalsIncomplete: number;
+  /** Of those, hours that wait for the next run (see the `waiting` outcome). */
+  totalsIncompleteWaiting: number;
   /** Group rows on the minute an hour ends: lines of the next hour, left to its own run. */
   atHourEnd: number;
   /** Full hours given no remainder because a group row was dropped. */
@@ -1705,6 +1710,7 @@ function emptySummary(hours: AuthLogsHour[]): AuthLogsRunSummary {
     totalsCapped: 0,
     totalsRowsDropped: 0,
     totalsIncomplete: 0,
+    totalsIncompleteWaiting: 0,
     atHourEnd: 0,
     remainderSkipped: 0,
     elements: 0,
@@ -1782,6 +1788,17 @@ async function readEdgeCarry(
     ok: true,
     value: hourEdgeCarry({ firstMinute: firstMinute.value, recorded: recorded.value, gateway }),
   };
+}
+
+/** Counts an hour whose totals were not whole in the run's summary (its report reads them). */
+function countTotalsIncomplete(
+  summary: AuthLogsRunSummary,
+  full: boolean,
+  rowsDropped: number,
+): void {
+  summary.totalsIncomplete += 1;
+  if (full) summary.totalsCapped += 1;
+  summary.totalsRowsDropped += rowsDropped;
 }
 
 /**
@@ -1869,6 +1886,15 @@ async function runHour(
       report.outcome = 'waiting';
       report.reconcile = reconcileServerForm(gateway, recorded);
       summary.hoursWaiting += 1;
+      // A waiting hour whose totals were not whole is told in THIS run, not
+      // only by the run that stores it: the totals report counts it, and
+      // says how many of its hours wait. The next run reads the hour again
+      // and reports what it finds then, with the flagged count it stores.
+      if (totalsIncomplete) {
+        report.totalsIncomplete = true;
+        countTotalsIncomplete(summary, totalsFull, totalsDropped);
+        summary.totalsIncompleteWaiting += 1;
+      }
       return null;
     }
     const read = await readEdgeCarry(ctx, next);
@@ -1877,9 +1903,7 @@ async function runHour(
   }
   if (recorded && !recorded.complete) summary.reconcileIncomplete += 1;
 
-  if (totalsFull) summary.totalsCapped += 1;
-  summary.totalsRowsDropped += totalsDropped;
-  if (totalsIncomplete) summary.totalsIncomplete += 1;
+  if (totalsIncomplete) countTotalsIncomplete(summary, totalsFull, totalsDropped);
   summary.atHourEnd += atHourEnd;
   if (capped) summary.capped += 1;
   summary.hoursRead += 1;
@@ -2144,13 +2168,14 @@ export async function readAuthLogs(options: {
   if (summary.totalsIncomplete > 0) {
     reports.push({
       message:
-        "The counts of an hour's refused sign-in requests, read from Supabase's logs, were not whole (the answer was full, or a row of it could not be read); the hour is given a flagged count, and its lines in our server's form were compared with the part that was read, so refusals our server has no record of can be missing from that hour",
+        "The counts of an hour's refused sign-in requests, read from Supabase's logs, were not whole (the answer was full, or a row of it could not be read); the hour is given a flagged count (an hour that waits for the next run is given it by that run: `waiting` says how many), and its lines in our server's form were compared with the part that was read, so refusals our server has no record of can be missing from that hour",
       level: 'warning',
       extra: {
         cause: 'totals_incomplete',
         hours: summary.totalsIncomplete,
         full: summary.totalsCapped,
         rowsDropped: summary.totalsRowsDropped,
+        waiting: summary.totalsIncompleteWaiting,
       },
     });
   }

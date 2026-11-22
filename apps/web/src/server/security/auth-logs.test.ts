@@ -3259,6 +3259,41 @@ describe('a run: six hours, oldest first, each written once', () => {
         });
       });
 
+      it('a waiting hour whose totals were not whole is reported in the same run, and flagged by the next', async () => {
+        // The newest hour would be flagged (three in our server's form, no
+        // record) and one of its totals rows fails its checks.
+        hourAnswers(
+          H(9),
+          [],
+          [totalsRow({ ...ours, n: 3 }, H(9)), totalsRow({ kind: 'mystery' }, H(9))],
+        );
+        const first = full(await run());
+        expect(h.rpc).not.toHaveBeenCalled();
+        expect(first.hours[5]).toMatchObject({ outcome: 'waiting', totalsIncomplete: true });
+        expect(first).toMatchObject({
+          hoursWaiting: 1,
+          totalsIncomplete: 1,
+          totalsIncompleteWaiting: 1,
+          totalsRowsDropped: 1,
+        });
+        expect(reportCauses()).toEqual(['totals_incomplete']);
+        expect(reportsOf('totals_incomplete')[0]![1]).toMatchObject({
+          extra: { cause: 'totals_incomplete', hours: 1, full: 0, rowsDropped: 1, waiting: 1 },
+        });
+        // The next run decides the hour: stored with its flagged counts, and
+        // reported again, this time as stored.
+        h.report.mockClear();
+        const next = full(await run({ nowMs: NOW + HOUR }));
+        expect(next.hours[4]).toMatchObject({ outcome: 'stored', totalsIncomplete: true });
+        expect(written().map((e) => [e.reason, e.count])).toEqual([
+          ['too_many_forms_to_count', 3],
+          ['unrecorded_server_form_password', 3],
+        ]);
+        expect(reportsOf('totals_incomplete')[0]![1]).toMatchObject({
+          extra: { cause: 'totals_incomplete', hours: 1, waiting: 0 },
+        });
+      });
+
       it('the newest hour that would be flagged and has no record at its edge is flagged by the next run', async () => {
         serverHour(H(9), 5);
         const first = full(await run());
@@ -3558,7 +3593,7 @@ describe('a run: six hours, oldest first, each written once', () => {
       expect(ctx).toMatchObject({
         tag: 'cron.security-events-auth-logs',
         level: 'warning',
-        extra: { cause: 'totals_incomplete', hours: 1, full: 1, rowsDropped: 0 },
+        extra: { cause: 'totals_incomplete', hours: 1, full: 1, rowsDropped: 0, waiting: 0 },
       });
       // The hour is stored: the next run does not read it again.
       fetches.length = 0;
