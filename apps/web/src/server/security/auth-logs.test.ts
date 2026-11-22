@@ -2260,6 +2260,10 @@ describe('the SQL is two constants that return classes and counts only', () => {
       [gatewayLine({ status: '429' }), 'password', true],
       [gatewayLine({ path: `/auth/v1/factors/${UUID}/verify`, status: '403' }), 'verify', false],
       [gatewayLine({ path: `/auth/v1/factors/${UUID}/verify`, status: '429' }), 'verify', true],
+      // The two pairs that are never stored are not listed: a password answered
+      // 422, a code check answered 400.
+      [gatewayLine({ status: '422' }), 'password', false],
+      [gatewayLine({ path: `/auth/v1/factors/${UUID}/verify`, status: '400' }), 'verify', false],
     ];
     for (const [line, kind, listed] of cases) {
       const { groups, totals } = bothOn(line);
@@ -2267,6 +2271,42 @@ describe('the SQL is two constants that return classes and counts only', () => {
       expect(totals.kept, kind).toBe(true);
       expect(groups.kept, kind).toBe(listed);
     }
+  });
+
+  it('the groups query lists exactly the pairs of kind and status that are stored, for every caller but our server', () => {
+    // Every kind the query answers, by a path (and a grant) that gives it,
+    // with every status class and one status outside them: a line is listed
+    // when, and only when, classifyAuthLogLine stores it.
+    const kinds: Array<[string, { path?: string; search?: string }]> = [
+      ['password', {}],
+      ['refresh', { search: '?grant_type=refresh_token' }],
+      ['token_known_other', { search: '?grant_type=pkce' }],
+      ['token_other', { search: '?grant_type=magic' }],
+      ['verify', { path: `/auth/v1/factors/${UUID}/verify` }],
+      ['verify_other', { path: '/auth/v1/factors/not-an-id/verify' }],
+      ['factors_known_other', { path: '/auth/v1/factors' }],
+      ['emailed_code', { path: '/auth/v1/verify' }],
+      ['emailed_code_other', { path: '/auth/v1/verify/' }],
+    ];
+    let listed = 0;
+    for (const [kind, where] of kinds) {
+      for (const status of ['400', '401', '403', '404', '422', '429', '418']) {
+        for (const client of ['supabase-js-react-native/2.50.0', 'curl/8.0.0']) {
+          const { groups, totals } = bothOn(gatewayLine({ ...where, status, client }));
+          expect(totals.values.kind, `${kind} ${status}`).toBe(kind);
+          const verdict = classifyAuthLogLine({
+            kind: kind as logs.AuthLogsLine['kind'],
+            status: totals.values.status as logs.AuthLogsLine['status'],
+            caller: totals.values.caller as logs.AuthLogsLine['caller'],
+            network: 'other',
+          });
+          expect(groups.kept, `${kind} ${status} ${client}`).toBe(verdict.store);
+          if (groups.kept) listed += 1;
+        }
+      }
+    }
+    // password 400 and 429, verify 422 and 429, from two callers each.
+    expect(listed).toBe(8);
   });
 
   it('both read the same lines; the groups query keeps only the kinds that can be stored', () => {
@@ -2279,7 +2319,7 @@ describe('the SQL is two constants that return classes and counts only', () => {
     // Only the statuses that can be stored are listed: a status the job does
     // not act on takes no row of the groups from one it does.
     expect(AUTH_LOGS_GROUPS_SQL).toContain(
-      "\nWHERE kind IN ('password', 'verify') AND status IN ('400', '422', '429') AND (caller != 'server' OR network != 'hosting')\n",
+      "\nWHERE ((kind = 'password' AND status IN ('400', '429')) OR (kind = 'verify' AND status IN ('422', '429'))) AND (caller != 'server' OR network != 'hosting')\n",
     );
     for (const [, sql] of BOTH) {
       expect(sql.trimEnd().endsWith(`LIMIT ${AUTH_LOGS_ROW_LIMIT}`)).toBe(true);

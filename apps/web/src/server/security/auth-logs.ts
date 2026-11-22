@@ -148,9 +148,9 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * is read, and a count below what was sent is reported.
  *
  * TWO QUERIES AN HOUR. The groups query lists the lines that can be stored
- * (kinds password and verify, answered 400, 422 or 429) by minute and
- * country, at most AUTH_LOGS_ROW_LIMIT groups, largest first. The totals
- * query counts every kind by kind, status class, caller class and network
+ * (a password answered 400 or 429, a code check answered 422 or 429) by
+ * minute and country, at most AUTH_LOGS_ROW_LIMIT groups, largest first.
+ * The totals query counts every kind by kind, status class, caller class and network
  * class only: it gives the log line, the flagged counts, our server's counts
  * and, when the groups query was full, the rest. THE TOTALS CANNOT BE
  * FILLED BY A CALLER: every class it is grouped by is a short list written
@@ -378,9 +378,12 @@ type AuthLogsStatus = (typeof STATUSES)[number];
 type AuthLogsNetwork = 'hosting' | 'other';
 
 /**
- * The refused lines of one hour that can be stored (kinds password and
- * verify), by minute, kind, status, caller class, network class and country,
- * largest groups first.
+ * The refused lines of one hour that can be stored, by minute, kind,
+ * status, caller class, network class and country, largest groups first.
+ * Only the pairs of kind and status classifyAuthLogLine stores are listed: a
+ * password answered 400 or 429, a code check (verify) answered 422 or 429.
+ * Any other pair is counted by the totals query alone, so it takes no row
+ * of this query's limit from one that is stored.
  *
  * Read from Supabase's single `logs` table (ClickHouse), gateway lines only
  * (source edge_logs), where every field is a string in log_attributes. Only
@@ -403,10 +406,9 @@ type AuthLogsNetwork = 'hosting' | 'other';
  * the phone app, our server's client string, or `other` (a browser, a tool,
  * no client string). The network is `hosting` when the caller is our
  * server's client string and the network owner's name starts with the one
- * prefix written in the query (measured: the leading comment says when);
- * only the statuses that can be stored are listed. The
- * kind is `token_other` when the query string holds an escape that does not
- * decode, an encoded `&` or `=` (which the sign-in service keeps inside a
+ * prefix written in the query (measured: the leading comment says when).
+ * The kind is `token_other` when the query string holds an escape that
+ * does not decode, an encoded `&` or `=` (which the sign-in service keeps inside a
  * value, so reading the whole decoded string would read it differently), an
  * encoded control character, or a raw semicolon (the service drops the pair
  * that holds one). Our server's class is its two client
@@ -465,7 +467,7 @@ FROM (
            OR position(lower(decodeURLComponent(log_attributes['request.path'])), 'verify') > 0)
   )
 )
-WHERE kind IN ('password', 'verify') AND status IN ('400', '422', '429') AND (caller != 'server' OR network != 'hosting')
+WHERE ((kind = 'password' AND status IN ('400', '429')) OR (kind = 'verify' AND status IN ('422', '429'))) AND (caller != 'server' OR network != 'hosting')
 GROUP BY minute, kind, status, caller, network, country
 ORDER BY n DESC, minute, kind, status, caller, network, country
 LIMIT 199`;
