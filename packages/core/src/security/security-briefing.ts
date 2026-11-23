@@ -1291,9 +1291,16 @@ export function buildPlatformSecurityBriefing(
   if (!organizationsRead) {
     line.push('The organizations could not be checked.');
   } else {
+    // A count made from reads that failed or were cut short is a floor, and
+    // says so: the organizations that only the missing part would have shown
+    // are not in it. The passkey repair read is a platform check, not one of
+    // the three organization reads: failing alone it leaves the count exact.
+    const counts = `${counted(needing, 'organization needs', 'organizations need')} attention this week.`;
     line.push(
       needing > 0
-        ? `${counted(needing, 'organization needs', 'organizations need')} attention this week.`
+        ? organizationsAllChecked
+          ? counts
+          : `At least ${counts}`
         : organizationsAllChecked
           ? 'No organization needs attention this week.'
           : 'No organization needs attention in what could be checked.',

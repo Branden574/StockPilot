@@ -1799,8 +1799,110 @@ describe('the platform briefing: its own items', () => {
       }),
     );
     expect(found.bottomLine).toBe(
-      '1 organization needs attention this week. Some checks could not be made.',
+      'At least 1 organization needs attention this week. Some checks could not be made.',
     );
+  });
+
+  it('a count from reads that failed or were cut short says "At least": it never understates', () => {
+    const one = platformMembers([
+      orgMembers(ORG_A, 'Example Academy', { adminsWithoutSecondStep: 1 }),
+    ]);
+    const two = platformMembers([
+      orgMembers(ORG_A, 'Example Academy', { adminsWithoutSecondStep: 1 }),
+      orgMembers(ORG_B, 'Example College', { adminsWithoutSecondStep: 2 }),
+    ]);
+    // All three reads whole: the count is exact, in the words it always had.
+    expect(buildPlatformSecurityBriefing(platformInput({ members: one })).bottomLine).toBe(
+      '1 organization needs attention this week.',
+    );
+    expect(buildPlatformSecurityBriefing(platformInput({ members: two })).bottomLine).toBe(
+      '2 organizations need attention this week.',
+    );
+    // One of the other two organization reads failed: what it would have
+    // shown is not in the count.
+    for (const failed of ['events', 'changes'] as const) {
+      expect(
+        buildPlatformSecurityBriefing(platformInput({ members: one, [failed]: null })).bottomLine,
+      ).toBe('At least 1 organization needs attention this week. Some checks could not be made.');
+      expect(
+        buildPlatformSecurityBriefing(platformInput({ members: two, [failed]: null })).bottomLine,
+      ).toBe('At least 2 organizations need attention this week. Some checks could not be made.');
+    }
+    // The members read failed and the events read found one: the same.
+    const rising = platformEvents({
+      organizations: [
+        {
+          organizationId: ORG_A,
+          thisWeek: { password_guessing: counts(40) },
+          lastWeek: { password_guessing: counts(2) },
+        },
+      ],
+    });
+    const fromEvents = buildPlatformSecurityBriefing(
+      platformInput({ members: null, events: rising }),
+    );
+    expect(fromEvents.organizations.map((o) => o.attention)).toEqual(['medium']);
+    expect(fromEvents.bottomLine).toBe(
+      'At least 1 organization needs attention this week. Some checks could not be made.',
+    );
+    // THE CAP: a read cut short at its cap. Nothing failed, so no "Some
+    // checks ..."; the organizations past the cap are not in the count.
+    for (const cut of [
+      { members: platformMembers(two.organizations, { truncated: true }) },
+      { members: two, events: platformEvents({ truncated: true }) },
+      { members: two, changes: { organizations: [], truncated: true } },
+    ]) {
+      const b = buildPlatformSecurityBriefing(platformInput(cut));
+      expect(b.organizationsAllChecked).toBe(false);
+      expect(b.bottomLine).toBe('At least 2 organizations need attention this week.');
+    }
+    // After a platform check, the same sentence.
+    expect(
+      buildPlatformSecurityBriefing(
+        platformInput({
+          members: two,
+          changes: null,
+          passkeyRepair: { accounts: 2, capped: false },
+        }),
+      ).bottomLine,
+    ).toBe(
+      '1 platform check needs attention. At least 2 organizations need attention this week. Some checks could not be made.',
+    );
+  });
+
+  it('ONLY the passkey repair read failed: no "At least" and "No organization ..." stands, as designed (it is a platform check; the three organization reads were whole)', () => {
+    // Not a miss. The lab walk's row 4b: the count of organizations is made
+    // from the three organization reads, and they all answered, whole.
+    const none = buildPlatformSecurityBriefing(platformInput({ passkeyRepair: null }));
+    expect(none.organizationsAllChecked).toBe(true);
+    expect(none.bottomLine).toBe(
+      'No organization needs attention this week. Some checks could not be made.',
+    );
+    expect(none.unchecked).toEqual(['Passkey set-ups that need repair could not be checked.']);
+    const some = buildPlatformSecurityBriefing(
+      platformInput({
+        members: platformMembers([
+          orgMembers(ORG_A, 'Example Academy', { adminsWithoutSecondStep: 1 }),
+          orgMembers(ORG_B, 'Example College', { adminsWithoutSecondStep: 2 }),
+        ]),
+        passkeyRepair: null,
+      }),
+    );
+    expect(some.organizationsAllChecked).toBe(true);
+    expect(some.bottomLine).toBe(
+      '2 organizations need attention this week. Some checks could not be made.',
+    );
+    expect(some.bottomLine).not.toMatch(/At least/);
+    // Too little history is not a failed organization read either.
+    const young = buildPlatformSecurityBriefing(
+      platformInput({
+        members: platformMembers([
+          orgMembers(ORG_A, 'Example Academy', { adminsWithoutSecondStep: 1 }),
+        ]),
+        events: platformEvents({ oldestEventAt: null }),
+      }),
+    );
+    expect(young.bottomLine).not.toMatch(/At least/);
   });
 
   it('a platform check that needs attention next to an organization read that failed: the two sentences do not contradict', () => {
@@ -1841,7 +1943,7 @@ describe('the platform briefing: its own items', () => {
         }),
       ).bottomLine,
     ).toBe(
-      '1 platform check needs attention. 1 organization needs attention this week. Some checks could not be made.',
+      '1 platform check needs attention. At least 1 organization needs attention this week. Some checks could not be made.',
     );
     expect(
       buildPlatformSecurityBriefing(
