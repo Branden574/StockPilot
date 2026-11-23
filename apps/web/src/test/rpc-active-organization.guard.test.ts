@@ -595,6 +595,25 @@ const REGISTRY: Record<string, Entry> = {
     'takes_org',
     'The platform console names the organization.',
   ],
+  // The platform console's security briefing (service role, behind
+  // requirePlatformAdmin): four functions that only read, STABLE in their
+  // migration (platform_security_briefing), and the passkey upkeep's own
+  // read of account states. None writes a row of any organization.
+  'server/services/platform/security-briefing.ts::passkey_account_states': RO(
+    'Reads only: how many accounts have a passkey set-up that needs repair.',
+  ),
+  'server/services/platform/security-briefing.ts::platform_security_briefing_changes': RO(
+    "Reads only: every organization's admin and sign-in policy change counts of the week.",
+  ),
+  'server/services/platform/security-briefing.ts::platform_security_briefing_events': RO(
+    "Reads only: every organization's event counts of two weeks.",
+  ),
+  'server/services/platform/security-briefing.ts::platform_security_briefing_for_organization': RO(
+    'Reads only: the organization the platform console names (the page writes its viewed_org audit row first).',
+  ),
+  'server/services/platform/security-briefing.ts::platform_security_briefing_members': RO(
+    "Reads only: every organization's member counts.",
+  ),
   'server/services/platform/sessions.ts::admin_revoke_user_sessions': [
     'not_org_data',
     "The platform console signs a person out of every session; an account's sessions, not an organization's row.",
