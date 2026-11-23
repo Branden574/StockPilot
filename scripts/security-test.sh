@@ -2577,6 +2577,26 @@ WEB_TESTS=(
   # opened for.
   src/server/actions/platform/passkeys.test.ts
   src/components/platform/passkey-switch-control.test.tsx
+  # The platform console's security briefing (platform administrators only;
+  # no member can open it). Its reads are made with the service role, so the
+  # doors are pinned: the service is imported by the briefing section alone,
+  # and the section by the gated platform Security page alone. The
+  # all-organizations part is counts only (no person's name, no email). One
+  # organization's part names members across a tenant boundary, so: the
+  # ?org= value is checked to be a uuid before anything is read, the
+  # organization is found, the viewed_org audit row is written, and only
+  # then is the detail read; an id that names no organization, or a row that
+  # could not be written, reads nothing. Links to an organization's briefing
+  # or console page are never prefetched. Each read stands alone with its own
+  # time budget; a failed read, or an answer with a key the contract does not
+  # name (a session id, an address, a factor id), is "could not check",
+  # never a zero. The section sits after the Passkeys section and inside
+  # Suspense, so the kill switch never waits for it. Each new file carries
+  # the "Security invariant" marker.
+  src/server/services/platform/security-briefing.test.ts
+  src/server/services/platform/security-briefing.callers.test.ts
+  src/components/platform/platform-security-briefing-section.test.tsx
+  'src/app/(platform)/platform/security/page.test.tsx'
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2940,6 +2960,12 @@ CORE_TESTS=(
   # name may not be one the server made), promise nothing about a later
   # version, and send the member to the website's security page.
   src/auth/passkey-copy.test.ts
+  # The security briefing's rules (the platform console): a part that could
+  # not be read is "could not check", never a zero and never "in good shape";
+  # a rise counts blocked events only; a reported sign-in comes from the
+  # reported number, never from the events; sign-ins nobody uses are never an
+  # item; the words name no address, reason code or detection number.
+  src/security/security-briefing.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
