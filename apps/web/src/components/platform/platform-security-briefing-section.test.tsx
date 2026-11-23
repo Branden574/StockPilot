@@ -86,7 +86,6 @@ function members(over: Partial<BriefingMembersInput> = {}): BriefingMembersInput
     membersWithIdleSignIns: 0,
     idleSignIns: 0,
     idleAfterDays: 30,
-    adminsJoinedThisWeek: 0,
     signInsReportedThisWeek: 0,
     ...over,
   };
@@ -138,7 +137,7 @@ function platformInput(
       organizations: [
         {
           organizationId: ORG_A,
-          adminsPromoted: 1,
+          adminsAdded: 2,
           adminsDemotedOrRemoved: 0,
           ownershipMoved: 0,
           policyLoosened: 1,
@@ -169,7 +168,7 @@ function organizationBriefing() {
         oldestEventAt: OLD_ENOUGH,
       },
       changes: {
-        adminsPromoted: 1,
+        adminsAdded: 1,
         adminsDemotedOrRemoved: 0,
         ownershipMoved: 0,
         policyLoosened: 0,
@@ -195,13 +194,15 @@ function organizationBriefing() {
         },
       ],
       peopleTruncated: false,
+      idleAfterDays: 30,
       changes: [
         {
           at: '2026-11-22T18:04:11.52+00:00',
-          text: 'Alex Example was made an admin by Dana Example.',
+          text: 'Alex Example (alex@example.com) was made an admin by Dana Example (dana@example.com).',
         },
       ],
       changesTruncated: false,
+      changesRowsRead: 1,
     },
   };
 }
@@ -276,12 +277,15 @@ describe('all organizations', () => {
       'Admins without a second step',
       'Members without a second step',
       'Sign-ins reported',
-      'Admin changes',
+      // Each its own number: admins added is never summed with another.
+      'Admins added',
+      'Admins removed or moved',
+      'Ownership moves',
       'Policy changes',
     ]);
     expect(cells(table)).toEqual([
-      ['Example Academy', 'High', '1,250', '4', '1', '1', '4', '0', '1', '1'],
-      ['Example Bakery', 'None', '2', '0', '0', '0', '0', '0', '0', '0'],
+      ['Example Academy', 'High', '1,250', '4', '1', '1', '4', '0', '2', '0', '0', '1'],
+      ['Example Bakery', 'None', '2', '0', '0', '0', '0', '0', '0', '0', '0', '0'],
     ]);
     expect(within(section).getByText('38 organizations have nothing to report.')).toBeTruthy();
   });
@@ -322,6 +326,8 @@ describe('all organizations', () => {
         '0',
         'Could not check',
         'Could not check',
+        'Could not check',
+        'Could not check',
       ],
     ]);
     expect(
@@ -341,14 +347,11 @@ describe('all organizations', () => {
       within(section).getByRole('region', { name: 'Security briefing by organization' }),
     );
     for (const row of rows) {
-      expect(row.slice(5, 9)).toEqual([
-        'Could not check',
-        'Could not check',
-        'Could not check',
-        'Could not check',
-      ]);
+      expect(row.slice(5, 8)).toEqual(['Could not check', 'Could not check', 'Could not check']);
     }
-    expect(within(section).queryByText(/nothing to report\./)).toBeNull();
+    // The admins added are the changes read's own number: still shown.
+    expect(rows[0]?.slice(8)).toEqual(['2', '0', '0', '1']);
+    expect(within(section).queryByText(/nothing to report/)).toBeNull();
   });
 
   it('no read answered: "Could not check this week\'s summary.", and no table', async () => {
@@ -385,6 +388,40 @@ describe('all organizations', () => {
     ).toBeInTheDocument();
     expect(within(section).getByText('1 organization has nothing to report.')).toBeTruthy();
   });
+
+  it.each([
+    ['members', 'Second steps and reported sign-ins could not be checked.'],
+    ['events', 'Blocked and flagged activity could not be checked.'],
+    ['changes', 'Admin and sign-in policy changes could not be checked.'],
+  ] as const)(
+    'the %s read failed and the other two are quiet: never "nothing to report", and the part is named',
+    async (failed, part) => {
+      const quiet = {
+        ...platformInput(),
+        members: { ...platformInput().members!, organizations: [], totalOrganizations: 12 },
+        events: { ...platformInput().events!, organizations: [], passkeyUnexplainedSignIns: 0 },
+        changes: { organizations: [], truncated: false },
+      };
+      h.platform.mockResolvedValue(buildPlatformSecurityBriefing({ ...quiet, [failed]: null }));
+      const section = await renderSection();
+      expect(
+        within(section).queryByText('No organization has anything to report this week.'),
+      ).toBeNull();
+      expect(section.textContent).not.toMatch(/nothing to report/i);
+      expect(section.textContent).not.toContain('No organization needs attention');
+      // What is said instead, with the part that could not be checked.
+      const table = within(section)
+        .getByRole('heading', { name: 'Organizations with something to report' })
+        .closest('div');
+      expect(table?.textContent).toContain('Nothing to list from what could be checked.');
+      expect(table?.textContent).toContain(part);
+      expect(
+        within(section).getByText(
+          'Nothing needs attention in what could be checked. Some checks could not be made.',
+        ),
+      ).toBeInTheDocument();
+    },
+  );
 
   it('more organizations than the table lists, and a read cut short, are said', async () => {
     const base = platformInput();
@@ -532,7 +569,91 @@ describe('one organization (?org=)', () => {
           name: 'Admin and sign-in policy changes: Example Academy',
         }),
       ),
-    ).toEqual([['22 Nov 2026, 18:04 UTC', 'Alex Example was made an admin by Dana Example.']]);
+    ).toEqual([
+      [
+        '22 Nov 2026, 18:04 UTC',
+        'Alex Example (alex@example.com) was made an admin by Dana Example (dana@example.com).',
+      ],
+    ]);
+  });
+
+  it('a member who named themselves "StockPilot support": their email is beside the name, in People and in the changes', async () => {
+    const base = organizationBriefing();
+    h.detail.mockResolvedValue({
+      ...base,
+      detail: {
+        ...base.detail,
+        people: [
+          {
+            userId: 'u1',
+            fullName: 'StockPilot support',
+            email: 'alex@example.com',
+            role: 'admin',
+            notes: ['No second step'],
+          },
+        ],
+        changes: [
+          {
+            at: '2026-11-22T18:04:11+00:00',
+            text: 'The sign-in policy was loosened: Required for everyone to Optional by StockPilot support (alex@example.com).',
+          },
+          {
+            at: '2026-11-21T18:04:11+00:00',
+            text: 'The sign-in policy was tightened: Optional to Required for everyone by StockPilot support.',
+          },
+        ],
+      },
+    });
+    const section = await renderSection(ORG_A);
+    expect(cells(within(section).getByRole('region', { name: 'People: Example Academy' }))).toEqual(
+      [['StockPilot support', 'alex@example.com', 'Admin', 'No second step']],
+    );
+    const lines = cells(
+      within(section).getByRole('region', {
+        name: 'Admin and sign-in policy changes: Example Academy',
+      }),
+    ).map((row) => row[1]);
+    // The member's line carries their email; the real label carries none.
+    expect(lines[0]).toMatch(/by StockPilot support \(alex@example\.com\)\.$/);
+    expect(lines[1]).toMatch(/by StockPilot support\.$/);
+  });
+
+  it('a list cut at 200 rows that hides a loosened policy: the page still says it was loosened, and says the list is not whole', async () => {
+    const zero = {
+      adminsAdded: 0,
+      adminsDemotedOrRemoved: 0,
+      ownershipMoved: 0,
+      policyLoosened: 0,
+      policyTightened: 0,
+      policyChangedOther: 0,
+    };
+    const base = organizationBriefing();
+    h.detail.mockResolvedValue({
+      // The week as the database counted it, from every audit row.
+      briefing: buildSecurityBriefing({
+        now: NOW,
+        members: members(),
+        events: { thisWeek: {}, lastWeek: {}, oldestEventAt: OLD_ENOUGH },
+        changes: { ...zero, policyLoosened: 1 },
+      }),
+      // The list: 200 rows read, none of them an admin or policy change.
+      detail: { ...base.detail, changes: [], changesTruncated: true, changesRowsRead: 200 },
+    });
+    const section = await renderSection(ORG_A);
+    expect(
+      within(section).getByText('The sign-in policy was loosened once this week'),
+    ).toBeInTheDocument();
+    expect(within(section).getByText('1 thing needs attention this week.')).toBeInTheDocument();
+    expect(within(section).queryByText('No admin or sign-in policy change this week.')).toBeNull();
+    // Never "none in the last 30 days" from a list that was cut.
+    expect(
+      within(section).queryByText('No admin or sign-in policy change in the last 30 days.'),
+    ).toBeNull();
+    expect(
+      within(section).getByText(
+        /^Showing the newest 200 audit entries, and none of them is an admin or sign-in policy change\. Older ones in the 30 days are not listed\./,
+      ),
+    ).toBeInTheDocument();
   });
 
   it("the link to the organization's console page is never prefetched", async () => {
@@ -570,11 +691,7 @@ describe('one organization (?org=)', () => {
     ).toBeInTheDocument();
     expect(within(section).getAllByText('Could not check.')).toHaveLength(3);
     expect(within(section).queryByRole('region', { name: /^People/ })).toBeNull();
-    expect(
-      within(section).queryByText(
-        'Every member has a second step, and no sign-in has gone unused.',
-      ),
-    ).toBeNull();
+    expect(within(section).queryByText(/Every member has a second step/)).toBeNull();
   });
 
   it('nothing to list: the words for each empty part, and the lists that were cut short', async () => {
@@ -585,7 +702,7 @@ describe('one organization (?org=)', () => {
         members: members(),
         events: { thisWeek: {}, lastWeek: {}, oldestEventAt: OLD_ENOUGH },
         changes: {
-          adminsPromoted: 0,
+          adminsAdded: 0,
           adminsDemotedOrRemoved: 0,
           ownershipMoved: 0,
           policyLoosened: 0,
@@ -593,7 +710,14 @@ describe('one organization (?org=)', () => {
           policyChangedOther: 0,
         },
       }),
-      detail: { people: [], peopleTruncated: false, changes: [], changesTruncated: false },
+      detail: {
+        people: [],
+        peopleTruncated: false,
+        idleAfterDays: 30,
+        changes: [],
+        changesTruncated: false,
+        changesRowsRead: 0,
+      },
     });
     const section = await renderSection(ORG_A);
     expect(within(section).getAllByText('Everything we checked is in good shape.')).toHaveLength(1);
@@ -601,7 +725,9 @@ describe('one organization (?org=)', () => {
       within(section).getByText('Nothing was blocked or flagged in the two weeks.'),
     ).toBeInTheDocument();
     expect(
-      within(section).getByText('Every member has a second step, and no sign-in has gone unused.'),
+      within(section).getByText(
+        'Every member has a second step, and no sign-in has gone unused for 30 days.',
+      ),
     ).toBeInTheDocument();
     expect(
       within(section).getByText('No admin or sign-in policy change in the last 30 days.'),
@@ -609,13 +735,22 @@ describe('one organization (?org=)', () => {
 
     h.detail.mockResolvedValue({
       ...quiet,
-      detail: { ...quiet.detail, peopleTruncated: true, changesTruncated: true },
+      detail: {
+        ...quiet.detail,
+        peopleTruncated: true,
+        changesTruncated: true,
+        changesRowsRead: 200,
+      },
     });
     cleanup();
     const cut = await renderSection(ORG_A);
     expect(within(cut).getByText('And more: only the first 2 are listed.')).toBeInTheDocument();
+    // The number is the rows read, never the number of lines listed (1 here).
     expect(
-      within(cut).getByText('And more: only the newest 1 audit entries were read.'),
+      within(cut).getByText(
+        /^Showing the newest 200 audit entries\. Older ones in the 30 days are not listed\./,
+      ),
     ).toBeInTheDocument();
+    expect(cut.textContent).not.toMatch(/newest 1 audit/);
   });
 });

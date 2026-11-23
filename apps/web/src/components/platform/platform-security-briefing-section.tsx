@@ -144,11 +144,21 @@ function AllOrganizations({ briefing }: { briefing: PlatformSecurityBriefing }) 
             Could not check this week&apos;s summary.
           </p>
         ) : briefing.organizations.length === 0 ? (
-          <p className="text-muted-foreground text-[13px]">
-            No organization has anything to report this week.
-          </p>
+          briefing.organizationsAllChecked ? (
+            <p className="text-muted-foreground text-[13px]">
+              No organization has anything to report this week.
+            </p>
+          ) : (
+            // Never "nothing to report" when a part was not read: say which.
+            <p className="text-muted-foreground text-[13px]">
+              Nothing to list from what could be checked.
+              {briefing.organizationsUnchecked.map((line) => (
+                <React.Fragment key={line}> {line}</React.Fragment>
+              ))}
+            </p>
+          )
         ) : (
-          <PlatformTable label="Security briefing by organization" minWidth={1100}>
+          <PlatformTable label="Security briefing by organization" minWidth={1300}>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>Organization</TableHead>
@@ -159,7 +169,9 @@ function AllOrganizations({ briefing }: { briefing: PlatformSecurityBriefing }) 
                 <TableHead className="text-right">Admins without a second step</TableHead>
                 <TableHead className="text-right">Members without a second step</TableHead>
                 <TableHead className="text-right">Sign-ins reported</TableHead>
-                <TableHead className="text-right">Admin changes</TableHead>
+                <TableHead className="text-right">Admins added</TableHead>
+                <TableHead className="text-right">Admins removed or moved</TableHead>
+                <TableHead className="text-right">Ownership moves</TableHead>
                 <TableHead className="text-right">Policy changes</TableHead>
               </TableRow>
             </TableHeader>
@@ -196,7 +208,9 @@ function AllOrganizations({ briefing }: { briefing: PlatformSecurityBriefing }) 
                   <CountCell value={o.adminsWithoutSecondStep} />
                   <CountCell value={o.membersWithoutSecondStep} />
                   <CountCell value={o.signInsReported} />
-                  <CountCell value={o.adminChanges} />
+                  <CountCell value={o.adminsAdded} />
+                  <CountCell value={o.adminsRemoved} />
+                  <CountCell value={o.ownershipMoves} />
                   <CountCell value={o.policyChanges} />
                 </TableRow>
               ))}
@@ -367,7 +381,8 @@ function OneOrganization({ part }: { part: OrganizationPart }) {
           <p className="text-muted-foreground text-[13px]">{COULD_NOT_CHECK}.</p>
         ) : detail.people.length === 0 ? (
           <p className="text-muted-foreground text-[13px]">
-            Every member has a second step, and no sign-in has gone unused.
+            Every member has a second step, and no sign-in has gone unused for{' '}
+            {num(detail.idleAfterDays)} days.
           </p>
         ) : (
           <PlatformTable label={`People: ${part.name}`} minWidth={760}>
@@ -413,9 +428,12 @@ function OneOrganization({ part }: { part: OrganizationPart }) {
         {detail === null ? (
           <p className="text-muted-foreground text-[13px]">{COULD_NOT_CHECK}.</p>
         ) : detail.changes.length === 0 ? (
-          <p className="text-muted-foreground text-[13px]">
-            No admin or sign-in policy change in the last 30 days.
-          </p>
+          // "None in the last 30 days" only when every row of the 30 days was read.
+          detail.changesTruncated ? null : (
+            <p className="text-muted-foreground text-[13px]">
+              No admin or sign-in policy change in the last 30 days.
+            </p>
+          )
         ) : (
           <PlatformTable label={`Admin and sign-in policy changes: ${part.name}`} minWidth={640}>
             <TableHeader>
@@ -438,7 +456,11 @@ function OneOrganization({ part }: { part: OrganizationPart }) {
         )}
         {detail?.changesTruncated ? (
           <p className="text-muted-foreground text-[12.5px]">
-            And more: only the newest {num(detail.changes.length)} audit entries were read.
+            {detail.changes.length === 0
+              ? `Showing the newest ${num(detail.changesRowsRead)} audit entries, and none of them is an admin or sign-in policy change.`
+              : `Showing the newest ${num(detail.changesRowsRead)} audit entries.`}{' '}
+            Older ones in the 30 days are not listed. This week&apos;s numbers above count every
+            entry.
           </p>
         ) : null}
       </div>
